@@ -99,6 +99,19 @@ async function expectWriteRejected(
 }
 
 describe("resolveWorkspaceMounts", () => {
+  it("reports only new protected sources while preserving their contents", async () => {
+    const workspaceDir = makeTempWorkspace();
+    const params = mountParams(workspaceDir);
+    expect(await ensureReadOnlyWorkspaceSkillMountSources(params)).toBe(true);
+    const mounts = resolveSandboxMountSelection(params).readOnlyWorkspaceSkillMounts;
+    expect(mounts.map((mount) => mount.containerPath)).toContain("/workspace/skills");
+    fs.writeFileSync(path.join(workspaceDir, "skills", "notes.md"), "saved skill content");
+    expect(await ensureReadOnlyWorkspaceSkillMountSources(params)).toBe(false);
+    expect(fs.readFileSync(path.join(workspaceDir, "skills", "notes.md"), "utf8")).toBe(
+      "saved skill content",
+    );
+  });
+
   it.skipIf(process.platform === "win32").each(["symlink", "file"] as const)(
     "does not materialize skill sources through a %s parent",
     async (kind) => {

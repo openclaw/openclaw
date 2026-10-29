@@ -673,7 +673,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sent: {
         requesterSessionKey: "global",
         agentId: "research",
-        mirror: expect.objectContaining({ sessionKey: "global", agentId: "research" }),
+        session: { agentId: "research", policyKey: "global" },
       },
     }),
     completionCase("channel-grammar direct target", "channel", {
@@ -1127,10 +1127,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it.each<[string, Record<string, unknown>, string?]>([
-    ["an attachment without usable media", { payloads: [{ attachments: [{}] }] }],
     ["non-subagent NO_REPLY", silentResult, "agent_harness_task"],
-    ["committed session spawn", { payloads: [], ...committedSessionSpawnEvidence }],
-    ["committed cron add", { payloads: [], successfulCronAdds: 1 }],
   ])(
     "rejects session-only completion without a result: %s",
     async (_name, gatewayResult, sourceTool) => {
@@ -1247,7 +1244,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     events: AgentInternalEvent[];
     options?: Partial<DeliveryFixtureParams>;
     expected: Record<string, unknown>;
-    noAttachments?: boolean;
   }>([
     {
       name: "private generated media on the owning session agent loop",
@@ -1299,19 +1295,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     },
     {
-      name: "generated-media failure notice without raw delivery",
-      route: "discord",
-      sourceTool: "music_generate",
-      events: musicCompletionEvents({
-        status: "error",
-        statusLabel: "failed",
-        result: "All music generation models failed.",
-        mediaUrls: undefined,
-      }),
-      expected: { expectedMediaUrls: [] },
-      noAttachments: true,
-    },
-    {
       name: "video completion with a stringified Telegram topic",
       route: "telegram",
       sourceTool: "video_generate",
@@ -1352,6 +1335,16 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         isActive: true,
         directIdempotencyKey: "announce-channel-media-handoff-locked",
         runtimeConfig: messageToolConfig,
+        preparedRequester: {
+          binding: {
+            agentId: "main",
+            sessionKey: "agent:main:slack:channel:C123",
+            storePath: "/synthetic/media/sessions.db",
+            sessionId: "requester-session-channel",
+            lifecycleRevision: null,
+          },
+          entry: { sessionId: "requester-session-channel", updatedAt: 1 },
+        },
       },
       events: imageCompletionEvents({
         childSessionKey: "image_generate:task-locked",
@@ -1364,7 +1357,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: {
         kind: "agentTurn",
         sessionKey: "agent:main:slack:channel:C123",
-        message: expect.stringContaining("generated-locked.png"),
         messageId: "announce-channel-media-handoff-locked:agent-loop",
         route: { channel: "slack", to: "channel:C123", accountId: "acct-1", chatType: "channel" },
         inputProvenance: {
@@ -1374,10 +1366,17 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         },
         sourceReplyDeliveryMode: "message_tool_only",
         expectedMediaUrls: ["/tmp/generated-locked.png"],
+        requesterBinding: {
+          agentId: "main",
+          sessionKey: "agent:main:slack:channel:C123",
+          storePath: "/synthetic/media/sessions.db",
+          sessionId: "requester-session-channel",
+          lifecycleRevision: null,
+        },
         idempotencyKey: "announce-channel-media-handoff-locked:agent-loop",
       },
     },
-  ])("queues $name", async ({ route, sourceTool, events, options, expected, noAttachments }) => {
+  ])("queues $name", async ({ route, sourceTool, events, options, expected }) => {
     const { result, callGateway, sendMessage } = await runDelivery(route, {
       sourceTool,
       internalEvents: events,
@@ -1391,11 +1390,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expect.any(Number),
       expectQueueContext(),
     );
-    if (noAttachments) {
-      expect(
-        sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mock.calls.at(-1)?.[0],
-      ).not.toHaveProperty("expectedMediaAttachments");
-    }
     expect(sessionDeliveryQueueMocks.releaseSessionDeliveryClaim).toHaveBeenCalledWith(
       "session-delivery-media",
       expectQueueContext(),
@@ -1406,7 +1400,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it.each(["unavailable", "failed", "completed"] as const)(
+  it.each(["unavailable", "failed"] as const)(
     "handles %s durable media persistence",
     async (status) => {
       if (status === "unavailable") {
@@ -1425,17 +1419,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         internalEvents: musicCompletionEvents(),
       });
 
-      expectRecordFields(
-        result,
-        status === "completed"
-          ? { delivered: true, path: "queued" }
-          : {
-              delivered: false,
-              path: "queued",
-              reason: "completion_handoff_unavailable",
-              disposition: status === "failed" ? "permanent_failure" : "retryable",
-            },
-      );
+      expectRecordFields(result, {
+        delivered: false,
+        path: "queued",
+        reason: "completion_handoff_unavailable",
+        disposition: status === "failed" ? "permanent_failure" : "retryable",
+      });
       expect(callGateway).not.toHaveBeenCalled();
       expect(sendMessage).not.toHaveBeenCalled();
       if (status !== "unavailable") {

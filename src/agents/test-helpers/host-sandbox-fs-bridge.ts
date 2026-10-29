@@ -22,29 +22,20 @@ export function createSandboxFsBridgeFromResolver(
     return target;
   };
   const transfer = async (
-    operation: "copy" | "rename",
+    operation: typeof fs.copyFile | typeof fs.rename,
     from: string,
     to: string,
     cwd: string | undefined,
     mkdir = true,
   ) => {
-    const source = resolvePath(from, cwd);
-    const target = resolvePath(to, cwd);
-    if (!source.hostPath || !target.hostPath) {
-      throw new Error(
-        `Expected hostPath for ${operation}: ${source.containerPath} -> ${target.containerPath}`,
-      );
-    }
-    if (mkdir) {
-      await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
-    }
-    await (operation === "copy" ? fs.copyFile : fs.rename)(source.hostPath, target.hostPath);
+    const source = hostPath(from, cwd);
+    await operation(source, await prepareWrite(to, cwd, mkdir));
   };
   return {
     ...(pathMappings === undefined ? {} : { pathMappings }),
     resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
     copyFile: ({ sourcePath, destinationPath, cwd, mkdir = true }) =>
-      transfer("copy", sourcePath, destinationPath, cwd, mkdir),
+      transfer(fs.copyFile, sourcePath, destinationPath, cwd, mkdir),
     readFile: async ({ filePath, cwd }) => fs.readFile(hostPath(filePath, cwd)),
     writeFile: async ({ filePath, cwd, data, mkdir = true }) => {
       await fs.writeFile(await prepareWrite(filePath, cwd, mkdir), data);
@@ -70,7 +61,7 @@ export function createSandboxFsBridgeFromResolver(
         force: force ?? false,
       });
     },
-    rename: ({ from, to, cwd }) => transfer("rename", from, to, cwd),
+    rename: ({ from, to, cwd }) => transfer(fs.rename, from, to, cwd),
     stat: async ({ filePath, cwd }) => {
       try {
         const stats = await fs.stat(hostPath(filePath, cwd));

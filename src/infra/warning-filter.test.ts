@@ -1,35 +1,27 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { installProcessWarningFilter } from "./warning-filter.js";
+import { createNodeEvalArgs, resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
-const warningFilterKey = Symbol.for("openclaw.warning-filter");
-const baseEmitWarning = process.emitWarning.bind(process);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function resetWarningFilterInstallState(): void {
-  const globalState = globalThis as typeof globalThis & {
-    [warningFilterKey]?: { installed: boolean };
-  };
-  delete globalState[warningFilterKey];
-  process.emitWarning = baseEmitWarning;
+function probe(source: string, env: NodeJS.ProcessEnv = {}, runtime = resolveTestNodeExecPath()) {
+  const childEnv = { ...process.env, ...env };
+  delete childEnv.NODE_OPTIONS;
+  delete childEnv.NODE_REDIRECT_WARNINGS;
+  delete childEnv.NODE_NO_WARNINGS;
+  const imports = runtime === process.execPath && process.versions.bun ? [] : ["./scripts/tsx.mjs"];
+  const result = spawnSync(runtime, createNodeEvalArgs(source, { imports }), {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: childEnv,
+  });
+  expect(result.status, result.stderr).toBe(0);
 }
 
 describe("warning filter", () => {
-  beforeEach(() => {
-    resetWarningFilterInstallState();
-    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-  });
-
-  afterEach(() => {
-    resetWarningFilterInstallState();
-    vi.restoreAllMocks();
-  });
-
   it("routes only Node's warning printer at WARN across repeated capture setup", () => {
     const tempDir = tempDirs.make("openclaw-warning-filter-");
     const logFile = path.join(tempDir, "warning.log");
@@ -49,20 +41,7 @@ describe("warning filter", () => {
       await flushLogger();
     `;
 
-    const childEnv: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_WARNING_LOG: logFile };
-    delete childEnv.NODE_OPTIONS;
-    delete childEnv.NODE_REDIRECT_WARNINGS;
-    delete childEnv.NODE_NO_WARNINGS;
-    const result = spawnSync(
-      resolveTestNodeExecPath(),
-      ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", source],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: childEnv,
-      },
-    );
-    expect(result.status, result.stderr).toBe(0);
+    probe(source, { OPENCLAW_WARNING_LOG: logFile });
     const records = fs
       .readFileSync(logFile, "utf8")
       .trim()
@@ -76,39 +55,28 @@ describe("warning filter", () => {
     ).toBe("ERROR");
   });
 
-  it("installs once and suppresses known warnings at emit time", async () => {
-    const seenWarnings: Array<{ code?: string; name: string; message: string }> = [];
-    const onWarning = ({ code, name, message }: Error & { code?: string }) => {
-      seenWarnings.push({ code, name, message });
-    };
-    const makeWarning = (name: string, message: string, code?: string) => ({ name, message, code });
-    const punycode = makeWarning(
-      "DeprecationWarning",
-      "The punycode module is deprecated.",
-      "DEP0040",
-    );
-    const warningError = (warning: { name: string; code?: string; message: string }) =>
-      Object.assign(new Error(warning.message), warning);
-    const extendMessage =
-      "The `util._extend` API is deprecated. Please use Object.assign() instead.";
-
-    process.on("warning", onWarning);
-    try {
+  it("installs once and suppresses known warnings at emit time", () => {
+    probe(
+      `
+      import assert from "node:assert/strict";
+      import { setImmediate } from "node:timers/promises";
+      import { installProcessWarningFilter } from "./src/infra/warning-filter.ts";
+      const seenWarnings = [];
+      process.on("warning", ({ code, name, message }) => seenWarnings.push({ code, name, message }));
+      const makeWarning = (name, message, code) => ({ name, message, code });
+      const punycode = makeWarning("DeprecationWarning", "The punycode module is deprecated.", "DEP0040");
+      const warningError = (warning) => Object.assign(new Error(warning.message), warning);
+      const extendMessage = "The \`util._extend\` API is deprecated. Please use Object.assign() instead.";
       installProcessWarningFilter();
       installProcessWarningFilter();
       installProcessWarningFilter();
-      const emitWarning = (...args: unknown[]) =>
-        (process.emitWarning as unknown as (...warningArgs: unknown[]) => void)(...args);
-
+      const emitWarning = (...args) => Reflect.apply(process.emitWarning, process, args);
       emitWarning(extendMessage, "DeprecationWarning", "DEP0060");
       emitWarning(extendMessage, { type: "DeprecationWarning", code: "DEP0060" });
       emitWarning(warningError(punycode));
       emitWarning(new Error("SQLite is an experimental feature and might change at any time"), {
         type: "ExperimentalWarning",
       });
-      await setImmediate();
-      expect(seenWarnings).toEqual([]);
-
       const visible = makeWarning("Warning", "Visible warning", "OPENCLAW_TEST_WARNING");
       emitWarning(visible.message, { type: visible.name, code: visible.code });
       emitWarning(warningError(punycode), { type: "Warning", code: "OPENCLAW_VISIBLE_OVERRIDE" });
@@ -121,13 +89,11 @@ describe("warning filter", () => {
         process.emitWarning(warningError(warning));
       }
       await setImmediate();
-      for (const expected of [visible, punycode, ...visibleWarnings]) {
-        expect(seenWarnings.find((seen) => seen.message === expected.message)).toStrictEqual(
-          expected,
-        );
-      }
-    } finally {
-      process.off("warning", onWarning);
-    }
+      const byMessage = (a, b) => a.message.localeCompare(b.message);
+      assert.deepEqual(seenWarnings.toSorted(byMessage), [visible, punycode, ...visibleWarnings].toSorted(byMessage));
+    `,
+      {},
+      process.execPath,
+    );
   });
 });

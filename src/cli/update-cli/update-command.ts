@@ -7,6 +7,7 @@ import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-le
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { withSystemPackageOwnershipRun } from "../../infra/update-system-package-ownership.js";
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -21,6 +22,7 @@ import { reportPreMutationUpdateResult } from "./update-command-admission-report
 import { runAdmittedUpdate } from "./update-command-admitted.js";
 import { withUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -56,56 +58,20 @@ export async function updateCommand(
   inputOpts: UpdateCommandOptions,
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
-  return await withDeferredDebugProxyCapture(async () => {
-    const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");
-    if (await tryRunImmutableUpdateCommand(inputOpts)) {
-      return;
-    }
-    const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
-    await preparePostgresPoolForUpdate("openclaw update repair");
-    const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
-    return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
-      updateCommandWithRuntime(inputOpts, retainRuntime, executorOptions),
-    );
-  });
-}
-
-async function withUpdateDatabaseEngine<T>(
-  env: NodeJS.ProcessEnv,
-  run: () => Promise<T>,
-): Promise<T> {
-  const [
-    { cloneEnvWithPlatformSemantics },
-    { createConfigIO },
-    { isConfigReadFailure },
-    { resolveDatabaseEngineSelection },
-    { withDatabaseEngineSelection },
-    { loadDotEnvAsync },
-  ] = await Promise.all([
-    import("../../config/env-vars.js"),
-    import("../../config/io.js"),
-    import("../../config/io.invalid-config.js"),
-    import("../../infra/database-engine/config.js"),
-    import("../../infra/database-engine/context.js"),
-    import("../../infra/dotenv.js"),
-  ]);
-  const configEnv = cloneEnvWithPlatformSemantics(env);
-  await loadDotEnvAsync({ env: configEnv });
-  const snapshot = await createConfigIO({
-    env: configEnv,
-    observe: false,
-    pluginValidation: "core-only",
-  }).readConfigFileSnapshot();
-  if (isConfigReadFailure(snapshot)) {
-    throw createUpdateConfigFailure(snapshot);
-  }
-  // Candidate Doctor owns config recovery; admission only needs the authored engine choice.
-  const selection = await resolveDatabaseEngineSelection(snapshot.sourceConfig, configEnv);
-  return await withDatabaseEngineSelection(selection, async () => {
-    const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
-    await preparePostgresPoolForUpdate("openclaw update repair");
-    return await run();
-  });
+  return await withSystemPackageOwnershipRun(() =>
+    withDeferredDebugProxyCapture(async () => {
+      const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");
+      if (await tryRunImmutableUpdateCommand(inputOpts)) {
+        return;
+      }
+      const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
+      await preparePostgresPoolForUpdate("openclaw update repair");
+      const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
+      return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
+        updateCommandWithRuntime(inputOpts, retainRuntime, executorOptions),
+      );
+    }),
+  );
 }
 
 async function updateCommandWithRuntime(
@@ -307,7 +273,7 @@ async function updateCommandInternal(
       !legacyConfigPlan &&
       !run.candidateAdmissionChecks?.includes("config")
     ) {
-      const failure = createUpdateConfigFailure(configSnapshot);
+      const failure = createUpdateConfigFailure(configSnapshot, target.configReadFailure);
       return await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
     }
     const schemaPreflight = await preflightUpdateCommandSchemas({
@@ -568,18 +534,25 @@ async function updateCommandInternal(
         ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords,
       packageUpdateNodeRunner,
     };
-    const rollbackBlockedReason = opts.recovery
-      ? undefined
-      : await inspectActivatedUpdateState({
-          result,
-          root,
-          packageUpdateNodeRunner,
-          schemaVersions: execution.schemaVersions,
-          candidateSchemaVersions: execution.candidateSchemaVersions,
-          config: finalization.configSnapshot.config,
-          env: ownedManagedUpdateContext?.env ?? run.env,
-          timeoutMs: updateStepTimeoutMs,
-        });
+    // Before update mutation, the restored predecessor may already be writing state again.
+    // A post-activation scan would replace the original failure without a mutation to inspect.
+    const failedBeforeMutation =
+      result.status === "error" &&
+      !execution.mutationStarted &&
+      !(result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk);
+    const rollbackBlockedReason =
+      opts.recovery || failedBeforeMutation
+        ? undefined
+        : await inspectActivatedUpdateState({
+            result,
+            root,
+            packageUpdateNodeRunner,
+            schemaVersions: execution.schemaVersions,
+            candidateSchemaVersions: execution.candidateSchemaVersions,
+            config: finalization.configSnapshot.config,
+            env: ownedManagedUpdateContext?.env ?? run.env,
+            timeoutMs: updateStepTimeoutMs,
+          });
     run.executorFence?.assertCurrent();
     if (opts.recovery || rollbackBlockedReason) {
       // Only candidate code may reopen migrated state, including during reporting and cleanup.

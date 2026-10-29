@@ -90,6 +90,24 @@ afterEach(() => {
 });
 
 describe("registered maintenance commands", () => {
+  const mapping = JSON.stringify({
+    from: "openai/gpt-daybreak-blue-latest",
+    to: "openai/gpt-6.1-sol",
+    accessProgram: "daybreak_blue",
+  });
+  it("passes explicit model replacements only to repair", async () => {
+    await runCli("doctor --fix --non-interactive --replace-model " + mapping);
+    expectDoctorOptions({ modelReplacements: [JSON.parse(mapping)] });
+  });
+  it.each(["", "--lint", "--post-upgrade", "--session-sqlite inspect"])(
+    "rejects model choices without repair: %s",
+    async (options) => {
+      await runCli("doctor " + options + " --replace-model " + mapping);
+      expectNoCalls(doctorCommand);
+      expectFailure("--replace-model requires", false);
+    },
+  );
+
   it("keeps plain doctor read-only on unsupported Node", async () => {
     vi.stubGlobal("process", {
       ...process,

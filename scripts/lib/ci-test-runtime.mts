@@ -101,14 +101,29 @@ const nodeRequiredFiles = new Set([
   "src/infra/worker-heap-flag.test.ts",
   "src/logging/diagnostic-heap-profile.test.ts",
   "src/gateway/server-methods/diagnostics.heap-snapshot.test.ts",
+  // Consumed async-loader retention is specific to V8's suspended frames.
+  "src/agents/harness/lifecycle-hook-helpers.test.ts",
   // JavaScriptCore's conservative stack scanning cannot prove forced WeakRef collection.
+  "src/agents/agent-tools.execution-validation.test.ts",
   "src/config/sessions/session-accessor.pending-input-retention.test.ts",
+  "src/gateway/session-list-history-retention.test.ts",
+  "src/gateway/session-row-projection.retention.test.ts",
+  "src/gateway/session-database-retention.test.ts",
   "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
   "ui/src/lib/reactive/session-progress-roster.test.ts",
   "ui/src/pages/chat/chat-pane-retention.test.ts",
   "ui/src/pages/chat/chat-thread-retention.test.ts",
+  "ui/src/pages/chat/components/chat-transcript-layout-retention.test.ts",
+  "ui/src/pages/chat/session-message-cache-retention.test.ts",
   "ui/src/pages/chat/session-snapshot-store.test.ts",
   "ui/src/pages/usage/usage-page-retention.test.ts",
+]);
+// Real Code Mode workers exercise both host runtimes independently of their
+// Node/QuickJS guest choice. Keep Bun coverage while qualifying Node workers.
+const bothHostFiles = new Set([
+  "src/agents/code-mode.bridge.lifecycle.test.ts",
+  "src/agents/code-mode-engine-parity.test.ts",
+  "src/agents/code-mode.failure-phase.test.ts",
 ]);
 const knownConfigs = new Set([
   "ui/vitest.config.ts",
@@ -314,9 +329,12 @@ function resolveAllRuntimeSelections(
         .split("/")
         .some((_, index, parts) => matchesVitestGlob(parts.slice(index).join("/"), relative));
     });
-  const files = exactTargets ? targets! : [...nodeRequiredFiles];
-  const exceptions = files.filter((file) => {
-    if (!nodeRequiredFiles.has(file) || (postIncludes && !matches(file, postIncludes))) {
+  const files = exactTargets ? targets! : [...nodeRequiredFiles, ...bothHostFiles];
+  const nodeFiles = files.filter((file) => {
+    if (
+      (!nodeRequiredFiles.has(file) && !bothHostFiles.has(file)) ||
+      (postIncludes && !matches(file, postIncludes))
+    ) {
       return false;
     }
     if (includes && !matches(file, includes)) {
@@ -349,6 +367,7 @@ function resolveAllRuntimeSelections(
         buildVitestRunPlans([file], cwd).some((plan) => unresolvedConfigs.includes(plan.config)))
     );
   });
+  const exceptions = nodeFiles.filter((file) => nodeRequiredFiles.has(file));
   if (
     (exactTargets && exceptions.length === files.length) ||
     (includes?.length && includes.every((file) => nodeRequiredFiles.has(relativePath(file))))
@@ -410,21 +429,36 @@ function resolveAllRuntimeSelections(
     }
   }
 
+  // Changed rows can join sibling projects. Removing Node-only files can leave a
+  // project with no members, so Bun runs only projects owning a remaining file.
+  const bunIncludes = includes?.map(relativePath).filter((file) => !exceptions.includes(file));
+  const bunInventories =
+    bunIncludes?.length && configs.length > 1
+      ? configs.map((config) => listNodeTestConfigFiles(config))
+      : undefined;
+  const bunConfigs =
+    bunInventories?.every(Boolean) &&
+    bunIncludes!.every((file) => bunInventories.some((inventory) => inventory!.includes(file)))
+      ? configs.filter((_, index) =>
+          bunIncludes!.some((file) => bunInventories[index]!.includes(file)),
+        )
+      : undefined;
   return [
     ...(policy === "dual-all"
       ? [node]
-      : exceptions.length
+      : nodeFiles.length
         ? [
             {
               runtime: "node" as const,
               ...(selection.targets?.length
-                ? { targets: exceptions }
-                : { vitestArgs: exceptions.map((file) => path.resolve(cwd, file)) }),
+                ? { targets: nodeFiles }
+                : { vitestArgs: nodeFiles.map((file) => path.resolve(cwd, file)) }),
             },
           ]
         : []),
     {
       runtime: "bun",
+      ...(bunConfigs && bunConfigs.length < configs.length ? { configs: bunConfigs } : {}),
       ...(ui ? { env: BUN_UI_TEST_ENV } : {}),
       // Uncertain configs/argv use Bun; only named Node contracts are excluded.
       // Absolute globs work with both repository-root and scoped Vitest dirs.

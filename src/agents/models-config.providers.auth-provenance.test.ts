@@ -450,22 +450,19 @@ describe("models-config provider auth provenance", () => {
         refresh: "must-not-refresh",
         expires: 1,
       };
-      const resolveProfile = vi.spyOn(
+      using resolveProfile = vi.spyOn(
         await import("./auth-profiles/oauth.js"),
         "resolveApiKeyForProfile",
       );
-      try {
-        await fixture.discover();
-        await fixture.plan(configWithKey(configRef));
-        expect(fixture.authorization).toEqual(["Bearer ambient-key", "Bearer ambient-key"]);
-        expect(resolveProfile.mock.calls.map(([params]) => params.profileId)).not.toContain(
-          "unrelated:oauth",
-        );
-        expect(fixture.errors).toEqual([]);
-        expect(fixture.outcomes).toEqual([]);
-      } finally {
-        resolveProfile.mockRestore();
-      }
+
+      await fixture.discover();
+      await fixture.plan(configWithKey(configRef));
+      expect(fixture.authorization).toEqual(["Bearer ambient-key", "Bearer ambient-key"]);
+      expect(resolveProfile.mock.calls.map(([params]) => params.profileId)).not.toContain(
+        "unrelated:oauth",
+      );
+      expect(fixture.errors).toEqual([]);
+      expect(fixture.outcomes).toEqual([]);
     });
   });
 
@@ -664,6 +661,25 @@ describe("models-config provider auth provenance", () => {
       });
     },
   );
+
+  it("discovers with the configured API key instead of another saved or ambient account", async () => {
+    await withDiscoveryFixture("api_key", "resolveProviderAuth", async (fixture) => {
+      fixture.env.OPENAI_API_KEY = "unselected-ambient-key";
+      fixture.store.profiles[fixture.profileId] = createApiKeyCredential(
+        "openai",
+        "unselected-profile-key",
+      );
+      const cfg = configWithKey("selected-config-key");
+      cfg.models!.providers!.openai!.auth = "api-key";
+      await fixture.discover(cfg);
+      expect(fixture.authorization).toEqual(["Bearer selected-config-key"]);
+      expect(fixture.authResults).toEqual([
+        expect.objectContaining({ discoveryApiKey: "selected-config-key", mode: "api_key" }),
+      ]);
+      expect(fixture.authResults[0]).not.toHaveProperty("profileId");
+      expect(fixture.errors).toEqual([]);
+    });
+  });
 
   it("does not switch profiles when the configured full-auth profile is excluded", () => {
     const profileId = "openai:pinned";

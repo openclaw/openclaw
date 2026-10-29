@@ -34,7 +34,11 @@ export function findTextCheckpoint(
   text: string,
   referenceLength: number,
   resolveOwnership: (text: string) => ReturnType<typeof findCodeOwnership>,
-) {
+): {
+  offset: number;
+  context: string;
+  definitions?: ReturnType<typeof findCodeOwnership>["definitions"];
+} {
   const state = createProtectionScanState();
   let cursor = referenceLength;
   let lastLineStart = cursor;
@@ -50,6 +54,9 @@ export function findTextCheckpoint(
       (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
     ) {
       const ownership = resolveOwnership(text);
+      if (ownership.continuation) {
+        return { ...ownership.continuation, definitions: ownership.definitions };
+      }
       const retain = ownership.retainStart;
       let start = retain === 0 ? 0 : text.lastIndexOf("\n", retain - 1) + 1;
       const startsDefinition = ownership.definitions.some(
@@ -103,7 +110,19 @@ export function canReuseMarkdownOwnership(
   if (!nextText.startsWith(previousText)) {
     return false;
   }
-  const appended = nextText.slice(previousText.length);
+  return canReuseMarkdownOwnershipForAppend(
+    previousText,
+    nextText.slice(previousText.length),
+    ownership,
+  );
+}
+
+/** Reuse a parsed prefix only when appending `appended` cannot change Markdown ownership. */
+export function canReuseMarkdownOwnershipForAppend(
+  previousText: string,
+  appended: string,
+  ownership?: ReturnType<typeof findCodeOwnership>,
+): boolean {
   if (!appended) {
     return true;
   }
@@ -136,7 +155,7 @@ export function canReuseMarkdownOwnership(
   // Inline code inside a streamed link title stops being code when the title closes.
   if (
     ownership.retainStart < previousText.length &&
-    completesInlineLinkTitle(previousText, nextText, ownership.retainStart)
+    completesInlineLinkTitleForAppend(previousText, appended, ownership.retainStart)
   ) {
     return false;
   }
@@ -333,8 +352,11 @@ function hasReferenceDefinitionColon(text: string, labelStart: number) {
   return false;
 }
 
-function completesInlineLinkTitle(previousText: string, nextText: string, retainStart: number) {
-  const appended = nextText.slice(previousText.length);
+function completesInlineLinkTitleForAppend(
+  previousText: string,
+  appended: string,
+  retainStart: number,
+) {
   const appendedBoundary = appended.includes(">") ? stripBlockquotePrefixes(appended) : appended;
   if (!/["']\s*\)|\)\s*\)|^\s*\)/u.test(appendedBoundary)) {
     return false;

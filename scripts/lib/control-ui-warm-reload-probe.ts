@@ -1,11 +1,23 @@
 /** Browser-only diagnostic, serialized after the mock socket and wire-delay probe. */
-export function warmReloadProbe() {
+export function warmReloadProbe(
+  input: { rowFacts?: boolean; avatars?: boolean; lateRowFacts?: boolean } = {},
+  samplePaneChrome?: (at: number) => void,
+) {
   const milestones: Record<string, number> = {};
   const mutations: Array<{ at: number; count: number; region: string }> = [];
   const shifts: Array<{ at: number; value: number }> = [];
   const states: Array<{ at: number; state: string }> = [];
   const longTasks: Array<{ at: number; duration: number }> = [];
-  const reads: Array<{ at: number; store: string; hit: boolean }> = [];
+  const reads: Array<{ at: number; store: string; hit: boolean; cursor?: boolean }> = [];
+  const historyRequests: Array<{
+    method: string;
+    sentAt: number;
+    cursor: boolean;
+    receivedAt?: number;
+    responseBytes?: number;
+    kind?: string;
+    messages?: number;
+  }> = [];
   const transactions: Array<{
     at: number;
     label: string;
@@ -14,6 +26,8 @@ export function warmReloadProbe() {
     boardFrames: number;
   }> = [];
   const rows = new Set<Element>();
+  const avatars = new WeakSet<Element>();
+  const avatarTransitions: Array<{ at: number; region: string; attribute: string }> = [];
   const sidebarFrames: Array<{
     at: number;
     cached: boolean;
@@ -42,6 +56,77 @@ export function warmReloadProbe() {
   let removedRows = 0;
   let stopped = false;
   let cachedRows: Element[] = [];
+  const factSelectors: Record<string, string> = {
+    reactions: ".chat-message-reactions",
+    notices: ".chat-run-failure",
+    activity: ".chat-activity-group",
+    meta: ".msg-meta",
+    ...(input.lateRowFacts
+      ? {
+          links: ".markdown-session-link, .markdown-github-item",
+          images: ".chat-image-frame",
+          canonicalNotices: ".chat-notice",
+          avatars: ".chat-avatar-slot, .chat-avatar, .chat-author-avatar",
+        }
+      : {}),
+  };
+  const lateFrames: Array<{
+    at: number;
+    cached: boolean;
+    height: number | undefined;
+    links: string[];
+    images: string[];
+    notices: string[];
+    avatars: string[];
+  }> = [];
+  const imageFact = (image: HTMLImageElement) => [
+    image.getAttribute("src")?.startsWith("blob:")
+      ? image.getAttribute("src")
+      : image.getAttribute("src")?.split("?", 1)[0],
+    image.complete && image.naturalWidth > 0,
+    image.naturalWidth,
+    image.naturalHeight,
+  ];
+  const factFrames: Array<{
+    at: number;
+    changes: Array<{ rowKey: string | null; parts: string[]; heightDelta: number }>;
+  }> = [];
+  const threadFrames: Array<{ at: number; height: number; rowKeys: Array<string | null> }> = [];
+  const rowWindows: Array<{ at: number; rowKeys: Array<string | null> }> = [];
+  const firstRowFacts: Array<{
+    rowKey: string | null;
+    cached: boolean;
+    counts: Record<string, number>;
+  }> = [];
+  const observed = new WeakSet<Element>();
+  const sizes = new WeakMap<Element, number>();
+  const rowFacts = new WeakMap<
+    Element,
+    {
+      parts: Record<string, string>;
+      heights: Record<string, Array<number | undefined>>;
+      height?: number;
+      cached: boolean;
+    }
+  >();
+  let observedThread: Element | undefined;
+  const resize = input.rowFacts
+    ? new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const height = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height;
+          sizes.set(entry.target, height);
+          if (entry.target === observedThread && lateFrames.length) {
+            lateFrames.at(-1)!.height = height;
+          }
+        }
+      })
+    : undefined;
+  const observeSize = (element: Element) => {
+    if (!observed.has(element)) {
+      observed.add(element);
+      resize?.observe(element);
+    }
+  };
   let retainedAtCatchup: number | null = null;
   const duplicateRowKeys = new Set<string>();
   type TranscriptAnchor = {
@@ -150,7 +235,14 @@ export function warmReloadProbe() {
     const request = get.apply(this, args);
     const store = this.name;
     request.addEventListener("success", () => {
-      reads.push({ at: performance.now(), store, hit: request.result !== undefined });
+      reads.push({
+        at: performance.now(),
+        store,
+        hit: request.result !== undefined,
+        ...(store === "snapshots"
+          ? { cursor: Boolean(request.result?.snapshot?.deltaCursor) }
+          : {}),
+      });
       if (store === "snapshots" && request.result !== undefined) {
         mark("cacheRead");
       }
@@ -163,13 +255,30 @@ export function warmReloadProbe() {
       mark("socketCreated");
       const socket: WebSocket = Reflect.construct(target, args);
       socket.addEventListener("open", () => mark("socketOpen"), { once: true });
-      const pending = new Map<string, string>();
+      const pending = new Map<
+        string,
+        { method: string; history?: (typeof historyRequests)[number] }
+      >();
       const send = socket.send.bind(socket);
       socket.send = (data) => {
         if (typeof data === "string") {
           const frame = JSON.parse(data);
           if (frame.type === "req") {
-            pending.set(frame.id, frame.method);
+            const params = frame.params?.initialHistory ?? frame.params;
+            const history =
+              frame.method === "chat.startup" ||
+              frame.method === "chat.history" ||
+              (frame.method === "sessions.messages.subscribe" && frame.params?.initialHistory)
+                ? {
+                    method: frame.method,
+                    sentAt: performance.now(),
+                    cursor: Boolean(params?.cursor),
+                  }
+                : undefined;
+            if (history) {
+              historyRequests.push(history);
+            }
+            pending.set(frame.id, { method: frame.method, history });
             if (frame.method === "connect") {
               mark("connectSent");
             } else if (milestones.hello !== undefined) {
@@ -184,9 +293,20 @@ export function warmReloadProbe() {
         if (frame.type === "event" && frame.event === "connect.challenge") {
           mark("challenge");
         }
-        const method = pending.get(frame.id);
-        if (method) {
+        const request = pending.get(frame.id);
+        if (request) {
           pending.delete(frame.id);
+          const { method, history } = request;
+          if (history) {
+            const result =
+              method === "sessions.messages.subscribe"
+                ? frame.payload?.initialHistory?.payload
+                : frame.payload;
+            history.receivedAt = performance.now();
+            history.responseBytes = new TextEncoder().encode(event.data).byteLength;
+            history.kind = result?.kind ?? (result?.messages ? "window" : "error");
+            history.messages = result?.messages?.length;
+          }
           if (method === "connect") {
             mark("hello");
           }
@@ -204,6 +324,7 @@ export function warmReloadProbe() {
   const observer = new MutationObserver((records) => {
     const regions = new Map<string, number>();
     const textRoots = new Set<Element>();
+    const textSelector = input.lateRowFacts ? ".chat-text, .chat-notice" : ".chat-text";
     for (const record of records) {
       const element =
         record.target instanceof Element ? record.target : record.target.parentElement;
@@ -213,7 +334,18 @@ export function warmReloadProbe() {
         ? "transcript"
         : (element?.closest("openclaw-chat-pane, openclaw-app-sidebar")?.localName ?? "shell");
       regions.set(region, (regions.get(region) ?? 0) + 1);
-      const textRoot = element?.closest(".chat-text");
+      if (
+        input.avatars &&
+        element &&
+        avatars.has(element) &&
+        record.type === "attributes" &&
+        record.attributeName &&
+        ["class", "src", "data-avatar-state"].includes(record.attributeName) &&
+        record.oldValue !== element.getAttribute(record.attributeName)
+      ) {
+        avatarTransitions.push({ at: performance.now(), region, attribute: record.attributeName });
+      }
+      const textRoot = element?.closest(textSelector);
       if (textRoot) {
         textRoots.add(textRoot);
       }
@@ -221,10 +353,10 @@ export function warmReloadProbe() {
         if (!(node instanceof Element)) {
           continue;
         }
-        if (node.matches(".chat-text")) {
+        if (node.matches(textSelector)) {
           textRoots.add(node);
         }
-        for (const root of node.querySelectorAll(".chat-text")) {
+        for (const root of node.querySelectorAll(textSelector)) {
           textRoots.add(root);
         }
       }
@@ -265,9 +397,10 @@ export function warmReloadProbe() {
     subtree: true,
     childList: true,
     attributes: true,
+    attributeOldValue: input.avatars,
     characterData: true,
   });
-  const sample = () => {
+  const sample = (frameAt: number) => {
     if (stopped) {
       return;
     }
@@ -304,6 +437,13 @@ export function warmReloadProbe() {
     const thread = pane?.querySelector(".chat-thread");
     const inner = thread?.querySelector(".chat-thread-inner");
     const currentRows = [...(thread?.querySelectorAll(".chat-virtual-row") ?? [])];
+    if (input.avatars && currentRows.length) {
+      for (const element of document.querySelectorAll(
+        ".chat-thread :is(.chat-avatar-slot, .chat-author-avatar, .identity-avatar--agent, img), aside.sidebar :is(.viewer-avatar, .identity-avatar--agent, img)",
+      )) {
+        avatars.add(element);
+      }
+    }
     const currentKeys = new Set<string>();
     for (const row of currentRows) {
       rows.add(row);
@@ -320,6 +460,125 @@ export function warmReloadProbe() {
     );
     if (visible) {
       mark("firstTranscript");
+      if (input.lateRowFacts && thread && inner) {
+        observedThread = inner;
+        observeSize(inner);
+        lateFrames.push({
+          at: performance.now(),
+          cached: Boolean(milestones.cacheRead && !milestones.catchupResponse),
+          height: sizes.get(inner),
+          links: [...thread.querySelectorAll<HTMLElement>(factSelectors.links!)].map((link) =>
+            JSON.stringify([
+              link.textContent,
+              link.className,
+              link.dataset.linkReaderTone,
+              link.getAttribute("aria-description"),
+            ]),
+          ),
+          images: [...thread.querySelectorAll<HTMLElement>(factSelectors.images!)].map((frame) =>
+            JSON.stringify([
+              frame.className,
+              frame.getAttribute("style"),
+              [...frame.querySelectorAll("img")].map(imageFact),
+            ]),
+          ),
+          notices: [...thread.querySelectorAll<HTMLElement>(factSelectors.canonicalNotices!)].map(
+            (notice) =>
+              JSON.stringify([
+                notice.getAttribute("data-chat-row-key"),
+                notice.className,
+                notice.textContent,
+              ]),
+          ),
+          avatars: [...thread.querySelectorAll<HTMLElement>(factSelectors.avatars!)].map((avatar) =>
+            JSON.stringify([
+              avatar.className,
+              (avatar instanceof HTMLImageElement
+                ? [avatar]
+                : [...avatar.querySelectorAll("img")]
+              ).map(imageFact),
+              avatar.textContent,
+            ]),
+          ),
+        });
+      }
+      if (resize && inner) {
+        const at = performance.now();
+        const rowKeys = currentRows.map((row) => row.getAttribute("data-virtual-row-key"));
+        if (JSON.stringify(rowWindows.at(-1)?.rowKeys) !== JSON.stringify(rowKeys)) {
+          rowWindows.push({ at, rowKeys });
+        }
+        observeSize(inner);
+        const threadHeight = sizes.get(inner);
+        if (threadHeight !== undefined && threadFrames.at(-1)?.height !== threadHeight) {
+          threadFrames.push({ at, height: threadHeight, rowKeys });
+        }
+        const changes: (typeof factFrames)[number]["changes"] = [];
+        for (const row of currentRows) {
+          observeSize(row);
+          const parts: Record<string, string> = {};
+          const heights: Record<string, Array<number | undefined>> = {};
+          const counts: Record<string, number> = {};
+          for (const [part, selector] of Object.entries(factSelectors)) {
+            const elements = [...row.querySelectorAll(selector)];
+            elements.forEach(observeSize);
+            parts[part] = JSON.stringify(
+              elements.map((element) => [
+                element.textContent,
+                element.querySelectorAll("*").length,
+                ...(input.lateRowFacts
+                  ? [
+                      element.className,
+                      element.getAttribute("style"),
+                      element.getAttribute("aria-description"),
+                      [...element.querySelectorAll("img")].map(imageFact),
+                    ]
+                  : []),
+              ]),
+            );
+            heights[part] = elements.map((element) => sizes.get(element));
+            counts[part] = elements.length;
+          }
+          const previous = rowFacts.get(row);
+          const height = sizes.get(row);
+          const cached =
+            previous?.cached ?? Boolean(milestones.cacheRead && !milestones.catchupResponse);
+          if (previous?.cached) {
+            const changed = Object.keys(parts).filter(
+              (part) =>
+                previous.parts[part] !== parts[part] ||
+                heights[part]!.some((partHeight, index) => {
+                  const before = previous.heights[part]?.[index];
+                  return (
+                    partHeight !== undefined &&
+                    before !== undefined &&
+                    Math.abs(partHeight - before) > 0.5
+                  );
+                }),
+            );
+            const heightDelta =
+              height !== undefined && previous.height !== undefined ? height - previous.height : 0;
+            if (changed.length || Math.abs(heightDelta) > 0.5) {
+              changes.push({
+                rowKey: row.getAttribute("data-virtual-row-key"),
+                parts: changed,
+                heightDelta,
+              });
+            }
+          } else if (!previous) {
+            // A new row's complete first frame is the baseline, never an addition.
+            firstRowFacts.push({
+              rowKey: row.getAttribute("data-virtual-row-key"),
+              cached,
+              counts,
+            });
+          }
+          rowFacts.set(row, { parts, heights, height, cached });
+        }
+        if (changes.length) {
+          factFrames.push({ at, changes });
+        }
+      }
       if (!milestones.catchupResponse && milestones.cacheRead) {
         mark("firstCachedTranscript");
         if (!cachedRows.length) {
@@ -360,8 +619,8 @@ export function warmReloadProbe() {
         };
       }
     }
-    const input = pane?.querySelector<HTMLTextAreaElement>("textarea");
-    if (input && !input.disabled && !input.readOnly) {
+    const composer = pane?.querySelector<HTMLTextAreaElement>("textarea");
+    if (composer && !composer.disabled && !composer.readOnly) {
       mark("inputReady");
     }
     const state = JSON.stringify({
@@ -372,12 +631,13 @@ export function warmReloadProbe() {
       sidebar: Boolean(document.querySelector("aside.sidebar")),
       header: pane?.querySelector(".chat-pane__session-title-text")?.textContent ?? null,
       rows: visible,
-      input: Boolean(input && !input.disabled),
+      input: Boolean(composer && !composer.disabled),
       board: Boolean(document.querySelector(".board-widget__frame")),
     });
     if (states.at(-1)?.state !== state) {
       states.push({ at: performance.now(), state });
     }
+    samplePaneChrome?.(frameAt);
     requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);
@@ -385,22 +645,141 @@ export function warmReloadProbe() {
     read() {
       stopped = true;
       observer.disconnect();
+      resize?.disconnect();
       const perf = Reflect.get(window, "__perf");
+      const coverage = input.rowFacts
+        ? Object.fromEntries(
+            Object.entries(factSelectors).map(([part, selector]) => [
+              part,
+              document.querySelectorAll(`.chat-pane-cache__pane--active .chat-thread ${selector}`)
+                .length,
+            ]),
+          )
+        : {};
+      if (
+        input.rowFacts &&
+        (!firstRowFacts.some((row) => row.cached) ||
+          Object.values(coverage).some((count) => count === 0))
+      ) {
+        throw new Error(
+          `Unqualified row-facts sample: cached rows or fact coverage missing (${JSON.stringify(coverage)})`,
+        );
+      }
+      const pane = document.querySelector(".chat-pane-cache__pane--active");
+      const thread = pane?.querySelector(".chat-thread");
+      const bounds = thread?.getBoundingClientRect();
+      const textRoots = [
+        ...(thread?.querySelectorAll(".chat-virtual-row .chat-text") ?? []),
+      ].filter((element) => element.textContent?.trim());
+      // Capture-only eligibility explains missing Element Timing without turning
+      // a DOM observation or compositor-only reveal into a measured text paint.
+      const paintable = textRoots.some((element) => {
+        if (!bounds || !element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+          return false;
+        }
+        const rect = element.getBoundingClientRect();
+        return (
+          Math.min(rect.right, bounds.right, innerWidth) > Math.max(rect.left, bounds.left, 0) &&
+          Math.min(rect.bottom, bounds.bottom, innerHeight) > Math.max(rect.top, bounds.top, 0)
+        );
+      });
+      const firstPaint = milestones.firstTranscriptPaint ?? milestones.firstTranscript;
+      // The rAF sample immediately before presentation owns that painted frame.
+      const firstPaintedFrame =
+        firstPaint === undefined ? -1 : lateFrames.findLastIndex((frame) => frame.at <= firstPaint);
+      const paintedLateFrames =
+        firstPaint === undefined ? [] : lateFrames.slice(Math.max(0, firstPaintedFrame));
+      const firstLateFrame = paintedLateFrames[0];
+      const lateChanges = paintedLateFrames.slice(1).flatMap((frame, index) => {
+        const previous = paintedLateFrames[index]!;
+        const parts = (["links", "images", "notices", "avatars"] as const).filter(
+          (part) => JSON.stringify(frame[part]) !== JSON.stringify(previous[part]),
+        );
+        const heightDelta =
+          frame.height !== undefined && previous.height !== undefined
+            ? frame.height - previous.height
+            : 0;
+        return parts.length || Math.abs(heightDelta) > 0.5
+          ? [{ at: frame.at, parts, heightDelta }]
+          : [];
+      });
+      if (
+        input.lateRowFacts &&
+        (firstPaintedFrame < 0 ||
+          !firstLateFrame?.cached ||
+          milestones.firstTranscriptPaint === undefined)
+      ) {
+        throw new Error(
+          "Unqualified late-row-facts sample: no measured cached first transcript paint",
+        );
+      }
       return {
         milestones,
+        transcriptPresentation: {
+          at: performance.now(),
+          status:
+            milestones.firstTranscriptPaint !== undefined
+              ? "measured"
+              : paintable
+                ? "visible-without-element-timing"
+                : textRoots.length
+                  ? "hidden-or-clipped"
+                  : pane
+                    ? "empty"
+                    : "absent",
+          paintable,
+          textRoots: textRoots.length,
+          taggedTextOwners:
+            pane?.querySelectorAll('[elementtiming="openclaw-transcript"]').length ?? 0,
+        },
         measures: performance.getEntriesByType("measure").map((entry) => entry.toJSON()),
         transcriptPaints,
         largestPaints,
         reads,
+        historyRequests,
         transactions,
         shifts,
         cls: shifts.reduce((sum, shift) => sum + shift.value, 0),
         lastLayoutShift: shifts.at(-1)?.at ?? null,
         lastMutationBurst: mutations.findLast((batch) => batch.count >= 10)?.at ?? null,
         mutations,
+        rowFacts: input.rowFacts
+          ? {
+              firstRowFacts,
+              frames: factFrames,
+              threadFrames,
+              rowWindows,
+              coverage,
+            }
+          : undefined,
+        lateRowFacts: input.lateRowFacts
+          ? {
+              boundary: firstPaint,
+              measuredPaint: milestones.firstTranscriptPaint !== undefined,
+              firstFrame: firstLateFrame,
+              frames: paintedLateFrames,
+              changes: lateChanges,
+              visualChanges: lateChanges.filter((change) => change.parts.length).length,
+              heightDelta:
+                firstLateFrame?.height !== undefined &&
+                paintedLateFrames.at(-1)?.height !== undefined
+                  ? paintedLateFrames.at(-1)!.height! - firstLateFrame.height
+                  : null,
+              maximumHeightChange:
+                firstLateFrame?.height === undefined
+                  ? null
+                  : Math.max(
+                      0,
+                      ...paintedLateFrames.map((frame) =>
+                        Math.abs((frame.height ?? firstLateFrame.height!) - firstLateFrame.height!),
+                      ),
+                    ),
+            }
+          : undefined,
         states,
         longTasks,
         sidebarFrames,
+        avatarTransitions: input.avatars ? avatarTransitions : undefined,
         rows: {
           mounted: rows.size,
           removed: removedRows,

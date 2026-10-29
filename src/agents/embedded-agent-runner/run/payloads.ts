@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { REPEATED_TOOL_ERROR_CODE } from "../../../../packages/agent-core/src/errors.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { buildProviderLoginRecovery } from "../../../auto-reply/provider-login-recovery.js";
 import {
@@ -15,6 +16,7 @@ import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-rep
 import { applyAssistantDeliveryDirectives } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readAgentAssistantSource } from "../../../infra/agent-events.js";
+import { hasMeaningfulAutomationResult } from "../../../infra/agent-run-registry.automation.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
@@ -246,9 +248,9 @@ export function buildEmbeddedRunPayloads(params: {
     const rawErrorMessage = lastAssistantNeedsErrorSurface
       ? normalizeOptionalString(assistantForPayload?.errorMessage)
       : undefined;
-    const oauthRefreshFailure = rawErrorMessage
-      ? classifyOAuthRefreshFailure(rawErrorMessage)
-      : null;
+    const repeatedToolError = assistantForPayload?.errorCode === REPEATED_TOOL_ERROR_CODE;
+    const oauthRefreshFailure =
+      rawErrorMessage && !repeatedToolError ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
     const providerLoginRecovery = buildProviderLoginRecovery({
       provider: oauthRefreshFailure?.provider ?? params.provider,
       oauthReason: oauthRefreshFailure?.reason,
@@ -268,9 +270,11 @@ export function buildEmbeddedRunPayloads(params: {
         ? suppressFailureArtifacts
           ? undefined
           : lastAssistantErrored || rawErrorMessage
-            ? (providerLoginRecovery?.hint ??
-              renderRateLimitRetryExhaustion(rateLimitRetriesExhausted) ??
-              formatUserFacingAssistantErrorText(assistantForPayload, errorContext))
+            ? repeatedToolError
+              ? formatUserFacingAssistantErrorText(assistantForPayload, errorContext)
+              : (providerLoginRecovery?.hint ??
+                renderRateLimitRetryExhaustion(rateLimitRetriesExhausted) ??
+                formatUserFacingAssistantErrorText(assistantForPayload, errorContext))
             : formatAssistantErrorText(assistantForPayload, errorContext)
         : undefined;
     const deferAssistantTimeoutError =
@@ -483,7 +487,8 @@ export function buildEmbeddedRunPayloads(params: {
       ? "Gateway restarting…"
       : buildFailureWarning({
           lastToolError: params.lastToolError,
-          hasUserFacingReply,
+          // A recorded progress/done/blocked summary already reports the scheduled run.
+          hasUserFacingReply: hasUserFacingReply || hasMeaningfulAutomationResult(params.runId),
           verboseLevel: params.verboseLevel,
           useMarkdown,
         });

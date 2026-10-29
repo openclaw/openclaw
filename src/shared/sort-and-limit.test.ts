@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { sortAndLimitBy } from "./sort-and-limit.js";
 
 describe("sortAndLimitBy", () => {
+  it("orders numeric indices including zero without losing the first or worst entry", () => {
+    const entries = [0, -5, 4, -3, 1, 2];
+    expect(sortAndLimitBy(entries, 3, (a, b) => a - b)).toEqual([-5, -3, 0]);
+    expect(sortAndLimitBy(entries, 3, (a, b) => b - a)).toEqual([4, 2, 1]);
+  });
   it.each([1, 200, 201, 1025, 4096, undefined])(
     "matches stable full ordering without mutating input for limit %s",
     (limit) => {

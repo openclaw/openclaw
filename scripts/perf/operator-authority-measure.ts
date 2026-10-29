@@ -1,4 +1,19 @@
-// Owner-level allocation probe; see scripts/perf/README.md before interpreting counts.
+// Owner-level allocation probe. Real transcript preparation, detached storage:
+// node --expose-gc --import ./scripts/tsx.mjs scripts/perf/operator-authority-measure.ts \
+//   --scenario attempt-transcript-guard --plugins 40 --samples 5 --iterations 5000 --warmup 1000 \
+//   --timing-only --revision <sha> --output <timing.json>
+// For recovery-source policy checks, use --plugins 40 --access-policies 1 to keep
+// ordinary plugins in the inventory without inventing 40 authorization callbacks.
+// Repeat without --timing-only and with --sampling-interval 1024 for sampled bytes.
+// Compare identical arguments across revisions; allocation/CPU passes are separate.
+// Calls the prepared lifecycle's actual assertCommitAllowed; setup and cleanup are
+// excluded. Detached persistence avoids unrelated storage IO, not authority checks.
+// Acceptance: fewer applicable policy assertions and allocated bytes per check,
+// with no repeatable thread CPU regression. This is not whole-Gateway evidence.
+// --scenario watchdog-progress measures the actual attempt-bound model-progress
+// callback with --plugins 40 --access-policies 1 --iterations 5000 --samples 5.
+// Set OPENCLAW_STATE_DIR to an isolated synthetic scratch directory for this scenario.
+// Admission and effects still check the plugin; progress only owns run liveness.
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
@@ -14,6 +29,9 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../src/agents/admitted-run-context.js";
+import type { prepareEmbeddedAttemptTranscriptLifecycle } from "../../src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.js";
+import { composeSessionSourceAssertion } from "../../src/config/sessions/session-source-authority.js";
+import { captureSessionTranscriptTargetBinding } from "../../src/config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWrites,
@@ -32,11 +50,15 @@ import { decodeQueuedOperatorRecoverySource } from "../../src/gateway/operator-r
 import { restoreGatewayOperatorSource } from "../../src/gateway/operator-run-recovery.js";
 import type { GatewayRequestContext } from "../../src/gateway/server-methods/shared-types.js";
 import { createUnavailableRuntime } from "../../src/plugins/api-builder.js";
-import type { PluginGatewayAccessAuthority } from "../../src/plugins/gateway-access-policy.types.js";
+import type {
+  PluginGatewayAccessAuthority,
+  PluginGatewayAccessPolicy,
+} from "../../src/plugins/gateway-access-policy.types.js";
 import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { getPluginInstance } from "../../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../../src/plugins/registry.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../../src/plugins/runtime.js";
+import type { SessionControllerWatchdogAttempt } from "../../src/sessions/session-controller.watchdog.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../src/state/openclaw-state-db.js";
 import { profileCatalogPath } from "../../src/state/user-profile-identity.read.js";
 import { prepareUserProfileIdentity } from "../../src/state/user-profile-list.js";
@@ -47,6 +69,9 @@ const { values } = parseArgs({
   options: {
     iterations: { type: "string", default: "20000" },
     warmup: { type: "string", default: "5000" },
+    plugins: { type: "string", default: "1" },
+    "access-policies": { type: "string" },
+    samples: { type: "string", default: "1" },
     scenario: { type: "string", default: "all" },
     "counts-only": { type: "boolean", default: false },
     "timing-only": { type: "boolean", default: false },
@@ -64,6 +89,10 @@ function positiveInteger(value: string, label: string): number {
 assert(!(values["counts-only"] && values["timing-only"]), "Select one measurement mode");
 const iterations = positiveInteger(values.iterations, "iterations");
 const warmup = positiveInteger(values.warmup, "warmup");
+const pluginCount = positiveInteger(values.plugins, "plugins");
+const policyCount = positiveInteger(values["access-policies"] ?? values.plugins, "access-policies");
+assert(policyCount <= pluginCount, "access-policies must not exceed plugins");
+const sampleCount = positiveInteger(values.samples, "samples");
 const samplingInterval = positiveInteger(values["sampling-interval"], "sampling-interval");
 assert(values["counts-only"] || globalThis.gc, "Run Node with --expose-gc");
 const authorityCounts = (
@@ -139,30 +168,43 @@ const builder = createPluginRegistry({
   runtime: createUnavailableRuntime("setup-only", pluginId),
   activateGlobalSideEffects: false,
 });
-const record = createPluginRecord({
-  id: pluginId,
-  source: new URL(import.meta.url).pathname,
-  origin: "workspace",
-  enabled: true,
-  configSchema: false,
-});
-builder.registry.plugins.push(record);
-builder.createApi(record, { config }).registerGatewayAccessPolicy({
-  authorize(context) {
-    counts.authorize++;
-    assert(allowedProfiles.has(context.profile.profileId));
-    assert.equal(context.requiredByRole, true);
-    return grantLive ? pluginAuthority : undefined;
-  },
-  resume(context) {
-    counts.resume++;
-    assert(allowedProfiles.has(context.profile.profileId));
-    assert.equal(context.grantId, pluginAuthority.grantId);
-    return grantLive ? pluginAuthority : undefined;
-  },
-});
-assert.equal(builder.registry.gatewayAccessPolicies.length, 1);
-assert(getPluginInstance(record), "Registration must install the real plugin invocation owner");
+for (let index = 0; index < pluginCount; index++) {
+  const id = index === 0 ? pluginId : `${pluginId}-${index}`;
+  const record = createPluginRecord({
+    id,
+    source: new URL(import.meta.url).pathname,
+    origin: "workspace",
+    enabled: true,
+    configSchema: false,
+  });
+  if (index > 0) {
+    config.plugins!.allow!.push(id);
+  }
+  config.plugins!.entries![id] = { enabled: true };
+  builder.registry.plugins.push(record);
+  if (index >= policyCount) {
+    continue;
+  }
+  const policy: PluginGatewayAccessPolicy = {
+    authorize(context) {
+      counts.authorize++;
+      assert(allowedProfiles.has(context.profile.profileId));
+      assert.equal(context.requiredByRole, index === 0);
+      return index === 0 && grantLive ? pluginAuthority : undefined;
+    },
+  };
+  if (index === 0) {
+    policy.resume = (context) => {
+      counts.resume++;
+      assert(allowedProfiles.has(context.profile.profileId));
+      assert.equal(context.grantId, pluginAuthority.grantId);
+      return grantLive ? pluginAuthority : undefined;
+    };
+  }
+  builder.createApi(record, { config }).registerGatewayAccessPolicy(policy);
+  assert(getPluginInstance(record), "Registration must install the real plugin invocation owner");
+}
+assert.equal(builder.registry.gatewayAccessPolicies.length, policyCount);
 setActivePluginRegistry(builder.registry);
 
 const access = resolvePreparedGatewayOperatorAccessAuthority(
@@ -202,7 +244,10 @@ const operator = createAdmittedRunOperatorAuthority({
   scopes: ["operator.write"],
   gatewayAccessGrant: grant,
   signal: retained.signal,
-  assertCurrent: checkSource,
+  assertCurrent:
+    values.scenario === "attempt-transcript-guard" || values.scenario === "watchdog-progress"
+      ? composeSessionSourceAssertion([access.assertCurrent])
+      : checkSource,
   modelPolicy: {
     models: [model],
     allows: (selected) => selected.provider === model.provider && selected.model === model.model,
@@ -218,7 +263,8 @@ const admission = prepareSystemAgentRunAdmission(
   undefined,
   operator,
 );
-const admitted = resolveAdmittedRunActiveAssertion(await admission.admit("embedded"));
+const admittedRunContext = await admission.admit("embedded");
+const admitted = resolveAdmittedRunActiveAssertion(admittedRunContext);
 assert(admitted);
 const transcriptTarget = {
   agentId: "synthetic-agent",
@@ -235,6 +281,50 @@ const transcript = await withOwnedSessionTranscriptWrites(
   },
   async () => captureOwnedTranscriptWriteAssertion(transcriptTarget),
 );
+let attemptTranscript:
+  | Awaited<ReturnType<typeof prepareEmbeddedAttemptTranscriptLifecycle>>
+  | undefined;
+if (values.scenario === "attempt-transcript-guard") {
+  const { prepareEmbeddedAttemptTranscriptLifecycle } =
+    await import("../../src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.js");
+  const target = captureSessionTranscriptTargetBinding({
+    ...transcriptTarget,
+    storePath: path.join(
+      process.cwd(),
+      ".local",
+      "transcript-authority-measure",
+      "openclaw-agent.sqlite",
+    ),
+    env: { OPENCLAW_STATE_DIR: path.join(process.cwd(), ".local", "transcript-authority-measure") },
+  });
+  attemptTranscript = await prepareEmbeddedAttemptTranscriptLifecycle({
+    attempt: {
+      config,
+      runId: "synthetic-authority-run",
+      admittedRunContext,
+      abortSignal: controller.signal,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      sessionFile: target.sessionKey,
+      sessionTarget: target,
+      sessionPersistence: "detached",
+      preparedSessionTarget: {
+        target,
+        assertCurrent: composeSessionSourceAssertion([admitted], (assertSource) => {
+          controller.signal.throwIfAborted();
+          assertSource();
+          controller.signal.throwIfAborted();
+        }),
+      },
+    },
+    externalAbortController: {
+      arm() {},
+      async throwIfFiredAfterPrepCleanup() {
+        controller.signal.throwIfAborted();
+      },
+    },
+  });
+}
 let recovery: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
 let recoveryStateDir: string | undefined;
 let recoveryConfig = config;
@@ -301,6 +391,54 @@ const scenarios = [
   { name: "admitted-run", check: admitted },
   { name: "transcript-guard", check: transcript },
 ];
+let watchdogLifetime: Promise<void> | undefined;
+const finishWatchdog = Promise.withResolvers<void>();
+if (values.scenario === "watchdog-progress") {
+  const { withPreparedEmbeddedRunToolAuthority } =
+    await import("../../src/agents/harness/tool-authority.runtime.js");
+  const { createReplyOperation } = await import("../../src/sessions/session-controller.js");
+  const operation = createReplyOperation({
+    sessionId: transcriptTarget.sessionId,
+    sessionKey: transcriptTarget.sessionKey,
+    resetTriggered: false,
+    turnKind: "direct",
+  });
+  const ready = Promise.withResolvers<SessionControllerWatchdogAttempt>();
+  watchdogLifetime = withPreparedEmbeddedRunToolAuthority(
+    { admittedRunContext, replyOperation: operation },
+    {
+      ...transcriptTarget,
+      config,
+      runId: "synthetic-authority-run",
+      sessionFile: "synthetic-authority-session.jsonl",
+      workspaceDir: process.cwd(),
+      provider: model.provider,
+      modelId: model.model,
+    },
+    undefined,
+    async () => {
+      const { getGatewayToolCallerIdentity } =
+        await import("../../src/agents/tools/gateway-caller-context.js");
+      const watchdog = getGatewayToolCallerIdentity()?.watchdogAttempt;
+      assert(watchdog);
+      ready.resolve(watchdog);
+      await finishWatchdog.promise;
+    },
+  ).finally(() => operation.complete());
+  void watchdogLifetime.catch(ready.reject);
+  const watchdog = await ready.promise;
+  scenarios.push({
+    name: "watchdog-progress",
+    check() {
+      assert(watchdog.progressModel("model:delta"));
+    },
+  });
+}
+if (attemptTranscript) {
+  const check = attemptTranscript.ownedTranscriptWriteContext.assertCommitAllowed;
+  assert(check);
+  scenarios.push({ name: "attempt-transcript-guard", check });
+}
 if (recovery) {
   const authority = recovery.authority;
   scenarios.push({
@@ -401,7 +539,14 @@ const results = [];
 const inspector = new Session();
 inspector.connect();
 try {
-  for (const scenario of scenarios) {
+  const samples = Array.from({ length: sampleCount }, (_, sample) =>
+    scenarios.map((scenario) => ({
+      name: scenario.name,
+      check: scenario.check,
+      sample: sample + 1,
+    })),
+  ).flat();
+  for (const scenario of samples) {
     if (values.scenario !== "all" && values.scenario !== scenario.name) {
       continue;
     }
@@ -409,7 +554,7 @@ try {
       scenario.check();
     }
     globalThis.gc?.();
-    if (values["start-at"]) {
+    if (values["start-at"] && scenario.sample === 1) {
       const startAt = positiveInteger(values["start-at"], "start-at");
       const remaining = startAt - Date.now();
       assert(remaining > 0, "Shared start deadline missed during setup/warmup");
@@ -432,6 +577,7 @@ try {
       }
       results.push({
         scenario: scenario.name,
+        sample: scenario.sample,
         iterations,
         counts: { ...counts },
         host: {
@@ -449,6 +595,7 @@ try {
       });
     }
     const finishGc = values["timing-only"] ? observeGc() : undefined;
+    const hostLoad = os.loadavg();
     const cpu = process.threadCpuUsage();
     const start = performance.now();
     for (let index = 0; index < iterations; index++) {
@@ -465,15 +612,17 @@ try {
       allocation = summarizeProfile(heapProfile.head);
       if (values.output) {
         await writeFile(
-          `${values.output}.${scenario.name}.heapprofile`,
+          `${values.output}.${scenario.name}${sampleCount > 1 ? `.sample-${scenario.sample}` : ""}.heapprofile`,
           JSON.stringify(heapProfile),
         );
       }
     }
     results.push({
       scenario: scenario.name,
+      sample: scenario.sample,
       iterations,
       elapsedMs,
+      hostLoad,
       gc,
       gcMsPerCheck: gc && gc.all.totalMs / iterations,
       nsPerCheck: (elapsedMs * 1e6) / iterations,
@@ -501,6 +650,12 @@ try {
   // Positive control outside capture: retained plugin answers remain live on the next check.
   grantLive = false;
   assert.throws(checkGrant);
+  if (watchdogLifetime) {
+    assert.throws(admitted);
+  }
+  if (attemptTranscript) {
+    assert.throws(attemptTranscript.ownedTranscriptWriteContext.assertCommitAllowed!);
+  }
   const report = {
     revision: values.revision,
     node: process.version,
@@ -512,6 +667,9 @@ try {
     timingOnly: values["timing-only"],
     countsOnly: values["counts-only"],
     warmup,
+    pluginCount,
+    policyCount,
+    sampleCount,
     setupCountsExcluded: true,
     nextCheckRevocationDenied: true,
     nextCheckConfigRevocationDenied,
@@ -524,6 +682,9 @@ try {
   console.log(json);
 } finally {
   inspector.disconnect();
+  finishWatchdog.resolve();
+  await watchdogLifetime;
+  await attemptTranscript?.transcriptLifecycle.dispose();
   execution.release();
   admission.close();
   controller.abort();

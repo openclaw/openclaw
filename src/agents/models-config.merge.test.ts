@@ -38,82 +38,49 @@ function mergeCustom(next: ProviderOverrides, existing: ProviderOverrides) {
 }
 
 describe("models-config merge", () => {
-  it("refreshes metadata while preserving explicit reasoning overrides", () => {
+  it("merges headers and refreshes metadata while preserving authored fields", () => {
     const { input: _input, ...authored } = model({
       reasoning: false,
       cost: { input: 123, output: 456, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 2_000_000,
       maxTokens: 200_000,
     });
-    const catalog = { models: [model({ reasoning: true })] };
-    const merged = merge.mergeProviderModels(catalog, { models: [authored] });
+    const merged = merge.mergeProviderModels<ProviderModelCatalog>(
+      { models: [model({ reasoning: true })], headers: { "User-Agent": "catalog" } },
+      { models: [authored], headers: { "X-Tenant": "configured" } },
+    );
     expect(merged.models).toEqual([{ ...authored, input: ["text"] }]);
+    expect(merged.headers).toEqual({ "User-Agent": "catalog", "X-Tenant": "configured" });
   });
 
-  it("uses compat from the owner of the configured local route", () => {
+  const catalogCompat = { supportsTools: true, supportsTemperature: false };
+  const configuredCompat = { supportsTools: false, supportsTemperature: true };
+  it.each<[ProviderOverrides, string | undefined, typeof catalogCompat]>([
+    [{}, "meta", catalogCompat],
+    [{ baseUrl: "http://127.0.0.1:9000/v1" }, undefined, configuredCompat],
+    [{ api: "openai-completions" }, undefined, configuredCompat],
+    [{ models: [] }, "meta", catalogCompat],
+  ])("keeps metadata with its route owner: %j", (overrides, family, compat) => {
+    const catalog = provider({ models: [model({ family: "meta", compat: catalogCompat })] });
     const merged = merge.mergeProviderModels(
-      provider({
-        baseUrl: "https://catalog.example/v1/",
-        models: [model({ compat: { supportsTools: true, supportsTemperature: false } })],
-      }),
-      provider({
-        baseUrl: "http://127.0.0.1:9000/v1",
-        models: [model({ compat: { supportsTools: false, supportsTemperature: true } })],
-      }),
+      catalog,
+      provider({ models: [model({ compat: configuredCompat })], ...overrides }),
     );
-    expect(merged.models[0]?.compat).toEqual({ supportsTools: false, supportsTemperature: true });
+    expect([merged.models[0]?.family, merged.models[0]?.compat]).toEqual([family, compat]);
+    if (overrides.models) {
+      expect(merged.models).toEqual(catalog.models);
+    }
   });
 
-  it("drops invalid stale catalogs while retaining auth-only providers", () => {
-    const merged = mergeSecrets(
-      { openai: provider() },
-      {
-        invalid: provider({ baseUrl: undefined }),
-        "auth-only": provider({ models: [], apiKey: "AGENT_KEY" }),
-      },
-    );
-    expect(merged.invalid).toBeUndefined();
-    expect(merged["auth-only"]?.apiKey).toBe("AGENT_KEY");
-    expect(merged.openai).toBeDefined();
-  });
-
-  it("preserves existing secrets after provider key normalization", () => {
+  it("normalizes providers, retaining valid secrets and dropping invalid stale catalogs", () => {
     const merged = mergeSecrets(merge.mergeProviders({ explicit: { openai: provider() } }), {
+      invalid: provider({ baseUrl: undefined }),
+      "auth-only": provider({ models: [], apiKey: "AGENT_KEY" }),
       " OpenAI ": provider({ baseUrl: agentUrl, apiKey: "AGENT_KEY" }),
     });
-    expect(Object.keys(merged)).toEqual(["openai"]);
+    expect(Object.keys(merged).toSorted()).toEqual(["auth-only", "openai"]);
+    expect(merged["auth-only"]?.apiKey).toBe("AGENT_KEY");
     expect(merged.openai).toMatchObject({ apiKey: "AGENT_KEY", baseUrl: agentUrl });
-  });
-
-  it("merges implicit and explicit provider headers", () => {
-    const catalog = {
-      api: "anthropic-messages",
-      baseUrl: "https://api.example.com",
-      models: [{ id: "model" }],
-    };
-    const merged = merge.mergeProviderModels<ProviderModelCatalog>(
-      { ...catalog, headers: { "User-Agent": "claude-code/0.1.0" } },
-      { ...catalog, headers: { "X-Kimi-Tenant": "tenant-a" } },
-    );
-    expect(merged).toEqual({
-      ...catalog,
-      headers: { "User-Agent": "claude-code/0.1.0", "X-Kimi-Tenant": "tenant-a" },
-    });
-  });
-
-  it("keeps a catalog model's family only while the configured route matches", () => {
-    const catalog = provider({ models: [model({ family: "meta" })] });
-    const familyFor = (configured: ProviderOverrides) =>
-      merge.mergeProviderModels(catalog, provider({ models: [model()], ...configured })).models[0]
-        ?.family;
-    expect(familyFor({})).toBe("meta");
-    // Another endpoint may serve a different model under the same id.
-    expect(familyFor({ baseUrl: "http://127.0.0.1:9000/v1" })).toBeUndefined();
-    expect(familyFor({ api: "openai-completions" })).toBeUndefined();
-    // Rows the configuration does not mention keep the catalog's own declaration.
-    expect(merge.mergeProviderModels(catalog, provider({ models: [] })).models).toEqual(
-      catalog.models,
-    );
   });
 
   it("replaces a stale baseUrl when the model API surface changes", () => {

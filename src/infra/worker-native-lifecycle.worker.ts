@@ -231,7 +231,10 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
     void (async () => {
       await nextTurn();
       lifetime.nativeJoined = { code };
-      send({ type: "execution-exit", id, code });
+      // Only retained resources can keep cleanup pending after execution has joined.
+      if (lifetime.resource) {
+        send({ type: "execution-exit", id, code });
+      }
       finishJoined(id, lifetime);
     })().catch((error: unknown) => send({ type: "stop-error", id, error }));
   });

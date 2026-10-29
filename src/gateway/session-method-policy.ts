@@ -19,6 +19,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["skills.library.activate", { fields: ["sessionKey"], required: true }],
   ["agent", { fields: ["sessionKey"], runStart: true }],
   ["board.event", { fields: ["sessionKey"], required: true }],
+  ["board.get", { fields: ["sessionKey"], required: true }],
   ["board.update", { fields: ["sessionKey"], required: true }],
   ["board.widget.grant", { fields: ["sessionKey"], required: true }],
   ["board.widget.put", { fields: ["sessionKey"], required: true }],
@@ -64,7 +65,6 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["sessions.goal.clear", { fields: ["sessionKey"], required: true }],
   ["sessions.providerReview.continue", { fields: ["sessionKey"], required: true, runStart: true }],
   ["sessions.pluginPatch", { fields: ["key"], required: true }],
-  ["sessions.recover", { fields: ["key"], required: true }],
   ["sessions.reset", { fields: ["key"], required: true }],
   ["sessions.rewind", { fields: ["sessionKey"], required: true }],
   ["sessions.send", { fields: ["key"], required: true, runStart: true, mayCreate: true }],
@@ -80,6 +80,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
     "talk.client.create",
     { fields: ["sessionKey"], profileIndependent: true, runStart: true, mayCreate: true },
   ],
+  ["talk.client.say", { fields: ["sessionKey"], required: true, profileIndependent: true }],
   ["talk.client.steer", { fields: ["sessionKey"], required: true, profileIndependent: true }],
   [
     "talk.client.toolCall",
@@ -156,6 +157,16 @@ export function isSessionTargetMethod(method: string): boolean {
 /** Only these reads are wholly bounded by their direct session keys. */
 export function isDirectSessionReadMethod(method: string): boolean {
   return DIRECT_SESSION_READ_METHODS.has(method);
+}
+
+/** Read admission is separate from whether direct keys wholly bound authorization. */
+export function sessionMethodDatabaseAdmission(method: string): "read" | "write" {
+  return isDirectSessionReadMethod(method) ||
+    method === "sessions.messages.subscribe" ||
+    method === "sessions.resolve" ||
+    method === "chat.metadata"
+    ? "read"
+    : "write";
 }
 
 export function sessionMutationTargetFields(method: string): readonly SessionMutationTargetField[] {

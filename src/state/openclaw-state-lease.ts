@@ -1,6 +1,7 @@
 // Host-owned SQLite leases serialize trusted work across processes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
@@ -22,6 +23,7 @@ import {
   createOpenClawStateLeaseError as leaseError,
   createOpenClawStateLeaseAbortError as abortError,
   createOpenClawStateLeaseLostError,
+  resolveOpenClawStateLeaseOperationError,
   OpenClawStateLeaseError,
 } from "./openclaw-state-lease-error.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
@@ -107,12 +109,11 @@ async function runStateLeaseOwnerInScope<T>(
   maintenance: OpenClawDatabaseMaintenanceScope | undefined,
 ): Promise<T> {
   const validated = validateOpenClawStateLeaseOptions(invocation.options);
-  const owner = randomUUID();
   const renewalTimer: { dueAt?: number; lateByMs: number } = { lateByMs: 0 };
   const identity: LeaseIdentity = {
     scope: validated.scope,
     key: validated.key,
-    owner,
+    owner: randomUUID(),
     renewalTimer,
     leaseLabel: validated.leaseLabel,
   };
@@ -160,6 +161,7 @@ async function runStateLeaseOwnerInScope<T>(
             ? createOpenClawStateLeaseLostErrorFromDatabase(identity, validated.database, cause)
             : createOpenClawStateLeaseLostError(validated, cause),
       );
+      materializeErrorStack(leaseLost.signal.reason);
     }
   };
   const assertActive = () => {
@@ -304,11 +306,7 @@ async function runStateLeaseOwnerInScope<T>(
         label: `${validated.leaseLabel} ${validated.scope}/${validated.key}`,
         waitMs: validated.waitMs,
         signal: validated.signal,
-        assertCurrent() {
-          if (leaseLost.signal.aborted) {
-            throw leaseLost.signal.reason;
-          }
-        },
+        assertCurrent: () => leaseLost.signal.throwIfAborted(),
         prepare:
           invocation.kind === "native" &&
           validated.prepareDatabase &&
@@ -451,7 +449,6 @@ async function runStateLeaseOwnerInScope<T>(
 
     const assertOperationOwned = (transaction?: EngineConnection) => {
       assertActive();
-      const params = { ...identity, database: validated.database, transaction };
       if (workerHeartbeat) {
         try {
           workerHeartbeat.assertRunning();
@@ -461,7 +458,7 @@ async function runStateLeaseOwnerInScope<T>(
         }
       }
       // Durable ownership authorizes the effect; worker liveness adds no authority.
-      verifyLeaseOwnership(params);
+      verifyLeaseOwnership({ ...identity, database: validated.database, transaction });
     };
     const renewForHandoff = () => {
       const params = { ...identity, database: validated.database };
@@ -607,6 +604,7 @@ async function runStateLeaseOwnerInScope<T>(
         await verify();
         const lease: OpenClawStateAsyncLeaseContext = {
           signal: operationSignal,
+          assertCurrent: execution.assertCurrent,
           assertOwned: async () => execution.run(() => verify()),
           renew: async () => execution.run(() => verify(true)),
         };
@@ -702,16 +700,7 @@ async function runStateLeaseOwnerInScope<T>(
           ? abortError(validated.signal, "operation", validated.leaseLabel)
           : undefined;
       workerOperations?.rethrowIfUncertain(failure, authorityError);
-      if (authorityError instanceof Error) {
-        if (failure !== error && authorityError instanceof OpenClawStateLeaseError) {
-          // Nested owners may observe the same failed operation differently. Keep
-          // the caller's authority code and all operation/drainage causes.
-          const { code, message, loss } = authorityError;
-          throw leaseError(code, message, failure, loss);
-        }
-        throw authorityError;
-      }
-      throw failure;
+      throw resolveOpenClawStateLeaseOperationError(error, failure, authorityError);
     }
     if (workerStorage) {
       assertActive();

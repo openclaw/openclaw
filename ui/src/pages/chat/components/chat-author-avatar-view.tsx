@@ -25,6 +25,7 @@ export type ChatAuthorAvatarProps = {
   agentAvatar?: { avatar?: string | null; textAvatar?: string | null };
   channelAvatar?: ChannelSenderAvatarSource;
   hideTooltip?: boolean;
+  mediaReadAllowed?: boolean;
 };
 
 function InitialsAvatar(props: {
@@ -44,30 +45,75 @@ function InitialsAvatar(props: {
 
 /** Small author marker shared by transcript bubbles and the pending-send queue. */
 export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
-  const gateway = useAvatarGatewayContext();
+  const authorGateway = useAvatarGatewayContext();
   const label = () => formatSenderLabel(props.sender);
   const avatar = createMemo(() => {
-    gateway();
+    authorGateway();
     const value = props.sender ? resolveAvatar(props.sender) : undefined;
     return value?.kind === "profile" ? value.url : null;
   });
+  function ProfileAuthorAvatar(childProps: {
+    view: IdentityAvatarView;
+    sender: IdentityAvatarInput;
+    label: string;
+  }) {
+    const gateway = useAvatarGatewayContext();
+    const channelPhoto = createMemo(() =>
+      resolveChannelSenderAvatarUrl(
+        childProps.sender,
+        props.channelAvatar,
+        gateway().resourceBasePath,
+      ),
+    );
+    const presentation = createIdentityAvatarPresentation(() => childProps.view);
+    return (
+      <span
+        ref={(element) => props.elementRef?.(element)}
+        data-avatar-state={channelPhoto() ? undefined : presentation.state()}
+        class={["chat-author-avatar", channelPhoto() ? undefined : presentation.classes()]}
+        role="img"
+        aria-label={childProps.label}
+        title={props.hideTooltip ? undefined : childProps.label}
+      >
+        <Show
+          when={channelPhoto()}
+          fallback={
+            <>
+              <Show when={Boolean(childProps.view.imageUrl)}>
+                <IdentityAvatarImage
+                  view={childProps.view}
+                  onStateChange={presentation.onStateChange}
+                  class="chat-author-avatar__image"
+                  ariaHidden
+                />
+              </Show>
+              <InitialsAvatar
+                avatar={childProps.view.fallback}
+                fallback={Boolean(childProps.view.imageUrl)}
+              />
+            </>
+          }
+        >
+          <ChannelAvatar
+            routeUrl={channelPhoto()}
+            authTokens={gateway().authTokens}
+            authReady={props.mediaReadAllowed !== false && Boolean(gateway().origin)}
+          >
+            <InitialsAvatar avatar={childProps.view.fallback} />
+          </ChannelAvatar>
+        </Show>
+      </span>
+    );
+  }
+
   return (
     <Show when={props.sender && label() ? props.sender : undefined}>
       {(sender) => (
         <Show
           when={sender().identity?.type === "agent"}
           fallback={
-            <IdentityAvatar identity={sender()}>
-              {(view) => (
-                <ProfileAuthorAvatar
-                  elementRef={props.elementRef}
-                  view={view()}
-                  sender={sender()}
-                  label={label()!}
-                  channelAvatar={props.channelAvatar}
-                  hideTooltip={props.hideTooltip}
-                />
-              )}
+            <IdentityAvatar identity={sender()} cachedOnly={props.mediaReadAllowed === false}>
+              {(view) => <ProfileAuthorAvatar view={view()} sender={sender()} label={label()!} />}
             </IdentityAvatar>
           }
         >
@@ -79,6 +125,7 @@ export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
             title={props.hideTooltip ? undefined : label()!}
           >
             <AgentIdentityAvatar
+              cachedOnly={props.mediaReadAllowed === false}
               agent={{
                 id: sender().identity!.id,
                 avatar: props.agentAvatar?.avatar ?? avatar(),
@@ -89,56 +136,6 @@ export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
         </Show>
       )}
     </Show>
-  );
-}
-
-function ProfileAuthorAvatar(props: {
-  elementRef?: (element: HTMLElement) => void;
-  view: IdentityAvatarView;
-  sender: IdentityAvatarInput;
-  label: string;
-  channelAvatar?: ChannelSenderAvatarSource;
-  hideTooltip?: boolean;
-}) {
-  const gateway = useAvatarGatewayContext();
-  const channelPhoto = createMemo(() =>
-    resolveChannelSenderAvatarUrl(props.sender, props.channelAvatar, gateway().resourceBasePath),
-  );
-  const presentation = createIdentityAvatarPresentation(() => props.view);
-  return (
-    <span
-      ref={(element) => props.elementRef?.(element)}
-      data-avatar-state={channelPhoto() ? undefined : presentation.state()}
-      class={["chat-author-avatar", channelPhoto() ? undefined : presentation.classes()]}
-      role="img"
-      aria-label={props.label}
-      title={props.hideTooltip ? undefined : props.label}
-    >
-      <Show
-        when={channelPhoto()}
-        fallback={
-          <>
-            <Show when={Boolean(props.view.imageUrl)}>
-              <IdentityAvatarImage
-                view={props.view}
-                onStateChange={presentation.onStateChange}
-                class="chat-author-avatar__image"
-                ariaHidden
-              />
-            </Show>
-            <InitialsAvatar avatar={props.view.fallback} fallback={Boolean(props.view.imageUrl)} />
-          </>
-        }
-      >
-        <ChannelAvatar
-          routeUrl={channelPhoto()}
-          authTokens={gateway().authTokens}
-          authReady={Boolean(gateway().origin)}
-        >
-          <InitialsAvatar avatar={props.view.fallback} />
-        </ChannelAvatar>
-      </Show>
-    </span>
   );
 }
 
@@ -155,14 +152,17 @@ export function UserAvatarSlot(props: {
         ref={(element) => props.elementRef?.(element)}
         data-avatar-state={presentation.state()}
         class={["chat-avatar-slot", presentation.classes()]}
+        role="img"
+        aria-label={props.label}
       >
         <IdentityAvatarImage
           view={props.view}
           onStateChange={presentation.onStateChange}
           class="chat-avatar user"
           alt={props.label}
+          ariaHidden
         />
-        <UserInitials view={props.view} label={props.label} />
+        <UserInitials view={props.view} />
       </span>
     </Show>
   );
@@ -170,7 +170,7 @@ export function UserAvatarSlot(props: {
 
 function UserInitials(props: {
   view: IdentityAvatarView;
-  label: string;
+  label?: string;
   elementRef?: (element: HTMLElement) => void;
 }) {
   return (
@@ -178,8 +178,9 @@ function UserInitials(props: {
       ref={(element) => props.elementRef?.(element)}
       class="chat-avatar user chat-avatar--sender-initials"
       style={{ background: `hsl(${props.view.fallback.colorSeed % 360} 48% 42%)` }}
-      role="img"
+      role={props.label ? "img" : undefined}
       aria-label={props.label}
+      aria-hidden={props.label ? undefined : "true"}
     >
       {props.view.fallback.initials}
     </div>

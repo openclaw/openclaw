@@ -4,7 +4,6 @@ import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { isAgentInputRecoveryPending } from "../../state/agent-input-recovery-context.js";
 import { createPluginMetadataSnapshotFixture } from "../plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { markPluginRegistryRetired } from "../registry-lifecycle.js";
@@ -50,7 +49,7 @@ describe("gateway request scope", () => {
     expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toEqual(expected);
   }
 
-  it("enters a repeated Gateway scope once with recovery in the same store", () => {
+  it("enters a repeated Gateway scope once in the same store", () => {
     const entries = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
     const runs = vi.spyOn(AsyncLocalStorage.prototype, "run");
     try {
@@ -66,48 +65,6 @@ describe("gateway request scope", () => {
       runs.mockRestore();
     }
     expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBeUndefined();
-  });
-
-  it("isolates recovery owners across sibling scopes and restores them after rejection", async () => {
-    const { withPluginRuntimeGenerationScope } = await import("./generation-scope.js");
-    const scope = (pending: string): PluginRuntimeGatewayRequestScope => ({
-      isWebchatConnect: () => false,
-      resolveGatewayContext: () =>
-        ({
-          inputRecovery: { isPending: (agentId: string) => agentId === pending },
-        }) as NonNullable<PluginRuntimeGatewayRequestScope["context"]>,
-    });
-    const failure = new Error("scope failure");
-    await runtimeScope.withPluginRuntimeGatewayRequestScope(scope("parent"), async () => {
-      await Promise.all(
-        ["left", "right"].map(async (name) => {
-          await expect(
-            runtimeScope.withPluginRuntimeGatewayRequestScope(scope(name), async () => {
-              await Promise.resolve();
-              expect(isAgentInputRecoveryPending(name)).toBe(true);
-              expect(isAgentInputRecoveryPending("parent")).toBe(false);
-              throw failure;
-            }),
-          ).rejects.toBe(failure);
-          expect(isAgentInputRecoveryPending("parent")).toBe(true);
-          expect(isAgentInputRecoveryPending(name)).toBe(false);
-        }),
-      );
-      await withPluginRuntimeGenerationScope(
-        { metadataSnapshot: createPluginMetadataSnapshotFixture() },
-        async () => {
-          const inherited = runtimeScope.getPluginRuntimeGatewayRequestScope()!;
-          inherited.resolveGatewayContext = scope("generation").resolveGatewayContext;
-          await runtimeScope.withPluginRuntimeGatewayRequestScope(inherited, async () => {
-            await Promise.resolve();
-            expect(isAgentInputRecoveryPending("generation")).toBe(true);
-            expect(isAgentInputRecoveryPending("parent")).toBe(false);
-          });
-          expect(isAgentInputRecoveryPending("parent")).toBe(true);
-        },
-      );
-    });
-    expect(isAgentInputRecoveryPending("parent")).toBe(false);
   });
 
   it("keeps Gateway routing bound to the exact owner across wrappers and cleanup", async () => {

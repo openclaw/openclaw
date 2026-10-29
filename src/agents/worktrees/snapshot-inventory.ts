@@ -131,24 +131,20 @@ function unstattedIndexPaths(index: readonly GitIndexPath[]): Buffer[] {
 async function inspectOtherPaths(
   checkoutPath: string,
   options: {
+    deletedOrUnmergedPaths: readonly Buffer[];
     unstattedIndexPaths?: readonly Buffer[];
     untracked?: (entry: Buffer) => Promise<void>;
     ignored?: (entry: Buffer) => Promise<void>;
-  } = {},
+  },
 ): Promise<boolean> {
   const untracked = await listCollapsedOtherPaths(checkoutPath, false);
   // Git omits a directory that replaced an indexed file from the collapsed listing
-  // because the index still holds that path. diff-files reports such entries as deleted
+  // because the index still holds that path. Git reports such entries as deleted
   // or, for a conflict, unmerged; it deliberately skips assume-unchanged and
   // skip-worktree entries, so those are stat-checked directly. Every candidate set stays
   // small: worktree deletions and conflicts, plus only manually flagged paths.
   const candidates = new Map<string, Buffer>();
-  for (const entry of [
-    ...splitNullBuffer(
-      await requireGitBuffer(checkoutPath, ["diff-files", "-z", "--name-only", "--diff-filter=DU"]),
-    ),
-    ...(options.unstattedIndexPaths ?? []),
-  ]) {
+  for (const entry of [...options.deletedOrUnmergedPaths, ...(options.unstattedIndexPaths ?? [])]) {
     candidates.set(gitPathKey(entry), entry);
   }
   const replaced = [...candidates.values()];
@@ -249,9 +245,34 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
       add(entry.path);
     }
   }
+  // One read-only status supplies both snapshot changes and directory-replacement candidates.
+  const status = splitNullBuffer(
+    await requireGitBuffer(input.checkoutPath, [
+      "-c",
+      "core.ignoreStat=false",
+      "-c",
+      "core.trustctime=true",
+      "-c",
+      "core.checkStat=default",
+      ...(process.platform === "win32" ? [] : ["-c", "core.filemode=true"]),
+      "--no-optional-locks",
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=no",
+      "--no-renames",
+    ]),
+  );
   const isStagedInput = createStagedInputPathMatcher(await fsRoot(input.checkoutPath));
   let untracked = 0;
   const otherNested = await inspectOtherPaths(input.checkoutPath, {
+    deletedOrUnmergedPaths: status
+      .filter((entry) => {
+        const state = entry.toString("ascii", 0, 2);
+        // DD and AA are the two unmerged states without a U status letter.
+        return state[1] === "D" || state.includes("U") || state === "AA";
+      })
+      .map((entry) => entry.subarray(3)),
     unstattedIndexPaths: unstattedIndexPaths(index),
     untracked: async (entry) => {
       untracked++;
@@ -271,25 +292,6 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
     type: "worktree.snapshot-inventory",
     input: { tracked: sourcePaths.size, untracked },
   });
-  // Porcelain compares HEAD, index and worktree using Git's stat cache. Keep the
-  // live index read-only, and include flags that deliberately hide worktree edits.
-  const status = splitNullBuffer(
-    await requireGitBuffer(input.checkoutPath, [
-      "-c",
-      "core.ignoreStat=false",
-      "-c",
-      "core.trustctime=true",
-      "-c",
-      "core.checkStat=default",
-      ...(process.platform === "win32" ? [] : ["-c", "core.filemode=true"]),
-      "--no-optional-locks",
-      "status",
-      "--porcelain=v1",
-      "-z",
-      "--untracked-files=no",
-      "--no-renames",
-    ]),
-  );
   const changed = new Set(status.map((entry) => gitPathKey(entry.subarray(3))));
   for (const entry of unstattedIndexPaths(index)) {
     if (paths.has(gitPathKey(entry))) {
@@ -329,13 +331,6 @@ async function prepareSnapshotIndex(
     ...inventory.headPaths.map((entry) => entry.path),
     ...inventory.paths.values(),
   ].reduce((total, entry) => total + 512 + 2 * entry.length, 0);
-  await requestGitWorkerEffect<"worktree.snapshot-capacity">({
-    type: "worktree.snapshot-capacity",
-    input: {
-      demands: [{ path: temporaryDirectory, bytes: 2 * metadataBytes }],
-      purpose: "worktree safety snapshot index",
-    },
-  });
   const tracked = new Set(inventory.headPaths.map((entry) => gitPathKey(entry.path)));
   const unique = new Map(
     [...inventory.paths].filter(([key]) => inventory.changed.has(key) || !tracked.has(key)),
@@ -604,6 +599,16 @@ export async function inspectNestedRepository(checkoutPath: string): Promise<boo
       checkoutPath,
       index.map((entry) => entry.path),
     )) ||
-    (await inspectOtherPaths(checkoutPath, { unstattedIndexPaths: unstattedIndexPaths(index) }))
+    (await inspectOtherPaths(checkoutPath, {
+      deletedOrUnmergedPaths: splitNullBuffer(
+        await requireGitBuffer(checkoutPath, [
+          "diff-files",
+          "-z",
+          "--name-only",
+          "--diff-filter=DU",
+        ]),
+      ),
+      unstattedIndexPaths: unstattedIndexPaths(index),
+    }))
   );
 }

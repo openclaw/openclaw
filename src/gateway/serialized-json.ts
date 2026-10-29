@@ -58,14 +58,12 @@ export class SerializedJsonPayload {
 export function registerSerializedJsonArray<T>(
   values: readonly T[],
   encodedRows: readonly string[],
+  utf8Bytes = encodedRows.reduce((bytes, row) => bytes + Buffer.byteLength(row), 0),
 ): readonly T[] {
   serializedArrays.set(values, {
     rows: encodedRows,
     // Reserve eventual UTF-8 bytes plus string references, without building an unused buffer.
-    retainedBytes: encodedRows.reduce(
-      (bytes, row) => bytes + Buffer.byteLength(row) + 8,
-      2 + Math.max(0, encodedRows.length - 1),
-    ),
+    retainedBytes: utf8Bytes + encodedRows.length * 8 + 2 + Math.max(0, encodedRows.length - 1),
   });
   return values;
 }
@@ -159,8 +157,9 @@ export function serializeGatewayFrame(value: unknown): string | SerializedGatewa
     return JSON.stringify(value);
   }
   const chunks: Uint8Array[] = [];
+  let json = "";
   const appendObject = (record: Record<string, unknown>): void => {
-    chunks.push(Buffer.from("{"));
+    json += "{";
     let separator = "";
     for (const key of Object.keys(record)) {
       const field = record[key];
@@ -177,16 +176,18 @@ export function serializeGatewayFrame(value: unknown): string | SerializedGatewa
       if (!encoded) {
         continue;
       }
-      chunks.push(Buffer.from(`${separator}${encoded}`));
+      json += `${separator}${encoded}`;
       separator = ",";
       if (rawArray) {
-        chunks.push(rawArray);
+        chunks.push(Buffer.from(json), rawArray);
+        json = "";
       } else if (nestedPayload) {
         appendObject(nestedPayload);
       }
     }
-    chunks.push(Buffer.from("}"));
+    json += "}";
   };
   appendObject(frame);
+  chunks.push(Buffer.from(json));
   return new SerializedGatewayFrame(chunks);
 }

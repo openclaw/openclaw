@@ -115,6 +115,7 @@ suite.define(() => {
           padding: 0;
           border: 0;
           font: 16px/20px monospace;
+          scrollbar-gutter: auto;
           scrollbar-width: auto;
           scrollbar-color: auto;
         }

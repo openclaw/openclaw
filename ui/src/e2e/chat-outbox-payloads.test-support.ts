@@ -1,6 +1,7 @@
-import { crc32, deflateSync } from "node:zlib";
+import { crc32 } from "node:zlib";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect } from "vitest";
+import { encodePngRgba } from "../../../src/media/png-encode.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { readOutboxPayloadAttachments } from "./chat-flow.test-support.ts";
 function pngChunk(type: string, data: Buffer): Buffer {
@@ -13,22 +14,11 @@ function pngChunk(type: string, data: Buffer): Buffer {
 }
 
 export function sizedOutboxPng(size: number, color = 255): Buffer {
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(1, 0);
-  header.writeUInt32BE(1, 4);
-  header[8] = 8;
-  header[9] = 6;
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  const ihdr = pngChunk("IHDR", header);
-  const idat = pngChunk("IDAT", deflateSync(Buffer.from([0, color, 100, 180, 255])));
-  const iend = pngChunk("IEND", Buffer.alloc(0));
+  const png = encodePngRgba(Buffer.from([color, 100, 180, 255]), 1, 1);
   // A CRC-covered tEXt ancillary chunk pads a decodable PNG, not trailing junk.
-  const padding = Buffer.alloc(
-    size - signature.length - ihdr.length - idat.length - iend.length - 12,
-    120,
-  );
+  const padding = Buffer.alloc(size - png.length - 12, 120);
   padding.write("Padding\0", 0, "ascii");
-  return Buffer.concat([signature, ihdr, pngChunk("tEXt", padding), idat, iend]);
+  return Buffer.concat([png.subarray(0, -12), pngChunk("tEXt", padding), png.subarray(-12)]);
 }
 
 export const outboxPayloadFile = {

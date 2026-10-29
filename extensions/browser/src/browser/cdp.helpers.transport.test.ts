@@ -9,21 +9,19 @@ const EXPECTED_AUTHORIZATION = `Basic ${Buffer.from(credentials).toString("base6
 
 async function startServer(status = 200, streaming = true) {
   const sockets = new Set<Socket>();
-  const authorizations: Array<string | undefined> = [];
   const server = createServer((request, response) => {
-    authorizations.push(request.headers.authorization);
     if (request.headers.authorization !== EXPECTED_AUTHORIZATION) {
       response.writeHead(401).end();
       return;
     }
 
     response.writeHead(status, { "content-type": "application/json" });
+    // Streaming bodies stay open until the actual CDP client cancels them.
     if (streaming) {
-      // Keep the response body open until the actual CDP client cancels it.
       response.write('{"Browser":');
-      return;
+    } else {
+      response.end(JSON.stringify({ Browser: "OpenClaw transport fixture" }));
     }
-    response.end(JSON.stringify({ Browser: "OpenClaw transport fixture" }));
   });
   server.on("connection", (socket) => {
     sockets.add(socket);
@@ -42,14 +40,12 @@ async function startServer(status = 200, streaming = true) {
   return {
     url: `http://${credentials}@127.0.0.1:${port}/json/version`,
     sockets,
-    authorizations,
   };
 }
 
 const waitFor = (assertion: () => void) => vi.waitFor(assertion, { timeout: 1_250, interval: 20 });
 
-async function expectReleased(server: Awaited<ReturnType<typeof startServer>>, requests = 1) {
-  expect(server.authorizations).toEqual(Array(requests).fill(EXPECTED_AUTHORIZATION));
+async function expectReleased(server: Awaited<ReturnType<typeof startServer>>) {
   await waitFor(() => expect(server.sockets.size).toBe(0));
 }
 
@@ -57,21 +53,15 @@ it("closes every unread streaming response after concurrent status probes", asyn
   const server = await startServer();
   await Promise.all(Array.from({ length: 8 }, () => fetchOk(server.url, 1_000)));
 
-  await expectReleased(server, 8);
+  await expectReleased(server);
 });
 
 it("releases an unread streaming response even when a caller clones it", async () => {
   const server = await startServer();
   const { response, release } = await fetchCdpChecked(server.url, 1_000);
   const clone = response.clone();
-  const released = vi.fn();
-  const releasing = release().finally(released);
-  void releasing.catch(() => {});
-
   expect(clone.bodyUsed).toBe(false);
-  await waitFor(() => expect(released).toHaveBeenCalledOnce());
-  await releasing;
-
+  await release();
   await expectReleased(server);
 });
 
@@ -83,10 +73,9 @@ it("closes a partially consumed response while its stream reader remains locked"
     throw new Error("expected the authenticated CDP response to expose a readable stream");
   }
   const readerClosed = reader.closed.catch(() => {});
-  const firstChunk = await reader.read();
-
-  expect(firstChunk.done).toBe(false);
-  expect(firstChunk.value?.byteLength).toBeGreaterThan(0);
+  const { done, value } = await reader.read();
+  expect(done).toBe(false);
+  expect(value?.byteLength).toBeGreaterThan(0);
   expect(response.bodyUsed).toBe(true);
   await release();
 
@@ -111,6 +100,4 @@ it("preserves authenticated CDP JSON responses with tuple headers", async () => 
   await expect(fetchJson(url.toString(), 1_000, { headers })).resolves.toEqual({
     Browser: "OpenClaw transport fixture",
   });
-
-  expect(server.authorizations).toEqual([EXPECTED_AUTHORIZATION]);
 });

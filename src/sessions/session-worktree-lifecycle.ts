@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PreservedSessionWorktree } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
+  hasWorktreeUnknownOutcome,
   SessionWorktreeLifecycleError,
   WorktreeRemovalContentionError,
 } from "../agents/worktrees/errors.js";
@@ -13,7 +14,10 @@ import {
   captureWorktreeRegistryReadGuard,
   readRegistryWorktree,
 } from "../agents/worktrees/registry-read.js";
-import { assertWorktreeRemovalAvailable } from "../agents/worktrees/registry.js";
+import {
+  assertWorktreeRemovalAvailable,
+  updateRegistryWorktree,
+} from "../agents/worktrees/registry.js";
 import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
 import {
   classifyWorktreeRemovalError,
@@ -32,6 +36,7 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { getChildLogger } from "../logging/logger.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -97,6 +102,7 @@ export async function removeSessionWorktree(params: {
     await service.remove({
       id: record.id,
       reason: params.reason,
+      runEndCleanup: { outcome: "removed-lossless", at: Date.now() },
       commitGuard: assertCurrent,
       workerAuthority: {
         ...params.workerAuthority,
@@ -119,6 +125,38 @@ export async function removeSessionWorktree(params: {
         error instanceof SessionWorktreeLifecycleError && error.reason === "owner-mismatch"
           ? error.reason
           : classifyWorktreeRemovalError(error);
+      // A competing remover owns its outcome; foreign or restored lifecycles are not ours.
+      if (
+        !hasWorktreeUnknownOutcome(error) &&
+        reason !== "busy" &&
+        reason !== "owner-mismatch" &&
+        belongsToSession(current, params.sessionKey) &&
+        current.lastActiveAt === record.lastActiveAt
+      ) {
+        await updateRegistryWorktree(
+          env,
+          current.id,
+          {
+            runEndCleanup: {
+              outcome: "failed",
+              at: Date.now(),
+              reason: truncateUtf16Safe(formatErrorMessage(error), 500),
+            },
+          },
+          {
+            onlyIfLive: true,
+            onlyIfActiveAt: record.lastActiveAt,
+            workerAuthority: {
+              ...params.workerAuthority,
+              assertCurrent: params.workerAuthority?.assertCurrent ?? params.commitGuard,
+              predicates: [
+                ...(params.workerAuthority?.predicates ?? []),
+                { kind: "exact-owner", record: current },
+              ],
+            },
+          },
+        );
+      }
       getChildLogger({ subsystem: "session-worktree" }).warn("Session worktree preserved", {
         worktreeId: record.id,
         sessionKey: params.sessionKey,

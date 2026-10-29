@@ -31,6 +31,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   createInterruptedPackagePublication,
@@ -179,29 +180,42 @@ async function interruptedPublication(
 }
 
 describe.skipIf(process.platform === "win32")("public package repair of obsolete recovery", () => {
-  it.each(["publishing", "publication-complete"] as const)(
-    "settles a remounted %s journal through public repair",
-    async (phase) => {
-      const f = await prepareRemountedPublication(fixtures, fixtureRoot);
+  it.each([
+    "lost acknowledgement",
+    "manual replacement",
+    "published candidate",
+    "replaced published launcher",
+  ] as const)(
+    "repairs remounted custody without accepting a foreign launcher: %s",
+    async (scenario) => {
+      const published =
+        scenario === "published candidate" || scenario === "replaced published launcher";
+      const f = await prepareRemountedPublication(
+        fixtures,
+        fixtureRoot,
+        false,
+        "equal-symlinks",
+        "candidate",
+        published,
+      );
       mocks.root.mockResolvedValue(f.packageRoot);
-      if (phase === "publication-complete") {
+      if (scenario === "manual replacement") {
         const db = new DatabaseSync(f.journalPath);
         try {
-          db.prepare("UPDATE package_activation SET phase = ?, intent_json = 'null'").run(phase);
+          db.prepare(
+            "UPDATE package_activation SET phase = 'publication-complete', intent_json = 'null'",
+          ).run();
         } finally {
           db.close();
         }
         fs.renameSync(f.packageRoot, `${f.packageRoot}.manual-backup`);
         fs.mkdirSync(f.packageRoot);
-        fs.writeFileSync(
-          path.join(f.packageRoot, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            version: "2026.10.1",
-            type: "module",
-            bin: { openclaw: "./openclaw.mjs" },
-          }),
-        );
+        writeFixtureJsonSync(path.join(f.packageRoot, "package.json"), {
+          name: "openclaw",
+          version: "2026.10.1",
+          type: "module",
+          bin: { openclaw: "./openclaw.mjs" },
+        });
         fs.writeFileSync(path.join(f.packageRoot, "openclaw.mjs"), "// newer installed launcher\n");
         fs.mkdirSync(path.join(f.packageRoot, "dist"));
         fs.writeFileSync(
@@ -209,6 +223,25 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
           '{"version":"2026.10.1"}',
         );
         await writePackageDistInventory(f.packageRoot);
+      }
+      if (published) {
+        // The writer must publish a new inode; the fixture only remaps device numbers afterward.
+        expect(fs.lstatSync(f.launcher).ino.toString()).not.toBe(
+          f.historical.launchers[0]!.candidateIdentity.split(":")[1],
+        );
+      }
+      if (scenario === "replaced published launcher") {
+        const target = fs.readlinkSync(f.launcher);
+        fs.renameSync(f.launcher, `${f.launcher}.recorded`);
+        fs.symlinkSync(target, f.launcher);
+        const before = fs.readFileSync(f.journalPath);
+        await expect(repair()).rejects.toThrow(
+          "Package settlement inode or device mapping changed",
+        );
+        expect(fs.readFileSync(f.journalPath)).toEqual(before);
+        expect(fs.existsSync(`${f.anchor}.superseded-${f.operationId}`)).toBe(false);
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        return;
       }
       const installed = await createPackageIntegrityReader().tree(f.packageRoot);
       const previous = await createPackageIntegrityReader().tree(path.join(f.anchor, "previous"));
@@ -221,9 +254,9 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         phase: "superseded",
         intent: {
           kind:
-            phase === "publishing"
-              ? "publication-settled-external-change"
-              : "superseded-by-manual-install",
+            scenario === "manual replacement"
+              ? "superseded-by-manual-install"
+              : "publication-settled-external-change",
           settled: true,
         },
         descriptor: f.historical,
@@ -326,20 +359,35 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
   });
 
-  it.each(supersessionReasons)("keeps unfinished rollback armed after %s", async (reason) => {
-    const f = await preparedOwnershipMismatch();
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(f.packageRoot);
-      const journal = openPackageActivationJournal(f.anchor);
-      journal.transition(journal.read(), "rollback-in-progress", null, fence.assertCurrent);
-    });
-    await obsoleteRecovery(f, reason);
-    const journal = fs.readFileSync(f.journal);
-    await expect(repair()).rejects.toThrow(/restoration|rollback/iu);
-    expect(fs.readFileSync(f.journal)).toEqual(journal);
-    expect(fs.existsSync(f.retained)).toBe(false);
-    expect(mocks.finalize).not.toHaveBeenCalled();
-  });
+  it.each(supersessionReasons)(
+    "settles rollback only after its installation is replaced: %s",
+    async (reason) => {
+      const f = await preparedOwnershipMismatch();
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        const journal = openPackageActivationJournal(f.anchor);
+        journal.transition(journal.read(), "rollback-in-progress", null, fence.assertCurrent);
+      });
+      await obsoleteRecovery(f, reason);
+      if (reason === "superseded-by-manual-install") {
+        const installed = await createPackageIntegrityReader().tree(f.packageRoot);
+        await repair();
+        expect(readArchivedSettlement(f.anchor, f.operationId).intent).toMatchObject({
+          kind: reason,
+          settled: true,
+        });
+        expect(await createPackageIntegrityReader().tree(f.packageRoot)).toEqual(installed);
+        expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+        expect(mocks.finalize).toHaveBeenCalledOnce();
+        return;
+      }
+      const journal = fs.readFileSync(f.journal);
+      await expect(repair()).rejects.toThrow(/restoration|rollback/iu);
+      expect(fs.readFileSync(f.journal)).toEqual(journal);
+      expect(fs.existsSync(f.retained)).toBe(false);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { field: "exports", value: { ".": { import: "./dist/index.js", default: "./missing.js" } } },
@@ -349,7 +397,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       const f = await interruptedPublication();
       const manifestPath = path.join(f.packageRoot, "package.json");
       const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, [field]: value }));
+      writeFixtureJsonSync(manifestPath, { ...manifest, [field]: value });
       const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
       await expect(repair()).rejects.toThrow("package.json");
       expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);
@@ -426,10 +474,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       );
     }
     if (failure === "wrong version") {
-      fs.writeFileSync(
-        path.join(f.packageRoot, "dist/build-info.json"),
-        JSON.stringify({ version: "1.0.0" }),
-      );
+      writeFixtureJsonSync(path.join(f.packageRoot, "dist/build-info.json"), { version: "1.0.0" });
       await writePackageDistInventory(f.packageRoot);
     }
     const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
@@ -551,10 +596,10 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       if (source === f.anchor) {
         fs.renameSync(f.packageRoot, `${f.packageRoot}.replaced-again`);
         fs.cpSync(`${f.packageRoot}.replaced-again`, f.packageRoot, { recursive: true });
-        fs.writeFileSync(
-          path.join(f.packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "4.0.0" }),
-        );
+        writeFixtureJsonSync(path.join(f.packageRoot, "package.json"), {
+          name: "openclaw",
+          version: "4.0.0",
+        });
       }
     });
 

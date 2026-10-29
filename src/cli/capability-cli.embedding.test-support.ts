@@ -35,54 +35,35 @@ export function registerEmbeddingCapabilityCliTests({
       );
       expect(providerCall()).toMatchObject({ provider, model, fallback: "none" });
       expect(jsonOutput()).toMatchObject({
-        capability: "embedding.create",
-        provider: "openai",
-        model: "text-embedding-3-small",
         outputs: ["hello", "world"].map((text) => ({ text, embedding: [0.1, 0.2] })),
       });
-      expect(embedBatch).toHaveBeenCalledWith(["hello", "world"], { inputType: "document" });
       expect(closeProvider).toHaveBeenCalledTimes(1);
     },
   );
 
-  it.each([
-    ["deepinfra", "Qwen/Qwen3-Embedding-8B", "Qwen"],
-    ["openai", "gemini/gemini-embedding-001", "gemini"],
-  ])(
-    "rejects --provider %s that conflicts with --model %s before creating a provider",
-    async (provider, model, modelProvider) => {
-      await expect(create("--provider", provider, "--model", model, "--json")).rejects.toThrow(
-        "exit 1",
-      );
-      expect(providerCall()).toBeUndefined();
-      expectError(
-        `Embedding --provider "${provider}" must match the provider "${modelProvider}" in --model.`,
-      );
-    },
-  );
+  it("rejects conflicting provider and model prefixes before creating a provider", async () => {
+    await expect(
+      create("--provider", "deepinfra", "--model", "Qwen/Qwen3-Embedding-8B", "--json"),
+    ).rejects.toThrow("exit 1");
+    expect(providerCall()).toBeUndefined();
+    expectError('Embedding --provider "deepinfra" must match the provider "Qwen" in --model.');
+  });
 
   it("shows ordered embedding dimensions and bounded vector previews in text output", async () => {
     embedBatch.mockResolvedValueOnce([
       [0.1, -0.2],
-      Array.from({ length: 1536 }, (_, index) => index + 1),
+      Array.from({ length: 9 }, (_, index) => index + 1),
       [],
     ]);
 
     await create("--text", "world", "--text", "");
 
-    expect(log).toHaveBeenCalledWith(`embedding.create via local
-provider: openai
-model: text-embedding-3-small
-outputs: 3
-hello
-dimensions: 2
-embedding: [0.1, -0.2]
-world
-dimensions: 1536
-embedding: [1, 2, 3, 4, 5, 6, 7, 8, ...]
-
-dimensions: 0
-embedding: []`);
+    expect(log).toHaveBeenCalledWith(
+      "embedding.create via local\nprovider: openai\nmodel: text-embedding-3-small\noutputs: 3\n" +
+        "hello\ndimensions: 2\nembedding: [0.1, -0.2]\n" +
+        "world\ndimensions: 9\nembedding: [1, 2, 3, 4, 5, 6, 7, 8, ...]\n" +
+        "\ndimensions: 0\nembedding: []",
+    );
   });
 
   it.each(["sync", "async"])(

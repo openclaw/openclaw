@@ -64,6 +64,7 @@ import {
 import {
   verifyGatewayMemoryReplacement,
   verifyGatewayMemoryWatcherRestart,
+  verifyUnchangedMemoryServiceSurvivesReload,
 } from "./server-plugin-reload.memory.test-support.js";
 import {
   createRecoveryChannelManager,
@@ -125,9 +126,6 @@ vi.mock("./server/ws-connection/message-handler.js", () => ({
 // mock-isolation: Independent startup tasks do not participate in plugin replacement.
 vi.mock("./server-startup-handler-prewarm.js", () => ({
   scheduleGatewayPrewarm: () => [{ stop() {} }],
-}));
-vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
-  scheduleRestartAbortedMainSessionRecovery: () => undefined,
 }));
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -413,6 +411,9 @@ it.for(["pending", "initialized", "separate-registry", "rollback"] as const)(
   (providerState, { signal }) =>
     verifyGatewayMemoryWatcherRestart(createRecoveryFixture, providerState, signal),
 );
+
+it("keeps an unchanged memory plugin's service running across an unrelated reload", () =>
+  verifyUnchangedMemoryServiceSurvivesReload(createRecoveryFixture));
 
 it.for([
   { owner: "retained", failure: "before-drain" },

@@ -401,31 +401,48 @@ describe("harness context engine lifecycle", () => {
     expect(assembleParams?.messages).toEqual([visibleUser, persistedCarrier, visibleAssistant]);
   });
 
-  it("preserves the authoritative history when assembly mutates then throws", async () => {
-    const first = textMessage("user", "first", 1);
-    const second = textMessage("assistant", "second", 2);
-    const messages = [first, second];
-    const contextEngine = createContextEngine({
-      assemble: vi.fn(async ({ messages: workingMessages }) => {
-        workingMessages.reverse();
-        workingMessages.pop();
-        throw new Error("assembly failed after windowing");
-      }),
-    });
+  it.each([false, true])(
+    "isolates assembly with one working array (carrier=%s)",
+    async (carrier) => {
+      const first = textMessage("user", "first", 1);
+      const second = textMessage("assistant", "second", 2);
+      let allocations = 0;
+      class History extends Array<AgentMessage> {
+        constructor(length = 0) {
+          super(length);
+          allocations++;
+        }
+      }
+      const messages = new History();
+      const original = carrier
+        ? [first, runtimeContextMessage("private context", 3), second]
+        : [first, second];
+      messages.push(...original);
+      allocations = 0;
+      const contextEngine = createContextEngine({
+        assemble: vi.fn(async ({ messages: workingMessages }) => {
+          expect(workingMessages).toEqual([first, second]);
+          workingMessages.reverse();
+          workingMessages.pop();
+          throw new Error("assembly failed after windowing");
+        }),
+      });
 
-    await expect(
-      assembleHarnessContextEngine({
-        contextEngine,
-        ...assemblySession,
-        messages,
-        modelId: "gpt-test",
-      }),
-    ).rejects.toThrow("assembly failed after windowing");
+      await expect(
+        assembleHarnessContextEngine({
+          contextEngine,
+          ...assemblySession,
+          messages,
+          modelId: "gpt-test",
+        }),
+      ).rejects.toThrow("assembly failed after windowing");
 
-    expect(messages).toEqual([first, second]);
-    expect(messages[0]).toBe(first);
-    expect(messages[1]).toBe(second);
-  });
+      expect(messages).toEqual(original);
+      expect(messages[0]).toBe(first);
+      expect(messages.at(-1)).toBe(second);
+      expect(allocations).toBe(1);
+    },
+  );
 
   it("passes runtime settings through a configured context engine across lifecycle hooks", async () => {
     const engineId = uniqueConfiguredProofEngineId();

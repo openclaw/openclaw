@@ -38,11 +38,15 @@ export function expectPrefixParity(
   source: string,
   createStream: () => { append: (chunk: string) => TextProjection },
   transform: (text: string) => string,
+  extraChunks?: readonly string[],
 ) {
   const expected = Array.from({ length: source.length + 1 }, (_, end) =>
     transform(source.slice(0, end)),
   );
+  let offset = 0;
+  const explicit = extraChunks?.map((chunk) => (offset += chunk.length));
   const schedules = [
+    ...(explicit ? [explicit] : []),
     ...Array.from({ length: source.length + 1 }, (_, split) => [split, source.length]),
     ...[1, 4].map((size) =>
       Array.from({ length: Math.ceil(source.length / size) }, (_, i) =>

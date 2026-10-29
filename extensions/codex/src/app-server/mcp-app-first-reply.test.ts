@@ -111,14 +111,12 @@ it.each([true, false])(
       await lease!.runtime.joinCleanup?.();
     }
     try {
-      const outcome = await runCodexAppServerAttempt(params, {
-        pluginConfig,
-        clientFactory: async () => acquire(wire.acquireOptions),
-      }).then(
-        (result) => ({ result }),
-        (error: unknown) => ({ error }),
-      );
-      expect(outcome).not.toHaveProperty("error");
+      await expect(
+        runCodexAppServerAttempt(params, {
+          pluginConfig,
+          clientFactory: async () => acquire(wire.acquireOptions),
+        }),
+      ).resolves.toBeDefined();
       expect(wire.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true);
     } finally {
       if (retainLease) {

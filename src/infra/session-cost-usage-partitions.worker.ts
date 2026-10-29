@@ -13,10 +13,13 @@ import {
   usageCostPartitionKey,
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
+import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
 import type { EngineConnection } from "./sql-connection.js";
 
 type CacheDatabase = Pick<DB, "cache_entries">;
+// Quarter rows share partition keys and lifetime; every partition deletion removes both.
+const PARTITION_SCOPES = [USAGE_COST_PARTITION_SCOPE, USAGE_COST_QUARTER_SCOPE];
 
 function assertUsagePartitionWorker(): void {
   if (isMainThread) {
@@ -45,7 +48,7 @@ export function deleteSessionCostUsagePartitionsInDatabase(
           replacements.map((row) =>
             // Keep scope in each arm so SQLite seeks each composite-key range.
             eb.and([
-              eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
+              eb("scope", "in", PARTITION_SCOPES),
               eb("key", ">=", usageCostPartitionKey(row.rollupId, "")),
               eb("key", "<=", usageCostPartitionKey(row.rollupId, "\uffff")),
             ]),
@@ -64,7 +67,7 @@ export function deleteSessionCostUsagePartitionsInDatabase(
       db,
       kysely
         .deleteFrom("cache_entries")
-        .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
+        .where("scope", "in", PARTITION_SCOPES)
         .where("key", "in", keys),
     );
   }
@@ -207,7 +210,7 @@ export function pruneSessionCostUsagePartitionsInDatabase(
         db,
         kysely
           .deleteFrom("cache_entries")
-          .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
+          .where("scope", "in", PARTITION_SCOPES)
           .where("key", ">=", usageCostPartitionKey(row.key, ""))
           .where("key", "<=", usageCostPartitionKey(row.key, "\uffff")),
       );

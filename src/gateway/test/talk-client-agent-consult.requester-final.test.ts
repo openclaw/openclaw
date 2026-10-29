@@ -11,13 +11,13 @@ import {
   promoteRequesterFinalAttachment,
 } from "../../agents/subagents/requester-final-attachment.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-
-type ConsultParams = Parameters<
-  typeof import("../../talk/agent-consult-runtime.js").consultRealtimeVoiceAgent
->[0];
+import { createConsultRunner } from "../talk/client-gateway-control.agent-consult-fixture.test-support.js";
+import {
+  coreParams,
+  type ConsultParams,
+} from "../talk/client-gateway-control.agent-consult.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   createOperationalRunInstanceRef: vi.fn<() => OperationalRunInstanceRef>(),
@@ -52,46 +52,9 @@ vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
 }));
 
-import { createTalkClientAgentConsultRunner } from "../talk/client-agent-consult.js";
-
-const config = {};
-const target = {
-  agentId: "researcher",
-  sessionId: "session-talk",
-  sessionKey: "agent:researcher:talk",
-  storePath: "/tmp/sessions",
-};
-const { agentId, sessionId, sessionKey } = target;
-const requester = {
-  requesterAgentId: agentId,
-  requesterSessionKey: sessionKey,
-};
-const batchRunIds = ["run-child"];
-const coreParams = {
-  config,
-  prompt: "check",
-  runId: "run-talk",
-  sessionId,
-  sessionTarget: target,
-  timeoutMs: 1,
-  workspaceDir: "/tmp/workspace",
-} as Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0];
-
-function createRunner(isCurrent: () => boolean) {
-  return createTalkClientAgentConsultRunner({
-    config,
-    context: { logGateway: { warn: vi.fn() } } as never,
-    sessionTarget: {
-      ...target,
-      sessionKey: "main",
-      canonicalKey: sessionKey,
-      assertCurrent: vi.fn(),
-    },
-    getVoiceSessionId: () => "voice-session",
-    initialItems: [],
-    registerRun: vi.fn(async () => ({ release: vi.fn(), isCurrent })),
-  });
-}
+const agentId = "researcher";
+const sessionId = "session-talk";
+const sessionKey = "agent:researcher:talk";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -99,13 +62,17 @@ beforeEach(() => {
 });
 afterEach(() => embeddedRunsTesting.resetActiveEmbeddedRuns());
 
-it.each([
-  ["promotes and consumes a yielded final exactly once", true, 1, "late final"],
-  ["revokes a promoted final when its run owner is stale", false, 2, "stale final"],
-] as const)(
-  "Talk requester-final: %s",
-  async (_name, current, rearmGeneration, finalAssistantVisibleText) => {
-    const instance = { instanceId: `instance:${rearmGeneration}`, runId: "run-talk" };
+it.each([true, false])(
+  "Talk requester-final: preserves a promoted final only for a current owner (%s)",
+  async (current) => {
+    const batch = {
+      requesterAgentId: agentId,
+      requesterSessionKey: sessionKey,
+      batchRunIds: ["run-child"],
+      rearmGeneration: current ? 1 : 2,
+    };
+    const finalAssistantVisibleText = current ? "late final" : "stale final";
+    const instance = { instanceId: `instance:${batch.rearmGeneration}`, runId: "run-talk" };
     mocks.createOperationalRunInstanceRef.mockReturnValueOnce(instance);
     const core = createDeferredCore<{ payloads: never[] }>();
     if (current) {
@@ -144,27 +111,23 @@ it.each([
     }
     let runCurrent = true;
     const append = vi.fn(() => true);
-    const runner = createRunner(() => runCurrent);
+    const runner = createConsultRunner({
+      context: { logGateway: { warn: vi.fn() } } as never,
+      registerRun: vi.fn(async () => ({ release: vi.fn(), isCurrent: () => runCurrent })),
+    });
     runner.runPrompt.adoptCompletionClaims();
     const run = runner.runPrompt({ prompt: "investigate", requesterFinal: { append } });
     await vi.waitFor(() => expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledOnce());
-    expect(
-      promoteRequesterFinalAttachment({
-        ...requester,
-        requesterTurnRunId: "run-talk",
-        batchRunIds,
-        rearmGeneration,
-      }),
-    ).toBe(true);
+    expect(promoteRequesterFinalAttachment({ ...batch, requesterTurnRunId: "run-talk" })).toBe(
+      true,
+    );
     core.resolve({ payloads: [] });
     await expect(run).resolves.toEqual({ text: "done" });
     runCurrent = current;
     expect(runner.runPrompt.claimAppend()).toBe(current);
     finalizeRequesterFinalAttachment({
-      ...requester,
+      ...batch,
       requesterSessionId: sessionId,
-      batchRunIds,
-      rearmGeneration,
       requesterYieldBatch: true,
       pause: false,
       delivered: true,

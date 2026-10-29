@@ -9,6 +9,7 @@ import { normalizeMeetUrlForReuse } from "./google-meet-urls.js";
 export function meetAudioCaptureScript(params: MeetingBrowserAudioCaptureRequest): string {
   return createMeetingBrowserAudioCaptureSource({
     ...params,
+    webAudioPlaybackGlobal: "__openclawMeetPlayback",
     ownershipSource: `
       const expectedUrl = ${JSON.stringify(normalizeMeetUrlForReuse(params.meetingUrl))};
       const currentUrl = new URL(location.href);
@@ -44,6 +45,24 @@ export function meetStatusScript(params: {
     ]
       .filter(Boolean)
       .join(" ");
+  const pageText = text(document.body).toLowerCase();
+  const host = location.hostname.toLowerCase();
+  const googleLoginRequired = host === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText);
+  if (!readOnly && host === "meet.google.com" && !googleLoginRequired && allowMicrophone && captionSessionId && !window.__openclawMeetPlayback?.early) {
+    const inCall = buttons().some((button) => /leave call/i.test(buttonLabel(button)));
+    // Custom input bridges can adopt active calls without browser capture.
+    // Managed capture checks early observation itself before it collects audio.
+    if (!inCall) {
+      const reloadKey = "__openclawMeetPlaybackReload";
+      if (${JSON.stringify(params.autoJoin)} && sessionStorage.getItem(reloadKey) !== captionSessionId) {
+        sessionStorage.setItem(reloadKey, captionSessionId);
+        setTimeout(() => location.reload(), 0);
+        return JSON.stringify({ inCall: false, micMuted: true, url: location.href, notes: ["Reloading pre-join Meet once to observe native WebAudio playback."] });
+      }
+      return JSON.stringify({ inCall, manualAction: manualActionFor("meet-playback-observer-required", "Rejoin this Meet after native WebAudio observation is available."), url: location.href, notes: [] });
+    }
+  }
+  if (!readOnly && window.__openclawMeetPlayback?.early) sessionStorage.removeItem("__openclawMeetPlaybackReload");
   const buttonLabels = buttons().map(buttonLabel).filter(Boolean);
   const notes = [];
   let audioInputRouted;
@@ -87,9 +106,7 @@ export function meetStatusScript(params: {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  const pageText = text(document.body).toLowerCase();
   const permissionText = [pageText, ...buttonLabels].join("\\n");
-  const host = location.hostname.toLowerCase();
   const pageUrl = location.href;
   const permissionNeeded = /permission needed|microphone problem|speaker problem|allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera|speaker)/i.test(permissionText);
   let mic = findCallControlButton(/^\\s*turn (?:off|on) microphone\\b/i);
@@ -326,13 +343,20 @@ export function meetStatusScript(params: {
         return;
       }
       let routed = 0;
+      let rejected = 0;
       for (const element of mediaElements) {
         if (element.sinkId !== output.deviceId) {
           if (readOnly) {
             continue;
           }
-          await element.setSinkId(output.deviceId);
-          routed += 1;
+          // One element (e.g. Meet's <video>) rejecting must not abort routing for the rest.
+          try {
+            await element.setSinkId(output.deviceId);
+            routed += 1;
+          } catch (error) {
+            rejected += 1;
+            audioOutputRouteError ??= error?.message || String(error);
+          }
         }
       }
       audioOutputRouted = mediaElements.some((element) => element.sinkId === output.deviceId);
@@ -343,6 +367,11 @@ export function meetStatusScript(params: {
             ? \`Routed Meet media output to \${audioOutputDeviceLabel}.\`
             : \`Meet media output already routed to \${audioOutputDeviceLabel}.\`
         );
+        if (rejected > 0) {
+          notes.push(\`\${rejected} Meet media element(s) rejected the speaker route: \${audioOutputRouteError}\`);
+        }
+      } else if (rejected > 0) {
+        notes.push(\`Could not route Meet speaker output to the virtual audio device: \${audioOutputRouteError}\`);
       }
     } catch (error) {
       audioOutputRouted = false;
@@ -359,7 +388,7 @@ export function meetStatusScript(params: {
     ? pageText.match(/you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i)?.[0]
     : undefined;
   let manualAction;
-  if (!inCall && (host === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText))) {
+  if (!inCall && googleLoginRequired) {
     manualAction = manualActionFor("google-login-required", "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.");
   } else if (!inCall && joinElsewhere) {
     manualAction = manualActionFor("meet-session-conflict", "Meet is already active in another tab or device. Leave that session or reuse an English-pinned tab before retrying.");

@@ -7,59 +7,52 @@ type RuntimeFactory = typeof createGatewayWorkerPlacementRuntime;
 type RuntimeOptions = Parameters<RuntimeFactory>[0];
 type Placement = { sessionId: string; environmentId?: string | null };
 
-export function placementAsyncDefaults(read: () => readonly Placement[] = () => []) {
-  return {
-    subscribeChanges: () => () => {},
-    workspaceResultInstanceId: () => "gateway-test",
-    getAsync: async (id: string) => read().find((row) => row.sessionId === id),
-    getManyAsync: async (ids: readonly string[]) =>
-      new Map(
-        read()
-          .filter((row) => ids.includes(row.sessionId))
-          .map((row) => [row.sessionId, row]),
-      ),
-    listAsync: async () => read(),
-    retireSessionPlacementAsync: vi.fn(async () => {}),
-    pruneOrphanedWorkspaceReconciliations: async () => [],
-    listWorkspaceReconciliationOwners: async () => [],
-    listPendingWorkspaceResultsAsync: async () => [],
-  };
-}
+export const placementAsyncDefaults = (read: () => readonly Placement[] = () => []) => ({
+  subscribeChanges: () => () => {},
+  workspaceResultInstanceId: () => "gateway-test",
+  getAsync: async (id: string) => read().find((row) => row.sessionId === id),
+  getManyAsync: async (ids: readonly string[]) =>
+    new Map(
+      read()
+        .filter((row) => ids.includes(row.sessionId))
+        .map((row) => [row.sessionId, row]),
+    ),
+  listAsync: async () => read(),
+  listSessionIdentitiesAsync: async () => read(),
+  retireSessionPlacementAsync: vi.fn(async () => {}),
+  pruneOrphanedWorkspaceReconciliations: async () => [],
+  listWorkspaceReconciliationOwners: async () => [],
+  listPendingWorkspaceResultsAsync: async () => [],
+});
 
-export function placementStoreDefaults(read: () => readonly Placement[] = () => []) {
-  return {
-    ...placementAsyncDefaults(read),
-    get: () => undefined,
-    list: read,
-    readChangeSnapshot: async () => read(),
-    readEnvironmentOwner: async (id: string) => read().find((row) => row.environmentId === id),
-    readProjection: async () => ({
-      placements: new Map(read().map((row) => [row.sessionId, row])),
-    }),
-    listPendingWorkspaceResultsAsync: () => [],
-  };
-}
+export const placementStoreDefaults = (read: () => readonly Placement[] = () => []) => ({
+  ...placementAsyncDefaults(read),
+  get: () => undefined,
+  list: read,
+  readChangeSnapshot: async () => read(),
+  readEnvironmentOwner: async (id: string) => read().find((row) => row.environmentId === id),
+  readProjection: async () => ({
+    placements: new Map(read().map((row) => [row.sessionId, row])),
+  }),
+  listPendingWorkspaceResultsAsync: () => [],
+});
 
-export function createEnvironments() {
-  return {
-    machineShapeNotifications: { onChanged: (_profileId: string) => {} },
-    installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
-    start: vi.fn(),
-    isStopping: () => false,
-    beginClose: vi.fn(),
-    stop: vi.fn().mockResolvedValue(undefined),
-  };
-}
+export const createEnvironments = () => ({
+  machineShapeNotifications: { onChanged: (_profileId: string) => {} },
+  installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
+  start: vi.fn(),
+  isStopping: () => false,
+  beginClose: vi.fn(),
+  stop: vi.fn().mockResolvedValue(undefined),
+});
 
-export function createIdleDiskSpace() {
-  return {
-    read: vi.fn(),
-    version: vi.fn(() => 0),
-    invalidate: vi.fn(),
-    nextSweepAtMs: () => Infinity,
-    sweep: vi.fn().mockResolvedValue(undefined),
-  };
-}
+export const createIdleDiskSpace = () => ({
+  read: vi.fn(),
+  version: vi.fn(() => 0),
+  invalidate: vi.fn(),
+  nextSweepAtMs: () => Infinity,
+  sweep: vi.fn().mockResolvedValue(undefined),
+});
 
 export function setDispatchMock(
   factory: ReturnType<typeof vi.fn>,

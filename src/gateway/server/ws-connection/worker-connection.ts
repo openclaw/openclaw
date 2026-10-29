@@ -556,9 +556,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
           if (!admission) {
             const client = params.getClient();
             const identity = client?.worker;
+            const suspensionPhase = getGatewaySuspendAdmissionPhase();
             if (
               client &&
-              getGatewaySuspendAdmissionPhase() === "draining" &&
+              (suspensionPhase === "draining" || suspensionPhase === "prepared") &&
               !isGatewayRestartDraining() &&
               identity?.turnClaim &&
               !client.invalidated &&

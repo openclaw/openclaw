@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliSessionBinding } from "../config/sessions.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { runPreparedCliAgent } from "./cli-runner.js";
+import { runCliAgent, runPreparedCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
+import * as cliPreparation from "./cli-runner/prepare.runtime.js";
 import * as cliTranscript from "./command/attempt-execution.helpers.js";
 import {
   createAgentRunDirectAbortError,
@@ -92,28 +93,7 @@ describe("runPreparedCliAgent directly stopped first turn", () => {
     );
   });
 
-  afterEach(() => {
-    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockRestore();
-  });
-
-  function stoppedRun(params: {
-    abort?: Error;
-    reusableSessionId?: string;
-    persist: (binding: CliSessionBinding) => Promise<void>;
-  }) {
-    executePreparedCliRunMock.mockResolvedValue(partialOutput("aborted"));
-    const persistStoppedFirstCliSession = vi.fn(params.persist);
-    const context = buildPreparedCliRunContext();
-    context.params.persistStoppedFirstCliSession = persistStoppedFirstCliSession;
-    if (params.reusableSessionId) {
-      context.reusableCliSession = { mode: "reuse", sessionId: params.reusableSessionId };
-    }
-    const abort = params.abort ?? createAgentRunDirectAbortError();
-    context.params.assertCurrent = () => {
-      throw abort;
-    };
-    return { abort, context, persistStoppedFirstCliSession };
-  }
+  afterEach(() => vi.restoreAllMocks());
 
   it.each([
     { name: "a flushed first turn", bind: true },
@@ -121,26 +101,45 @@ describe("runPreparedCliAgent directly stopped first turn", () => {
     { name: "a superseded run", abort: createAgentRunSupersededAbortError() },
     { name: "a resumed turn", reusableSessionId: "established-session" },
     { name: "an unflushed transcript", unflushed: true },
+    { name: "a run without operator model authority", bind: true, noOperator: true },
   ])(
     "keeps the stop unsettled for $name",
-    async ({ bind, refused, abort, reusableSessionId, unflushed }) => {
-      if (unflushed) {
-        transcriptProbe.mockResolvedValue(false);
-      }
-      const run = stoppedRun({
-        abort,
-        reusableSessionId,
-        persist: async () => {
-          if (refused) {
-            throw new Error("settlement closed");
-          }
-        },
+    async ({ bind, refused, abort, reusableSessionId, unflushed, noOperator }) => {
+      transcriptProbe.mockResolvedValue(!unflushed);
+      const reason = abort ?? createAgentRunDirectAbortError();
+      const stop = new AbortController();
+      const persist = vi.fn(async (_binding: CliSessionBinding) => {
+        if (refused) {
+          throw new Error("settlement closed");
+        }
       });
-      await expect(runPreparedCliAgent(run.context)).rejects.toBe(run.abort);
-      expect(run.persistStoppedFirstCliSession).toHaveBeenCalledTimes(bind ? 1 : 0);
+      const context = buildPreparedCliRunContext();
+      context.params.persistStoppedFirstCliSession = persist;
+      context.params.abortSignal = stop.signal;
+      context.params.assertCurrent = noOperator
+        ? undefined
+        : () => {
+            throw reason;
+          };
+      if (reusableSessionId) {
+        context.reusableCliSession = { mode: "reuse", sessionId: reusableSessionId };
+      }
+      if (noOperator) {
+        vi.spyOn(cliPreparation, "prepareCliRunContext").mockImplementation(async (params) => ({
+          ...context,
+          params: { ...params, admittedRunContext: context.params.admittedRunContext },
+        }));
+      }
+      executePreparedCliRunMock.mockImplementation(async () => {
+        stop.abort(reason);
+        return partialOutput("aborted");
+      });
+      const run = noOperator ? runCliAgent(context.params) : runPreparedCliAgent(context);
+      await expect(run).rejects.toBe(reason);
+      expect(persist).toHaveBeenCalledTimes(bind ? 1 : 0);
       if (bind) {
         expect(transcriptProbe).toHaveBeenCalledWith(expect.objectContaining({ sessionId }));
-        expect(run.persistStoppedFirstCliSession.mock.calls[0]?.[0]).toMatchObject({ sessionId });
+        expect(persist.mock.calls[0]?.[0]).toMatchObject({ sessionId });
       }
     },
   );

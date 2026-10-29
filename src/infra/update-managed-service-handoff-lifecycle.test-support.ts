@@ -142,10 +142,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
       updaterResult: { status: "ok", mode: "npm" },
     });
 
-    expect(state).toMatchObject({
-      parked: true,
-      stopCompleted: true,
-    });
+    expect(state).toMatchObject({ parked: true, stopCompleted: true });
     if (delay) {
       expect([state.reset, state.restored]).toEqual([undefined, undefined]);
     }
@@ -234,6 +231,7 @@ export function createManagedServiceManagerFixtureScript(params: {
   options?: ManagedServiceManagerBoundaryOptions;
 }): string {
   const { commandsPath, kind, options, parentPid, statePath } = params;
+  const update = (source: string) => managedServiceStateUpdateScript(statePath, source);
   return `#!${testNodeExecPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -245,11 +243,10 @@ void (async () => {
     ? await import(${JSON.stringify(new URL("../shared/pid-alive.ts", import.meta.url).href)})
     : {};
   if (${JSON.stringify(kind)} === "systemd" && action === "stop") {
-    ${managedServiceStateUpdateScript(statePath, "state.parked = true")};
+    ${update("state.parked = true")};
     while (!isPidDefinitelyDead(${parentPid})) sleep(10);
     sleep(${options?.systemdStopDelayMs ?? 0});
-    ${managedServiceStateUpdateScript(
-      statePath,
+    ${update(
       `${
         options?.revokeOwner
           ? `const config = JSON.parse(fs.readFileSync(${JSON.stringify(params.configPath)}, "utf8"));
@@ -263,8 +260,7 @@ void (async () => {
     )};
     return;
   }
-  ${managedServiceStateUpdateScript(
-    statePath,
+  ${update(
     `
 if (${JSON.stringify(kind)} === "systemd") {
   if (action === "reset-failed") state.reset = true;
@@ -347,7 +343,7 @@ if (${JSON.stringify(kind)} === "systemd") {
   )};
   if (action === "bootout" && ${options?.launchdTeardown?.bootoutDelayMs ?? 0}) {
     await new Promise((resolve) => setTimeout(resolve, ${options?.launchdTeardown?.bootoutDelayMs ?? 0}));
-    ${managedServiceStateUpdateScript(statePath, "state.bootoutCompleted = true")};
+    ${update("state.bootoutCompleted = true")};
   }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 `;
@@ -365,6 +361,7 @@ export function createManagedServiceUpdaterFixtureScript(params: {
 }): string {
   const { kind, root, statePath, updaterPath, stateDatabasePath, consumeNotification, options } =
     params;
+  const update = (source: string) => managedServiceStateUpdateScript(statePath, source);
   const updaterResult = options?.updaterResult
     ? { root, ...(options.updaterResult as UpdateRunResult) }
     : null;
@@ -395,7 +392,7 @@ export function createManagedServiceUpdaterFixtureScript(params: {
   return `void (async () => {
 const fs = require("node:fs");
 if (${kind === "launchd"}) {
-const state = ${managedServiceStateUpdateScript(statePath, "if (state.unloaded) state.updaterObservedUnloaded = true")};
+const state = ${update("if (state.unloaded) state.updaterObservedUnloaded = true")};
 if (!state.unloaded) process.exit(19);
 }
 fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");
@@ -404,7 +401,7 @@ const notification = ${JSON.stringify(notification)};
 const row = ${JSON.stringify(notificationRow)};
 const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)});
 db.prepare("INSERT INTO gateway_restart_sentinel (" + Object.keys(row).join(", ") + ") VALUES (" + Object.keys(row).map(() => "?").join(", ") + ")").run(...Object.values(row)); db.close();
-${managedServiceStateUpdateScript(statePath, "state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }")};
+${update("state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }")};
 if (${Boolean(consume)}) { ${consumeNotification} }
 }
 if (${options?.diagnosticReadFailure === "before-recovery"}) {

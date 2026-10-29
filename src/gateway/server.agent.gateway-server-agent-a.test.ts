@@ -184,6 +184,7 @@ describe("gateway server agent", () => {
             ? {
                 [sessionKey]: {
                   sessionId: "expired-predecessor",
+                  lifecycleRevision: "expired-lifecycle",
                   updatedAt: expiredAt,
                   sessionStartedAt: expiredAt,
                   lastInteractionAt: expiredAt,
@@ -219,7 +220,9 @@ describe("gateway server agent", () => {
           expect(stored.entry?.sessionId).toBe(boundSessionId);
         }
         if (kind === "expired") {
-          expect(boundSessionId).not.toBe("expired-predecessor");
+          expect(boundSessionId).toBe("expired-predecessor");
+          expect(stored.entry?.lifecycleRevision).toEqual(expect.any(String));
+          expect(stored.entry?.lifecycleRevision).not.toBe("expired-lifecycle");
         } else if (kind === "requested") {
           expect(boundSessionId).toBe("requested-session");
         }

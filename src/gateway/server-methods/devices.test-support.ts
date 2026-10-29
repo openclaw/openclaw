@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
+import { createInfoWarnErrorDebugLogger } from "../../../test/helpers/mock-logger.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -41,9 +42,7 @@ const { deviceHandlers } = await import("./devices.js");
 export function createClient(
   scopes: string[],
   deviceId?: string,
-  opts?: {
-    isDeviceTokenAuth?: boolean;
-  },
+  opts?: { isDeviceTokenAuth?: boolean },
 ) {
   return {
     ...(opts?.isDeviceTokenAuth !== undefined ? { isDeviceTokenAuth: opts.isDeviceTokenAuth } : {}),
@@ -69,15 +68,8 @@ export function createOptions(
       broadcast: vi.fn(),
       disconnectClientsForDevice: vi.fn(),
       invalidateClientsForDevice: vi.fn(),
-      logGateway: {
-        debug: vi.fn(),
-        error: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-      },
-      nodeRegistry: {
-        updateSurface: vi.fn(),
-      },
+      logGateway: createInfoWarnErrorDebugLogger(),
+      nodeRegistry: { updateSurface: vi.fn() },
     },
   } as unknown as GatewayRequestHandlerOptions;
 }

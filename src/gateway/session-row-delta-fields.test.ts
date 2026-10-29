@@ -1,115 +1,155 @@
-import { describe, expect, it } from "vitest";
+import { hash } from "node:crypto";
+import { expect, it, vi } from "vitest";
 import {
   createSessionRowDeltaDiffer,
   prepareSessionRowDeltaFields,
 } from "./session-row-delta-fields.js";
 
-describe("session row field deltas", () => {
-  it("preserves JSON values and removes fields that disappear from the wire", () => {
-    const previous = {
-      key: "agent:main:child",
-      removed: "old",
-      nowUndefined: "old",
-      nil: "old",
-      enabled: true,
-      runtimeMs: 123,
-      runs: ["old"],
-    };
-    const current = {
-      key: "agent:main:child",
-      nowUndefined: undefined,
-      nil: null,
-      enabled: false,
-      runtimeMs: 0,
-      runs: [],
-      added: "new",
-    };
-    const delta = createSessionRowDeltaDiffer()(
-      prepareSessionRowDeltaFields(previous),
-      prepareSessionRowDeltaFields(current),
+vi.mock("node:crypto", async (importOriginal) => {
+  const crypto = await importOriginal<typeof import("node:crypto")>();
+  return { ...crypto, hash: vi.fn(crypto.hash) };
+});
+
+const compare = (previous: Record<string, unknown>, current: Record<string, unknown>) =>
+  createSessionRowDeltaDiffer()(
+    prepareSessionRowDeltaFields(previous),
+    prepareSessionRowDeltaFields(current),
+    current,
+  );
+
+it("preserves JSON values and removes fields that disappear from the wire", () => {
+  const previous = Object.fromEntries(
+    ["removed", "nowUndefined", "nil", "enabled", "runtimeMs", "runs"].map((key) => [key, "old"]),
+  );
+  const current = {
+    nowUndefined: undefined,
+    nil: null,
+    enabled: false,
+    runtimeMs: 0,
+    runs: [],
+    added: "new",
+  };
+  expect(compare(previous, current)).toEqual({
+    set: { nil: null, enabled: false, runtimeMs: 0, runs: [], added: "new" },
+    remove: ["removed", "nowUndefined"],
+  });
+});
+
+it.each([
+  [-0, 0, false],
+  [Number.NaN, null, false],
+  [Infinity, null, false],
+  [-Infinity, null, false],
+  [null, Number.NaN, false],
+  [1, "1", true],
+  [true, "true", true],
+  ["", "", false],
+  ["allow", "allow", false],
+  ["allow", "allows", true],
+  ["a", "a\0", true],
+  ["\u007f", "\u0080", true],
+  ["🦞\ud800", "🦞\ufffd", true],
+])("compares primitive JSON values %j → %j", (before, after, changed) => {
+  expect(compare({ value: before }, { value: after })).toEqual({
+    set: changed ? { value: after } : {},
+    remove: [],
+  });
+});
+
+it("avoids native hashing for short ASCII JSON while retaining only numeric fingerprints", () => {
+  vi.mocked(hash).mockClear();
+  const { fingerprints } = prepareSessionRowDeltaFields({
+    agentId: "main",
+    sharingRole: "owner",
+    permissionMode: "allow",
+    reasoningLevel: "off",
+    empty: [],
+    longer: "viewer",
+  });
+  expect(hash).toHaveBeenCalledExactlyOnceWith("sha256", '"viewer"', "buffer");
+  expect([...fingerprints.values()].every((value) => typeof value === "bigint")).toBe(true);
+});
+
+it.each(["", "allow", "allows", "\u007f", "\u0080", "\0", "\ud800"])(
+  "keeps a short JSON string equivalent to an object encoding the same value: %j",
+  (value) => {
+    expect(compare({ value }, { value: { toJSON: () => value } })).toEqual({
+      set: {},
+      remove: [],
+    });
+  },
+);
+
+it("compares nested JSON semantically and replaces a changed nested field whole", () => {
+  const previous = {
+    activity: { b: [null, { done: false }], a: 1 },
+    usage: { input: 4, output: 3 },
+  };
+  const current = {
+    activity: { a: 1, b: [undefined, { done: false, ignored: undefined }] },
+    usage: { input: 4, output: 5 },
+  };
+  expect(compare(previous, current)).toEqual({
+    set: { usage: { input: 4, output: 5 } },
+    remove: [],
+  });
+});
+
+it("recomputes mutable children shared by distinct shallow-frozen row snapshots", () => {
+  const usage = { input: 4, output: 3 };
+  const previous = prepareSessionRowDeltaFields(Object.freeze({ usage }));
+  usage.output = 5;
+  const current = Object.freeze({ usage });
+  expect(
+    createSessionRowDeltaDiffer()(previous, prepareSessionRowDeltaFields(current), current),
+  ).toEqual({ set: { usage: { input: 4, output: 5 } }, remove: [] });
+});
+
+it("reuses materialized field digests across clock samples without hiding viewer or source changes", () => {
+  const source = Object.freeze({
+    label: "Original label",
+    status: "running",
+    unread: false,
+    model: "original-model",
+    subagentCount: 2,
+  });
+  const initial = prepareSessionRowDeltaFields(source, source);
+  vi.mocked(hash).mockClear();
+  for (let snapshotAt = 0; snapshotAt < 20; snapshotAt++) {
+    const current = { ...source, snapshotAt };
+    expect(
+      createSessionRowDeltaDiffer()(
+        initial,
+        prepareSessionRowDeltaFields(current, source),
+        current,
+      ),
+    ).toEqual({ set: { snapshotAt }, remove: [] });
+  }
+  expect(hash).not.toHaveBeenCalled();
+  const overrides = {
+    label: "Viewer label",
+    status: "done",
+    unread: true,
+    model: "next-model",
+    subagentCount: 3,
+  };
+  for (const [field, value] of Object.entries(overrides)) {
+    const current = { ...source, [field]: value };
+    expect(
+      createSessionRowDeltaDiffer()(
+        initial,
+        prepareSessionRowDeltaFields(current, source),
+        current,
+      ),
+    ).toEqual({ set: { [field]: value }, remove: [] });
+  }
+  const replacement = Object.freeze(overrides);
+  const current = { ...replacement };
+  expect(
+    createSessionRowDeltaDiffer()(
+      initial,
+      prepareSessionRowDeltaFields(current, replacement),
       current,
-    );
-    expect(delta).toEqual({
-      set: { nil: null, enabled: false, runtimeMs: 0, runs: [], added: "new" },
-      remove: ["removed", "nowUndefined"],
-    });
-  });
-
-  it("compares primitive JSON values without confusing numeric normalization or strings", () => {
-    const previous = {
-      zero: -0,
-      notANumber: Number.NaN,
-      positiveInfinity: Infinity,
-      negativeInfinity: -Infinity,
-      nil: null,
-      count: 1,
-      enabled: true,
-    };
-    const current = {
-      zero: 0,
-      notANumber: null,
-      positiveInfinity: null,
-      negativeInfinity: null,
-      nil: Number.NaN,
-      count: "1",
-      enabled: "true",
-    };
-    expect(
-      createSessionRowDeltaDiffer()(
-        prepareSessionRowDeltaFields(previous),
-        prepareSessionRowDeltaFields(current),
-        current,
-      ),
-    ).toEqual({ set: { count: "1", enabled: "true" }, remove: [] });
-  });
-
-  it("compares nested JSON semantically and replaces a changed nested field whole", () => {
-    const previous = {
-      activity: { b: [null, { done: false }], a: 1 },
-      usage: { input: 4, output: 3 },
-    };
-    const current = {
-      activity: { a: 1, b: [undefined, { done: false, ignored: undefined }] },
-      usage: { input: 4, output: 5 },
-    };
-    expect(
-      createSessionRowDeltaDiffer()(
-        prepareSessionRowDeltaFields(previous),
-        prepareSessionRowDeltaFields(current),
-        current,
-      ),
-    ).toEqual({ set: { usage: { input: 4, output: 5 } }, remove: [] });
-  });
-
-  it("recomputes mutable children shared by distinct shallow-frozen row snapshots", () => {
-    const usage = { input: 4, output: 3 };
-    const previous = prepareSessionRowDeltaFields(Object.freeze({ usage }));
-    usage.output = 5;
-    const current = Object.freeze({ usage });
-    expect(
-      createSessionRowDeltaDiffer()(previous, prepareSessionRowDeltaFields(current), current),
-    ).toEqual({ set: { usage: { input: 4, output: 5 } }, remove: [] });
-  });
-
-  it("prepares each immutable row once and reuses comparisons across interleaved recipients", () => {
-    let reads = 0;
-    const current = Object.freeze({
-      key: "agent:main:child",
-      get runtimeMs() {
-        reads += 1;
-        return 50;
-      },
-    });
-    const first = prepareSessionRowDeltaFields({ key: "agent:main:child", runtimeMs: 10 });
-    const second = prepareSessionRowDeltaFields({ key: "agent:main:child", runtimeMs: 50 });
-    const next = prepareSessionRowDeltaFields(current);
-    prepareSessionRowDeltaFields(current);
-    expect(reads).toBe(1);
-
-    const diff = createSessionRowDeltaDiffer();
-    expect(diff(first, next, current)).toEqual({ set: { runtimeMs: 50 }, remove: [] });
-    expect(diff(second, next, current)).toEqual({ set: {}, remove: [] });
-    expect(diff(first, next, current)).toEqual({ set: { runtimeMs: 50 }, remove: [] });
-    expect(reads).toBe(2);
-  });
+    ),
+  ).toEqual({ set: overrides, remove: [] });
 });

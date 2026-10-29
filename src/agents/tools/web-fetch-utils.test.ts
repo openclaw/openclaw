@@ -44,6 +44,24 @@ describe("web-fetch-utils", () => {
     );
   });
 
+  it("keeps Markdown-looking inline code literal in text mode", () => {
+    const markdown =
+      "Use `![alt](image.png)` and ``[label](https://example.com)``; read [guide](https://example.com).";
+    // Inline code spans are literal: only the link outside backticks is flattened.
+    expect(markdownToText(markdown)).toBe(
+      "Use ![alt](image.png) and [label](https://example.com); read guide.",
+    );
+    // Line-leading heading and list markers inside inline code stay literal.
+    expect(markdownToText("`# not a heading`\nNext line")).toBe("# not a heading\nNext line");
+    expect(markdownToText("`- not a list`\nNext line")).toBe("- not a list\nNext line");
+    // A backtick run with no matching run of the same length is preserved.
+    expect(markdownToText("cost is 5` per unit")).toBe("cost is 5` per unit");
+    // A fence-looking run inside an inline span is literal content, not a fence.
+    expect(markdownToText("Use `before ```x``` after`.")).toBe("Use before ```x``` after.");
+    // A backtick inside a link/image destination is not a code delimiter.
+    expect(markdownToText("![alt](image`1.png) and `code`.")).toBe("and code.");
+  });
+
   it.each<[string, string, ("text" | "markdown")?]>([
     ["<p hidden>Before<bloc\u212aquote>Secret</bloc\u212aquote></p><p>Visible</p>", "Visible"],
     ["<p hidden>Before<div.foo>Secret</div.foo></p><p>Visible</p>", "Visible"],

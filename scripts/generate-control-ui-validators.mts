@@ -24,7 +24,10 @@ import {
   SessionsGoalClearParamsSchema,
   SessionsGoalUpdateParamsSchema,
 } from "../packages/gateway-protocol/src/schema/sessions-goal.js";
-import { SessionReactionEventSchema } from "../packages/gateway-protocol/src/schema/sessions-reactions.js";
+import {
+  MessageReactionSummarySchema,
+  SessionReactionEventSchema,
+} from "../packages/gateway-protocol/src/schema/sessions-reactions.js";
 import {
   SessionPermissionModeSchema,
   SessionRowSchema,
@@ -33,6 +36,7 @@ import {
 import {
   SessionNarrationEventSchema,
   SessionObserverDigestSchema,
+  SessionsFilesGetResultSchema,
 } from "../packages/gateway-protocol/src/schema/sessions.js";
 import { TalkVoiceChangeEventSchema } from "../packages/gateway-protocol/src/schema/talk-voice.js";
 import { CHAT_TRANSCRIPT_METADATA_KEYS } from "../ui/src/pages/chat/chat-transcript-metadata.ts";
@@ -125,14 +129,21 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     'import("' + schemaRoot + 'sessions-goal.js").SessionsGoalClearParams',
     "session-input",
   ],
-  ...(["worktreeSource", "deviceFolder", "repository", "fastMode", "titleSource"] as const).map(
-    (key): [string, TSchema, string, Group] => [
-      `Session${key.charAt(0).toUpperCase()}${key.slice(1)}`,
-      SessionsCreateParamsSchema.properties[key],
-      `import("${schemaRoot}sessions-create.js").SessionsCreateParams["${key}"]`,
-      "session-input",
-    ],
-  ),
+  ...(
+    [
+      "worktreeSource",
+      "deviceFolder",
+      "repository",
+      "fastMode",
+      "cyberAccessProgram",
+      "titleSource",
+    ] as const
+  ).map((key): [string, TSchema, string, Group] => [
+    `Session${key.charAt(0).toUpperCase()}${key.slice(1)}`,
+    SessionsCreateParamsSchema.properties[key],
+    `import("${schemaRoot}sessions-create.js").SessionsCreateParams["${key}"]`,
+    "session-input",
+  ]),
   [
     "SessionPermissionMode",
     SessionPermissionModeSchema,
@@ -172,9 +183,21 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     "transcript",
   ],
   [
+    "MessageReactionSummary",
+    MessageReactionSummarySchema,
+    'import("' + schemaRoot + 'sessions-reactions.js").MessageReactionSummary',
+    "transcript",
+  ],
+  [
     "TalkVoiceChangeEvent",
     TalkVoiceChangeEventSchema,
     'import("' + schemaRoot + 'talk-voice.js").TalkVoiceChangeEvent',
+    "session-input",
+  ],
+  [
+    "SessionFileReadMetadata",
+    Type.Pick(SessionsFilesGetResultSchema, ["root", "source"]),
+    'Pick<import("' + schemaRoot + 'sessions.js").SessionsFilesGetResult, "root" | "source">',
     "session-input",
   ],
 ];

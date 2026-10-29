@@ -1,18 +1,12 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
-import {
-  getRestartRecoveryTerminalDeliveryEvidence,
-  hasRestartRecoverySourceClaim,
-  hasRestartRecoveryTerminalRun,
-} from "../../../config/sessions/restart-recovery-state.js";
-import type { RestartRecoveryTerminalDeliveryEvidence } from "../../../config/sessions/restart-recovery-types.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../../gateway/operator-tool-gateway-authority.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
-import type { GatewayRecoveryTypingParams } from "../../../gateway/server-instance-runtime.types.js";
-import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
+import type { GatewayLifecycleTypingParams } from "../../../gateway/server-instance-runtime.types.js";
+import { getGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
+import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
@@ -20,7 +14,6 @@ import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../..
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
-import { SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import {
@@ -58,7 +51,7 @@ export async function runAnnounceAgentCall(params: {
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
   agentToolCaller?: import("../../../gateway/server-methods/client-types.js").TrustedAgentToolCaller;
-  typing?: Omit<GatewayRecoveryTypingParams, "isCurrent">;
+  typing?: Omit<GatewayLifecycleTypingParams, "isCurrent">;
   settleWakeSourceSessionKeys?: readonly string[];
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
@@ -73,8 +66,8 @@ export async function runAnnounceAgentCall(params: {
 }): Promise<unknown> {
   const typingRuntime = params.typing
     ? params.resolveGatewayContext
-      ? params.resolveGatewayContext()?.recoveryRuntime
-      : getGatewayRecoveryRuntime()
+      ? params.resolveGatewayContext()?.lifecycleRuntime
+      : getGatewayLifecycleRuntime()
     : undefined;
   let stopTyping: (() => void) | undefined;
   const deadline = new AbortController();
@@ -90,10 +83,11 @@ export async function runAnnounceAgentCall(params: {
   const timer =
     params.timeoutMs === undefined
       ? undefined
-      : setTimeout(
-          () => deadline.abort(new Error("gateway request timeout for agent")),
-          params.timeoutMs,
-        );
+      : setTimeout(() => {
+          const reason = new Error("gateway request timeout for agent");
+          materializeErrorStack(reason);
+          deadline.abort(reason);
+        }, params.timeoutMs);
   timer?.unref();
   try {
     signal.throwIfAborted();
@@ -133,6 +127,7 @@ export async function runAnnounceAgentCall(params: {
               sessionMutationCommitGuard: () => {
                 if (!isSourceSessionAdmissionAllowed()) {
                   const error = new SourceOwnerChangedError();
+                  materializeErrorStack(error);
                   sourceLifecycle.abort(error);
                   throw error;
                 }
@@ -155,7 +150,9 @@ export async function runAnnounceAgentCall(params: {
         onExecutionStarted: () => {
           executionSignal.throwIfAborted();
           if (!params.isExecutionAllowed()) {
-            sourceLifecycle.abort(new SourceOwnerChangedError());
+            const reason = new SourceOwnerChangedError();
+            materializeErrorStack(reason);
+            sourceLifecycle.abort(reason);
             // Classify execution immediately, before Gateway observes cancellation.
             throw createAgentRunDirectAbortError();
           }
@@ -163,14 +160,14 @@ export async function runAnnounceAgentCall(params: {
           clearTimeout(timer);
           params.onExecutionStarted?.();
           if (params.typing) {
-            stopTyping ??= typingRuntime?.startRecoveryTyping?.({
+            stopTyping ??= typingRuntime?.startTyping?.({
               ...params.typing,
               isCurrent: () =>
                 !executionSignal.aborted &&
                 params.isExecutionAllowed() &&
                 (params.resolveGatewayContext
-                  ? params.resolveGatewayContext()?.recoveryRuntime === typingRuntime
-                  : getGatewayRecoveryRuntime() === typingRuntime),
+                  ? params.resolveGatewayContext()?.lifecycleRuntime === typingRuntime
+                  : getGatewayLifecycleRuntime() === typingRuntime),
             });
           }
         },
@@ -197,65 +194,12 @@ export function isGatewayAgentRunPending(response: unknown): boolean {
   return isNonTerminalAgentRunStatus(asOptionalObjectRecord(response)?.status);
 }
 
-/** A recovery successor owns its admitted input until its exact final can be reconciled. */
-export function resolveRequesterRecoveryDelivery(
-  entry: SessionEntry | undefined,
-  runId: string,
-  replaySafeTranscriptConflict = false,
-):
-  | { kind: "result"; result: RestartRecoveryTerminalDeliveryEvidence }
-  | { kind: "delivery"; delivery: SubagentAnnounceDeliveryResult }
-  | undefined {
-  const result = getRestartRecoveryTerminalDeliveryEvidence(entry, runId);
-  if (result) {
-    return { kind: "result", result };
-  }
-  if (hasRestartRecoverySourceClaim(entry, runId)) {
-    return {
-      kind: "delivery",
-      delivery: {
-        delivered: false,
-        path: "direct",
-        reason: "requester_turn_pending",
-        disposition: "session_queued",
-      },
-    };
-  }
-  if (hasRestartRecoveryTerminalRun(entry, runId)) {
-    // Only the live failed dispatch can prove this was a rejected write with no
-    // effects. A missing receipt alone (including after restart) never permits
-    // fresh execution. The wake owner bounds retries and rechecks original custody.
-    if (replaySafeTranscriptConflict) {
-      return {
-        kind: "delivery",
-        delivery: {
-          delivered: false,
-          path: "direct",
-          reason: "requester_transcript_conflict",
-          disposition: "retryable",
-        },
-      };
-    }
-    return {
-      kind: "delivery",
-      delivery: {
-        delivered: false,
-        path: "direct",
-        reason: "visible_reply_missing",
-        error: "recovered requester completed without durable final delivery evidence",
-        disposition: "permanent_failure",
-      },
-    };
-  }
-  return undefined;
-}
-
 export function resolvePrivateCompletionDeliveryResult(
   response: Record<string, unknown> | undefined,
   origin?: DeliveryContext,
 ): SubagentAnnounceDeliveryResult {
   const outcome = buildAgentRunTerminalOutcomeFromWaitResult(response);
-  if (outcome?.reason === "cancelled" && outcome.stopReason !== "restart") {
+  if (outcome?.reason === "cancelled") {
     return {
       delivered: false,
       path: "direct",
@@ -415,6 +359,7 @@ export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
   requesterSessionId?: string;
+  requesterLifecycleRevision?: string;
   requesterAgentId?: string;
   directIdempotencyKey: string;
   deliveryTarget: {
@@ -481,6 +426,8 @@ export async function deliverCompletionDirect(params: {
       accountId: params.deliveryTarget.accountId,
       threadId: params.deliveryTarget.threadId,
       requesterSessionKey: params.requesterSessionKey,
+      // The child produced this result; the requester key scopes policy only.
+      session: { agentId, policyKey: params.requesterSessionKey },
       agentId,
       conversationType: "direct",
       content: content ?? "",
@@ -496,7 +443,7 @@ export async function deliverCompletionDirect(params: {
           return;
         }
         // This single payload must finish every chunk and attachment before settling,
-        // still ahead of potentially blocked transcript mirroring.
+        // still ahead of potentially blocked conversation history.
         committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
         deliveryResultReported = Promise.resolve(
           params.onDeliveryResult?.(committedDelivery),
@@ -504,15 +451,17 @@ export async function deliverCompletionDirect(params: {
           // Bookkeeping failure cannot make a fully sent result retryable.
         });
       },
-      // The requester lane may already belong to its next turn.
-      mirror: {
-        sessionKey: params.requesterSessionKey,
-        agentId,
-        idempotencyKey,
-        expectedSessionId: params.requesterSessionId,
-        deliveryMirror: { kind: SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND },
-        deferToSessionLane: true,
-      },
+      // Pin history to the requester generation that spawned the child.
+      ...(params.requesterSessionId
+        ? {
+            transcriptExpectedGeneration: {
+              sessionKey: params.requesterSessionKey,
+              sessionId: params.requesterSessionId,
+              lifecycleRevision: params.requesterLifecycleRevision,
+            },
+          }
+        : {}),
+      transcriptProvenance: { kind: "subagent-completion" },
     });
     if (committedDelivery) {
       return committedDelivery;

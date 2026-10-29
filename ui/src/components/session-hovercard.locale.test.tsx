@@ -8,44 +8,13 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { SessionHovercard } from "./session-hovercard-solid.tsx";
 
-it("uses the visible translated Create PR text in its name and tooltip", async () => {
-  const restoreI18n = captureI18nStateForTesting();
-  await i18n.setLocale("fr");
-  const label = "Créer une demande de fusion";
-  const branch = {
-    owner: "example",
-    repo: "project",
-    branch: "feature/translated-label",
-    createUrl: "https://github.com/example/project/pull/new/feature/translated-label",
-  };
-  const view = mountSolid(() => (
-    <SessionHovercard
-      pullRequests={{ status: "ready", pullRequests: [], rateLimited: false, branch }}
-    />
-  ));
-  onTestFinished(async () => {
-    view.unmount();
-    await restoreI18n();
-  });
-  await waitForSolid(() => {
-    const link = view.container.querySelector<HTMLAnchorElement>(
-      ".session-hovercard__branch-action",
-    );
-    const name = link?.getAttribute("aria-label");
-    expect(link?.textContent).toBe(label);
-    expect(name).toContain(label);
-    expect(name).toContain(branch.branch);
-    expect(link?.title).toBe(name);
-    expect(link?.href).toBe(branch.createUrl);
-  });
-});
-
 function mountCard(
   initial: SidebarSessionHovercardRow,
-  automationLink?: Parameters<typeof SessionHovercard>[0]["automationLink"],
+  initialProps: Omit<Parameters<typeof SessionHovercard>[0], "row"> = {},
 ) {
   const [row, setRow] = createSignal<SidebarSessionHovercardRow | undefined>(initial);
-  const view = mountSolid(() => <SessionHovercard row={row()} automationLink={automationLink} />);
+  const [props, setProps] = createSignal(initialProps);
+  const view = mountSolid(() => <SessionHovercard {...props()} row={row()} />);
   const find = (suffix = "") =>
     view.container.querySelector<HTMLElement>(`.session-hovercard${suffix}`);
   const parts = () => ({
@@ -53,14 +22,16 @@ function mountCard(
     creator: find("__creator-avatar"),
     color: view.container.querySelector(".session-color-dot"),
   });
-  return { ...view, find, parts, setRow };
+  return { ...view, find, parts, setRow, setProps };
 }
 
-it("refreshes retained hovercard labels and age without replacing its focused link", async () => {
+it("preserves live hovercard content, focus, and translated actions across updates", async () => {
   const restoreI18n = captureI18nStateForTesting();
   await i18n.setLocale("en");
   const row: SidebarSessionHovercardRow = {
     label: "Example session",
+    color: "blue",
+    createdActor: { type: "human", id: "ada", label: "Ada" },
     hasActiveRun: false,
     hasAutomation: true,
     createdAt: Date.now() - 2 * 60 * 60_000,
@@ -72,11 +43,24 @@ it("refreshes retained hovercard labels and age without replacing its focused li
     attention: { kind: "error", reason: "Failure", sourceSessionKey: "agent:main:example" },
   };
   const view = mountCard(row, {
-    gateway: null,
-    sessionKey: "agent:main:example",
-    agentId: "main",
-    href: "/automations",
-    navigate: () => {},
+    automationLink: {
+      gateway: null,
+      sessionKey: "agent:main:example",
+      agentId: "main",
+      href: "/automations",
+      navigate: () => {},
+    },
+    pullRequests: {
+      status: "ready",
+      pullRequests: [],
+      rateLimited: false,
+      branch: {
+        owner: "example",
+        repo: "project",
+        branch: "feature",
+        createUrl: "https://github.com/example/project/pull/new/feature",
+      },
+    },
   });
   onTestFinished(async () => {
     view.unmount();
@@ -84,59 +68,46 @@ it("refreshes retained hovercard labels and age without replacing its focused li
   });
   await waitForSolid(() => expect(view.find("__automation-link")).not.toBeNull());
   const card = view.find();
+  const populated = { color: expect.any(Element), creator: expect.any(Element) };
+  expect(view.parts()).toMatchObject(populated);
   const link = view.find("__automation-link")!;
   link.focus();
-  for (const [locale, channel, project, placement, age, failure] of [
-    ["en", "Linked to Slack", "Project", "Runs on", "2h", "Run failed"],
-    ["de", "Mit Slack verknüpft", "Projekt", "Läuft auf", "2 Std.", "Ausführung fehlgeschlagen"],
-  ] as const) {
-    await i18n.setLocale(locale);
-    await waitForSolid(() => {
-      for (const text of [channel, `${failure}: Failure`]) {
-        expect(card?.textContent).toContain(text);
-      }
-      for (const label of [`${project}: Example`, `${placement} local · default`]) {
-        expect(card?.querySelector(`[aria-label="${label}"]`)).not.toBeNull();
-      }
-      expect(view.find("__created-age")).toMatchObject({
-        textContent: age,
-        ...(locale === "de" ? { title: "vor 2 Std." } : {}),
-      });
-      if (locale === "en") {
-        expect(view.find("__machine")?.textContent).toContain("16 GB");
-      }
-      expect(view.find()).toBe(card);
-      expect(document.activeElement).toBe(link);
+  expect(view.find("__machine")?.textContent).toContain("16 GB");
+  await i18n.setLocale("de");
+  await waitForSolid(() => {
+    for (const text of ["Mit Slack verknüpft", "Ausführung fehlgeschlagen: Failure"]) {
+      expect(card?.textContent).toContain(text);
+    }
+    for (const label of ["Projekt: Example", "Läuft auf local · default"]) {
+      expect(card?.querySelector(`[aria-label="${label}"]`)).not.toBeNull();
+    }
+    expect(view.find("__created-age")).toMatchObject({
+      textContent: "2 Std.",
+      title: "vor 2 Std.",
     });
-  }
+    expect(view.find()).toBe(card);
+    expect(document.activeElement).toBe(link);
+  });
   const machine = view.find("__machine");
   await i18n.setLocale("fr");
   await waitForSolid(() => {
     expect(machine?.textContent).toContain("16 Go");
     expect(view.find("__machine")).toBe(machine);
     expect(document.activeElement).toBe(link);
+    const create = view.find("__branch-action");
+    const label = "Créer une demande de fusion";
+    expect(create?.textContent).toBe(label);
+    expect(create?.getAttribute("aria-label")).toContain(label);
+    expect(create?.getAttribute("aria-label")).toContain("feature");
+    expect(create?.title).toBe(create?.getAttribute("aria-label"));
+    expect(create?.getAttribute("href")).toBe(
+      "https://github.com/example/project/pull/new/feature",
+    );
   });
-});
-
-it("retains the header across row updates and clears optional details without stale snapshots", async () => {
-  const initial: SidebarSessionHovercardRow = {
-    label: "Synthetic session",
-    hasActiveRun: false,
-    hasAutomation: false,
-    color: "blue",
-    channelPresentation: { channel: "slack", channelLabel: "Slack", kind: "group" },
-    createdActor: {
-      type: "human",
-      id: "synthetic-person",
-      label: "Synthetic person",
-      identity: { type: "profile", id: "synthetic-person" },
-    },
-  };
-  const { find, parts, setRow } = mountCard(initial);
-  const populated = { color: expect.any(Element), creator: expect.any(Element) };
-  await waitForSolid(() => expect(parts()).toMatchObject(populated));
+  const { find, parts, setRow } = view;
+  view.setProps({});
   const header = find("__header");
-  setRow({ ...initial, label: "Updated synthetic session", color: "purple" });
+  setRow({ ...row, label: "Updated synthetic session", color: "purple" });
   await waitForSolid(() => {
     expect(find("__header")).toBe(header);
     expect(header?.textContent).toContain("Updated synthetic session");
@@ -149,9 +120,9 @@ it("retains the header across row updates and clears optional details without st
   });
   setRow(undefined);
   await waitForSolid(() => expect(find()).toBeNull());
-  setRow(initial);
+  setRow(row);
   await waitForSolid(() => {
-    expect(find("__header")?.textContent).toContain("Synthetic session");
+    expect(find("__header")?.textContent).toContain("Example session");
     expect(parts()).toMatchObject(populated);
   });
 });

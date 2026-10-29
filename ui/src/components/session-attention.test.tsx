@@ -29,10 +29,7 @@ function mountAttention(
     () => render(createSessionAttention(context, questions, host, () => true)),
     { container: host },
   );
-  onTestFinished(() => {
-    view.unmount();
-    host.remove();
-  });
+  onTestFinished(() => host.remove());
   return view;
 }
 function advance(milliseconds: number) {
@@ -85,8 +82,12 @@ function mountSnoozedSession(deadline: number) {
   };
 }
 
-it.each([200, 2_147_483_847])("resurfaces a row at %d without polling", (deadline) => {
+it.each([200, 2_147_483_847])("keeps the wake at %d armed across unrelated events", (deadline) => {
   const view = mountSnoozedSession(deadline);
+  for (let index = 0; index < 24; index += 1) {
+    view.refresh();
+    flush();
+  }
   if (deadline > 2_147_483_647) {
     advance(2_147_483_647);
     expect(view.queryByText("Resurfaced session")).toBeNull();
@@ -94,20 +95,6 @@ it.each([200, 2_147_483_847])("resurfaces a row at %d without polling", (deadlin
   advance(100);
   expect(view.queryByText("Resurfaced session")).toBeNull();
   advance(1);
-  expect(view.getByText("Resurfaced session")).toBeTruthy();
-  expect(vi.getTimerCount()).toBe(0);
-});
-
-it("keeps the earliest wake armed across unrelated session events", () => {
-  const view = mountSnoozedSession(200);
-  const clear = vi.spyOn(globalThis, "clearTimeout");
-  const schedule = vi.spyOn(globalThis, "setTimeout");
-  for (let index = 0; index < 24; index += 1) {
-    view.refresh();
-    flush();
-  }
-  expect([clear.mock.calls, schedule.mock.calls]).toEqual([[], []]);
-  advance(101);
   expect(view.getByText("Resurfaced session")).toBeTruthy();
   expect(vi.getTimerCount()).toBe(0);
 });

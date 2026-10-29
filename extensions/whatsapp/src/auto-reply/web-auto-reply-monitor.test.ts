@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
@@ -35,211 +34,122 @@ function makeConfig(
   } as unknown as OpenClawConfig;
 }
 
-type TestMessageOverrides = {
+type TestMessageOverrides = Partial<AdmittedWebInboundMessage["platform"]> & {
   admission?: NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>["admission"];
   body?: string;
   id?: string;
   mentionedJids?: string[];
   replyToBody?: string;
-  replyToId?: string;
-  replyToSender?: string;
-  replyToSenderE164?: string;
-  replyToSenderJid?: string;
-  selfE164?: string;
-  selfJid?: string;
-  senderE164?: string;
-  senderJid?: string;
-  senderName?: string;
-  timestamp?: number;
-  to?: string;
 };
 
-function createMessage(
-  kind: "group" | "direct",
-  overrides: TestMessageOverrides = {},
-): AdmittedWebInboundMessage {
-  const conversationId =
-    overrides.admission?.conversation?.id ?? (kind === "group" ? "123@g.us" : "+1555");
-  const senderE164 = overrides.senderE164 ?? (kind === "group" ? "+111" : conversationId);
+function createGroupMessage({
+  admission,
+  body = "hello group",
+  id = "g1",
+  mentionedJids,
+  replyToBody,
+  ...platform
+}: TestMessageOverrides = {}): AdmittedWebInboundMessage {
   return createTestWebInboundMessage({
-    event: { id: overrides.id ?? (kind === "group" ? "g1" : "d1"), timestamp: overrides.timestamp },
-    payload: { body: overrides.body ?? `hello ${kind}` },
+    event: { id },
+    payload: { body },
     platform: {
-      chatJid: conversationId,
-      recipientJid: overrides.to ?? "+2",
-      senderE164,
-      senderJid: overrides.senderJid,
-      senderName: overrides.senderName ?? "Alice",
-      selfE164: overrides.selfE164 ?? "+999",
-      selfJid: overrides.selfJid,
+      chatJid: "123@g.us",
+      recipientJid: "+2",
+      senderE164: "+111",
+      senderName: "Alice",
+      selfE164: "+999",
+      ...platform,
     },
     admission: {
-      ...overrides.admission,
-      accountId: overrides.admission?.accountId ?? "default",
-      conversation: {
-        kind,
-        id: conversationId,
-        ...overrides.admission?.conversation,
-      },
-      sender: {
-        id: overrides.senderJid ?? senderE164,
-        ...overrides.admission?.sender,
-      },
-      ...(kind === "group"
-        ? {
-            senderAccess: {
-              reasonCode: "group_policy_allowed",
-              ...overrides.admission?.senderAccess,
-            },
-          }
-        : {}),
+      conversation: { kind: "group", id: "123@g.us" },
+      sender: { id: platform.senderJid ?? platform.senderE164 ?? "+111" },
+      senderAccess: { reasonCode: "group_policy_allowed" },
+      ...admission,
     },
-    quote: overrides.replyToBody
+    quote: replyToBody
       ? {
-          id: overrides.replyToId,
-          body: overrides.replyToBody,
+          id: "m0",
+          body: replyToBody,
           sender: {
-            displayName: overrides.replyToSender,
-            jid: overrides.replyToSenderJid,
-            e164: overrides.replyToSenderE164,
+            displayName: "+15551234567",
+            jid: "15551234567@s.whatsapp.net",
+            e164: "+15551234567",
           },
         }
       : undefined,
-    ...(kind === "group"
-      ? {
-          group: { mentions: { jids: overrides.mentionedJids } },
-        }
-      : {}),
+    group: { mentions: { jids: mentionedJids } },
   });
 }
 
-const createGroupMessage = (overrides: TestMessageOverrides = {}) =>
-  createMessage("group", overrides);
-
-function createReplyToBot(overrides: TestMessageOverrides) {
+function createBotGroupMessage(overrides: TestMessageOverrides) {
   return createGroupMessage({
     selfJid: "15551234567@s.whatsapp.net",
     selfE164: "+15551234567",
-    replyToId: "m0",
-    replyToSender: "+15551234567",
-    replyToSenderJid: "15551234567@s.whatsapp.net",
-    replyToSenderE164: "+15551234567",
     ...overrides,
   });
 }
 
 describe("applyGroupGating", () => {
-  it("does not treat self-number quoted replies as implicit mention in selfChatMode groups", async () => {
-    const cfg = makeConfig({
-      selfChatMode: true,
-      groupPolicy: "open",
-      groups: { "*": { requireMention: true } },
-    });
+  it.each([
+    ["15551234567", false],
+    ["15559999999", true],
+  ] as const)("gates selfChatMode quoted replies from %s: %s", async (sender, shouldProcess) => {
     const { result } = await runGroupGating({
-      cfg,
-      msg: createReplyToBot({
-        id: "m-self-reply",
-        to: "+15550000",
-        body: "following up on my own message",
-        timestamp: Date.now(),
-        senderE164: "+15551234567",
-        senderJid: "15551234567@s.whatsapp.net",
-        replyToBody: "my earlier message",
+      cfg: makeConfig({
+        selfChatMode: true,
+        groupPolicy: "open",
+        groups: { "*": { requireMention: true } },
       }),
-    });
-
-    expect(result.shouldProcess).toBe(false);
-  });
-
-  it("still treats reply-to-bot as implicit mention in selfChatMode when sender is a different user", async () => {
-    const cfg = makeConfig({
-      selfChatMode: true,
-      groupPolicy: "open",
-      groups: { "*": { requireMention: true } },
-    });
-    const { result } = await runGroupGating({
-      cfg,
-      msg: createReplyToBot({
-        id: "m-other-reply",
-        to: "+15550000",
-        body: "following up on bot reply",
-        timestamp: Date.now(),
-        senderE164: "+15559999999",
-        senderJid: "15559999999@s.whatsapp.net",
-        replyToBody: "bot earlier response",
-      }),
-    });
-
-    expect(result.shouldProcess).toBe(true);
-  });
-
-  it("uses account-scoped groupPolicy and groupAllowFrom for named-account group gating", async () => {
-    const cfg = makeConfig({
-      groupPolicy: "allowlist",
-      accounts: {
-        work: { groupPolicy: "allowlist", groupAllowFrom: ["+111"] },
-      },
-    });
-
-    const { result } = await runGroupGating({
-      cfg,
-      msg: createReplyToBot({
-        id: "g-account-policy",
-        admission: { accountId: "work" },
+      msg: createBotGroupMessage({
+        recipientJid: "+15550000",
         body: "following up",
-        senderJid: "111@s.whatsapp.net",
-        replyToBody: "bot said hi",
+        senderE164: `+${sender}`,
+        senderJid: `${sender}@s.whatsapp.net`,
+        replyToBody: "earlier message",
       }),
     });
-
-    expect(result.shouldProcess).toBe(true);
+    expect(result.shouldProcess).toBe(shouldProcess);
   });
 
-  it("inherits group gating defaults from accounts.default for named accounts", async () => {
-    const cfg = makeConfig({
-      groupPolicy: "allowlist",
-      accounts: {
-        default: {
-          groupPolicy: "open",
-          groups: { "*": { requireMention: false } },
+  it.each<{
+    name: string;
+    whatsapp: Parameters<typeof makeConfig>[0];
+    message: TestMessageOverrides;
+  }>([
+    {
+      name: "account-scoped groupPolicy and groupAllowFrom",
+      whatsapp: {
+        groupPolicy: "allowlist",
+        accounts: { work: { groupPolicy: "allowlist", groupAllowFrom: ["+111"] } },
+      },
+      message: { replyToBody: "bot said hi" },
+    },
+    {
+      name: "inherited accounts.default group gating",
+      whatsapp: {
+        groupPolicy: "allowlist",
+        accounts: {
+          default: { groupPolicy: "open", groups: { "*": { requireMention: false } } },
+          work: {},
         },
-        work: {},
       },
-    });
-
+      message: { body: "plain group message" },
+    },
+    {
+      name: "account-scoped allowFrom for owner commands",
+      whatsapp: { allowFrom: ["+999"], accounts: { work: { allowFrom: ["+111"] } } },
+      message: { body: "/new", senderName: "Owner" },
+    },
+  ])("uses $name", async ({ whatsapp, message }) => {
     const { result } = await runGroupGating({
-      cfg,
-      msg: createGroupMessage({
-        id: "g-default-inheritance",
+      cfg: makeConfig(whatsapp),
+      msg: createBotGroupMessage({
         admission: { accountId: "work" },
-        body: "plain group message",
         senderJid: "111@s.whatsapp.net",
-        selfJid: "15551234567@s.whatsapp.net",
-        selfE164: "+15551234567",
+        ...message,
       }),
     });
-
-    expect(result.shouldProcess).toBe(true);
-  });
-
-  it("uses account-scoped allowFrom when bypassing mention gating for owner commands", async () => {
-    const cfg = makeConfig({
-      allowFrom: ["+999"],
-      accounts: {
-        work: { allowFrom: ["+111"] },
-      },
-    });
-
-    const { result } = await runGroupGating({
-      cfg,
-      msg: createGroupMessage({
-        id: "g-account-owner",
-        admission: { accountId: "work" },
-        body: "/new",
-        senderName: "Owner",
-      }),
-    });
-
     expect(result.shouldProcess).toBe(true);
   });
 
@@ -251,15 +161,11 @@ describe("applyGroupGating", () => {
       },
     );
 
-    // A native third-party mention must not short-circuit mentionPatterns (#109488).
     const { result } = await runGroupGating({
       cfg,
-      msg: createGroupMessage({
-        id: "g-other-mention-pattern",
+      msg: createBotGroupMessage({
         body: "@openclaw please check this",
         mentionedJids: ["15550000000@s.whatsapp.net"],
-        selfE164: "+15551234567",
-        selfJid: "15551234567@s.whatsapp.net",
       }),
     });
 
@@ -267,15 +173,9 @@ describe("applyGroupGating", () => {
   });
 
   it("does not bypass mention gating for non-owner /new in group chats", async () => {
-    const cfg = makeConfig({ allowFrom: ["+999"], groups: { "*": { requireMention: true } } });
-
     const { result, groupHistories } = await runGroupGating({
-      cfg,
-      msg: createGroupMessage({
-        id: "g-new-unauth",
-        body: "/new",
-        senderName: "NotOwner",
-      }),
+      cfg: makeConfig({ allowFrom: ["+999"], groups: { "*": { requireMention: true } } }),
+      msg: createGroupMessage({ body: "/new", senderName: "NotOwner" }),
     });
 
     expect(result.shouldProcess).toBe(false);
@@ -304,13 +204,6 @@ describe("applyGroupGating", () => {
       },
     );
 
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "whatsapp",
-      peer: { kind: "group", id: "123@g.us" },
-    });
-    expect(route.agentId).toBe("work");
-
     const { result: globalMention } = await runGroupGating({
       cfg,
       msg: createGroupMessage({
@@ -333,13 +226,8 @@ describe("applyGroupGating", () => {
   });
 
   it("blocks group messages when whatsapp groups is set without a wildcard", async () => {
-    const cfg = makeConfig({
-      allowFrom: ["*"],
-      groups: { "999@g.us": { requireMention: false } },
-    });
-
     const { result, verboseLogs } = await runGroupGating({
-      cfg,
+      cfg: makeConfig({ allowFrom: ["*"], groups: { "999@g.us": { requireMention: false } } }),
       msg: createGroupMessage({
         body: "@workbot ping",
         mentionedJids: ["999@s.whatsapp.net"],

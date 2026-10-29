@@ -173,13 +173,11 @@ describe("patchSessionRows", () => {
         { targets: [sessionTarget(parent)], patch: { unread: false } },
         { targets: [sessionTarget(parent)], patch: { unread: true } },
       ]);
-      expect(h.patch.mock.calls).toEqual([
-        [
-          run.key,
-          { unread: false },
-          { agentId: "main", expectedMarkedUnreadAt: null, expectedSessionId: run.sessionId },
-        ],
-      ]);
+      expect(h.acknowledgeHiddenRuns).toHaveBeenCalledExactlyOnceWith([run], {
+        agentId: "main",
+        publishErrors: true,
+      });
+      expect(h.patch).not.toHaveBeenCalled();
     },
   );
 
@@ -205,6 +203,10 @@ describe("patchSessionRows", () => {
     const h = createHarness({ scopes: ["operator.sessions.write"] });
     await h.action({ kind: "toggle-unread" }, [parent], true);
     expect(h.request).toHaveBeenCalledOnce();
+    expect(h.acknowledgeHiddenRuns).toHaveBeenCalledWith([run], {
+      agentId: "main",
+      publishErrors: true,
+    });
     expectNoCalls(h.patch, h.publishSessionMutationError);
   });
 
@@ -658,6 +660,33 @@ describe("session organizer destructive confirmations", () => {
       deleteTranscript: true,
       expectedSessionId: row.sessionId,
     });
+  });
+
+  it("warns about bound automations even after the delete confirmation opt-out", async () => {
+    patchSettings({ sessionDeleteConfirm: false });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const h = createHarness(destructiveHarness);
+    const original = h.request.getMockImplementation()!;
+    h.request.mockImplementation(async (method, params, options) =>
+      method === "cron.list"
+        ? { jobs: [{ id: "job-1", name: "Nightly digest" }], total: 1 }
+        : original(method, params, options),
+    );
+    const row = makeRow(0, { hasAutomation: true });
+    const pending = h.remove(row, { offerSkip: true });
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.textContent).toContain('Deleting "Batch 0" pauses its automations.');
+    expect(document.body.textContent).toContain("Nightly digest (job-1)");
+    expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
+    expect(actions.textContent).toContain("Delete anyway");
+    answerConfirmDialog(actions, "cancel");
+    await pending;
+    expect(h.deleteOne).not.toHaveBeenCalled();
+    expect(info.mock.calls.map(([message]) => message)).toEqual([
+      "[session-automation-confirm] delete shown",
+      "[session-automation-confirm] delete cancelled",
+    ]);
+    info.mockRestore();
   });
 
   it.each(["cloud worker stop", "preserved worktree removal"])(

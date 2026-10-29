@@ -1,6 +1,7 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
 import { cronRunResultEvent } from "../store/run-result.js";
 import { isDeferredCronAdmission } from "./admission-deferred.js";
@@ -84,6 +85,11 @@ export async function finalizeCompletedCronRunOutcomes(
             outcomes: outcomes.map(
               ({ activeJobMarker, runReceiptContext: _context, request, ...completed }) => ({
                 ...completed,
+                errorReason: resolveCronRunErrorReason(
+                  cronRunResultEvent(completed.job, completed).error,
+                  completed.provider,
+                  completed.errorClassification,
+                ),
                 activeJobMarker: activeJobMarker && {
                   jobRemoved: activeJobMarker.jobRemoved,
                   scheduleMutated: activeJobMarker.scheduleMutated,
@@ -157,7 +163,7 @@ export async function finalizeCompletedCronRunOutcomes(
       try {
         const request = finalized.find((outcome) => outcome.request);
         const nowMs = state.deps.nowMs();
-        if (request || state.store?.jobs.some((job) => needsCronTimerMaintenance(job, nowMs))) {
+        if (state.store?.jobs.some((job) => needsCronTimerMaintenance(job, nowMs))) {
           await locked(state, () =>
             recomputeUnownedCronSchedules(state, {
               nowMs,

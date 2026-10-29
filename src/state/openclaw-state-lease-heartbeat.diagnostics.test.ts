@@ -39,9 +39,15 @@ vi.mock("../infra/sqlite-transaction.js", () => ({
   runSqliteReadSnapshotSync: (_db: unknown, run: () => unknown) => run(),
   retainSqliteWriteAdmissionService: () => () => {},
 }));
-vi.mock("./openclaw-state-db-handle.js", () => ({
+vi.mock("./openclaw-state-db-handle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-handle.js")>()),
   openTrackedStateDatabase: () => ({}),
+  readTrackedStateDatabaseIdentity: () => ({ key: "file:12:34", birthtime: "0" }),
   closeTrackedStateDatabase() {},
+}));
+vi.mock("../infra/sqlite-worker-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-worker-identity.js")>()),
+  assertExistingDatabaseIdentity() {},
 }));
 vi.mock("./openclaw-state-lease-store.js", () => ({
   renewOpenClawStateLeaseInTransaction: fixture.renew,

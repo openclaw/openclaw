@@ -33,6 +33,7 @@ export type ChatRouteData =
       truncated: boolean;
       face: BoardFace;
     }
+  | { kind: "unavailable-home"; agentId: string; face: BoardFace }
   | MissingSessionRouteData
   | { kind: "route-error"; message: string; face: "chat" };
 

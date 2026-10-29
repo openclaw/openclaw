@@ -1,38 +1,21 @@
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
-import {
-  createMessageUpdateContext,
-  updateMessage,
-} from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
+import * as replyDirectives from "../auto-reply/reply/reply-directives.js";
+import * as updates from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
 import { createOpenAiResponsesTextEvent } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import * as runtimeContext from "./internal-runtime-context.js";
 
-// The subscriber projection chain caches its filters, so the spy has to stay installed for the
-// whole module and count every scrub call the shipped handler performs.
+// Projections cache their filters, so keep both spies installed across deltas.
 const scrub = vi.spyOn(runtimeContext, "stripInternalRuntimeContext");
-
-beforeEach(() => {
-  scrub.mockClear();
-});
-afterAll(() => {
-  scrub.mockRestore();
-});
-
-function characters(calls: ReadonlyArray<readonly [string, ...unknown[]]>): number {
-  return calls.reduce((sum, [text]) => sum + text.length, 0);
-}
-
-const sentence =
-  "The quick brown fox jumps over the lazy dog while the operator reviews one more log line. ";
-const source = sentence
-  .repeat(Math.ceil(32_768 / sentence.length))
-  .slice(0, 32_768)
-  .trimEnd();
-
-async function streamThroughSubscriber(text: string, size: number): Promise<string> {
-  const ctx = createMessageUpdateContext();
-  let visible = "";
+const parse = vi.spyOn(replyDirectives, "parseReplyDirectives");
+beforeEach(vi.clearAllMocks);
+afterAll(vi.restoreAllMocks);
+const source = "Ordinary prose for the operator. ".repeat(1100).slice(0, 32_768).trimEnd();
+const characters = (calls: ReadonlyArray<readonly [string, ...unknown[]]>) =>
+  calls.reduce((sum, [text]) => sum + text.length, 0);
+async function stream(text: string, size: number, inspect?: (visible: string) => void) {
+  const ctx = updates.createMessageUpdateContext();
   for (let offset = 0; offset < text.length; offset += size) {
-    await updateMessage(
+    await updates.updateMessage(
       ctx,
       createOpenAiResponsesTextEvent({
         type: "text_delta",
@@ -44,21 +27,23 @@ async function streamThroughSubscriber(text: string, size: number): Promise<stri
         messagePhase: "final_answer",
       }),
     );
-    visible = ctx.state.assistantStream?.text ?? "";
+    inspect?.(ctx.state.assistantStream?.text ?? "");
   }
-  return visible;
+  return ctx.state.assistantStream?.text ?? "";
 }
-
-// Every new projection starts with replace(previousStream?.raw ?? ""), so an empty replacement
-// must keep activation off or ordinary prose pays a whole-reply scan per provider delta.
-it("keeps ordinary English off the runtime-context scrub through the subscriber handler", async () => {
-  const visible = await streamThroughSubscriber(source, 4);
-
-  expect(visible).toBe(source);
-  expect(characters(scrub.mock.calls)).toBe(0);
-}, 30_000);
-
-it("still scrubs a complete runtime-context block through the subscriber handler", async () => {
+it.each(["", "MEDIA: ./chart.png\n"])(
+  "bounds stream work: %j",
+  async (prefix) => {
+    const text = prefix + source;
+    expect(await stream(text, 3, (part) => expect(part).not.toContain("MEDIA:"))).toBe(
+      replyDirectives.parseReplyDirectives(text).text,
+    );
+    expect(characters(parse.mock.calls)).toBeLessThan(1_000_000);
+    expect(characters(scrub.mock.calls)).toBe(0);
+  },
+  30_000,
+);
+it("still scrubs a complete runtime-context block", async () => {
   const text = [
     "Visible intro.",
     runtimeContext.INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -66,9 +51,19 @@ it("still scrubs a complete runtime-context block through the subscriber handler
     runtimeContext.INTERNAL_RUNTIME_CONTEXT_END,
     "Visible outro.",
   ].join("\n");
-
-  const visible = await streamThroughSubscriber(text, 5);
-
-  expect(visible).toBe("Visible intro.\n\nVisible outro.");
+  expect(await stream(text, 5)).toBe("Visible intro.\n\nVisible outro.");
   expect(characters(scrub.mock.calls)).toBeGreaterThan(0);
-}, 30_000);
+});
+it.each([1, 3, 7, 13])("preserves directives at %i-character deltas", async (size) => {
+  for (const text of [
+    "Intro.\n\nMEDIA: ./a.png\n\nOutro",
+    "Intro.\n\nMEDIA: /tmp/x.pdf\n\nMiddle.\n\nMEDIA: ./b.png\n\nOutro",
+    "Intro [[audio_as_voice]]\n\nMEDIA: ./voice.ogg\n\nOutro",
+    "[[reply_to_current]]Intro.\n\nMEDIA: ./a.png\n\nOutro",
+    "Intro.\n\n```text\nMEDIA: ./literal.png\n```\n\nOutro",
+    "Intro.\n\n    MEDIA: ./indented.png\n\nOutro",
+    "Intro with [tool calls omitted] inside.\n\nMEDIA: ./a.png\n\nOutro",
+  ]) {
+    expect(await stream(text, size)).toBe(replyDirectives.parseReplyDirectives(text).text);
+  }
+});

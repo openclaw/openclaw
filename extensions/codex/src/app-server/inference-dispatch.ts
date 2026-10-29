@@ -220,14 +220,27 @@ export function createCodexInferenceModelBinding(params: {
         }
         try {
           const mapping = captured.modelMapping;
-          model = bind(
+          const accessPrograms = body.access_programs;
+          if (accessPrograms !== undefined && !isJsonObject(accessPrograms)) {
+            throw new CodexInferenceAuthorizationError("model");
+          }
+          const cyber = isJsonObject(accessPrograms) ? accessPrograms.cyber : undefined;
+          if (
+            cyber !== undefined &&
+            cyber !== "standard" &&
+            cyber !== "daybreak_blue" &&
+            cyber !== "daybreak_red"
+          ) {
+            throw new CodexInferenceAuthorizationError("model");
+          }
+          const selection =
             params.modelPolicyEnforced === false
               ? undefined
               : mapping?.nativeModel.provider === provider &&
                   mapping.nativeModel.model === body.model
                 ? mapping.authorizedModel
-                : { provider, model: body.model },
-          );
+                : { provider, model: body.model };
+          model = bind(selection && { ...selection, cyberAccessProgram: cyber ?? "standard" });
         } catch {
           cancelNativeTurn();
           throw new CodexInferenceAuthorizationError("model");
@@ -433,9 +446,17 @@ export async function readProxyBody(
   return Buffer.concat(chunks);
 }
 
+const TERMINAL_RESPONSE_CANDIDATE = /response\.(?:completed|failed|incomplete)|\\u/u;
+
 export function isTerminalResponse(bytes: Buffer): boolean {
+  const text = bytes.toString("utf8");
+  // Ordinary deltas cannot settle a response. Escaped names and all possible
+  // terminal matches still use JSON parsing, including duplicate/malformed keys.
+  if (!TERMINAL_RESPONSE_CANDIDATE.test(text)) {
+    return false;
+  }
   try {
-    const event: unknown = JSON.parse(bytes.toString("utf8"));
+    const event: unknown = JSON.parse(text);
     return (
       isJsonObject(event) &&
       (event.type === "response.failed" ||

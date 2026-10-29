@@ -325,6 +325,27 @@ and use `structuredClone(file)` before preparing an edit. Internal execution rea
 still reuse frozen owner snapshots. Retaining any snapshot does not retain execution
 authority: pending updates and revocations still fail closed at the final execution check.
 
+### Durable-send destination history
+
+Remove `mirror` from calls to `sendDurableMessageBatch` and
+`withDurableMessageSendContext` in `openclaw/plugin-sdk/channel-outbound`.
+Confirmed sends now record their delivered content automatically in the resolved
+destination conversation. The caller's own conversation is not recorded twice.
+
+`session.key` now names the conversation whose turn produced the send. A send to
+that same conversation is skipped because the producing turn already recorded
+it. For proactive or scheduled sends that have no producing turn, pass the
+destination as `session.policyKey` (for example with
+`buildOutboundSessionContext({ policySessionKey })`) instead of `session.key`;
+otherwise the send is treated as the producer's own reply and adds no history row.
+
+The `mirror` parameter and `DeliveryMirror` type remain source-compatible with
+the 2026.10.1 SDK until the next Plugin SDK major, when removal requires explicit
+breaking-release approval. Legacy calls emit one deprecation warning per plugin
+and process. The old field does not select a different history destination or
+override delivered text or media; a mismatched `mirror.sessionKey` creates no
+extra conversation row.
+
 ### Session reset freshness
 
 Channel runtime consumers should await

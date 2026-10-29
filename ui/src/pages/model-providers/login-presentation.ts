@@ -24,25 +24,6 @@ export function createLoginSavingPresentation(options: {
     lifetime = Promise.withResolvers<void>();
     identity = undefined;
   }
-  function synchronize(): void {
-    const current = options.getScope();
-    const next = {
-      client: current.context.gateway.snapshot.client,
-      epoch: current.connectionEpoch,
-      agentId: current.agentId,
-    };
-    if (
-      identity?.client === next.client &&
-      identity.epoch === next.epoch &&
-      identity.agentId === next.agentId
-    ) {
-      return;
-    }
-    // Synchronous scope retirement releases pending presentation before publication.
-    reset();
-    identity = next;
-    options.notify();
-  }
   const presentation = createMemo(() => {
     scope();
     const [wizardSaving, setWizardSaving] = createOptimistic(false);
@@ -69,7 +50,25 @@ export function createLoginSavingPresentation(options: {
   });
 
   return {
-    synchronize,
+    synchronize: (): void => {
+      const current = options.getScope();
+      const next = {
+        client: current.context.gateway.snapshot.client,
+        epoch: current.connectionEpoch,
+        agentId: current.agentId,
+      };
+      if (
+        identity?.client === next.client &&
+        identity.epoch === next.epoch &&
+        identity.agentId === next.agentId
+      ) {
+        return;
+      }
+      // Synchronous scope retirement releases pending presentation before publication.
+      reset();
+      identity = next;
+      options.notify();
+    },
     reset,
     dispose: () => lifetime.resolve(),
     retired: () => lifetime.promise,

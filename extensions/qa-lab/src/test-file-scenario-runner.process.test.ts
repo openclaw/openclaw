@@ -33,47 +33,36 @@ async function scriptFixture(name: string, script: string) {
   return { root, scenario, options };
 }
 
-it.each([true, false])("streams native output before settlement (bounded: %s)", async (bounded) => {
-  const exitCode = bounded ? 7 : 0;
-  const script = bounded
-    ? `process.stdout.write('x'.repeat(${STDOUT_LIMIT * 2})); process.stderr.write('🦞'.repeat(${STDERR_LIMIT / 2 + 1}) + '\\nfinal diagnostic\\n');`
-    : "process.stdout.write('native stdout'); process.stderr.write('native stderr');";
+it("streams native output before settlement while bounding retained output", async () => {
+  const script = `process.stdout.write('x'.repeat(${STDOUT_LIMIT * 2})); process.stderr.write('🦞'.repeat(${STDERR_LIMIT / 2 + 1}) + '\\nfinal diagnostic\\n'); process.exitCode = 7;`;
   const streamed = { stdout: 0, stderr: 0 };
   let settled = false;
   const result = await runQaScenarioCommandLifecycle({
     command: process.execPath,
-    args: ["-e", `${script} process.exitCode = ${exitCode};`],
+    args: ["-e", script],
     cwd: process.cwd(),
     env: process.env,
     timeoutMs: 5_000,
     onOutput: (stream, chunk) => {
       expect(settled).toBe(false);
       streamed[stream] += chunk.byteLength;
-      if (!bounded) {
-        expect(chunk.toString("utf8")).toBe(`native ${stream}`);
-      }
     },
   });
   settled = true;
-  expect(result.exitCode).toBe(exitCode);
+  expect(result.exitCode).toBe(7);
   expect(result.failureMessage).toBeUndefined();
-  if (bounded) {
-    expect(Buffer.byteLength(result.stdout)).toBe(STDOUT_LIMIT);
-    expect(Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(STDERR_LIMIT);
-    expect(result).toMatchObject({ stdoutTruncated: true, stderrTruncated: true });
-    const log = formatQaScenarioCommandOutput(result);
-    expect(log.startsWith("[stdout truncated to first")).toBe(true);
-    expect(log).toContain("[stderr truncated to last");
-    expect(result.stderr).toContain("final diagnostic");
-    expect(result.stderr).not.toContain("�");
-    expect(streamed).toEqual({
-      stdout: STDOUT_LIMIT * 2,
-      stderr: STDERR_LIMIT * 2 + 4 + Buffer.byteLength("\nfinal diagnostic\n"),
-    });
-  } else {
-    expect(streamed).toEqual({ stdout: 13, stderr: 13 });
-    expect(result).toMatchObject({ stdout: "native stdout", stderr: "native stderr" });
-  }
+  expect(Buffer.byteLength(result.stdout)).toBe(STDOUT_LIMIT);
+  expect(Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(STDERR_LIMIT);
+  expect(result).toMatchObject({ stdoutTruncated: true, stderrTruncated: true });
+  const log = formatQaScenarioCommandOutput(result);
+  expect(log.startsWith("[stdout truncated to first")).toBe(true);
+  expect(log).toContain("[stderr truncated to last");
+  expect(result.stderr).toContain("final diagnostic");
+  expect(result.stderr).not.toContain("�");
+  expect(streamed).toEqual({
+    stdout: STDOUT_LIMIT * 2,
+    stderr: STDERR_LIMIT * 2 + 4 + Buffer.byteLength("\nfinal diagnostic\n"),
+  });
 });
 
 it("dispatches explicit checkout and external artifact roots to a real script", async () => {

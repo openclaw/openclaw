@@ -118,7 +118,7 @@ it.for(["durable", "memory"] as const)(
       storage === "durable"
         ? refusePendingInputCommit({
             operation: "stage",
-            message: "Idle input must commit directly with its restart claim",
+            message: "Idle input must commit directly with its transcript",
             sessionId: fixture.scope.sessionId,
             runId,
           })
@@ -139,8 +139,6 @@ it.for(["durable", "memory"] as const)(
       expect(entryAtAck).toMatchObject({
         sessionId: fixture.scope.sessionId,
         lifecycleRunId: runId,
-        restartRecoveryDeliveryRunId: runId,
-        restartRecoveryDeliverySourceRunId: runId,
         ...(storage === "memory" ? { incognito: true } : {}),
       });
       expectUserTurn(fixture, transcriptAtAck);
@@ -159,7 +157,6 @@ it.each(["selected profile", "session access"] as const)(
   "rechecks %s before committing unhooked idle input",
   async (change) => {
     const fixture = await createFixture({ active: false });
-    const runId = fixture.params.idempotencyKey;
     const source = ensureProfileForEmail("idle-admission-source@example.test");
     const other = ensureProfileForEmail("idle-admission-owner@example.test");
     setClientProfile(fixture.client, source);
@@ -205,7 +202,6 @@ it.each(["selected profile", "session access"] as const)(
       expect(respond.mock.calls[0]?.[0]).toBe(false);
       expect(respond.mock.calls[0]?.[2]).toBeDefined();
       expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-      expect(loadSessionEntry(fixture.scope)?.restartRecoveryDeliveryRunId).not.toBe(runId);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
     } finally {
@@ -247,9 +243,7 @@ it.for(["failure", "cancel"] as const)(
     const readClaim = observer.prepare(
       `SELECT current_session_id AS sessionId, status,
         json_extract(entry_json, '$.lastInteractionAt') AS lastInteractionAt,
-        json_extract(entry_json, '$.lifecycleRunId') AS lifecycleRunId,
-        json_extract(entry_json, '$.restartRecoveryDeliveryRunId') AS runId,
-        json_extract(entry_json, '$.restartRecoveryDeliverySourceRunId') AS sourceRunId
+        json_extract(entry_json, '$.lifecycleRunId') AS lifecycleRunId
        FROM session_nodes WHERE session_key = ?`,
     );
     const readUserTurn = observer.prepare(
@@ -280,8 +274,6 @@ it.for(["failure", "cancel"] as const)(
           status: null,
           lastInteractionAt: expect.any(Number),
           lifecycleRunId: runId,
-          runId,
-          sourceRunId: runId,
         },
         userTurns: [
           {

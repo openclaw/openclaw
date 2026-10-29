@@ -50,6 +50,14 @@ import {
 import { buildInitialChatSubmission, buildLocalUserMessage } from "./user-message-content.ts";
 
 const pendingScope = { sessionKey, currentSessionId: sessionId };
+const userMessage = <Metadata extends Record<string, unknown>>(
+  content: string,
+  __openclaw: Metadata,
+) => ({
+  role: "user",
+  content,
+  __openclaw,
+});
 function queuedSource(sendRunId: string, overrides: Partial<ChatQueueItem> = {}): ChatQueueItem {
   return { id: sendRunId, sendRunId, sessionKey, createdAt: 1, text: sendRunId, ...overrides };
 }
@@ -91,12 +99,7 @@ async function retainDeliveredUserTurn(
   host: Parameters<typeof retireDeliveredQueuedUserTurn>[0],
   item: ChatQueueItem,
 ): Promise<Parameters<typeof retireDeliveredQueuedUserTurn>[2]> {
-  const admission = captureChatOutboxAdmission(
-    host,
-    item.sessionKey ?? host.sessionKey,
-    item.agentId,
-  );
-  expect(admitQueuedMessageForSession(host, admission, item)).toBe(true);
+  admitSource(host, item);
   const outbox = expectDefined(
     listStoredChatOutboxes(host).find((entry) =>
       entry.queue.some((queued) => queued.id === item.id),
@@ -105,6 +108,15 @@ async function retainDeliveredUserTurn(
   );
   expect(await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox)).toBe("retired");
   return outbox;
+}
+
+function admitSource(host: Parameters<typeof retainDeliveredUserTurn>[0], item: ChatQueueItem) {
+  const admission = captureChatOutboxAdmission(
+    host,
+    item.sessionKey ?? host.sessionKey,
+    item.agentId,
+  );
+  expect(admitQueuedMessageForSession(host, admission, item)).toBe(true);
 }
 
 beforeEach(() => {
@@ -143,48 +155,15 @@ describe("server-owned pending input display", () => {
     expect(rendered).toEqual([[], [input.id], []]);
   });
 
-  it.each([
-    ["agent queued", "queued", input.runId, true, false, undefined],
-    [
-      "agent interrupted",
-      "interrupted",
-      input.runId,
-      true,
-      false,
-      "Delivery interrupted. This saved agent update is not scheduled to retry.",
-    ],
-    [
-      "workspace sync",
-      "queued",
-      input.runId,
-      false,
-      false,
-      "Received · waiting for workspace sync",
-    ],
-    ["worker setup without run", "queued", undefined, false, true, undefined],
-    [
-      "worker setup interrupted",
-      "interrupted",
-      input.runId,
-      false,
-      true,
-      "Interrupted before the agent started it. If it does not resume, copy it and send again.",
-    ],
-  ] as const)("describes %s custody", (_name, state, runId, agent, workerSetup, notice) => {
-    const message = agent
-      ? {
-          role: "user",
-          content: "The mobile fixes are merged.",
-          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-        }
-      : input.message;
+  it("keeps legacy interrupted custody out of the conversation", () => {
+    expect(buildPendingInputItems([{ ...input, state: "interrupted" }])).toEqual([]);
     const items = buildPendingInputItems(
-      [{ ...input, state, runId, message }],
-      agent || workerSetup ? [] : ["run-queued"],
-      workerSetup,
+      [{ ...input, state: "queued", runId: undefined }],
+      [],
+      true,
     );
     expect(items.some((item) => item.kind === "message")).toBe(true);
-    expect(noticeText(items)).toEqual(notice ? [notice] : []);
+    expect(noticeText(items)).toEqual([]);
   });
 
   it("keeps cached local submissions available after pane remount", async () => {
@@ -213,11 +192,11 @@ describe("server-owned pending input display", () => {
     async (receipt) => {
       const host = makeChatHost({ ...pendingScope, requestHandlers: {} });
       const runId = "consumed-delivery";
-      const canonical = {
-        role: "user",
-        content: "Authoritative input",
-        __openclaw: { id: "canonical-input", seq: 1, idempotencyKey: `${runId}:user` },
-      };
+      const canonical = userMessage("Authoritative input", {
+        id: "canonical-input",
+        seq: 1,
+        idempotencyKey: `${runId}:user`,
+      });
       if (receipt === "canonical-first") {
         reduceChatSessionProjection(host, { type: "snapshotLoaded", messages: [canonical] });
       } else if (receipt === "pending-first") {
@@ -377,14 +356,12 @@ describe("server-owned pending input display", () => {
   ] as const)(
     "retires an attributed $source source on $delivery $custody custody without disturbing active work",
     async ({ delivery, source, custody }) => {
-      const canonical = {
-        role: "user",
-        content: "An earlier canonical input",
-        __openclaw:
-          source === "delivered" && custody === "consumed"
-            ? { id: "aggregate", seq: 1, idempotencyKey: "followup-collect:session:batch" }
-            : { id: "canonical-user", seq: 1, runId: "canonical-run" },
-      };
+      const canonical = userMessage(
+        "An earlier canonical input",
+        source === "delivered" && custody === "consumed"
+          ? { id: "aggregate", seq: 1, idempotencyKey: "followup-collect:session:batch" }
+          : { id: "canonical-user", seq: 1, runId: "canonical-run" },
+      );
       const acceptedPage =
         custody === "consumed"
           ? emptyPage
@@ -485,10 +462,7 @@ describe("server-owned pending input display", () => {
         }
       }
       expect(host.chatMessages).toEqual([...history, unrelated]);
-      expect(host).toMatchObject({
-        chatRunId: "active-run",
-        chatStream: "Still working",
-      });
+      expect(host).toMatchObject({ chatRunId: "active-run", chatStream: "Still working" });
       expect(host.chatToolMessages).toEqual([tool]);
       const displayed = getChatPendingInputs(host)?.page;
       expect(displayed).toEqual(acceptedPage);
@@ -526,17 +500,13 @@ describe("server-owned pending input display", () => {
       applyChatPendingInputs(host, { items: [], total: 0 });
       expect(host.chatMessages).toEqual([...history, unrelated]);
       if (custody !== "consumed") {
-        const promoted = {
-          role: "user",
-          content: "authoritative projection",
-          __openclaw: {
-            id: input.id,
-            seq: 4,
-            idempotencyKey: `${input.runId}:user`,
-            runId: "execution-run",
-            senderName: "Authoritative Author",
-          },
-        };
+        const promoted = userMessage("authoritative projection", {
+          id: input.id,
+          seq: 4,
+          idempotencyKey: `${input.runId}:user`,
+          runId: "execution-run",
+          senderName: "Authoritative Author",
+        });
         reduceChatSessionProjection(host, { type: "messagePersisted", message: promoted });
         expect(host.chatMessages).toHaveLength(history.length + 2);
         expect(host.chatMessages).toContain(promoted);
@@ -582,16 +552,8 @@ describe("server-owned pending input display", () => {
       const stale = createDeferred<unknown>();
       const fresh = createDeferred<unknown>();
       const freshStarted = createDeferred();
-      const initialUser = {
-        role: "user",
-        content: "First turn",
-        __openclaw: { id: "first", seq: 1 },
-      };
-      const promoted = {
-        role: "user",
-        content: "Keep my accepted input",
-        __openclaw: { id: input.id, seq: 2 },
-      };
+      const initialUser = userMessage("First turn", { id: "first", seq: 1 });
+      const promoted = userMessage("Keep my accepted input", { id: input.id, seq: 2 });
       const toolMessage = { role: "assistant", runId: "active-run", toolCallId: "live-tool" };
       let historyReads = 0;
       const host = makeChatPageHost({
@@ -742,13 +704,7 @@ describe("server-owned pending input display", () => {
           Buffer.from(imageBase64, "base64"),
         );
       }
-      expect(
-        admitQueuedMessageForSession(
-          host,
-          captureChatOutboxAdmission(host, sessionKey, queued.agentId),
-          queued,
-        ),
-      ).toBe(true);
+      admitSource(host, queued);
       expect(
         loadChatComposerState(host, sessionKey).snapshot?.queue[0]?.attachments?.[0]?.dataUrl,
       ).toBeUndefined();
@@ -789,27 +745,6 @@ describe("server-owned pending input display", () => {
       expect(listStoredChatOutboxes(host)).toEqual([]);
     },
   );
-
-  it("keeps unconsumed input after persisted history without a generic queue notice", () => {
-    // Custody accepted at 100 is not in the transcript, so it floors after the
-    // reply persisted at 150 instead of interleaving by acceptance time.
-    const earlier = { role: "assistant", content: "Earlier reply", timestamp: 50 };
-    const later = { role: "assistant", content: "Later reply", timestamp: 150 };
-    const items = threadItems({
-      paneId: "chronological-pending-pane",
-      messages: [earlier, later],
-      pendingInputs: [{ ...input, state: "queued" }],
-    });
-
-    expect(items).toMatchObject([
-      { kind: "group", role: "assistant", messages: [{ message: earlier }, { message: later }] },
-      {
-        kind: "group",
-        role: "user",
-        messages: [{ message: { content: "Keep my accepted input" } }],
-      },
-    ]);
-  });
 
   it.each(["assistant"])("preserves a canonical %s sharing the pending run correlation", (role) => {
     const canonical = {

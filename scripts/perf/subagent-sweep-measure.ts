@@ -1,4 +1,10 @@
-// Run only on an approved benchmark host with --expose-gc --trace-gc-nvp.
+/**
+ * Run with --expose-gc; use --trace-gc-nvp only for a separate promotion pass.
+ * Startup's notification-retirement scan over retained subagent history:
+ * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/subagent-sweep-measure.ts
+ *   --operation notification-retirement --runs 10000 --operations 3000 --yield-ms 0
+ * Run baseline and candidate in alternating order with separate state/output paths.
+ */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync, writeSync } from "node:fs";
@@ -25,6 +31,7 @@ const { values } = parseArgs({
     operations: { type: "string", default: "4000" },
     runs: { type: "string", default: "500" },
     workload: { type: "string", default: "settled" },
+    operation: { type: "string", default: "sweep" },
     "yield-ms": { type: "string", default: "1" },
     "start-at": { type: "string", default: "0" },
     "gc-log": { type: "string" },
@@ -38,6 +45,8 @@ const runCount = integer("runs", 10);
 const yieldMs = integer("yield-ms", 0);
 const startAt = integer("start-at", 0);
 const workload = values.workload;
+const operation = values.operation;
+assert.ok(operation === "sweep" || operation === "notification-retirement");
 assert.ok(workload === "settled" || workload === "mixed", "--workload must be settled or mixed");
 assert.ok(global.gc, "Run with --expose-gc");
 const stateDir = values["state-dir"]
@@ -86,8 +95,6 @@ const sweeper = createSubagentRegistrySweeper({
     lifecycleSweeps++;
   },
   completeSubagentRunWithRecovery: unexpected,
-  getGatewayRecoveryRuntime: () => undefined,
-  finalizeInterruptedSubagentRun: unexpected,
   startSubagentAnnounceCleanupFlow: unexpected,
   completeCleanupBookkeeping: unexpected,
   resumeRequesterSettleWake: unexpected,
@@ -109,6 +116,13 @@ const sweeper = createSubagentRegistrySweeper({
   getRunsForCollectorGroup: memory.getSubagentRunsForCollectorGroup,
   warn: unexpected,
 });
+const { suspendReplacedStoreNotifications } =
+  await import("../../src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.js");
+const retirementOptions = { runs: subagentRuns, resumedRuns: new Set<object>() };
+const sweepOnce =
+  operation === "notification-retirement"
+    ? () => suspendReplacedStoreNotifications(retirementOptions)
+    : () => sweeper.sweepOnce();
 
 const composition = { settled: 0, running: 0, pendingDelivery: 0, futureArchive: 0 };
 const claims = new Map<string, string | undefined>();
@@ -194,9 +208,13 @@ function allocation(profile: HeapProfiler.SamplingHeapProfile) {
     bytesPerSweep: totalBytes / operations,
     registryBytes,
     registryBytesPerSweep: registryBytes / operations,
-    // The production idle timer runs once every 60 seconds; this is an extrapolation.
-    projectedBytesPerIdleMinute: totalBytes / operations,
-    projectedRegistryBytesPerIdleMinute: registryBytes / operations,
+    ...(operation === "sweep"
+      ? {
+          // The production idle timer runs once every 60 seconds; this is an extrapolation.
+          projectedBytesPerIdleMinute: totalBytes / operations,
+          projectedRegistryBytesPerIdleMinute: registryBytes / operations,
+        }
+      : {}),
   };
 }
 
@@ -232,7 +250,7 @@ try {
     assert.equal(JSON.stringify([...subagentRuns.values()]), expectedJson);
   };
   for (let index = 0; index < 100; index++) {
-    await sweeper.sweepOnce();
+    await sweepOnce();
   }
   assertUnchanged();
   global.gc();
@@ -253,18 +271,21 @@ try {
     includeObjectsCollectedByMinorGC: true,
   });
   const before = process.memoryUsage();
+  const hostLoadBefore = os.loadavg();
   const cpu = process.cpuUsage();
+  const threadCpu = process.threadCpuUsage();
   loop.reset();
   marker("heap-start");
   measuredStart = performance.now();
   for (let index = 0; index < operations; index++) {
     const started = performance.now();
-    await sweeper.sweepOnce();
+    await sweepOnce();
     latency.push(performance.now() - started);
     await (yieldMs ? delay(yieldMs) : nextTurn());
   }
   measuredEnd = performance.now();
   const usedCpu = process.cpuUsage(cpu);
+  const usedThreadCpu = process.threadCpuUsage(threadCpu);
   const after = process.memoryUsage();
   marker("heap-stop");
   loop.disable();
@@ -273,7 +294,7 @@ try {
   observer.disconnect();
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   assertUnchanged();
-  assert.equal(lifecycleSweeps, operations + 100);
+  assert.equal(lifecycleSweeps, operation === "sweep" ? operations + 100 : 0);
   writeFileSync(profilePath, JSON.stringify(profile));
   const gc = (kind?: number) =>
     distribution(
@@ -286,8 +307,9 @@ try {
     ? readGatewayGcTrace(path.resolve(values["gc-log"]), profilePath)
     : undefined;
   const result = {
-    scope: "production registry sweeper and canonical memory; no Gateway/model latency claim",
+    scope: "production registry sweep and canonical memory; no Gateway/model latency claim",
     node: process.version,
+    operation,
     workload,
     runCount,
     composition,
@@ -296,7 +318,7 @@ try {
     startAt,
     stateDir,
     profilePath,
-    idleSweepIntervalMs: 60_000,
+    ...(operation === "sweep" ? { idleSweepIntervalMs: 60_000 } : {}),
     allocationScope:
       "whole capture includes timing/yield overhead; registry stacks are also reported",
     unchangedRecordsSha256: hash("sha256", expectedJson, "hex"),
@@ -306,10 +328,12 @@ try {
     profiledSweepLatency: distribution(latency),
     elapsedMs: measuredEnd - measuredStart,
     cpuMs: (usedCpu.user + usedCpu.system) / 1000,
+    mainThreadCpuMs: (usedThreadCpu.user + usedThreadCpu.system) / 1000,
+    hostLoad: { before: hostLoadBefore, after: os.loadavg() },
     gc: {
       total: totalGc,
       msPerSweep: totalGc.totalMs / operations,
-      projectedMsPerIdleMinute: totalGc.totalMs / operations,
+      ...(operation === "sweep" ? { projectedMsPerIdleMinute: totalGc.totalMs / operations } : {}),
       minor: gc(constants.NODE_PERFORMANCE_GC_MINOR),
       major: gc(constants.NODE_PERFORMANCE_GC_MAJOR),
     },

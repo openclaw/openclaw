@@ -35,8 +35,8 @@ import {
 } from "../process/gateway-work-admission.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { waitForAgentJob } from "./agent-turn/agent-job.js";
+import { dispatchGatewayLifecycleMethod } from "./server-lifecycle-runtime-context.js";
 import type { GatewayContextResolver } from "./server-methods/shared-types.js";
-import { dispatchGatewayLifecycleMethod } from "./server-recovery-runtime-context.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
@@ -491,9 +491,10 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           cfg: runtimeConfig,
           agentId,
           jobId: params.job.id,
-          target: {
-            ...resolved,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
+          target: resolved,
+          transcriptRoute: resolved.sessionRoute,
+          onTranscriptDiagnostic: (message) => {
+            params.logger.warn({ jobId: params.job.id }, message);
           },
           payload: {
             ...params.payload,

@@ -93,7 +93,7 @@ it.each([false, true])(
       texts(page.element, ".daily-chart-legend li", false).map((text) => text.replace(/\s+/g, ""));
     expect(legend()).toEqual(partial ? ["Anthropic", "OpenAI"] : ["Anthropic90%", "OpenAI10%"]);
     barsIn(page)
-      .find((bar) => labelOf(bar) === "May 2")!
+      .find((bar) => bar.getAttribute("aria-label")?.startsWith("May 2, 2026:"))!
       .click();
     await settleUsageTimers(page);
     expect(textOf(page, ".usage-metric-badge strong")).toBe("100");
@@ -184,4 +184,28 @@ it("keeps the same calendar interactive while day totals are pending", async () 
     ?.selectedDays;
   expect(days).toEqual(expect.arrayContaining(["2026-04-05", "2026-05-04"]));
   expect(Array.isArray(days) && days.length > 1).toBe(true);
+});
+
+it("retains the accepted heatmap while editing a query draft", async () => {
+  const { page, request } = await loadCalendar("fresh", [
+    dailyEntry("2026-05-02", 100),
+    dailyEntry("2026-05-04", 900),
+  ]);
+  changeUsageControl(
+    page.querySelector<HTMLInputElement>('input[aria-label="Start date"]')!,
+    "2026-01-01",
+  );
+  await settleUsageTimers(page, 400);
+  const cells = [...page.querySelectorAll(".usage-heatmap__cell")];
+  expect(cells.length).toBeGreaterThan(62);
+  const requests = request.mock.calls.length;
+  const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
+  input.value = "model:example";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await page.updateComplete;
+  const current = [...page.querySelectorAll(".usage-heatmap__cell")];
+  expect(current).toHaveLength(cells.length);
+  current.forEach((cell, index) => expect(cell).toBe(cells[index]));
+  expect(request.mock.calls).toHaveLength(requests);
+  expect(input.value).toBe("model:example");
 });

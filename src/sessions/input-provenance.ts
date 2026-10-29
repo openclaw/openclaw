@@ -21,7 +21,12 @@ export type InputProvenance = {
   runId?: string;
 };
 
-export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
+/** Native input attribution, not canonical chat visibility or execution authority. */
+export function isHostGeneratedInputProvenance(provenance: InputProvenance | undefined): boolean {
+  // Forwarded inputs retain their sender in the canonical transcript; their native
+  // copy must not invent another message authored by this session's operator.
+  return provenance?.kind === "internal_system" || provenance?.kind === "inter_session";
+}
 
 export const PROGRESS_CARD_REFRESH_SOURCE_TOOL = "progress_card_refresh" as const;
 
@@ -145,14 +150,6 @@ export function isSubagentCoordinationInputProvenance(
   );
 }
 
-export function isMainSessionRestartRecoveryInputProvenance(value: unknown): boolean {
-  const provenance = normalizeInputProvenance(value);
-  return (
-    provenance?.kind === "internal_system" &&
-    provenance.sourceTool?.toLowerCase() === MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL
-  );
-}
-
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOL_SET: ReadonlySet<string> = new Set(
   AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS,
 );
@@ -180,7 +177,6 @@ const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = n
   "exec_approval_followup",
   "subagent_announce",
   "subagent_settle",
-  "subagent_interrupted_resume",
 ]);
 
 export function shouldPreserveUserFacingSessionStateForInputProvenance(value: unknown): boolean {

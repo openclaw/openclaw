@@ -251,7 +251,6 @@ export async function prepareSessionsSendCommunication(params: {
     params.target.entry.parentSessionId === params.source.entry?.sessionId &&
     !task.killIntent &&
     !task.killReconciliation &&
-    !task.terminalOwner &&
     task.cleanupCompletedAt === undefined,
   );
   const taskRunId = task?.runId;
@@ -280,7 +279,6 @@ export async function prepareSessionsSendCommunication(params: {
         (task?.controllerSessionKey && task.controllerSessionKey !== params.source.sessionKey) ||
         task?.killIntent ||
         task?.killReconciliation ||
-        task?.terminalOwner ||
         task?.cleanupCompletedAt !== undefined)
     ) {
       if (resumedTask) {

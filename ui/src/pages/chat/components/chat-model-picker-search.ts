@@ -31,6 +31,7 @@ export type ChatModelSearchView = {
   selectable(): SearchMatch[];
   reveal(key: string): void;
   highlighted(): string | undefined;
+  isHighlighted(key: string): boolean;
   highlight(value: string | undefined): void;
   providerOpen(provider: string): boolean;
   moreOpen(provider: string): boolean;
@@ -125,6 +126,7 @@ export function createChatModelSearch() {
       return state.view?.row(key);
     },
     highlighted: () => state.view?.highlighted(),
+    isHighlighted: (key: string) => state.view?.isHighlighted(key) ?? false,
     bindView(view: ChatModelSearchView) {
       // Rows read this synchronous bridge while mounting; cleanup belongs to this primitive.
       state.view = view;

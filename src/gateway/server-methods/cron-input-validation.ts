@@ -7,9 +7,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
+import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -25,6 +26,7 @@ import {
   requiresExternalCronDelivery,
   resolveDeliveryTarget,
 } from "../../cron/isolated-agent/delivery-target.js";
+import { resolveCarriedCronModelSelection } from "../../cron/isolated-agent/session-carried-model.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
@@ -55,6 +57,38 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 
 type InferenceCaller = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">;
+
+/**
+ * The entry a job's cron session takes its runtime override from: the target row of a
+ * `session:` job, or what a `current` job carries from its creating conversation.
+ */
+async function loadCronRuntimeSessionEntry(params: {
+  cfg: OpenClawConfig;
+  job: Pick<CronJob, "sessionTarget" | "sessionKey">;
+  agentId?: string;
+  executionEntry?: SessionEntry;
+  loaded?: { key: string; entry?: SessionEntry };
+}): Promise<Partial<SessionEntry> | undefined> {
+  if (params.executionEntry) {
+    return params.executionEntry;
+  }
+  const sourceKey =
+    params.job.sessionTarget === "current" ? params.job.sessionKey?.trim() : undefined;
+  if (!sourceKey) {
+    return undefined;
+  }
+  const source =
+    params.loaded?.key === sourceKey
+      ? params.loaded.entry
+      : (
+          await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg: params.cfg,
+            key: sourceKey,
+            agentId: params.agentId,
+          })
+        )?.entry;
+  return source ? resolveCarriedCronModelSelection(source) : undefined;
+}
 
 async function captureCronInferenceForCaller(
   params: Parameters<typeof captureCronInferenceBinding>[0],
@@ -313,7 +347,7 @@ export async function captureCronCreatorSession(
       loaded.canonicalKey,
     ) &&
     caller.client?.internal?.agentRuntimeIdentity
-      ? createRestartRecoveryOperatorSource({
+      ? captureScheduledOperatorSource({
           authority: operatorAuthority,
           entry: creatorSession,
           agentId: loaded.agentId,
@@ -339,6 +373,16 @@ export async function captureCronCreatorSession(
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && executionSessionKey
       ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionSessionKey, agentId })
       : undefined;
+  const runtimeSessionEntry =
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn"
+      ? await loadCronRuntimeSessionEntry({
+          cfg,
+          job,
+          agentId,
+          executionEntry: executionSession?.entry,
+          loaded: sessionKey ? { key: sessionKey, entry: loaded?.entry } : undefined,
+        })
+      : undefined;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
@@ -354,6 +398,7 @@ export async function captureCronCreatorSession(
                 )) === "gmail",
             sessionEntry: callerScope ? creatorSession : undefined,
             executionSessionEntry: executionSession?.entry,
+            runtimeSessionEntry,
           },
           caller,
         )
@@ -413,12 +458,22 @@ export async function captureCronUpdatedInferenceBinding(
     }
     return undefined;
   }
+  // An account edit keeps the runtime the job records; otherwise it resolves the way create does.
+  const recordedRuntime = nextJob.inferenceBinding?.runtime;
+  const executionKey = resolveCronSessionTargetSessionKey(nextJob.sessionTarget);
+  const runtimeSessionEntry = recordedRuntime
+    ? { agentRuntimeOverride: recordedRuntime }
+    : await loadCronRuntimeSessionEntry({
+        cfg,
+        job: nextJob,
+        agentId,
+        executionEntry: executionKey
+          ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))
+              ?.entry
+          : undefined,
+      });
   const inference = await captureCronInferenceForCaller(
-    {
-      cfg,
-      agentId: nextJob.agentId ?? resolveDefaultAgentId(cfg),
-      model,
-    },
+    { cfg, agentId, model, runtimeSessionEntry },
     caller,
   );
   if (!inference.inferenceBinding) {
@@ -426,6 +481,19 @@ export async function captureCronUpdatedInferenceBinding(
       return undefined;
     }
     throw new Error("The selected automation account is unavailable.");
+  }
+  // An account edit on the same provider never moves the job off the runtime it records;
+  // when that runtime is no longer available, the edit fails and the binding stays as it was.
+  const capturedRuntime = inference.inferenceBinding.runtime;
+  if (
+    recordedRuntime &&
+    capturedRuntime !== recordedRuntime &&
+    inference.inferenceBinding.provider === nextJob.inferenceBinding?.provider
+  ) {
+    inference.disposeInferenceAuthorization();
+    throw new Error(
+      `The automation runs on runtime ${recordedRuntime}, which is unavailable for this account; the edit would move it to runtime ${capturedRuntime ?? "unknown"}.`,
+    );
   }
   return inference;
 }

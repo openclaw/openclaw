@@ -128,7 +128,16 @@ it checks the selected publisher at the publication boundary. A bot-authored PR
 from another conversation is not eligible for own-PR import just because the
 publisher created it; continue in its original publication conversation.
 
-To continue that PR in the same local conversation, use `github_publish` with
+For an open PR originally published from this conversation, `refresh_base`
+selects its current GitHub destination before integrating the base into the
+managed workspace. This includes a base branch changed outside the conversation.
+Ordinary publication then continues the same PR and head branch. The Gateway
+checks the current workspace, requester and shared publisher; an original
+publication receipt does not grant permission to import another person's PR.
+Prior receipts retain the destination recorded for their own publication, and
+recovery verifies accepted effects against the original PR before another write.
+
+To import your own existing PR into a local conversation, use `github_publish` with
 `action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
 sessions with a writable managed sandbox or an ordinary local Docker or Podman
 sandbox; sessions that run directly on the host do not see it. A separate
@@ -173,7 +182,15 @@ Ordinary temporary GitHub failures retain the same association's last verified
 status with a warning; a failed own-PR authorization clears it.
 
 Repeating a completed preparation of the same head preserves later edits without
-resetting or synchronizing source files. If the remote PR head has advanced,
+resetting or synchronizing source files. An explicit refresh adopts the PR's
+current destination and updates its review comparison, including after its base
+branch changes. A destination-only change preserves staged and unstaged edits,
+local commits, and the original PR head; it does not merge the destination into
+that head or change GitHub's selected base. The agent uses the user's intent to
+continue recoverable work and asks a focused question when the intended change
+is materially ambiguous. `inspect_pr` supplies current branch and commit facts
+when needed; restoring the old destination is not a prerequisite.
+If the remote PR head has advanced,
 an explicit refresh with `prepare_pr` integrates that head and preserves subsequent
 guest work. Resolve returned `conflictPaths`, then repeat with
 `conflictsResolved: true` and `expectedHeadCommit` set to the returned `headCommit`.
@@ -182,7 +199,8 @@ refresh refuses that case so its index-only version is not lost. The returned re
 head and its base, so an older PR head does not make newer base work appear to be
 deleted.
 
-An interrupted preparation retains the same accepted source for retry.
+An interrupted preparation retains the same accepted source for retry while
+reconciling the current destination for its review comparison.
 If recovery returns `headChanged: true`, it completed that original accepted
 head while GitHub has since advanced; repeat preparation to integrate the newer
 head. Preparation makes no GitHub writes
@@ -290,7 +308,7 @@ Squash landing uses the current PR title read by the merge action as the commit 
 
 For delegated work, the agent must explicitly select the child's `publishingSessionKey`. An authorized person's managed parent conversation receives these PR actions even when its own workspace is ineligible for publication; publishing from that parent remains unavailable. The Gateway verifies that the publishing session belongs to this conversation and binds the operation to its recorded PR. A changed publication or GitHub head requires another inspection and review. If an action's response is interrupted, inspect the same publication before retrying; already-ready, already-merged, or already-closed requests return their observed state without another write. Closing preserves the branch, workspace, and conversation history; it does not reopen a closed PR. Failed checks or unavailable credentials leave the saved work intact.
 
-Only a current full-write person's tool schema and instructions expose privileged inspection, merging, closing and child selection. Guest turns retain their own publication, current-PR metadata editing and readiness, including after admin participation in the conversation. Each action also rechecks the initiating person's current authority at the Gateway. Admin participation does not elevate the session or later guest requests, and publication never grants merge authority. The Gateway keeps the publisher credentials and executes only the requested operation; the agent remains responsible for review, testing, and sequencing the landing request.
+The tool schema and instructions stay stable across turns, including privileged inspection, merging, closing and child selection. For agent tool calls, those actions require the initiating person's current full operator write authority at execution; internal System scopes alone do not grant it. Guest turns retain their own publication, current-PR metadata editing and readiness, including after admin participation in the conversation. Each action rechecks the initiating person's current authority at the Gateway. Admin participation does not elevate the session or later guest requests, and publication never grants merge authority. The Gateway keeps the publisher credentials and executes only the requested operation; the agent remains responsible for review, testing, and sequencing the landing request.
 
 The Gateway prepares the shared identity for worker launch in the background when a session requests it, and refreshes observed sessions after GitHub configuration, credential, or workspace changes. Idle session rows do not trigger credential discovery. Worker turns consume the last prepared result without waiting; removing a workspace binding retires its old fact. Worker launch still validates current identity authority before attaching any credential.
 
@@ -313,6 +331,14 @@ Automatic shared-publication recovery backs off after an unresolved attempt: one
 During cooldown, publication status includes the remaining wait and the latest failure. Base-fetch failures include bounded, redacted Git diagnostics in status and the recovery warning. Inspect the original branch and PR, repair the reported access, connectivity, or Git-object problem, and let recovery reconcile the existing request. A failed observation does not establish that a push or PR creation failed; do not request a replacement publication to recover it.
 
 During publication, an accepted PR response still completes its owned receipt if the requesting connection closes or publication permission ends. A successful local branch update likewise finishes its matching index transaction while the execution retains workspace ownership. This settlement does not authorize another push or PR creation; unconfirmed outcomes retain their existing recovery or personal-confirmation requirements.
+
+If an update reached an existing PR before that PR closed, recovery recognizes
+the accepted commit and the original publication receipt, including after its
+branch is deleted or the accepted tree is merged. It settles the same request
+against that PR without reopening it or creating a replacement. A
+recovered publication result records the accepted update; it does not mean the
+PR is still open. Inspect its current state before making a new, explicit
+publication request for further work.
 
 Before creating a publication commit or changing the local branch and index, the Gateway verifies that the accepted commit shares Git history with the authenticated pull request base, and that the published branch is absent or an ancestor of the accepted local head. Recreating a local branch or expiring its reflog does not invalidate shared commit history. A failed lookup is not treated as an absent branch. A rebased, behind, or unrelated branch is rejected with recovery guidance before new local publication changes. Recovery of an already-started request-owned index transaction still runs first. The push is conditional on the exact observed remote head or branch absence, so a concurrent branch change is rejected. The broker never rewrites published history or rewrites local history automatically.
 

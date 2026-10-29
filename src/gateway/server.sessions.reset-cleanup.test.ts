@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { afterEach, expect, test, vi, describe } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -59,6 +59,30 @@ import {
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 const { disposeSessionMcpRuntime: disposeMcp } = bundleMcpRuntimeMocks;
+function mainTarget(storePath: string) {
+  return captureSessionTarget({
+    storeScope: storePath,
+    sessionKey: "agent:main:main",
+    aliases: ["main", "sess-main"],
+    incarnation: "sess-main",
+    agentId: "main",
+  });
+}
+
+async function resetService(
+  overrides: Partial<
+    Parameters<typeof import("./session-reset-service.js").performGatewaySessionReset>[0]
+  > = {},
+) {
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  return performGatewaySessionReset({
+    key: "main",
+    reason: "new",
+    commandSource: "gateway:agent",
+    workerPlacementContext: {},
+    ...overrides,
+  });
+}
 
 afterEach(async () => {
   await disposeSessionReadContexts();
@@ -74,13 +98,7 @@ async function seedMainSession(entries: Record<string, InternalSessionEntry> = {
 
 async function seedWaitingActiveMainSession() {
   const seeded = await seedActiveMainSession();
-  const target = captureSessionTarget({
-    storeScope: seeded.storePath,
-    sessionKey: "agent:main:main",
-    aliases: ["main", "sess-main"],
-    incarnation: "sess-main",
-    agentId: "main",
-  });
+  const target = mainTarget(seeded.storePath);
   const started = createDeferred();
   const activeRun = withSessionTurn(
     { sessionKey: target.sessionKey, sessionId: "sess-main", target },
@@ -100,35 +118,23 @@ async function resetMainSession() {
     ok: true;
     key: string;
     entry: { lifecycleRevision?: string; sessionId: string };
-  }>("sessions.reset", {
-    key: "main",
-  });
+  }>("sessions.reset", { key: "main" });
 }
 
 type ArchivedMainResetCase = {
   key: string;
   mainKey?: string;
-  reason?: InternalSessionEntry["archiveReason"];
-  tombstone?: boolean;
-  allowed: boolean;
-  locked?: boolean;
   staleIdentity?: boolean;
 };
 
 test.each<[string, ArchivedMainResetCase]>([
-  ["default Main", { key: "agent:main:main", allowed: true }],
-  ["configured Main", { key: "agent:main:inbox", mainKey: "inbox", allowed: true }],
-  ["manually archived Main", { key: "agent:main:main", reason: "manual", allowed: false }],
-  ["archived peer", { key: "agent:main:dashboard:peer", allowed: false }],
-  ["archive without tombstone", { key: "agent:main:main", tombstone: false, allowed: false }],
-  ["model-locked recovered Main", { key: "agent:main:main", locked: true, allowed: false }],
-  ["stale expected Main identity", { key: "agent:main:main", staleIdentity: true, allowed: false }],
+  ["default Main", { key: "agent:main:main" }],
+  ["configured Main", { key: "agent:main:inbox", mainKey: "inbox" }],
+  ["peer", { key: "agent:main:dashboard:peer" }],
+  ["stale expected Main identity", { key: "agent:main:main", staleIdentity: true }],
 ])(
-  "sessions.reset preserves history when restoring %s",
-  async (
-    _,
-    { key, mainKey, reason = "restart-recovery", tombstone = true, allowed, locked, staleIdentity },
-  ) => {
+  "sessions.reset refuses archived %s without changing history",
+  async (_, { key, mainKey, staleIdentity }) => {
     const { dir, storePath } = await createSessionStoreDir();
     testState.sessionConfig = mainKey ? { mainKey } : undefined;
     const sessionId = "synthetic-archived-main";
@@ -138,22 +144,7 @@ test.each<[string, ArchivedMainResetCase]>([
         [key]: {
           ...sessionStoreEntry(sessionId),
           archivedAt: 100,
-          archiveReason: reason,
-          ...(locked ? { modelSelectionLocked: true } : {}),
-          ...(tombstone
-            ? {
-                mainRestartRecovery: {
-                  cycleId: "synthetic-recovery",
-                  revision: 1,
-                  chargedAttempts: 3,
-                  tombstone: {
-                    reason: "synthetic exhausted restart recovery",
-                    recoveredSessionKey: "agent:main:dashboard:old-successor",
-                    recoveredSessionId: "synthetic-successor",
-                  },
-                },
-              }
-            : {}),
+          archiveReason: "manual",
         },
       },
     });
@@ -162,23 +153,14 @@ test.each<[string, ArchivedMainResetCase]>([
       key,
       expectedSessionId: staleIdentity ? "stale-session" : sessionId,
     });
-    expect(result.ok).toBe(allowed);
+    expect(result.ok).toBe(false);
     const entry = loadSessionEntry({ storePath, sessionKey: key });
     expect(entry?.sessionId).toBe(sessionId);
     const after = await loadTranscriptRows({ storePath, sessionKey: key, sessionId });
     expect(after.slice(0, before.length)).toEqual(before);
-    if (allowed) {
-      expect(entry?.archivedAt).toBeUndefined();
-      expect(entry?.archiveReason).toBeUndefined();
-      expect(entry?.mainRestartRecovery).toBeUndefined();
-      expect(after.slice(before.length)).toContainEqual(
-        expect.objectContaining({ type: "reset", reason: "reset" }),
-      );
-    } else {
-      expect(entry?.archivedAt).toBe(100);
-      expect(entry?.archiveReason).toBe(reason);
-      expect(after).toEqual(before);
-    }
+    expect(entry?.archivedAt).toBe(100);
+    expect(entry?.archiveReason).toBe("manual");
+    expect(after).toEqual(before);
   },
 );
 
@@ -202,15 +184,6 @@ function seedAcp(
       backendSessionId: `backend-${sessionKey}`,
       ...overrides,
     }),
-  });
-}
-
-function admitMainWork(storePath: string, onInterrupt: () => void) {
-  return beginSessionEffect({
-    scope: storePath,
-    identities: ["agent:main:main", "sess-main"],
-    assertAllowed: () => {},
-    onInterrupt,
   });
 }
 
@@ -258,9 +231,9 @@ test("sessions.reset preempts the controller run and clears queues", async () =>
     { storePath, sessionKey: "agent:main:main" },
     { ...parentGrant, ...preferences },
   );
-  enqueueSystemEvent("stale event via alias", { sessionKey: "main" });
-  enqueueSystemEvent("stale event via canonical key", { sessionKey: "agent:main:main" });
-  enqueueSystemEvent("stale event via session id", { sessionKey: "sess-main" });
+  for (const sessionKey of ["main", "agent:main:main", "sess-main"]) {
+    enqueueSystemEvent(`stale event via ${sessionKey}`, { sessionKey });
+  }
   const reset = await resetMainSession();
   await activeRun;
   expect(reset).toMatchObject({
@@ -272,9 +245,7 @@ test("sessions.reset preempts the controller run and clears queues", async () =>
   });
   expect(reset.payload?.entry).not.toHaveProperty("sessionDiffBaselineCapture");
   expect(
-    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }) as
-      | InternalSessionEntry
-      | undefined,
+    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
   ).toMatchObject({
     sessionId: "sess-main",
     ...parentGrant,
@@ -309,13 +280,7 @@ test("sessions.reset preempts the controller run and clears queues", async () =>
 
 test("sessions.reset preserves its unavailable result when controller preemption times out", async () => {
   const { storePath } = await seedActiveMainSession();
-  const target = captureSessionTarget({
-    storeScope: storePath,
-    sessionKey: "agent:main:main",
-    aliases: ["main", "sess-main"],
-    incarnation: "sess-main",
-    agentId: "main",
-  });
+  const target = mainTarget(storePath);
   const claim = await submitSessionControllerTask(target.sessionKey, {
     target,
     start: (mailboxClaim) => {
@@ -412,9 +377,9 @@ test("sessions.reset clears retained native conversations from every execution o
     const response = await resetMainSession();
     await activeRun;
     expect(response.ok).toBe(true);
-    expect(current.has("sess-main")).toBe(false);
-    expect(firstModel.has("sess-main")).toBe(false);
-    expect(secondModel.has("sess-main")).toBe(false);
+    for (const history of [current, firstModel, secondModel]) {
+      expect(history.has("sess-main")).toBe(false);
+    }
     expect(firstModel.get("sibling")).toBe("keep me");
     expect(retained).toBe(false);
   } finally {
@@ -426,8 +391,13 @@ test("sessions.reset clears retained native conversations from every execution o
 test("sessions.reset rejects an active lifecycle mutation without interrupting admitted work", async () => {
   const { storePath } = await seedMainSession();
   let interrupted = false;
-  const admissionLease = await admitMainWork(storePath, () => {
-    interrupted = true;
+  const admissionLease = await beginSessionEffect({
+    scope: storePath,
+    identities: ["agent:main:main", "sess-main"],
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      interrupted = true;
+    },
   });
   const mutation = createRequestGate();
   const blocker = runSessionMutation({
@@ -437,15 +407,11 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
   });
   try {
     await mutation.entered;
-    const { performGatewaySessionReset } = await import("./session-reset-service.js");
     const assertCurrent = vi.fn(() => {
       throw new Error("stale lifecycle");
     });
-    const reset = await performGatewaySessionReset({
-      key: "main",
+    const reset = await resetService({
       reason: "reset",
-      commandSource: "gateway:agent",
-      workerPlacementContext: {},
       assertCurrent,
     });
     expect(reset).toMatchObject({
@@ -474,12 +440,7 @@ test("sessions.reset finishes after lifecycle rotation during destructive cleanu
   acpManagerMocks.closeSession.mockImplementationOnce(async () => {
     lifecycleCurrent = false;
   });
-  const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  const reset = await performGatewaySessionReset({
-    key: "main",
-    reason: "new",
-    commandSource: "gateway:agent",
-    workerPlacementContext: {},
+  const reset = await resetService({
     assertCurrent: () => {
       if (!lifecycleCurrent) {
         throw new Error("stale lifecycle");
@@ -503,12 +464,9 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
   });
   const hook = createRequestGate();
   sessionHookMocks.triggerInternalHook.mockImplementationOnce(() => hook.pause());
-  const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  const resetPromise = performGatewaySessionReset({
+  const resetPromise = resetService({
     key: sessionKey,
-    reason: "new",
     commandSource: "gateway:sessions.reset",
-    workerPlacementContext: {},
   });
   await hook.entered;
   const archivePromise = directSessionReq("sessions.patch", {
@@ -609,8 +567,7 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
     });
   }
 
-  const reset = await resetMainSession();
-  expect(reset.ok).toBe(true);
+  expect((await resetMainSession()).ok).toBe(true);
 
   expect(closedAcpKeys()).toContain("agent:codex:acp:cross-store-child");
 });
@@ -702,69 +659,66 @@ test("sessions.reset directly unbinds thread bindings when hooks are unavailable
   await seedMainSession();
   subagentLifecycleHookState.hasSubagentEndedHook = false;
 
-  const reset = await resetMainSession();
-  expect(reset.ok).toBe(true);
+  expect((await resetMainSession()).ok).toBe(true);
   expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
   expectThreadUnbound();
 });
 
-describe("acp-authority", () => {
-  test.each(["already retired", "caller retired"] as const)(
-    "ACP reset preserves its row and resume state when %s before metadata commit",
-    async (reason) => {
-      const entryWorker =
-        await import("../config/sessions/session-accessor.sqlite-replacement-worker.js");
-      const { closeAcpRuntimeForSession } = await import("./session-reset-acp.js");
-      const { storePath } = await seedActiveMainSession();
-      const sessionKey = "agent:main:main";
-      seedAcp(sessionKey, {
-        backendSessionId: "original-backend",
-        runtimeSessionName: "original-runtime",
+test.each(["already retired", "caller retired"] as const)(
+  "ACP reset preserves its row and resume state when %s before metadata commit",
+  async (reason) => {
+    const entryWorker =
+      await import("../config/sessions/session-accessor.sqlite-replacement-worker.js");
+    const { closeAcpRuntimeForSession } = await import("./session-reset-acp.js");
+    const { storePath } = await seedActiveMainSession();
+    const sessionKey = "agent:main:main";
+    seedAcp(sessionKey, {
+      backendSessionId: "original-backend",
+      runtimeSessionName: "original-runtime",
+    });
+    installAcpRuntimeBackendWithFreshSession();
+    const scope = { agentId: "main", sessionKey, storePath };
+    const readState = () => ({
+      entry: loadSessionEntry(scope),
+      meta: readAcpSessionEntry({ sessionKey })?.acp,
+    });
+    const before = structuredClone(readState());
+    const mutation = createRequestGate();
+    const originalWrite = entryWorker.withSessionEntryWorker;
+    using intercepted = vi
+      .spyOn(entryWorker, "withSessionEntryWorker")
+      .mockImplementation(async (...args) => {
+        await mutation.pause();
+        return await originalWrite(...args);
       });
-      installAcpRuntimeBackendWithFreshSession();
-      const scope = { agentId: "main", sessionKey, storePath };
-      const readState = () => ({
-        entry: loadSessionEntry(scope),
-        meta: readAcpSessionEntry({ sessionKey })?.acp,
-      });
-      const before = structuredClone(readState());
-      const mutation = createRequestGate();
-      const originalWrite = entryWorker.withSessionEntryWorker;
-      using intercepted = vi
-        .spyOn(entryWorker, "withSessionEntryWorker")
-        .mockImplementation(async (...args) => {
-          await mutation.pause();
-          return await originalWrite(...args);
-        });
-      let current = reason !== "already retired";
-      const resetting = closeAcpRuntimeForSession({
-        cfg: { session: { store: storePath } },
-        agentId: "main",
-        sessionKey,
-        reason: "session-reset",
-        assertCurrent: () => assert(current, "reset caller retired"),
-      });
-      const outcome = expect(resetting).rejects.toThrow("reset caller retired");
-      try {
-        if (reason === "already retired") {
-          await outcome;
-          expect(intercepted).not.toHaveBeenCalled();
-        } else {
-          await Promise.race([
-            mutation.entered,
-            outcome.then(() => {
-              throw new Error("ACP reset settled before the metadata mutation boundary");
-            }),
-          ]);
-          current = false;
-          mutation.release();
-          await outcome;
-        }
-        expect(readState()).toEqual(before);
-      } finally {
+    let current = reason !== "already retired";
+    const resetting = closeAcpRuntimeForSession({
+      cfg: { session: { store: storePath } },
+      agentId: "main",
+      sessionKey,
+      reason: "session-reset",
+      assertCurrent: () => assert(current, "reset caller retired"),
+    });
+    const outcome = expect(resetting).rejects.toThrow("reset caller retired");
+    try {
+      if (reason === "already retired") {
+        await outcome;
+        expect(intercepted).not.toHaveBeenCalled();
+      } else {
+        await Promise.race([
+          mutation.entered,
+          outcome.then(() => {
+            throw new Error("ACP reset settled before the metadata mutation boundary");
+          }),
+        ]);
+        current = false;
         mutation.release();
         await outcome;
       }
-    },
-  );
-});
+      expect(readState()).toEqual(before);
+    } finally {
+      mutation.release();
+      await outcome;
+    }
+  },
+);

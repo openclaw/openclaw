@@ -124,6 +124,21 @@ describe("PostgreSQL schema generation", () => {
       expect(files[file], file).not.toContain('"openclaw_state".');
       expect(files[file], file).not.toContain('"openclaw_agent".');
     }
+    const workspaceMigration = files["state-v34-v35.postgres.sql"]!;
+    expect(workspaceMigration).toContain(
+      "IF to_regclass('local_workspace_projections') IS NOT NULL",
+    );
+    for (const column of [
+      "tree_root_digest",
+      "source_paths_digest",
+      "canonical_fingerprints",
+      "projection_fingerprints",
+    ]) {
+      expect(workspaceMigration).toContain(`ADD COLUMN "${column}" bytea;`);
+    }
+    expect(workspaceMigration).toContain('CREATE TABLE "local_workspace_tree_packs"');
+    expect(workspaceMigration).toContain('CREATE TABLE "local_workspace_source_path_sets"');
+    expect(workspaceMigration).not.toMatch(/\b(?:UPDATE|INSERT|DELETE|DROP)\b/u);
   });
 
   it("emits canonical SQL or an omission diagnostic and generates identical bytes twice", async () => {

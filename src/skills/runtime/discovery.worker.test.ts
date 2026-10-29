@@ -3,8 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as skillPaths from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as boundaryFileRead from "../../infra/boundary-file-read.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -289,4 +291,36 @@ it("keeps shared-root file limits and hardlink policies separate within a scan",
     [],
     ["guide"],
   ]);
+});
+
+it("fingerprints precedence winners without resolving paths for discarded collision reports", async () => {
+  const root = temporary.make("skills-scan-collisions-");
+  const managed = path.join(root, "managed");
+  const workspace = path.join(root, "skills");
+  const execution = path.join(root, "execution");
+  await write(managed, "guide", "Managed");
+  await write(workspace, "guide", "Workspace");
+  await write(path.join(execution, ".agents", "skills"), "extra", "Project extra");
+  await write(path.join(execution, "skills"), "extra", "Execution extra");
+  await write(path.join(execution, "skills"), "guide", "Execution guide");
+  const input = selected(root, [
+    { dir: managed, source: "openclaw-managed", tier: "managed" },
+    { dir: workspace, source: "openclaw-workspace", tier: "workspace" },
+  ]);
+  input.selection.request.executionWorkspaceDir = execution;
+  const canonicalize = vi.spyOn(skillPaths, "canonicalizePath");
+  const [result] = await scan([input]);
+  expect(result!.sources.entries.map(facts)).toEqual([
+    ["guide", "Managed"],
+    ["guide", "Workspace"],
+  ]);
+  const winner = result!.sources.entries[1]!;
+  const extra = result!.sources.executionEntries.find(
+    ({ skill }) => skill.description === "Execution extra",
+  )!;
+  expect(extra).toBeDefined();
+  expect(result!.fingerprint).toBe(
+    sha256Hex(JSON.stringify([[winner, extra], result!.sources.runtime])),
+  );
+  expect(canonicalize).not.toHaveBeenCalled();
 });

@@ -98,52 +98,6 @@ describe("worker placement dispatch reclaim", () => {
     expect(placementStore.get("pending-session")).toMatchObject({ state: "provisioning" });
   });
 
-  it("releases a failed reclaim before an older provisioning recovery without losing accepted work", async () => {
-    const harness = await createHarness(database, placementStore, {
-      workspacePath: root,
-      destroyFailureCount: 1,
-      reconcileChanged: false,
-      reconcileCommitsManifest: false,
-    });
-    const coordinated = coordinateWorkerPlacementDispatch(harness.service, (_request, run) =>
-      run(),
-    );
-    const provisionStarted = createDeferredCore();
-    const releaseProvision = createDeferredCore();
-    vi.mocked(harness.environments.createWithRequest).mockImplementationOnce(async () => {
-      provisionStarted.resolve();
-      await releaseProvision.promise;
-      return harness.ready;
-    });
-    const dispatching = coordinated.dispatch(REQUEST);
-    await provisionStarted.promise;
-    const provisioning = placementStore.get(REQUEST.sessionId);
-    if (provisioning?.state !== "provisioning") {
-      throw new Error("expected in-flight provisioning owner");
-    }
-    const outcome = coordinated.reclaim(REQUEST).catch((error: unknown) => error);
-    const olderRecovery = coordinated.resumeProvisioning(provisioning, async () => {});
-    // The environment service joins the pass already waiting behind reclaim.
-    vi.mocked(harness.environments.reconcileOnce).mockImplementationOnce(async () => {
-      await olderRecovery;
-    });
-    releaseProvision.resolve();
-    try {
-      await dispatching;
-      expect(await outcome).toEqual(new Error("destroy pending"));
-      await olderRecovery;
-      expect(placementStore.get(REQUEST.sessionId)?.state).toBe("draining");
-      expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([
-        expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
-      ]);
-      expect(harness.log.filter((event) => event === "workspace:reconcile")).toHaveLength(1);
-
-      expect(harness.environments.destroy).toHaveBeenCalledOnce();
-    } finally {
-      await Promise.allSettled([dispatching, outcome, olderRecovery]);
-    }
-  });
-
   it("keeps the accepted placement draining when provider destruction is not proven", async () => {
     const harness = await createHarness(database, placementStore, {
       workspacePath: path.join(root, "workspace"),

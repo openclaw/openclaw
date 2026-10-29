@@ -87,10 +87,7 @@ export function latestTranscriptAnnouncement(
       }
       for (const group of chatItemGroups(part).toReversed()) {
         if (isSessionActivityGroup(group)) {
-          const count = group.messages.reduce(
-            (total, entry) => total + (entry.duplicateCount ?? 1),
-            0,
-          );
+          const count = group.messages.length;
           const source = group.senderSession?.label ?? group.senderSession?.sessionKey;
           const label = t(
             source

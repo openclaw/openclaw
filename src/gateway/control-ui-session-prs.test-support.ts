@@ -102,8 +102,10 @@ export function mockPrCheckout(options: {
     switch (operation.type) {
       case "pull-request.branch-comparison":
         return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
-      case "checkout.revision":
-        return options.revision();
+      case "checkout.revision": {
+        const key = options.revision();
+        return key === null ? null : { key };
+      }
       case "checkout.context":
         if (options.resolve) {
           return options.resolve(operation.input.root);

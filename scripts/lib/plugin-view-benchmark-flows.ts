@@ -13,15 +13,21 @@ type MeasureStep = (
 
 export async function remainingPluginReady(page: Page, fixture: RemainingFixture) {
   if (fixture.plugin === "x") {
+    const view = page.locator(".x-replies");
     await expect(page.locator('.x-replies__list[aria-busy="false"] tbody tr')).toHaveCount(
       fixture.count,
     );
     await expect(page.locator(".x-replies__github tbody tr")).toHaveCount(
       Math.ceil(fixture.count / 2),
     );
-    await expect(page.getByRole("combobox", { name: "Bot account" })).toHaveValue("primary");
-    await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
-    await expect(page.getByText("@p_user_0000", { exact: true })).toBeVisible();
+    await expect(view.locator(".x-replies__field select")).toHaveValue("primary");
+    await expect(view.locator(".x-replies__header button")).toBeEnabled();
+    await expect(
+      view.locator(".x-replies__list[aria-busy] tbody tr").first().locator("strong"),
+    ).toHaveText("@p_user_0000");
+    await expect(
+      view.locator(".x-replies__list[aria-busy] tbody tr").first().locator("strong"),
+    ).toBeVisible();
   } else if (fixture.plugin === "clawrouter") {
     await expect(page.locator('.clawrouter-pool[aria-busy="false"]')).toBeVisible();
     await expect(page.locator(".clawrouter-pool__summary")).toBeVisible();
@@ -78,18 +84,27 @@ export async function exerciseRemainingPlugin(
   step: MeasureStep,
 ): Promise<Record<string, unknown>> {
   if (fixture.plugin === "x") {
-    const rows = page.locator(".x-replies__list[aria-busy] tbody tr");
+    const view = page.locator(".x-replies");
+    const rows = view.locator(".x-replies__list[aria-busy] tbody tr");
+    const refresh = view.locator(".x-replies__header button");
+    const input = view.locator('.x-replies__add input[name="username"]');
+    const guestMode = view.locator(".x-replies__switch");
+    const accountSelect = view.locator(".x-replies__field select");
+    const add = view.locator('.x-replies__add button[type="submit"]');
+    await expect(refresh).toHaveAccessibleName("Refresh");
+    await expect(input).toHaveAccessibleName("Add by X handle");
+    await expect(guestMode).toHaveAccessibleName("Guest mode");
+    await expect(accountSelect).toHaveAccessibleName("Bot account");
+    await expect(add).toHaveAccessibleName("Add account");
     const retained = await rows.first().elementHandle();
     await step("type-handle", async () => {
-      await page.getByRole("textbox", { name: "Add by X handle" }).fill("@fixture_new");
-      await expect(page.getByRole("textbox", { name: "Add by X handle" })).toHaveValue(
-        "@fixture_new",
-      );
+      await input.fill("@fixture_new");
+      await expect(input).toHaveValue("@fixture_new");
     });
     await step("refresh", async () => {
       const match = { accountId: "primary" };
       const before = (await gateway.getRequests("x.allowlist.list", match)).length;
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await refresh.click();
       await gateway.waitForRequest("x.allowlist.list", {
         after: before,
         match,
@@ -97,38 +112,38 @@ export async function exerciseRemainingPlugin(
       await remainingPluginReady(page, fixture);
     });
     await step("add-account", async () => {
-      await page.getByRole("button", { name: "Add account", exact: true }).click();
+      await add.click();
       await gateway.waitForRequest("x.allowlist.add", {
         match: { accountId: "primary", username: "@fixture_new" },
       });
       await expect(rows).toHaveCount(fixture.count + 1);
-      await expect(
-        page.getByRole("button", { name: "Remove stored entry for @fixture_new", exact: true }),
-      ).toBeEnabled();
+      await expect(rows.last().locator("strong")).toHaveText("@fixture_new");
+      await expect(rows.last().locator("button")).toHaveAccessibleName(
+        "Remove stored entry for @fixture_new",
+      );
+      await expect(rows.last().locator("button")).toBeEnabled();
     });
     const rowRetained = await rows.first().evaluate((row, old) => row === old, retained);
     expect(rowRetained).toBe(true);
     await step("remove-account", async () => {
-      await page
-        .getByRole("button", { name: "Remove stored entry for @fixture_new", exact: true })
-        .click();
+      await rows.last().locator("button").click();
       await expect(rows).toHaveCount(fixture.count);
-      await expect(
-        page.getByText("Stored entry removed. Any other allowlist source still applies.", {
-          exact: true,
-        }),
-      ).toBeVisible();
+      await expect(view.locator('[aria-live="polite"]')).toHaveText(
+        "Stored entry removed. Any other allowlist source still applies.",
+      );
+      await expect(view.locator('[aria-live="polite"]')).toBeVisible();
     });
     await step("guest-mode", async () => {
-      await page.getByRole("switch", { name: "Guest mode" }).click();
-      await expect(page.getByRole("switch", { name: "Guest mode" })).toBeChecked();
-      await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
+      await guestMode.click();
+      await expect(guestMode).toBeChecked();
+      await expect(refresh).toBeEnabled();
     });
     await step("switch-account", async () => {
-      await page.getByRole("combobox", { name: "Bot account" }).selectOption("secondary");
+      await accountSelect.selectOption("secondary");
       await expect(rows).toHaveCount(fixture.count);
-      await expect(page.getByText("@s_user_0000", { exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
+      await expect(rows.first().locator("strong")).toHaveText("@s_user_0000");
+      await expect(rows.first().locator("strong")).toBeVisible();
+      await expect(refresh).toBeEnabled();
     });
     await step("scroll", async () => {
       const last = page.locator(".x-replies__github tbody tr").last();

@@ -292,6 +292,11 @@ export type ModelCatalogProvider = {
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
   /**
+   * Multi-vendor routers: small model id per vendor, keyed by the vendor prefix of the
+   * primary model id (`<vendor>/<model>`). Used only when the router offers that model.
+   */
+  defaultUtilityModels?: Record<string, string>;
+  /**
    * Hosted catalog v2 projection of the curated global list onto this provider's
    * model ids, best first; reserved for picker ordering and not yet used.
    */
@@ -326,6 +331,8 @@ export type ModelCatalog = {
   aliases?: Record<string, ModelCatalogAlias>;
   suppressions?: ModelCatalogSuppression[];
   discovery?: Record<string, ModelCatalogDiscovery>;
+  /** Runtime catalogs bound to the configured origin, or the manifest default when absent. */
+  configuredEndpointDiscovery?: string[];
   runtimeAugment?: boolean;
 };
 

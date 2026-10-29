@@ -1,4 +1,4 @@
-import { Show, createMemo, createSignal, lazy } from "solid-js";
+import { Show, createMemo, createSignal, createUniqueId, lazy } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import "../../../components/tooltip.ts";
@@ -8,6 +8,7 @@ import type {
   ChatFastModeSelectValue,
 } from "../../../lib/chat/model-select-state.ts";
 import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
+import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatAccessProgramControlProps } from "./chat-access-program-control.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -15,9 +16,12 @@ import { createChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
 
+const EFFORT_GAUGE_PATH = "M3.34 17a10 10 0 1 1 17.32 0";
+
 const ChatEffortPickerPanel = lazy(() => import("./chat-effort-picker-panel.tsx"), {
   export: "ChatEffortPickerPanel",
 });
+warmWhenIdle(ChatEffortPickerPanel.preload);
 
 export type ChatEffortPickerParams = {
   accessProgram?: ChatAccessProgramControlProps;
@@ -37,6 +41,7 @@ export function formatEffortLabel(label: string): string {
 }
 
 export function ChatEffortPicker(props: ChatEffortPickerParams) {
+  const gradientId = `chat-effort-gradient-${createUniqueId()}`;
   const view = createMemo(() => {
     const sliderStops = props.thinking.options;
     const showReasoning = sliderStops.length > 0;
@@ -51,20 +56,6 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     const hasThinkingOverride = selection.source === "override";
     const sliderIndex = selection.kind === "anchored" ? selection.index : 0;
     const sliderUnanchored = selection.kind === "unanchored";
-    // A narrowed catalog's first stop must not paint a full maximum-effort track.
-    // Binary providers can use a ranked wire value with the display label "On".
-    const maximumIndex = sliderStops.findLastIndex(
-      (stop) =>
-        stop.label !== "On" &&
-        ["minimal", "low", "medium", "high", "xhigh", "max"].includes(stop.value),
-    );
-    const sliderBoost = (index: number) =>
-      sliderStops[index]?.value === "ultra"
-        ? "ultra"
-        : maximumIndex > 0 && index === maximumIndex
-          ? "max"
-          : "";
-    const committedBoost = sliderUnanchored ? "" : sliderBoost(sliderIndex);
     const defaultLevelLabel = formatEffortLabel(props.thinking.inherited.displayLabel);
     const reasoningValueText = formatEffortLabel(selection.displayLabel);
     const reasoningValueLabel = hasThinkingOverride
@@ -117,13 +108,13 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
       sliderStops,
       showReasoning,
       effortIsOff,
+      effortIsUltra: selection.kind === "anchored" && selection.value === "ultra",
+      effortFraction,
       effortAngle: -120 + effortFraction * 240,
       hasThinkingOverride,
       selectedThinkingValue: hasThinkingOverride ? selection.value : "",
       sliderIndex,
       sliderUnanchored,
-      sliderBoost,
-      committedBoost,
       reasoningValueText,
       reasoningValueLabel,
       ultrafast,
@@ -165,7 +156,6 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                 "chat-controls__inline-select-trigger chat-controls__effort-trigger",
                 {
                   "chat-controls__effort-trigger--ultrafast": view().ultrafast,
-                  "chat-controls__inline-select-trigger--disabled": props.disabled,
                 },
               ]}
               data-chat-thinking-select="true"
@@ -178,31 +168,69 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                   : view().triggerTitle
               }
               aria-disabled={props.disabled ? "true" : "false"}
+              aria-description={props.disabledReason}
               title={props.disabledReason ?? view().triggerTitle}
             >
               {view().showReasoning ? (
                 <span
                   class={[
                     "chat-controls__effort-gauge",
-                    { "chat-controls__effort-gauge--off": view().effortIsOff },
+                    {
+                      "chat-controls__effort-gauge--off": view().effortIsOff,
+                    },
                   ]}
                   aria-hidden="true"
                 >
                   <StrokeIcon>
+                    <defs>
+                      <linearGradient
+                        id={gradientId}
+                        x1="2"
+                        y1="12"
+                        x2="22"
+                        y2="12"
+                        gradientUnits="userSpaceOnUse"
+                      >
+                        <stop
+                          offset="0"
+                          stop-color="color-mix(in oklab, var(--accent) 45%, white)"
+                        />
+                        <stop offset="1" stop-color="var(--accent)" />
+                      </linearGradient>
+                    </defs>
+                    <path class="chat-controls__effort-gauge-dial" d={EFFORT_GAUGE_PATH} />
                     <path
-                      class="chat-controls__effort-gauge-dial"
-                      d="M3.34 17a10 10 0 1 1 17.32 0"
+                      class="chat-controls__effort-gauge-progress"
+                      d={EFFORT_GAUGE_PATH}
+                      pathLength="1"
+                      stroke={view().effortIsUltra ? `url(#${gradientId})` : "var(--muted)"}
+                      stroke-dasharray={`${view().effortFraction} 1`}
+                      stroke-opacity={view().effortFraction > 0 ? "1" : "0"}
                     />
-                    <path
-                      class="chat-controls__effort-gauge-needle"
-                      d="M12 12V6"
-                      style={{ transform: `rotate(${view().effortAngle}deg)` }}
-                    />
-                    <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+                    {props.fastMode.active && view().effortFraction === 0 && (
+                      <circle cx="3.34" cy="17" r="1" fill="var(--muted)" stroke="none" />
+                    )}
+                    {!props.fastMode.active && (
+                      <>
+                        <path
+                          class="chat-controls__effort-gauge-needle"
+                          d="M12 12V6"
+                          style={{ transform: `rotate(${view().effortAngle}deg)` }}
+                        />
+                        <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+                      </>
+                    )}
                   </StrokeIcon>
                   {props.fastMode.active && (
-                    <span class="chat-controls__effort-fast-badge">
-                      <Icon name="zap" />
+                    <span
+                      class={[
+                        "chat-controls__effort-fast-badge",
+                        {
+                          "chat-controls__effort-zap--ultrafast": view().ultrafast,
+                        },
+                      ]}
+                    >
+                      <Icon name={view().ultrafast ? "zapDouble" : "zap"} />
                     </span>
                   )}
                 </span>
@@ -219,8 +247,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                   ]}
                   aria-hidden="true"
                 >
-                  {view().ultrafast && <Icon name="zap" />}
-                  <Icon name="zap" />
+                  <Icon name={view().ultrafast ? "zapDouble" : "zap"} />
                 </span>
               )}
               <span class="chat-controls__inline-select-label">{view().triggerLabel}</span>

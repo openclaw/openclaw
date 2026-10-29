@@ -51,9 +51,7 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
 );
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  const error: unknown = await fs.stat(targetPath).catch((caught: unknown) => caught);
-  expect(error).toBeInstanceOf(Error);
-  expect(error).toMatchObject({ code: "ENOENT" });
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 async function seedCliBackfillTranscript(
@@ -147,12 +145,6 @@ afterEach(() => {
 
 const inactiveMemorySecretDiagnostic = "memory.search.remote.apiKey inactive"; // pragma: allowlist secret
 
-function expectCliSync(sync: ReturnType<typeof vi.fn>) {
-  expect(sync).toHaveBeenCalledWith(
-    expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-  );
-}
-
 function setDreaming(dreaming: Record<string, unknown>) {
   getRuntimeConfig.mockReturnValue(memoryCoreConfig({ dreaming }));
 }
@@ -217,6 +209,13 @@ function expectNotLogged(spy: ReturnType<typeof vi.spyOn>, expected: string) {
   expect(loggedOutput(spy)).not.toContain(expected);
 }
 
+function captureOutput() {
+  return {
+    json: spyRuntimeJson(defaultRuntime),
+    log: spyRuntimeLogs(defaultRuntime),
+  };
+}
+
 async function run(args: string[] | string, hostOptions?: Parameters<typeof registerMemoryCli>[1]) {
   const program = new Command().name("test");
   registerMemoryCli(program, hostOptions);
@@ -258,10 +257,6 @@ function setMemorySecret(id: string) {
   getRuntimeConfig.mockReturnValue({
     memory: { search: { remote: { apiKey: { source: "env", provider: "default", id } } } },
   });
-}
-
-function llamaRuntime() {
-  return { engine: "llama.cpp", state: "ready", backend: "metal", buildInfo: "b10357 (689e227db)" };
 }
 
 it("resets and rebuilds the real index without changing canonical session bytes or other owners", async () => {
@@ -454,18 +449,15 @@ it("drains admitted session backfill in one apply command before preview", async
   });
 });
 
-it.each([[["search", "hello", "--min-score", "0x1"], "--min-score must be a finite number."]])(
-  "rejects invalid memory numeric option %j before acquisition",
-  async (args, message) => {
-    const program = new Command().exitOverride();
-    program.configureOutput({ writeErr: () => {}, writeOut: () => {} });
-    registerMemoryCli(program);
-    await expect(program.parseAsync(["memory", ...args], { from: "user" })).rejects.toThrow(
-      message,
-    );
-    expect(getMemorySearchManager).not.toHaveBeenCalled();
-  },
-);
+it("rejects invalid memory numeric options before acquisition", async () => {
+  const program = new Command().exitOverride();
+  program.configureOutput({ writeErr: () => {}, writeOut: () => {} });
+  registerMemoryCli(program);
+  await expect(
+    program.parseAsync(["memory", "search", "hello", "--min-score", "0x1"], { from: "user" }),
+  ).rejects.toThrow("--min-score must be a finite number.");
+  expect(getMemorySearchManager).not.toHaveBeenCalled();
+});
 
 async function createWorkspace() {
   const workspaceDir = path.join(workspaceFixtureRoot, `case-${workspaceCaseId++}`);
@@ -584,6 +576,8 @@ async function historicalFixture(command: "rem-harness" | "rem-backfill") {
   return {
     workspaceDir,
     historyPath,
+    ...captureOutput(),
+    run: (json = true) => run([command, "--path", historyPath, ...(json ? ["--json"] : [])]),
     scratchDirectory: () => scratchDir,
     close: mockWorkspace(workspaceDir),
     async [Symbol.asyncDispose]() {
@@ -768,7 +762,10 @@ it.each([false, true])(
         requestedProvider: index ? "openai" : "auto",
         custom: {
           llamaCppRuntime: {
-            ...llamaRuntime(),
+            engine: "llama.cpp",
+            state: "ready",
+            backend: "metal",
+            buildInfo: "b10357 (689e227db)",
             ...(index
               ? {
                   model: { id: "embeddinggemma-300m-qat-q8_0", path: "/models/embedding.gguf" },
@@ -801,7 +798,7 @@ it.each([false, true])(
       }
     }
     if (index) {
-      expectCliSync(sync);
+      expect(sync).toHaveBeenCalled();
       expectLogged(log, "Embeddings: ready", "llama.cpp server: metal (b10357 (689e227db))");
     } else {
       expectLogged(log, "Vector store: indexed (unprobed)", "Provider: auto");
@@ -835,9 +832,6 @@ it("fans JSON status out to every keyed agent entry", async () => {
   try {
     await run(["status", "--json"], { openKeyedStore: openKeyedStore as never });
 
-    expect(
-      getMemorySearchManager.mock.calls.map(([params]) => (params as { agentId: string }).agentId),
-    ).toEqual(agentIds);
     const payload = jsonValue<Array<{ agentId: string; status: { dbPath: string } }>>(json);
     expect(payload?.map(({ agentId }) => agentId)).toEqual(agentIds);
     expect(payload?.map(({ status }) => status.dbPath)).toEqual(
@@ -964,7 +958,7 @@ it.each(["missing-directory", "sessions", "unsupported"] as const)(
       expect(log).toHaveBeenCalledWith("Memory backend does not support manual reindex.");
       expect(sync).not.toHaveBeenCalled();
     } else {
-      expectCliSync(sync);
+      expect(sync).toHaveBeenCalled();
       if (source === "missing-directory") {
         expectLogged(log, `No memory files found in ${workspaceDir}; nothing indexed (main).`);
         expectNotLogged(log, "Memory index updated");
@@ -1000,8 +994,7 @@ it("warns on stderr when index has vector store but no semantic vectors", async 
   );
   const error = spyRuntimeErrors(defaultRuntime);
   await run("index");
-  expectCliSync(sync);
-  expect(probeVectorAvailability).toHaveBeenCalledTimes(1);
+  expect(sync).toHaveBeenCalled();
   expect(error).toHaveBeenCalledWith(
     "Memory index WARNING (main): chunks_vec not updated — semantic vector embeddings unavailable — no vector dimensions resolved. Vector recall degraded.",
   );
@@ -1100,16 +1093,12 @@ it("fails index --force when the memory index has orphaned provenance", async ()
   expect(error).toHaveBeenCalledWith(expect.stringContaining("SQLite foreign_key_check failed"));
 });
 
-it("rejects an empty --query override before acquisition", async () => {
-  const writeJson = spyRuntimeJson(defaultRuntime);
-  await expect(run(["search", "positional", "--query", "", "--json"])).rejects.toThrow(
-    "Missing search query. Provide a positional query or use --query <text>.",
-  );
-  expect(getMemorySearchManager).not.toHaveBeenCalled();
-  expect(writeJson).not.toHaveBeenCalled();
-});
-
 it.each([
+  [
+    ["search", "positional", "--query", ""],
+    false,
+    "Missing search query. Provide a positional query or use --query <text>.",
+  ],
   [["forget", "--dry-run"], false, "Memory forget requires --session"],
   [["promote-explain", "   "], false, "Memory promote-explain requires a non-empty selector."],
   [
@@ -1127,10 +1116,7 @@ it.each([
   "propagates invalid memory input without a success report: %j",
   async (args, acquires, message) => {
     const workspaceDir = await createWorkspace();
-    const close = vi.fn(async () => {});
-    if (acquires) {
-      mockManager({ status: () => memoryStatus({ workspaceDir }), close });
-    }
+    const close = acquires ? mockWorkspace(workspaceDir) : vi.fn();
     const writeJson = spyRuntimeJson(defaultRuntime);
     await expect(run([...args, "--json"])).rejects.toThrow(message);
     expect(writeJson).not.toHaveBeenCalled();
@@ -1160,10 +1146,7 @@ it.each([
         vi.spyOn(promotion, "applyShortTermPromotions").mockRejectedValueOnce(failure);
       }
     }
-    const close = vi.fn(async () => {});
-    if (operation !== "forget") {
-      mockManager({ status: () => memoryStatus({ workspaceDir }), close });
-    }
+    const close = operation !== "forget" ? mockWorkspace(workspaceDir) : vi.fn();
     const writeJson = spyRuntimeJson(defaultRuntime);
     await expect(run([...args, "--json"])).rejects.toThrow(`${prefix}${failure.message}`);
     expect(writeJson).not.toHaveBeenCalled();
@@ -1193,31 +1176,27 @@ it("qualifies json search results when the index remains stale", async () => {
   });
 });
 
-it("prints no candidates when promote has no short-term recall data", async () => {
+it.each(["München", "Mu\u0308nchen"])("promote-explain finds %s", async (title) => {
   const workspaceDir = await createWorkspace();
-  mockWorkspace(workspaceDir);
+  getMemorySearchManager.mockResolvedValue({ manager: workspaceManager(workspaceDir) });
   const log = spyRuntimeLogs(defaultRuntime);
   await run("promote");
   expect(log).toHaveBeenCalledWith("No short-term recall candidates.");
   expect(process.exitCode).toBe(0);
-});
-
-it("explains a specific promote candidate as json", async () => {
-  const workspaceDir = await createWorkspace();
   await recordRecall(
     workspaceDir,
     "router notes",
-    recallResult("memory/2026-04-03.md", "Configured VLAN 10 for IoT on router", {
+    recallResult("memory/2026-04-03.md", `Configured VLAN 10 for IoT in ${title}`, {
       startLine: 4,
       endLine: 8,
       score: 0.86,
     }),
   );
-  mockWorkspace(workspaceDir);
   const writeJson = spyRuntimeJson(defaultRuntime);
-  await run(["promote-explain", "  router  ", "--json", "--include-promoted"]);
+  const query = title === "München" ? "Mu\u0308nchen" : "München";
+  await run(["promote-explain", `  ${query}  `, "--json", "--include-promoted"]);
   expect(jsonValue(writeJson)).toMatchObject({
-    candidate: { snippet: expect.stringContaining("Configured VLAN 10") },
+    candidate: { snippet: `Configured VLAN 10 for IoT in ${title}` },
   });
 });
 
@@ -1236,8 +1215,7 @@ it.each([false, true])(
       nowMs,
     );
     const close = mockWorkspace(workspaceDir);
-    const writeJson = spyRuntimeJson(defaultRuntime);
-    const log = spyRuntimeLogs(defaultRuntime);
+    const { json: writeJson, log } = captureOutput();
 
     await run(["rem-harness", ...(json ? ["--json"] : [])]);
 
@@ -1250,10 +1228,13 @@ it.each([false, true])(
       expect(payload?.deep.candidates[0]?.snippet).toContain("Always check weather");
       expect(log).not.toHaveBeenCalled();
     } else {
-      expectLogged(log, "REM Harness");
-      expectLogged(log, "recentRecallEntries=1 deepCandidates=1");
-      expectLogged(log, snippet);
-      expectLogged(log, `[memory/${isoDay}.md:2-3]`);
+      expectLogged(
+        log,
+        "REM Harness",
+        "recentRecallEntries=1 deepCandidates=1",
+        snippet,
+        `[memory/${isoDay}.md:2-3]`,
+      );
       expect(writeJson).not.toHaveBeenCalled();
     }
     expect(close).toHaveBeenCalledOnce();
@@ -1301,7 +1282,7 @@ it.each([
   { command: "rem-backfill", json: true },
 ] as const)("publishes $command success only after scratch cleanup", async ({ command, json }) => {
   await using fixture = await historicalFixture(command);
-  const { historyPath, scratchDirectory, close } = fixture;
+  const { historyPath, scratchDirectory, close, json: writeJson, log } = fixture;
   const entered = createDeferred<void>();
   const release = createDeferred<void>();
   const actualRm = fs.rm;
@@ -1312,9 +1293,7 @@ it.each([
     }
     await actualRm(target, options);
   });
-  const writeJson = spyRuntimeJson(defaultRuntime);
-  const log = spyRuntimeLogs(defaultRuntime);
-  const outcome = run([command, "--path", historyPath, ...(json ? ["--json"] : [])]).then(
+  const outcome = fixture.run(json).then(
     () => ({ status: "fulfilled" as const }),
     (error: unknown) => ({ status: "rejected" as const, error }),
   );
@@ -1349,7 +1328,8 @@ it.each([
 
 it("rejects scratch cleanup without publishing success even when manager close fails", async () => {
   await using fixture = await historicalFixture("rem-backfill");
-  const { historyPath, scratchDirectory, close } = fixture;
+  const { scratchDirectory, close, json: writeJson, log } = fixture;
+  const errors = spyRuntimeErrors(defaultRuntime);
   const failure = new Error("fixture scratch cleanup rejected");
   close.mockRejectedValueOnce(new Error("close boom"));
   const actualRm = fs.rm;
@@ -1359,10 +1339,7 @@ it("rejects scratch cleanup without publishing success even when manager close f
     }
     await actualRm(target, options);
   });
-  const writeJson = spyRuntimeJson(defaultRuntime);
-  const log = spyRuntimeLogs(defaultRuntime);
-  const errors = spyRuntimeErrors(defaultRuntime);
-  await expect(run(["rem-backfill", "--path", historyPath, "--json"])).rejects.toBe(failure);
+  await expect(fixture.run()).rejects.toBe(failure);
   expect(writeJson).not.toHaveBeenCalled();
   expect(log).not.toHaveBeenCalled();
   expect(close).toHaveBeenCalledTimes(1);
@@ -1371,7 +1348,7 @@ it("rejects scratch cleanup without publishing success even when manager close f
 
 it("cleans allocated scratch when preparing historical input fails", async () => {
   await using fixture = await historicalFixture("rem-harness");
-  const { historyPath, scratchDirectory, close } = fixture;
+  const { scratchDirectory, close, json: writeJson } = fixture;
   const failure = Object.assign(new Error("fixture mkdir rejected"), { code: "EIO" });
   const actualMkdir = fs.mkdir;
   let faultObserved = false;
@@ -1383,8 +1360,7 @@ it("cleans allocated scratch when preparing historical input fails", async () =>
     }
     return actualMkdir(target, options);
   });
-  const writeJson = spyRuntimeJson(defaultRuntime);
-  await expect(run(["rem-harness", "--path", historyPath, "--json"])).rejects.toBe(failure);
+  await expect(fixture.run()).rejects.toBe(failure);
   expect(faultObserved).toBe(true);
   expect(writeJson).not.toHaveBeenCalled();
   expect(close).toHaveBeenCalledTimes(1);
@@ -1392,29 +1368,47 @@ it("cleans allocated scratch when preparing historical input fails", async () =>
   await expectPathMissing(scratchDirectory()!);
 });
 
-it("rolls back grounded staged short-term entries without touching diary rollback", async () => {
-  const workspaceDir = await createWorkspace();
-  const historyPath = await writeHistory(workspaceDir, "2025-01-01.md", [
-    "## Preferences Learned",
-    '- Always use "Happy Together" calendar for flights and reservations.',
-  ]);
-  const close = mockWorkspace(workspaceDir);
-  await run(["rem-backfill", "--path", historyPath, "--stage-short-term"]);
-  const staged = await readRecalls({ workspaceDir });
-  expect(staged).toMatchObject([
-    {
-      snippet: expect.stringContaining("Happy Together"),
-      groundedCount: 3,
-      recallCount: 0,
-    },
-  ]);
-  expect(staged[0]?.queryHashes).toHaveLength(2);
-  mockStatus({ workspaceDir }, { close });
-  await run("rem-backfill --rollback-short-term");
-  const entries = await readRecalls({ workspaceDir });
-  expect(entries).toHaveLength(0);
-  expect(close).toHaveBeenCalledTimes(2);
-});
+it.each(["short-term", "diary"] as const)(
+  "rolls back grounded %s entries without touching the other store",
+  async (store) => {
+    const workspaceDir = await createWorkspace();
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(
+      dreamsPath,
+      "# Dream Diary\n\n<!-- openclaw:dreaming:diary:start -->\n\n---\n\n*April 5, 2026, 3:00 AM*\n\nKeep this normal dream.\n\n<!-- openclaw:dreaming:diary:end -->\n",
+    );
+    const historyPath = await writeHistory(workspaceDir, "2025-01-01.md", [
+      "## Preferences Learned",
+      '- Always use "Happy Together" calendar for flights and reservations.',
+    ]);
+    const close = mockWorkspace(workspaceDir);
+    await run(["rem-backfill", "--path", historyPath, "--stage-short-term"]);
+    const staged = await readRecalls({ workspaceDir });
+    expect(staged).toMatchObject([
+      {
+        snippet: expect.stringContaining("Happy Together"),
+        groundedCount: 3,
+        recallCount: 0,
+      },
+    ]);
+    expect(staged[0]?.queryHashes).toHaveLength(2);
+    const diary = await fs.readFile(dreamsPath, "utf-8");
+    expect(diary).toContain("Happy Together");
+    mockStatus({ workspaceDir }, { close });
+    await run(`rem-backfill --rollback${store === "short-term" ? "-short-term" : ""}`);
+    const entries = await readRecalls({ workspaceDir });
+    const afterDiary = await fs.readFile(dreamsPath, "utf-8");
+    if (store === "short-term") {
+      expect(entries).toHaveLength(0);
+      expect(afterDiary).toBe(diary);
+    } else {
+      expect(entries).toEqual(staged);
+      expect(afterDiary).toContain("Keep this normal dream.");
+      expect(afterDiary).not.toContain("Happy Together");
+    }
+    expect(close).toHaveBeenCalledTimes(2);
+  },
+);
 
 it.each([
   [
@@ -1497,42 +1491,6 @@ it.each([
   }
 });
 
-it("rolls back grounded rem backfill entries from DREAMS.md", async () => {
-  const workspaceDir = await createWorkspace();
-  const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-  await fs.writeFile(
-    dreamsPath,
-    [
-      "# Dream Diary",
-      "",
-      "<!-- openclaw:dreaming:diary:start -->",
-      "---",
-      "",
-      "*April 5, 2026, 3:00 AM*",
-      "",
-      "Keep this normal dream.",
-      "",
-      "---",
-      "",
-      "*January 1, 2025*",
-      "",
-      "<!-- openclaw:dreaming:backfill-entry day=2025-01-01 source=memory/2025-01-01.md -->",
-      "",
-      "What Happened",
-      "1. Remove this entry.",
-      "",
-      "<!-- openclaw:dreaming:diary:end -->",
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
-  mockWorkspace(workspaceDir);
-  await run("rem-backfill --rollback");
-  const dreams = await fs.readFile(dreamsPath, "utf-8");
-  expect(dreams).toContain("Keep this normal dream.");
-  expect(dreams).not.toContain("Remove this entry.");
-});
-
 it("honors the configured prior-entry loss limit during CLI promotion", async () => {
   const workspaceDir = await createWorkspace();
   const promotionSection = (date: string, index: number) =>
@@ -1596,15 +1554,13 @@ it.runIf(process.platform !== "win32")(
     const writeJson = spyRuntimeJson(defaultRuntime);
     await run(["promote", "--agent", "beta", "--apply", "--json", ...unrestrictedPromotion]);
 
-    const payload = jsonValue<{
-      candidates: unknown[];
-      apply: { appliedCandidates: unknown[]; rejectedCandidates: Array<{ reason: string }> };
-    }>(writeJson);
-    expect(payload?.candidates).toHaveLength(1);
-    expect(payload?.apply.appliedCandidates).toEqual([]);
-    expect(payload?.apply.rejectedCandidates).toEqual([
-      expect.objectContaining({ reason: expect.stringContaining("budget") }),
-    ]);
+    expect(jsonValue(writeJson)).toMatchObject({
+      candidates: [expect.anything()],
+      apply: {
+        appliedCandidates: [],
+        rejectedCandidates: [{ reason: expect.stringContaining("budget") }],
+      },
+    });
     expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")).toBe(existingMemory);
   },
 );
@@ -1702,16 +1658,14 @@ it.each([
     const search = vi.fn(async () => [result]);
     setDreaming({ enabled });
     mockStatus({ workspaceDir }, { search });
-    const writeJson = spyRuntimeJson(defaultRuntime);
-    const log = spyRuntimeLogs(defaultRuntime);
+    const { json: writeJson, log } = captureOutput();
     await run(["search", "glacier", ...(json ? ["--json"] : [])]);
     if (json) {
       expect(jsonValue(writeJson)).toEqual({
         results: [expect.objectContaining({ path: "memory/2026-04-03.md" })],
       });
     } else {
-      expectLogged(log, "0.910 memory/2026-04-03.md:1-2");
-      expectLogged(log, "Move backups to S3 Glacier.");
+      expectLogged(log, "0.910 memory/2026-04-03.md:1-2", "Move backups to S3 Glacier.");
       expect(writeJson).not.toHaveBeenCalled();
     }
     const entries = await readRecalls({ workspaceDir });

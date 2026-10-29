@@ -23,6 +23,11 @@ or starting another voice action discards the pending insertion.
 
 Native Talk is a continuous loop. It listens for speech. It sends the transcript to the model through the active session. It waits for the response. It then speaks the response through the configured Talk provider (`talk.speak`).
 
+While the Gateway is preparing an agent after startup, native Talk keeps the spoken
+turn pending in **Thinking…** and retries it with the same message identity. Stop
+Talk to cancel the pending turn. Other request failures keep their ordinary error
+handling; an uncertain network outcome does not trigger this startup retry.
+
 For replies dominated by fenced code, `talk.speak` uses a short spoken message directing the listener to the screen. Inline code and ordinary prose remain part of the spoken reply.
 
 Apple Watch also retains **Talk to Claw**, the separate [one-turn companion flow](/platforms/ios#talk-to-claw-with-the-iphone). That flow uses native dictation, text relayed through the iPhone, and system-voice readback. **Talk on Watch** is the realtime path included in normal Watch setup. See [standalone voice setup](/platforms/ios#standalone-voice).

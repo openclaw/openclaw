@@ -1,3 +1,4 @@
+import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
@@ -15,6 +16,42 @@ const userFields = {
 };
 const user = json.object(userFields);
 const sessionKey = json.refine(text, (key) => !isIncognitoSessionKey(key));
+const attention = json.enumeration([
+  "none",
+  "error",
+  "question",
+  "approval",
+  ...SESSION_AGENT_ATTENTION_ICON_IDS,
+]);
+const childrenState = {
+  attention: json.optional(attention),
+  runningChildCount: json.optional(json.number),
+  queuedChildCount: json.optional(json.number),
+  unreadChildCount: json.optional(json.number),
+  failedChildCount: json.optional(json.number),
+};
+const state = json.object({
+  unread: json.optional(json.boolean),
+  isRunVisuallyActive: json.optional(json.boolean),
+  hasAutomation: json.optional(json.boolean),
+  status: json.optional(
+    json.enumeration(["queued", "running", "done", "failed", "interrupted", "killed", "timeout"]),
+  ),
+  ...childrenState,
+  ownAttention: json.optional(attention),
+  subagentSummary: json.optional(json.object(childrenState)),
+  workSession: json.optional(json.boolean),
+  acpSession: json.optional(json.boolean),
+  workspaceKind: json.optional(json.enumeration(["worktree", "checkout"])),
+  pullRequest: json.optional(
+    json.object({
+      numbers: json.array(json.number, 20),
+      state: json.enumeration(["open", "draft", "merged", "closed"]),
+    }),
+  ),
+  pullRequestCount: json.optional(json.number),
+  hasApproval: json.optional(json.boolean),
+});
 const sessionFields = {
   key: sessionKey,
   label: text,
@@ -35,6 +72,7 @@ const sessionFields = {
   category: optionalText,
   boardFace: json.optional(json.enumeration(["chat", "dashboard"])),
   incognito: json.optional(json.literal(false)),
+  state: json.optional(state),
 };
 export type SidebarSnapshotSession = json.SnapshotObject<typeof sessionFields> & {
   children: SidebarSnapshotSession[];
@@ -58,6 +96,7 @@ export const sidebarSnapshotSchema = json.object({
   }),
   roster: json.nullable(bootRosterSchema),
   mode: json.enumeration(["chip", "roster"]),
+  grouping: json.optional(json.enumeration(["none", "category", "person", "project"])),
   navigationView: json.enumeration(["pages", "sessions", "online"]),
   pages: json.array(session),
   pageScopeId: json.nullable(text),
@@ -69,7 +108,7 @@ export const sidebarSnapshotSchema = json.object({
         !entry.startsWith("session:") || !isIncognitoSessionKey(entry.slice("session:".length)),
     ),
   ),
-  sessions: json.array(session),
+  issuesCount: json.optional(json.number),
   sections: json.array(
     json.object({
       id: sectionId,

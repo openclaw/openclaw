@@ -80,8 +80,9 @@ function seedSession(session: Record<string, unknown>, version = 1, key = "agent
 const snapshot = (state: ComposerState, key = state.sessionKey) => load(state, key).snapshot;
 const revision = (state: ComposerState) => load(state, state.sessionKey).revisions.latestAttempt;
 
-const readStored = (state: ComposerState) =>
-  JSON.parse(sessionStorage.getItem(storageTargetForComposer(state).key)!);
+const storedText = (state: ComposerState) =>
+  sessionStorage.getItem(storageTargetForComposer(state).key);
+const readStored = (state: ComposerState) => JSON.parse(storedText(state)!);
 const storedRow = (state: ComposerState) =>
   readStored(state).sessions[`${state.sessionKey}\u0000agent:lily`];
 function quotaFailure() {
@@ -479,7 +480,7 @@ it("reviews full v1 main and global queues while consuming legacy tombstones", (
   expect(listOutboxes(state)).toEqual([]);
   const entries = readRecovery(state).entries;
   expect(entries).toHaveLength(3);
-  expect(sessionStorage.getItem(storageTargetForComposer(state).key)).toBeNull();
+  expect(storedText(state)).toBeNull();
   for (const [sessionKey, queue] of [
     ["global", globalQueue],
     [mainKey, mainQueue],
@@ -510,9 +511,7 @@ it("reviews full v1 main and global queues while consuming legacy tombstones", (
   expect(readRecovery(state).entries).toEqual([]);
   state.chatMessage = "updated draft";
   expect(persist(state)).toBe(true);
-  expect(sessionStorage.getItem(storageTargetForComposer(state).key)).not.toContain(
-    "removedQueueItemIds",
-  );
+  expect(storedText(state)).not.toContain("removedQueueItemIds");
   expect(sessionStorage.getItem(legacyKey(state.settings?.gatewayUrl))).toBeNull();
 });
 
@@ -599,7 +598,7 @@ it("does not replay an exact-240 legacy key to a longer same-prefix gateway", ()
     const state = createState({ settings: { gatewayUrl } });
     expect(snapshot(state)).toBeNull();
     expect(listOutboxes(state)).toEqual([]);
-    expect(sessionStorage.getItem(storageTargetForComposer(state).key)).toBeNull();
+    expect(storedText(state)).toBeNull();
     expect(readRecovery(state).entries).toEqual([]);
     expect(sessionStorage.getItem(legacyKey(gatewayUrl))).toContain(item.id);
   }
@@ -868,9 +867,7 @@ it("retires a draft when its write notification reveals Incognito metadata", asy
     state.chatMessage = "private notification draft";
     persistence.schedule();
     persistence.persistNow();
-    expect(sessionStorage.getItem(storageTargetForComposer(state).key)).not.toContain(
-      "private notification draft",
-    );
+    expect(storedText(state)).not.toContain("private notification draft");
     expect(state.chatMessage).toBe("private notification draft");
     expect(
       reader

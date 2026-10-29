@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -50,6 +51,49 @@ async function spawn(patch: Partial<SpawnInput> = {}) {
     }));
   return createInitialSubagentSession({ ...input, parentTarget });
 }
+
+it.each(["disabled", "disabled during preparation"])(
+  "keeps an existing Draft usable without creating a child when Draft creation is %s",
+  async (policy) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const parent = { agentId: "main", storePath, sessionKey };
+      await upsertSessionEntryCore(parent, {
+        sessionId: "draft-parent",
+        visibility: "draft",
+      });
+      const before = readEntry(storePath, sessionKey);
+      const cfg = { session: { sharing: { drafts: policy !== "disabled" } } };
+      setRuntimeConfigSnapshot(cfg);
+      const prepare = sessionStorePaths.preparePhysicalSessionStorePath;
+      using prepared = vi
+        .spyOn(sessionStorePaths, "preparePhysicalSessionStorePath")
+        .mockImplementation(async (...args) => {
+          const physical = await prepare(...args);
+          setRuntimeConfigSnapshot({ session: { sharing: { drafts: false } } });
+          return physical;
+        });
+      const result = await spawn({ cfg });
+      expect(result).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("session visibility is disabled: draft"),
+      });
+      expect(readEntry(storePath, childSessionKey)).toBeUndefined();
+      expect(readEntry(storePath, sessionKey)).toEqual(before);
+      expect(prepared).toHaveBeenCalledTimes(policy === "disabled" ? 0 : 1);
+      await appendTranscriptMessage(
+        { ...parent, sessionId: "draft-parent" },
+        { message: { role: "user", content: "Continue this existing Draft." } },
+      );
+      expect(readEntry(storePath, sessionKey)?.visibility).toBe("draft");
+      expect(await loadTranscriptEvents({ ...parent, sessionId: "draft-parent" })).toContainEqual(
+        expect.objectContaining({
+          message: { role: "user", content: "Continue this existing Draft." },
+        }),
+      );
+    });
+  },
+);
 
 it.each(["creation", "fork"] as const)(
   "keeps the selected physical store when its alias changes before child %s",
@@ -223,7 +267,7 @@ it("inherits admitted skill pins without overwriting a parent refresh", async ()
     });
     let refreshedParent: SessionEntry | null = null;
     const preparePhysical = sessionStorePaths.preparePhysicalSessionStorePath;
-    const prepare = vi
+    using _ = vi
       .spyOn(sessionStorePaths, "preparePhysicalSessionStorePath")
       .mockImplementation(async (...args) => {
         if (args[0].sessionKey === childSessionKey) {
@@ -235,26 +279,23 @@ it("inherits admitted skill pins without overwriting a parent refresh", async ()
         }
         return preparePhysical(...args);
       });
-    try {
-      const result = await spawn({
-        expectedParentSessionId: "parent-first",
-        senderIsOwner: true,
-      });
-      expect(result).toMatchObject({ status: "ok" });
-      const child = readEntry(storePath, childSessionKey);
-      expect(child).toMatchObject({
-        spawnedBySessionId: "parent-first",
-        spawnedBySenderIsOwner: true,
-        skillLibrarySelections,
-      });
-      expect(refreshedParent).toMatchObject({
-        totalTokens: 10,
-        skillLibrarySelections: [],
-      });
-      expect(loadSessionEntry(scope)).toEqual(refreshedParent);
-    } finally {
-      prepare.mockRestore();
-    }
+
+    const result = await spawn({
+      expectedParentSessionId: "parent-first",
+      senderIsOwner: true,
+    });
+    expect(result).toMatchObject({ status: "ok" });
+    const child = readEntry(storePath, childSessionKey);
+    expect(child).toMatchObject({
+      spawnedBySessionId: "parent-first",
+      spawnedBySenderIsOwner: true,
+      skillLibrarySelections,
+    });
+    expect(refreshedParent).toMatchObject({
+      totalTokens: 10,
+      skillLibrarySelections: [],
+    });
+    expect(loadSessionEntry(scope)).toEqual(refreshedParent);
   });
 });
 

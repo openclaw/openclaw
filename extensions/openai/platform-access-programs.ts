@@ -35,8 +35,7 @@ export async function discoverOpenAIPlatformAccessPrograms(params: {
         return readOpenAIModelAccessPrograms(rows, {
           api: "openai-responses",
           baseUrl: OPENAI_API_BASE_URL,
-          // Native Codex's API-key program forwarding is not supported here.
-          runtimeIds: ["openclaw"],
+          runtimeIds: ["openclaw", "codex"],
         });
       },
     });

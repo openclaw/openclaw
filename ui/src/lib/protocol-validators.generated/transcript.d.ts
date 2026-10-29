@@ -5,3 +5,6 @@ export function isChatTranscriptMetadata(
 export function isProgressCard(
   value: unknown,
 ): value is import("../../../../packages/gateway-protocol/src/schema/progress-card.js").ProgressCard;
+export function isMessageReactionSummary(
+  value: unknown,
+): value is import("../../../../packages/gateway-protocol/src/schema/sessions-reactions.js").MessageReactionSummary;

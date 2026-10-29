@@ -18,6 +18,8 @@ With Claude CLI, a successful `sessions_yield` closes the current subprocess aft
 its tool result is consumed and suppresses later reply text. The next child-completion
 turn resumes the same saved Claude session in a new subprocess. This avoids recording
 the yield as a user interruption; it adds process startup time after a yield.
+An intentional yield is not a failed completion and does not trigger model fallback,
+even when it has no final answer. Genuine CLI failures remain eligible for fallback.
 
 A CLI backend can be an agent's primary runtime or a fallback. Choosing **Claude CLI** during onboarding keeps `anthropic/*` model refs and runs them through Claude Code. For ACP session controls, background tasks, thread/conversation binding, and persistent external coding sessions, use [ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
 
@@ -169,9 +171,19 @@ tool contracts.
 
 ### Keeping Claude Code orchestration tools on managed turns
 
-Managed turns expose no Claude-native tools by default. Operators who want
-Claude Code's native subagents or workflows can opt in per agent, or for every
-agent, through the Anthropic plugin config:
+Managed turns keep Claude's read-only `ToolSearch` available by default. OpenClaw
+passes only the authorized MCP catalog, and Claude loads full tool definitions
+when it discovers them instead of placing every schema in the initial prompt.
+`tools.toolSearch: false` (or `{ enabled: false }`) keeps definitions upfront.
+On this native route the setting controls deferral; OpenClaw's search modes and
+catalog selectors apply to the embedded Tool Search surface, not Claude's search.
+
+Discovery grants no tool execution authority. Discovered calls still pass through
+OpenClaw's MCP policy and approvals. Tool-free turns do not receive `ToolSearch`.
+Reading a schema does not require permission to execute a shell command.
+
+Operators who want Claude Code's native subagents or workflows can opt in per
+agent, or for every agent, through the Anthropic plugin config:
 
 ```json5
 {
@@ -190,7 +202,7 @@ agent, through the Anthropic plugin config:
 }
 ```
 
-Only `Agent` and `Workflow` are accepted: they add orchestration without
+Only `Agent` and `Workflow` are accepted in this opt-in: they add orchestration without
 granting file, shell, or network authority, so descendants act through the same
 policy-filtered OpenClaw tools as the parent. File and shell tools stay with
 OpenClaw. `Skill` is not offered because managed turns load no Claude skills.
@@ -206,7 +218,8 @@ a project's `.claude/agents/` are not loaded.
   commands, Chrome, and Claude-only MCP servers remain excluded, and scheduled
   wake-ups, cron creation, background shell commands, and monitors stay blocked.
 - Restricted senders, delegated execution, turns with an explicit tool cap, and
-  `tools.fs.workspaceOnly` still receive no native tools. A capped turn in an
+  `tools.fs.workspaceOnly` still receive no native execution tools. Read-only
+  discovery can remain available for their authorized MCP tools. A capped turn in an
   opted-in session therefore launches with different tool definitions.
 - Each native call still passes `before_tool_call` and exec policy: ask
   `on-miss` or `always` routes it through approval, and exec security `deny`,
@@ -292,8 +305,9 @@ Plugin tools such as remote SSH do not become background jobs automatically.
 When Claude Code moves a foreground Bash command to the background after its tool timeout,
 OpenClaw keeps the turn active until Claude processes the completion and returns its final answer.
 Stopping a native task releases that task's hold. Completions belonging to an earlier
-input do not hold or settle a newer input. Tasks launched inside a subagent report back
-to that subagent and do not independently hold the parent input open.
+input do not hold or settle a newer input. Nested Agent and Workflow completions stay
+within their running parent; if that background parent ends first, the turn waits for
+the forwarded result.
 Follow-up tools still require the current turn's host permissions. Commands started explicitly
 in the background do not hold the turn open. If the turn fails or is cancelled while one of these
 commands still needs a follow-up, OpenClaw closes that subprocess and starts a fresh one for the next turn.
@@ -621,8 +635,11 @@ For JSONL, banner scanning starts fresh on each line.
 
 Claude streaming limits discount recognized partial-message envelopes while
 counting their text, thinking, and tool-input payloads. Cumulative snapshots and
-tool results still count toward the output budget. Single-line limits and bounded
-frame counts remain active, including for empty or unrecognized events.
+tool results still count toward the output budget. Forwarded subagent assistant
+messages and tool-result messages that the parser discards are charged a fixed
+allowance for their parent progress id. Child attribution alone does not earn
+that discount: retained stream-event text still counts toward the same 8 MiB
+output limit. Single-line limits and bounded frame counts remain active.
 
 Input modes:
 
@@ -772,6 +789,8 @@ TCP connection.
 The shared listener remains available after the turn that first started it completes.
 Later calls use their own run's permissions and caller liveness, without retaining
 the starting turn's transcript read fence or request scope.
+If the listener closes unexpectedly, its grants are retired and the next CLI run
+starts a replacement. A warning records the closure in the Gateway log.
 The listener retains the Gateway's process broker and database-reader lifecycle.
 After plugin replacement, new CLI turns resolve bridge tools against the current
 plugin generation without restarting the listener. Retired plugin instances remain

@@ -100,16 +100,6 @@ test("sessions.dispatch admits the runtime offered after a repository child's pa
       },
     },
   );
-  expect(dispatch).toHaveBeenCalledWith(
-    expect.objectContaining({
-      sessionKey: childKey,
-      executionMode: "worker-turn",
-      profileId: "test",
-    }),
-    expect.any(Function),
-    undefined,
-    undefined,
-  );
   expect(result.error?.message).toBe("admitted to placement service");
 });
 

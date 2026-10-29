@@ -6,10 +6,13 @@
  * Use --owner <path> for another revision of the owner (with resolvable imports).
  * Alternate base/candidate timing runs; --allocations measures collected-object
  * sampling separately. This measures the lifecycle owner, not Gateway latency.
+ * Add --retained --profile <path> to exclude minor-collected objects and retain
+ * the raw sampling profile for owner-frame attribution (not exact promotion).
+ * --runtime-carriers includes 16 hidden carriers per history to measure filtering.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { resolve } from "node:path";
@@ -24,16 +27,23 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "2000" },
     owner: { type: "string", default: "src/agents/harness/context-engine-lifecycle.ts" },
     allocations: { type: "boolean", default: false },
+    retained: { type: "boolean", default: false },
+    profile: { type: "string" },
+    "runtime-carriers": { type: "boolean", default: false },
   },
 });
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(global.gc, "Run with --expose-gc");
+assert(!values.retained || values.allocations, "--retained requires --allocations");
+assert(!values.profile || values.allocations, "--profile requires --allocations");
 const ownerUrl = pathToFileURL(resolve(values.owner));
 const ownerSha256 = createHash("sha256").update(readFileSync(ownerUrl)).digest("hex");
 const { prepareHarnessContextEnginePrompt } = (await import(
   ownerUrl.href
 )) as typeof import("../../src/agents/harness/context-engine-lifecycle.js");
+const { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } =
+  await import("../../src/agents/internal-runtime-context.js");
 let engineCalls = 0;
 const contextEngine: ContextEngine = {
   info: { id: "legacy", name: "Synthetic pass-through" },
@@ -54,11 +64,21 @@ const attempts = Array.from({ length: 8 }, (_attempt, session) => ({
   sessionKey: `agent:main:synthetic-${session}`,
   modelId: "synthetic-model",
   contextEngine,
-  messages: Array.from({ length: 256 }, (_, index) => ({
-    role: "user" as const,
-    content: `Synthetic session ${session} message ${index}`,
-    timestamp: index,
-  })),
+  messages: Array.from({ length: 256 }, (_, index) =>
+    values["runtime-carriers"] && index % 16 === 0
+      ? {
+          role: "custom" as const,
+          customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+          content: `Synthetic session ${session} carrier ${index}`,
+          display: false,
+          timestamp: index,
+        }
+      : {
+          role: "user" as const,
+          content: `Synthetic session ${session} message ${index}`,
+          timestamp: index,
+        },
+  ),
   availableTools: new Set(Array.from({ length: 40 }, (_, index) => `synthetic_tool_${index}`)),
   promptBudget: {
     contextTokens: 100_000,
@@ -98,7 +118,7 @@ try {
     await inspector.post("HeapProfiler.startSampling", {
       samplingInterval: 4096,
       includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
+      includeObjectsCollectedByMinorGC: !values.retained,
     });
   } else {
     observer.observe({ entryTypes: ["gc"] });
@@ -118,6 +138,9 @@ try {
   if (values.allocations) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
     sampledBytes = profile.samples.reduce((sum, sample) => sum + sample.size, 0);
+    if (values.profile) {
+      writeFileSync(values.profile, JSON.stringify(profile));
+    }
   }
   console.log(
     JSON.stringify({
@@ -128,7 +151,9 @@ try {
       messagesPerSession: 256,
       unrelatedAttemptFields: 128,
       tools: 40,
+      runtimeCarriersPerSession: values["runtime-carriers"] ? 16 : 0,
       mode: values.allocations ? "allocation" : "timing",
+      includeMinorCollected: values.allocations ? !values.retained : undefined,
       node: process.version,
       fingerprint: fingerprint.digest("hex"),
       hostLoad,

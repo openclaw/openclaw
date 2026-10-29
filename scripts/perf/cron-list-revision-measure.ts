@@ -3,6 +3,7 @@
  * Each operation enters the real lock without publishing a change, then lists 25
  * rows. Every 50 operations per store publishes one changed worker postimage.
  * This models no-op scheduler/CRUD invalidation, not worker or Gateway latency.
+ * Add --query synthetic to measure repeated search preparation within each revision.
  *
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/cron-list-revision-measure.ts \
  *   --mode timing --output .local/cron-revision/head.json
@@ -10,7 +11,11 @@
  * allocation includes collected objects; promotion needs --trace-gc-nvp and
  * --gc-log pointing at redirected stdout. --lock accepts the baseline locked.ts
  * with its relative imports resolved to the same checkout. All other code stays
- * identical. Compare revisionDigest, publications, operations, and hashComputations.
+ * identical. --read likewise accepts a baseline ops-read.ts with resolved imports.
+ * Compare rowDigest, publications, operations, and listPreparations.
+ * coldRead includes initial store admission and full first-page preparation.
+ * mainThreadCpuMsPerOperation separates owner CPU from loader/worker threads.
+ * Row snapshots are retained for the current inventory; report cold and warm costs.
  * Decide on allocation/operation and CPU/operation with GC, promotion, latency,
  * loop tails and maxima under the campaign's absolute-materiality thresholds.
  */
@@ -39,6 +44,8 @@ const { values } = parseArgs({
     mode: { type: "string", default: "timing" },
     output: { type: "string" },
     lock: { type: "string" },
+    query: { type: "string" },
+    read: { type: "string" },
     operations: { type: "string", default: "2000" },
     "gc-log": { type: "string" },
   },
@@ -58,7 +65,12 @@ const operations = parseStrictIntegerOption({
 });
 const { GatewayScheduler } = await import("../../src/infra/gateway-scheduler.js");
 const { createCronServiceState } = await import("../../src/cron/service/state.js");
-const { listPage } = await import("../../src/cron/service/ops-read.js");
+const readUrl = values.read
+  ? pathToFileURL(path.resolve(values.read))
+  : new URL("../../src/cron/service/ops-read.ts", import.meta.url);
+const { listPage }: typeof import("../../src/cron/service/ops-read.js") = await import(
+  readUrl.href
+);
 const { applyCronRuntimeRowsToState } =
   await import("../../src/cron/service/runtime-publication.js");
 const lockUrl = values.lock
@@ -96,7 +108,8 @@ const stores = Array.from({ length: 2 }, (_, storeIndex) => {
   return state;
 });
 let publications = 0;
-let hashComputations = 0;
+let listPreparations = 0;
+let rowDigest = createHash("sha256");
 let revisionDigest = createHash("sha256");
 async function run(operation: number) {
   const state = stores[operation % stores.length]!;
@@ -114,22 +127,39 @@ async function run(operation: number) {
       publications++;
     }
   });
-  const page = await listPage(state, { sortBy: "name", limit: 25 });
+  const page = await listPage(state, { sortBy: "name", limit: 25, query: values.query });
   if (state.readSnapshot?.lists[0] !== previousList) {
-    hashComputations++;
+    listPreparations++;
   }
   assert.equal(page.total, 200);
   assert.equal(page.jobs.length, 25);
   revisionDigest.update(page.snapshotRevision);
-  revisionDigest.update(JSON.stringify(page.jobs.map((job) => [job.id, job.state.lastRunAtMs])));
+  rowDigest.update(JSON.stringify(page.jobs.map((job) => [job.id, job.state.lastRunAtMs])));
 }
+global.gc?.();
+const coldHeap = process.memoryUsage().heapUsed;
+const coldCpu = process.cpuUsage();
+const coldStart = performance.now();
+for (let i = 0; i < stores.length; i++) {
+  await run(i);
+}
+const coldElapsedMs = performance.now() - coldStart;
+const coldUsedCpu = process.cpuUsage(coldCpu);
+global.gc?.();
+const coldRead = {
+  operations: stores.length,
+  elapsedMs: coldElapsedMs,
+  cpuMs: (coldUsedCpu.user + coldUsedCpu.system) / 1000,
+  retainedHeapBytes: process.memoryUsage().heapUsed - coldHeap,
+};
 const warmup = 100;
 for (let i = 0; i < warmup; i++) {
   await run(i);
 }
 publications = 0;
-hashComputations = 0;
+listPreparations = 0;
 revisionDigest = createHash("sha256");
+rowDigest = createHash("sha256");
 const profilePath = `${output}.heapprofile`;
 const marker = (phase: string) =>
   writeSync(
@@ -180,6 +210,7 @@ await delay(10);
 loop.reset();
 const outsideLoad = loadavg();
 const cpu = process.cpuUsage();
+const mainCpu = process.threadCpuUsage();
 const latencies: number[] = [];
 marker("heap-start");
 measuredStart = performance.now();
@@ -192,6 +223,7 @@ for (let i = 0; i < operations; i++) {
 measuredEnd = performance.now();
 marker("heap-stop");
 const usedCpu = process.cpuUsage(cpu);
+const usedMainCpu = process.threadCpuUsage(mainCpu);
 loop.disable();
 await nextTurn();
 await nextTurn();
@@ -228,15 +260,21 @@ const report = {
   node: process.version,
   platform: process.platform,
   lock: lockUrl.href,
+  read: readUrl.href,
+  query: values.query ?? null,
   stores: stores.length,
   jobsPerStore: 200,
   warmup,
   operations,
   publications,
-  hashComputations,
+  listPreparations,
+  coldRead,
+  memory: process.memoryUsage(),
+  rowDigest: rowDigest.digest("hex"),
   revisionDigest: revisionDigest.digest("hex"),
   outsideLoad,
   elapsedMs: measuredEnd - measuredStart,
+  mainThreadCpuMsPerOperation: (usedMainCpu.user + usedMainCpu.system) / 1000 / operations,
   cpuMsPerOperation: (usedCpu.user + usedCpu.system) / 1000 / operations,
   latency: distribution(latencies),
   gc: {

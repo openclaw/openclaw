@@ -90,98 +90,121 @@ function sharingFixture(initial: PreparedChatSessionSharing, access = false) {
 }
 const accessFixture = (initial: PreparedChatSessionSharing) => sharingFixture(initial, true);
 
-it("keeps sharing busy through refresh and retires it for a same-key successor", async () => {
-  const initial = prepared();
-  const previous = { ...initial.session, agentId: "main", visibility: "draft" as const };
-  const replacement = {
-    ...previous,
-    sessionId: "successor",
-    visibility: "read-only" as const,
-    updatedAt: 2,
-  };
-  const rows: GatewaySessionRow[] = [previous];
-  const fixture = createMountedPanes(rows);
-  const pane = fixture.mount(previous.key) as ReturnType<typeof fixture.mount> & {
-    prepareSessionSharing: (row: GatewaySessionRow) => PreparedChatSessionSharing;
-    syncSelectedSessionSharing: (row: GatewaySessionRow) => void;
-  };
-  const response = createDeferred<unknown>();
-  const refresh = createDeferred<SessionMembersListEvidenceResult>();
-  const refreshStarted = createDeferred();
-  let holdRefresh = false;
-  const originalRequest = pane.state.client!.request.bind(pane.state.client!);
-  vi.spyOn(pane.state.client!, "request").mockImplementation((method, params, options) => {
-    if (method === "session.visibility.set") {
-      return response.promise;
-    }
-    if (method === "session.members.listEvidence") {
-      if (holdRefresh) {
-        refreshStarted.resolve();
-        return refresh.promise;
+it.each(["event", "canonical-list"] as const)(
+  "keeps sharing busy through refresh and retires it for a same-key successor (%s)",
+  async (replacementSource) => {
+    const initial = prepared();
+    const previous = { ...initial.session, agentId: "main", visibility: "draft" as const };
+    const replacement = {
+      ...previous,
+      sessionId: "successor",
+      visibility: "read-only" as const,
+      updatedAt: 2,
+    };
+    const rows: GatewaySessionRow[] = [previous];
+    const fixture = createMountedPanes(rows);
+    const pane = fixture.mount(previous.key) as ReturnType<typeof fixture.mount> & {
+      prepareSessionSharing: (row: GatewaySessionRow) => PreparedChatSessionSharing;
+      syncSelectedSessionSharing: (row: GatewaySessionRow) => void;
+    };
+    const response = createDeferred<unknown>();
+    const writeStarted = createDeferred();
+    const refresh = createDeferred<SessionMembersListEvidenceResult>();
+    const refreshStarted = createDeferred();
+    let holdRefresh = false;
+    const originalRequest = pane.state.client!.request.bind(pane.state.client!);
+    vi.spyOn(pane.state.client!, "request").mockImplementation((method, params, options) => {
+      if (method === "session.visibility.set") {
+        writeStarted.resolve();
+        return response.promise;
       }
-      return Promise.resolve(initial.state!.result);
+      if (method === "session.members.listEvidence") {
+        if (holdRefresh) {
+          refreshStarted.resolve();
+          return refresh.promise;
+        }
+        return Promise.resolve(initial.state!.result);
+      }
+      return originalRequest(method, params, options);
+    });
+    const snapshot = pane.context.gateway.snapshot;
+    snapshot.phase = "connected";
+    snapshot.hello = {
+      ...snapshot.hello,
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: {
+        ...snapshot.hello?.features,
+        methods: [
+          "session.visibility.set",
+          "session.members.listEvidence",
+          "session.members.add",
+          "session.members.remove",
+          "session.publicShare.set",
+        ],
+      },
+    } as typeof snapshot.hello;
+    await refreshPane(pane);
+    await pane.awaitDomCommit();
+    pane.syncSelectedSessionSharing(previous);
+    await waitForSolid(() =>
+      expect(pane.prepareSessionSharing(previous)?.state?.loading).toBe(false),
+    );
+    const source = pane.prepareSessionSharing(previous);
+    const operation = vi.spyOn(source, "onVisibilityChange");
+    const view = accessFixture(source);
+    view.button(/Shared/).click();
+    // Busy can reflect hydration before the lazy mutation reaches the transport.
+    await writeStarted.promise;
+    await view.expectDisabled(/Shared/, true);
+    // A delayed header render may check hydration while the write is pending.
+    pane.syncSelectedSessionSharing(previous);
+    // Hold every post-write read, including any competing header hydration.
+    holdRefresh = true;
+    response.resolve({});
+    await refreshStarted.promise;
+    flush();
+    expect(
+      view.button(/Shared/).hasAttribute("disabled"),
+      "sharing stays busy through refresh",
+    ).toBe(true);
+    expect(view.applied).not.toHaveBeenCalled();
+    holdRefresh = false;
+    rows[0] = replacement;
+    if (replacementSource === "canonical-list") {
+      // Publish the successor before the old row observation delivers its retirement.
+      await fixture.sessions.refresh({ agentId: "main", force: true });
     }
-    return originalRequest(method, params, options);
-  });
-  const snapshot = pane.context.gateway.snapshot;
-  snapshot.phase = "connected";
-  snapshot.hello = {
-    ...snapshot.hello,
-    auth: { role: "operator", scopes: ["operator.admin"] },
-    features: {
-      ...snapshot.hello?.features,
-      methods: [
-        "session.visibility.set",
-        "session.members.listEvidence",
-        "session.members.add",
-        "session.members.remove",
-        "session.publicShare.set",
-      ],
-    },
-  } as typeof snapshot.hello;
-  await refreshPane(pane);
-  pane.syncSelectedSessionSharing(previous);
-  await waitForSolid(() =>
-    expect(pane.prepareSessionSharing(previous)?.state?.loading).toBe(false),
-  );
-  const source = pane.prepareSessionSharing(previous);
-  const operation = vi.spyOn(source, "onVisibilityChange");
-  const view = accessFixture(source);
-  view.button(/Shared/).click();
-  await view.expectDisabled(/Shared/, true);
-  // A delayed header render may check hydration while the write is pending.
-  pane.syncSelectedSessionSharing(previous);
-  // Hold every post-write read, including any competing header hydration.
-  holdRefresh = true;
-  response.resolve({});
-  await refreshStarted.promise;
-  flush();
-  expect(view.button(/Shared/).hasAttribute("disabled")).toBe(true);
-  expect(view.applied).not.toHaveBeenCalled();
-  holdRefresh = false;
-  rows[0] = replacement;
-  fixture.emitGatewayEvent("sessions.changed", {
-    sessionKey: previous.key,
-    agentId: "main",
-    sessionId: replacement.sessionId,
-    reason: "update",
-    session: replacement,
-  });
-  await waitForSolid(() => expect(source.operationSignal?.aborted).toBe(true));
-  pane.syncSelectedSessionSharing(replacement);
-  await waitForSolid(() =>
-    expect(pane.prepareSessionSharing(replacement)?.state?.loading).toBe(false),
-  );
-  view.setSource(pane.prepareSessionSharing(replacement));
-  await waitForSolid(() =>
-    expect(view.button(/Read-only/).getAttribute("aria-pressed")).toBe("true"),
-  );
-  expect(view.button(/Shared/).hasAttribute("disabled")).toBe(false);
-  refresh.resolve(initial.state!.result!);
-  await operation.mock.results[0]!.value;
-  flush();
-  expect(view.applied).not.toHaveBeenCalled();
-});
+    fixture.emitGatewayEvent("sessions.changed", {
+      sessionKey: previous.key,
+      agentId: "main",
+      sessionId: replacement.sessionId,
+      reason: "update",
+      session: replacement,
+    });
+    // Retirement crosses the roster refresh path; loaded 4-vCPU PR runners exceed 1s here.
+    await waitForSolid(
+      () =>
+        expect(
+          source.operationSignal?.aborted,
+          "successor retires the previous sharing scope",
+        ).toBe(true),
+      { timeout: 5_000 },
+    );
+    pane.syncSelectedSessionSharing(replacement);
+    await waitForSolid(() =>
+      expect(pane.prepareSessionSharing(replacement)?.state?.loading).toBe(false),
+    );
+    view.setSource(pane.prepareSessionSharing(replacement));
+    await waitForSolid(() =>
+      expect(view.button(/Read-only/).getAttribute("aria-pressed")).toBe("true"),
+    );
+    expect(view.button(/Shared/).hasAttribute("disabled")).toBe(false);
+    refresh.resolve(initial.state!.result!);
+    await operation.mock.results[0]!.value;
+    flush();
+    expect(view.applied).not.toHaveBeenCalled();
+  },
+);
 
 it("retains access controls across rejection and retries, returning only on native success", async () => {
   const change = vi.fn<PreparedChatSessionSharing["onVisibilityChange"]>();

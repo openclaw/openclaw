@@ -27,6 +27,8 @@ export type OpenClawStateLeaseContext = {
 /** Ordinary runtime leases whose durable checks and renewal are awaited. */
 export type OpenClawStateAsyncLeaseContext = {
   signal: AbortSignal;
+  /** Final live-owner guard after awaiting durable ownership at an effect boundary. */
+  assertCurrent(this: void): void;
   assertOwned(): Promise<void>;
   renew(): Promise<void>;
 };

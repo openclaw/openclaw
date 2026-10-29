@@ -554,7 +554,10 @@ export function authorizeSessionSharingTarget(
     ? prepared.value
     : params.cfg && operatorSessionCap(params.client, params.cfg);
   const role = prepared?.role ?? resolveSessionSharingRole(params, { value: sessionCap });
-  if (sessionCap === "none" && role !== "owner" && role !== "admin") {
+  if (
+    (sessionCap === "none" && role !== "owner" && role !== "admin") ||
+    (sessionCap === "invited" && role === "viewer")
+  ) {
     return hiddenSessionNotFound(params.target.canonicalKey);
   }
   if (params.requireOwner && !canManageSessionSharing(role)) {
@@ -563,7 +566,7 @@ export function authorizeSessionSharingTarget(
       `Only the session creator or an admin can ${params.ownerAction ?? "archive or restore this session"}.`,
     );
   }
-  const capped = sessionCap === "view" || sessionCap === "suggest";
+  const capped = sessionCap === "invited" || sessionCap === "view" || sessionCap === "suggest";
   // Draft membership is inactive, while an explicit role caps even shared visibility.
   const canMutate =
     visibility === "draft"

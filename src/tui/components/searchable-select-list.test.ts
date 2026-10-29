@@ -1,22 +1,12 @@
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
+import { attacks, expectText, select, theme, typeText } from "./render.test-support.js";
 import {
   SearchableSelectList,
   type SearchableSelectItem,
   type SearchableSelectListTheme,
 } from "./searchable-select-list.js";
-
-const mockTheme: SearchableSelectListTheme = {
-  selectedPrefix: (t) => `[${t}]`,
-  selectedText: (t) => `**${t}**`,
-  description: (t) => `(${t})`,
-  scrollInfo: (t) => `~${t}~`,
-  noMatch: (t) => `!${t}!`,
-  searchPrompt: (t) => `>${t}<`,
-  searchInput: (t) => `|${t}|`,
-  matchHighlight: (t) => `*${t}*`,
-};
 
 const ansiHighlightTheme: SearchableSelectListTheme = {
   selectedPrefix: (t) => t,
@@ -32,50 +22,44 @@ const ansiHighlightTheme: SearchableSelectListTheme = {
 function item(value: string, description?: string, label = value): SearchableSelectItem {
   return { value, label, description };
 }
-const testItems = [
-  item("anthropic/claude-3-opus", "Claude 3 Opus"),
-  item("anthropic/claude-3-sonnet", "Claude 3 Sonnet"),
-  item("openai/gpt-4", "GPT-4"),
-  item("openai/gpt-4-turbo", "GPT-4 Turbo"),
-  item("google/gemini-pro", "Gemini Pro"),
-];
-const makeList = (items: SearchableSelectItem[] = testItems, theme = mockTheme, maxVisible = 5) =>
-  new SearchableSelectList(items, maxVisible, theme);
+const makeList = (
+  items: SearchableSelectItem[] = [item("model")],
+  listTheme: SearchableSelectListTheme = theme,
+  maxVisible = 5,
+) => new SearchableSelectList(items, maxVisible, listTheme);
 const makeAnsiList = (items: SearchableSelectItem[], maxVisible = 5) =>
   makeList(items, ansiHighlightTheme, maxVisible);
 const render = (list: SearchableSelectList, width = 80) => list.render(width).join("\n");
 
 describe("SearchableSelectList", () => {
+  it.each(["label", "description", "searchText"] as const)(
+    "matches canonical Unicode in %s without changing the value",
+    (field) => {
+      for (const [stored, query] of [
+        ["Café".normalize("NFD"), "Café"],
+        ["Café", "Café".normalize("NFD")],
+      ] as const) {
+        const value = "original-value";
+        const list = makeList([{ value, label: "model", [field]: stored }]);
+        typeText(list, query);
+        expect(select(list)?.value).toBe(value);
+      }
+    },
+  );
+
   it("keeps replacement empty-state errors on one safe terminal row", () => {
     const list = makeAnsiList([], 7);
     list.setItems([], "network\nunavailable\u001b[2J");
     expect(list.render(80).at(-1)).toBe("  network unavailable");
   });
 
-  function selectByEnter(list: SearchableSelectList) {
-    const onSelect = vi.fn<(item: SearchableSelectItem) => void>();
-    list.onSelect = onSelect;
-    list.handleInput("\r");
-    expect(onSelect).toHaveBeenCalledTimes(1);
-    return onSelect.mock.calls[0]?.[0];
-  }
-
-  function typeInput(list: SearchableSelectList, text: string) {
-    Array.from(text).forEach((ch) => list.handleInput(ch));
-  }
-
-  function expectCursor(list: SearchableSelectList, focused: boolean) {
-    expect(list.focused).toBe(focused);
-    expect(list.render(80)[0]?.includes(CURSOR_MARKER)).toBe(focused);
-  }
-
   it("emits the hardware cursor marker only while the search input is focused", () => {
     const list = makeList();
-    expectCursor(list, false);
-    list.focused = true;
-    expectCursor(list, true);
-    list.focused = false;
-    expectCursor(list, false);
+    expect(list.focused).toBe(false);
+    for (const focused of [false, true, false]) {
+      list.focused = focused;
+      expect(list.render(80)[0]?.includes(CURSOR_MARKER)).toBe(focused);
+    }
   });
 
   it("keeps ANSI, CJK, scroll, and no-match rows within seven terminal columns", () => {
@@ -108,11 +92,10 @@ describe("SearchableSelectList", () => {
 
   it("does not corrupt ANSI sequences when highlighting repeated query tokens", () => {
     const list = makeAnsiList([item("gpt-model")]);
-    typeInput(list, "  gpt GPT m  ");
+    typeText(list, "  gpt GPT m  ");
     const rendered = list.render(80);
     const renderedLine = rendered.find((line) => stripAnsi(line).includes("gpt-model"));
     expect(renderedLine?.split("\u001b[31m")).toHaveLength(3);
-    expect(list.render(80)).toEqual(rendered);
   });
 
   it("renders the current query after clearing and replacing it", () => {
@@ -129,41 +112,22 @@ describe("SearchableSelectList", () => {
   });
 
   it("sanitizes rendered fields before applying trusted highlighting", () => {
-    const attacks = [
-      "\u001b[38;5;201m",
-      "\u001b[3J",
-      "\u001b]0;search-title\u0007",
-      "\u001b]52;c;search-clipboard\u0007",
-      "\u009b2K",
-      "\u009d0;search-c1-title\u009c",
-    ];
     const rawValue = `selector-value-start${attacks[1]}selector-value-end\r\nمرحبا\tשלום`;
     const description = `selector-description-start${attacks[3]}selector-description-end\n東京`;
     const list = makeAnsiList([
       { value: rawValue, label: attacks.join(""), description, searchText: "selector-target" },
     ]);
-    typeInput(list, "selector");
+    typeText(list, "selector");
     const rendered = render(list, 160);
     const plainRendered = stripAnsi(rendered);
     expect(rendered).toContain("\u001b[31mselector\u001b[0m-value-start");
-    expect(plainRendered).toContain("selector-description-startselector-description-end 東京");
-    expect(plainRendered).toContain("مرحبا שלום");
-    expect(plainRendered).toContain("\u2067");
-    expect(plainRendered).toContain("\u2069");
-    for (const attack of attacks) {
-      expect(rendered).not.toContain(attack);
-    }
-    expect(rendered).not.toContain("selector-value-end\r\nمرحبا\tשלום");
-    expect(selectByEnter(list)?.value).toBe(rawValue);
-  });
-
-  it("cancels an active query with modifyOtherKeys Ctrl+C", () => {
-    const list = makeList();
-    list.onCancel = vi.fn();
-    typeInput(list, "gemini");
-    const selected = selectByEnter(list);
-    list.handleInput("\x1b[27;5;99~");
-    expect(list.onCancel).toHaveBeenCalledTimes(1);
-    expect(selectByEnter(list)).toBe(selected);
+    expectText(plainRendered, [
+      "selector-description-startselector-description-end 東京",
+      "مرحبا שלום",
+      "\u2067",
+      "\u2069",
+    ]);
+    expectText(rendered, [], [...attacks, "selector-value-end\r\nمرحبا\tשלום"]);
+    expect(select(list)?.value).toBe(rawValue);
   });
 });

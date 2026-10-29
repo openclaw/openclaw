@@ -34,7 +34,7 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       const row = sidebar.locator('[data-session-key="' + sessionKey + '"]');
       await row.waitFor({ state: "visible" });
-      const footer = page.locator(".sidebar-shell__footer");
+      const footer = page.locator(".sidebar-shell__connection");
       const before = await takeControlUiScreenshotFrame(page, row, [row], {
         elements: [row],
         animations: "disabled",

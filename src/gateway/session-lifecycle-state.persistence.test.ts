@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import * as termination from "../agents/run-termination.js";
 import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
@@ -124,63 +123,6 @@ async function stopSubscriptions(subscriptions: Subscriptions | undefined) {
   subscriptions?.transcriptUnsub();
   subscriptions?.lifecycleUnsub();
 }
-
-it.each([
-  ["restart", "interrupted", "recoverable", undefined],
-  ["aborted", "killed", "inactive", undefined],
-  ["restart", "timeout", "inactive", "provider"],
-] as const)(
-  "retains %s cancellation as %s after reopening a store without a shutdown marker",
-  async (stopReason, status, recovery, timeoutPhase) => {
-    const target = createTarget("agent:main:restart-terminal");
-    const runId = "interrupted-run";
-    try {
-      await replaceSessionEntry(target, {
-        sessionId: "restart-terminal-session",
-        lifecycleRunId: runId,
-        startedAt: 1_000,
-        updatedAt: 1_000,
-      });
-      // The bulk shutdown marker failed; cancellation is the remaining durable writer.
-      await lifecycleState.persistGatewaySessionLifecycleEvent({
-        sessionKey: target.sessionKey,
-        event: {
-          runId,
-          sessionId: "restart-terminal-session",
-          lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          ts: 2_000,
-          data: { phase: "error", aborted: true, stopReason, timeoutPhase, endedAt: 2_000 },
-        },
-      });
-      await closeStore(path.dirname(target.storePath));
-      const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
-      expect(restored?.status).toBe(status);
-      if (recovery === "recoverable") {
-        expect(restored).toMatchObject({
-          abortedLastRun: true,
-          endedAt: 2_000,
-          runtimeMs: 1_000,
-          lastRunError: "Run interrupted by a Gateway restart.",
-          restartRecoveryForceSafeTools: true,
-          restartRecoveryRuns: [{ runId, lifecycleGeneration: getAgentEventLifecycleGeneration() }],
-        });
-      }
-      if (!restored) {
-        throw new Error("session did not survive store reopen");
-      }
-      const observed = transitionMainSessionRecovery(restored, {
-        kind: "observe",
-        cycleId: "next-recovery-cycle",
-        lifecycleGeneration: "next-gateway-generation",
-        sessionKey: target.sessionKey,
-      });
-      expect(observed).toMatchObject({ kind: "observed", view: { status: recovery } });
-    } finally {
-      routing.loadSessionEntry.mockReset();
-      await closeStore(path.dirname(target.storePath));
-    }
-  },
-);
 
 it("persists current-run timing after pre-start failure and clears it on the next run", async () => {
   const target = createTarget("agent:main:timing");
@@ -374,7 +316,6 @@ it.each(["success", "failed-write"])(
     let persistenceSpy:
       | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
       | undefined;
-    const restartRecoveryCandidates = new Map();
     const [writerStarted, releaseWriter] = [createDeferred(), createDeferred()] as const;
     let heldWriter: Promise<unknown> | undefined;
     let subscriptions: Subscriptions | undefined;
@@ -421,7 +362,6 @@ it.each(["success", "failed-write"])(
         broadcast,
         broadcastToConnIds,
         sessionEventSubscribers,
-        restartRecoveryCandidates,
       });
       const prepareLifecycleEvent = lifecycleState.prepareGatewaySessionLifecycleEvent;
       persistenceSpy = vi
@@ -503,10 +443,6 @@ it.each(["success", "failed-write"])(
         });
         await expect(interruption.released).rejects.toThrow("Source cleanup failed");
         expect(await removed).toBe(false);
-        expect(restartRecoveryCandidates.get(runId)).toMatchObject({
-          sessionId,
-          observedAt: 2_000,
-        });
         expect(entry.adapter.projectSessionTerminalPersisted).toBe(false);
         expect(loadSessionEntry(target)?.status).toBeUndefined();
         return;
@@ -554,7 +490,6 @@ it.each(["success", "failed-write"])(
         runtimeMs: 1_000,
       });
       expect(restored?.lifecycleRunId).toBeUndefined();
-      expect(restored?.restartRecoveryForceSafeTools).toBeUndefined();
     } finally {
       releaseProducer();
       admission.release();

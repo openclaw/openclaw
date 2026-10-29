@@ -71,90 +71,69 @@ async function createStartedPlugin() {
   };
 }
 
-describe("dreaming startup lifecycle", () => {
-  it("finishes the replacement hook before slow cleanup and still joins cleanup at service stop", async () => {
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    scrub.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    const plugin = await createStartedPlugin();
-    const result = plugin.start().then(
-      () => "started",
-      (error: unknown) => error,
-    );
-    try {
-      await entered.promise;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(await result).toBe("started");
-      let stopped = false;
-      const stopping = Promise.resolve(plugin.stop()).then(() => {
-        stopped = true;
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
-      release.resolve();
-      await stopping;
-      expect(stopped).toBe(true);
-      // Disposal fences the next agent and deferred sweep, without abandoning admitted work.
-      await vi.advanceTimersByTimeAsync(300_000);
-      expect(scrub).toHaveBeenCalledTimes(1);
-    } finally {
-      release.resolve();
-      await result;
-      await plugin.dispose();
+async function withBlockedCleanup(
+  check: (
+    plugin: Awaited<ReturnType<typeof createStartedPlugin>>,
+    starting: Promise<void>,
+    release: () => void,
+  ) => Promise<void>,
+  failure?: Error,
+) {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  scrub.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    if (failure) {
+      throw failure;
     }
   });
+  const plugin = await createStartedPlugin();
+  const starting = plugin.start();
+  try {
+    await entered.promise;
+    await check(plugin, starting, release.resolve);
+  } finally {
+    release.resolve();
+    await starting;
+    await plugin.dispose();
+  }
+}
 
-  it("reports cleanup rejection after the start hook has completed", async () => {
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    scrub.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      throw new Error("cleanup storage unavailable");
-    });
-    const plugin = await createStartedPlugin();
-    const starting = plugin.start();
-    try {
-      await entered.promise;
+describe("dreaming startup lifecycle", () => {
+  it("reports cleanup rejection after the start hook has completed", () =>
+    withBlockedCleanup(async (plugin, starting, release) => {
       await starting;
-      release.resolve();
+      release();
       await plugin.stop();
       expect(plugin.logger.warn).toHaveBeenCalledWith(
         expect.stringContaining(
           "dreaming startup cleanup failed for agent main: cleanup storage unavailable",
         ),
       );
-    } finally {
-      release.resolve();
-      await starting;
-      await plugin.dispose();
-    }
-  });
+    }, new Error("cleanup storage unavailable")));
 
-  it("prevents a retired instance from cleaning another agent before its successor starts", async () => {
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    scrub.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-    });
+  it("starts promptly, drains admitted cleanup, then fences the retired instance before replacement", async () => {
     const successorFinished = Promise.withResolvers<void>();
     scrub.mockImplementation(async ({ agentId }) => {
       if (agentId === "researcher") {
         successorFinished.resolve();
       }
     });
-    const plugin = await createStartedPlugin();
-    const starting = plugin.start();
-    try {
-      await entered.promise;
-      await starting;
-      const stopping = plugin.stop();
-      release.resolve();
+    await withBlockedCleanup(async (plugin, starting, release) => {
+      const result = starting.then(
+        () => "started",
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await result).toBe("started");
+      const stopped = vi.fn();
+      const stopping = Promise.resolve(plugin.stop()).then(stopped);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).not.toHaveBeenCalled();
+      release();
       await stopping;
+      expect(stopped).toHaveBeenCalledOnce();
       expect(scrub).toHaveBeenCalledTimes(1);
       const successor = await createStartedPlugin();
       try {
@@ -168,10 +147,6 @@ describe("dreaming startup lifecycle", () => {
       expect(scrub).toHaveBeenCalledTimes(3);
       await vi.advanceTimersByTimeAsync(300_000);
       expect(scrub).toHaveBeenCalledTimes(3);
-    } finally {
-      release.resolve();
-      await starting;
-      await plugin.dispose();
-    }
+    });
   });
 });

@@ -308,7 +308,6 @@ export function createMergeOutcomeFixtureHarness() {
         head?: string;
         preparedHead?: string;
         artifact?: string;
-        artifactContents?: string;
         bodyPath?: string;
         receiptField?: "LOCAL_PREP_HEAD_SHA" | "PREP_HEAD_SHA";
       },
@@ -421,7 +420,7 @@ const restCheckRuns=()=>{
   const check={id:1,head_sha:s.pr.headRefOid,name:s.restContexts[0],status:"completed",conclusion:s.gates==="pass"?"success":"failure",
     started_at:"2026-09-20T00:00:00Z",check_suite:{id:10},app:{id:s.restCheckApp,slug:s.restCheckApp===15368?"github-actions":"custom-ci"}};
   if(s.restUnseenSuite==="partial-pending") return [check,{...check,id:2,name:"detect-changes",check_suite:{id:2}}];
-  if(!s.restDuplicate) return [...s.restContexts.filter(name=>name!==s.priorCi.missingCheck).map((name,index)=>({...check,id:index+1,name,check_suite:{id:10+index},
+  if(!s.restDuplicate) return [...s.restContexts.filter(name=>name!==s.priorCi.missingCheck).map((name,index)=>({...check,id:index+1,name,check_suite:{id:s.priorCi.artifactBuild&&name==="openclaw/ci-gate"?30:10+index},
     ...(s.priorCi.enabled?{status:name===s.requiredCheckName&&s.gates==="pending"?"in_progress":"completed",
       conclusion:name===s.restFailedContext?"failure":name!==s.requiredCheckName?"success":s.gates==="pending"?null:s.gates==="pass"?"success":"failure"}:
       {conclusion:name===s.restFailedContext?"failure":check.conclusion})})),
@@ -465,7 +464,7 @@ const advanceClock=(seconds)=>{
 };
 const advanceMain=(parent=main())=>{
   const previous=main();
-  const next=git(["--git-dir="+process.env.FIXTURE_REMOTE,"commit-tree",git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse",parent+"^{tree}"]),"-p",parent],"Remote advance\\n");
+  const next=git(["--git-dir="+process.env.FIXTURE_REMOTE,"commit-tree",git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse",parent+"^{tree}"]),"-p",parent],"Remote advance "+(s.mainAdvances.length+1)+"\\n");
   git(["--git-dir="+process.env.FIXTURE_REMOTE,"update-ref","refs/heads/main",next,previous]);
   s.mainAdvances.push(next);
 };
@@ -514,11 +513,26 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/rulesets/41")) {
   if(!args.includes("--include")||!args.includes("Cache-Control: max-age=0")) fail("ruleset authority must use the live writer");
   s.priorCi.rulesetReads++;save();
   out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({id:41,source:"fixture/repo",source_type:"Repository",target:"branch",enforcement:"active",
-    current_user_can_bypass:s.priorCi.revokeRulesetAfterRead&&s.priorCi.rulesetReads>1?"never":s.priorCi.rulesetBypass,
+    current_user_can_bypass:s.priorCi.revokeRulesetAfterRead&&s.priorCi.rulesetReads>s.priorCi.revokeRulesetAfterReads?"never":s.priorCi.rulesetBypass,
     rules:[{type:"required_status_checks",parameters:{required_status_checks:[{context:"openclaw/ci-gate",integration_id:s.restRequiredApp}]}}]}));
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("orgs/fixture/memberships/"))) {
+  s.priorCi.membershipReads++;save();
+  if(s.priorCi.revokeMembershipAfterReads&&s.priorCi.membershipReads>s.priorCi.revokeMembershipAfterReads) {
+    out('HTTP/2.0 404 Not Found\\n\\n{"message":"Not Found"}');fail("gh: Not Found (HTTP 404)");
+  }
   out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({state:"active",role:s.priorCi.membership,user:{login:s.operator}}));
+}
+else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/502"))) {
+  const fault=s.priorCi.artifactFault;
+  const run={id:502,workflow_id:52,run_attempt:fault==="primary attempt"?3:2,check_suite_id:30,head_sha:fault==="primary head"?s.base:s.pr.headRefOid,
+    repository:{full_name:s.repo.nameWithOwner},path:".github/workflows/ci.yml",event:"pull_request",head_branch:s.pr.headRefName,
+    head_repository:s.priorCi.sourceRepository,status:"completed",conclusion:fault==="primary failed"?"failure":"success",
+    pull_requests:[{number:fault==="primary PR"?124:123,head:{sha:s.pr.headRefOid},base:{repo:{id:s.repoAuthority.id}}}]};
+  const jobs=["openclaw/ci-gate","security-fast"].map((name,index)=>({id:701+index,name,run_id:502,head_sha:s.pr.headRefOid,
+    status:"completed",conclusion:fault==="primary security"&&index===1?"failure":"success",
+    check_run_url:"https://api.github.com/repos/fixture/repo/check-runs/1"}));
+  out(args.some(arg=>arg.includes("/jobs?"))?[{total_count:jobs.length,jobs}]:run);
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actions/runs/501"))) {
   const jobs=s.priorCi.jobs??[{name:"openclaw/ci-gate",status:"completed",conclusion:"success",head_sha:s.priorCi.runHead,run_id:501}];
@@ -532,7 +546,7 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actio
     if(s.priorCi.jobPageFault==="inconsistent-total") pages.at(-1).total_count++;
     out(args.includes("--paginate")&&args.includes("--slurp")?pages:pages[0]);
   }
-  else out({id:501,run_attempt:args.includes("repos/fixture/repo/actions/runs/501")?s.priorCi.latestAttempt:2,check_suite_id:10,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:s.priorCi.runRepository??s.priorCi.sourceRepository,status:"completed",conclusion:s.priorCi.runConclusion,pull_requests:s.priorCi.event==="pull_request"&&!s.priorCi.omitPullRequests?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
+  else out({id:501,workflow_id:51,created_at:"2026-09-20T00:00:00Z",run_attempt:args.includes("repos/fixture/repo/actions/runs/501")?s.priorCi.latestAttempt:2,check_suite_id:10,head_sha:s.priorCi.runHead,repository:{full_name:s.repo.nameWithOwner},path:s.priorCi.workflowPath,event:s.priorCi.event,head_branch:s.priorCi.branch,head_repository:s.priorCi.runRepository??s.priorCi.sourceRepository,status:"completed",conclusion:s.priorCi.runConclusion,pull_requests:s.priorCi.event==="pull_request"&&!s.priorCi.omitPullRequests?[{number:123,head:{sha:s.priorCi.runHead},base:{repo:{id:s.repoAuthority.id}}}]:[]});
   if(s.restObservation?.afterHistoricalRead&&s.restMainReads>0) applyRestObservation();
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/check-runs/601"))) {
@@ -542,10 +556,18 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/check
 }
 else if(args.includes("graphql")&&args.some(arg=>arg.includes("reviewThreads("))) {
   const start=Number(args.find(arg=>arg.startsWith("cursor="))?.slice(7)??0);
-  const nodes=[...Array.from({length:s.priorCi.nativeOptionalCount},(_,index)=>({__typename:"CheckRun",name:"optional-"+index,isRequired:false})),
+  const artifactCheck=(id,name,conclusion)=>({__typename:"CheckRun",databaseId:id,name,status:"COMPLETED",conclusion,
+    isRequired:s.priorCi.artifactFault==="required",checkSuite:{databaseId:s.priorCi.artifactFault==="suite"?11:10,
+      app:{databaseId:15368},workflowRun:{databaseId:501,event:"pull_request",runAttempt:2,createdAt:"2026-09-20T00:00:00Z",workflow:{databaseId:51}}}});
+  const artifactNodes=s.priorCi.artifactBuild?[artifactCheck(601,"build-artifacts","FAILURE"),artifactCheck(602,"admission","SKIPPED")]:[];
+  if(s.priorCi.artifactFault==="new run") artifactNodes.push({...artifactCheck(603,"admission","SKIPPED"),
+    checkSuite:{databaseId:12,app:{databaseId:15368},workflowRun:{databaseId:503,event:"pull_request",runAttempt:1,createdAt:"2026-09-20T00:01:00Z",workflow:{databaseId:51}}}});
+  if(s.priorCi.artifactBuild) artifactNodes.push(...["admission","build-artifacts"].map((name,index)=>({...artifactCheck(590+index,name,"SKIPPED"),
+    checkSuite:{databaseId:9,app:{databaseId:15368},workflowRun:{databaseId:500,event:"pull_request",runAttempt:1,createdAt:"2026-09-19T00:00:00Z",workflow:{databaseId:51}}}})));
+  const nodes=[...artifactNodes,...Array.from({length:s.priorCi.nativeOptionalCount},(_,index)=>({__typename:"CheckRun",name:"optional-"+index,isRequired:false})),
     ...nativeChecks().flatMap(check=>{
-      const node=check.kind==="status"?{__typename:"StatusContext",context:check.name,isRequired:check.required}:
-        {__typename:"CheckRun",name:check.name,isRequired:check.required,checkSuite:{app:{databaseId:s.restCheckApp}}};
+      const node=check.kind==="status"?{__typename:"StatusContext",context:check.name,state:check.state.toUpperCase(),isRequired:check.required}:
+        {__typename:"CheckRun",name:check.name,status:"COMPLETED",conclusion:check.state.toUpperCase(),isRequired:check.required,checkSuite:{app:{databaseId:s.restCheckApp}}};
       return check.previousFailure?[node,node]:[node];
     })];
   const page=nodes.slice(start,start+100);
@@ -676,8 +698,7 @@ else if(args[0]==="pr"&&args[1]==="checks") {
   if(s.duringChecks?.preparedHead) git(["update-ref","refs/heads/pr-123-prep",s.duringChecks.preparedHead]);
   if(s.duringChecks?.artifact) {
     const path=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/"+s.duringChecks.artifact;
-    if(typeof s.duringChecks.artifactContents==="string") fs.writeFileSync(path,s.duringChecks.artifactContents);
-    else fs.appendFileSync(path,"\\n# changed during checks\\n");
+    fs.appendFileSync(path,"\\n# changed during checks\\n");
   }
   if(s.duringChecks?.receiptField) { const receipt=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/prep.env"; fs.writeFileSync(receipt,fs.readFileSync(receipt,"utf8").replace(new RegExp("^"+s.duringChecks.receiptField+"=.*$","m"),s.duringChecks.receiptField+"="+main())); }
   out([{name:s.requiredCheckName,bucket:s.gates,state:s.gates==="pass"?"SUCCESS":s.gates==="pending"?"PENDING":"FAILURE"},...(s.priorCi.otherCheck?[{name:s.priorCi.otherCheck,bucket:"fail",state:"FAILURE"}]:[])]);}
@@ -957,7 +978,10 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
   if [ "\${14:-false}" = true ]; then
     PR_WORKFLOW_RECOVERY_OUTCOME="$2"
     PR_WORKFLOW_RECOVERY_HEAD="$3"
-    binding=$(pr_batch_wrapper_git workflow-recovery-select "$canonical_repo_root" 123 "$2" "$3")
+    PR_WORKFLOW_ADMISSION=0
+    selection_mode=workflow-recovery-select
+    if [ -z "$2" ]; then PR_WORKFLOW_ADMISSION=1; selection_mode=workflow-admission-select; fi
+    binding=$(pr_batch_wrapper_git "$selection_mode" "$canonical_repo_root" 123 "$2" "$3")
     IFS=$'\\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
     PR_WORKFLOW_BOOTSTRAP=0
     PR_WORKFLOW_TRUST_ANCHOR=refs/remotes/origin/main
@@ -965,7 +989,7 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
     script_parent_dir="$FIXTURE_WORKFLOW_DIRECTORY/scripts"
     hold_pr_workflow_selection "$PR_WORKFLOW_SOURCE_REVISION" "$FIXTURE_WORKFLOW_DIRECTORY"
     [ -z "\${FIXTURE_WORKFLOW_AFTER_HOLD:-}" ] || source "$FIXTURE_WORKFLOW_AFTER_HOLD"
-    pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" 123 "$$" "$PPID" "$2" "$3" >/dev/null
+    pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" 123 "$$" "$PPID" "$2" "$3" "$PR_WORKFLOW_ADMISSION" >/dev/null
     admit_pr_workflow_binding 123
     script_parent_dir="$original_scripts"
   fi

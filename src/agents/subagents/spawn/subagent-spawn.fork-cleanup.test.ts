@@ -32,6 +32,9 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
   let restoreUpsert: () => void;
   let forkedEntry: SessionEntry | undefined;
+  let initialForkVisibility: string | undefined;
+  let visibilityDuringFork: "shared" | undefined;
+  let disableDraftsDuringFork: boolean;
   const registerSubagentRun = vi.fn();
   const startQueuedSubagentRun = vi.fn();
   const prepareSubagentSpawn = vi.fn();
@@ -75,6 +78,17 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   }
   const fork = vi.fn(async (input: unknown) => {
     const params = input as Parameters<ForkSession>[0];
+    if (read()?.visibility === "draft") {
+      initialForkVisibility = read(params.sessionKey)?.visibility ?? "shared";
+    }
+    if (visibilityDuringFork) {
+      await sessions.upsertSessionEntryCore(scope(params.sessionKey), {
+        visibility: visibilityDuringFork,
+      });
+    }
+    if (disableDraftsDuringFork) {
+      config = { ...config, session: { ...config.session, sharing: { drafts: false } } };
+    }
     const result = await forkSession(params);
     if (result.status === "forked") {
       forkedEntry = result.sessionEntry;
@@ -149,6 +163,9 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     };
     threadBindingAvailable = false;
     forkedEntry = undefined;
+    initialForkVisibility = undefined;
+    visibilityDuringFork = undefined;
+    disableDraftsDuringFork = false;
     fork.mockClear();
     registerSubagentRun.mockReset().mockResolvedValue(undefined);
     startQueuedSubagentRun.mockReset().mockResolvedValue(false);
@@ -214,11 +231,32 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     vi.doUnmock("../../provider-model-normalization.runtime.js");
   });
 
+  it("refuses a Draft child after the prepared request's policy is replaced", async () => {
+    await sessions.upsertSessionEntryCore(parentScope(), { visibility: "draft" });
+    const before = children();
+    const expectParentUnchanged = await snapshotParent();
+    const disableDrafts = vi.fn(() => {
+      config = { ...config, session: { ...config.session, sharing: { drafts: false } } };
+    });
+    const result = await spawnSubagentDirect(
+      { task: "Keep this delegated work private", context: "isolated" },
+      { agentSessionKey: parentKey, onSpawnEffectsStart: disableDrafts },
+    );
+    expect(disableDrafts).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("session visibility is disabled: draft"),
+    });
+    expect(children()).toEqual(before);
+    expectNotLaunched();
+    await expectParentUnchanged();
+  });
+
   it("cleans up the provisional child when fork parent lookup rejects", async () => {
     const runtime = await import("./subagent-spawn.runtime.js");
     const resolveTarget = runtime.resolveGatewaySessionStoreTargetInWorker;
     let provisional: { sessionKey: string; entry: SessionEntry } | undefined;
-    const selected = vi
+    using _ = vi
       .spyOn(runtime, "resolveGatewaySessionStoreTargetInWorker")
       .mockImplementation(async (params) => {
         const child = children().find(({ sessionKey }) => sessionKey !== parentKey);
@@ -228,17 +266,14 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         }
         return await resolveTarget(params);
       });
-    try {
-      await spawn({ task: "inspect parent history", context: "fork" }).catch(() => undefined);
 
-      const created = expectDefined(provisional, "committed provisional child");
-      expect(read(created.sessionKey)).toBeUndefined();
-      expect(fork).not.toHaveBeenCalled();
-      expectNotLaunched();
-      expect(read()).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
-    } finally {
-      selected.mockRestore();
-    }
+    await spawn({ task: "inspect parent history", context: "fork" }).catch(() => undefined);
+
+    const created = expectDefined(provisional, "committed provisional child");
+    expect(read(created.sessionKey)).toBeUndefined();
+    expect(fork).not.toHaveBeenCalled();
+    expectNotLaunched();
+    expect(read()).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
   });
 
   it("refuses an oversized fork when its created child disappears before preparation", async () => {
@@ -310,6 +345,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       parentTokens: undefined,
       preparedMode: "fork",
       operation: "fork",
+      changedChildVisibility: undefined,
+      disableDrafts: false,
     },
     {
       scenario: "a queued oversized fork starts isolated",
@@ -317,10 +354,40 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       parentTokens: 150_000,
       preparedMode: "isolated",
       operation: "create",
+      changedChildVisibility: undefined,
+      disableDrafts: false,
+    },
+    {
+      scenario: "the child is explicitly shared during fork preparation",
+      args: { context: "fork" },
+      parentTokens: undefined,
+      preparedMode: "fork",
+      operation: "fork",
+      changedChildVisibility: "shared",
+      disableDrafts: false,
+    },
+    {
+      scenario: "Draft creation is disabled after the child exists",
+      args: { context: "fork" },
+      parentTokens: undefined,
+      preparedMode: "fork",
+      operation: "fork",
+      changedChildVisibility: undefined,
+      disableDrafts: true,
     },
   ] as const)(
     "records the committed context when $scenario",
-    async ({ args, parentTokens, preparedMode, operation }) => {
+    async ({
+      args,
+      parentTokens,
+      preparedMode,
+      operation,
+      changedChildVisibility,
+      disableDrafts,
+    }) => {
+      await sessions.upsertSessionEntryCore(parentScope(), { visibility: "draft" });
+      visibilityDuringFork = changedChildVisibility;
+      disableDraftsDuringFork = disableDrafts;
       prepareSubagentSpawn.mockResolvedValue(undefined);
       startQueuedSubagentRun.mockResolvedValue(true);
       threadBindingAvailable = true;
@@ -367,6 +434,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
           "accepted child key",
         );
         const child = expectDefined(read(childSessionKey), "accepted child entry");
+        expect(initialForkVisibility).toBe("draft");
+        expect(child.visibility).toBe(changedChildVisibility ?? "draft");
         expect(prepareSubagentSpawn).toHaveBeenCalledWith(
           expect.objectContaining({
             contextMode: preparedMode,

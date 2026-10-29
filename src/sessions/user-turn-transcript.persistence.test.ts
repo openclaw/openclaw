@@ -19,6 +19,7 @@ import { resolveSessionTranscriptDatabasePath } from "../config/sessions/session
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { maintenanceConfig } from "../config/sessions/session-cold-storage.test-support.js";
 import { withSessionTranscriptSourcePublication } from "../config/sessions/transcript-write-context.js";
 import { stripEnvelopeFromMessages } from "../gateway/chat-sanitize.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -65,17 +66,6 @@ function installWriteHook(write: (message: PersistedUserTurnMessage) => AgentMes
     ]),
   );
 }
-
-const acceptedPeerDelivery = {
-  source: { sessionKey: "agent:main:source" },
-  operatorSource: {
-    kind: "channel",
-    snapshot: {
-      profileId: "original",
-      scopes: ["operator.read"],
-    },
-  },
-};
 
 describe("persistUserTurnTranscript", () => {
   const sessionDirs = useSessionStoreTempDirs(
@@ -138,13 +128,7 @@ describe("persistUserTurnTranscript", () => {
     const owner = database.db.prepare("SELECT current_session_id FROM session_nodes").get();
     expect(
       await runSessionColdStorageMaintenance({
-        config: {
-          agents: { entries: { [target.agentId]: {} } },
-          session: {
-            store: target.storePath,
-            maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
-          },
-        },
+        config: maintenanceConfig(target.storePath),
       }),
     ).toMatchObject({ archivedTranscripts: 1, externalizedTranscripts: 0 });
     const descriptor = readSessionColdTranscript(database.db, target.sessionId)!;
@@ -347,7 +331,6 @@ describe("persistUserTurnTranscript", () => {
               ? {}
               : {
                   senderIdentity: identity,
-                  sessionSendDelivery: structuredClone(acceptedPeerDelivery),
                 }),
           },
         }),
@@ -356,20 +339,14 @@ describe("persistUserTurnTranscript", () => {
             mode === "in-place" ? message["__openclaw"]! : { ...message["__openclaw"] };
           if (mode === "forge") {
             metadata.senderIdentity = { type: "profile", id: "forged" };
-            metadata.sessionSendDelivery = { ...acceptedPeerDelivery, operatorSource: null };
           }
           if (mode === "in-place") {
             (metadata.senderIdentity as { id: string }).id = "forged";
             requesterOrigin.senderId = "forged";
             requesterOrigin.sessionKey = "agent:main:replacement";
-            const delivery = metadata.sessionSendDelivery as typeof acceptedPeerDelivery;
-            delivery.source.sessionKey = "agent:main:forged";
-            delivery.operatorSource.snapshot.profileId = "forged";
-            delivery.operatorSource.snapshot.scopes.push("operator.admin");
           }
           if (mode === "raw-redact") {
             delete metadata.senderId;
-            delete metadata.sessionSendDelivery;
           }
           return {
             ...message,
@@ -387,9 +364,7 @@ describe("persistUserTurnTranscript", () => {
         senderName: "Edited display",
         senderIsOwner: true,
         ...(mode === "retain" ? { senderIdentity: { type: "profile", id: "original" } } : {}),
-        ...(mode === "forge"
-          ? {}
-          : { requesterOrigin: originalOrigin, sessionSendDelivery: acceptedPeerDelivery }),
+        ...(mode === "forge" ? {} : { requesterOrigin: originalOrigin }),
       });
     },
   );

@@ -648,7 +648,10 @@ describe("resolveModel", () => {
       if (apiOverride) {
         expect(model.thinkingLevelMap).toEqual({ off: null });
       } else {
-        expect(model.compat).toMatchObject(deepSeekCatalogCompat);
+        expect(model.compat).toMatchObject({
+          ...deepSeekCatalogCompat,
+          supportsReasoningEffort: mode !== "fallback",
+        });
       }
       if (mode === "fallback") {
         expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({

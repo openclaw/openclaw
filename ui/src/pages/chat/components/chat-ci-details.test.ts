@@ -2,6 +2,7 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiSessionPullRequestCheckDetails } from "../../../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { createMenuControls } from "../../../components/solid/menu.tsx";
 import {
   createGatewayHarness,
   createHello,
@@ -93,6 +94,41 @@ it("aborts a retired head read and ignores its late answer", async () => {
     expect(element.textContent).not.toContain("Retired head");
   });
   expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("moves mounted CI controls to the current menu owner and releases them on removal", async () => {
+  const first = createMenuControls();
+  const second = createMenuControls();
+  const result = details("Failed check");
+  result.checks[0]!.detailsUrl = "https://github.com/example/project/actions/runs/1";
+  result.checks.push({
+    id: 2,
+    name: "Skipped check",
+    source: "actions",
+    state: "skipped",
+    status: "completed",
+  });
+  const { element } = mount(Promise.resolve(result));
+  element.controls = first;
+  element.menuControls = true;
+  const renderedControls = () =>
+    Array.from(
+      element.querySelectorAll<HTMLElement>(
+        ".chat-ci__job-summary, .chat-ci__job-link, .chat-ci__skipped > summary",
+      ),
+    );
+  await waitForSolid(() => {
+    expect(first.elements.size).toBe(4);
+    expect([...first.elements]).toEqual(expect.arrayContaining(renderedControls()));
+  });
+  element.controls = second;
+  await waitForSolid(() => {
+    expect(first.elements.size).toBe(0);
+    expect(second.elements.size).toBe(4);
+    expect([...second.elements]).toEqual(expect.arrayContaining(renderedControls()));
+  });
+  element.remove();
+  await waitForSolid(() => expect(second.elements.size).toBe(0));
 });
 
 it("shares native subscriptions across closed CI pairs while retaining ordered events", async () => {

@@ -18,6 +18,7 @@ import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
+import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import "../../styles/sidebar-markdown.css";
 import {

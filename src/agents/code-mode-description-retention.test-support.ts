@@ -20,19 +20,17 @@ function collected(...references: WeakRef<object>[]) {
 }
 
 function createScenario(resourceLoader: Awaited<ReturnType<typeof createResourceLoader>>) {
-  const catalogRef = createToolSearchCatalogRef();
   const context = {
     config: { tools: { codeMode: true, toolSearch: false } },
-    catalogRef,
+    catalogRef: createToolSearchCatalogRef(),
     sessionId: "description-retention-session",
     sessionKey: "agent:main:description-retention",
     runId: "description-retention-run",
   };
-  const compacted = applyCodeModeCatalog({
+  const exec = applyCodeModeCatalog({
     ...context,
     tools: [...createCodeModeTools(context), createStubTool("retention_target")],
-  });
-  const exec = compacted.tools.find((tool) => tool.name === "exec");
+  }).tools.find((tool) => tool.name === "exec");
   assert.ok(exec);
   const extensionRunnerRef: { current?: ExtensionRunner } = {};
   const agent = new Agent({

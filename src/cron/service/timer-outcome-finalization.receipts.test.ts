@@ -12,6 +12,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-jobs.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import {
   CronJobsStoreChangedError,
   loadCronStore,
@@ -29,6 +30,7 @@ import type { CronJob, CronStoredJob } from "../types.js";
 import { updateWithPrecondition } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { createCronRunHandle } from "./run-history.js";
+import * as runtimeMutation from "./runtime-mutation.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
@@ -91,6 +93,79 @@ function completion(
 }
 
 describe("cron outcome receipt finalization", () => {
+  it.each([false, true])(
+    "only acquires schedule maintenance for a stale sibling (%s)",
+    async (repairSibling) => {
+      const { storePath } = fixtures.makeStorePath();
+      const startedAt = Date.now();
+      const job = dueJob("completed-request", startedAt);
+      job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
+      const sibling: CronJob = {
+        ...job,
+        id: "sibling",
+        state: { nextRunAtMs: startedAt + 60_000 },
+      };
+      if (repairSibling) {
+        delete sibling.state.nextRunAtMs;
+      }
+      await saveCronStore(storePath, { version: 1, jobs: [job, sibling] });
+      const receipt = claimReceipt(storePath, job, startedAt);
+      const state = createState(storePath, startedAt + 10);
+      const mutations = vi.spyOn(runtimeMutation, "runCronRuntimeMutation");
+      await finalizeCompletedCronRunOutcomes(state, [
+        completion(job, startedAt, startedAt + 10, receipt, {
+          request: { executionJob: job, preserveCadence: false, scheduleOwnershipAtMs: startedAt },
+        }),
+      ]);
+      const stored = await loadCronStore(storePath);
+      expect(stored.jobs.map((entry) => entry.state.nextRunAtMs)).toEqual([
+        startedAt + 60_000,
+        startedAt + 60_000,
+      ]);
+      expect(receiptStatus(receipt)).toEqual({ status: "ok" });
+      expect(
+        mutations.mock.calls.filter(([params]) => params.type === "cron.scheduleUnowned"),
+      ).toHaveLength(repairSibling ? 1 : 0);
+    },
+  );
+
+  it.each([
+    { classification: undefined, reason: "timeout", errors: 3 },
+    { classification: { kind: "permanent" }, reason: undefined, errors: 3 },
+    { classification: { kind: "aborted" }, reason: undefined, errors: 2 },
+    { classification: { kind: "reason", reason: "rate_limit" }, reason: "rate_limit", errors: 3 },
+  ] as const)(
+    "records host classification $classification with the receipt and job outcome",
+    async ({ classification, reason, errors }) => {
+      const { storePath } = fixtures.makeStorePath();
+      const startedAt = Date.now();
+      const job = dueJob("classified-outcome", startedAt);
+      job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
+      job.state.consecutiveErrors = 2;
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      const receipt = claimReceipt(storePath, job, startedAt);
+      const state = createState(storePath, startedAt + 10);
+      await finalizeCompletedCronRunOutcomes(state, [
+        completion(job, startedAt, startedAt + 10, receipt, {
+          status: "error",
+          error: "internal_error from provider",
+          provider: "anthropic",
+          errorClassification: classification,
+        }),
+      ]);
+      const stored = (await loadCronStore(storePath)).jobs[0]!;
+      expect(stored.state.lastErrorReason).toBe(reason);
+      expect(stored.state.consecutiveErrors).toBe(errors);
+      expect(receiptStatus(receipt)).toEqual({ status: "error" });
+      const history = readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(storePath),
+        jobId: job.id,
+      });
+      expect(history.entries).toHaveLength(1);
+      expect(history.entries[0]?.errorReason).toBe(reason);
+    },
+  );
+
   it.each(["current", "legacy definition", "legacy state"])(
     "accepts the first guarded update after publishing a completed run (%s)",
     async (shape) => {

@@ -11,9 +11,15 @@ import { assertAutomaticBindingsWriteAllowed } from "./io.ownership-write-guard.
 
 const state = (
   rawJobs: Array<Record<string, unknown>>,
+  projections: Record<string, Projection> = {},
   invalidConfigRows: Array<Record<string, unknown>> = [],
-  projectedOwnersByJobId: ReadonlyMap<string, Projection> = new Map(),
-) => ({ rawJobs, invalidConfigRows, projectedOwnersByJobId, ownerRows: [] }) as unknown as State;
+) =>
+  ({
+    rawJobs,
+    invalidConfigRows,
+    projectedOwnersByJobId: new Map(Object.entries(projections)),
+    ownerRows: [],
+  }) as unknown as State;
 const deps = (
   activeGateway?: {
     pid: number;
@@ -42,11 +48,7 @@ const activeGateway = {
 it("allows an ownership-safe live Gateway with a projected dynamic row and rechecks at commit", async () => {
   const injected = deps(
     activeGateway,
-    state(
-      [{ id: "dynamic" }],
-      [],
-      new Map([["dynamic", { kind: "runtime-default" as const, agentId: "ops" }]]),
-    ),
+    state([{ id: "dynamic" }], { dynamic: { kind: "runtime-default", agentId: "ops" } }),
   );
   const plan = await prepare(injected);
   injected.loadLegacyCronRepairState.mockResolvedValueOnce(state([{ id: "ownerless" }]));
@@ -59,16 +61,17 @@ it("refuses an unproven live Gateway without suggesting doctor", async () => {
   await expect(refusal).rejects.not.toThrow("doctor --fix");
 });
 
-it("refuses ownerless and corrupt cron rows with an ownership-safe live Gateway", async () => {
-  const ownerless = state([
-    { id: "null", agentId: null },
-    { id: "blank", agentId: " " },
-  ]);
-  await expect(prepare(deps(activeGateway, ownerless))).rejects.toThrow(
+it.each([
+  [
+    state([
+      { id: "null", agentId: null },
+      { id: "blank", agentId: " " },
+    ]),
     "contains 2 ownerless legacy cron job",
-  );
-  const corrupt = state([], [{ id: "corrupt", reason: "invalid config" }]);
-  await expect(prepare(deps(activeGateway, corrupt))).rejects.toThrow("contains 1 corrupt row");
+  ],
+  [state([], {}, [{ id: "corrupt", reason: "invalid config" }]), "contains 1 corrupt row"],
+] as const)("refuses unsafe cron rows: %s", async (rows, message) => {
+  await expect(prepare(deps(activeGateway, rows))).rejects.toThrow(message);
 });
 
 it("keeps include-owned binding writes fail closed", () => {
@@ -84,14 +87,9 @@ it("refuses a retained historical owner even when the runtime projects a new def
   const owned = { id: "owned", agentId: "research" };
   const injected = deps(
     undefined,
-    state(
-      [{ id: "ownerless" }, owned],
-      [],
-      new Map([
-        ["ownerless", { kind: "runtime-default" as const, agentId: "research" }],
-        ["owned", { kind: "explicit" as const, agentId: "research" }],
-      ]),
-    ),
+    state([{ id: "ownerless" }, owned], {
+      ownerless: { kind: "runtime-default", agentId: "research" },
+    }),
   );
   const refusal = prepare(injected, "ops");
   await expect(refusal).rejects.toSatisfy(isCronOwnerWriteRefusalError);

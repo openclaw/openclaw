@@ -390,18 +390,13 @@ describe("OpenAI rich forms", () => {
       uri: `cad://parts/item-${index}`,
       name: `Part ${index}`,
     }));
-    const lowercase = vi.spyOn(String.prototype, "toLowerCase");
-    try {
-      const result = richCompile({
-        parts: resourceFields({ type: "resource", options: resources }),
-      });
-      expect(requireForm(result).fields[0]?.question.options).toHaveLength(64);
-      expect(lowercase.mock.contexts.filter((value) => value === resources[0]!.uri)).toHaveLength(
-        1,
-      );
-    } finally {
-      lowercase.mockRestore();
-    }
+    using lowercase = vi.spyOn(String.prototype, "toLowerCase");
+
+    const result = richCompile({
+      parts: resourceFields({ type: "resource", options: resources }),
+    });
+    expect(requireForm(result).fields[0]?.question.options).toHaveLength(64);
+    expect(lowercase.mock.contexts.filter((value) => value === resources[0]!.uri)).toHaveLength(1);
   });
 
   it.each([

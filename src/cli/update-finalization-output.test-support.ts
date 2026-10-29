@@ -5,15 +5,13 @@ import path from "node:path";
 import { mock } from "node:test";
 import { pathToFileURL } from "node:url";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { finalizationFixtureClockUrl as fixtureClockUrl } from "./update-finalization-clock.test-support.js";
 
 await import(fixtureClockUrl);
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
-await fs.writeFile(
-  path.join(root, "package.json"),
-  JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-);
+await writeFixtureJson(path.join(root, "package.json"), { name: "openclaw", version: "2026.9.4" });
 const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
 const repairDeadline = scenario?.startsWith("repair-deadline");
@@ -235,7 +233,7 @@ const blockedPhase = repairDeadline
         : undefined;
 if (blockedPhase) {
   // Doctor needs time for native admission; its output markers advance the deadline.
-  // Keep real phase ownership and the short budget for other blocked phases.
+  // Repair freezes admission time until the guarded plugin mutation is ready.
   stub(
     "./update-cli/update-finalization-lifecycle.ts",
     `import { once } from 'node:events';
@@ -258,10 +256,10 @@ export class UpdateFinalizationLifecycle extends RealLifecycle {
       },
     });
   }`
-      : doctorDeadline || scenario === "borrowed-phase"
+      : repairDeadline || doctorDeadline || scenario === "borrowed-phase"
         ? `async run(phase, operation, outcome, custody) {
-    if (phase !== 'doctor' && !(phase === 'configSnapshot' && ${scenario === "borrowed-phase"})) return super.run(phase, operation, outcome, custody);
-    startFinalizationFixtureClock();
+    if (phase !== ${JSON.stringify(repairDeadline ? "plugins" : "doctor")} && !(phase === 'configSnapshot' && ${scenario === "borrowed-phase"})) return super.run(phase, operation, outcome, custody);
+    startFinalizationFixtureClock(${repairDeadline});
     try { return await super.run(phase, operation, outcome, custody); }
     finally { restoreFinalizationFixtureClock(); }
   }`

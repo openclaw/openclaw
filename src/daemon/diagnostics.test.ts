@@ -46,6 +46,18 @@ it("reads the launchd supervisor log instead of a state-dir stderr file on darwi
   );
 });
 
+it("surfaces an ownership refusal without copying holder details from the log", async () => {
+  const env = logs(
+    "Doctor could not enter maintenance. cannot verify Gateway ownership from this process; holder 4242 at synthetic-private-host\n",
+    undefined,
+    "darwin",
+  );
+  const failure = await readLastGatewayErrorLine(env, { platform: "darwin" });
+  expect(failure).toContain("Gateway ownership could not be verified");
+  expect(failure).toContain("openclaw gateway recover-lock");
+  expect(failure).not.toContain("synthetic-private-host");
+});
+
 it.each([
   ["stderr wins", blocked, bindError, bindError],
   ["outside tail", `${blocked}\n${"filler\n".repeat(50_000)}current\n`, undefined, null],

@@ -11,6 +11,7 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
+import type { BackgroundSessionResultProvenance } from "../../sessions/background-session-result.js";
 import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueStateContext,
@@ -29,7 +30,7 @@ import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMessageSendOverrides } from "./message-plan.js";
 import type { MessageSentEvent } from "./message-sent-hook.js";
-import type { DeliveryMirror } from "./mirror.js";
+import type { OutboundSessionRoute } from "./outbound-session.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSendDeps } from "./send-deps.js";
@@ -226,7 +227,26 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   requireUnknownSendReconciliation?: boolean;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
-  mirror?: DeliveryMirror;
+  /** Known destination conversation route; `null` when the caller proved there is none. */
+  transcriptRoute?: OutboundSessionRoute | null;
+  /** @internal Another owner records this send's destination history. */
+  skipDestinationHistory?: boolean;
+  /** @internal Stable delivery identity, independent of provider reconciliation markers. */
+  transcriptDeliveryId?: string;
+  /** @internal State root captured for this delivery; history never follows a later ambient root. */
+  transcriptStateDir?: string;
+  /** Pins destination history to the conversation generation the caller observed. */
+  transcriptExpectedGeneration?: {
+    sessionKey?: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
+  /** Background producer recorded on destination history rows. */
+  transcriptProvenance?: BackgroundSessionResultProvenance;
+  /** Receives warnings when a confirmed send could not be added to history. */
+  onTranscriptDiagnostic?: (message: string) => void;
+  /** Revalidates the producer before destination history is written. */
+  assertTranscriptCurrent?: () => void;
 };
 
 /**

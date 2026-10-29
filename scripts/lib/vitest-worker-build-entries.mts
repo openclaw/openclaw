@@ -28,7 +28,6 @@ import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-co
 import { agentProcessTestEntrypoints } from "../../src/agents/process-runtime.test-support.ts";
 import { sdkStateOwnerFixtureEntrypoint } from "../../src/agents/sandbox/sdk-state-owner-runtime.test-support.ts";
 import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
-import { clawProjectBuildEntrypoint } from "../../src/claws/project-runtime.test-support.ts";
 import {
   adminStateOwnerFixtureEntrypoint,
   cliMessageExitEntrypoints,
@@ -99,6 +98,7 @@ import {
   stateLeaseRetentionRuntimeEntrypoint,
 } from "../../src/state/openclaw-state-lease-runtime.test-support.ts";
 import { groqSetupSdkEntrypoints } from "../../src/system-agent/setup-inference-groq-sdk.test-support.ts";
+import { templateProjectBuildEntrypoint } from "../../src/templates/project-runtime.test-support.ts";
 import { tempDirEntrypoint } from "../../src/test-helpers/temp-dir-runtime.test-support.ts";
 import { transcriptLibraryTimezoneEntrypoint } from "../../src/transcripts/library-timezone-runtime.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
@@ -202,6 +202,7 @@ export const preservedModuleBuildSources = [
   "src/agents/agent-bundle-mcp-manager.ts",
   "src/agents/agent-bundle-mcp-manager-api.ts",
   "src/agents/mcp-auth-profile.integration.test-support.ts",
+  "src/agents/mcp-auth-profile-authorization.ts",
   "src/agents/mcp-auth-profile.ts",
   "src/agents/mcp-auth-profile.runtime.ts",
   "src/agents/auth-profiles/oauth.ts",
@@ -287,6 +288,8 @@ export const preservedModuleBuildAssets = [
 export const vitestWorkerBuildEntries = {
   // Standalone skill discovery loads this sibling only when prepared contributions are absent.
   "plugin-metadata-readers.runtime": "src/plugins/plugin-metadata-readers.runtime.ts",
+  "plugins/test-helpers/installed-plugin-index":
+    "src/plugins/test-helpers/installed-plugin-index.ts",
   "legacy-config-binding-repair.runtime":
     "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts",
   ...createRuntimeProcessBuildEntries([
@@ -305,7 +308,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(proxyCaptureNativeProcessEntrypoints),
     ...Object.values(serviceProcessEnvEntrypoints),
     workerBundleArchiveEntrypoint,
-    clawProjectBuildEntrypoint,
+    templateProjectBuildEntrypoint,
     tempDirEntrypoint,
     ...Object.values(deliveryQueueProcessEntrypoints),
     ...Object.values(externalProxyTestEntrypoints),

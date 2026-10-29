@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as reconciliation from "../../config/sessions/session-transcript-reconcile.js";
-import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
-import type { SessionTranscriptReconcileWorkerMessage } from "../../config/sessions/session-transcript-reconcile.worker.js";
+import {
+  holdReconcileAck,
+  useReconcileWorkerObserver,
+} from "../../config/sessions/session-transcript-reconcile.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "../embedded-agent-runner/run/attempt-transcript-helpers.js";
@@ -73,30 +75,8 @@ it.each([false, true])(
           errorMessage: "Context overflow: prompt too large for the model (mid-turn precheck).",
         }),
       );
-      const held = createDeferred();
-      let releaseAcknowledgement: (() => void) | undefined;
-      let released = false;
-      observer.onTask = ({ input, port, observeMessage }) => {
-        if (input.mode !== "disk" || input.path !== admission.storePath) {
-          return;
-        }
-        const postMessage = port.postMessage.bind(port);
-        let startingTarget = false;
-        observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
-          startingTarget =
-            message.type === "plan-start" && message.plan.sessionId === target.sessionId;
-        });
-        port.postMessage = (message: unknown, transferList) => {
-          const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
-          if (startingTarget && !released) {
-            startingTarget = false;
-            releaseAcknowledgement = () => postMessage(message, options);
-            held.resolve();
-            return;
-          }
-          postMessage(message, options);
-        };
-      };
+      const held = holdReconcileAck(observer, "plan-start", target.sessionId, admission.storePath);
+      let releaseAcknowledgement: (() => void) | undefined = held.release;
       let outcome: ReturnType<typeof finalizeTurn> | undefined;
       try {
         const result = await truncateOversizedToolResultsInSessionManager({
@@ -113,12 +93,7 @@ it.each([false, true])(
           agentId: target.agentId,
           path: admission.storePath,
         });
-        await Promise.race([
-          held.promise,
-          joined.then(() => {
-            throw new Error("expected a deferred projection rebuild");
-          }),
-        ]);
+        await awaitGateBeforeSettlement(held.paused, joined, "projection rebuilt early");
         const terminalEntryId = sessionManager.getLeafId();
         assert(terminalEntryId, "recovery must retain a terminal entry");
         const record = vi.fn();
@@ -149,20 +124,13 @@ it.each([false, true])(
             record,
           },
         });
-        const phase = await Promise.race([
-          waiting.promise.then(() => "waiting"),
-          outcome.then(() => "finished"),
-        ]);
+        await awaitGateBeforeSettlement(waiting.promise, outcome, "finalization bypassed recovery");
         expect(record).not.toHaveBeenCalled();
-        expect(phase, "finalization must not finish without its recovered terminal anchor").toBe(
-          "waiting",
-        );
         if (cancel) {
           controller.abort(new Error("cancelled recovery"));
           await expect(outcome).rejects.toMatchObject({ name: "AbortError" });
           expect(record).not.toHaveBeenCalled();
         } else {
-          released = true;
           releaseAcknowledgement?.();
           releaseAcknowledgement = undefined;
           await outcome;
@@ -176,7 +144,6 @@ it.each([false, true])(
           );
         }
       } finally {
-        released = true;
         releaseAcknowledgement?.();
         await outcome?.catch(() => {});
         await reconciliation.waitForSessionTranscriptIndexReconcile({

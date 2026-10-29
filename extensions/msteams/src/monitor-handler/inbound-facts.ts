@@ -3,7 +3,10 @@ import {
   resolveMSTeamsAdvertisedMedia,
   summarizeMSTeamsHtmlAttachments,
 } from "../attachments/html.js";
-import { extractHtmlFromAttachment } from "../attachments/shared.js";
+import {
+  extractHtmlFromAttachment,
+  replaceTeamsEmojiSpriteImagesWithAltText,
+} from "../attachments/shared.js";
 import type { MSTeamsAttachmentLike } from "../attachments/types.js";
 import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
 import type { StoredConversationReference } from "../conversation-store.js";
@@ -30,10 +33,11 @@ function extractTextFromHtmlAttachments(
       continue;
     }
     const text = htmlToPlainText(
-      normalizeMSTeamsMentionTags(raw, activity, { preserveHtml: true }).replace(
-        /<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis,
-        "$2 $1",
-      ),
+      // Teams emoji sprites are message text: keep their alt text when the
+      // media reference is discarded so emoji-only messages stay deliverable.
+      normalizeMSTeamsMentionTags(replaceTeamsEmojiSpriteImagesWithAltText(raw), activity, {
+        preserveHtml: true,
+      }).replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1"),
     );
     if (text) {
       return text;

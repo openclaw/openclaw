@@ -43,6 +43,8 @@ type WorkerProviderIntentOptions = Pick<
     record: WorkerEnvironmentRecord,
     provider?: WorkerProvider,
     signal?: AbortSignal,
+    retainProviderSettlement?: (settled: Promise<void>) => void,
+    beforeProvision?: () => void,
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
@@ -60,6 +62,7 @@ export type WorkerProviderIntentPreparationOptions = {
   runSetupScript?: boolean;
   signal?: AbortSignal;
   setupAuthorized?: boolean;
+  beforeProvision?: () => void;
 };
 
 function allocationSnapshot(
@@ -551,7 +554,13 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           return existing;
         }
         if (!existing.leaseId && ["requested", "provisioning"].includes(existing.state)) {
-          return resumeProvision(existing, undefined, signal);
+          return resumeProvision(
+            existing,
+            undefined,
+            signal,
+            undefined,
+            createOptions.beforeProvision,
+          );
         }
         return existing;
       }
@@ -579,7 +588,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           assertPreparedIntentCurrent(profileId, admitted);
         },
       );
-      return resumeProvision(intent, provider, signal);
+      return resumeProvision(intent, provider, signal, undefined, createOptions.beforeProvision);
     });
   };
   return { prepareIntent, prepareRetention, assertPreparedIntentCurrent, createWithProfile };

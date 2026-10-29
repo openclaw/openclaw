@@ -158,11 +158,16 @@ export async function prepareDoctorInteractiveMaintenance(params: {
   };
 }
 
-export function showDoctorConfigWriteRefusal(
+export function showDoctorRepairRefusal(
   ctx: DoctorHealthFlowContext,
 ): UpdatePostInstallDoctorResult | undefined {
   if (!ctx.configWriteRefusal) {
-    return undefined;
+    if (ctx.postInstallDoctorResult?.status !== "error") {
+      return undefined;
+    }
+    showDoctorHealthSummary(ctx);
+    showDoctorOutro("Doctor blocked; required repairs remain incomplete.");
+    return ctx.postInstallDoctorResult;
   }
   showDoctorHealthSummary(ctx);
   showDoctorOutro(

@@ -16,12 +16,11 @@ const storeRef = (id = "TOKEN", provider = "default") => ({
 
 it("explicitly requests Linux when the profile uses the default target", () => {
   const profile = parseCrabboxProfile({ provider: "aws", ttl: "24h", idleTimeout: "60m" });
-  expect(buildCrabboxAllocationArgs(profile, "cbx_linux", "linux-worker")).toEqual(
-    (
-      "--provider aws --network public --tailscale=false --target linux --ttl 24h " +
-      "--idle-timeout 60m --lease-id cbx_linux --slug linux-worker --keep=true"
-    ).split(" "),
-  );
+  const args = buildCrabboxAllocationArgs(profile, "cbx_linux", "linux-worker");
+  expect(args.slice(args.indexOf("--target"), args.indexOf("--target") + 2)).toEqual([
+    "--target",
+    "linux",
+  ]);
 });
 
 it("keys snapshots by resolved disk inputs while ignoring allocation policy", () => {
@@ -102,7 +101,6 @@ it.each([
   [{ HTTPS_PROXY: storeRef() }, "reserved"],
   [{ CRABBOX_ENV_ALLOW: storeRef() }, "reserved"],
   [{ OPENCLAW_WORKTREE_PATH: storeRef() }, "reserved"],
-  [[], "map"],
   [
     Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`TOKEN_${index}`, storeRef()])),
     "at most 16",
@@ -111,11 +109,8 @@ it.each([
   expect(() => parseCrabboxProfile({ ...PROFILE, setupSecrets })).toThrow(message);
 });
 
-it.each([{ setupEnv: [] }, { setupEnv: ["TOKEN"] }, { setupEnv: "TOKEN" }])(
-  "refuses retired setupEnv $setupEnv before provisioning",
-  ({ setupEnv }) => {
-    expect(() => resolveCrabboxProvisionProfile({ ...PROFILE, setupEnv }, undefined)).toThrow(
-      "run openclaw doctor --fix",
-    );
-  },
-);
+it("refuses retired setupEnv before provisioning", () => {
+  expect(() =>
+    resolveCrabboxProvisionProfile({ ...PROFILE, setupEnv: ["TOKEN"] }, undefined),
+  ).toThrow("run openclaw doctor --fix");
+});

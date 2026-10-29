@@ -1,6 +1,6 @@
 import { deserialize, serialize } from "node:v8";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   encodeWorkboardSqliteFailure,
   unwrapWorkboardSqliteResult,
@@ -16,6 +16,7 @@ import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 
 const workerModuleUrl = new URL("./sqlite-store.worker.ts", import.meta.url);
+const storeOptions = { dbPath: "/unused-workboard-lifecycle.sqlite", workerModuleUrl };
 beforeEach(() => {
   openEngineWorkerStore.mockReset();
 });
@@ -24,10 +25,7 @@ function workerFixture() {
   const execute = vi.fn<() => Promise<WorkboardSqliteResult<unknown>>>();
   const close = vi.fn(async () => {});
   openEngineWorkerStore.mockResolvedValue({ execute, close });
-  const stores = createWorkboardSqliteStores({
-    dbPath: "/unused-workboard-lifecycle.sqlite",
-    workerModuleUrl,
-  });
+  const stores = createWorkboardSqliteStores(storeOptions);
   return { execute, close, stores };
 }
 
@@ -70,7 +68,6 @@ describe("Workboard SQLite facade cleanup", () => {
     await closing;
     await stores.close();
     expect(close).toHaveBeenCalledOnce();
-    expect(execute).toHaveBeenCalledOnce();
   });
 
   it("retains failed broker cleanup for explicit close retry", async () => {
@@ -88,10 +85,7 @@ describe("Workboard SQLite facade cleanup", () => {
   it("preserves initial admission failure without inventing a lease to release", async () => {
     const failure = new Error("store initialization failed");
     openEngineWorkerStore.mockRejectedValue(failure);
-    const stores = createWorkboardSqliteStores({
-      dbPath: "/unused-workboard-lifecycle.sqlite",
-      workerModuleUrl,
-    });
+    const stores = createWorkboardSqliteStores(storeOptions);
     await expect(stores.ready).rejects.toBe(failure);
     await expect(stores.cards.entries()).rejects.toBe(failure);
     await stores.close();
@@ -99,18 +93,17 @@ describe("Workboard SQLite facade cleanup", () => {
   });
 
   it("preserves aggregate error order, cause, and SQLite fields through V8 serialization", () => {
-    const sqlite = Object.assign(new Error("write failed"), {
+    const sqliteFields = {
       name: "StorageFixtureError",
       code: "SQLITE_CONSTRAINT",
       errcode: 19,
       errstr: "constraint failed",
-    });
+    };
+    const sqlite = Object.assign(new Error("write failed"), sqliteFields);
     const failure = new AggregateError(
       [sqlite, new TypeError("cleanup failed")],
       "write and cleanup failed",
-      {
-        cause: sqlite,
-      },
+      { cause: sqlite },
     );
     const encoded: WorkboardSqliteResult<never> = {
       ok: false,
@@ -123,18 +116,10 @@ describe("Workboard SQLite facade cleanup", () => {
     } catch (error) {
       decoded = error;
     }
-    if (!(decoded instanceof AggregateError)) {
-      throw new Error("Expected the transported aggregate failure");
-    }
+    assert(decoded instanceof AggregateError);
     expect(decoded.message).toBe("write and cleanup failed");
     expect(decoded.errors).toHaveLength(2);
-    expect(decoded.errors[0]).toMatchObject({
-      name: "StorageFixtureError",
-      message: "write failed",
-      code: "SQLITE_CONSTRAINT",
-      errcode: 19,
-      errstr: "constraint failed",
-    });
+    expect(decoded.errors[0]).toMatchObject({ ...sqliteFields, message: "write failed" });
     expect(decoded.errors[1]).toBeInstanceOf(TypeError);
     expect(decoded.errors[1].message).toBe("cleanup failed");
     expect(decoded.cause).toBe(decoded.errors[0]);

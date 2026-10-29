@@ -317,6 +317,9 @@ This metadata lets an operator see how a card moved through the board without
 opening the linked session. It is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
+Card create/update RPCs reject unsupported top-level `metadata` keys with an error
+naming the keys, rather than accepting data that will not be stored.
+
 New and edited comments are limited to 2000 characters. Unchanged stored comment
 bodies, including older oversized comments, retain their exact text during dispatch
 and other card updates. The existing per-card metadata budget still applies.

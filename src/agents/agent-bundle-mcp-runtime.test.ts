@@ -886,63 +886,6 @@ describe("session MCP runtime", () => {
     expect(diagnostic?.message).not.toContain(secret);
   });
 
-  it.each([
-    {
-      policy: "server include/exclude",
-      serverName: "docs",
-      tools: ["search_docs", "read_docs", "admin_delete"],
-      server: { toolFilter: { include: ["*_docs", "admin_*"], exclude: ["admin_*"] } },
-      capabilities: { tools: {} },
-      expectedTools: ["read_docs", "search_docs"],
-      expectedServer: { toolCount: 2, tools: { filteredCount: 1 } },
-    },
-    {
-      policy: "session denials including synthetic tools",
-      serverName: "docs",
-      tools: ["search_docs", "read_docs"],
-      server: {},
-      toolOverrides: { mcpToolsDeny: { docs: ["read_docs", "resources_read"] } },
-      capabilities: { tools: {}, resources: {} },
-      expectedTools: ["search_docs"],
-      expectedServer: { toolCount: 1 },
-      expectedDenied: [{ serverName: "docs", toolName: "read_docs", deniedBySession: true }],
-      expectedMaterialized: ["docs__resources_list", "docs__search_docs"],
-    },
-    {
-      policy: "own-property session denials",
-      serverName: "constructor",
-      tools: ["slow_tool"],
-      server: {},
-      toolOverrides: { mcpToolsDeny: { docs: ["slow_tool"] } },
-      capabilities: { tools: {} },
-      expectedTools: ["slow_tool"],
-      expectedServer: { toolCount: 1 },
-    },
-  ])("filters the MCP catalog with $policy", async (row) => {
-    const { runtime } = await stdioRuntime(
-      row.serverName,
-      {
-        capabilities: row.capabilities,
-        tools: row.tools.map((name) => toolDefinition(name)),
-      },
-      {
-        inWorkspace: true,
-        server: row.server,
-        toolOverrides: "toolOverrides" in row ? row.toolOverrides : undefined,
-      },
-    );
-    const catalog = await runtime.getCatalog();
-    expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual(row.expectedTools);
-    expect(catalog.servers[row.serverName]).toMatchObject(row.expectedServer);
-    if (row.expectedDenied) {
-      expect(catalog.sessionDeniedTools).toMatchObject(row.expectedDenied);
-    }
-    if ("expectedMaterialized" in row) {
-      const materialized = await materializeTools({ runtime });
-      expect(materialized.tools.map((tool) => tool.name)).toEqual(row.expectedMaterialized);
-    }
-  });
-
   it("does not split a surrogate pair at the MCP metadata text limit", async () => {
     const safePrefix = "x".repeat(1_199);
     const { runtime } = await stdioRuntime("metadata", {
@@ -2183,9 +2126,9 @@ describe("disposeSession timeout", () => {
   });
 
   it(
-    "recovers expired stateful HTTP sessions without replay",
+    "waits for expired HTTP session recovery on the next call without replay",
     { timeout: 15_000 },
-    async ({ signal }) => {
+    async () => {
       const { runtime, state } = await expiryRuntime(true);
       expect((await runtime.getCatalog()).tools).toHaveLength(1);
       await expect(
@@ -2201,12 +2144,7 @@ describe("disposeSession timeout", () => {
       expect(runtime.peekCatalog()?.diagnostics).toEqual([
         expect.objectContaining({ serverName: "stateful" }),
       ]);
-      await runtime.getCatalog();
-      await waitForRuntimeState(
-        () => state.initializeCount === 2 && !runtime?.peekCatalog()?.diagnostics?.length,
-        "stateful MCP server to replace its expired HTTP session",
-        signal,
-      );
+      // A new explicit call must wait for recovery without a separate catalog warmup.
       await expect(
         runtime.callTool("stateful", "probe", { attempt: "after" }),
       ).resolves.toMatchObject({

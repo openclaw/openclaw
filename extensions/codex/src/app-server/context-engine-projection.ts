@@ -1,6 +1,7 @@
 import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
 import {
   isOpenClawRuntimeContextCustomMessage,
+  isTranscriptOnlyOpenClawAssistantMessage,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
@@ -452,6 +453,9 @@ type MessageRenderOptions = {
 };
 
 export function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
+  if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    return "";
+  }
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
     return message.summary.trim();

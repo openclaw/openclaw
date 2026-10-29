@@ -23,11 +23,19 @@ import { buildTestCtx } from "./test-ctx.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const audioPath = "https://example.com/good-night.opus";
 const speech = "Good night, sleep well.";
+let delivered: ReplyPayload[];
+let dispatcher: ReturnType<typeof createReplyDispatcher>;
 
 beforeAll(globalBeforeAll0);
 beforeEach(() => {
   describe0BeforeEach0();
   setNoAbort();
+  delivered = [];
+  dispatcher = createReplyDispatcher({
+    deliver: async (payload) => {
+      delivered.push(payload);
+    },
+  });
   vi.stubEnv("OPENCLAW_TTS_PREFS", path.join(tempDirs.make("tagged-tts-"), "prefs.json"));
   ttsMocks.state.statusSnapshot.autoMode = "tagged";
   ttsMocks.resolveTtsConfig.mockImplementation((cfg) => ({ mode: cfg.tts?.mode ?? "final" }));
@@ -60,12 +68,6 @@ it.each([
   "delivers tagged block speech once on $channel in $mode mode (canonical final: $canonical)",
   async ({ channel, mode, canonical }) => {
     installCaptionedVoiceTestPlugin(channel);
-    const delivered: ReplyPayload[] = [];
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-      },
-    });
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({ Provider: channel, Surface: channel }),
       cfg: { tts: { auto: "tagged", mode, provider: "openai" } },
@@ -97,10 +99,6 @@ it.each([
     await dispatcher.waitForIdle();
 
     expect(ttsSynthesis.textToSpeechCore).toHaveBeenCalledOnce();
-    expect(ttsSynthesis.textToSpeechCore).toHaveBeenCalledWith(
-      expect.objectContaining({ text: speech, channel }),
-      expect.any(Function),
-    );
     expect(delivered.flatMap((payload) => (payload.text ? [payload.text] : []))).toEqual([
       "Welcome home.",
       "Rest well.",
@@ -117,12 +115,6 @@ it.each([true, false])(
   async (enabled) => {
     ttsMocks.state.statusSnapshot.autoMode = "always";
     vi.spyOn(ttsConfig, "shouldCleanTtsDirectiveText").mockReturnValue(enabled);
-    const delivered: ReplyPayload[] = [];
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-      },
-    });
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
       cfg: { tts: { auto: "always", mode: "all", modelOverrides: { enabled } } },

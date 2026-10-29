@@ -17,6 +17,7 @@ import type {
 import { mapSessionResultRows } from "./reconcile.ts";
 import { createSessionArchiveState } from "./session-archive-state.ts";
 import { createOptimisticArchivePatches, deferSessionPatch } from "./session-deferred-patch.ts";
+import { createHiddenRunReads } from "./session-hidden-run-reads.ts";
 import { createSessionModelOverrides } from "./session-model-overrides.ts";
 import { withSessionMutationOperations } from "./session-mutation-operations.ts";
 import type { SessionMutationsHost } from "./session-mutations-host.ts";
@@ -64,6 +65,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     category: optimisticCategories,
   };
   const optimisticUnread = createOptimisticRowField(host, "unread");
+  const acknowledgeHiddenRuns = createHiddenRunReads(host, optimisticUnread);
   const optimisticArchive = createOptimisticArchivePatches(host);
   const settingsPatches = createOptimisticSettingsPatches(host);
   const rowPatches: Array<
@@ -453,6 +455,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return conversation ? settingsPatches.read(conversation.identity) : undefined;
     },
     patchMany,
+    acknowledgeHiddenRuns,
     assignOwner,
     patchRowLocal,
     /** Confirmed archive facts precede in-flight row intents on every presentation. */

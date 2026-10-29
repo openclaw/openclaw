@@ -2,6 +2,7 @@ import { closeSync, openSync, writeSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { CDPSession, Page } from "playwright/test";
+import type { ControlUiMockGateway } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 
 type HeapSnapshot = {
   snapshot: { meta: { node_fields: string[]; node_types: (string | string[])[] } };
@@ -89,6 +90,7 @@ type ClosedSample = {
   jsEventListeners: number;
   visibility: DocumentVisibilityState;
   elements: number;
+  fixtureRequests: number;
 };
 
 /** Callback results must be asserted through visible UI, without retained DOM handles. */
@@ -119,7 +121,9 @@ export async function runPluginViewLeakCheck(options: {
   const timeOrigin = await page.evaluate(() => performance.timeOrigin);
   const reportFile = path.join(options.outputDir, "leak-check.json");
   const baselineFile = path.join(options.outputDir, "baseline.heapsnapshot");
+  const middleFile = path.join(options.outputDir, "middle.heapsnapshot");
   const finalFile = path.join(options.outputDir, "final.heapsnapshot");
+  const releasedFile = path.join(options.outputDir, "fixture-history-released.heapsnapshot");
   const samples: ClosedSample[] = [];
   const report = {
     status: "running" as "running" | "completed" | "failed",
@@ -131,19 +135,29 @@ export async function runPluginViewLeakCheck(options: {
     protocol: {
       gcPassesPerSample: 2,
       nativeDetachednessValue: 2,
-      snapshotFiles: { baseline: baselineFile, final: finalFile },
+      snapshotFiles: {
+        baseline: baselineFile,
+        middle: rounds > 1 ? middleFile : undefined,
+        final: finalFile,
+        fixtureHistoryReleased: releasedFile,
+      },
       notes:
         "Same document and CDP session throughout. Closed samples follow visible UI assertions and two explicit GC requests. Counts include the host, synthetic transport and probe overhead. Snapshots are outside timing measurements. Growth is evidence for retainer analysis, not a universal pass/fail or leak verdict.",
     },
     samples,
     snapshots: {} as {
       baseline?: Awaited<ReturnType<typeof takeHeapSnapshot>>;
+      middle?: Awaited<ReturnType<typeof takeHeapSnapshot>>;
       final?: Awaited<ReturnType<typeof takeHeapSnapshot>>;
+      fixtureHistoryReleased?: Awaited<ReturnType<typeof takeHeapSnapshot>>;
     },
+    fixtureHistoryRelease: undefined as
+      | { releasedRequests: number; sample: ClosedSample }
+      | undefined,
     error: undefined as string | undefined,
   };
   const save = () => writeFile(reportFile, `${JSON.stringify(report, null, 2)}\n`);
-  const sampleClosed = async (round: number, verifiedUpdates: number) => {
+  const sampleClosed = async (round: number, verifiedUpdates: number, record = true) => {
     await options.settle();
     await cdp.send("HeapProfiler.collectGarbage");
     await cdp.send("HeapProfiler.collectGarbage");
@@ -153,13 +167,16 @@ export async function runPluginViewLeakCheck(options: {
       visibility: window.document.visibilityState,
       elements: window.document.getElementsByTagName("*").length,
       timeOrigin: performance.timeOrigin,
+      fixtureRequests:
+        (window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
+          .openclawControlUiE2eGateway?.requests.length ?? 0,
     }));
     if (document.timeOrigin !== timeOrigin) {
       throw new Error(
         "Leak check navigated to a different document; snapshot IDs are not comparable",
       );
     }
-    samples.push({
+    const sample: ClosedSample = {
       round,
       verifiedUpdates,
       totalVerifiedUpdates: round * updatesPerRound,
@@ -167,11 +184,15 @@ export async function runPluginViewLeakCheck(options: {
       heapUsedBytes: heap.usedSize,
       ...dom,
       ...document,
-    });
-    await save();
+    };
+    if (record) {
+      samples.push(sample);
+      await save();
+    }
+    return sample;
   };
   await save();
-  // Keep HeapProfiler enabled across both snapshots so node IDs can be compared.
+  // Keep HeapProfiler enabled across snapshots so node IDs can be compared.
   await cdp.send("HeapProfiler.enable");
   try {
     await options.close();
@@ -185,8 +206,47 @@ export async function runPluginViewLeakCheck(options: {
       }
       await options.close();
       await sampleClosed(round, updatesPerRound);
+      if (round === Math.floor(rounds / 2) && round < rounds) {
+        report.snapshots.middle = await takeHeapSnapshot(cdp, middleFile);
+        await save();
+      }
     }
     report.snapshots.final = await takeHeapSnapshot(cdp, finalFile);
+    // Preserve all primary samples, then test the fixture's intentional history
+    // separately so its retained request records are not attributed to the view.
+    const releasedRequests = await page.evaluate(() => {
+      const gateway = (window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
+        .openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("Leak check requires the synthetic Gateway fixture");
+      }
+      const count = gateway.requests.length;
+      gateway.requests.length = 0;
+      return count;
+    });
+    report.fixtureHistoryRelease = {
+      releasedRequests,
+      sample: await sampleClosed(rounds, 0, false),
+    };
+    report.snapshots.fixtureHistoryReleased = await takeHeapSnapshot(cdp, releasedFile);
+    // Resolve heap location script IDs after the primary captures; enabling the
+    // debugger earlier can affect the code/JIT population being investigated.
+    const scripts: { scriptId: string; url: string; sourceMapURL?: string }[] = [];
+    const onScript = (script: (typeof scripts)[number]) => {
+      scripts.push({
+        scriptId: script.scriptId,
+        url: script.url,
+        sourceMapURL: script.sourceMapURL,
+      });
+    };
+    cdp.on("Debugger.scriptParsed", onScript);
+    try {
+      await cdp.send("Debugger.enable");
+      await writeFile(path.join(options.outputDir, "scripts.json"), `${JSON.stringify(scripts)}\n`);
+    } finally {
+      cdp.off("Debugger.scriptParsed", onScript);
+      await cdp.send("Debugger.disable");
+    }
     report.status = "completed";
     return report;
   } catch (error) {

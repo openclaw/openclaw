@@ -502,6 +502,15 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const headers = normalizeStringMap(value.headers);
   const defaultModel = normalizeOptionalString(value.defaultModel) ?? "";
   const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
+  // Keyed by the vendor prefix of a routed model id; lookups lowercase that prefix.
+  const defaultUtilityModels = normalizeCatalogRecords(
+    value.defaultUtilityModels,
+    (vendor, modelId) => {
+      const id = normalizeOptionalString(modelId) ?? "";
+      return vendor && !isBlockedObjectKey(vendor) && id ? id : undefined;
+    },
+    (vendor) => normalizeOptionalString(vendor)?.toLowerCase() ?? "",
+  );
   const family = normalizeModelFamily(value.family);
   return {
     ...(authScope ? { authScope } : {}),
@@ -511,6 +520,7 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
     ...(family ? { family } : {}),
     ...(defaultModel ? { defaultModel } : {}),
     ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
+    ...(defaultUtilityModels ? { defaultUtilityModels } : {}),
     models,
   };
 }
@@ -644,12 +654,20 @@ export function normalizeModelCatalog(
       : undefined;
   });
   const runtimeAugment = value.runtimeAugment === true;
+  const configuredEndpointDiscovery = [
+    ...new Set(
+      normalizeTrimmedStringList(value.configuredEndpointDiscovery)
+        .map(normalizeProviderId)
+        .filter((provider) => discovery?.[provider] === "runtime"),
+    ),
+  ];
   const catalog = {
     ...(Object.keys(modelsDev).length > 0 ? { modelsDev } : {}),
     ...(providers ? { providers } : {}),
     ...(aliases ? { aliases } : {}),
     ...(suppressions ? { suppressions } : {}),
     ...(discovery ? { discovery } : {}),
+    ...(configuredEndpointDiscovery.length > 0 ? { configuredEndpointDiscovery } : {}),
     ...(runtimeAugment ? { runtimeAugment } : {}),
   } satisfies ModelCatalog;
   return Object.keys(catalog).length > 0 ? catalog : undefined;

@@ -72,12 +72,12 @@ it("coalesces snapshot progress while its receipt is settling", async () => {
   await fs.writeFile(
     worker,
     `
-    import fs from "node:fs";
     let input = "";
     for await (const chunk of process.stdin) input += chunk;
     const request = JSON.parse(input);
+    // Buffer the burst so a full nonblocking stderr pipe cannot truncate it.
     for (let i = 0; i < 256; i++) {
-      fs.writeSync(2, "State schema progress: " + JSON.stringify({phase: "copy-" + i}) + "\\n");
+      process.stderr.write("State schema progress: " + JSON.stringify({phase: "copy-" + i}) + "\\n");
     }
     process.stdout.write(JSON.stringify(request.mode === "inventory"
       ? {databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json"}
@@ -175,6 +175,7 @@ it.each([
         });
       }
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 400_000);
+      const perfClock = vi.spyOn(performance, "now").mockReturnValue(Date.now() + 400_000);
       if (settled) {
         controller.abort(new Error("Update validation deadline expired during progress recording"));
       } else {
@@ -183,6 +184,7 @@ it.each([
       pendingReceipt.resolve();
       const result = await operation;
       clock.mockRestore();
+      perfClock.mockRestore();
       expect(result).toMatchObject({
         status: "error",
         phase: "snapshot",

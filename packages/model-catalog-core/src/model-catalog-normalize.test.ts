@@ -27,6 +27,7 @@ const windows = [
 const wire = { api: "openai-responses", baseUrl: "https://api.test", headers: { x: "y" } };
 const scope = { baseUrlHosts: ["api.test"], providerConfigApiIn: ["qwen", "modelstudio"] };
 const suppression = { provider: "alias", model: "m", reason: "retired", when: scope };
+const utility = { defaultUtilityModel: "u", defaultUtilityModels: { vendor: "vendor/small" } };
 it.each<[string, unknown, unknown]>([
   [
     "providers",
@@ -35,11 +36,12 @@ it.each<[string, unknown, unknown]>([
         ...wire,
         defaultModel: " m ",
         defaultUtilityModel: " u ",
+        defaultUtilityModels: { " Vendor ": " vendor/small ", blank: " " },
         models: [{ id: "m" }, { id: "" }],
       },
       other: { models: [{ id: "x" }] },
     },
-    { openai: { ...wire, defaultModel: "m", defaultUtilityModel: "u", models: [{ id: "m" }] } },
+    { openai: { ...wire, defaultModel: "m", ...utility, models: [{ id: "m" }] } },
   ],
   [
     "aliases",
@@ -52,10 +54,7 @@ it.each<[string, unknown, unknown]>([
       {
         ...suppression,
         provider: "Alias",
-        when: {
-          baseUrlHosts: ["API.TEST"],
-          providerConfigApiIn: ["Qwen", "ModelStudio"],
-        },
+        when: { baseUrlHosts: ["API.TEST"], providerConfigApiIn: ["Qwen", "ModelStudio"] },
       },
     ],
     [suppression],
@@ -370,11 +369,7 @@ const invalidV2: Rejection[] = [
   [{ pricing: {} }],
 ];
 for (const recommendedModels of [["vendor/model", " vendor/model "], [" "], ["second-only"]]) {
-  invalidV2.push([
-    {
-      providers: { first: { recommendedModels }, second: {} },
-    },
-  ]);
+  invalidV2.push([{ providers: { first: { recommendedModels }, second: {} } }]);
 }
 for (const pricing of [
   { "vendor/model": { input: 1, output: 2 } },
@@ -479,17 +474,10 @@ it("strips v2 transport metadata while preserving transport-like provider identi
     },
     { ...validBundleV2.models[1], provider: "baseUrl" },
   ];
-  const bundle = sanitizeV2({
-    ...validBundleV2,
-    providers: { headers: {}, baseUrl: {} },
-    models,
-  });
+  const bundle = sanitizeV2({ ...validBundleV2, providers: { headers: {}, baseUrl: {} }, models });
   expect(Object.keys(bundle.providers)).toEqual(["headers", "baseUrl"]);
   expect(bundle.models.map((model) => model.provider)).toEqual(["headers", "baseUrl"]);
-  expect(bundle.models[0]).toEqual({
-    ...models[0],
-    compat: { supportsTools: true, nested: {} },
-  });
+  expect(bundle.models[0]).toEqual({ ...models[0], compat: { supportsTools: true, nested: {} } });
   expect(() => parseV2(bundle)).not.toThrow();
 });
 
@@ -516,4 +504,19 @@ it("negotiates task metadata only on v3 and rejects malformed declarations per r
   expect(admitted.models[0]).toMatchObject({ inference, compat: { nested: {} } });
   expect(admitted.providers.first?.recommendedModels).toEqual([]);
   expect(warn).toHaveBeenCalledOnce();
+});
+
+it("limits configured-origin discovery to owned runtime catalogs", () => {
+  expect(
+    normalize(
+      {
+        discovery: { live: "runtime", cached: "refreshable", fixed: "static", other: "runtime" },
+        configuredEndpointDiscovery: [" LIVE ", "live", "cached", "fixed", "other", "missing"],
+      },
+      ["live", "cached", "fixed", "missing"],
+    ),
+  ).toEqual({
+    discovery: { live: "runtime", cached: "refreshable", fixed: "static" },
+    configuredEndpointDiscovery: ["live"],
+  });
 });

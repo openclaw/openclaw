@@ -1,6 +1,12 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import { readTerminalSourceReplyDeliveryMirror } from "../../../shared/chat-message-content.js";
 import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
+import {
+  parseInlineDirectives,
+  stripInlineDirectiveTagsForDelivery,
+} from "../../../utils/directive-tags.js";
+import { prepareTerminalAssistantReply } from "../../assistant-terminal-reply.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
@@ -117,7 +123,24 @@ export async function readSubagentRunFinalAnswerUsing(
         ?.event;
     }
     assertCurrent?.();
-    return (isRecord(event) ? extractStoredAssistantText(event.message) : undefined) || undefined;
+    const message = isRecord(event) ? asOptionalObjectRecord(event.message) : undefined;
+    // Explicit delivery records already own their display text, including literal NO_REPLY.
+    // Parent review keeps media references as data rather than extracting channel attachments.
+    const answer =
+      message?.display === true || readTerminalSourceReplyDeliveryMirror(message)
+        ? extractStoredAssistantText(message)
+        : stripInlineDirectiveTagsForDelivery(
+            parseInlineDirectives(
+              prepareTerminalAssistantReply(
+                message && {
+                  content: typeof message.text === "string" ? message.text : message.content,
+                  stopReason: message.stopReason,
+                  phase: message.phase,
+                },
+              ).text,
+            ).text,
+          ).text;
+    return answer || undefined;
   });
 }
 
@@ -126,10 +149,6 @@ function describeSubagentOutcome(child: ChildCompletionRow): string {
   if (child.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
     const error = outcome?.error?.trim();
     return error ? `cancelled: ${error}` : "cancelled";
-  }
-  if (child.execution.interruptionReason === "gateway-restart") {
-    const error = outcome?.error?.trim();
-    return error ? `interrupted by gateway restart: ${error}` : "interrupted by gateway restart";
   }
   if (!outcome) {
     return "unknown";
@@ -149,10 +168,7 @@ export type ChildCompletionRow = Pick<
   "childSessionKey" | "task" | "taskName" | "label" | "createdAt" | "endedReason"
 > & {
   announceResult?: string;
-  execution: Pick<
-    SubagentRunRecord["execution"],
-    "endedAt" | "outcome" | "transcriptTarget" | "interruptionReason"
-  >;
+  execution: Pick<SubagentRunRecord["execution"], "endedAt" | "outcome" | "transcriptTarget">;
   completion?: Partial<
     Pick<
       NonNullable<SubagentRunRecord["completion"]>,

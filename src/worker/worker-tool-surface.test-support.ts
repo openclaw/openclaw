@@ -147,7 +147,7 @@ export function createWorkerHelloForTest(
   };
 }
 
-export function createEmptyWorkerToolSurfaceForTest(): WorkerToolSurface {
+function createEmptyWorkerToolSurfaceForTest(): WorkerToolSurface {
   return {
     generation: "runtime-surface",
     presentation: createToolSurfacePresentationForTest(),

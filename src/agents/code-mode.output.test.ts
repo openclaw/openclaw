@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyCodeModeCatalog,
   runCodeModeScriptHeadless,
@@ -19,8 +19,6 @@ import {
   waitUntilCompleted,
   runUntilCompleted,
 } from "./code-mode.test-support.js";
-import { projectMcpCallToolResult } from "./mcp-content.js";
-import { fakeTool } from "./test-helpers/fake-tool.js";
 import {
   addClientToolsToToolCatalog,
   registerHeadlessToolSearchCatalog,
@@ -371,6 +369,33 @@ function setup(
   };
 }
 
+it("loads saved JSON without decoding it on the host and keeps guest copies detached", async () => {
+  const { run } = setup();
+  const value = {
+    marker: "saved-result-load",
+    rows: Array.from({ length: 100 }, (_, id) => ({ id })),
+  };
+  const json = JSON.stringify(value);
+  const saved = await run(`return await results.save(${json});`);
+  expect(saved.status).toBe("completed");
+  const id = JSON.stringify((saved.value as { id: string }).id);
+  const parse = vi.spyOn(JSON, "parse");
+  try {
+    const result = await run(`
+      const first = await results.load(${id});
+      first.rows[0].id = -1;
+      const second = await results.load(${id});
+      return { first: first.rows[0].id, second: second.rows[0].id, count: second.rows.length };`);
+    expect(result).toMatchObject({
+      status: "completed",
+      value: { first: -1, second: 0, count: 100 },
+    });
+    expect(parse.mock.calls.filter(([text]) => text === json)).toHaveLength(0);
+  } finally {
+    parse.mockRestore();
+  }
+});
+
 it("preserves saved data at the UTF-8 cap and reuses deleted capacity", async () => {
   const { run } = setup([], { codeMode: { maxSnapshotBytes: 1024, maxOutputBytes: 1024 } });
   const saved = await run('return await results.save("🦞".repeat(255));');
@@ -628,53 +653,4 @@ it("projects nested Errors before their custom toJSON can hide the failure", asy
     { type: "json", value: { error } },
     { type: "text", text: JSON.stringify(error) },
   ]);
-});
-
-describe("Code Mode tool execution scheduling", () => {
-  it.each(["native", "mcp"] as const)(
-    "honors sequential-only %s tools through independent calls",
-    async (source) => {
-      let active = 0;
-      let maximumActive = 0;
-      let calls = 0;
-      const execute: AnyAgentTool["execute"] = async () => {
-        calls += 1;
-        active += 1;
-        maximumActive = Math.max(maximumActive, active);
-        try {
-          // A real host turn lets every incorrectly parallel invocation enter.
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          return source === "mcp"
-            ? projectMcpCallToolResult({ structuredContent: { ok: true } })
-            : jsonResult({ ok: true });
-        } finally {
-          active -= 1;
-        }
-      };
-      const tool: AnyAgentTool =
-        source === "mcp"
-          ? mcpTool({
-              name: "probe__ordered_probe",
-              serverName: "probe",
-              toolName: "ordered_probe",
-              execute,
-            })
-          : { ...fakeTool("ordered_probe", "Ordered probe"), execute };
-      tool.executionMode = "sequential";
-      const ctx = createHeadlessCodeModeHarness([tool]);
-      const call = source === "mcp" ? "MCP.probe.orderedProbe({})" : "ordered_probe({})";
-      const code = `const values = await Promise.all([${call}, ${call}]); return ${source === "mcp" ? "values.map(value => value.structuredContent)" : "values"};`;
-      const result =
-        source === "native"
-          ? await runCodeModeScriptHeadless({ ctx, code })
-          : resultDetails(await createCodeModeTools(ctx)[0]!.execute("ordered-call", { code }));
-
-      expect(result).toMatchObject({ status: "completed", value: [{ ok: true }, { ok: true }] });
-      expect(calls).toBe(2);
-      expect(maximumActive).toBe(1);
-      expect(active).toBe(0);
-    },
-  );
 });

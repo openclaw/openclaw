@@ -1,5 +1,6 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRunExit } from "../agents/bash-tools.exec-runtime.test-support.js";
 import * as safeCwd from "../infra/safe-cwd.js";
 import {
   getProcessSupervisor,
@@ -104,16 +105,7 @@ function createSettlingSpawn(params: { stdout?: string[]; stderr?: string[]; err
         if (params.error) {
           throw params.error;
         }
-        return {
-          reason: "exit",
-          exitCode: 0,
-          exitSignal: null,
-          durationMs: 0,
-          stdout: "",
-          stderr: "",
-          timedOut: false,
-          noOutputTimedOut: false,
-        };
+        return createRunExit({ durationMs: 0 });
       },
       cancel: vi.fn(),
       detachOutput: vi.fn(),

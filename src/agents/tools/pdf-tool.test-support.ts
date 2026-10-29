@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtract from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
-import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import * as authProfiles from "../auth-profiles.js";
 import * as modelAuth from "../model-auth.js";
@@ -23,16 +22,13 @@ export function stubPdfInput(text = "PDF") {
   vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({ text, images: [] });
 }
 
-type StubPreparedRuntimeSnapshot = {
+// Empty prepared facts leave model resolution to each fixture's registry.
+export function withPreparedRuntimeFacts(snapshot: {
   agentDir: string;
   config: OpenClawConfig;
   workspaceDir?: string;
-  pluginRegistry?: PluginRegistry;
   createStores: () => { authStorage: unknown; modelRegistry: unknown };
-};
-
-// Empty prepared facts leave model resolution to each fixture's registry.
-export function withPreparedRuntimeFacts(snapshot: StubPreparedRuntimeSnapshot) {
+}) {
   return {
     ...snapshot,
     metadataSnapshot: createEmptyPluginMetadataSnapshot(snapshot.workspaceDir),
@@ -80,15 +76,9 @@ export function createPdfToolInfraStub(completeMock: Mock) {
       provider?: string;
       input?: string[];
       api?: string;
-      modelFound?: boolean;
-      pluginRegistry?: PluginRegistry;
     } = {},
   ) {
-    const {
-      provider = "anthropic",
-      input: modalities = ["text", "document"],
-      pluginRegistry,
-    } = params;
+    const { provider = "anthropic", input: modalities = ["text", "document"] } = params;
     if (provider === "openai") {
       vi.stubEnv("OPENAI_API_KEY", "test-key");
     }
@@ -97,8 +87,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
       loadSpy.mockResolvedValue(FAKE_PDF_MEDIA);
     }
 
-    const setRuntimeApiKey = vi.fn();
-    const authStorage = { setRuntimeApiKey };
+    const authStorage = { setRuntimeApiKey: vi.fn() };
     const model = {
       baseUrl: "https://pdf-fixture.invalid/v1",
       provider,
@@ -106,11 +95,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
       maxTokens: 8192,
       input: modalities,
     };
-    const modelRegistry = createPdfModelRegistry((_provider, id) =>
-      params.modelFound === false ? null : { id, name: id, ...model },
-    );
-    const createStores = () => ({ authStorage, modelRegistry });
-    const release = vi.fn(async () => {});
+    const modelRegistry = createPdfModelRegistry((_provider, id) => ({ id, name: id, ...model }));
     vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
       async ({ agentDir: capturedAgentDir, config, workspaceDir }) =>
         ({
@@ -118,10 +103,9 @@ export function createPdfToolInfraStub(completeMock: Mock) {
             agentDir: capturedAgentDir,
             config,
             workspaceDir,
-            pluginRegistry,
-            createStores,
+            createStores: () => ({ authStorage, modelRegistry }),
           }),
-          [Symbol.asyncDispose]: release,
+          [Symbol.asyncDispose]: async () => {},
         }) as never,
     );
 
@@ -132,7 +116,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
     auth.mockResolvedValue({ apiKey: "test-key", mode: "api-key", source: "fixture" });
     vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
 
-    return { loadSpy, release, setRuntimeApiKey };
+    return { loadSpy, setRuntimeApiKey: authStorage.setRuntimeApiKey };
   }
 
   return { createPdfModelRegistry, stubPdfToolInfra };

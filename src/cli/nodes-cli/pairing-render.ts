@@ -1,4 +1,4 @@
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { renderTable } from "../../../packages/terminal-core/src/table.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
@@ -16,12 +16,10 @@ export function renderPendingPairingRequestsTable(params: {
 }) {
   const { pending, now, tableWidth, theme } = params;
   const rows = pending.map((r) => ({
-    Request: sanitizeTerminalText(r.requestId),
-    Node: sanitizeTerminalText(r.displayName?.trim() || r.nodeId),
-    IP: sanitizeTerminalText(r.remoteIp ?? ""),
-    Scopes: sanitizeTerminalText(
-      resolveNodePairApprovalScopes(r.commands, r.requiredApproveScopes).join(", "),
-    ),
+    Request: terminalText`${r.requestId}`,
+    Node: terminalText`${r.displayName?.trim() || r.nodeId}`,
+    IP: terminalText`${r.remoteIp ?? ""}`,
+    Scopes: terminalText`${resolveNodePairApprovalScopes(r.commands, r.requiredApproveScopes).join(", ")}`,
     Requested:
       typeof r.ts === "number" ? formatTimeAgo(Math.max(0, now - r.ts)) : theme.muted("unknown"),
   }));

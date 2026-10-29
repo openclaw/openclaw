@@ -237,8 +237,12 @@ describe("public-session post-deploy app handoff", () => {
     };
     page.on("request", observeDocument);
     const start = requests.length;
+    const expectedPath = reload ? new URL(page.url()).pathname : publicPath;
     const held = holdAppDelivery();
-    const navigation = reload ? page.reload() : page.goto(baseUrl + publicPath);
+    // The reader replaces its document during handoff; the app readiness checks below own completion.
+    const navigation = reload
+      ? page.reload({ waitUntil: "commit" })
+      : page.goto(baseUrl + publicPath, { waitUntil: "commit" });
     // Observe rejection immediately while the HTML owner remains intentionally held.
     void navigation.catch(() => {});
     try {
@@ -285,7 +289,7 @@ describe("public-session post-deploy app handoff", () => {
         entries: 1,
         probes: maxDocuments === 1 ? 0 : 1,
         validStatuses: true,
-        pathname: publicPath,
+        pathname: expectedPath,
         recovery: false,
       });
       expect(documents).toBeLessThanOrEqual(maxDocuments);
@@ -349,6 +353,15 @@ describe("public-session post-deploy app handoff", () => {
       } else {
         root.path = path.join(fixture!, buildB);
         await gateway.setServerBuildId(buildB);
+      }
+      if (scenarioKind === "controlled reload") {
+        await page.evaluate((sessionKey) => {
+          const url = new URL(location.href);
+          url.pathname = "/chat/main/12345678aaaa40008000000000000001";
+          url.searchParams.set("__openclawSessionKey", sessionKey);
+          url.searchParams.set("__openclawComposerFocus", "1");
+          history.replaceState(null, "", url);
+        }, publicScope.sessionKey);
       }
       await openAcrossPublication(page, signal, buildB, controlled ? 1 : 2, gateway, !fresh);
       if (fresh) {

@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
+import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
@@ -16,6 +18,7 @@ import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js"
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { resolveLegacyGatewayManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-legacy-store.js";
 import { ManagedHandoffCustodyRetainedError } from "../../infra/update-managed-service-handoff-reclamation.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import {
@@ -59,6 +62,7 @@ import {
   resolveTargetVersion,
   type UpdateFinalizeOptions,
 } from "./shared.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
@@ -69,7 +73,8 @@ import {
 } from "./update-retained-custody.js";
 
 export function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
-  return repairUpdate(opts).catch((error: unknown) => {
+  const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
+  return withUpdateDatabaseEngine(env, () => repairUpdate(opts)).catch((error: unknown) => {
     throw updateMaintenanceError(error);
   });
 }
@@ -130,14 +135,22 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   }
   let retained: RetainedUpdateCustodyReport | undefined;
   const prepareHandoffRepair = async () => {
-    const store = await prepareManagedHandoffLeaseStore();
+    // Admission keys custody by the canonical installation, not a lexical slot.
+    const root = resolveUpdateInstallRoot(await resolveUpdateRoot());
     try {
-      // Admission keys custody by the canonical installation, not a lexical slot.
-      return await store.prepareRepair(
-        resolveUpdateInstallRoot(await resolveUpdateRoot()),
-        env,
-        timeoutMs,
-      );
+      const repair = await (
+        await prepareManagedHandoffLeaseStore()
+      ).prepareRepair(root, env, timeoutMs);
+      const legacy = resolveLegacyGatewayManagedUpdateLeaseDatabasePath();
+      if (repair || !legacy || !fs.existsSync(legacy)) {
+        return repair;
+      }
+      // An earlier macOS Gateway's handoff stays in its own store until repaired.
+      const store = await prepareManagedHandoffLeaseStore({
+        databasePath: legacy,
+        serviceManagerEnv: resolveServiceManagerEnv(),
+      });
+      return await store.prepareRepair(root, env, timeoutMs);
     } catch (error) {
       if (!(error instanceof ManagedHandoffCustodyRetainedError)) {
         throw error;

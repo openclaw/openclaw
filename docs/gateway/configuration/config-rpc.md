@@ -19,7 +19,7 @@ For tooling that writes config over the gateway API, prefer this flow:
   deletes, arrays replace when explicitly confirmed with `replacePaths` if
   entries would be removed)
 - `config.apply` only when you intend to replace the entire config
-- `update.run` for explicit self-update plus restart; include `continuationMessage` when the post-restart session should run one follow-up turn
+- `update.run` for explicit self-update plus restart and a passive outcome report; a running session resumes through the ordinary graceful-shutdown marker
 - `update.status` to inspect the latest update restart sentinel and verify the running version after a restart
 
 Agents should treat `config.schema.lookup` as the first stop for exact
@@ -84,7 +84,13 @@ skills again. Shutdown,
 supersession by different content, or failed application returns `UNAVAILABLE`
 with recovery guidance. `config.set` acknowledges persistence only. With
 `gateway.reload.mode: "off"`, a write that needs no restart is acknowledged once
-persisted and applies at the next restart; a write that needs a restart schedules one.
+persisted and applies at the next restart; a write that needs a restart schedules one,
+except a `config.patch` from a CLI client (`openclaw config set/patch/unset` routed
+through the Gateway), which keeps the offline write's contract: it persists without
+a restart and the CLI prints `Restart the gateway to apply.` Likewise, when a CLI
+`config.patch` is accepted for a reloader restart (for example re-enabling reload after
+deferred changes), it succeeds with `restartPending: true` instead of `UNAVAILABLE`, and
+the CLI prints `The Gateway is restarting to apply it.`
 
 When a committed write cannot finish runtime application, the error's
 `details.persistedConfig` contains the redacted committed `config` and its public

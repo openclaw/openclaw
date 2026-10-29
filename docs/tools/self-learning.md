@@ -13,7 +13,7 @@ Self-learning turns corrections and hard-won procedures into
 [learned skills](/tools/skill-workshop) that future sessions load. It is on by
 default (`skills.workshop.autonomous.mode: "auto"`).
 
-Learning happens in three places:
+Learning happens in four places:
 
 - **The foreground agent** patches a learned skill that misled it and saves a
   procedure after hard multi-step work, in the same turn.
@@ -21,9 +21,13 @@ Learning happens in three places:
   saves what the foreground agent did not. This page covers it.
 - **Unused-skill cleanup** archives learned skills unused for 30 days. See
   [Unused-skill cleanup](/tools/skill-workshop#unused-skill-cleanup).
+- **Skill diet** shrinks one oversized learned skill a day without changing
+  its rules. See [Skill diet](/tools/skill-workshop#skill-diet).
 
 Every change applies immediately and can be undone. Background review changes
-appear in the Control UI chat. See [Undo](/tools/skill-workshop#undo).
+appear in the Control UI chat. See [Undo](/tools/skill-workshop#undo). To
+review background learning before it applies, use `propose` mode: reviews save
+[drafts](/tools/skill-workshop#drafts) that you review with `/learn drafts`.
 
 ## When a review runs
 
@@ -141,11 +145,13 @@ appear only in debug logs. Provider and storage failures still produce warnings.
 
 ```bash
 openclaw config set skills.workshop.autonomous.mode off
+openclaw config set skills.workshop.autonomous.mode propose
 openclaw config set skills.workshop.autonomous.mode auto
 ```
 
-The Control UI **Plugins → Skill workshop** page has the same switch. `off`
-stops background reviews and unused-skill cleanup. The agent can still create or
+The Control UI **Plugins → Skill workshop** page has the same switch. `propose`
+keeps background reviews but saves their changes as drafts and skips
+unused-skill cleanup and the skill diet. `off` stops background reviews, unused-skill cleanup, and the skill diet. The agent can still create or
 update learned skills when you ask, through `/learn`, or in a
 **Learn from past conversations** session.
 

@@ -4,9 +4,9 @@ import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
@@ -19,7 +19,6 @@ import {
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import {
-  closeUnclaimedSharedStateSqliteWorkers,
   isSqliteWorkerStoreAvailable,
   openAgentDatabaseSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
@@ -50,9 +49,8 @@ import {
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
 import {
-  cleanupRetiredAgentDatabaseLease,
+  closeAgentDatabaseNativeGeneration,
   readAgentDatabaseClosedReceipt,
-  publishAgentDatabaseCloseCheckpoint,
 } from "./openclaw-agent-execution-cleanup.js";
 import type {
   AgentDatabaseFileExecutionIdentity,
@@ -80,8 +78,10 @@ export function createAgentDatabaseNativeGeneration(
   onTerminal: (reason: Error) => void,
   creatingIdentity?: DatabasePathIdentity,
   creationClaim?: AgentDatabaseFileExecutionOpen["creationClaim"],
+  startupPreparation = false,
 ): AgentDatabaseNativeGeneration {
   const inPreparation = AsyncLocalStorage.snapshot();
+  const processOwner = captureGatewayStateOwner(context.admission.databasePath);
   const input: AgentDatabaseFileExecutionOpen = {
     leaseId: randomUUID(),
     agentId,
@@ -456,6 +456,7 @@ export function createAgentDatabaseNativeGeneration(
               existingOnly: preparingShared || !createIfMissing,
             },
             {
+              startupPreparation,
               stateContext: context,
               stateDatabasePath: context.admission.databasePath,
               assertCurrent: preparingShared ? assertCurrent : assertOpening,
@@ -497,9 +498,7 @@ export function createAgentDatabaseNativeGeneration(
         try {
           assertCurrent();
           // An eager opener has already settled registration and its topology publication.
-          if (nativeIdentity) {
-            preparationPublished = true;
-          }
+          preparationPublished ||= nativeIdentity !== undefined;
           return store;
         } catch (error) {
           try {
@@ -668,50 +667,20 @@ export function createAgentDatabaseNativeGeneration(
     run,
     close() {
       lifetime.retire();
-      closing ??= (async () => {
-        const errors: unknown[] = [];
-        let storeClosed = false;
-        if (opening) {
-          try {
-            await opening.then(
-              async (store) => {
-                await store?.close();
-                storeClosed = store !== undefined;
-              },
-              () =>
-                openedStore
-                  ? openedStore.close()
-                  : closeUnclaimedSharedStateSqliteWorkers(pathname),
-            );
-          } catch (error) {
-            errors.push(error);
-          }
-        }
-        // A failed close can leave the Worker running; its retry owns lease cleanup.
-        if (errors.length === 0 && nativeStopped && lease) {
-          try {
-            await cleanupRetiredAgentDatabaseLease({
-              context,
-              stopped: nativeStopped,
-              assertOwned: assertCleanupOwned,
-              lease,
-              readOpenRefused,
-              closed: () =>
-                storeClosed
-                  ? readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease)
-                  : undefined,
-            });
-          } catch (error) {
-            errors.push(error);
-          }
-        }
-        throwSqliteLifecycleErrors(errors, "Agent native close and lease cleanup failed");
-        publishAgentDatabaseCloseCheckpoint(
-          pathname,
-          readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease),
-          assertCleanupOwned,
-        );
-      })().catch((error: unknown) => {
+      closing ??= closeAgentDatabaseNativeGeneration({
+        pathname,
+        context,
+        processOwner,
+        opening,
+        readOpenedStore: () => openedStore,
+        assertCleanupOwned,
+        readRetirement: () => ({
+          stopped: nativeStopped,
+          lease,
+          readOpenRefused,
+          closed: readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease),
+        }),
+      }).catch((error: unknown) => {
         closing = undefined;
         throw error;
       });

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
 import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
@@ -13,6 +14,7 @@ export const GATEWAY_OWNER_HEARTBEAT_STALE_MS = 90_000;
 
 const [uuidBoot, windowsBoot, freebsdBoot] = managedHandoffBootSchema.options;
 const host = z.string().min(1);
+export const MachineIdentitySchema = z.string().regex(/^[a-f0-9]{64}$/u);
 export const GatewayProcessNamespaceSchema = z.discriminatedUnion("platform", [
   uuidBoot.extend({ host, platform: z.literal("linux"), pidNsInode: z.string().min(1) }),
   uuidBoot.extend({ host, platform: z.literal("darwin") }),
@@ -28,7 +30,8 @@ let processNamespace: { platform: NodeJS.Platform; value: ProcessNamespace | nul
 export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
   if (
     processNamespace?.platform === process.platform &&
-    (processNamespace.value !== null || process.platform !== "linux")
+    (processNamespace.value !== null ||
+      (process.platform !== "linux" && process.platform !== "android"))
   ) {
     return processNamespace.value;
   }
@@ -47,7 +50,7 @@ export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
           }
         : {}),
     });
-    processNamespace = { platform: value.platform, value };
+    processNamespace = { platform: process.platform, value };
     return value;
   } catch {
     processNamespace = { platform: process.platform, value: null };
@@ -97,7 +100,10 @@ export class GatewayLockNamespaceError extends Error {
 
 /** File-lock recovery also covers pre-namespace Windows records from supported upgrades. */
 export function classifyGatewayLockProcessNamespace(
-  holder: { processNamespace?: unknown; pid?: unknown; startTime?: unknown } | null | undefined,
+  holder:
+    | { processNamespace?: unknown; machineIdentity?: unknown; pid?: unknown; startTime?: unknown }
+    | null
+    | undefined,
   lockPath?: string,
 ): "same" | "dead" | "unknown" {
   if (process.platform === "win32" && holder && holder.processNamespace === undefined && lockPath) {
@@ -115,13 +121,15 @@ export function classifyGatewayLockProcessNamespace(
     }
     return "unknown";
   }
-  return classifyGatewayOwnerProcessNamespace(holder?.processNamespace);
+  return classifyGatewayOwnerProcessNamespace(holder?.processNamespace, {
+    machineIdentity: holder?.machineIdentity,
+  });
 }
 
 /** File locks and SQLite leases require comparable evidence of process death. */
 export function classifyGatewayOwnerProcessNamespace(
   value: unknown,
-  options: { ownerHost?: string } = {},
+  options: { ownerHost?: string; machineIdentity?: unknown } = {},
 ): "same" | "dead" | "unknown" {
   const owner = GatewayProcessNamespaceSchema.safeParse(value).data;
   if (!owner || (options.ownerHost !== undefined && options.ownerHost !== owner.host)) {
@@ -131,13 +139,29 @@ export function classifyGatewayOwnerProcessNamespace(
   if (!current) {
     return "unknown";
   }
+  if (owner.platform !== current.platform) {
+    return "unknown";
+  }
+  if (owner.platform === "darwin" && options.machineIdentity !== undefined) {
+    const machine = MachineIdentitySchema.safeParse(options.machineIdentity).data;
+    const currentMachine = readProcessMachineIdentity();
+    if (machine && currentMachine) {
+      if (machine !== currentMachine) {
+        return "unknown";
+      }
+      // A reboot ends every process on this Mac, even if its hostname changed.
+      if (owner.identity !== current.identity) {
+        return "dead";
+      }
+    }
+  }
   // macOS hostnames can change within one boot; the kernel UUID still binds
-  // PID inspection to that same kernel. A different host and boot stays unknown.
+  // PID inspection to that same kernel. Legacy records with a different host and boot stay unknown.
   const sameDarwinBoot =
     owner.platform === "darwin" &&
     current.platform === "darwin" &&
     owner.identity === current.identity;
-  if (owner.platform !== current.platform || (owner.host !== current.host && !sameDarwinBoot)) {
+  if (owner.host !== current.host && !sameDarwinBoot) {
     return "unknown";
   }
   // Windows boot observations can disagree within one boot. Local Windows owners
@@ -177,6 +201,8 @@ export const LockPayloadSchema = z.object({
   parentStartTime: z.number().optional(),
   // Null and absent identities cannot establish the owner's process namespace.
   processNamespace: GatewayProcessNamespaceSchema.nullable().optional(),
+  // Shipped readers ignore this sibling; the nested namespace must remain rollback-compatible.
+  machineIdentity: MachineIdentitySchema.nullable().optional(),
 });
 
 export type LockPayload = z.infer<typeof LockPayloadSchema>;

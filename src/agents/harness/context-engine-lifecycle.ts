@@ -177,6 +177,7 @@ type HarnessContextEngineAssemblyParams = Omit<
   sessionKey?: string;
   agentId?: string;
   appendOnlyRuntimeContext?: boolean;
+  clearsTurnScopedSystemUpdates?: boolean;
   messages: AgentMessage[];
   tokenBudget?: number;
   availableTools?: Set<string>;
@@ -213,6 +214,8 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
         ? undefined
         : resolveContextEngineTranscriptByteLimit(contextEngine),
       resolveAssemblyHistoryTokenBudget(params),
+      undefined,
+      params.clearsTurnScopedSystemUpdates,
     );
     return { result: bounded, snapshot: assembly.snapshot };
   });
@@ -259,11 +262,11 @@ async function assembleHarnessContextEngineWithinSourceScope(
     : params.maxOutputTokens;
   // Append-only replay policies keep persisted carriers in the assembled window;
   // dropping one here would change the prefix bound to later thinking signatures.
-  const messages = (
-    params.appendOnlyRuntimeContext
-      ? inputMessages
-      : stripRuntimeContextCustomMessages(inputMessages)
-  ).slice();
+  const projectedMessages = params.appendOnlyRuntimeContext
+    ? inputMessages
+    : stripRuntimeContextCustomMessages(inputMessages);
+  // Filtering already isolates the plugin's working array from authoritative history.
+  const messages = projectedMessages === inputMessages ? inputMessages.slice() : projectedMessages;
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(
     params,
     tokenBudget,
@@ -359,6 +362,8 @@ export async function prepareHarnessContextEnginePrompt(
         },
         resolveContextEngineTranscriptByteLimit(contextEngine),
         resolveAssemblyHistoryTokenBudget(params),
+        undefined,
+        params.clearsTurnScopedSystemUpdates,
       );
     let bounded: AssembleResult;
     try {

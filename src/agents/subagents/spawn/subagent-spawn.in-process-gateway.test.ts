@@ -19,7 +19,7 @@ import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { readInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { GatewayLifecycleRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { GatewayRequestOptions } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import type { WorkerSessionTurnClaim } from "../../../gateway/worker-environments/placement-record.js";
@@ -228,9 +228,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     const unexpectedRecovery = async () => {
       throw new Error("Unexpected fixture recovery");
     };
-    gatewayContext.recoveryRuntime = {
-      prepareRestartRecovery: () => undefined,
-      resumeChatInput: unexpectedRecovery,
+    gatewayContext.lifecycleRuntime = {
       waitForAgent: async <T>(params: { runId: string }): Promise<T> => {
         const index = launchedRunIds.indexOf(params.runId);
         const terminal = expectDefined(terminalReplies[index], "launched collector terminal owner");
@@ -246,8 +244,8 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       },
       dispatchAgent: unexpectedRecovery,
       dispatchSessionMethod: unexpectedRecovery,
-      sendRecoveryNotice: unexpectedRecovery,
-    } satisfies GatewayRecoveryRuntime;
+      sendNotice: unexpectedRecovery,
+    } satisfies GatewayLifecycleRuntime;
     subagentSpawnTesting.setDepsForTest({
       dispatchGatewayMethodInProcess: async <T>(
         method: string,
@@ -632,7 +630,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       expect(subagentRuns.get(firstRunId!)).toEqual({
         ...killedSnapshot,
         swarmLaunchPending: false,
-        queuedLaunch: undefined,
         collectorLaunchCleanupPending: false,
         completion: {
           required: false,

@@ -34,6 +34,7 @@ async function withState(
 
 async function writeJson(file: string, value: unknown) {
   await fs.writeFile(file, JSON.stringify(value));
+  resetConfigRuntimeState();
 }
 
 it("reports an unresolved candidate database without opening fallback state before restart", async () => {
@@ -73,8 +74,6 @@ it("validates plugins only for actions that start the service", async () => {
       configSchema: {
         type: "object",
         required: ["current"],
-        properties: { current: { type: "boolean" } },
-        additionalProperties: false,
       },
     });
     const config = {
@@ -85,7 +84,6 @@ it("validates plugins only for actions that start the service", async () => {
       },
     };
     await writeJson(configPath, config);
-    resetConfigRuntimeState();
     expect(await preflight("start")).toMatchObject({
       message: expect.stringContaining("plugins.entries.migration-fixture"),
     });
@@ -94,7 +92,6 @@ it("validates plugins only for actions that start the service", async () => {
     expect(await preflight("uninstall")).toBeNull();
 
     await writeJson(configPath, { ...config, meta: { lastTouchedVersion: "9999.1.1" } });
-    resetConfigRuntimeState();
     expect((await preflight("stop"))?.message).toContain(
       "Config was last written by OpenClaw 9999.1.1",
     );

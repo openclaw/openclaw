@@ -180,6 +180,12 @@ export async function sendXDelivery(
     mention?: XPost;
     senderTier?: XSenderTier;
     visibleWorkSessions?: XVisibleWorkSession[];
+    onPlatformSendDispatch?: () => Promise<void>;
+    onDeliveryResult?: (result: {
+      channel: "x";
+      messageId: string;
+      receipt: ReturnType<typeof xReceipt>;
+    }) => Promise<void> | void;
     assertDirectAdapterHandoff?: () => void;
     sessionKey?: string | null;
   },
@@ -407,6 +413,8 @@ export async function sendXDelivery(
           retryable: false,
         });
       }
+      // Uploads and X processing can outlast queue custody; re-check it before each visible post.
+      await params.onPlatformSendDispatch?.();
       const id = await api.reply({
         text,
         ...(postIds.length === 0 && mediaIds.length ? { mediaIds } : {}),
@@ -419,12 +427,15 @@ export async function sendXDelivery(
   } catch (cause) {
     if (postIds.length) {
       logger.warn(`partial reply posts=${postIds.join(",")}`);
+      const receipt = xReceipt(postIds, replyToId, media.length > 0);
+      // Report sent posts first: a not-dispatched cause alone would mark the whole reply as unsent.
+      await params.onDeliveryResult?.({ channel: "x", messageId: postIds.at(-1) ?? "", receipt });
       throw createChannelPartialDeliveryError(
         new Error("X reply chain failed after one or more posts were sent", { cause }),
         {
           visibleReplySent: true,
           content: chunks.slice(0, postIds.length).join("\n"),
-          receipt: xReceipt(postIds, replyToId, media.length > 0),
+          receipt,
         },
       );
     }

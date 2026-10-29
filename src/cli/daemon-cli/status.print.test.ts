@@ -328,7 +328,6 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, job.label);
     expectMockLineContains(runtime.log, job.program);
     expectMockLineContains(runtime.log, "Report only; left unchanged.");
-    expect(output(runtime.error)).not.toContain(job.label);
     expect(runtime.error).not.toHaveBeenCalled();
     expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
   });
@@ -390,8 +389,7 @@ describe("printDaemonStatus", () => {
   });
 
   it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
+    withMockedPlatform("win32", () => {
       printDaemonStatus({
         service: {
           label: "Scheduled Task",
@@ -404,9 +402,7 @@ describe("printDaemonStatus", () => {
           },
         },
       });
-    } finally {
-      platform.mockRestore();
-    }
+    });
 
     const errors = output(runtime.error);
     expect(errors).toContain("Scheduled Task 'OpenClaw Custom Gateway' is registered but DISABLED");
@@ -532,8 +528,7 @@ describe("printDaemonStatus", () => {
   ])(
     "distinguishes systemd crash exhaustion from config exit $lastExitStatus",
     ({ lastExitStatus, exhausted }) => {
-      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      try {
+      withMockedPlatform("linux", () => {
         printDaemonStatus({
           service: {
             label: "systemd",
@@ -545,9 +540,7 @@ describe("printDaemonStatus", () => {
             },
           },
         });
-      } finally {
-        platform.mockRestore();
-      }
+      });
       const errors = output(runtime.error);
       expect(errors.includes("systemd stopped restarting the gateway after repeated crashes")).toBe(
         exhausted,
@@ -568,19 +561,27 @@ describe("printDaemonStatus", () => {
     );
   }
 
-  it("prints the confirmed ClawHub target instead of the host version in deep mode", () => {
+  function printClawHubDrift(
+    status: "resolved" | "registry-current",
+    installedVersion: string,
+    requestedTarget: string,
+  ) {
     printDrift({
       pluginId: "whatsapp",
-      installedVersion: "2026.9.2",
+      installedVersion,
       gatewayVersion: "2026.9.4",
       source: "clawhub",
       targetResolution: {
-        status: "resolved",
+        status,
+        requestedTarget,
         packageName: "@openclaw/whatsapp",
-        requestedTarget: "latest",
         version: "2026.9.3",
       },
     });
+  }
+
+  it("prints the confirmed ClawHub target instead of the host version in deep mode", () => {
+    printClawHubDrift("resolved", "2026.9.2", "latest");
 
     expectMockLineContains(runtime.log, "- whatsapp: 2026.9.2 (clawhub)");
     expectMockLineContains(
@@ -595,18 +596,7 @@ describe("printDaemonStatus", () => {
   });
 
   it("explains a registry-current ClawHub target without a repair command in deep mode", () => {
-    printDrift({
-      pluginId: "whatsapp",
-      installedVersion: "2026.9.3",
-      gatewayVersion: "2026.9.4",
-      source: "clawhub",
-      targetResolution: {
-        status: "registry-current",
-        packageName: "@openclaw/whatsapp",
-        requestedTarget: "2026.9.4",
-        version: "2026.9.3",
-      },
-    });
+    printClawHubDrift("registry-current", "2026.9.3", "2026.9.4");
 
     expectMockLineContains(runtime.log, "- whatsapp: 2026.9.3 (clawhub) → expected 2026.9.4");
     expectMockLineContains(

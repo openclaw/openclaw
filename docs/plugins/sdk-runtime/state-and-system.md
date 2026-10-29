@@ -208,6 +208,8 @@ keep the existing synchronous fallback.
 
     The Gateway keeps complete active namespace views in memory and updates them from committed write receipts before acknowledging a write. Ordinary reads reuse those views without SQL. Residency is bounded to 64 namespaces, 16 MiB of accounted data in total, and 8 MiB or 10,000 rows per namespace. Cold or evicted namespaces load on demand; oversized namespaces and transaction-local reads use SQL. Eviction never deletes durable rows. Synchronous compatibility writers publish to the same owner. A restart rebuilds the views from the database.
 
+    Duplicate `registerIfAbsent(...)` claims can also use a resident namespace without requesting a writer when no expiry cleanup is due. The existing value, creation time, and TTL stay unchanged; missing or expired keys still use the atomic worker operation.
+
     Expired values become unavailable immediately at their TTL deadline. Namespace mutations remove expired rows in bounded batches; the Gateway does not run a periodic keyed-state expiry sweep. An inactive namespace may retain expired rows on disk until a later mutation, without making those values readable or counting them toward live capacity.
 
     To retain records without count-based eviction, use the async opener with `retention: "retained"` instead of `maxEntries`:
@@ -295,6 +297,17 @@ writers. Keep the adapter's authoritative reader for that case. A failed prepare
 read is a denial, never permission to fall back to an older value. Preparation
 and its receipt do not replace account, session-incarnation, or other independent
 security checks.
+
+For an ownership predicate that can survive metadata updates, use
+`preparePluginStateGuard(store, key, assertValueCurrent)`. It returns
+`{ assertCurrent, release }` without exposing row contents. The pure, synchronous
+predicate must validate the complete domain ownership condition. Each assertion
+checks the unexpired committed value and every overlapping pending effect.
+Read-only observations and non-evicting CAS updates with no TTL change may preserve
+the predicate. Replacements, deletions, unknown outcomes, and unclassified writes
+remain denied. Release the guard when the effect owner's custody ends; retain all
+independent session and account checks. Ordinary prepared reads keep their pending
+write fences.
 
 Retained synchronous effect guards can call `assertPluginStateReadAvailable(store)`
 with the host-created async store before their native read. This checks the same

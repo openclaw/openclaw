@@ -9,11 +9,13 @@ export function registerPersistentSessionDeliveryTests({
   deliverOutboundPayloads,
   appendAssistantMessageToSessionTranscript,
   expectDeliveryCall,
+  outboundSend,
 }: {
   commitBackgroundResultToSessionMock: unknown;
   deliverOutboundPayloads: unknown;
   appendAssistantMessageToSessionTranscript: unknown;
   expectDeliveryCall: (callIndex: number, expected: Record<string, unknown>) => void;
+  outboundSend: { mock: { calls: unknown[][] } };
 }) {
   it.each([false, true])(
     "publishes a persistent session final once with notification=%s",
@@ -71,7 +73,8 @@ export function registerPersistentSessionDeliveryTests({
       name: "different destination thread",
       executionKey: "agent:main:telegram:group:-100123:topic:42",
       destinationThread: "43",
-      commits: 1,
+      // Outbound records another conversation; the run itself commits nothing there.
+      commits: 0,
     },
   ])(
     "publishes one settled transcript result for $name",
@@ -87,18 +90,19 @@ export function registerPersistentSessionDeliveryTests({
         lifecycleRevision: "execution-lifecycle-revision",
       };
       const destinationKey = `agent:main:telegram:group:-100123:topic:${destinationThread}`;
+      const sessionRoute = {
+        sessionKey: destinationKey,
+        baseSessionKey: "agent:main:telegram:group:-100123",
+        peer: { kind: "group" as const, id: "-100123" },
+        chatType: "group" as const,
+        from: "telegram:-100123",
+        to: "-100123",
+        threadId: destinationThread,
+      };
       params.resolvedDelivery = makeResolvedDelivery({
         to: "-100123",
         threadId: destinationThread,
-        sessionRoute: {
-          sessionKey: destinationKey,
-          baseSessionKey: "agent:main:telegram:group:-100123",
-          peer: { kind: "group", id: "-100123" },
-          chatType: "group",
-          from: "telegram:-100123",
-          to: "-100123",
-          threadId: destinationThread,
-        },
+        sessionRoute,
       });
 
       expect(await dispatchCronDelivery(params)).toMatchObject({
@@ -112,6 +116,7 @@ export function registerPersistentSessionDeliveryTests({
         threadId: destinationThread,
         payloads: [{ text: "Persistent session report" }],
       });
+      expect(outboundSend.mock.calls[0]?.[0]).toMatchObject({ transcriptRoute: sessionRoute });
       expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(commits);
       if (commits) {
         expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(

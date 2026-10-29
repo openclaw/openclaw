@@ -47,6 +47,7 @@ Behavior:
 - A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. A completion without captured output, such as a command that redirected its output to a file, continues the same way, so the agent can read that file and report. This is a model instruction, not a rule-based notification filter, and it does not disable the completion turn. A silent completion turn is valid in every conversation, including Control UI chats; subagent runs still require a final result.
 - Raw exec completion notices stay in the agent's transcript but are hidden from the Control UI's chat history and live message updates. The agent's user-facing reply remains visible.
 - A host command started in a chat conversation completes through ordinary execution in that conversation: the completion turn runs with its session history, and any reply goes back to the captured account, chat, and topic. It waits behind existing work in that session, independently of heartbeat cadence, active hours, and delivery settings. A command started in an automatically silent run keeps that restriction for its completion. Current session permissions and tool restrictions can tighten the captured permissions before execution.
+- When a channel owner started the command, its completion turn keeps that owner's owner-only tools, such as `openclaw` and `gateway`, so the agent can finish the task without a new message. OpenClaw rechecks owner status against the current config each time; if the sender is no longer an owner, the tools stay unavailable. Commands started by other senders, and lost-process wakes after a Gateway restart, do not get owner-only tools.
 - Isolated cron exec completions stay on the originating run's session, including jobs with `delivery.mode: "announce"`. They never wake the agent main session. A completion accepted while that run is active waits for it to finish before starting a follow-up turn. Completions not yet accepted when the originating run ends cannot start another turn; retained output remains available through `process poll` or `process log`. Jobs with `delivery.mode: "none"` keep automatic completion wakes disabled. The cron job's normal announcement delivery is unchanged.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
 - Gateway-hosted background processes still end with the Gateway. After a restart, eligible owning sessions receive one lost-process completion turn: the outcome is unknown, and the agent must check side effects or saved state before re-running anything. No command or output is replayed. Reset or archived sessions, incognito sessions, subagents, ended cron runs, and disabled completion notifications do not receive a restart wake. Keeping the physical process alive requires a separate process host.
@@ -145,9 +146,11 @@ Reading the output does not drain pending agent output or acknowledge completion
 notifications. **Stop** requests termination of the exact observed process instance.
 
 The list is bounded, prioritizes running processes, and follows the existing
-in-memory retention limits. It refreshes while visible; disconnected or
-unavailable workers show an error rather than an empty list. It does not provide
-an interactive terminal or enumerate unrelated operating-system processes.
+in-memory retention limits. It refreshes while visible. A connected node returns
+an empty list after confirming that the worker has fully retired and no launch
+is still active for that environment. Disconnected workers and uncertain cleanup show
+an error. It does not provide an interactive terminal or enumerate unrelated
+operating-system processes.
 
 ## Child process bridging
 
@@ -265,12 +268,13 @@ Actions:
 
 Notes:
 
-- Only backgrounded sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart.
+- Only backgrounded sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart. New handles include an opaque boot suffix so old handles cannot select a new process after restart. Looking up an old handle explains that it is no longer tracked and advises checking saved output and side effects before rerunning. Older handles without a boot suffix cannot distinguish restart from expiry or removal.
+- Graceful Gateway shutdown stops supervised process trees and waits for their cleanup. After an abrupt crash, service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
 - Resetting or deleting a session clears only its completed background processes; other sessions, explicit shared scopes, and running processes remain unaffected.
 - A live background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit.
 - `process remove` can hide a running session immediately after requesting termination; suspension and restart remain blocked until exit confirmation.
 - Session logs are only saved to chat history if you run `process poll`/`log` and the tool result is recorded.
-- `process` is scoped per agent; it only sees sessions started by that agent.
+- `process` sees its own session’s processes and processes started by ancestor sessions belonging to the same agent. It cannot access sibling sessions, unrelated session trees, or another agent’s processes. Visibility follows the recorded session tree; handles do not need to be copied.
 - After an explicit `kill` or task cancellation, `list`, `poll`, `log`, and a repeated `kill` report a confirmed requested stop as a completed observation, retaining the process's signal and cancellation reason. Unexpected termination, timeouts, and cleanup failures remain errors; `finalizationFailed: true` identifies cleanup failure.
 - A repeated `kill` of a retained finished session returns its terminal facts without sending another signal or consuming output. An unknown or cleared session ID does not confirm termination.
 - Process context shown at turn start is a snapshot. Later `process` results supersede it; the snapshot is not refreshed during the turn.

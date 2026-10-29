@@ -9,10 +9,10 @@ import {
 
 type HeartbeatEventsModule = typeof import("./heartbeat-events.js");
 
-const heartbeatEventsModuleUrl = new URL("./heartbeat-events.ts", import.meta.url).href;
-
 async function importHeartbeatEventsModule(cacheBust: string): Promise<HeartbeatEventsModule> {
-  return (await import(`${heartbeatEventsModuleUrl}?t=${cacheBust}`)) as HeartbeatEventsModule;
+  return (await import(
+    `${new URL("./heartbeat-events.ts", import.meta.url).href}?t=${cacheBust}`
+  )) as HeartbeatEventsModule;
 }
 
 describe("heartbeat events", () => {
@@ -27,45 +27,27 @@ describe("heartbeat events", () => {
   });
 
   it.each([
-    {
-      status: "ok" as const,
-      completionStatus: "succeeded" as const,
-      delivered: true,
-      expected: "sent",
-    },
-    {
-      status: "ok" as const,
-      completionStatus: "succeeded" as const,
-      delivered: false,
-      expected: "ok-empty",
-    },
-    {
-      status: "error" as const,
-      completionStatus: "failed" as const,
-      delivered: false,
-      expected: "failed",
-    },
-    {
-      status: "ok" as const,
-      completionStatus: "unknown" as const,
-      delivered: false,
-      expected: "skipped",
-    },
-  ])(
-    "projects receipt settlement into the existing $expected diagnostic",
-    ({ expected, ...outcome }) => {
+    ["ok", "succeeded", true, "sent", `${"s".repeat(1999)}😀tail`, "s".repeat(1999)],
+    ["ok", "succeeded", false, "ok-empty", `${"s".repeat(1998)}😀`, `${"s".repeat(1998)}😀`],
+    ["error", "failed", false, "failed", "result", "result"],
+    ["ok", "unknown", false, "skipped", "result", "result"],
+  ] as const)(
+    "projects receipt settlement (%s, %s, delivered: %s) into %s",
+    (status, completionStatus, delivered, expected, summary, preview) => {
       emitLegacyHeartbeatCronOutcome({
         jobId: "converted",
         action: "finished",
-        ...outcome,
-        summary: "Synthetic automation result",
+        status,
+        completionStatus,
+        delivered,
+        summary,
         durationMs: 12,
       });
       expect(getLastHeartbeatEvent()).toMatchObject({
         status: expected,
-        preview: "Synthetic automation result",
+        preview,
         durationMs: 12,
-        silent: !outcome.delivered,
+        silent: !delivered,
       });
     },
   );
@@ -95,55 +77,16 @@ describe("heartbeat events", () => {
     },
   );
 
-  it("keeps an astral automation summary whole at the preview cap", () => {
-    emitLegacyHeartbeatCronOutcome({
-      jobId: "converted",
-      action: "finished",
-      status: "ok",
-      completionStatus: "succeeded",
-      delivered: true,
-      summary: `${"s".repeat(1999)}\u{1F600}summary tail`,
-    });
-    expect(getLastHeartbeatEvent()?.preview).toBe("s".repeat(1999));
-  });
-
-  it("keeps an automation summary that fits the preview cap unchanged", () => {
-    const summary = `${"s".repeat(1998)}\u{1F600}`;
-    emitLegacyHeartbeatCronOutcome({
-      jobId: "converted",
-      action: "finished",
-      status: "ok",
-      completionStatus: "succeeded",
-      delivered: true,
-      summary,
-    });
-    expect(getLastHeartbeatEvent()?.preview).toBe(summary);
-  });
-
-  it("delivers events to the Gateway callback and isolates its failures", () => {
-    const seen: string[] = [];
-    heartbeatNotifications.onEvent = () => {
-      throw new Error("boom");
-    };
-    expect(() => emitHeartbeatEvent({ status: "failed" })).not.toThrow();
-    expect(getLastHeartbeatEvent()?.status).toBe("failed");
-
-    heartbeatNotifications.onEvent = (evt) => {
-      seen.push(evt.status);
-    };
-    emitHeartbeatEvent({ status: "ok-empty" });
-    heartbeatNotifications.onEvent = () => {};
-    emitHeartbeatEvent({ status: "failed" });
-
-    expect(seen).toEqual(["ok-empty"]);
-  });
-
-  it("shares heartbeat state across duplicate module instances", async () => {
+  it("shares state and replaceable failure-isolated callbacks across module instances", async () => {
     const first = await importHeartbeatEventsModule(`first-${Date.now()}`);
     const second = await importHeartbeatEventsModule(`second-${Date.now()}`);
 
     first.resetHeartbeatEventsForTest();
-
+    first.heartbeatNotifications.onEvent = () => {
+      throw new Error("boom");
+    };
+    expect(() => second.emitHeartbeatEvent({ status: "failed" })).not.toThrow();
+    expect(first.getLastHeartbeatEvent()?.status).toBe("failed");
     const seen: string[] = [];
     first.heartbeatNotifications.onEvent = (evt) => {
       seen.push(evt.status);
@@ -156,6 +99,9 @@ describe("heartbeat events", () => {
       status: "ok-token",
       preview: "pong",
     });
+    expect(seen).toEqual(["ok-token"]);
+    first.heartbeatNotifications.onEvent = () => {};
+    second.emitHeartbeatEvent({ status: "failed" });
     expect(seen).toEqual(["ok-token"]);
   });
 });

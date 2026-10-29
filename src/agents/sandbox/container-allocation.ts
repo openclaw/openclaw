@@ -199,7 +199,9 @@ export async function allocateSandboxContainer(params: {
         })
       : undefined;
   const createCfg = podmanPolicy?.cfg ?? cfg;
-  await ensureContainerImage(engine, cfg.image);
+  if (engine.id === "podman") {
+    await ensureContainerImage(engine, cfg.image);
+  }
 
   const { argv: args, env } = buildSandboxCreateArgs({
     name,
@@ -211,6 +213,10 @@ export async function allocateSandboxContainer(params: {
   });
   if (podmanPolicy) {
     args.push(...podmanPolicy.extraCreateArgs);
+  }
+  if (engine.id === "docker") {
+    // Creation already resolves the local image; do not inspect it a second time.
+    args.push("--pull=never");
   }
   args.push("--workdir", cfg.workdir);
   for (const bind of params.mountPlan.skippedBinds) {
@@ -242,7 +248,15 @@ export async function allocateSandboxContainer(params: {
   const created = await withContainerEnvFile(env, async (envFile) => {
     args.push("--env-file", envFile, cfg.image, ...command);
     params.assertCurrent?.();
-    return await execContainer(engine, args);
+    try {
+      return await execContainer(engine, args, { assertCurrent: params.assertCurrent });
+    } catch (error) {
+      if (engine.id === "docker") {
+        // Retain image/daemon guidance while preserving unrelated creation failures.
+        await ensureContainerImage(engine, cfg.image);
+      }
+      throw error;
+    }
   });
   const containerId = created.stdout.trim();
   if (!/^[a-f0-9]{64}$/u.test(containerId)) {

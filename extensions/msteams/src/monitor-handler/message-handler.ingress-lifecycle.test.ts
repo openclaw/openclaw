@@ -79,6 +79,61 @@ describe("Microsoft Teams drain claim ownership", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it.each(["batched text", "HTML attachment"])(
+    "preserves user mentions in agent input from %s",
+    async (mode) => {
+      vi.useFakeTimers();
+      const clock = createDebounceControl();
+      const handler = createHandler(openDM, clock.createDebouncer);
+      const bot = "<at>Bot</at>";
+      const user = "<at>Other User</at>";
+      const html = mode === "HTML attachment";
+      const first = {
+        ...directActivity("first", html ? "" : `${bot} so ${user} and Third Person can use you.`),
+        entities: [
+          { type: "mention", text: user, mentioned: { id: "other-user-id" } },
+          { type: "mention", text: bot, mentioned: { id: "bot-id" } },
+        ],
+        ...(html
+          ? {
+              attachments: [
+                {
+                  contentType: "text/html",
+                  content:
+                    `${bot}<p>ask ${user}; literal &lt;at&gt;Typed&lt;/at&gt;; once &amp;lt;tag&amp;gt; ` +
+                    '<img src="https://statics.teams.cdn.office.net/emoji/smile.png" alt="🙂"></p>',
+                },
+              ],
+            }
+          : {}),
+      };
+      const claims = [createLifecycle(), createLifecycle()];
+      try {
+        await handler(context(first), claims[0]);
+        if (!html) {
+          expect(dispatch).not.toHaveBeenCalled();
+          await handler(
+            context(directActivity("second", "also ask <at>Unidentified User</at>")),
+            claims[1],
+          );
+          expect(dispatch).not.toHaveBeenCalled();
+        }
+        await clock.flush(40);
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0]?.[0].ctx.BodyForAgent).toBe(
+          html
+            ? "ask @Other User; literal <at>Typed</at>; once &lt;tag&gt; 🙂"
+            : "so @Other User and Third Person can use you.\nalso ask @Unidentified User",
+        );
+        for (const claim of claims.slice(0, html ? 1 : 2)) {
+          expectAdopted(claim);
+        }
+      } finally {
+        await clock.flush(40);
+      }
+    },
+  );
+
   it.each(["batched", "gated", "html"])("settles %s claims once", async (mode) => {
     vi.useFakeTimers();
     const clock = createDebounceControl();

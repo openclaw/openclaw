@@ -208,8 +208,9 @@ describe("chat transcript invalidation", () => {
         }
 
         toggleTranscriptSearch(paneId);
-        flush();
-        const input = expectDefined(searchContainer.querySelector("input"), "search input");
+        const input = await waitForSolid(() =>
+          expectDefined(searchContainer.querySelector("input"), "search input"),
+        );
         input.value = ownMessage.content;
         input.dispatchEvent(new Event("input", { bubbles: true }));
         await flushDeferredRowPrune();
@@ -497,6 +498,7 @@ describe("chat transcript invalidation", () => {
   });
 
   it("keeps message rows prepared and refreshes failure actions when a retained transcript returns", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
     const owner = new EventTarget();
     let visible = true;
     const props = {
@@ -649,7 +651,9 @@ describe("chat transcript invalidation", () => {
       rerender();
       transcript.start();
       await flushDeferredRowPrune();
-      expect(container.textContent).toContain("Received · waiting for worker setup");
+      await waitForSolid(() =>
+        expect(container.textContent).toContain("Received · waiting for worker setup"),
+      );
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
       expect(buildSpy).toHaveBeenCalledOnce();
 
@@ -776,9 +780,7 @@ describe("chat transcript invalidation", () => {
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const transcript = createTestTranscript();
     const container = transcriptContainer();
-    const client = {
-      request: vi.fn(async () => null),
-    } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
+    const client = createGatewayBrowserClientFixture({ request: vi.fn(async () => null) });
     const sessions = createSessionCapabilityFixture();
     const { pane, state } = createTestChatPane({ client, sessions });
     const applyToken = (deviceToken: string) =>

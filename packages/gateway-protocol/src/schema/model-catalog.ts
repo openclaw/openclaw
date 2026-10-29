@@ -84,6 +84,8 @@ const ModelRuntimeProperties = {
   availableAccessPrograms: Type.Optional(
     closedObject({ cyber: Type.Array(CyberAccessProgramSchema) }),
   ),
+  /** Configured selection or Standard baseline for an Access-capable model and runtime. */
+  cyberAccessProgramDefault: Type.Optional(CyberAccessProgramSchema),
   /** Local selected-request applicability, not preference or upstream fulfillment. */
   supportsFastMode: Type.Optional(Type.Boolean()),
   /** Selected route can safely retry rejected service tiers before output. */

@@ -10,7 +10,8 @@ import { readDefaultProactiveJobReceiptInDatabase } from "../cron/proactive-job-
 import { readScratchStateFromDatabase } from "../cron/scratch-read.kernel.js";
 import { writeCronJobScratchInDatabase } from "../cron/scratch-write.kernel.js";
 import { CronService } from "../cron/service.js";
-import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfig, saveCronStore } from "../cron/store.js";
+import { createReloadCronJob } from "../cron/store.test-support.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import {
   loadedCronStoreFromRows,
@@ -40,6 +41,7 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -280,6 +282,45 @@ describe("heartbeat cadence Doctor cutover", () => {
       code: "ENOENT",
     });
     expect(await fs.readdir(f.root)).toEqual([]);
+  });
+
+  it("keeps unresolved cron partition selection advisory without changing state", async () => {
+    const f = fixture();
+    const retainedKey = path.join(f.root, "previous-state", "cron", "jobs.json");
+    await saveCronStore(retainedKey, {
+      version: 1,
+      jobs: [createReloadCronJob({ id: "retained-job", agentId: "main" })],
+    });
+    const db = openOpenClawStateDatabase({ env: f.env }).db;
+    db.prepare("DELETE FROM config_machine_state WHERE state_key = 'cron.defaultStoreKey'").run();
+    const snapshot = () => ({
+      jobs: db
+        .prepare("SELECT store_key, job_id, job_json FROM cron_jobs ORDER BY store_key, job_id")
+        .all(),
+      selection: db
+        .prepare(
+          "SELECT state_key, value_json FROM config_machine_state WHERE state_key = 'cron.defaultStoreKey'",
+        )
+        .all(),
+    });
+    const before = {
+      config: structuredClone(f.cfg),
+      state: snapshot(),
+    };
+
+    expect(await collectHeartbeatCadenceMigrationFindings(f.cfg, f.env)).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        requirement: "heartbeat-migration-deferred",
+        message: expect.stringContaining(
+          "Default cron partition selection is unresolved; cron is paused.",
+        ),
+        fixHint:
+          "Run openclaw doctor --fix in an interactive terminal and complete Select the default cron partition. --yes does not choose a partition.",
+      }),
+    ]);
+    expect(f.cfg).toEqual(before.config);
+    expect(snapshot()).toEqual(before.state);
   });
 
   it.each(["removed-owner-receipt", "invalid-legacy-row"])(
