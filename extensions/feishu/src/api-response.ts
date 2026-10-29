@@ -5,11 +5,13 @@ export function assertFeishuApiSuccess(
   errorPrefix?: string,
 ): void {
   if (response.code !== 0) {
-    throw new Error(
-      errorPrefix === undefined
-        ? response.msg
-        : `${errorPrefix}: ${response.msg || `code ${response.code}`}`,
-      { cause: { code: response.code } },
+    throw Object.assign(
+      new Error(
+        errorPrefix === undefined
+          ? response.msg
+          : `${errorPrefix}: ${response.msg || `code ${response.code}`}`,
+      ),
+      { code: response.code },
     );
   }
 }
