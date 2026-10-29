@@ -316,3 +316,10 @@ it.each([
     await expectDirectory(agent, { "note.txt": false });
   }
 });
+
+it("reads literal file paths without trimming whitespace", async () => {
+  await seedLocal(" x.txt", "literal-data");
+  await seedLocal("x.txt", "decoy-data");
+  await expectRead(" x.txt", "literal-data");
+  await expectRead("x.txt", "decoy-data");
+});
