@@ -10,6 +10,7 @@ import {
   addPreCutoverClientCredentialTablesForTest,
   restorePreTemplateStateIdentifiersForTest,
 } from "../../state/openclaw-state-schema.test-support.js";
+import * as stateOwner from "../gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { LEGACY_USAGE_COST_PARTITION_SCOPE } from "../session-cost-usage-partitions.js";
 import * as snapshotSource from "../sqlite-snapshot-source.js";
@@ -112,11 +113,78 @@ describe("physical store diagnostics", () => {
     const result = await inspectUnchanged(input);
 
     expect(result).toMatchObject({ lease: "unverifiable", backup: null, issues: [] });
-    expect(result.nextSteps.join(" ")).not.toContain("backup create");
-    expect(result.nextSteps.join(" ")).not.toContain("custody and lease");
+    expect(result.nextSteps).toEqual([]);
     const output = formatDatabaseStoreDiagnostic(result);
     expect(output).toContain("lease=unverifiable");
     expect(output).toContain("backup=unknown");
+  });
+
+  it.each([false, true])(
+    "preserves observed custody guidance (malformed=%s)",
+    async (malformed) => {
+      const input = fixture();
+      createStore(input, descriptor.version);
+      const ownerPath = path.join(path.dirname(input.path!), "owner.json");
+      fs.writeFileSync(
+        ownerPath,
+        malformed
+          ? "{}"
+          : JSON.stringify({
+              pid: process.pid,
+              createdAt: "2026-01-01",
+              configPath: "fixture",
+              processNamespace: null,
+            }),
+      );
+      // Redirect only this diagnostic input; parsing and store inspection remain real.
+      vi.spyOn(stateOwner, "resolveGatewayStateOwnerPath").mockReturnValue(ownerPath);
+
+      const result = await inspectUnchanged(input);
+
+      expect(result.custody).toBe("unverifiable");
+      expect(result.nextSteps.join(" ")).toContain(
+        malformed ? "Check the Gateway owner" : "custody before offline maintenance",
+      );
+      expect(result.issues).toEqual(
+        malformed ? ["Physical store custody could not be verified."] : [],
+      );
+    },
+  );
+
+  it.each([false, true])("preserves observed lease guidance (malformed=%s)", async (malformed) => {
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
+    {
+      using db = openNodeSqliteDatabase(input.path!);
+      db.prepare(`INSERT INTO state_leases
+        (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+        VALUES ('gateway-owner', 'global', 'recorded-generation', 1, 1, ?, 1, 1)`).run(
+        JSON.stringify(
+          malformed
+            ? {}
+            : {
+                owner: {
+                  pid: process.pid,
+                  host: "fixture-host",
+                  startedAt: null,
+                  processNamespace: null,
+                },
+                port: 19483,
+                mode: "foreground",
+                supervisor: null,
+              },
+        ),
+      );
+    }
+
+    const result = await inspectUnchanged(input);
+
+    expect(result.lease).toBe("unverifiable");
+    expect(result.nextSteps.join(" ")).toContain(
+      malformed ? "Check the Gateway owner" : "lease before offline maintenance",
+    );
+    expect(result.issues).toEqual(
+      malformed ? ["The recorded Gateway lease could not be verified."] : [],
+    );
   });
 
   it("reports missing and damaged stores as unknown without creating or repairing them", async () => {
@@ -149,7 +217,7 @@ describe("physical store diagnostics", () => {
   it.each([
     [1, "sqlite", 2, 1, "doctor --fix"],
     [2, "postgres", 2, 0, "database port"],
-    [0, "sqlite", null, null, "backup"],
+    [0, "sqlite", null, null, null],
   ] as const)(
     "inspects SQLite %i against %s without blocking or changing bytes",
     async (version, effective, expectedVersion, pending, fix) => {
@@ -185,7 +253,11 @@ describe("physical store diagnostics", () => {
         lease: "unverifiable",
         backup: null,
       });
-      expect(result.nextSteps.join(" ")).toContain(fix);
+      if (fix) {
+        expect(result.nextSteps.join(" ")).toContain(fix);
+      } else {
+        expect(result.nextSteps).toEqual([]);
+      }
       expect(result.nextSteps.join(" ")).not.toContain("expected schema version");
     },
   );
