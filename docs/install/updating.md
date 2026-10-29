@@ -378,6 +378,12 @@ next update's admission can record the failed outcome without waiting for the
 inactivity grace period. Live or unverifiable drivers and retained recovery
 continue to preserve their ownership.
 
+If an explicit update timeout expires during preparation, the original updater
+records a failed outcome after its child work settles, while it still owns
+bookkeeping. Expiration during activation, unresolved child work, or lost
+ownership retains recovery custody instead. A timeout does not authorize a new
+process to take over an unresolved update.
+
 A successful foreground update hands completion to the replacement Gateway.
 Automatic history reconciliation preserves that handoff while startup verifies
 the running build. If the replacement never starts, `openclaw update repair`
