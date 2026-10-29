@@ -29,6 +29,7 @@ export async function isUnsettledGatewayRequestTimeout(error: unknown): Promise<
     return false;
   }
   const { isGatewayTransportError } = await loadMessageGatewayRuntime();
+  // A startup or pre-hello timeout never reached the Gateway, so a retry would send anew.
   return (
     isGatewayTransportError(error) && error.kind === "timeout" && error.requestDispatched === true
   );
