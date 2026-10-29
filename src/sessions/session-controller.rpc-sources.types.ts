@@ -1,7 +1,4 @@
-import type {
-  AdmittedRunOperatorAuthority,
-  OperationalRunInstanceRef,
-} from "../agents/admitted-run-context.js";
+import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { ChatAbortDiagnosticReason } from "../gateway/chat-abort-diagnostics.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 import type {
@@ -27,8 +24,6 @@ export type RpcSourceTiming = {
 };
 
 export type RpcSourceAdapter = SessionControllerSourceAdapter & {
-  /** Original personal ingress, bound at admission; identity evidence, not a new execution grant. */
-  initiatingPersonalOperator?: AdmittedRunOperatorAuthority;
   /** Source-local deadline facts; execution owns the running timeout. */
   timing?: RpcSourceTiming;
   /** Captures this run's canonical producer before cancellation releases its live slot. */

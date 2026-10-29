@@ -14,9 +14,12 @@ import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixt
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import * as execRequest from "../infra/exec-request-context.js";
+import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import * as chatAbort from "./chat-abort.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import * as abortPreparation from "./server-methods/chat-aborted-partial.js";
@@ -66,6 +69,21 @@ it(
     };
     const wait = <T>(work: Promise<T>) => withinTest(work, signal);
     const errors: unknown[] = [];
+    const cancellation = vi.spyOn(chatAbort, "abortChatRunById");
+    const custody = new Map<string, execRequest.ExecRequestCustody>();
+    const originalTurn = execRequest.withExecRequestTurn;
+    const captureTurn = vi
+      .spyOn(execRequest, "withExecRequestTurn")
+      .mockImplementation(<T>(params: Parameters<typeof originalTurn>[0], run: () => Promise<T>) =>
+        originalTurn(params, async () => {
+          const captured = execRequest.captureExecRequestCustody(params.identity);
+          if (captured && params.identity.runId) {
+            custody.set(params.identity.runId, captured);
+          }
+          return run();
+        }),
+      );
+    let removeNativeHarness: (() => void) | undefined;
     const providerServer = productProvider(errors, async (_body, response) => {
       const hold = holds.shift();
       if (!hold) {
@@ -263,6 +281,9 @@ it(
       await expect(stop(second, active.runId, { sessionId: randomUUID() })).rejects.toMatchObject({
         code: "INVALID_REQUEST",
       });
+      expect(
+        cancellation.mock.calls.filter(([, params]) => params.runId === active.runId),
+      ).toHaveLength(0);
 
       const bobHold = holdNext();
       const bobQueued = await send(bob, randomUUID(), "followup");
@@ -307,10 +328,76 @@ it(
         ),
       );
       const followup = await send(second, randomUUID(), "followup");
+      const foreignHold = holdNext();
+      const foreignSessionKey = `agent:main:foreign-native-${randomUUID()}`;
+      const foreignRun = await bob.request<{ runId: string }>("chat.send", {
+        sessionKey: foreignSessionKey,
+        message: "Prepare the independent dispatch report",
+        idempotencyKey: randomUUID(),
+        deliver: false,
+      });
+      await wait(
+        awaitGateBeforeSettlement(
+          foreignHold.entered.promise,
+          terminal(foreignRun.runId),
+          "Foreign run settled before provider",
+        ),
+      );
+      // Capture real dispatch custody; the fixture models only the external child effect.
+      // Retired Bob custody also exercises a foreign native owner in this same writable chat.
+      const nativeRunIds = [sessionRun.runId, foreignRun.runId, bobQueued.runId];
+      const children = nativeRunIds.map((runId) => {
+        const requestCustody = custody.get(runId);
+        expect(requestCustody).toBeDefined();
+        return { runId, requestCustody, cancel: vi.fn() };
+      });
+      const hooks = requireActivePluginRegistry().agentHarnesses;
+      const registration = {
+        pluginId: "core",
+        source: "runtime",
+        harness: {
+          id: "initiator-native-stop",
+          label: "Native Stop fixture",
+          supports: () => ({ supported: false }),
+          runAttempt: async () => {
+            throw new Error("No inference in cancellation fixture");
+          },
+          withDescendantCancellation: (params, run) =>
+            run(async () => {
+              const selected = children.filter((child) =>
+                params.acceptsRequest(child.requestCustody),
+              );
+              selected.forEach((child) => child.cancel());
+              return { killed: selected.length, cancelledRequesters: [] };
+            }),
+        },
+      } satisfies (typeof hooks)[number];
+      hooks.push(registration);
+      removeNativeHarness = () => {
+        const index = hooks.indexOf(registration);
+        if (index >= 0) {
+          hooks.splice(index, 1);
+        }
+      };
       expect(
         await reconnected.request("sessions.abort", { key: sessionKey, clearQueued: true }),
       ).toMatchObject({ status: "aborted" });
       expect(await wait(terminal(sessionRun.runId))).toBe("aborted");
+      expect(children[0]?.cancel).toHaveBeenCalledOnce();
+      expect(children[1]?.cancel).not.toHaveBeenCalled();
+      expect(children[2]?.cancel).not.toHaveBeenCalled();
+      expect(await bobSecond.request("sessions.abort", { key: sessionKey })).toMatchObject({
+        status: "aborted",
+      });
+      expect(children[2]?.cancel).toHaveBeenCalledOnce();
+      expect(children[0]?.cancel).toHaveBeenCalledOnce();
+      expect(
+        await bob.request("chat.abort", {
+          sessionKey: foreignSessionKey,
+          runId: foreignRun.runId,
+        }),
+      ).toMatchObject({ aborted: true });
+      expect(await wait(terminal(foreignRun.runId))).toBe("aborted");
       expect(await stop(reconnected, followup.runId)).toMatchObject({ aborted: false });
       expect(await second.request("chat.history", { sessionKey, limit: 1 })).toMatchObject({
         pendingInputs: { queuedCount: 0 },
@@ -348,12 +435,22 @@ it(
       setUserProfileRole(aliceId, "none");
       releaseAbort.resolve();
       await expect(denied).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(await wait(terminal(revokeRun.runId))).toBe("aborted");
+      const revocationEffects = cancellation.mock.calls
+        .filter(([, params]) => params.runId === revokeRun.runId)
+        .map(([, params]) => params.diagnosticReason);
+      expect(revocationEffects.length).toBeGreaterThan(0);
+      // Automatic revocation cleanup owns this effect; the denied Stop never reaches it.
+      expect(revocationEffects.every((reason) => reason === "authority-revoked")).toBe(true);
       expect(errors).toEqual([]);
     } finally {
       releasePreparation.resolve();
       releaseAbort.resolve();
       prepareSend?.mockRestore();
       prepareAbort?.mockRestore();
+      captureTurn.mockRestore();
+      cancellation.mockRestore();
+      removeNativeHarness?.();
       for (const hold of holds) {
         hold.release.resolve();
       }
