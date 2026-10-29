@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.ts";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -10,13 +11,12 @@ import { connectChatGateway, createChatGatewayInstance } from "./chat-real-gatew
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:avatar-revision-proof";
-// Minimal PNG so prepareGatewayAvatarDataUrl accepts a renderable image/* data URL.
-const dataAvatar = `data:image/png;base64,${Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1,
-  0, 0, 0, 1, 0x08, 0x06, 0, 0, 0, 0x1f, 0x15, 0xc4, 0x89, 0, 0, 0, 0x0a, 0x49, 0x44, 0x41, 0x54,
-  0x78, 0x9c, 0x63, 0, 0, 0, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0, 0, 0, 0, 0x49, 0x45, 0x4e,
-  0x44, 0xae, 0x42, 0x60, 0x82,
-]).toString("base64")}`;
+// Valid decodable PNG: production avatar delivery runs createImageProcessor().encode.
+const dataAvatar = `data:image/png;base64,${createSolidPngBuffer(2, 2, {
+  r: 34,
+  g: 197,
+  b: 94,
+}).toString("base64")}`;
 
 type AvatarNetworkProof = {
   url: string;
@@ -86,10 +86,15 @@ async function openSession(page: Page) {
 
 suite.define(() => {
   it("projects a revisioned session owner avatarUrl and loads it in the browser", async () => {
+    // sessions.create is a closed object without owner; assign after create.
     await client.request("sessions.create", {
       key: sessionKey,
       agentId: "main",
       label: "Avatar revision proof",
+    });
+    await client.request("sessions.assignOwner", {
+      key: sessionKey,
+      agentId: "main",
       owner: { type: "agent", id: "main" },
     });
 
