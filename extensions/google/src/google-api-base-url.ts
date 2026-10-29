@@ -30,21 +30,13 @@ const GOOGLE_VERTEX_MULTI_REGION_HOSTS = new Set([
   "aiplatform.us.rep.googleapis.com",
 ]);
 
-function resolveGoogleVertexHostnameLocation(hostname: string): string | undefined {
-  const normalized = hostname.toLowerCase();
-  if (normalized === GOOGLE_VERTEX_HOST) {
-    return "global";
-  }
-  if (GOOGLE_VERTEX_MULTI_REGION_HOSTS.has(normalized)) {
-    return normalized.split(".")[1];
-  }
-  return normalized.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX)
-    ? normalized.slice(0, -GOOGLE_VERTEX_REGION_HOST_SUFFIX.length)
-    : undefined;
-}
-
 export function isGoogleVertexHostname(hostname: string): boolean {
-  return resolveGoogleVertexHostnameLocation(hostname) !== undefined;
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === GOOGLE_VERTEX_HOST ||
+    normalized.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX) ||
+    GOOGLE_VERTEX_MULTI_REGION_HOSTS.has(normalized)
+  );
 }
 
 export function resolveGoogleVertexBaseUrlLocation(baseUrl?: string | null): string | undefined {
@@ -54,7 +46,15 @@ export function resolveGoogleVertexBaseUrlLocation(baseUrl?: string | null): str
     return undefined;
   }
   const url = URL.parse(raw);
-  return url ? resolveGoogleVertexHostnameLocation(url.hostname) : undefined;
+  if (!url || !isGoogleVertexHostname(url.hostname)) {
+    return undefined;
+  }
+  if (url.hostname === GOOGLE_VERTEX_HOST) {
+    return "global";
+  }
+  return GOOGLE_VERTEX_MULTI_REGION_HOSTS.has(url.hostname)
+    ? url.hostname.split(".")[1]
+    : url.hostname.slice(0, -GOOGLE_VERTEX_REGION_HOST_SUFFIX.length);
 }
 
 export function isGoogleVertexBaseUrl(baseUrl?: string | null): boolean {

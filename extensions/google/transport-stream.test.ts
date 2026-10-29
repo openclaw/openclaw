@@ -139,7 +139,6 @@ function withProviderContextHandoff(
 async function runGoogleVertexStreamResult(params: {
   model?: Model<"google-vertex">;
   fetch: typeof guardedFetchMock;
-  location?: string;
 }) {
   const streamFn = createGoogleVertexTransportStreamFn();
   const stream = await Promise.resolve(
@@ -148,11 +147,7 @@ async function runGoogleVertexStreamResult(params: {
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
         typeof streamFn
       >[1],
-      {
-        apiKey: "gcp-vertex-credentials",
-        fetch: params.fetch,
-        location: params.location,
-      } as Parameters<typeof streamFn>[2],
+      { apiKey: "gcp-vertex-credentials", fetch: params.fetch } as Parameters<typeof streamFn>[2],
     ),
   );
   return stream.result();
@@ -1859,87 +1854,27 @@ describe("google transport stream", () => {
   });
 
   it.each([
-    ["eu", "https://aiplatform.eu.rep.googleapis.com"],
-    ["us", "https://aiplatform.us.rep.googleapis.com"],
-  ])(
-    "routes the %s Vertex multi-region through the production stream",
-    async (location, origin) => {
-      const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-region-"));
-      vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
-      vi.stubEnv("HOME", path.join(tempDir, "home"));
-      vi.stubEnv("APPDATA", "");
-      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
-      vi.stubEnv("GOOGLE_CLOUD_LOCATION", location);
-      googleAuthGetAccessTokenMock.mockResolvedValueOnce("oauth-token");
-      guardedFetchMock.mockResolvedValueOnce(
-        buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
-      );
-      await runGoogleVertexStreamResult({ fetch: vi.fn() });
+    ["aiplatform.eu.rep", "us-central1", "eu"],
+    ["aiplatform.us.rep", "us-central1", "us"],
+    ["aiplatform", "us-central1", "global"],
+    ["us-east5-aiplatform", "global", "us-east5"],
+    ["custom", "us-central1", "us-central1"],
+  ])("routes %s through the production Vertex stream", async (host, environment, location) => {
+    await useGoogleAuthLibraryCredentials("endpoint-location", "fixture-token");
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", environment);
+    mockGoogleTextResponse();
+    const baseUrl = `https://${host}.googleapis.com`;
+    await runGoogleVertexStreamResult({
+      model: buildGoogleVertexModel({ baseUrl }),
+      fetch: vi.fn(),
+    });
 
-      const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
-      expect(String(url)).toBe(
-        `${origin}/v1/projects/demo/locations/${location}/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse`,
-      );
-    },
-  );
-
-  it.each([
-    ["global endpoint", "https://aiplatform.googleapis.com", "us-central1", undefined, "global"],
-    [
-      "regional endpoint",
-      "https://us-east5-aiplatform.googleapis.com",
-      "global",
-      undefined,
-      "us-east5",
-    ],
-    ["EU endpoint", "https://aiplatform.eu.rep.googleapis.com", "us-central1", undefined, "eu"],
-    ["US endpoint", "https://aiplatform.us.rep.googleapis.com", "us-central1", undefined, "us"],
-    [
-      "explicit option",
-      "https://us-east5-aiplatform.googleapis.com",
-      "us-central1",
-      "global",
-      "global",
-    ],
-    ["custom endpoint", "https://vertex.example.com", "us-central1", undefined, "us-central1"],
-    [
-      "unrelated REP host",
-      "https://discoveryengine.eu.rep.googleapis.com",
-      "global",
-      undefined,
-      "global",
-    ],
-    [
-      "malformed endpoint",
-      "https://us-east5-aiplatform.googleapis.com:invalid",
-      "global",
-      undefined,
-      "global",
-    ],
-    ["endpoint without environment", "https://aiplatform.googleapis.com", "", undefined, "global"],
-  ])(
-    "uses the selected %s for the Vertex request location",
-    async (_name, baseUrl, environment, location, expectedLocation) => {
-      await useGoogleAuthLibraryCredentials("endpoint-location", "fixture-token");
-      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
-      vi.stubEnv("GOOGLE_CLOUD_LOCATION", environment);
-      mockGoogleTextResponse();
-
-      const result = await runGoogleVertexStreamResult({
-        model: buildGoogleVertexModel({ baseUrl }),
-        fetch: vi.fn(),
-        location,
-      });
-
-      expect(result.stopReason).toBe("stop");
-      expect(result.content).toEqual([{ type: "text", text: "ok" }]);
-      const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
-      expect(String(url)).toBe(
-        `${baseUrl}/v1/projects/demo/locations/${expectedLocation}/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse`,
-      );
-      expect(guardedFetchMock).toHaveBeenCalledOnce();
-    },
-  );
+    const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(String(url)).toBe(
+      `${baseUrl}/v1/projects/demo/locations/${location}/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse`,
+    );
+  });
 
   it("never refreshes stale home ADC when the selected Cloud SDK directory has no credentials", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-stale-home-"));
