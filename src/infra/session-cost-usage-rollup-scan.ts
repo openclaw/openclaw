@@ -1,10 +1,13 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { projectTranscriptNavigationFields } from "../config/sessions/transcript-navigation-fields.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { sha256Base64Url } from "./crypto-digest.js";
+import {
+  dropInheritedTranscriptEvents,
+  projectUsageScanFields,
+} from "./session-cost-usage-inherited.js";
 import {
   computeUsageTokenTotals,
   parseUsageCostTranscriptRecord,
@@ -138,14 +141,14 @@ export async function scanMemoryUsageCostRollup(params: {
     };
     if (isRecord(event)) {
       record.usageEntry = parseUsageCostTranscriptRecord(event);
-      projectTranscriptNavigationFields(event, record);
+      projectUsageScanFields(event, record);
     }
     return record;
   });
   const scan = createUsageRollupScan({ ...params, appendOnly: false });
   await scan.addEntries(
-    selectVisibleTranscriptEvents(records).flatMap((record) =>
-      record.usageEntry ? [record.usageEntry] : [],
+    dropInheritedTranscriptEvents(records, selectVisibleTranscriptEvents(records)).flatMap(
+      (record) => (record.usageEntry ? [record.usageEntry] : []),
     ),
   );
   const visibleLeafId = scanSessionTranscriptTree(records).leafId;

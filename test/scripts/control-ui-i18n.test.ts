@@ -24,6 +24,8 @@ import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
+import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerNewSessionRuntimeEnglish } from "../../ui/src/i18n/locales/en-new-session-runtime.ts";
@@ -299,6 +301,8 @@ describe("control-ui-i18n generated ownership", () => {
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenCatalog(catalog, "en");
     for (const fragment of [
+      registerChatSessionEnglish.catalog,
+      registerChatSessionOptionalEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
       registerLabsEnglish.catalog,
       registerNewSessionRuntimeEnglish.catalog,
@@ -310,6 +314,31 @@ describe("control-ui-i18n generated ownership", () => {
         expect(source.get(key), key).toBe(value);
       }
     }
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.workspaceConflict."))
+        .map((key) => key.slice("chat.workspaceConflict.".length)),
+    ).toEqual([
+      "titleOne",
+      "titleMany",
+      "description",
+      "summary",
+      "showCommands",
+      "morePaths",
+      "stagedResult",
+      "copyStagedResult",
+      "inspectCloud",
+      "takeCloud",
+      "copyInspectCommand",
+      "copyTakeCommand",
+      "commandHelp",
+      "commandsUnavailable",
+      "dismiss",
+      "eventSender",
+      "eventTitleOne",
+      "eventTitleMany",
+      "eventDescription",
+    ]);
     expect(source.get("meetingCapture.title")).toBe("Meeting capture");
     expect(source.get("meetingCapture.sources")).toBe("Auto-start sources");
   });

@@ -17,6 +17,7 @@ import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withDoctorProgress } from "../flows/doctor-health-startup.js";
+import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
@@ -501,7 +502,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const prompter = params.prompter;
     const repairSequence = await withDoctorProgress(
-      "Config repairs",
+      formatDoctorProgressPhase("Config repairs"),
       () =>
         runDoctorRepairSequence({
           state,

@@ -110,7 +110,7 @@ shell-completion metadata.
   `image describe`, `image describe-many`, `audio transcribe`, `video generate`, `video describe`,
   `embedding create`, and `model auth login/logout/status`) also accept `--agent <id>`. They resolve
   an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
-- Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged.
+- Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged. An interrupt stops an in-progress provider-URL video download instead of letting it finish and publish a late result.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - Model runs load the catalog for case correction only when an explicit model override contains uppercase characters. Runs using the configured default or a lowercase model ref skip that catalog lookup.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.

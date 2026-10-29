@@ -233,7 +233,6 @@ type MatrixCliCommandConfig<TResult> = {
   onJson?: (result: TResult) => unknown;
   shouldFail?: (result: TResult) => boolean;
   errorPrefix: string;
-  onJsonError?: (message: string) => unknown;
   onTextError?: (message: string) => void;
   gateway?: {
     method: string;
@@ -304,13 +303,13 @@ export async function runMatrixCliCommand<TResult>(
       process.exitCode = 1;
     }
   } catch (err) {
-    const message = formatErrorMessage(err);
+    // The host owns JSON envelopes and output draining for plugin action failures.
     if (json) {
-      printJson(config.onJsonError ? config.onJsonError(message) : { error: message });
-    } else {
-      console.error(`${config.errorPrefix}: ${formatMatrixCliText(message)}`);
-      config.onTextError?.(message);
+      throw err;
     }
+    const message = formatErrorMessage(err);
+    console.error(`${config.errorPrefix}: ${formatMatrixCliText(message)}`);
+    config.onTextError?.(message);
     process.exitCode = 1;
   }
 }

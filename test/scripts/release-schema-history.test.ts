@@ -23,7 +23,7 @@ function fixture() {
     "| 1 | Initial store | `v2026.9.1` |",
     "| 2 | Earlier beta | `v2026.9.2-beta.1` |",
     "| 3 | Unreleased migration description | Unreleased |",
-    "| 4-5 | Consolidation | Unreleased |",
+    "| 4-5 | Consolidation | `Unreleased` |",
     "",
   ].join("\n");
   for (const file of files) {
@@ -39,7 +39,7 @@ it.each(["2026.10.1", "v2026.10.1-beta.1"])(
     const tag = version.startsWith("v") ? version : `v${version}`;
     const expected = content
       .replace("description | Unreleased |", `description | \`${tag}\` |`)
-      .replace("Consolidation | Unreleased |", `Consolidation | \`${tag}\` |`);
+      .replace("Consolidation | `Unreleased` |", `Consolidation | \`${tag}\` |`);
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = spawnSync(process.execPath, [cli, version], { cwd: root, encoding: "utf8" });
       expect(result.stderr).toBe("");

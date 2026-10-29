@@ -57,6 +57,7 @@ import {
 import { isPlainCommandExitFailure, type CommandOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
+import { createUpdateDoctorProgress } from "./progress.js";
 import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { readUpdateTargetCliOptions } from "./update-command-cli-options.js";
@@ -160,7 +161,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   let result: { stdout?: unknown; stderr?: unknown } | undefined;
   let warning: PluginUpdateWarning | undefined;
   let failure: { error: unknown } | undefined;
-  const sectionTiming = createUpdateDoctorSectionTiming();
+  const sectionTiming = createUpdateDoctorSectionTiming(process.env, createUpdateDoctorProgress());
   let doctorStep: UpdateStepResult | undefined;
   let doctorStartedAt: number | undefined;
   assertCurrent();

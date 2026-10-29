@@ -95,6 +95,7 @@ export function createDispatchFixture(
     runDiscoveryMisses?: number;
     targetAlreadyRemote?: boolean;
     includeTargetRef?: boolean;
+    releaseRef?: string;
     workflowSource?: string;
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
@@ -136,7 +137,7 @@ export function createDispatchFixture(
   const payloadCapturePath = join(root, "payload-capture.json");
   const preloadPath = join(root, "immediate-poll.mjs");
   const waitCallsPath = join(root, "wait-calls.txt");
-  const releaseRef = "release/2026.8.1";
+  const releaseRef = options.releaseRef ?? "release/2026.8.1";
   mkdirSync(binDir);
   writeFileSync(npmCallsPath, "");
   writeFileSync(
@@ -673,14 +674,8 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
     const args: string[] = [];
     if (!recoveryOnly) {
       if (options.candidateOwned) {
-        args.push(
-          "--admission-workflow-sha",
-          workflowSha,
-          "-f",
-          "provider=openai",
-          "-f",
-          "release_profile=stable",
-        );
+        args.push("--admission-workflow-sha", workflowSha);
+        args.push("-f", "provider=openai", "-f", "release_profile=stable");
       } else if (!extraArgs.includes("--trusted-workflow-ref")) {
         args.push("--trusted-workflow-ref", "main", "--workflow-sha", workflowSha);
       }

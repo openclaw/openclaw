@@ -27,6 +27,7 @@ import {
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../runtime.js";
+import { monotonicDeadlineAfter, monotonicNow } from "../../shared/monotonic-time.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { measureCliCommandStartup } from "../command-startup-timing.js";
@@ -81,7 +82,8 @@ async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
       withPluginRuntimeRegistryScope(registry, () =>
         runner.runGatewayStop({ reason: "cli message action complete" }, {}),
       ),
-    Date.now() + GATEWAY_STOP_TIMEOUT_MS,
+    monotonicDeadlineAfter(GATEWAY_STOP_TIMEOUT_MS),
+    monotonicNow,
   );
   if (result === ABSOLUTE_DEADLINE_EXPIRED) {
     defaultRuntime.error(

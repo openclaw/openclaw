@@ -1,9 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   ErrorCodes,
   type GatewayCoreRequestParams,
   errorShape,
   validateSessionGitHubPublishParams,
   validateSessionGitHubActionParams,
+  validateSessionGitHubReadinessParams,
   validateSessionGitHubOptionsParams,
   validateSessionGitHubStatusParams,
   validateSessionGitHubConfirmParams,
@@ -22,15 +25,16 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationOptionsIdentity,
-  hasSupportedGitHubPublicationTarget,
+  qualifyGitHubPublicationSource,
   prepareGitHubPublicationSession,
-  type PublicationSessionIdentity,
 } from "../github-publication-availability.js";
 import { refreshManagedWorkspaceBase } from "../github-publication-base-refresh.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { performSessionGitHubInspection } from "../github-publication-inspect.js";
+import { readGitHubPublicationReadiness } from "../github-publication-readiness.js";
 import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
 import { prepareGitHubPublicationRequesterV2 } from "../github-publication-requester.js";
+import type { PublicationSessionIdentity } from "../github-publication-session.types.js";
 import { adoptUnboundPullRequestWorkspace } from "../session-pr-workspace-adoption.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -58,6 +62,7 @@ const sessionGitHubFailureMessages = {
   "sessions.github.action":
     "GitHub pull request action failed; inspect its current state before retrying.",
   "sessions.github.options": "GitHub publication options are unavailable.",
+  "sessions.github.readiness": "GitHub publication readiness is unavailable.",
   "sessions.github.status": "GitHub publication status is unavailable.",
   "sessions.github.confirm": "GitHub publication confirmation failed.",
 };
@@ -326,16 +331,6 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         if (caller?.workspacePrAdoptionSessionId !== loaded.entry.sessionId) {
           throw new Error("Local checkout publication requires an agent handoff.");
         }
-        const source = await prepareSessionCreateRequestedCwd({
-          cfg: context.getRuntimeConfig(),
-          requestedCwd: params.workspacePath,
-          clientPresent: true,
-          clientScopes: admitted.requester.snapshot.scopes,
-        });
-        admitted.requester.assertCurrent();
-        if (!source.ok) {
-          throw new Error(source.error.message);
-        }
         if (loaded.entry.worktree) {
           using owner = await resolveLocalWorkspaceOwner({
             ...session,
@@ -345,14 +340,28 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
               admitted.requester.assertCurrent();
             },
           });
+          const requestedPath = path.isAbsolute(params.workspacePath)
+            ? await fs.realpath(params.workspacePath)
+            : undefined;
+          owner?.assertCurrent();
+          // Existing ownership admits this checkout, even outside the default workspace.
           // canonicalWorkspaceDir is the skills/source workspace, not the owned checkout.
-          if (!owner || owner.worktree.path !== source.value) {
+          if (!owner || owner.worktree.path !== requestedPath) {
             throw new Error(
               "This session already publishes a different checkout. Publish from its current managed worktree, or use a separate session for the other checkout; no files were moved or published.",
             );
           }
-          owner.assertCurrent();
         } else {
+          const source = await prepareSessionCreateRequestedCwd({
+            cfg: context.getRuntimeConfig(),
+            requestedCwd: params.workspacePath,
+            clientPresent: true,
+            clientScopes: admitted.requester.snapshot.scopes,
+          });
+          admitted.requester.assertCurrent();
+          if (!source.ok) {
+            throw new Error(source.error.message);
+          }
           const placements = context.workerSessionPlacementService;
           if (!placements?.withLocalWorkspaceReservation) {
             throw new Error("Workspace preparation is unavailable during Gateway startup.");
@@ -384,6 +393,24 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       });
       sessionMutationAuthorization?.assertCurrent();
       respond(true, result);
+    },
+  ),
+  "sessions.github.readiness": defineSessionGitHubMethod(
+    "sessions.github.readiness",
+    validateSessionGitHubReadinessParams,
+    async (options) => {
+      const deadline = new AbortController();
+      const result = await raceWithTimeout(
+        () => readGitHubPublicationReadiness(options, options.params, deadline.signal),
+        GITHUB_OPTIONS_TIMEOUT_MS,
+        () => {
+          const error = new GitHubOptionsTimeoutError();
+          deadline.abort(error);
+          throw error;
+        },
+        { ref: false },
+      );
+      options.respond(true, result);
     },
   ),
   "sessions.github.options": defineSessionGitHubMethod(
@@ -441,13 +468,16 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
               }
             : null;
           if (shared && read.sessionScoped) {
-            if (
-              !(await hasSupportedGitHubPublicationTarget(
-                session,
-                assertResponseCurrent,
-                read.currentSessionRead,
-              ))
-            ) {
+            const source = await qualifyGitHubPublicationSource(
+              session,
+              assertResponseCurrent,
+              read.currentSessionRead,
+            );
+            if (!source.ok) {
+              throw source.cause;
+            }
+            source.assertCurrent();
+            if (source.target.kind !== "supported") {
               shared = null;
               sharedUnavailableReason = "unsupported_workspace";
             }

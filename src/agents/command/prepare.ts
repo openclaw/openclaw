@@ -33,7 +33,7 @@ import {
   hasAgentDatabaseAdmissions,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
-import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
@@ -174,7 +174,7 @@ export async function prepareAgentCommandExecution(
     }
     const admissionAgentId =
       agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg });
-    await waitForAgentDatabaseWriteAdmission(admissionAgentId, { signal: abortSignal });
+    await waitForAgentInputAdmission(admissionAgentId, { cfg, signal: abortSignal });
     assertAgentDatabaseAdmitted(admissionAgentId);
   }
   const agentCfg = cfg.agents?.defaults;
@@ -266,7 +266,7 @@ export async function prepareAgentCommandExecution(
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
-  await waitForAgentDatabaseWriteAdmission(sessionAgentId, { signal: abortSignal });
+  await waitForAgentInputAdmission(sessionAgentId, { cfg, signal: abortSignal });
   assertPreparationCurrent();
   assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({

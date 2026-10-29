@@ -17,6 +17,18 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
+Temporary workspaces require a private root and safe ancestor permissions. If the
+selected system temp root has a group- or world-writable ancestor without sticky
+protection, OpenClaw warns with that ancestor's path and uses private scratch
+under the selected state directory instead. The fallback uses the same private-root
+checks and does not change shared directory permissions. If both locations are
+unsafe, the error names the directory whose owner must restore sticky protection
+(`chmod +t` for shared temp directories) or remove group/other write access
+(`chmod go-w` for private ancestors) before retrying.
+The installed updater must contain this fix; an older release may still need its
+temp hierarchy repaired before updating. Shared coordination databases and service
+locks keep their existing per-user locations across profiles.
+
 Update checks, candidate rehearsal, activation Doctor, and verification inherit
 the managed Gateway's Node heap controls from its effective service command and
 `NODE_OPTIONS`. Command-line heap controls take precedence. An empty service
@@ -153,7 +165,14 @@ For supported package targets, the candidate makes that
 decision after private staging; see [Candidate-owned admission](#candidate-owned-admission).
 The local diagnostic identifies invalid fields and recommends
 `openclaw doctor --fix`, followed by correcting any remaining errors. A dry run
-keeps this guidance in its JSON `notes` without changing the configuration.
+keeps this guidance in its JSON `notes` without changing the configuration, even
+when the authored file cannot be parsed. In that case, preview leaves the database
+engine unresolved instead of assuming a backend; actual updates still refuse admission.
+For malformed source, text and JSON previews do not inspect runtime databases or
+create profile, cache, or scratch artifacts. They do not save diagnostic reports.
+Package-manager probes that create caches wait until the source is readable.
+Native ownership and recovery refusals still apply. Previews with readable
+configuration retain their existing diagnostics.
 Public failure reports retain the rejected schema area, such as `gateway.*`,
 while hiding operator-defined keys and rejected values. Admission still runs
 when the selected package version matches the installed version; the no-op
@@ -1009,6 +1028,13 @@ print progress steps or run the progress observer. Progress observes committed
 ledger rows through a reusable read-only worker connection instead of repeatedly
 copying shared state. This applies to updates launched by the fixed updater; a
 published older updater keeps its own progress reader until it is replaced.
+During activation and pre/post-plugin checks, the updater also prints bounded core
+Doctor phase messages to stderr before the child finishes, including with `--json`. These informational
+messages respect the console log level and JSON console style. Plugin labels and
+arbitrary child diagnostics stay in the captured output. Phase notices do not
+resume ledger observation while Doctor changes schemas, and do not indicate a
+successful outcome; the final result still owns that outcome. The pre/post-plugin
+Doctor's terminal diagnostic replay can include phases already shown live.
 State inspection and snapshot progress is advisory: a temporarily full progress
 pipe can omit an update without interrupting the underlying work. Other output
 errors still fail the affected operation and retain its diagnostic report.

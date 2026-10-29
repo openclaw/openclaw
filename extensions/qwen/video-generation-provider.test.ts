@@ -64,11 +64,11 @@ function expectPostJsonRequest(
 
 it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
   mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
-  let nowMs = Date.now();
-  // Force preparation to cross a clock tick instead of relying on wall-clock timing.
-  const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs++);
+  let nowMs = performance.now();
+  // Preparation consumes the same monotonic clock used by the operation budget.
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => nowMs++);
   try {
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     const result = await generateVideo({
       model: "wan2.6-r2v-flash",
       inputImages: [{ url: "https://example.com/ref.png" }],
@@ -78,7 +78,7 @@ it("submits async Wan generation, polls task status, and downloads the resulting
 
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
     expectPostJsonRequest(postJsonRequestMock.mock.calls[0]?.[0], {
-      elapsedMs: Date.now() - startedAt,
+      elapsedMs: performance.now() - startedAt,
       url: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
       body: {
         model: "wan2.6-r2v-flash",

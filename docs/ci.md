@@ -224,7 +224,11 @@ Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries
 
 iOS screenshot capture, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
-iOS Store Release and daily TestFlight check out the exact selected commit at depth one, then fetch its complete ancestry without unrelated branches, tags, or historical file contents. Release-note reads fetch their recorded baseline refs and hydrate historical contents as needed. Source identity and main-ancestry checks remain unchanged.
+iOS and Android releases check out the exact selected commit at depth one and gather their release plans there. The release entry point creates a detached worktree and fetches complete ancestry only when preparing notes, without unrelated branches, tags, or historical file contents. TestFlight attempts that are unchanged or deferred for review or processing skip that extra checkout and history transfer. Release-note reads fetch their recorded baseline refs and hydrate historical contents as needed. Source identity and main-ancestry checks remain unchanged.
+
+Both release destinations share a separate Watch RTC device-library cache, populated only by successful trusted `main` release runs. It retains both `arm64` and `arm64_32` device slices without sharing the simulator cache. The existing build phase verifies each slice's input fingerprint and checksum before reuse; a miss runs the locked Cargo build. Cache transfer failures do not block a release.
+
+The same release job caches Xcode's `SourcePackages` downloads separately from ordinary CI, keyed by runner platform, architecture, Xcode, package manifests, and available lockfiles. Both destinations use the canonical `$RUNNER_TEMP/ios-release-recovery/source` project path, which determines Xcode's default DerivedData directory. Automatic package resolution and clean compilation remain enabled; build products and screenshot DerivedData are excluded. Only successful release jobs save downloads, and cache transfer failures retain the cold resolution path. Changing the canonical project path requires a new cache namespace.
 
 Release qualification disables Spotlight indexing on the disposable runner's Data volume before checkout. After Simulator boot, it requires ten seconds of at least 30% idle host CPU within five minutes before issuing the pairing credential. This keeps first-launch background work out of the Gateway and XCTest deadlines. Local qualification uses the same CPU readiness check and leaves host indexing settings to the operator.
 
@@ -596,3 +600,21 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Release channels](/install/development-channels)
 
 Ordinary PR iOS smoke keeps app and test-bundle compilation while selecting its two simulator groups by source owner. With neither group selected, simulator preparation is skipped. `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` restores full PR execution; [selection and routing](/ci/scope-and-routing/selection) documents the owners and full hourly/release coverage.
+
+Android's existing `android-access-native` emulator rows retain their packaged
+Access-crypto proof and exercise Gateway WebSocket and widget HTTPS clients on
+Android Conscrypt. Each client must pass matching leaf-pin and platform-root
+controls, reject a wrong pin and wrong hostname before an origin request, and
+reject the verified incident OV G3C intermediate in both trust modes. The report
+reducer requires all twelve TLS class/method identities exactly once, separately
+from the existing Access case and packaged-library checks.
+
+These secretless, disposable emulators temporarily import a synthetic localhost
+root and the verified incident root into copied APEX CA stores in the zygote
+mount namespaces before launching the test app. Stock roots and SELinux remain
+intact. Cleanup stops/uninstalls the task app, unmounts the copied stores, verifies
+the full original-store manifests and SELinux state, and always disposes the
+emulator and deletes its AVD without a snapshot. Failed restoration is preserved as contaminated
+runner evidence; that emulator must never be reused. Reports include fixture
+identities, before/after manifests and cleanup/disposal receipts. This adds no
+jobs, runner tiers or fanout and never changes host trust.

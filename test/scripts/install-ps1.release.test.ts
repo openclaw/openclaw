@@ -464,7 +464,81 @@ try {
       '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
       "}",
     ),
+    "target-node-engine": installerFixture(
+      String.raw`
+$cases = @(
+  @('24.21.0', '>=24.22.1 <25 || >=26.12.1', $true),
+  @('24.22.1', '>=24.22.1 <25 || >=26.12.1', $false),
+  @('24.21.0', '>=24.16.0 <25 || >=26.1.0', $false),
+  @('24.21.0', '', $true),
+  @('26.12.0', '', $true),
+  @('26.12.1', '', $false)
+)
+function Check-ExistingOpenClaw { return $false }
+function Get-Command { return [pscustomobject]@{ Source = 'Invoke-FixtureNode' } }
+function Invoke-FixtureNode {
+  $global:LASTEXITCODE = 0
+  if ($args[0] -eq '-v') { return "v$script:fixtureVersion" }
+  $input | Out-Null
+  return '{"available":true,"version":"3.51.3","text":true,"blob":true,"json":true}'
+}
+function Invoke-NpmCommand {
+  param([string[]]$Arguments)
+  if (($Arguments -join ' ') -ne 'view openclaw@extended-stable engines.node --fetch-timeout=5000 --fetch-retries=0') { throw 'wrong target lookup' }
+  $global:LASTEXITCODE = if ($script:fixtureEngine) { 0 } else { 1 }
+  return $script:fixtureEngine
+}
+function Install-Node { $script:upgraded = $true; $script:fixtureVersion = '26.12.1'; return $true }
+function Test-PreviousGitWrapper { throw 'package stage reached' }
+$InstallMethod = 'npm'
+$Tag = 'extended-stable'
+foreach ($case in $cases) {
+  $script:fixtureVersion = $case[0]; $script:fixtureEngine = $case[1]; $script:upgraded = $false
+  try { Main; throw 'package stage missing' } catch {
+    if ($_.Exception.Message -ne 'package stage reached') { throw }
+  }
+  if ($script:upgraded -ne $case[2]) { throw "Incorrect upgrade decision for $case" }
+}
+`,
+    ),
+    "git-target-node-engine": installerFixture(
+      String.raw`
+$root = Join-Path $script:InstallerTempDirectory 'git-engine'
+$null = New-Item -ItemType Directory -Path (Join-Path $root '.git') -Force
+function Check-ExistingOpenClaw { return $false }
+function Ensure-Git { return $true }
+function Assert-GitCheckoutHasCommit { }
+function git { $global:LASTEXITCODE = 0 }
+function Update-GitCheckoutBestEffort {
+  Set-Content -LiteralPath (Join-Path $root 'package.json') -Value ('{"engines":{"node":"' + $script:fixtureEngine + '"}}')
+}
+function Get-Command { return [pscustomobject]@{ Source = 'Invoke-FixtureNode' } }
+function Invoke-FixtureNode {
+  if (-not (Test-Path (Join-Path $root 'package.json'))) { throw 'Node ran before checkout' }
+  $global:LASTEXITCODE = 0
+  if ($args[0] -eq '-v') { return "v$script:fixtureVersion" }
+  $input | Out-Null
+  return '{"available":true,"version":"3.51.3","text":true,"blob":true,"json":true}'
+}
+function Invoke-NpmCommand { throw 'npm ran before git build' }
+function Install-Node { $script:upgraded = $true; $script:fixtureVersion = '26.12.1'; return $true }
+function Ensure-Pnpm { throw 'git build reached' }
+$InstallMethod = 'git'; $GitDir = $root
+foreach ($case in @(
+  @('>=24.16.0 <25 || >=26.1.0', $false),
+  @('>=24.22.1 <25 || >=26.12.1', $true)
+)) {
+  Remove-Item -LiteralPath (Join-Path $root 'package.json') -ErrorAction SilentlyContinue
+  $script:fixtureVersion = '24.21.0'; $script:fixtureEngine = $case[0]; $script:upgraded = $false
+  try { Main; throw 'git build missing' } catch {
+    if ($_.Exception.Message -ne 'git build reached') { throw }
+  }
+  if ($script:upgraded -ne $case[1]) { throw "Incorrect upgrade decision for $case" }
+}
+`,
+    ),
     "node-capabilities": installerFixture(
+      '$script:NodePackageEngine = ">=24.16.0 <25 || >=26.1.0"',
       `$cases = ${toPowerShellSingleQuotedLiteral(
         JSON.stringify([
           ["v24.22.1", "3.51.3", true, true],
@@ -1451,6 +1525,7 @@ try {
             "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)",
             installerFunctions([
               "Test-NodeVersionSupported",
+              "Test-NodePackageEngine",
               "Test-NodeSqliteSupported",
               "Check-Node",
             ]),
@@ -1600,11 +1675,14 @@ describe("install.ps1 stale Winget repair", () => {
       "Fail-Install",
       "Test-BooleanSuccessResult",
       "Test-NodeVersionSupported",
+      "Test-NodePackageEngine",
       "Test-NodeSqliteSupported",
       "Check-Node",
       "Invoke-NodePackageManagerInstall",
       "Install-Node",
+      "Resolve-NodePackageEngine",
       "Main",
+      "Ensure-Node",
     ]);
     const fixture = [
       "$ErrorActionPreference = 'Stop'",

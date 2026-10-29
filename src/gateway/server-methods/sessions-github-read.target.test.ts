@@ -327,7 +327,7 @@ describe("registered guest publication target discovery", () => {
     "preserves %s account discovery without a publication workspace",
     async (caller) => {
       await withReadFixture(async (fixture) => {
-        const target = vi.spyOn(availability, "hasSupportedGitHubPublicationTarget");
+        const target = vi.spyOn(availability, "qualifyGitHubPublicationSource");
         const respond = caller === "broad" ? await options(fixture) : vi.fn();
         if (caller === "internal") {
           await handleGatewayRequest({

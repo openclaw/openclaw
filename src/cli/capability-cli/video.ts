@@ -9,6 +9,7 @@ import {
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { positiveDurationError } from "../../shared/positive-duration.js";
 import { registerMediaUnderstandingCommand } from "./media-understanding-command.js";
@@ -93,11 +94,16 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           watermark: opts.watermark === true ? true : undefined,
           timeoutMs,
         });
+        // An accepted interrupt owns the exit status: stop before resolving a download
+        // or publishing instead of finishing the work late.
+        const signal = getAsyncWorkSignal();
         const outputs = await Promise.all(
           result.videos.map(async (video, index) => {
             if (!video.buffer && !video.url) {
               throw new Error(`Video asset at index ${index} has neither buffer nor url`);
             }
+
+            signal?.throwIfAborted();
 
             let videoBuffer = video.buffer;
             if (!videoBuffer && video.url) {
@@ -121,7 +127,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
               });
               const download = await fetchWithTimeoutGuarded(
                 downloadUrl,
-                { method: "GET" },
+                { method: "GET", signal },
                 GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS,
                 fetch,
                 {
@@ -161,11 +167,13 @@ export function registerVideoCapabilityCommands(capability: Command): void {
                           response.body as import("node:stream/web").ReadableStream<Uint8Array>,
                         ),
                         createWriteStream(tempPath, { flags: "wx" }),
+                        { signal },
                       );
                       const writtenSize = (await fs.stat(tempPath)).size;
                       if (writtenSize === 0) {
                         throw new Error("Generated media output is empty.");
                       }
+                      signal?.throwIfAborted();
                       return writtenSize;
                     },
                   });
@@ -188,6 +196,9 @@ export function registerVideoCapabilityCommands(capability: Command): void {
               }
             }
 
+            // A buffered asset is written by an owner that is not signal-aware, so this
+            // only stops an interrupt from starting that write.
+            signal?.throwIfAborted();
             return await writeOutputAsset({
               buffer: videoBuffer!,
               mimeType: video.mimeType,

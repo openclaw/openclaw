@@ -77,11 +77,16 @@ export function createDoctorPluginMigrationPreparation(params: {
       return;
     }
     deferred = await withArtifactPreservingStateReads(() =>
-      withOpenClawStateDatabaseReadSnapshot(async () => readDeferredPluginMigrations({ env }), {
-        env,
-      }),
+      withOpenClawStateDatabaseReadSnapshot(
+        async () => {
+          expectedPending = structuredClone(readDeferredPluginMigrations({ env }));
+          return readDeferredPluginMigrations({ env, includeDeferred: true });
+        },
+        {
+          env,
+        },
+      ),
     );
-    expectedPending = structuredClone(deferred);
     remember();
     previousLoaded = true;
   };
@@ -92,6 +97,7 @@ export function createDoctorPluginMigrationPreparation(params: {
   let runtimePluginAliases = new Set<string>();
   let unavailablePluginIds = new Set<string>();
   let discoveryBlockedPluginIds = new Set<string>();
+  let inactivePluginIds = new Set<string>();
   let replacementPluginIds: Readonly<Record<string, string>> = {};
   let sourceSnapshot: ConfigFileSnapshot | undefined;
   const inspectedStatelessPluginIds = new Set<string>();
@@ -114,6 +120,7 @@ export function createDoctorPluginMigrationPreparation(params: {
     runtimePluginAliases = new Set(inspection.runtimePluginAliases);
     unavailablePluginIds = new Set(inspection.unavailablePluginIds);
     discoveryBlockedPluginIds = new Set(inspection.discoveryBlockedPluginIds);
+    inactivePluginIds = new Set(inspection.inactivePluginIds);
     replacementPluginIds = inspection.replacementPluginIds ?? {};
     requirePlugins(inspection.requiredPluginIds, "requiresStateMigration");
     requirePlugins(inspection.inspectionRequiredPluginIds, "requiresDoctorInspection");
@@ -209,6 +216,7 @@ export function createDoctorPluginMigrationPreparation(params: {
       runtimePluginAliases.clear();
       unavailablePluginIds.clear();
       discoveryBlockedPluginIds.clear();
+      inactivePluginIds.clear();
       replacementPluginIds = {};
       inspectedStatelessPluginIds.clear();
       refreshSnapshot = true;
@@ -332,14 +340,15 @@ export function createDoctorPluginMigrationPreparation(params: {
               });
             if (
               !explicitlyEnabled &&
-              !plugin.requiresStateMigration &&
-              !plugin.requiresDoctorInspection
+              ((!plugin.requiresStateMigration && !plugin.requiresDoctorInspection) ||
+                (!successor && hasOwner(inactivePluginIds, plugin.pluginId)))
             ) {
+              const deferredUntilActive =
+                plugin.requiresStateMigration || plugin.requiresDoctorInspection;
               settlements.push({
                 pluginId: plugin.pluginId,
-                status: "completed",
-                reason:
-                  "Not applicable: the plugin owner is unavailable and there is no protected config to migrate. Existing state has been kept.",
+                status: deferredUntilActive ? "deferred" : "completed",
+                reason: `${deferredUntilActive ? "Deferred until active" : "Not applicable"}: the plugin owner is unavailable and there is no protected config to migrate. Existing state has been kept.`,
               });
               return true;
             }
@@ -441,7 +450,11 @@ export function createDoctorPluginMigrationPreparation(params: {
         previousById.delete(pluginId);
         const receipt = reported.get(pluginId);
         if (receipt) {
-          receipt.outcome = "completed";
+          receipt.outcome = settlements.some(
+            (entry) => entry.pluginId === pluginId && entry.status === "deferred",
+          )
+            ? "skipped"
+            : "completed";
           receipt.warnings = [];
         }
       }

@@ -523,7 +523,7 @@ export function loadTranscriptEventsFromDatabase(
 }
 
 /** Consume synchronously: the iterator must not outlive its fenced native snapshot. */
-export function readTranscriptEventsFromDatabase<T>(
+function readTranscriptEventsFromDatabase<T>(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
   consume: (events: Iterable<TranscriptEvent>) => T,

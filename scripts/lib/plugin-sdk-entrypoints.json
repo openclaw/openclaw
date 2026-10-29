@@ -46,6 +46,7 @@
   "plugin-config-runtime",
   "config-mutation",
   "cron-store-runtime",
+  "cron-tool-defaults",
   "json-schema-runtime",
   "json-schema-validator",
   "json-unsafe-integers",

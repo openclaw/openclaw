@@ -20,6 +20,7 @@ import {
   chatHeaderSharingSnapshotSchema,
   chatHeaderViewersSnapshotSchema,
 } from "./chat-header-viewers-snapshot.ts";
+import { trimmedChatHistoryPagination } from "./chat-history-pagination.ts";
 import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
 import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
@@ -43,7 +44,9 @@ const completePaginationSchema = json.object(
 const morePaginationSchema = json.object(
   {
     hasMore: json.literal(true),
-    nextOffset: nonnegative,
+    nextOffset: json.optional(nonnegative),
+    olderCursor: json.optional(json.refine(json.text, (value) => value.length > 0)),
+    needsBoundary: json.optional(json.literal(true)),
     totalMessages: json.optional(nonnegative),
   },
   true,
@@ -178,7 +181,7 @@ export async function parseSnapshotRecord(
   return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
 }
 
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 10;
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 11;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
 export async function createSnapshotRecord(
@@ -201,17 +204,10 @@ export async function createSnapshotRecord(
       start--;
     }
     if (start > 0) {
-      // Display rows are not Gateway page boundaries. Refill from zero on the
-      // first upward scroll; the history owner deduplicates the overlap and
-      // returns the next authoritative offset, including merged CLI histories.
+      // Display rows are not Gateway page boundaries. Reopen the held oldest
+      // source before paging; the original cursor would skip the discarded rows.
       changes.messages = messages.slice(start);
-      changes.pagination = {
-        hasMore: true,
-        nextOffset: 0,
-        ...(source.pagination.totalMessages !== undefined
-          ? { totalMessages: source.pagination.totalMessages }
-          : {}),
-      };
+      changes.pagination = trimmedChatHistoryPagination(source.pagination);
     }
     let historyChanged = false;
     const retainedMessages = changes.messages ?? messages;

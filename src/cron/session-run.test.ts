@@ -1,6 +1,8 @@
+import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOperatorRecoveryAuthority } from "../agents/operator-recovery.test-support.js";
 import type {
   SessionEventOptions,
@@ -8,6 +10,9 @@ import type {
 } from "../auto-reply/reply/session-event-contract.js";
 import type * as SessionHandoff from "../auto-reply/reply/session-event-handoff.js";
 import type { RestoredGatewayOperatorAuthority } from "../gateway/operator-run-recovery.js";
+import { prepareAutomationSystemEvents } from "../infra/system-events.js";
+import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveCronSourceDeliveryPlan } from "./isolated-agent/source-delivery-plan.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
@@ -21,6 +26,7 @@ const fixture = vi.hoisted(() => ({
   delivery:
     vi.fn<typeof import("./isolated-agent/run-delivery-trace.js").resolveCronDeliveryContext>(),
   restore: vi.fn<typeof import("../gateway/cron-operator-source.js").restoreCronOperatorSource>(),
+  readScratch: vi.fn<typeof import("./scratch-read.js").readCronScratchSnapshot>(),
 }));
 
 // mock-isolation: Fixed session receipts exercise the Cron owner without invoking a model.
@@ -40,7 +46,7 @@ vi.mock("../gateway/cron-operator-source.js", () => ({
   restoreCronOperatorSource: fixture.restore,
 }));
 // mock-isolation: These receipt/prompt contracts use a job with no saved scratch.
-vi.mock("./scratch-read.js", () => ({ readCronScratchSnapshot: async () => undefined }));
+vi.mock("./scratch-read.js", () => ({ readCronScratchSnapshot: fixture.readScratch }));
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -175,15 +181,46 @@ describe("scheduled session prompts", () => {
     );
   });
 
-  it("submits the job identity and localized current time with the scheduled instructions", async () => {
-    const params = input();
-    params.cfg = { agents: { defaults: { userTimezone: "America/Los_Angeles" } } };
-    const text = await prepareLivePrompt(params, () => {
-      vi.setSystemTime(new Date("2026-10-20T16:10:00Z"));
+  it("resolves store off-thread before submitting localized job context", async () => {
+    await withOpenClawTestState({ label: "cron-session-store-path" }, async (state) => {
+      const storePath = state.statePath("cron", "jobs.json");
+      await writeConfigMachineStateAsync("cron.store", storePath, { env: state.env });
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        const params = input();
+        params.cfg = { agents: { defaults: { userTimezone: "America/Los_Angeles" } } };
+        const text = await prepareLivePrompt(params, () => {
+          vi.setSystemTime(new Date("2026-10-20T16:10:00Z"));
+        });
+        expect(text).toContain("[cron:job-1 test] Check the report.");
+        expect(text).toMatch(/Current time: .*9:00.*\(America\/Los_Angeles\)/);
+        expect(text).toContain("Reference UTC: 2026-10-20 16:00 UTC");
+        expect(observation.queries.filter((sql) => sql.includes('"config_machine_state"'))).toEqual(
+          [],
+        );
+        expect(fixture.readScratch.mock.calls[0]?.[0]).toBe(storePath);
+        fixture.readScratch.mockClear();
+        const prepared = input();
+        prepared.cfg = params.cfg;
+        prepared.sessionPreparation = {
+          agentId: prepared.agentId,
+          sessionKey: prepared.sessionKey,
+          notices: await prepareAutomationSystemEvents(
+            prepared.sessionKey,
+            prepared.job.id,
+            prepared.job.state.runningAtMs,
+          ),
+          scratch: {
+            currentRevision: 1,
+            scratch: { content: "Prepared proof scratch", revision: 1, updatedAtMs: 1 },
+          },
+        };
+        expect(await prepareLivePrompt(prepared)).toContain("Prepared proof scratch");
+        expect(fixture.readScratch).not.toHaveBeenCalled();
+      } finally {
+        observation.restore();
+      }
     });
-    expect(text).toContain("[cron:job-1 test] Check the report.");
-    expect(text).toMatch(/Current time: .*9:00.*\(America\/Los_Angeles\)/);
-    expect(text).toContain("Reference UTC: 2026-10-20 16:00 UTC");
   });
 
   it.each([

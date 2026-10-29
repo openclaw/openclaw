@@ -8,5 +8,11 @@ export function readPublicSupportCauses(value: string): string[] {
     ) ?? []
   )
     .map((cause) => cause.replace(/^permission denied$/u, "Permission denied"))
-    .concat(value.match(SQLITE_SNAPSHOT_STABILIZATION_DETAILS) ?? []);
+    .concat(value.match(SQLITE_SNAPSHOT_STABILIZATION_DETAILS) ?? [])
+    .concat(
+      // Volume roles and formatted capacities contain no private paths or identifiers.
+      value.match(
+        /^Update database (?:backup|rollback|capture) volume: needs \d{1,8}(?:\.\d)? (?:MiB|GiB); available \d{1,8}(?:\.\d)? (?:MiB|GiB)$/gmu,
+      ) ?? [],
+    );
 }
