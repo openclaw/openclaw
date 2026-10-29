@@ -176,7 +176,9 @@ export class MxcFsBridge implements SandboxFsBridge {
   }
 
   private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedMxcPath {
-    const input = params.filePath.trim();
+    // The caller's whitespace is part of the filesystem identity; only the
+    // invocation base goes through the trimming resolver.
+    const input = params.filePath;
     const cwd = params.cwd?.trim() ? path.resolve(params.cwd) : this.defaultContainerRoot;
     const containerPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);
 
