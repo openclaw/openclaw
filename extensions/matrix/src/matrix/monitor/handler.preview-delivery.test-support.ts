@@ -354,7 +354,7 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
     },
   );
 
-  it("sends a progress final with media as one captioned media event", async () => {
+  it("delivers a progress final with media normally, with the text as its caption", async () => {
     vi.useFakeTimers();
     const { dispatch, redactEventMock } = createStreamingHarness({
       streaming: "progress",
