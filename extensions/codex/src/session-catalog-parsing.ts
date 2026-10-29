@@ -430,15 +430,14 @@ export function filterCatalogPageByTitle(
   page: CodexSessionCatalogPage,
   searchTerm: string | undefined,
 ): CodexSessionCatalogPage {
-  if (!searchTerm) {
+  const search = searchTerm?.toLocaleLowerCase().normalize("NFC");
+  if (!search) {
     return page;
   }
   return {
     ...page,
     sessions: page.sessions.filter((session) =>
-      (session.name ?? session.fallbackName)
-        ?.toLocaleLowerCase()
-        .includes(searchTerm.toLocaleLowerCase()),
+      (session.name ?? session.fallbackName)?.toLocaleLowerCase().normalize("NFC").includes(search),
     ),
   };
 }
