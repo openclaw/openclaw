@@ -1,5 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveAdmittedRunActiveAssertion } from "../agents/admitted-run-context.js";
 import { addSession, deleteSession, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import {
@@ -9,6 +11,7 @@ import {
 import * as runs from "../agents/embedded-agent-runner/runs.js";
 import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { CommandOwnerRevokedError } from "../auto-reply/command-owner-authority.js";
 import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -221,6 +224,52 @@ export function registerGoalAutomaticContinuationCases(
     expect(owners.slice(1)).toEqual([true, true]);
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
     expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
+  });
+
+  it("refuses an admitted owner Goal successor's tool effect once ownership is revoked", async () => {
+    let restore = withOwnerPolicy();
+    const effects: string[] = [];
+    let refusal: unknown;
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      const calls = runEmbeddedAgent.mock.calls.length;
+      if (calls === 1) {
+        await completeRequesterExec("456");
+      } else if (calls === 3) {
+        expect(params).toMatchObject({
+          senderIsOwner: true,
+          prompt: expect.stringContaining("Advance"),
+        });
+        const admission = expectDefined(params.preparedRunAdmission, "successor admission");
+        // The same assertion the runner hands its tools as `assertInvocationCurrent`.
+        const assertTool = expectDefined(
+          resolveAdmittedRunActiveAssertion(await admission.admit("embedded")),
+          "admitted successor tool assertion",
+        );
+        const ownerEffect = (label: string) => {
+          assertTool();
+          effects.push(label);
+        };
+        ownerEffect("while owner");
+        restore();
+        restore = withOwnerPolicy(true);
+        try {
+          ownerEffect("after revocation");
+        } catch (error) {
+          refusal = error;
+        }
+      }
+      return result(params.sessionId);
+    });
+    try {
+      await start("Continue until ownership changes mid-turn");
+      await expectDrained();
+    } finally {
+      restore();
+    }
+    expect(effects).toEqual(["while owner"]);
+    // Refused at the admitted run's tool gate because the requester is no longer an owner.
+    expect(refusal).toMatchObject({ cause: expect.any(CommandOwnerRevokedError) });
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
   });
 
   it.each([
