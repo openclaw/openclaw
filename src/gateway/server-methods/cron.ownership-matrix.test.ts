@@ -544,7 +544,9 @@ describe("cron ownership access matrix", () => {
       await scratchRace.cron.update(scratchRace.id, {
         payload: { kind: "agentTurn", toolsAllow: ["read"] },
       });
-      return await scratchRace.cron.writeScratch(id, params);
+      const result = await scratchRace.cron.writeScratch(id, params);
+      // The fixture mock types only the success shape; the real result is passed through as-is.
+      return result as Awaited<ReturnType<typeof scratchRace.context.cron.writeScratch>>;
     });
     const racedScratch = await invokeCron(
       "cron.scratch.set",
