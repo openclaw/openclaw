@@ -163,12 +163,17 @@ type ControlUiDocumentReadiness =
   | { ready: false; reason: string; status?: number };
 
 /** Wait for a preparing or temporarily slow dashboard; fail immediately for terminal errors. */
+/** An accepted CLI interruption must stop the readiness probe instead of letting it run on. */
+const CONTROL_UI_READINESS_INTERRUPTED = "Control UI readiness check was interrupted.";
+
 export async function waitForControlUiDocument(params: {
   url: string;
   tlsConfig?: GatewayTlsConfig;
   timeoutMs?: number;
   waitForPending?: boolean;
   onPending?: () => void;
+  /** Command-owned cancellation; an aborted signal stops pending probe work. */
+  signal?: AbortSignal;
 }): Promise<ControlUiDocumentReadiness> {
   const deadline = monotonicNow() + (params.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS);
   let tlsFingerprint: string | undefined;
@@ -216,9 +221,13 @@ export async function waitForControlUiDocument(params: {
       init: {
         method,
         headers: { Accept: "text/html", "Accept-Encoding": "identity" },
+        ...(params.signal ? { signal: params.signal } : {}),
       },
     });
   while (true) {
+    if (params.signal?.aborted) {
+      return { ready: false, reason: CONTROL_UI_READINESS_INTERRUPTED };
+    }
     const remainingMs = deadline - monotonicNow();
     if (remainingMs <= 0) {
       return lastTransientError
@@ -286,6 +295,9 @@ export async function waitForControlUiDocument(params: {
         await request.release();
       }
     } catch (error) {
+      if (params.signal?.aborted) {
+        return { ready: false, reason: CONTROL_UI_READINESS_INTERRUPTED };
+      }
       if (
         params.waitForPending === false ||
         !(error instanceof Error) ||
@@ -302,6 +314,13 @@ export async function waitForControlUiDocument(params: {
       pendingReported = true;
       params.onPending?.();
     }
-    await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - monotonicNow())));
+    try {
+      await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - monotonicNow())), params.signal);
+    } catch {
+      if (params.signal?.aborted) {
+        return { ready: false, reason: CONTROL_UI_READINESS_INTERRUPTED };
+      }
+      throw new Error("Control UI readiness retry delay failed.");
+    }
   }
 }

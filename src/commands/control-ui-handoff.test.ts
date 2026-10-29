@@ -211,6 +211,36 @@ it("retries a real document timeout and reports pending once", async () => {
   expect(onPending).toHaveBeenCalledOnce();
 }, 20_000);
 
+it("stops probing pending readiness once the command aborts", async () => {
+  let requests = 0;
+  const server = createHttpServer((_request, response) => {
+    requests++;
+    response.writeHead(503, { "content-type": "text/plain", "retry-after": "1" });
+    response.end("preparing");
+  });
+  await withEnvAsync({ no_proxy: "127.0.0.1" }, async () => {
+    await withLoopbackTestServer(server, async (port) => {
+      const controller = new AbortController();
+      await expect(
+        waitForControlUiDocument({
+          url: `http://127.0.0.1:${port}/dashboard/`,
+          timeoutMs: 15_000,
+          signal: controller.signal,
+          onPending: () => controller.abort(),
+        }),
+      ).resolves.toEqual({
+        ready: false,
+        reason: "Control UI readiness check was interrupted.",
+      });
+      // The accepted interruption stops the retry loop; no probe may follow it.
+      const observed = requests;
+      expect(observed).toBeGreaterThan(0);
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      expect(requests).toBe(observed);
+    });
+  });
+}, 20_000);
+
 it.each(["timeout", "preparing"])(
   "reports the latest pending state at the deadline: %s",
   async (state) => {

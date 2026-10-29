@@ -1,6 +1,7 @@
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { promptYesNo } from "../cli/prompt.js";
+import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { openUrlPrivately } from "../infra/browser-handoff.js";
 import { copyToClipboard } from "../infra/clipboard.js";
@@ -223,12 +224,32 @@ export async function dashboardCommand(
         return;
       }
 
-      const document = await waitForControlUiDocument({
-        url: target.documentUrl,
-        tlsConfig: target.tlsConfig,
-        waitForPending: false,
+      // Release the readiness probe on an accepted interruption: the signal barrier
+      // owns the notice and exit code, so the probe must not keep polling.
+      const readinessAbort = new AbortController();
+      let releaseReadinessGate = () => {};
+      const readinessFinished = new Promise<void>((resolve) => {
+        releaseReadinessGate = resolve;
       });
+      const unregisterReadinessGate = registerSignalExitGate(readinessFinished, () =>
+        readinessAbort.abort(),
+      );
+      let document: Awaited<ReturnType<typeof waitForControlUiDocument>>;
+      try {
+        document = await waitForControlUiDocument({
+          url: target.documentUrl,
+          tlsConfig: target.tlsConfig,
+          waitForPending: false,
+          signal: readinessAbort.signal,
+        });
+      } finally {
+        releaseReadinessGate();
+        unregisterReadinessGate();
+      }
       if (!document.ready) {
+        if (readinessAbort.signal.aborted) {
+          return;
+        }
         dashboardJsonFailure(runtime, document.reason);
         return;
       }
