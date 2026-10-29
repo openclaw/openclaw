@@ -55,6 +55,7 @@ vi.mock("../../agent-bundle-mcp-tools.js", () => ({
 vi.mock("../../internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession: vi.fn(),
 }));
+// mock-isolation: Retry policy does not own requester cron or follow-up authority state.
 vi.mock("../requester-cron-authority.js", () => ({
   retireRequesterFollowupAuthority: vi.fn(),
   revokeRequesterCronAuthorityBatch: vi.fn(),

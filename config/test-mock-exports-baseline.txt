@@ -3008,7 +3008,6 @@
 ["src/agents/subagents/registry/subagent-registry-context-cleanup.test.ts","../../runtime-plugins.js","c480434311b38a95e6ef9abd0cd438d527ae9b55f6bbaae9acb3fc537a905e8b",1]
 ["src/agents/subagents/registry/subagent-registry-lifecycle-wake.retry.test.ts","../../../runtime.js","1f37d059a6ffc673aca8fd7c692a6669c429a506dbca46016a9dcd4ad0934351",1]
 ["src/agents/subagents/registry/subagent-registry-lifecycle-wake.retry.test.ts","../../internal-session-effects.js","732dd20233a5ed62d0772548a54b155b0a36d4b227cf88fa16e2c92773fea597",1]
-["src/agents/subagents/registry/subagent-registry-lifecycle-wake.retry.test.ts","../requester-cron-authority.js","cbb571f64c5662994bdf32315dfb951c96a5588a681050d1803da85b6b5075a0",1]
 ["src/agents/subagents/registry/subagent-registry-lifecycle-wake.retry.test.ts","./subagent-registry-lifecycle-announce-cleanup.js","a49a10e96dcc08e96651085000842a9056a1652c9ebbe058d126b4bedc40d8ce",1]
 ["src/agents/subagents/registry/subagent-registry-lifecycle-wake.retry.test.ts","./subagent-registry-lifecycle-completion.js","1bbf34d4beb18733d3c945132a5c25e6b039a80fb1fb429d0a8cf385f1439f6c",1]
 ["src/agents/subagents/registry/subagent-registry-lifecycle-wake.retry.test.ts","./subagent-registry-lifecycle-delivery.js","f3246fddf67120ff868d108868b1d59ffee41234c382bf1c33ceabf98c17188f",1]
