@@ -246,7 +246,7 @@ const COUNTS: Record<ScribeId, string> = {
   "claim-consolidation": "claims examined, linked, superseded, withdrawn and left",
   conversations: "conversations learned and skipped, claims and pages written",
   granola:
-    "meetings ingested, already in Knowledge, skipped and left for later, pages and claims written",
+    "meetings ingested, already in Knowledge, left pending and without a transcript, pages and claims written",
   memory: "files read, items saved, already known and skipped",
 };
 

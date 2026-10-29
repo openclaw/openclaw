@@ -187,26 +187,34 @@ time zone).
    are missing or say the account is not connected, stop with
    `Scribe status: failed — the Granola plugin is not installed or connected`.
 2. **Checkpoint.** `knowledge_lookup` the note page
-   `Knowledge scribe checkpoint · Learn from Granola`. Its body lists one line
-   per Granola meeting handled: meeting date, UUID, `updated_at`, and the outcome (meeting
-   page title, `already in Knowledge`, or `no transcript`). Create it with
-   `knowledge_save_page` (type `note`) on the first run.
-3. **List.** `list_meetings` from the prompt's start date on the first run,
-   otherwise from 7 days before the newest meeting date in the checkpoint,
-   through today.
-   For the owner's meetings pass
+   `Knowledge scribe checkpoint · Learn from Granola`. Its first line is
+   `Start: YYYY-MM-DD`, the start date the prompt set when the page was
+   created. Then one line per Granola meeting: meeting date, UUID,
+   `updated_at` and a state: `done` (with the meeting page title), `no
+   transcript`, or `pending` (with why: still recording, transcript pending,
+   or verification failed). Create the page with `knowledge_save_page` (type
+   `note`) on the first run, writing the prompt's start date.
+3. **List.** `list_meetings` from the later of `Start` and 7 days before the
+   newest `done` meeting date, through today; never earlier than `Start`. For
+   the owner's meetings pass
    `involvement: {captured_by_me: true, listed_as_participant: true}`. Follow
-   `next_cursor`. Skip meetings already in the checkpoint, unless a later
-   `updated_at` shows a note that was still being written last time.
+   `next_cursor`. Add every `pending` meeting by UUID (read with
+   `get_meetings`), whatever its date, so it is retried until it is `done` or
+   `no transcript`. Skip `done` and `no transcript` meetings unless a later
+   `updated_at` shows the note changed.
 4. **Dedup.** Before acquiring, `knowledge_grep` the UUID, then the meeting
    title, and read candidate meeting pages with the same date (±1 day). A
-   match is recorded as `already in Knowledge` and skipped.
+   page is not proof of a complete ingestion: an earlier run may have stopped
+   after publishing it. Run the verification in step 5 against the existing
+   page. If it passes, record the meeting `done` and skip it. Otherwise
+   reconcile into that page ([speakers](references/speakers.md)) and finish
+   steps 3–5 for it; never create a second page.
 5. **Ingest.** Oldest first, one meeting at a time, run steps 1–5 of this skill
-   in full. Leave a meeting still being recorded or with a pending transcript
-   for the next run; record `no transcript` for one that has none. After each
-   meeting passes verification, add its checkpoint line with
-   `knowledge_edit_body`, so an interrupted run resumes instead of redoing it.
-   A meeting that fails verification gets no line; say so in the counts. If
-   context runs short, stop after the current meeting and leave the rest.
-6. Count meetings ingested, already in Knowledge, skipped and left for later,
-   and pages and claims written.
+   in full. Record a meeting still being recorded, with a pending transcript,
+   or failing verification as `pending`; record `no transcript` for one that
+   has none. Record `done` only after verification passes. Write each line
+   with `knowledge_edit_body` as soon as the meeting's outcome is known, so an
+   interrupted run resumes instead of redoing or losing it. If context runs
+   short, stop after the current meeting and leave the rest.
+6. Count meetings ingested, already in Knowledge, left pending and without a
+   transcript, and pages and claims written.
