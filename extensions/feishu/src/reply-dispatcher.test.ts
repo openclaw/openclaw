@@ -102,6 +102,7 @@ vi.mock("./streaming-card.js", async (importOriginal) => {
     },
   };
 });
+import { assertFeishuApiSuccess } from "./api-response.js";
 import { buildFeishuPostMessageContent } from "./markdown.js";
 import {
   createFeishuPartialReplyDeliveryError,
@@ -1787,6 +1788,70 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
           "without visible content",
         );
       }
+    },
+  );
+
+  it.each([
+    { name: "fulfilled rejection", partial: false, noticeFails: false, fulfilled: true },
+    {
+      name: "rejection after partial delivery",
+      partial: true,
+      noticeFails: false,
+      fulfilled: false,
+    },
+    { name: "failed policy notice", partial: false, noticeFails: true, fulfilled: false },
+  ])(
+    "explains $name without resending rejected content",
+    async ({ partial, noticeFails, fulfilled }) => {
+      if (partial) {
+        useNonStreamingBlockAccount();
+      } else {
+        useNonStreamingAutoAccount();
+      }
+      sendMessageFeishuMock.mockReset();
+      if (partial) {
+        sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_accepted" });
+      }
+      sendMessageFeishuMock.mockImplementationOnce(async () => {
+        if (fulfilled) {
+          assertFeishuApiSuccess({ code: 230028, msg: "message rejected" }, "Feishu send failed");
+        }
+        throw new Error("Feishu send failed", { cause: { response: { data: { code: 230028 } } } });
+      });
+      if (noticeFails) {
+        sendMessageFeishuMock.mockRejectedValueOnce(new Error("notice delivery failed"));
+      } else {
+        sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_notice" });
+      }
+      const { result } = createDispatcherHarness({
+        replyToMessageId: "om_parent",
+        accountId: "main",
+      });
+      const dispatcher = createReplyDispatcher(toTypingDispatcherOptions(result));
+      if (partial) {
+        dispatcher.sendBlockReply({ text: "accepted prefix" });
+      }
+      dispatcher.sendFinalReply({ text: "rejected answer" });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      await expect(result.ensureNoVisibleReplyFallback("dispatch-complete")).resolves.toBe(
+        noticeFails,
+      );
+      const sent = sendMessageFeishuMock.mock.calls.map(([params]) => params);
+      expect(sent.map((params) => params.text)).toEqual([
+        ...(partial ? ["accepted prefix"] : []),
+        "rejected answer",
+        "⚠️ Feishu couldn't deliver this reply because it didn't pass a content policy check.",
+        ...(noticeFails
+          ? [
+              "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.",
+            ]
+          : []),
+      ]);
+      expect(sent.at(partial ? 2 : 1)).toMatchObject({
+        accountId: "main",
+        replyToMessageId: "om_parent",
+      });
     },
   );
 
