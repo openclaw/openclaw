@@ -10,6 +10,7 @@ import {
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as tempRoot from "./tmp-openclaw-dir.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
   completeCanaryCommand,
@@ -18,6 +19,7 @@ import {
   stubHealthyGateway,
   canaryOutcomeStep,
 } from "./update-candidate-canary.test-support.js";
+import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "./update-doctor-result.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
@@ -788,3 +790,101 @@ describe("canary teardown evidence", () => {
     }
   });
 });
+
+describe.skipIf(process.platform === "win32" || process.platform === "android")(
+  "canary Doctor receipt across processes",
+  () => {
+    it.each([0o700, 0o775])(
+      "binds creator, child writer, consumption and cleanup with preferred ancestry %s",
+      async (mode) => {
+        await fs.chmod(root, 0o700);
+        const preferredParent = path.join(root, "preferred-parent");
+        const originalState = path.join(root, "original-state");
+        await fs.mkdir(preferredParent, { mode: 0o700 });
+        await fs.chmod(preferredParent, mode);
+        vi.stubEnv("OPENCLAW_STATE_DIR", originalState);
+        const preferredDir = path.join(preferredParent, "openclaw");
+        const resolveTemp = tempRoot.resolvePreferredOpenClawTmpDir;
+        const selector = vi
+          .spyOn(tempRoot, "resolvePreferredOpenClawTmpDir")
+          .mockImplementation((options) => resolveTemp({ ...options, preferredDir }));
+        const { spawn } =
+          await vi.importActual<typeof import("node:child_process")>("node:child_process");
+        const fallbackSpawn = mocks.spawn.getMockImplementation()!;
+        const writer = path.join(root, "doctor-receipt.mjs");
+        await fs.writeFile(
+          writer,
+          [
+            "import assert from 'node:assert/strict';",
+            "import { createRequire } from 'node:module';",
+            "const require = createRequire(" + JSON.stringify(path.resolve("package.json")) + ");",
+            "const { resolveSecureTempRoot } = require('@openclaw/fs-safe/secure-temp-root');",
+            "const { registerSealedRuntime } = await import(" +
+              JSON.stringify(path.resolve("src/infra/sealed-runtime-registry.ts")) +
+              ");",
+            "const { writeUpdatePostInstallDoctorResult } = await import(" +
+              JSON.stringify(path.resolve("src/infra/update-doctor-result.ts")) +
+              ");",
+            "registerSealedRuntime({ json5: {}, resolveSecureTempRoot: options => resolveSecureTempRoot({ ...options, ...(options.preferredDir ? { preferredDir: " +
+              JSON.stringify(preferredDir) +
+              " } : {}) }) });",
+            "const resultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;",
+            "await assert.rejects(writeUpdatePostInstallDoctorResult({ resultPath: resultPath + '.invalid', result: {status: 'ok'} }), /Unsafe post-install doctor result path/);",
+            "await writeUpdatePostInstallDoctorResult({ resultPath, result: {status: 'ok', configChanges: [{kind: 'migration', message: 'cross-process receipt'}]} });",
+            "await assert.rejects(writeUpdatePostInstallDoctorResult({ resultPath, result: {status: 'ok'} }), {code: 'EEXIST'});",
+            "console.log('Doctor complete.');",
+          ].join("\n"),
+        );
+        let receipt: string | undefined;
+        let copiedState: string | undefined;
+        let consumedBeforeCleanup = false;
+        mocks.spawn.mockImplementation(
+          (command: string, args: string[], options: import("node:child_process").SpawnOptions) => {
+            if (!args.includes("--fix")) {
+              return fallbackSpawn(command, args, options);
+            }
+            receipt = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+            copiedState = options.env?.OPENCLAW_STATE_DIR;
+            return spawn(
+              process.execPath,
+              ["--import", path.resolve("scripts/tsx.mjs"), writer],
+              options,
+            );
+          },
+        );
+        mocks.port.mockResolvedValue(43_123);
+        stubHealthyGateway();
+        try {
+          const result = await validateUpdateCandidateCanary({
+            ...canaryStateOptions(10_000),
+            env: { ...process.env },
+            onStep: async (step) => {
+              if (step.name === "candidate-doctor") {
+                expect(receipt).toBeDefined();
+                await expect(fs.access(receipt!)).rejects.toMatchObject({ code: "ENOENT" });
+                await expect(fs.access(copiedState!)).resolves.toBeUndefined();
+                consumedBeforeCleanup = true;
+              }
+            },
+          });
+          expect(result).toMatchObject({
+            status: "ok",
+            doctorConfigChanges: [{ kind: "migration", message: "cross-process receipt" }],
+          });
+          expect(consumedBeforeCleanup).toBe(true);
+          expect(path.dirname(receipt!)).toBe(
+            mode === 0o700
+              ? preferredDir
+              : path.join(copiedState!, "tmp", "openclaw-" + process.getuid!()),
+          );
+          await expect(fs.access(copiedState!)).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(fs.access(originalState)).rejects.toMatchObject({ code: "ENOENT" });
+          expect((await fs.stat(preferredParent)).mode & 0o777).toBe(mode);
+        } finally {
+          selector.mockRestore();
+          vi.unstubAllEnvs();
+        }
+      },
+    );
+  },
+);

@@ -129,11 +129,11 @@ it.for(["current", "historical-v1", "lost-journal"] as const)(
     ]) {
       delete env[key];
     }
-    const doctorResultOptions = { tmpdir: () => stateDir };
+    const doctorResultOptions = { tmpdir: () => stateDir, stateDir };
     let doctorResultPath: string | undefined;
     if (sharedState === "lost-journal") {
       fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-      // These helpers are unchanged from v2026.9.8's candidate Doctor driver.
+      // Mirror the candidate Doctor driver's private namespace, including temp fallback.
       Object.assign(
         env,
         buildUpdateRehearsalPathEnv(stateDir),

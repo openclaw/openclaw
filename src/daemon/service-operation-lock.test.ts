@@ -14,7 +14,10 @@ import {
 } from "./service-operation-lock.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 async function fixture() {
   const root = await fs.realpath(dirs.make("native-operation-"));
@@ -272,3 +275,31 @@ it("expires a borrowing read without cancelling shared admission or running it l
   });
   expect(binding.close).toHaveBeenCalledOnce();
 });
+
+it.skipIf(process.platform !== "linux")(
+  "keeps the shipped service lock address across state profiles with unsafe temp ancestry",
+  async () => {
+    const root = dirs.make("service-coordination-address-");
+    const unsafe = path.join(root, "unsafe");
+    const control = path.join(unsafe, "openclaw");
+    await fs.mkdir(unsafe, { mode: 0o775 });
+    await fs.chmod(unsafe, 0o775);
+    const resolve = temporaryState.resolvePreferredOpenClawTmpDir;
+    vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockImplementation((options) =>
+      resolve({ ...options, preferredDir: control, tmpdir: () => unsafe }),
+    );
+    const env = { HOME: root, OPENCLAW_SYSTEMD_UNIT: "safe-temp-proof.service" };
+    const lockName =
+      "service-lifecycle-e487ec2becb952ef7267f993fde50598ed64696ea6f098e77a4f0594e437a489.lock";
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "first-state"));
+    await withGatewayServiceOperationLock(env, async () => {
+      expect(await fs.readdir(control)).toContain(lockName);
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "second-state"));
+      await withGatewayServiceOperationLock(env, async () => {
+        expect(await fs.readdir(control)).toContain(lockName);
+      });
+    });
+    expect(await fs.readdir(control)).not.toContain(lockName);
+    expect((await fs.stat(unsafe)).mode & 0o7777).toBe(0o775);
+  },
+);

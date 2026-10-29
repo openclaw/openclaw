@@ -461,7 +461,7 @@ export function recordUpdateDoctorConfigWriteRefusal(
 }
 
 export function createUpdatePostInstallDoctorResultPath(
-  options?: Pick<ResolvePreferredOpenClawTmpDirOptions, "tmpdir">,
+  options?: Pick<ResolvePreferredOpenClawTmpDirOptions, "tmpdir" | "stateDir">,
 ): string {
   return path.join(
     resolvePreferredOpenClawTmpDir(options),
@@ -471,7 +471,7 @@ export function createUpdatePostInstallDoctorResultPath(
 
 function resolveSafeUpdatePostInstallDoctorResultPath(
   resultPath: string,
-  options?: Pick<ResolvePreferredOpenClawTmpDirOptions, "tmpdir">,
+  options?: Pick<ResolvePreferredOpenClawTmpDirOptions, "tmpdir" | "stateDir">,
 ): string {
   const tempRoot = path.resolve(resolvePreferredOpenClawTmpDir(options));
   const resolvedPath = path.resolve(resultPath);
@@ -521,7 +521,7 @@ export async function writeUpdatePostInstallDoctorResult(params: {
 
 export async function consumeUpdatePostInstallDoctorResult(
   resultPath: string,
-  options?: Pick<ResolvePreferredOpenClawTmpDirOptions, "tmpdir">,
+  options?: Pick<ResolvePreferredOpenClawTmpDirOptions, "tmpdir" | "stateDir">,
 ): Promise<UpdatePostInstallDoctorResult | null> {
   let safeResultPath: string;
   try {

@@ -293,7 +293,8 @@ export async function validateUpdateCandidateCanary(params: {
     await recordStep(snapshotStep);
     env = { ...rehearsal.env };
     const { port, stateDir: copiedStateDir } = rehearsal;
-    const doctorResultOptions = { tmpdir: () => copiedStateDir };
+    // Match the child's selected namespace for both system-temp and private-state fallback.
+    const doctorResultOptions = { tmpdir: () => copiedStateDir, stateDir: copiedStateDir };
     listenerIsolation = {
       gateway: { host: "127.0.0.1", port },
       mcpAppSandbox: "disabled",
