@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { PLUGIN_UI_CAPABILITIES } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { domProbe } from "../../test-helpers/dom-probe.ts";
@@ -91,6 +92,32 @@ it("renders complete catalog content in capability order", () => {
   expect(extensions.textContent).toContain("session dashboards");
   expect(extensions.textContent).toContain("reader inside the web app");
   expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
+});
+
+it("renders a distinct icon for each extension type with a plain section heading", () => {
+  const result = createDiscoveryDetail();
+  result.detail.uiCapabilities = [...PLUGIN_UI_CAPABILITIES];
+  const { container } = mount(result);
+  const section = container.querySelector(".plugin-capabilities")!;
+  const icons = [...section.querySelectorAll(".plugin-capability__icon svg")];
+  expect(icons).toHaveLength(9);
+  expect(new Set(icons.map((icon) => icon.innerHTML)).size).toBe(9);
+  expect(section.querySelectorAll("h2 svg")).toHaveLength(0);
+  expect([...section.querySelectorAll(".settings-row__title")].map((row) => row.textContent)).toEqual([
+    "Pages",
+    "Navigation",
+    "Panels",
+    "Actions",
+    "Session accessories",
+    "Dashboard widgets",
+    "Inline views",
+    "Interface replacements",
+    "Link previews",
+  ]);
+  for (const icon of icons) {
+    expect(icon.getAttribute("viewBox")).toBe("0 0 24 24");
+    expect(icon.getAttribute("aria-hidden")).toBe("true");
+  }
 });
 
 it("retains catalog controls while refreshing the same accepted plugin", async () => {

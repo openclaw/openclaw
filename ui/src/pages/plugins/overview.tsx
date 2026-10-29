@@ -4,7 +4,7 @@ import {
   PLUGIN_UI_CAPABILITIES,
   type PluginUiCapability,
 } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Icon, IconSvg } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
@@ -16,6 +16,7 @@ import type {
 } from "../../lib/plugins/index.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { formatCompactCount } from "./catalog-results.tsx";
+import { extensionIconData } from "./extension-icons.ts";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.tsx";
 import { renderPluginRowMessage } from "./plugin-row-message.tsx";
 
@@ -273,6 +274,7 @@ export function renderPluginMetadata(
 }
 
 type PluginCapabilityRow = {
+  icon?: () => JSX.Element;
   name: string;
   description?: string;
   onOpen?: () => void;
@@ -319,7 +321,7 @@ export function renderPluginCapabilitySection(
             const content = (chevron: boolean) => (
               <>
                 <span class="plugin-capability__icon" aria-hidden="true">
-                  {icon()}
+                  {value.icon?.() ?? icon()}
                 </span>
                 <PluginCapabilityRowText value={value} />
                 <PluginCapabilityRowControl value={value} chevron={chevron} />
@@ -452,6 +454,7 @@ export function renderPluginContentCapabilities(params: {
         PLUGIN_UI_CAPABILITIES.filter((capability) =>
           params.uiCapabilities?.includes(capability),
         ).map((capability) => ({
+          icon: () => <IconSvg data={extensionIconData[capability]} />,
           name: t(`pluginsPage.uiCapabilities.${capability}.name`),
           description: t(`pluginsPage.uiCapabilities.${capability}.description`),
         })),

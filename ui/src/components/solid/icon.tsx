@@ -54,7 +54,7 @@ function IconShape(props: { node: IconNode }) {
   );
 }
 
-function IconSvg(props: IconPresentation & { data: IconData }) {
+export function IconSvg(props: IconPresentation & { data: IconData }) {
   return (
     <svg
       {...props.data.attributes}
