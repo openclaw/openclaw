@@ -90,9 +90,11 @@ export function withNodeRuntimePath(env, nodePath, platform = process.platform) 
     .filter((key) => (platform === "win32" ? key.toUpperCase() === "PATH" : key === "PATH"));
   const key = keys[0] ?? "PATH";
   const directory = paths.dirname(nodePath);
-  const entries = (env[key] ? env[key].split(paths.delimiter) : []).filter(
-    (entry) => entry !== directory,
-  );
+  // A JS env object can hold both "PATH" and "Path" on Win32; merged env blocks
+  // must keep every spelling's directories or lifecycle children lose them.
+  const entries = keys
+    .flatMap((pathKey) => (env[pathKey] ? env[pathKey].split(paths.delimiter) : []))
+    .filter((entry) => entry !== directory);
   const result = { ...env };
   for (const pathKey of keys.length ? keys : [key]) {
     result[pathKey] = [directory, ...entries].join(paths.delimiter);
