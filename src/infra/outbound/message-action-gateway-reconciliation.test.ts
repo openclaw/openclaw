@@ -229,6 +229,7 @@ describe("runMessageAction plugin dispatch", () => {
       const timeout = Object.assign(new Error("gateway timeout after 30000ms"), {
         name: "GatewayTransportError",
         kind: "timeout",
+        requestDispatched: true,
       });
       mocks.callGatewayLeastPrivilege
         .mockRejectedValueOnce(timeout)
