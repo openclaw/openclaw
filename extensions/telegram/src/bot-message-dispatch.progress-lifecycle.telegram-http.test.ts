@@ -108,6 +108,72 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     };
   }
 
+  it.each(["payload", "item"] as const)(
+    "delivers authored block commentary before the final while tool details are hidden (%s)",
+    async (source) => {
+      const commentary = "I will inspect the requested file.";
+      let beforeToolResult: string[] = [];
+      await dispatch(
+        async (options) => {
+          if (source === "payload") {
+            await options?.onBlockReply?.({ text: commentary, isCommentary: true });
+          } else {
+            await preamble(options, "authored-block", commentary);
+          }
+          await tool(options, "inspect", "read");
+          beforeToolResult = texts();
+          await options?.onToolResult?.({ text: "hidden tool arguments and result" });
+        },
+        {
+          mode: "block",
+          toolProgress: false,
+          cfg: { agents: { defaults: { verboseDefault: "off" } } },
+          telegramCfg: { streaming: { mode: "block", block: { enabled: true } } },
+          finalReply: { text: "The requested answer." },
+        },
+      );
+      expect(beforeToolResult).toEqual([source === "item" ? `💬 ${commentary}` : commentary]);
+      expect(texts()).toEqual([
+        source === "item" ? `💬 ${commentary}` : commentary,
+        "The requested answer.",
+      ]);
+      expect(callsFor("sendMessage")).toHaveLength(2);
+      expect(callsFor("editMessageText")).toEqual([]);
+      expect(JSON.stringify(calls)).not.toContain("hidden tool arguments and result");
+    },
+  );
+
+  it.each(["room-event", "send-denied"] as const)(
+    "keeps authored block commentary private for %s turns",
+    async (suppression) => {
+      const context = http.createContext();
+      if (suppression === "room-event") {
+        context.ctxPayload.InboundEventKind = "room_event";
+      }
+      await dispatch(
+        async (options) => {
+          await preamble(options, "private-commentary", "Private authored commentary.");
+          await options?.onBlockReply?.({
+            text: "Private authored commentary.",
+            isCommentary: true,
+          });
+          await tool(options, "inspect", "read");
+        },
+        {
+          mode: "block",
+          toolProgress: false,
+          context,
+          cfg:
+            suppression === "send-denied" ? { session: { sendPolicy: { default: "deny" } } } : {},
+          telegramCfg: { streaming: { mode: "block", block: { enabled: true } } },
+          finalReply: { text: "Private final answer." },
+        },
+      );
+      expect(texts()).toEqual([]);
+      expect(callsFor("sendMessage")).toEqual([]);
+    },
+  );
+
   it("reports an owner rejection silently without claiming a network failure", async () => {
     await dispatch(async () => {}, {
       mode: "off",

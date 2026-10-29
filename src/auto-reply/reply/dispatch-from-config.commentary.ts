@@ -2,7 +2,7 @@ import type { ReplyPayload } from "../reply-payload.js";
 
 /** Coalesce repeated item snapshots and flush commentary ahead of the final reply. */
 export function createDispatchCommentaryProgress(params: {
-  shouldSendToolSummaries: () => Promise<boolean>;
+  shouldDeliverCommentary: () => Promise<boolean>;
   shouldSuppressDelivery: () => Promise<boolean>;
   isAborted: () => boolean;
   isFinalDeliveryStarted: () => boolean;
@@ -12,7 +12,7 @@ export function createDispatchCommentaryProgress(params: {
   let pendingCommentaryProgress: { itemId?: string; text: string } | null = null;
   const flushedCommentaryItems = new Set<string>();
   const deliverCommentaryProgressMessage = async (text: string) => {
-    if (!(await params.shouldSendToolSummaries()) || (await params.shouldSuppressDelivery())) {
+    if (!(await params.shouldDeliverCommentary()) || (await params.shouldSuppressDelivery())) {
       return;
     }
     if (params.isAborted() || params.isFinalDeliveryStarted()) {

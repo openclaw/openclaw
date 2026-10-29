@@ -284,8 +284,12 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             commentaryProgressEnabled:
               turn.streamMode === "progress" ? turn.commentaryProgressEnabled : undefined,
             progressPreambleEnabled: turn.progressPreambleEnabled,
-            commentaryPayloadsEnabled: turn.progressPreambleEnabled,
-            // The progress draft is the only commentary owner and retires before
+            commentaryPayloadsEnabled:
+              turn.progressPreambleEnabled ||
+              (turn.streamMode === "block" &&
+                turn.streamDeliveryEnabled &&
+                !turn.answerLane.stream),
+            // When present, the progress draft owns commentary and retires before
             // the clean final. A durable copy would restore the queue burst this
             // owner boundary prevents; verbose still controls durable tool output.
             shouldDeliverCommentaryPayloads:

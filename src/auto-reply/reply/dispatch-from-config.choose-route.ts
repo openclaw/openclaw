@@ -139,7 +139,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     finalReplyDeliveryStarted && !requiresDurableToolResultDelivery(payload);
   const { flushPendingCommentaryProgress, noteCommentaryProgress } =
     createDispatchCommentaryProgress({
-      shouldSendToolSummaries: shouldSendToolSummariesAsync,
+      shouldDeliverCommentary: async () =>
+        state.commentaryPayloadsEnabled || (await shouldSendToolSummariesAsync()),
       shouldSuppressDelivery: shouldSuppressProgressDelivery,
       isAborted: () => state.isDispatchOperationAborted(),
       isFinalDeliveryStarted: () => finalReplyDeliveryStarted,

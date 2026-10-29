@@ -280,9 +280,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
               onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
               onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
                 ...toolLifecycleOptions,
-                onForward: async () => {
-                  // Commentary precedes the tool that follows it.
+                beforeVisibility: async () => {
+                  // Queue authored commentary independently of hidden tool-progress callbacks.
                   await flushPendingCommentaryProgress();
+                  if (commentaryPayloadsEnabled) {
+                    await waitForReplyDispatcherIdle(dispatcher, getDispatchAbortSignal());
+                  }
                 },
               }),
               onItemEvent: state.onItemEvent,

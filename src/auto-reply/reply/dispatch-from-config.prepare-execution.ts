@@ -190,6 +190,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       allowWhenToolSummariesHidden?: boolean;
       forwardWhenSourceDeliverySuppressed?: boolean;
       requiresToolSummaryVisibility?: boolean;
+      beforeVisibility?: (...args: Args) => Promise<void> | void;
       onForward?: (...args: Args) => Promise<void> | void;
       onVisible?: (...args: Args) => Promise<void> | void;
       waitForDirectBlockReplyDelivery?: boolean;
@@ -220,6 +221,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
             return undefined;
           }
         }
+        await options?.beforeVisibility?.(...args);
         if ((await shouldForwardProgressCallback(options)) && !isDispatchOperationAborted()) {
           // Preserve the historical microtask boundary for unflagged channels.
           if (!preserveProgressCallbackStartOrder || options?.onForward) {
@@ -290,7 +292,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     });
   state.assertProgressCurrent();
   const deliverStandaloneCommentaryProgress =
-    standaloneCommentaryProgressVisible && !draftOwnsCommentaryProgress;
+    (standaloneCommentaryProgressVisible || commentaryPayloadsEnabled) &&
+    !draftOwnsCommentaryProgress;
   const canForwardItemEvents = Boolean(params.replyOptions?.onItemEvent);
   const canForwardSuppressedSourceItemEvents =
     allowSuppressedSourceProgressCallbacks && !state.sendPolicyDenied && canForwardItemEvents;
@@ -304,7 +307,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     forwardWhenSourceDeliverySuppressed: true,
     requiresToolSummaryVisibility: true,
     waitForDirectBlockReplyDelivery: true,
-    onForward: (payload) =>
+    beforeVisibility: (payload) =>
       preserveProgressCallbackStartOrder && shouldDeliverDurableCommentaryProgress(payload)
         ? noteCommentaryProgress(payload)
         : undefined,
