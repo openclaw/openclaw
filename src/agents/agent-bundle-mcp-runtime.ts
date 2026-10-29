@@ -4,6 +4,7 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
+import { monotonicDeadlineAfter, monotonicNow } from "../shared/monotonic-time.js";
 import {
   getSessionMcpRequestSignal,
   runWithSessionMcpRequestSignal,
@@ -128,11 +129,11 @@ function createServerMcpRuntime(
         launchSummary: server.launchSummary,
         message,
       });
-      catalogRetryAfterMs = performance.now();
+      catalogRetryAfterMs = monotonicNow();
     }
   };
   const catalogRetryIsDue = (): boolean =>
-    catalogRetryAfterMs !== undefined && performance.now() >= catalogRetryAfterMs;
+    catalogRetryAfterMs !== undefined && monotonicNow() >= catalogRetryAfterMs;
   let currentSession: BundleMcpSession | undefined;
   const nativeContextKey = nativeContext
     ? stableStringify({ capabilities: nativeContext.capabilities, roots: nativeContext.roots })
@@ -216,7 +217,7 @@ function createServerMcpRuntime(
   ): Promise<T> => {
     const requestSignal = getSessionMcpRequestSignal();
     const tracksFailureBackoff = options?.failureBackoff !== "ignore";
-    const nowMs = performance.now();
+    const nowMs = monotonicNow();
     const backoff = serverBackoff;
     if (
       tracksFailureBackoff &&
@@ -616,7 +617,7 @@ function createServerMcpRuntime(
         awaitSessionRecovery = false;
       }
       catalogRetryAfterMs = nextCatalog.diagnostics?.length
-        ? (startupRetryAfterMs ?? performance.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
+        ? (startupRetryAfterMs ?? monotonicDeadlineAfter(BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS))
         : undefined;
       return nextCatalog;
     } finally {
@@ -666,7 +667,7 @@ function createServerMcpRuntime(
     catalogRetryAfterMs = undefined;
     void loadCatalog(discoveryContext).catch(() => {
       if (!retiredCatalog && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
-        catalogRetryAfterMs = performance.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
+        catalogRetryAfterMs = monotonicDeadlineAfter(BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS);
       }
     });
     return staleCatalog;

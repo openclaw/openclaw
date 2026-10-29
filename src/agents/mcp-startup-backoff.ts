@@ -6,6 +6,11 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  monotonicDeadlineAfter,
+  monotonicNow,
+  remainingMonotonicMs,
+} from "../shared/monotonic-time.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 
 type StartupState = {
@@ -58,7 +63,7 @@ export class McpStartupBackoffError extends Error {
     super(
       state.authorization
         ? state.message
-        : `${state.message}; server unavailable; retry after ${new Date(Date.now() - performance.now() + retryAfterMs).toISOString()}. Check server reachability or reload MCP after fixing it.`,
+        : `${state.message}; server unavailable; retry after ${new Date(Date.now() + remainingMonotonicMs(retryAfterMs)).toISOString()}. Check server reachability or reload MCP after fixing it.`,
     );
     this.retryAfterMs = retryAfterMs;
     this.authorizationRequired = state.authorization !== undefined;
@@ -112,7 +117,7 @@ async function connectWithMcpStartupBackoff(
   }
   signal.throwIfAborted();
   const backoff = getMcpStartupBackoff(key, signal, recoveryRetryMs, authorizationKey);
-  if (backoff && performance.now() < backoff.retryAfterMs) {
+  if (backoff && monotonicNow() < backoff.retryAfterMs) {
     throw backoff;
   }
   const state: StartupState = startups.get(key) ?? {
@@ -151,7 +156,7 @@ async function connectWithMcpStartupBackoff(
       throw error;
     }
     state.delayMs = Math.min(state.delayMs * 2, 600_000);
-    state.retryAfterMs = performance.now() + state.delayMs;
+    state.retryAfterMs = monotonicDeadlineAfter(state.delayMs);
     state.message = redactMcpDiagnosticError(error);
     const reportFailure =
       !state.authorization ||
