@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
+import { webKitHostWindow } from "../app/native-webkit-bridge.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -254,11 +255,15 @@ suite.define(() => {
       await openGatewayMenu("Studio");
       await page.getByRole("menuitemradio", { name: /Local Gateway/ }).click();
       await expect.poll(() => page.getByRole("alert").count()).toBe(0);
+      await using nativeHost = await page.evaluateHandle(webKitHostWindow);
       for (const source of ["native", "invoke"] as const) {
-        await page.evaluate(() => {
+        await nativeHost.evaluate((nativeWindow) => {
           Reflect.set(window, "holdNextGatewayRequest", true);
-          const { postMessage: postGatewayMessage } = Reflect.get(window, "webkit").messageHandlers
-            .openclawGateways;
+          const handler = nativeWindow?.webkit?.messageHandlers?.openclawGateways;
+          if (!handler) {
+            throw new Error("Native Gateway bridge was not installed.");
+          }
+          const postGatewayMessage = handler.postMessage.bind(handler);
           Reflect.set(
             window,
             "pendingGatewayRequest",
@@ -280,9 +285,12 @@ suite.define(() => {
             message,
           );
         } else {
-          await page.evaluate(() => {
-            const { postMessage: postGatewayMessage } = Reflect.get(window, "webkit")
-              .messageHandlers.openclawGateways;
+          await nativeHost.evaluate((nativeWindow) => {
+            const handler = nativeWindow?.webkit?.messageHandlers?.openclawGateways;
+            if (!handler) {
+              throw new Error("Native Gateway bridge was not installed.");
+            }
+            const postGatewayMessage = handler.postMessage.bind(handler);
             return postGatewayMessage({ type: "open-settings" });
           });
         }
@@ -293,9 +301,12 @@ suite.define(() => {
           await Reflect.get(window, "pendingGatewayRequest");
         });
         expect(await warning.isVisible()).toBe(true);
-        await page.evaluate(() => {
-          const { postMessage: postGatewayMessage } = Reflect.get(window, "webkit").messageHandlers
-            .openclawGateways;
+        await nativeHost.evaluate((nativeWindow) => {
+          const handler = nativeWindow?.webkit?.messageHandlers?.openclawGateways;
+          if (!handler) {
+            throw new Error("Native Gateway bridge was not installed.");
+          }
+          const postGatewayMessage = handler.postMessage.bind(handler);
           return postGatewayMessage({ type: "select", id: "primary" });
         });
         expect(await page.getByRole("alert").count()).toBe(0);
@@ -312,10 +323,12 @@ suite.define(() => {
           body: "<!doctype html><title>Isolated page</title>",
         }),
       );
-      const hasBridge = () =>
-        page.evaluate(() =>
-          Boolean(Reflect.get(window, "webkit")?.messageHandlers?.openclawGateways),
+      const hasBridge = async () => {
+        await using nativeHost = await page.evaluateHandle(webKitHostWindow);
+        return await nativeHost.evaluate((nativeWindow) =>
+          Boolean(nativeWindow?.webkit?.messageHandlers?.openclawGateways),
         );
+      };
       await page.goto(`${suite.server.baseUrl}dashboard-other`);
       expect(await hasBridge()).toBe(false);
       await page.goto("http://gateway.example.test/dashboard");
@@ -330,9 +343,10 @@ suite.define(() => {
       await expect.poll(() => page.frames().length).toBe(2);
       const frame = page.frames().find((candidate) => candidate !== page.mainFrame())!;
       await frame.waitForLoadState();
+      await using childHost = await frame.evaluateHandle(webKitHostWindow);
       expect(
-        await frame.evaluate(() =>
-          Boolean(Reflect.get(window, "webkit")?.messageHandlers?.openclawGateways),
+        await childHost.evaluate((nativeWindow) =>
+          Boolean(nativeWindow?.webkit?.messageHandlers?.openclawGateways),
         ),
       ).toBe(false);
     });

@@ -105,6 +105,8 @@ const repositoryScriptEntries = [
   "scripts/dev/cron-context-replay.mts!",
   // #183131 invokes this fresh-process cron flake workload by path.
   "scripts/perf/repeat-cron-test.mjs!",
+  // scripts/perf/README.md invokes this real-Gateway Browser panel workload by path.
+  "scripts/perf/browser-panel-input-measure.mjs!",
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   "scripts/perf/access-authority-callback-measure.mjs!",

@@ -4,6 +4,7 @@ import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
+import { reserveKeyboardInteraction, type KeyboardDispatch } from "./keyboard-dispatch.js";
 import { assertBrowserNavigationResultAllowed } from "./navigation-guard.js";
 import { pageTargetInfo } from "./pw-session-connection.js";
 import {
@@ -40,6 +41,7 @@ import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-
 
 type ActionExecutionOptions = GuardedInteractionOptions & {
   evaluateEnabled?: boolean;
+  keyboardDispatch?: KeyboardDispatch;
 };
 
 async function executeSingleAction(
@@ -75,9 +77,17 @@ async function executeSingleAction(
     case "type":
       return await typeViaPlaywright({ ...action, ...interaction });
     case "insertText":
-      return await insertTextViaPlaywright({ ...action, ...interaction });
+      return await insertTextViaPlaywright({
+        ...action,
+        ...interaction,
+        keyboardDispatch: opts.keyboardDispatch,
+      });
     case "press":
-      return await pressKeyViaPlaywright({ ...action, ...interaction });
+      return await pressKeyViaPlaywright({
+        ...action,
+        ...interaction,
+        keyboardDispatch: opts.keyboardDispatch,
+      });
     case "hover":
       return await hoverViaPlaywright({ ...action, ...interaction });
     case "scrollIntoView":
@@ -146,7 +156,31 @@ export async function executeActViaPlaywright(
   opts: GuardedInteractionOptions & {
     action: BrowserActRequest;
     evaluateEnabled?: boolean;
+    keyboardDispatch?: KeyboardDispatch;
   },
+) {
+  // Reserve before the first page lookup or authority await. Only native input
+  // settlement releases the next key; guarded response completion stays separate.
+  const keyboardDispatch =
+    opts.keyboardDispatch ??
+    (opts.action.kind === "press" || opts.action.kind === "insertText"
+      ? reserveKeyboardInteraction({
+          cdpUrl: opts.cdpUrl,
+          targetId: opts.action.targetId ?? opts.targetId,
+        })
+      : undefined);
+  try {
+    if (keyboardDispatch?.ready) {
+      await keyboardDispatch.ready;
+    }
+    return await executePreparedActViaPlaywright({ ...opts, keyboardDispatch });
+  } finally {
+    keyboardDispatch?.releaseIfUnused();
+  }
+}
+
+async function executePreparedActViaPlaywright(
+  opts: ActionExecutionOptions & { action: BrowserActRequest },
 ): Promise<{
   result?: unknown;
   results?: BrowserBatchActionResult[];
@@ -163,7 +197,9 @@ export async function executeActViaPlaywright(
     ssrfPolicy: opts.ssrfPolicy,
   });
   const withOperationTarget = async <T extends Record<string, unknown>>(payload: T) => {
-    const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;
+    // Exact selection already established this tab's identity; navigation changes
+    // its document, not its target. Automatic selection still needs discovery.
+    const targetId = opts.targetId || (await pageTargetInfo(page).catch(() => null))?.targetId;
     return { ...payload, ...(targetId ? { targetId } : {}) };
   };
   // Any DOM action can synchronously trigger a download. Capturing all actions
@@ -201,6 +237,7 @@ export async function executeActViaPlaywright(
     evaluateEnabled: opts.evaluateEnabled,
     signal: dialogAbort.signal,
     assertCurrent: opts.assertCurrent,
+    keyboardDispatch: opts.keyboardDispatch,
   };
   try {
     if (opts.action.kind === "batch") {

@@ -79,7 +79,8 @@ export class BrowserPanelInputOwner {
   private pendingClick: Promise<boolean> | null = null;
   private clickSequence = 0;
   private inputGeneration = 0;
-  private pendingText: Promise<boolean | undefined> | null = null;
+  private pendingText: Promise<unknown> | null = null;
+  private pendingKeyBarrier: Promise<unknown> | null = null;
   private compositionCurrent: (() => boolean) | null = null;
   private scrollPoint: { x: number; y: number } | null = null;
   private touchScroll: {
@@ -98,6 +99,7 @@ export class BrowserPanelInputOwner {
     this.cancelOverlayPointerGesture();
     this.pendingClick = null;
     this.pendingText = null;
+    this.pendingKeyBarrier = null;
     this.compositionCurrent = null;
     this.touchScroll = null;
     const input = this.elements.input;
@@ -294,8 +296,9 @@ export class BrowserPanelInputOwner {
     const current = this.compositionCurrent;
     this.compositionCurrent = null;
     if (current?.() && event.data) {
-      this.runAfterClick((client, targetId) =>
-        insertBrowserText(client, { targetId, text: event.data }),
+      this.runAfterClick(
+        (client, targetId) => insertBrowserText(client, { targetId, text: event.data }),
+        true,
       );
     }
     if (event.currentTarget instanceof HTMLTextAreaElement) {
@@ -319,7 +322,7 @@ export class BrowserPanelInputOwner {
       // The empty proxy cannot identify the remote range a local correction would replace.
       this.host.setState("noticeText", t("browser.manualTextCorrection"));
     } else if (["insertText", "insertFromPaste"].includes(event.inputType) && text) {
-      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
+      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }), true);
     } else {
       const key =
         event.inputType === "deleteContentBackward"
@@ -358,7 +361,10 @@ export class BrowserPanelInputOwner {
       return;
     }
     event.preventDefault();
-    this.runAfterClick((client, targetId) => pressBrowserKey(client, { targetId, key }));
+    this.runAfterClick(
+      (client, targetId) => pressBrowserKey(client, { targetId, key }),
+      key.length === 1,
+    );
   }
 
   handleViewportPaste(event: ClipboardEvent): void {
@@ -370,12 +376,13 @@ export class BrowserPanelInputOwner {
     }
     const text = event.clipboardData.getData("text/plain");
     if (text) {
-      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
+      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }), true);
     }
   }
 
   private runAfterClick(
     action: (client: BrowserRequestClient, targetId: string) => Promise<void>,
+    pipeline = false,
   ): void {
     const targetId = this.host.activeTargetId;
     const client = this.host.operations.captureClient();
@@ -404,10 +411,16 @@ export class BrowserPanelInputOwner {
     const click = this.pendingClick;
     const afterClick = () =>
       click ? click.then((succeeded) => (succeeded ? run() : undefined)) : run();
-    // Text, deletion and submit must reach the same focused field in input order.
+    // The browser owns native keyboard ordering. Ordinary text need not wait for
+    // earlier navigation-policy responses; focus/navigation keys and clicks do.
+    const barrier = pipeline ? this.pendingKeyBarrier : this.pendingText;
+    const response = barrier ? barrier.then(afterClick) : Promise.resolve(afterClick());
+    if (!pipeline) {
+      this.pendingKeyBarrier = response;
+    }
     this.pendingText = this.pendingText
-      ? this.pendingText.then(afterClick)
-      : Promise.resolve(afterClick());
+      ? Promise.all([this.pendingText, response]).then(() => undefined)
+      : response;
   }
 
   handleOverlayPointerDown(event: PointerEvent): void {

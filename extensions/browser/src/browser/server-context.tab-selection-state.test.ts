@@ -186,6 +186,22 @@ function closingTab(listsBeforeGone: number) {
 }
 
 describe("browser tab selection and ownership", () => {
+  it("selects from one fresh discovery per available target", async () => {
+    let tabs = [page("FIRST")];
+    const { openclaw, fetchMock } = listOnly(() => tabs);
+    await expect(openclaw.ensureTabAvailable("FIRST")).resolves.toMatchObject({
+      targetId: "FIRST",
+    });
+    tabs = [page("SECOND")];
+    await expect(openclaw.ensureTabAvailable("SECOND")).resolves.toMatchObject({
+      targetId: "SECOND",
+    });
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "http://127.0.0.1:18800/json/list",
+      "http://127.0.0.1:18800/json/list",
+    ]);
+  });
+
   it("preserves a disappeared sticky alias when a newly discovered tab is blocked", async () => {
     const create = vi
       .spyOn(cdp, "createTargetViaCdp")

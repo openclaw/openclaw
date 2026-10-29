@@ -4,6 +4,7 @@ import type { Locator, Page } from "playwright-core";
 import { resolveActInteractionTimeoutMs } from "./act-policy.js";
 import type { BrowserFormField } from "./client-actions.types.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
+import { reserveKeyboardInteraction, type KeyboardDispatch } from "./keyboard-dispatch.js";
 import { evaluateBrowserFunction } from "./page-function-runtime.js";
 import {
   ensurePageState,
@@ -167,13 +168,12 @@ export async function selectOptionViaPlaywright(
 }
 
 export async function pressKeyViaPlaywright(
-  opts: GuardedInteractionOptions & {
+  opts: KeyboardInteractionOptions & {
     key: string;
     delayMs?: number;
   },
 ): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  await runGuardedPageInteraction(page, opts, async () => {
+  await runKeyboardInteraction(opts, async (page) => {
     await page.keyboard.press(opts.key, {
       delay: opts.delayMs ?? 0,
     });
@@ -181,10 +181,9 @@ export async function pressKeyViaPlaywright(
 }
 
 export async function insertTextViaPlaywright(
-  opts: GuardedInteractionOptions & { text: string },
+  opts: KeyboardInteractionOptions & { text: string },
 ): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  await runGuardedPageInteraction(page, opts, async () => {
+  await runKeyboardInteraction(opts, async (page) => {
     try {
       // Native insertion preserves the focused frame and selection without reading the clipboard.
       await page.keyboard.insertText(opts.text);
@@ -195,6 +194,26 @@ export async function insertTextViaPlaywright(
       );
     }
   });
+}
+
+type KeyboardInteractionOptions = GuardedInteractionOptions & {
+  keyboardDispatch?: KeyboardDispatch;
+};
+
+async function runKeyboardInteraction(
+  opts: KeyboardInteractionOptions,
+  action: (page: Page) => Promise<void>,
+): Promise<void> {
+  const dispatch = opts.keyboardDispatch ?? reserveKeyboardInteraction(opts);
+  try {
+    if (dispatch.ready) {
+      await dispatch.ready;
+    }
+    const page = await getPageForTargetId(opts);
+    await runGuardedPageInteraction(page, opts, () => dispatch.dispatch(() => action(page)));
+  } finally {
+    dispatch.releaseIfUnused();
+  }
 }
 
 export async function typeViaPlaywright(

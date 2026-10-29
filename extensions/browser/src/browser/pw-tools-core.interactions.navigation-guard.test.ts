@@ -126,6 +126,156 @@ function subframeClick(
 }
 
 describe("pw-tools-core interaction navigation guard", () => {
+  it.each(["page lookup", "authority", "failed page lookup"] as const)(
+    "orders action-entry keyboard input across asynchronous %s",
+    async (phase) => {
+      await withFakeTimers(async () => {
+        const setup = heldAction();
+        const delivered: string[] = [];
+        const page = {
+          ...navigationPage("https://example.test/input").page,
+          keyboard: {
+            press: async (key: string) => {
+              delivered.push(key);
+            },
+            insertText: async (text: string) => {
+              delivered.push(text);
+            },
+          },
+        };
+        install(page);
+        if (phase !== "authority") {
+          session.getPageForTargetId.mockImplementationOnce(async () => {
+            await setup.run();
+            if (phase === "failed page lookup") {
+              throw new Error("page unavailable");
+            }
+            return page;
+          });
+        }
+        let firstAssertion = true;
+        const a = executeActViaPlaywright({
+          ...strict(),
+          action: { kind: "press", key: "a" },
+          assertCurrent: () => {
+            if (phase === "authority" && firstAssertion) {
+              firstAssertion = false;
+              return setup.run();
+            }
+            return undefined;
+          },
+        }).then(
+          () => "ok",
+          (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        );
+        await setup.started;
+        const b = act({ kind: "insertText", text: "b" });
+        await vi.advanceTimersByTimeAsync(0);
+        const beforeSetupSettled = [...delivered];
+        setup.resolve();
+        await vi.runAllTimersAsync();
+        await b;
+        expect(await a).toBe(phase === "failed page lookup" ? "page unavailable" : "ok");
+        expect(beforeSetupSettled).toEqual([]);
+        expect(delivered).toEqual(phase === "failed page lookup" ? ["b"] : ["a", "b"]);
+      });
+    },
+  );
+
+  it("orders native keys and insertion while retaining delayed policy settlement and authority checks", async () => {
+    await withFakeTimers(async () => {
+      const first = heldAction();
+      const delivered: string[] = [];
+      const navigation = navigationPage("https://example.test/input");
+      const page = {
+        ...navigation.page,
+        keyboard: {
+          press: async (key: string) => {
+            delivered.push(key);
+            await first.run();
+          },
+          insertText: async (text: string) => {
+            delivered.push(text);
+          },
+        },
+      };
+      install(page);
+      const outcomes: string[] = [];
+      const observe = (name: string, task: Promise<unknown>) =>
+        task.then(
+          () => outcomes.push(`${name}:ok`),
+          (error: unknown) =>
+            outcomes.push(`${name}:${error instanceof Error ? error.message : String(error)}`),
+        );
+      const a = observe("a", act({ kind: "press", key: "a" }));
+      await first.started;
+      const b = observe("b", act({ kind: "insertText", text: "b" }));
+      let current = true;
+      const c = observe(
+        "c",
+        executeActViaPlaywright({
+          ...strict(),
+          action: { kind: "insertText", text: "c" },
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("owner changed");
+            }
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(delivered).toEqual(["a"]);
+      current = false;
+      first.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(delivered).toEqual(["a", "b"]);
+      // Entry-point authority rejects c before it begins guarded native work.
+      expect(outcomes).toEqual(["c:owner changed"]);
+      // A denial after native input must still own the final response.
+      complete.mockRejectedValue(new Error("delayed navigation denied"));
+      try {
+        navigation.setUrl("http://127.0.0.1/private");
+        navigation.emit();
+        await vi.advanceTimersByTimeAsync(249);
+        expect(outcomes).toEqual(["c:owner changed"]);
+        await vi.advanceTimersByTimeAsync(1);
+        await Promise.all([a, b, c]);
+        expect(outcomes.toSorted()).toEqual([
+          "a:delayed navigation denied",
+          "b:delayed navigation denied",
+          "c:owner changed",
+        ]);
+        expect(navigation.listenerCount()).toBe(0);
+      } finally {
+        complete.mockResolvedValue(undefined);
+      }
+    });
+  });
+
+  it("keeps interrupted native input ahead of later typing until it actually settles", async () => {
+    await withFakeTimers(async () => {
+      const first = heldAction();
+      const inserted = vi.fn(async () => {});
+      install({
+        ...navigationPage("https://example.test/input").page,
+        keyboard: { press: first.run, insertText: inserted },
+      });
+      const controller = new AbortController();
+      const a = act({ kind: "press", key: "a" }, { signal: controller.signal });
+      const interrupted = expect(a).rejects.toThrow("caller left");
+      await first.started;
+      const b = act({ kind: "insertText", text: "b" });
+      controller.abort(new Error("caller left"));
+      await vi.advanceTimersByTimeAsync(0);
+      await interrupted;
+      expect(inserted).not.toHaveBeenCalled();
+      first.resolve();
+      await vi.runAllTimersAsync();
+      await b;
+      expect(inserted).toHaveBeenCalledExactlyOnceWith("b");
+    });
+  });
+
   it.each([
     { phase: "delayed", duration: 0, blocked: false },
     { phase: "in-flight", duration: 30, blocked: false },

@@ -4,6 +4,7 @@ import { useBrowserDashboardTestHarness } from "../../browser-dashboard.test-har
 import type { BrowserActRequest } from "../client-actions.types.js";
 import type { BrowserTab } from "../client.types.js";
 import { gotoPageWithNavigationGuard as gotoPageWithNavigationGuardReal } from "../pw-session-navigation.js";
+import { withFakeTimers } from "../pw-tools-core.guard-test-support.js";
 import {
   getPwToolsCoreSessionMocks as sessionMocks,
   installPwToolsCoreTestHooks,
@@ -198,6 +199,61 @@ describe("dashboard action ownership", () => {
   beforeEach(() => {
     suite.mode = "actions";
   });
+  it.each([false, true])(
+    "orders typing before route preparation (first fails=%s)",
+    async (fails) => {
+      const { targetId, tab, assertCurrent } = await dashboardTarget();
+      await (await import("../pw-ai-module.js")).getPwAiModule();
+      await withFakeTimers(async () => {
+        const ready = createGate();
+        const delivered: string[] = [];
+        setPwToolsCoreCurrentPage({
+          url: () => tab.url,
+          keyboard: {
+            press: async (key: string) => {
+              delivered.push(key);
+            },
+            insertText: async (text: string) => {
+              delivered.push(text);
+            },
+          },
+        });
+        let preparations = 0;
+        const handler = dashboardRoute(tab, "/act", async () => {
+          if (++preparations === 1) {
+            await ready.block();
+            if (fails) {
+              throw new Error("tab unavailable");
+            }
+          }
+        });
+        const a = startRoute(handler, {
+          body: { kind: "press", targetId, key: "a" },
+          assertCurrent,
+        });
+        await atBarrier(
+          ready.entered,
+          a.completion,
+          "First key did not reach preparation",
+          a.response,
+        );
+        const b = startRoute(handler, {
+          body: { kind: "insertText", targetId, text: "b" },
+          assertCurrent,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        const beforeSetupSettled = [...delivered];
+        ready.resolve();
+        await vi.runAllTimersAsync();
+        await Promise.all([a.completion, b.completion]);
+        expect(beforeSetupSettled).toEqual([]);
+        expect(delivered).toEqual(fails ? ["b"] : ["a", "b"]);
+        expect(b.response).toMatchObject({ statusCode: 200, body: { ok: true } });
+        expect(a.response.statusCode).toBe(fails ? 500 : 200);
+      });
+    },
+  );
+
   it.each([
     { revoke: "replacement", boundary: "nested batch" },
     { revoke: "Stop", boundary: "submit" },

@@ -312,14 +312,14 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("preserves the last complete list when a later enumeration is unavailable", async () => {
+  it("retries an unavailable enumeration without opening a blank tab", async () => {
     const complete = [page("A", "https://a.example"), page("B", "https://b.example")];
     const listPagesViaPlaywright = vi
       .fn<() => Promise<typeof complete>>()
-      .mockResolvedValueOnce(complete)
       .mockRejectedValueOnce(
         new Error("Playwright page target identities are temporarily unavailable."),
-      );
+      )
+      .mockResolvedValueOnce(complete);
     const createPageViaPlaywright = vi.fn(async () => page("WRONG", "about:blank"));
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
       listPagesViaPlaywright,
@@ -328,6 +328,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     const { remote } = deps.createRemoteRouteHarness();
 
     await expect(remote.ensureTabAvailable("B")).resolves.toMatchObject({ targetId: "B" });
+    expect(listPagesViaPlaywright).toHaveBeenCalledTimes(2);
     expect(createPageViaPlaywright).not.toHaveBeenCalled();
   });
 
