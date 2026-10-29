@@ -121,8 +121,10 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("sessions.messages.subscribe");
+      await expect.poll(() => breakdownRequests.length).toBe(1);
       const details = await openChatDetails(page);
-      expect(breakdownRequests).toHaveLength(0);
+      // Idle warming may fetch code; opening Details must not fetch a context report.
+      expect(await gateway.getRequests("sessions.usage")).toHaveLength(0);
       expect(
         await details
           .locator('[data-details-group="context"], [data-details-destination="context"]')

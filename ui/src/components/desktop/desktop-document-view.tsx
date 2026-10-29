@@ -30,6 +30,18 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
     <section class="desktop-document" aria-label={t("desktop.title")}>
       <DesktopPanelContent
         {...props}
+        notice={() => (
+          <>
+            {props.state !== "connecting" && props.state !== "connected" && (
+              <div class="desktop-toolbar">
+                <button class="desktop-button" type="button" onClick={() => props.onClose()}>
+                  {t("desktop.back")}
+                </button>
+              </div>
+            )}
+            {props.notice()}
+          </>
+        )}
         connection={() => (
           <div class="desktop-stage">
             {/* noVNC owns this island; controls remain Solid-owned siblings. */}

@@ -16,7 +16,13 @@ import {
 
 export function createChatPaneResourceProps() {
   const widgetLayout = createChatWidgetLayout();
+  const downloads = new WeakMap<ChatPageHost, NonNullable<ChatProps["resolveArtifactDownload"]>>();
   return (state: ChatPageHost, context: ApplicationContext) => {
+    let download = downloads.get(state);
+    if (!download) {
+      download = (params, signal) => resolveArtifactDownloadSource(state, params, signal);
+      downloads.set(state, download);
+    }
     const mediaReadAllowed = state.connected && !state.isRouteSessionPending?.();
     const target = {
       sessionKey: state.sessionKey,
@@ -44,8 +50,7 @@ export function createChatPaneResourceProps() {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       fetchLinkFavicon: mediaReadAllowed ? resolveChatLinkFaviconFetcher(state) : undefined,
       assistantAttachmentAuthToken: mediaReadAllowed ? resolveControlUiAuthToken(state) : null,
-      resolveArtifactDownload: (params, signal) =>
-        resolveArtifactDownloadSource(state, params, signal),
+      resolveArtifactDownload: download,
       basePath: state.basePath,
       sessionPublicOrigin: markdownSessionPublicOrigin(context),
       resourceBasePath: state.resourceBasePath,

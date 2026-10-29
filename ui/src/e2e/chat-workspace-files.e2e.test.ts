@@ -116,14 +116,13 @@ suite.define(() => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+      const session = createControlUiSessionRow("agent:main:main", "Delivery notes", Date.now(), {
+        visibility: "shared",
+        sharingRole: "owner",
+      });
       const gateway = await installMockGateway(page, {
         operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
-        sessions: [
-          createControlUiSessionRow("agent:main:main", "Delivery notes", Date.now(), {
-            visibility: "shared",
-            sharingRole: "owner",
-          }),
-        ],
+        sessions: [session],
         methodResponses: {
           "artifacts.list": { artifacts: [] },
           "sessions.files.list": {
@@ -155,9 +154,11 @@ suite.define(() => {
           },
         },
       });
-      await page.route("**/api/artifacts/download/navigation/notes", (route) =>
-        route.fulfill({ body: "# Delivery notes\n", contentType: "text/markdown" }),
-      );
+      const attachmentDownload = Promise.withResolvers<void>();
+      await page.route("**/api/artifacts/download/navigation/notes", async (route) => {
+        await attachmentDownload.promise;
+        await route.fulfill({ body: "# Delivery notes\n", contentType: "text/markdown" });
+      });
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
       await composer.fill("Please review the delivery notes before publishing.");
@@ -170,7 +171,27 @@ suite.define(() => {
       const heading = page.getByRole("heading", { name: "Delivery notes", exact: true });
       await heading.waitFor();
       await page.getByRole("button", { name: "More file actions", exact: true }).click();
-      await page.getByRole("menuitem", { name: "Attach to session", exact: true }).click();
+      try {
+        await Promise.all([
+          page.waitForRequest("**/api/artifacts/download/navigation/notes"),
+          page.getByRole("menuitem", { name: "Attach to session", exact: true }).click(),
+        ]);
+        await composer.fill("Please review the attached delivery notes before publishing.");
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...session,
+          sessionKey: session.key,
+          label: "Delivery notes updated",
+          reason: "patch",
+          updatedAt: Date.now() + 1,
+        });
+        await page
+          .getByText("Delivery notes updated", { exact: true })
+          .first()
+          .waitFor({ state: "attached" });
+        await waitForLayoutSettled(page, ".agent-chat__composer-combobox");
+      } finally {
+        attachmentDownload.resolve();
+      }
       await page.getByRole("button", { name: "Remove notes.md", exact: true }).waitFor();
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       const sent = await gateway.waitForRequest("chat.send");

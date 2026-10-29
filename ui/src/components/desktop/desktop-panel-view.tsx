@@ -249,24 +249,20 @@ export function DesktopPicker(props: {
 }) {
   return (
     <>
-      {props.automatic ? (
-        <>
-          {props.openWindowHref && (
-            <div class="desktop-toolbar session-panel-rail" data-presentation="desktop">
-              <span class="desktop-toolbar__spacer" />
-              <DesktopOpenWindow href={props.openWindowHref} />
-            </div>
-          )}
-          {props.hostSetup ? (
-            <DesktopHostSetupNotice setup={props.hostSetup} loading={props.loading} />
-          ) : (
-            <div class="desktop-status" role="status">
-              <button class="desktop-button" type="button" onClick={() => props.onRefresh()}>
-                {t("common.retry")}
-              </button>
-            </div>
-          )}
-        </>
+      {props.automatic && props.openWindowHref && (
+        <div class="desktop-toolbar session-panel-rail" data-presentation="desktop">
+          <span class="desktop-toolbar__spacer" />
+          <DesktopOpenWindow href={props.openWindowHref} />
+        </div>
+      )}
+      {props.hostSetup ? (
+        <DesktopHostSetupNotice setup={props.hostSetup} loading={props.loading} />
+      ) : props.automatic ? (
+        <div class="desktop-status" role="status">
+          <button class="desktop-button" type="button" onClick={() => props.onRefresh()}>
+            {t("common.retry")}
+          </button>
+        </div>
       ) : (
         <>
           <div
