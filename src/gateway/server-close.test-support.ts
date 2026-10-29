@@ -34,7 +34,7 @@ export function createGatewayCloseTestHandlerFactory({
     completeGatewayClose(params, await prepareGatewayClose(params, opts));
 }
 
-export function createTestChatRunState() {
+function createTestChatRunState() {
   const state = createChatRunState();
   const clear = state.clear;
   state.clear = vi.fn(() => clear());
