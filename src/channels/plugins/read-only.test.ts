@@ -757,7 +757,8 @@ describe("resolveGatewayDelegatedChannelPlugin", () => {
       }),
     );
 
-    expect(request).toHaveBeenCalledExactlyOnceWith(
+    expect(request).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         method: "message.action",
         params: expect.objectContaining({
@@ -769,6 +770,30 @@ describe("resolveGatewayDelegatedChannelPlugin", () => {
       expect.anything(),
     );
     expect(result).toMatchObject({ channel: "external-chat", action: "read" });
+    // This adapter has no target grammar, so a mention reaches the Gateway's plugin unresolved.
+    await withPluginRuntimeRegistryScope(registry, () =>
+      runMessageAction({
+        cfg,
+        action: "read",
+        params: {
+          channel: "external-chat",
+          accountId: "default",
+          target: "<@123456789012345678>",
+          limit: 1,
+        },
+        senderIsOwner: true,
+        conversationReadOrigin: "direct-operator",
+        gateway: { clientName: "cli", mode: "cli", request },
+      }),
+    );
+    expect(request).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          params: expect.objectContaining({ to: "<@123456789012345678>" }),
+        }),
+      }),
+      expect.anything(),
+    );
     expectMarkers(setupMarker, fullMarker);
   });
 });

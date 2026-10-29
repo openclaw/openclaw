@@ -17,19 +17,16 @@ import { resolveChannelThreadAddressing } from "../../channels/thread-addressing
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
-import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import {
   hydrateAttachmentParamsForAction,
   resolveAttachmentMediaPolicy,
 } from "../../infra/outbound/message-action-params.js";
-import { actionHasTarget } from "../../infra/outbound/message-action-spec.js";
 import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { maybeResolvePluginMessagingTarget } from "../../infra/outbound/target-normalization.js";
-import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
@@ -58,6 +55,7 @@ import {
   resolveAgentRuntimeMessageActionConfig,
   resolveTrustedMessageActionToolContext,
 } from "./message-action-context.js";
+import { prepareGatewayMessageActionTarget } from "./message-action-target.js";
 import {
   buildGatewayDeliveryPayload,
   createGatewayInflightAuthorityFailure,
@@ -217,24 +215,17 @@ export const sendHandlers: GatewayRequestHandlers = {
               if (accountId) {
                 request.params.accountId = accountId;
               }
-              if (
-                canonicalAction &&
-                request.action === "send" &&
-                !normalizeOptionalString(request.params.target) &&
-                !actionHasTarget("send", request.params, {
-                  channel,
-                  aliasSpec: plugin.actions?.messageActionTargetAliases?.send ?? null,
-                }) &&
-                !resolveImplicitMessageActionTarget(trustedContext.toolContext)
-              ) {
-                // Native sends could use account defaults without a target. Resolve that
-                // owner fact before core routing requires it.
-                const target = await resolveOutboundTarget({ channel, plugin, cfg, accountId });
-                if (!target.ok) {
-                  throw target.error;
-                }
-                request.params.to = target.to;
-              }
+              await prepareGatewayMessageActionTarget({
+                cfg,
+                channel,
+                plugin,
+                action: request.action,
+                actionParams: request.params,
+                accountId,
+                canonicalAction,
+                conversationReadOrigin,
+                toolContext: trustedContext.toolContext,
+              });
               const resolvedMediaAccess = resolveAgentScopedOutboundMediaAccess({
                 cfg,
                 agentId,
