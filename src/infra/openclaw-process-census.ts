@@ -8,7 +8,7 @@ import {
   type ProcessCommand,
 } from "../process/supervisor/service-child-group-ownership.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
-import { isPidDefinitelyDead } from "../shared/pid-alive.js";
+import { isPidDefinitelyDead, readLinuxProcessStat } from "../shared/pid-alive.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { isRosettaTranslatedProcess } from "../shared/rosetta-translation.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
@@ -402,6 +402,17 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         })
       );
     };
+    const predatesHandoffDrivers = (pid: number) => {
+      if (process.platform !== "linux" || !handoff?.drivers?.length) {
+        return false;
+      }
+      const startedAt = readLinuxProcessStat(pid)?.startedAt;
+      // Protected same-user daemons can hide cwd, but cannot descend from later-born drivers.
+      return (
+        startedAt !== undefined &&
+        handoff.drivers.every(({ startIdentity }) => BigInt(startIdentity) > BigInt(startedAt))
+      );
+    };
     for (const { pid, state, command } of processes) {
       if (handoff && Date.now() >= deadline) {
         throw new Error("Process census deadline exceeded");
@@ -470,7 +481,8 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
             byPid.get(command?.ppid ?? 0)?.command,
             inspectorUid,
           ) &&
-          !outsideHandoffFamily(pid)
+          !outsideHandoffFamily(pid) &&
+          !predatesHandoffDrivers(pid)
         ) {
           result.unverifiedPids.push(pid);
           const image = observation?.executable ?? argv?.[0];

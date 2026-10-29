@@ -47,6 +47,7 @@ vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => {
 });
 afterEach(() => {
   admission.created = admission.beforeGrant = undefined;
+  vi.unstubAllEnvs();
 });
 const tempDirs = useStateDatabaseTempDirs();
 function fixture(input: Parameters<typeof updateRunFixture>[1]) {
@@ -116,25 +117,21 @@ it("preserves an owner that adopts dead-driver work before reconciliation commit
 it("status projects recent driver loss until explicit reconciliation", async () => {
   const run = await deadDriverRun();
   vi.stubEnv("OPENCLAW_STATE_DIR", run.options.env.OPENCLAW_STATE_DIR);
-  try {
-    expect(await readUpdateRunStatus()).toMatchObject({
-      activeRun: { runId: run.id, status: "running", phase: "activating" },
-      abandonedRun: {
-        runId: run.id,
-        rule: "inactive-driver-dead",
-      },
-    });
-    expect(await run.readAsync()).toEqual(run.recorded);
-    await run.reconcile({ explicit: true });
-    expect(await run.readAsync()).toMatchObject({
-      status: "failed",
-      reason: "abandoned",
-      phase: "finished",
-      finishedAtMs: expect.any(Number),
-    });
-  } finally {
-    vi.unstubAllEnvs();
-  }
+  expect(await readUpdateRunStatus()).toMatchObject({
+    activeRun: { runId: run.id, status: "running", phase: "activating" },
+    abandonedRun: {
+      runId: run.id,
+      rule: "inactive-driver-dead",
+    },
+  });
+  expect(await run.readAsync()).toEqual(run.recorded);
+  await run.reconcile({ explicit: true });
+  expect(await run.readAsync()).toMatchObject({
+    status: "failed",
+    reason: "abandoned",
+    phase: "finished",
+    finishedAtMs: expect.any(Number),
+  });
 });
 it.each([false, true])(
   "status recovers a killed validating handoff (pruned helper: %s)",
@@ -148,7 +145,7 @@ it.each([false, true])(
     const run = fixture({
       trigger: "cli",
       origin: {
-        driver: pruned ? deadDriverFixture().dead : driver,
+        driver: pruned ? undefined : driver,
         previousDrivers: [parent],
         managedHandoff: { parent, helper: driver },
       },
@@ -180,14 +177,11 @@ it.each([false, true])(
         lastRun: { runId: run.id, status: "failed", reason: "handoff-terminated" },
       });
       const steps = (await run.readAsync())?.steps;
-      expect(steps).toContainEqual(
-        expect.objectContaining({
-          step: "reconcile:abandoned",
-          detail: expect.stringContaining("validating"),
-        }),
+      expect(steps?.find(({ step }) => step === "reconcile:abandoned")?.detail).toContain(
+        "validating",
       );
       const retained = process.platform === "linux" && isContainerEnvironment();
-      expect(fs.existsSync(stage.prefix)).toBe(retained);
+      expect(fs.existsSync(stage.prefix), JSON.stringify(steps)).toBe(retained);
       expect(steps?.some(({ step }) => step === "warning:recovery-artifact-cleanup")).toBe(
         retained,
       );
@@ -197,7 +191,6 @@ it.each([false, true])(
         helper.kill("SIGKILL");
         await exited;
       }
-      vi.unstubAllEnvs();
     }
   },
 );

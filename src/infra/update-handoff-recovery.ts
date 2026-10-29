@@ -82,15 +82,20 @@ export async function cleanupTerminatedHandoffStage(
       runId: run.runId,
       artifactPaths: [stage.prefix],
       artifactPathsOnly: true,
-      drivers: recordedUpdateRunDrivers(run).filter(
-        (driver) =>
-          !run.origin.managedHandoff ||
-          !sameUpdateRunDriver(driver, run.origin.managedHandoff.parent),
-      ),
+      drivers: [
+        ...(run.origin.managedHandoff ? [run.origin.managedHandoff.helper] : []),
+        ...recordedUpdateRunDrivers(run).filter(
+          (driver) =>
+            !run.origin.managedHandoff ||
+            !sameUpdateRunDriver(driver, run.origin.managedHandoff.parent),
+        ),
+      ],
       windowsUserSid: run.origin.windowsUserSid,
     });
     if (census.error || census.matchingPids.length || census.unverifiedPids.length) {
-      throw new Error("Package stage work remains alive or unverified; it was retained.");
+      throw new Error(
+        `Package stage work remains alive or unverified; it was retained. ${census.error ?? census.warnings?.join(" ") ?? ""}`,
+      );
     }
     const { discardPackageUpdateStage } = await import("./package-update-stage-cleanup.js");
     const failure = await discardPackageUpdateStage({
