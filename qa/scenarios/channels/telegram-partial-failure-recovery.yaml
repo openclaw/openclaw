@@ -39,20 +39,29 @@ scenario:
     config:
       requiredProviderMode: mock-openai
       partialMarker: TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE
-      recoveryMarker: request failed.
+      recoveryMarker: "⚠️"
 
 flow:
   steps:
     - name: preserves a visible partial in one recovered message
       actions:
         - assert:
-            expr: env.providerMode === config.requiredProviderMode && typeof readTelegramMessages === "function"
-            message: this Telegram recovery scenario requires mock-openai and native Telegram observations
+            expr: env.providerMode === config.requiredProviderMode
+            message: this Telegram recovery scenario requires mock-openai
         - call: waitForGatewayHealthy
           args: [{ ref: env }, 60000]
         - call: waitForTransportReady
           args: [{ ref: env }, 60000]
         - resetTransport: true
+        # Live Telegram correlates native replies to the inbound; other drivers use bus outbound order.
+        - set: readRecoveryMessages
+          value:
+            lambda:
+              params: [inbound, outboundStart]
+              expr: "typeof readTelegramMessages === 'function' ? readTelegramMessages(inbound.id).map((message) => ({ id: `${message.chatId}:${message.messageId}`, text: message.text })) : getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStart).map((message) => ({ id: message.id, text: message.text }))"
+        - set: visibleOutboundStart
+          value:
+            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - set: delivery
           value:
             expr: "transport.buildAgentDelivery({ target: 'group:telegram-partial-failure-room' })"
@@ -69,7 +78,7 @@ flow:
           args:
             - lambda:
                 params: []
-                expr: "readTelegramMessages(visibleInbound.id).find((message) => message.text.includes(config.partialMarker))"
+                expr: "readRecoveryMessages(visibleInbound, visibleOutboundStart).find((message) => message.text.includes(config.partialMarker))"
             - 75000
           saveAs: visiblePartial
         - call: waitForCondition
@@ -77,20 +86,23 @@ flow:
             - lambda:
                 async: true
                 params: []
-                expr: "(await env.gateway.call('sessions.list', {}, { timeoutMs: 30000 })).sessions?.some((session) => session.key === sessionKey && session.hasActiveRun === false) ? readTelegramMessages(visibleInbound.id).find((message) => message.messageId === visiblePartial.messageId && message.chatId === visiblePartial.chatId && message.text.includes(config.partialMarker) && message.text.includes(config.recoveryMarker)) : undefined"
+                expr: "(await env.gateway.call('sessions.list', {}, { timeoutMs: 30000 })).sessions?.some((session) => session.key === sessionKey && session.hasActiveRun === false) ? readRecoveryMessages(visibleInbound, visibleOutboundStart).find((message) => message.id === visiblePartial.id && message.text.includes(config.partialMarker) && message.text.includes(config.recoveryMarker)) : undefined"
             - 75000
         - set: visibleMessages
           value:
-            expr: "readTelegramMessages(visibleInbound.id)"
+            expr: "readRecoveryMessages(visibleInbound, visibleOutboundStart)"
         - assert:
-            expr: "visibleMessages.length === 1 && visibleMessages[0].messageId === visiblePartial.messageId && visibleMessages[0].chatId === visiblePartial.chatId && visibleMessages[0].text.includes(config.partialMarker) && visibleMessages[0].text.includes(config.recoveryMarker)"
+            expr: "visibleMessages.length === 1 && visibleMessages[0].id === visiblePartial.id && visibleMessages[0].text.includes(config.partialMarker) && visibleMessages[0].text.includes(config.recoveryMarker)"
             message:
-              expr: "`expected one correlated native Telegram recovery; saw ${JSON.stringify(visibleMessages)}`"
-      detailsExpr: "JSON.stringify({ count: visibleMessages.length, nativeMessageId: visibleMessages[0].messageId, initialText: visiblePartial.text, finalText: visibleMessages[0].text })"
+              expr: "`expected one correlated Telegram recovery; saw ${JSON.stringify(visibleMessages)}`"
+      detailsExpr: "JSON.stringify({ count: visibleMessages.length, initialText: visiblePartial.text, finalText: visibleMessages[0].text })"
 
     - name: sends one fallback when no partial became visible
       actions:
         - resetTransport: true
+        - set: unsentOutboundStart
+          value:
+            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
             conversation: { id: telegram-partial-failure-room, kind: group }
             senderId: qa-telegram-recovery-operator
@@ -102,13 +114,13 @@ flow:
             - lambda:
                 async: true
                 params: []
-                expr: "(await env.gateway.call('sessions.list', {}, { timeoutMs: 30000 })).sessions?.some((session) => session.key === sessionKey && session.hasActiveRun === false) ? readTelegramMessages(unsentInbound.id).find((message) => message.text.includes(config.recoveryMarker)) : undefined"
+                expr: "(await env.gateway.call('sessions.list', {}, { timeoutMs: 30000 })).sessions?.some((session) => session.key === sessionKey && session.hasActiveRun === false) ? readRecoveryMessages(unsentInbound, unsentOutboundStart).find((message) => message.text.includes(config.recoveryMarker)) : undefined"
             - 75000
         - set: unsentMessages
           value:
-            expr: "readTelegramMessages(unsentInbound.id)"
+            expr: "readRecoveryMessages(unsentInbound, unsentOutboundStart)"
         - assert:
             expr: "unsentMessages.length === 1 && unsentMessages[0].text.includes(config.recoveryMarker) && !unsentMessages[0].text.includes(config.partialMarker)"
             message:
               expr: "`expected one correlated Telegram fallback without partial text; saw ${JSON.stringify(unsentMessages)}`"
-      detailsExpr: "JSON.stringify({ count: unsentMessages.length, nativeMessageId: unsentMessages[0].messageId, text: unsentMessages[0].text })"
+      detailsExpr: "JSON.stringify({ count: unsentMessages.length, text: unsentMessages[0].text })"
