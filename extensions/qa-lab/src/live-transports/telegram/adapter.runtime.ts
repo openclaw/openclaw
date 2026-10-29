@@ -9,6 +9,7 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
+import { createTelegramNativeMessageLedger } from "./native-message-ledger.js";
 import {
   readTelegramPrivateProductionDescriptor,
   requestTelegramPrivateAppTurn,
@@ -188,8 +189,6 @@ export async function createTelegramQaTransportAdapter(
     bound?: true;
   };
   const routes = new Map<string, Route>();
-  const nativeKey = (observer: number, chatId: number, messageId: number) =>
-    `${observer}:${chatId}:${messageId}`;
   const routeKey = (observer: number, chatId: number, topic?: number) =>
     `${observer}:${chatId}:${topic ?? ""}`;
   const resetRoutes = () => {
@@ -200,13 +199,7 @@ export async function createTelegramQaTransportAdapter(
       kind: directMessageOnly ? "direct" : "channel",
     });
   };
-  const nativeMessageIds = new Map<
-    string,
-    { observer: number; chatId: number; messageId: number }
-  >();
-  const busMessages = new Map<string, { id: string; update?: TelegramUserbotUpdate }>();
-  // Native identities outlive a bus reset: delayed edits must not become new replies.
-  const retiredNativeKeys = new Set<string>();
+  const ledger = createTelegramNativeMessageLedger();
   const pendingUpdates = new Set<Promise<void>>();
   let resetting = false;
   let sendsInFlight = 0;
@@ -214,15 +207,10 @@ export async function createTelegramQaTransportAdapter(
   let localMessageId = 1;
 
   const publishUpdate = async (update: TelegramUserbotUpdate, observer: number) => {
-    const key = nativeKey(observer, update.chatId, update.messageId);
-    if (
-      retiredNativeKeys.has(key) ||
-      (update.replyToMessageId !== undefined &&
-        retiredNativeKeys.has(nativeKey(observer, update.chatId, update.replyToMessageId)))
-    ) {
+    if (ledger.isRetired(update, observer)) {
       return;
     }
-    const existing = busMessages.get(key);
+    const existing = ledger.bus(observer, update.chatId, update.messageId);
     if (update.kind === "edit" && existing) {
       await context.messages.editMessage({
         accountId,
@@ -249,20 +237,19 @@ export async function createTelegramQaTransportAdapter(
       text: update.text,
       timestamp: update.timestamp,
       replyToId: update.replyToMessageId
-        ? busMessages.get(nativeKey(observer, update.chatId, update.replyToMessageId))?.id
+        ? ledger.bus(observer, update.chatId, update.replyToMessageId)?.id
         : undefined,
     });
-    nativeMessageIds.set(outbound.id, {
-      observer,
-      chatId: update.chatId,
-      messageId: update.messageId,
-    });
-    busMessages.set(key, { id: outbound.id, update });
+    ledger.record(
+      outbound.id,
+      { observer, chatId: update.chatId, messageId: update.messageId },
+      update,
+    );
   };
 
   const processUpdate = async (update: TelegramUserbotUpdate, observer: number) => {
     if (resetting) {
-      retiredNativeKeys.add(nativeKey(observer, update.chatId, update.messageId));
+      ledger.retire(observer, update.chatId, update.messageId);
       return;
     }
     observerState.updateCount += 1;
@@ -278,7 +265,7 @@ export async function createTelegramQaTransportAdapter(
     if (
       sendsInFlight > 0 &&
       update.replyToMessageId &&
-      !busMessages.has(nativeKey(observer, update.chatId, update.replyToMessageId))
+      !ledger.bus(observer, update.chatId, update.replyToMessageId)
     ) {
       deferredReplies.push({ update, observer });
       return;
@@ -468,7 +455,7 @@ export async function createTelegramQaTransportAdapter(
         );
       }
       routes.set(routeId, { ...input.conversation, threadId: input.threadId, bound: true });
-      const reply = input.replyToId ? nativeMessageIds.get(input.replyToId) : undefined;
+      const reply = input.replyToId ? ledger.native(input.replyToId) : undefined;
       if (input.replyToId && (!reply || reply.observer !== observer || reply.chatId !== chatId)) {
         throw new Error(
           "Telegram QA reply requires a message observed by this participant in this chat.",
@@ -536,12 +523,7 @@ export async function createTelegramQaTransportAdapter(
           accountId,
           senderId: participant.testerUserId,
         });
-        nativeMessageIds.set(message.id, {
-          observer: messageObserver,
-          chatId,
-          messageId: sent.messageId,
-        });
-        busMessages.set(nativeKey(messageObserver, chatId, sent.messageId), { id: message.id });
+        ledger.record(message.id, { observer: messageObserver, chatId, messageId: sent.messageId });
         if (appProofReply !== undefined) {
           await observeUpdate(
             {
@@ -576,13 +558,9 @@ export async function createTelegramQaTransportAdapter(
       try {
         // Settle admitted observer writes before the transport clears its bus state.
         await Promise.all(pendingUpdates);
-        for (const key of busMessages.keys()) {
-          retiredNativeKeys.add(key);
-        }
+        ledger.reset();
         resetRoutes();
         primaryAlias = undefined;
-        nativeMessageIds.clear();
-        busMessages.clear();
         deferredReplies = [];
         observerState.updateCount = 0;
         observerState.filteredCount = 0;
@@ -608,20 +586,7 @@ export async function createTelegramQaTransportAdapter(
         },
         readTelegramMessages: (replyToId?: string) => {
           assertTransportHealthy();
-          const reply = replyToId === undefined ? undefined : nativeMessageIds.get(replyToId);
-          if (replyToId !== undefined && !reply) {
-            return [];
-          }
-          // Correlate in the observer namespace; TDLib IDs are not cross-account identities.
-          return [...busMessages.entries()].flatMap(([key, { update }]) =>
-            update &&
-            (!reply ||
-              (update.chatId === reply.chatId &&
-                update.replyToMessageId === reply.messageId &&
-                key === nativeKey(reply.observer, update.chatId, update.messageId)))
-              ? [structuredClone(update)]
-              : [],
-          );
+          return ledger.readUpdates(replyToId);
         },
       };
     },

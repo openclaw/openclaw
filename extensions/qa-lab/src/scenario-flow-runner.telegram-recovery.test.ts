@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { syncBuiltinESMExports } from "node:module";
+import timersPromises from "node:timers/promises";
+import { promisify } from "node:util";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
@@ -51,7 +54,9 @@ async function runRecoveryFlow(
           : marker
         : "Synthetic provider request failed.";
       const rows = [{ chatId: -100123, messageId: nextId++, text }];
-      if (options.duplicate && partialCase) rows.push({ ...rows[0]!, messageId: nextId++ });
+      if (options.duplicate && partialCase) {
+        rows.push({ ...rows[0]!, messageId: nextId++ });
+      }
       messages.set(inbound.id, rows);
       for (const row of rows) {
         state.addOutboundMessage({
@@ -63,7 +68,7 @@ async function runRecoveryFlow(
       return inbound;
     },
   };
-  const result = await runLoadedScenarioFlow("telegram-partial-failure-recovery", {
+  const pending = runLoadedScenarioFlow("telegram-partial-failure-recovery", {
     state,
     api: {
       transport,
@@ -74,16 +79,35 @@ async function runRecoveryFlow(
       waitForCondition: (check: () => unknown) =>
         waitForQaTransportCondition(
           check,
+          1_000,
           100,
-          0,
           () => "correlated terminal observation was not met",
         ),
     },
   });
-  return { result, gatewayCall };
+  // Poll sleeps and the deadline run on the fake clock, so worker pauses cannot exhaust it.
+  const settled = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  await vi.runAllTimersAsync();
+  await settled;
+  return { result: await pending, gatewayCall };
 }
 
 describe("Telegram recovery scenario native observations", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.spyOn(timersPromises, "setTimeout").mockImplementation(promisify(setTimeout));
+    syncBuiltinESMExports();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    syncBuiltinESMExports();
+  });
+
   it("accepts an initially recovered message without requiring a second edit", async () => {
     const { result, gatewayCall } = await runRecoveryFlow({ initiallyRecovered: true });
     expect(result.status).toBe("pass");
