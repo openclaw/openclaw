@@ -209,20 +209,51 @@ describe("worker policy installed-service fallbacks", () => {
     await expect(inspectCliGatewayServiceInstallation({})).resolves.toBeUndefined();
     expect(fixture.readRuntime).not.toHaveBeenCalled();
   });
-  it("resolves an installed service's database without the CLI's state selectors", async () => {
+  it.each([
+    { name: "omitted selectors", args: [], selectors: {} },
+    {
+      name: "argv profile",
+      args: ["--profile", "service"],
+      selectors: { OPENCLAW_PROFILE: "service" },
+    },
+  ])("resolves an installed service's database from its own $name", async ({ args, selectors }) => {
     fixture.gateway = false;
-    const serviceEnv = { HOME: "/home/example" };
-    fixture.readCommand.mockResolvedValue({ fixtureScope: "user", environment: serviceEnv });
+    const home = { HOME: "/home/example" };
+    fixture.readCommand.mockResolvedValue({
+      fixtureScope: "user",
+      programArguments: ["node", "/user/dist/index.js", ...args, "gateway"],
+      environment: home,
+    });
     const isolated = {
-      ...serviceEnv,
+      ...home,
       OPENCLAW_HOME: "/isolated",
       OPENCLAW_STATE_DIR: "/isolated/state",
       OPENCLAW_PROFILE: "isolated",
     };
     await expect(inspectCliGatewayServiceInstallation(isolated)).resolves.toMatchObject({
       version: "2026.10.5",
-      databasePath: resolveOpenClawStateSqlitePath(serviceEnv),
+      databasePath: resolveOpenClawStateSqlitePath({ ...home, ...selectors }),
     });
+  });
+  it("reads a Windows service's saved selectors case-insensitively", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!descriptor) {
+      throw new Error("missing platform descriptor");
+    }
+    try {
+      Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+      fixture.readCommand.mockResolvedValue({
+        fixtureScope: "user",
+        programArguments: ["node", "/user/dist/index.js", "gateway"],
+        environment: { HOME: "/home/example", openclaw_state_dir: "/shared" },
+      });
+      const cli = { HOME: "/home/example", OPENCLAW_STATE_DIR: "/shared" };
+      await expect(inspectCliGatewayServiceInstallation(cli)).resolves.toMatchObject({
+        databasePath: resolveOpenClawStateSqlitePath(cli),
+      });
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
   });
   it.each(["darwin", "win32"])("preserves the installed-service guard on %s", async (platform) => {
     const descriptor = Object.getOwnPropertyDescriptor(process, "platform");

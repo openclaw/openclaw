@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import {
+  mergeGatewayServiceEnv,
+  resolveWindowsServiceCommandProfile,
+} from "../daemon/service-env-merge.js";
+import {
   inspectGatewayServiceInstallationDrift,
   summarizeGatewayServiceLayout,
 } from "../daemon/service-layout.js";
@@ -12,6 +16,7 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
 import { isGatewayRunInvocationArgv } from "./gateway-run-argv.js";
+import { applyCliProfileEnv } from "./profile.js";
 
 /** Resolve this Gateway's own manager, never a same-named unit in another scope. */
 async function readOwnGatewayServiceCommand(
@@ -79,12 +84,22 @@ async function readOwnGatewayServiceCommand(
   }
 }
 
-function withoutStateSelectors(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+/** Rebuild another installed service's state selectors without inheriting the CLI's. */
+function resolveInstalledServiceEnv(
+  env: NodeJS.ProcessEnv,
+  command: GatewayServiceCommandConfig | null | undefined,
+): NodeJS.ProcessEnv {
   const hostEnv = { ...env };
   delete hostEnv.OPENCLAW_HOME;
   delete hostEnv.OPENCLAW_STATE_DIR;
   delete hostEnv.OPENCLAW_PROFILE;
-  return hostEnv;
+  // The merge normalizes saved Windows keys and applies Windows argv profiles.
+  const serviceEnv = mergeGatewayServiceEnv(hostEnv, command ?? null);
+  const profile = command && resolveWindowsServiceCommandProfile(command);
+  if (process.platform !== "win32" && profile?.kind === "resolved" && profile.source === "argv") {
+    applyCliProfileEnv({ profile: profile.profile, env: serviceEnv });
+  }
+  return serviceEnv;
 }
 
 /** Unknown service installations retain normal CLI behavior; only proven older installs restrict migration. */
@@ -109,12 +124,12 @@ export async function inspectCliGatewayServiceInstallation(
       version: drift.serviceVersion,
       cliVersion: VERSION,
       databasePath: resolveIdentityPathViaExistingAncestorSync(
-        resolveOpenClawStateSqlitePath({
+        resolveOpenClawStateSqlitePath(
           // This process is the live service, so its selectors are the service's.
-          // Another installed service omitting a selector uses its default, not the CLI's.
-          ...(ownCommand ? env : withoutStateSelectors(env)),
-          ...command?.environment,
-        }),
+          ownCommand
+            ? { ...env, ...ownCommand.environment }
+            : resolveInstalledServiceEnv(env, command),
+        ),
       ),
     };
   } catch {
