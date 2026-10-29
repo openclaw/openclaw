@@ -61,7 +61,10 @@ vi.mock("../process/supervisor/darwin-process-command.js", () => ({
 }));
 // mock-isolation: Native ancestry would otherwise read real host PIDs behind the synthetic table.
 vi.mock("@openclaw/proc-safe/identity", () => ({ readProcessAncestry: ancestry }));
-import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
+import {
+  type HandoffReferences,
+  inspectOtherOpenClawProcesses,
+} from "./openclaw-process-census.js";
 
 const self = process.pid;
 const launcher = self + 1;
@@ -487,7 +490,7 @@ const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
 function expectReferences(
   matchingPids: number[],
   unverifiedPids: number[] = [],
-  handoff: typeof references & { sharedRoots?: string[]; familyDeadline?: number } = references,
+  handoff: HandoffReferences = references,
 ) {
   expect(inspectOtherOpenClawProcesses(handoff)).toEqual({
     matchingPids,

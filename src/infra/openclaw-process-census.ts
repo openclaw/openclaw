@@ -181,7 +181,7 @@ function classifyProcessArtifactCustody(
   return unknown ? { kind: "unknown", reason: unknown } : (holder ?? { kind: "not-holder" });
 }
 
-type HandoffReferences = {
+export type HandoffReferences = {
   runId: string;
   artifactPaths: readonly string[];
   /** Pre-activation disposal checks only the private stage, not other serving installations. */
