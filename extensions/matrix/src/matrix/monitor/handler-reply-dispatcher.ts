@@ -275,7 +275,8 @@ export function createMatrixReplyDispatcher(config: {
                   payloadText?.trim() &&
                   !payload.isError &&
                   !payloadReplyMismatch &&
-                  !draftStream.mustDeliverFinalNormally()
+                  !draftStream.mustDeliverFinalNormally() &&
+                  !(hasMedia && !ttsSupplement && streaming === "progress")
                     ? { text: payloadText }
                     : undefined,
                 editFinal: async (draftEventId, edit) => {
