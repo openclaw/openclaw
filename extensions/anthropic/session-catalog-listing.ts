@@ -62,20 +62,20 @@ export async function listLocalClaudeSessionPage(
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
-  const search = params.searchTerm?.toLocaleLowerCase().normalize("NFC");
+  const search = params.searchTerm?.toLocaleLowerCase();
   const scan = await listClaudeSessions(resolvedHome, resolvedScanOptions);
   // Exact lookup reads only matching transcripts, independent of the ordinary discovery frontier.
   const exact =
-    search &&
-    !scan.records.some((record) => record.threadId.toLocaleLowerCase().normalize("NFC") === search)
+    search && !scan.records.some((record) => record.threadId.toLocaleLowerCase() === search)
       ? await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, sessionId: search })
       : undefined;
+  const needle = search?.normalize("NFC");
   const records = [...(exact?.records ?? []), ...scan.records].filter((record) => {
-    if (!search) {
+    if (!needle) {
       return true;
     }
     return [record.name, record.cwd, record.gitBranch, record.threadId].some((candidate) =>
-      candidate?.toLocaleLowerCase().normalize("NFC").includes(search),
+      candidate?.toLocaleLowerCase().normalize("NFC").includes(needle),
     );
   });
   const page = records

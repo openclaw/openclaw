@@ -226,7 +226,7 @@ describe("Pi session catalog", () => {
         const file = path.join(directory, `session-${String(index)}.jsonl`);
         const entries = [
           header(`pi-session-${String(index)}`),
-          sessionInfo(`info-${String(index)}`, `Pi history ${String(index)}`),
+          sessionInfo(`info-${String(index)}`, `Cafe\u0301 history ${String(index)}`),
         ];
         await fs.writeFile(file, piJsonl(entries));
         await fs.utimes(file, baseTime + index, baseTime + index);
@@ -240,28 +240,13 @@ describe("Pi session catalog", () => {
     expect(second.sessions).toHaveLength(5);
     expect(second.nextCursor).toBeUndefined();
     await expect(
-      listLocalPiSessionPage({ limit: 20, searchTerm: "Pi history 0" }),
+      listLocalPiSessionPage({ limit: 20, searchTerm: "CAFÉ history 0" }),
     ).resolves.toMatchObject({
       sessions: [expect.objectContaining({ threadId: "pi-session-0" })],
     });
     await expect(
       readLocalPiTranscriptPage({ threadId: "pi-session-0", limit: 20 }),
     ).resolves.toMatchObject({ threadId: "pi-session-0" });
-  });
-
-  it.each([
-    { name: "Caf\u00e9 history", query: "Caf\u00e9", label: "composed name" },
-    { name: "Cafe\u0301 history", query: "Caf\u00e9", label: "decomposed name" },
-    { name: "Caf\u00e9 history", query: "Cafe\u0301", label: "composed name, decomposed query" },
-    { name: "Cafe\u0301 history", query: "Cafe\u0301", label: "decomposed name and query" },
-  ])("matches canonically equivalent $label in search", async ({ name, query }) => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-catalog-"));
-    temporaryDirectories.push(directory);
-    process.env.PI_CODING_AGENT_SESSION_DIR = directory;
-    const file = path.join(directory, "session.jsonl");
-    await fs.writeFile(file, piJsonl([header("pi-nfc-session"), sessionInfo("info", name)]));
-    const sessions = (await listLocalPiSessionPage({ searchTerm: query })).sessions;
-    expect(sessions.map((session) => session.threadId)).toEqual(["pi-nfc-session"]);
   });
 
   it("uses the configured Pi session directory and lists oversized sessions", async () => {

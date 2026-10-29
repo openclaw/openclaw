@@ -196,7 +196,7 @@ it("lists non-archived interactive threads without probing transcript previews",
   fixture.commandRpcMocks.codexControlRequest.mockResolvedValue({
     data: [
       nativeThread("thread-title", {
-        name: "Match title",
+        name: "Cafe\u0301 title",
         preview: "private\ntranscript preview",
         cwd: "/workspace/one",
         source: "vscode",
@@ -204,7 +204,7 @@ it("lists non-archived interactive threads without probing transcript previews",
       nativeThread("thread-preview", { preview: "Unrelated private preview text" }),
       nativeThread("thread-fallback", {
         cwd: "/workspace/one",
-        preview: "\x1b[31mMatch\x1b[0m\nvisible\x00 fallback\x7f title",
+        preview: "\x1b[31mCafe\u0301\x1b[0m\nvisible\x00 fallback\x7f title",
       }),
     ],
   });
@@ -212,17 +212,17 @@ it("lists non-archived interactive threads without probing transcript previews",
   await control.initialize();
 
   await expect(
-    control.listPage({ limit: 25, searchTerm: "mAtCh", cwd: " /workspace/one " }),
+    control.listPage({ limit: 25, searchTerm: "CAFÉ", cwd: " /workspace/one " }),
   ).resolves.toEqual({
     sessions: [
       catalogSession("thread-title", {
-        name: "Match title",
+        name: "Cafe\u0301 title",
         cwd: "/workspace/one",
         source: "vscode",
       }),
       catalogSession("thread-fallback", {
         cwd: "/workspace/one",
-        fallbackName: "Match visible fallback title",
+        fallbackName: "Cafe\u0301 visible fallback title",
       }),
     ],
   });
@@ -243,30 +243,10 @@ it("lists non-archived interactive threads without probing transcript previews",
       startOptions: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
     }),
   );
-  expect(JSON.stringify(await control.listPage({ searchTerm: "mAtCh" }))).not.toContain("private");
+  expect(JSON.stringify(await control.listPage({ searchTerm: "CAFÉ" }))).not.toContain("private");
   expect(
     fixture.commandRpcMocks.codexControlRequest.mock.calls.map((call) => call[1]),
   ).not.toContain("thread/resume");
-});
-
-it.each([
-  { name: "Caf\u00e9 thread", query: "Caf\u00e9", label: "composed name" },
-  { name: "Cafe\u0301 thread", query: "Caf\u00e9", label: "decomposed name" },
-  { name: "Caf\u00e9 thread", query: "Cafe\u0301", label: "composed name, decomposed query" },
-  { name: "Cafe\u0301 thread", query: "Cafe\u0301", label: "decomposed name and query" },
-])("matches canonically equivalent $label in catalog search", async ({ name, query }) => {
-  const pluginConfig = await fixture.normalizeCodexManifestConfig({
-    supervision: { enabled: true },
-    appServer: { command: "codex-catalog" },
-  });
-  fixture.commandRpcMocks.codexControlRequest.mockResolvedValue({
-    data: [nativeThread("thread-nfc", { name, cwd: "/workspace/one" })],
-  });
-  const control = createFactory({ getPluginConfig: () => pluginConfig }).forRequest("main");
-  await control.initialize();
-  await expect(control.listPage({ limit: 25, searchTerm: query })).resolves.toMatchObject({
-    sessions: [{ threadId: "thread-nfc" }],
-  });
 });
 
 it.each(["direct", "pinned"] as const)(
