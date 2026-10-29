@@ -5430,7 +5430,6 @@
 ["src/infra/outbound/message-action-send.core.test.ts","../../tts/tts.runtime.js","12583d29ff95b807d024eaedea007d3737529b441803c378673ab8a8f6747155",1]
 ["src/infra/outbound/message-action-send.mirror-order.test.ts","../../tts/tts.runtime.js","3bc6d1123fd4af7d3f0e7a488ca98299de9188c1095d0e7d14c894b2d89f5600",1]
 ["src/infra/outbound/message-action-spec.test.ts","../../channels/plugins/bootstrap-registry.js","6f666becece07def57caf93f71371c10b08d801ac09d1ffdad103ec8d047ac45",1]
-["src/infra/outbound/message.channels.test.ts","../../gateway/call.js","9e94f6c1ee1399339bd9302039cfbb12fc93608b78e47937b82d92375a65234f",1]
 ["src/infra/outbound/message.test.ts","../../channels/plugins/index.js","72bc0fbe28ef10fd2f1a53b7434b0e32e6607958cc1c56ee1093e21f2badee58",1]
 ["src/infra/outbound/message.test.ts","../../config/plugin-auto-enable.js","fc319f958bfad5b5ba3a393ea68126e69851586b508ce8e05f6323c23ad91c06",1]
 ["src/infra/outbound/message.test.ts","../../plugins/loader.js","93ad1f31aa1309356523cfabb9ef77f2207be2af541d0e2df0ac2ead9fb66bb3",1]

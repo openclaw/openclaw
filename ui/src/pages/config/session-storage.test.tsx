@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
+import { mockDocumentVisibility } from "../../test-helpers/mock-cleanup.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sessionStorageStatus } from "./session-storage.test-support.ts";
 import { SessionStorageSettings } from "./session-storage.tsx";
@@ -232,6 +233,25 @@ async function startBackgroundRun() {
   await waitText(mounted.page, "Background batch started.");
   return { ...mounted, running, nextStatus };
 }
+
+it.each(["visible", "hidden"] as const)(
+  "pauses maintenance progress reads when hidden after starting %s",
+  async (initial) => {
+    const show = mockDocumentVisibility(initial);
+    const { page, request, nextStatus } = await startBackgroundRun();
+    show("hidden");
+    await expectIdle(request);
+    expect(request.mock.calls.filter(([method]) => method === "sessions.storage.run")).toHaveLength(
+      1,
+    );
+    nextStatus.mockResolvedValue(inventory(5, { lastCompletedAt: 200, archivedTranscripts: 2 }));
+    const reads = nextStatus.mock.calls.length;
+    show("visible");
+    await waitText(page, "Batch completed. 2 transcripts archived.");
+    expect(nextStatus).toHaveBeenCalledTimes(reads + 1);
+    await expectIdle(request);
+  },
+);
 
 it("follows run completion after reconnect", async () => {
   const { page, request, nextStatus, client, publish } = await startBackgroundRun();
