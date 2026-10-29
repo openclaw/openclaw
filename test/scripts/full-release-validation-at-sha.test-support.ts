@@ -95,6 +95,7 @@ export function createDispatchFixture(
     runDiscoveryMisses?: number;
     targetAlreadyRemote?: boolean;
     includeTargetRef?: boolean;
+    releaseRef?: string;
     workflowSource?: string;
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
@@ -136,7 +137,7 @@ export function createDispatchFixture(
   const payloadCapturePath = join(root, "payload-capture.json");
   const preloadPath = join(root, "immediate-poll.mjs");
   const waitCallsPath = join(root, "wait-calls.txt");
-  const releaseRef = "release/2026.8.1";
+  const releaseRef = options.releaseRef ?? "release/2026.8.1";
   mkdirSync(binDir);
   writeFileSync(npmCallsPath, "");
   writeFileSync(

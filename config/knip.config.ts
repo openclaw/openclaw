@@ -46,6 +46,7 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-reader-reuse-measure.ts!",
   "scripts/perf/cron-registry-read-measure.ts!",
   "scripts/perf/doctor-session-manifests.ts!",
+  "scripts/perf/history-model-projection-measure.ts!",
   "scripts/perf/inspection-read-admission.ts!",
   "scripts/perf/local-workspace-refresh-measure.ts!",
   "scripts/perf/local-workspace-request-bytes-measure.ts!",

@@ -34,6 +34,7 @@ import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { prepareGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../session-subagent-resume.js";
 import { formatForLog } from "../ws-log.js";
+import { createAgentPreacceptRefusal } from "./agent-admission-refusal.js";
 import {
   isPreRegistrationAbortedAgentDedupeEntryForSession,
   readGatewayDedupeEntry,
@@ -330,14 +331,7 @@ export async function prepareAgentRunDispatch(
       });
     }
   };
-  const rejectPreaccept = async (error: ReturnType<typeof errorShape>) => {
-    try {
-      await cleanupPreaccept(false, error.message);
-    } finally {
-      params.io.emitAcceptance([false, undefined, error]);
-    }
-    return undefined;
-  };
+  const rejectPreaccept = createAgentPreacceptRefusal(params, cleanupPreaccept);
   const revalidateAdmission = createAgentRunAdmissionRevalidator({
     source: params,
     activeRunAbort,
@@ -415,6 +409,7 @@ export async function prepareAgentRunDispatch(
     return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, err));
   }
 
+  rejectPreaccept.stage = "subagent-preparation";
   const resolvedThreadId =
     params.delivery.explicitThreadId ?? params.delivery.deliveryPlan.resolvedThreadId;
   let subagentAdmission: Awaited<ReturnType<typeof prepareGatewaySubagentRun>>;
@@ -446,6 +441,7 @@ export async function prepareAgentRunDispatch(
   }
   const { pluginSubagent, reactivateSubagent, adoptParentResume, followupSuccessor } =
     subagentAdmission;
+  rejectPreaccept.stage = "input-preparation";
   let assertInputAdmissionCurrent = params.assertAdmissionCurrent;
   let resumedTaskAdopted = false;
   let userTurn: PreparedAgentRunUserTurn | undefined;
@@ -517,6 +513,7 @@ export async function prepareAgentRunDispatch(
   if (inputAdmission !== true) {
     return inputAdmission;
   }
+  rejectPreaccept.stage = "acceptance";
   const accepted = {
     runId: params.runId,
     sessionKey: params.resolvedSessionKey,

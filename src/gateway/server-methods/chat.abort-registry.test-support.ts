@@ -9,8 +9,10 @@ import {
   writeSubagentSessionEntry,
 } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { observeSwarmSchedulerWork } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
+import {
+  enqueueSwarmRun,
+  observeSwarmSchedulerWork,
+} from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
