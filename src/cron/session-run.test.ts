@@ -180,33 +180,28 @@ describe("scheduled session prompts", () => {
     );
   });
 
-  it("resolves the default cron store through the worker before reading scratch", async () => {
+  it("resolves store off-thread before submitting localized job context", async () => {
     await withOpenClawTestState({ label: "cron-session-store-path" }, async (state) => {
       const storePath = state.statePath("cron", "jobs.json");
       await writeConfigMachineStateAsync("cron.store", storePath, { env: state.env });
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
-        await runCronSessionTurn(input());
+        const params = input();
+        params.cfg = { agents: { defaults: { userTimezone: "America/Los_Angeles" } } };
+        const text = await prepareLivePrompt(params, () => {
+          vi.setSystemTime(new Date("2026-10-20T16:10:00Z"));
+        });
+        expect(text).toContain("[cron:job-1 test] Check the report.");
+        expect(text).toMatch(/Current time: .*9:00.*\(America\/Los_Angeles\)/);
+        expect(text).toContain("Reference UTC: 2026-10-20 16:00 UTC");
+        expect(observation.queries.filter((sql) => sql.includes('"config_machine_state"'))).toEqual(
+          [],
+        );
+        expect(fixture.readScratch.mock.calls[0]?.[0]).toBe(storePath);
       } finally {
         observation.restore();
       }
-      // PostgreSQL state refuses this read on the Gateway main thread.
-      expect(observation.queries.filter((sql) => sql.includes('"config_machine_state"'))).toEqual(
-        [],
-      );
-      expect(fixture.readScratch.mock.calls[0]?.[0]).toBe(storePath);
     });
-  });
-
-  it("submits the job identity and localized current time with the scheduled instructions", async () => {
-    const params = input();
-    params.cfg = { agents: { defaults: { userTimezone: "America/Los_Angeles" } } };
-    const text = await prepareLivePrompt(params, () => {
-      vi.setSystemTime(new Date("2026-10-20T16:10:00Z"));
-    });
-    expect(text).toContain("[cron:job-1 test] Check the report.");
-    expect(text).toMatch(/Current time: .*9:00.*\(America\/Los_Angeles\)/);
-    expect(text).toContain("Reference UTC: 2026-10-20 16:00 UTC");
   });
 
   it.each([
