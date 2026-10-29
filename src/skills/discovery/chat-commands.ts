@@ -18,6 +18,7 @@ import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import { resolveSessionSkillExecutionWorkspace } from "../loading/workspace-skill-roots.js";
 import { prepareRemoteSkillConnections } from "../runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
@@ -38,11 +39,13 @@ type WorkspaceSkillCommandParams = {
   agentId?: string;
   skillFilter?: string[];
   sessionEntry?: ExecSessionDefaults &
-    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
+    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot" | "spawnedCwd" | "worktree">;
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
   includeAllowlistHidden?: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
 };
 
 function resolveWorkspaceSkillCommandOptions(
@@ -61,6 +64,8 @@ function resolveWorkspaceSkillCommandOptions(
     eligibility,
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     librarySelections: params.sessionEntry?.skillLibrarySelections,
+    executionWorkspaceDir: params.executionWorkspaceDir,
+    executionWorkspaceFileHost: params.executionWorkspaceFileHost,
   };
 }
 
@@ -152,7 +157,7 @@ type AgentSkillCommandParams = {
   cfg: OpenClawConfig;
   agentIds?: string[];
   sessionEntry?: ExecSessionDefaults &
-    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
+    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot" | "spawnedCwd" | "worktree">;
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
 };
@@ -160,6 +165,15 @@ type AgentSkillCommandParams = {
 function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, allowRemote = false) {
   const agentIds = params.agentIds ?? listAgentIds(params.cfg);
   const hasSingleAgentContext = agentIds.length === 1;
+  // A session-bound catalog admits the selected project's skill roots with the
+  // same resolution the runtime catalog uses; node-owned execCwd stays node-side.
+  const executionWorkspace =
+    hasSingleAgentContext && params.sessionEntry
+      ? resolveSessionSkillExecutionWorkspace(
+          params.sessionEntry.worktree?.canonicalWorkspaceDir,
+          params.sessionEntry.spawnedCwd,
+        )
+      : undefined;
   const workspaceAgents: Array<{
     agentId: string;
     workspaceDir: string;
@@ -204,6 +218,8 @@ function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, al
               sessionEntry: params.sessionEntry,
               sessionKey: params.sessionKey,
               execOverrides: params.execOverrides,
+              executionWorkspaceDir: executionWorkspace?.executionWorkspaceDir,
+              executionWorkspaceFileHost: executionWorkspace?.executionWorkspaceFileHost,
             }
           : {}),
       },
