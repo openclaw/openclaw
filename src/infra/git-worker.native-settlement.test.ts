@@ -82,7 +82,7 @@ it.runIf(process.platform !== "win32").each([
                 cwd,
                 input: undefined,
                 signal: AbortSignal.any([
-                  ...(options.signal ? [options.signal] : []),
+                  ...(options?.signal ? [options.signal] : []),
                   terminate.signal,
                 ]),
               });
