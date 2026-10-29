@@ -322,6 +322,7 @@ describe("sanitizeForPlainText", () => {
     "attempts<max and wait>5s",
     "重试次数<max 且等待>5秒",
     "🙂<limit and wait>5s",
+    "𝒜<limit and wait>5s",
     "Set latency<budget. Then check:\n\n```\nif (a<b) { return c>d; }\n```\n\nand confirm concurrency>4 is safe.",
   ])("preserves unspaced comparison prose in %s", (input) => {
     expect(sanitizeForPlainText(input)).toBe(input);
