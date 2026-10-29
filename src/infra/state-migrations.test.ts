@@ -167,6 +167,26 @@ async function writeJsonFixture(filePath: string, value: unknown) {
   await fs.writeFile(filePath, JSON.stringify(value), "utf8");
 }
 
+function expectAmbiguousSessionMigrationReceipts(
+  result: Awaited<ReturnType<typeof autoMigrateLegacyState>>,
+  storePath: string,
+  preservedKeys: number,
+) {
+  const orphanWarning = `Preserved ${preservedKeys} ambiguous session key(s) in potentially shared store ${storePath}`;
+  const orphanReceipt = result.stepReceipts.find((receipt) => receipt.id === "orphan-session-keys");
+  expect(orphanReceipt).toMatchObject({ outcome: "warning", warnings: [orphanWarning] });
+  expect(orphanReceipt?.refusal).toBeUndefined();
+  const acpWarningPrefix = `Preserved ACP metadata for ${preservedKeys} ambiguous session key(s) in potentially shared store `;
+  expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(1);
+  expect(
+    result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
+  ).toMatchObject({
+    outcome: "refused",
+    warnings: [`${acpWarningPrefix}${storePath}`],
+    refusal: { code: "step-refused" },
+  });
+}
+
 function readConfigHealthRows(env: NodeJS.ProcessEnv): Array<{
   config_path: string;
   last_known_good_json: string | null;
@@ -1899,24 +1919,7 @@ describe("state migrations", () => {
     expect(result.changes).not.toContain(
       "Migrated 1 ACP session metadata row → shared SQLite state",
     );
-    const orphanWarning = `Preserved 1 ambiguous session key(s) in potentially shared store ${storePath}`;
-    const orphanReceipt = result.stepReceipts.find(
-      (receipt) => receipt.id === "orphan-session-keys",
-    );
-    expect(orphanReceipt).toMatchObject({ outcome: "warning", warnings: [orphanWarning] });
-    expect(orphanReceipt?.refusal).toBeUndefined();
-    const acpWarningPrefix =
-      "Preserved ACP metadata for 1 ambiguous session key(s) in potentially shared store ";
-    expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(
-      1,
-    );
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
-    ).toMatchObject({
-      outcome: "refused",
-      warnings: [`${acpWarningPrefix}${storePath}`],
-      refusal: { code: "step-refused" },
-    });
+    expectAmbiguousSessionMigrationReceipts(result, storePath, 1);
   });
 
   it("migrates malformed agent-shaped rows in single-owner plugin stores", async () => {
@@ -2076,24 +2079,7 @@ describe("state migrations", () => {
     expect(result.changes).not.toContain(
       "Migrated 1 ACP session metadata row → shared SQLite state",
     );
-    const orphanWarning = `Preserved 3 ambiguous session key(s) in potentially shared store ${storePath}`;
-    const orphanReceipt = result.stepReceipts.find(
-      (receipt) => receipt.id === "orphan-session-keys",
-    );
-    expect(orphanReceipt).toMatchObject({ outcome: "warning", warnings: [orphanWarning] });
-    expect(orphanReceipt?.refusal).toBeUndefined();
-    const acpWarningPrefix =
-      "Preserved ACP metadata for 3 ambiguous session key(s) in potentially shared store ";
-    expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(
-      1,
-    );
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
-    ).toMatchObject({
-      outcome: "refused",
-      warnings: [`${acpWarningPrefix}${storePath}`],
-      refusal: { code: "step-refused" },
-    });
+    expectAmbiguousSessionMigrationReceipts(result, storePath, 3);
   });
 
   it("leaves standalone ACP session metadata unchanged until Doctor repair", async () => {
