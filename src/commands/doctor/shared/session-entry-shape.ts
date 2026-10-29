@@ -32,22 +32,114 @@ export type SessionEntryStateRepair = {
   numericChanges?: SessionEntryNumericSnapshot;
 };
 
-/** Startup and offline Doctor may retire old claims, never a live execution owner. */
-export function hasRetiredRestartTombstone(value: Record<string, unknown>): boolean {
+/** A dead owner is not proof that its custody belongs to this recovery cycle. */
+export function inspectLegacyRestartTombstone(
+  value: Record<string, unknown>,
+): { retire: boolean; warning: string } | undefined {
   if (!isRecord(value.mainRestartRecovery) || !isRecord(value.mainRestartRecovery.tombstone)) {
-    return false;
+    return undefined;
   }
+  const recovery = value.mainRestartRecovery;
+  const execution = isRecord(recovery.executionIdentity) ? recovery.executionIdentity : undefined;
+  const reservation = isRecord(recovery.reservation) ? recovery.reservation : undefined;
+  const claims = isRecord(recovery.foregroundClaims) ? recovery.foregroundClaims : undefined;
+  const runIds = new Set(
+    [
+      execution?.runId,
+      reservation?.runId,
+      ...Object.values(isRecord(claims?.runIdsByClaimId) ? claims.runIdsByClaimId : {}),
+    ].filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
+  const generations = new Set(
+    [reservation?.lifecycleGeneration, claims?.lifecycleGeneration].filter(
+      (id): id is string => typeof id === "string" && id.length > 0,
+    ),
+  );
   const runs = Array.isArray(value.restartRecoveryRuns) ? value.restartRecoveryRuns : [];
-  const claims = Array.isArray(value.mainRestartRecovery.foregroundClaims)
-    ? value.mainRestartRecovery.foregroundClaims
-    : [];
-  return ![
+  // An execution identity inside the cycle can bind its recorded fence generation.
+  // Explicit cycle generations win if a run ID was reused by a later generation.
+  if (generations.size === 0) {
+    for (const run of runs) {
+      if (
+        isRecord(run) &&
+        typeof run.runId === "string" &&
+        runIds.has(run.runId) &&
+        typeof run.lifecycleGeneration === "string"
+      ) {
+        generations.add(run.lifecycleGeneration);
+      }
+    }
+  }
+  const ownsFence = (run: unknown): boolean =>
+    isRecord(run) &&
+    (run.lifecycleGeneration !== undefined && generations.size > 0
+      ? typeof run.lifecycleGeneration === "string" && generations.has(run.lifecycleGeneration)
+      : typeof run.runId === "string" && runIds.has(run.runId));
+  const ownsRun = (id: unknown): boolean =>
+    typeof id === "string" &&
+    (runIds.has(id) || runs.some((run) => isRecord(run) && run.runId === id && ownsFence(run)));
+  const custodyIds = [
     value.activeWriterRunId,
     value.lifecycleRunId,
     value.restartRecoveryDeliveryRunId,
+    value.restartRecoveryDeliverySourceRunId,
     ...runs.map((run) => (isRecord(run) ? run.runId : undefined)),
-    ...claims.map((claim) => (isRecord(claim) ? claim.runId : undefined)),
-  ].some((id) => typeof id === "string" && hasAgentRunContextExecutionOwner(id));
+    ...(Array.isArray(value.restartRecoveryTerminalRunIds)
+      ? value.restartRecoveryTerminalRunIds
+      : []),
+    ...(Array.isArray(value.restartRecoveryTerminalDeliveryEvidence)
+      ? value.restartRecoveryTerminalDeliveryEvidence.flatMap((item) =>
+          isRecord(item) ? [item.runId, item.transcriptRunId] : [null],
+        )
+      : []),
+    isRecord(value.restartRecoveryOperatorSource)
+      ? value.restartRecoveryOperatorSource.sourceRunId
+      : undefined,
+    isRecord(value.restartRecoveryHarnessCompletion)
+      ? value.restartRecoveryHarnessCompletion.sourceRunId
+      : undefined,
+  ].filter((id) => id !== undefined);
+  const pending = normalizePendingFinalDelivery(value.pendingFinalDelivery);
+  const pendingId = pending?.sourceRunId;
+  const defer = (reason: string) => ({
+    retire: false,
+    warning: `Retained legacy restart custody: ${reason}. Next step: inspect this session's retained run/generation IDs and pending-delivery outcome against its transcript before repairing custody; custody was left intact.`,
+  });
+  if (
+    [...runIds, ...custodyIds, pendingId].some(
+      (id) => typeof id === "string" && hasAgentRunContextExecutionOwner(id),
+    )
+  ) {
+    return defer("an execution owner is still live");
+  }
+  if (runs.some((run) => !ownsFence(run)) || custodyIds.some((id) => !ownsRun(id))) {
+    return defer("a fence or delivery claim has no matching tombstone run/generation");
+  }
+  if (
+    (pending ||
+      value.pendingFinalDelivery === true ||
+      normalizeOptionalString(value.pendingFinalDeliveryText)) &&
+    !ownsRun(pendingId)
+  ) {
+    return defer("pending final delivery has no matching tombstone source run");
+  }
+  if (
+    runIds.size === 0 &&
+    generations.size === 0 &&
+    Object.keys(value).some(
+      (key) =>
+        key.startsWith("restartRecovery") &&
+        value[key] !== undefined &&
+        (!Array.isArray(value[key]) || value[key].length > 0),
+    )
+  ) {
+    return defer("no recorded generation links the retained custody to the tombstone");
+  }
+  return {
+    retire: true,
+    warning:
+      "Recovered legacy restart tombstone; matching obsolete claims and pending delivery retired (original state backed up).",
+  };
 }
 
 /** Retire file-era activity metadata without reconstructing an execution. */
@@ -55,14 +147,11 @@ export function migrateLegacySessionRunOutcome(
   value: Record<string, unknown>,
   updatedAt: unknown = value.updatedAt,
 ): Record<string, unknown> {
-  if (
-    isRecord(value.mainRestartRecovery) &&
-    value.mainRestartRecovery.tombstone &&
-    !hasRetiredRestartTombstone(value)
-  ) {
+  const tombstone = inspectLegacyRestartTombstone(value);
+  if (tombstone && !tombstone.retire) {
     return value;
   }
-  if (hasRetiredRestartTombstone(value)) {
+  if (tombstone?.retire) {
     const next = { ...value };
     // Tombstones predate the current admission owner. A continuation is not required.
     delete next.mainRestartRecovery;

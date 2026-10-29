@@ -27,6 +27,13 @@ delivery is retired with an unknown outcome rather than replayed under obsolete
 sender authority; its original content remains in the backup. Existing transcript
 content is unchanged. Eligible roots receive one ordinary resume input; manual
 archives, provider review, and external harness ownership retain their normal gates.
+Every retained fence and pending final must match the tombstone's recorded run or
+generation before retirement. A different generation, missing ownership link, or
+live execution leaves custody intact and prevents automatic resume of that row.
+Doctor names the session and asks the operator to inspect its retained identities
+and delivery outcome against the transcript before repairing custody. Legacy scalar
+delivery fields can still be normalized without discarding the pending final, so
+ordinary admission no longer depends on the retired tombstone gate.
 
 ## What survives a restart
 

@@ -22,7 +22,10 @@ import {
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "../../../config/sessions/session-entry-snapshots.js";
-import { LEGACY_SESSION_ENTRY_STATE_FIELDS } from "../../../config/sessions/session-entry-state-format.js";
+import {
+  hasLegacySessionEntryState,
+  LEGACY_SESSION_ENTRY_STATE_FIELDS,
+} from "../../../config/sessions/session-entry-state-format.js";
 import { deriveSessionPredicateColumns } from "../../../config/sessions/session-predicate-columns.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../../../config/sessions/store-entry-shape.js";
 import { assertSupportedSessionStoreEntry } from "../../../config/sessions/supported-session-store.js";
@@ -54,7 +57,7 @@ import {
   sessionDeliveryChannel,
 } from "../../../utils/delivery-context.read.js";
 import {
-  hasRetiredRestartTombstone,
+  inspectLegacyRestartTombstone,
   migrateLegacySessionEntryState,
   migrateLegacySessionRunOutcome,
   type SessionEntryStateRepair,
@@ -190,11 +193,21 @@ export async function repairLegacySessionRunOutcomes(
   const expectedIdentity = readDatabasePathIdentitySync(scope.storePath);
   const sessionKeys: string[] = [];
   const tombstones = new Set<string>();
+  const warnings = new Map<string, string>();
+  const reportWarnings = () => {
+    for (const [sessionKey, warning] of warnings) {
+      warn(`${sessionKey}: ${warning}`);
+    }
+  };
   withEngineStoreAdmission(() =>
     scanDoctorSessionEntryRecords(
       scope,
       ({ entry, sessionKey }) => {
-        if (hasRetiredRestartTombstone(entry)) {
+        const tombstone = inspectLegacyRestartTombstone(entry);
+        if (tombstone) {
+          warnings.set(sessionKey, tombstone.warning);
+        }
+        if (tombstone?.retire || (tombstone && hasLegacySessionEntryState(entry))) {
           tombstones.add(sessionKey);
         }
         if (entry.status === "running" || entry.status === "queued" || tombstones.has(sessionKey)) {
@@ -207,6 +220,7 @@ export async function repairLegacySessionRunOutcomes(
   );
   assertCurrent();
   if (sessionKeys.length === 0) {
+    reportWarnings();
     return 0;
   }
   const assertRepairCurrent = () => {
@@ -233,10 +247,15 @@ export async function repairLegacySessionRunOutcomes(
       return rewriteDoctorSessionEntries({
         scope,
         sessionKeys,
-        rawTransform: (entry, _sessionKey, updatedAt) =>
-          hasRetiredRestartTombstone(entry)
+        rawTransform: (entry, sessionKey, updatedAt) => {
+          const tombstone = inspectLegacyRestartTombstone(entry);
+          if (tombstone) {
+            warnings.set(sessionKey, tombstone.warning);
+          }
+          return tombstone
             ? migrateLegacySessionEntryState(entry, updatedAt)
-            : { entry: migrateLegacySessionRunOutcome(entry, updatedAt) },
+            : { entry: migrateLegacySessionRunOutcome(entry, updatedAt) };
+        },
         expectedIdentity,
         assertCurrent,
       });
@@ -248,11 +267,7 @@ export async function repairLegacySessionRunOutcomes(
         repair,
         assertRepairCurrent,
       ));
-  for (const sessionKey of tombstones) {
-    warn(
-      `Recovered legacy restart tombstone for ${sessionKey}; obsolete claims and pending delivery retired (original state backed up).`,
-    );
-  }
+  reportWarnings();
   return repaired;
 }
 

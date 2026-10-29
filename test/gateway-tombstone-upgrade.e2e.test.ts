@@ -63,14 +63,30 @@ it("upgrades a tombstoned root, resumes it, and completes a fresh Gateway chat t
       const database = openOpenClawAgentDatabase(scope);
       database.db
         .prepare(
-          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.mainRestartRecovery', json(?), '$.pendingFinalDelivery', json('true'), '$.pendingFinalDeliveryText', 'Unsent legacy final', '$.restartRecoveryRuns', json(?)) WHERE session_key = ?",
+          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.mainRestartRecovery', json(?), '$.pendingFinalDelivery', json(?), '$.restartRecoveryRuns', json(?)) WHERE session_key = ?",
         )
         .run(
           JSON.stringify({
             cycleId: "old",
+            foregroundClaims: {
+              lifecycleGeneration: "old-generation",
+              tokens: [],
+              runIdsByClaimId: {},
+            },
             tombstone: { reason: "delegated recovery sender authority is unavailable" },
           }),
-          JSON.stringify(Array.from({ length: 8 }, (_, i) => ({ runId: `old-${i}` }))),
+          JSON.stringify({
+            kind: "replayable",
+            text: "Unsent legacy final",
+            createdAt: 42,
+            sourceRunId: "old-0",
+          }),
+          JSON.stringify(
+            Array.from({ length: 8 }, (_, i) => ({
+              runId: `old-${i}`,
+              lifecycleGeneration: "old-generation",
+            })),
+          ),
           scope.sessionKey,
         );
       await cleanupSessionStateForTest();
