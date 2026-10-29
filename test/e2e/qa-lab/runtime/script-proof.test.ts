@@ -69,8 +69,8 @@ it.each(["synchronous", "asynchronous"])(
 );
 
 it.each([false, true])("waits for callback cleanup (rejects=%s)", async (rejects) => {
-  const enteredCleanup = createDeferred<void>();
-  const releaseCleanup = createDeferred<void>();
+  const enteredCleanup = createDeferred();
+  const releaseCleanup = createDeferred();
   let settled = false;
   const pending = produceQaScriptProof(
     {},
