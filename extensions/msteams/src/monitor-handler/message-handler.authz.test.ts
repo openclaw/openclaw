@@ -1,6 +1,6 @@
 // Msteams tests cover message handler.authz plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
+import type { MSTeamsConfig, OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -10,7 +10,6 @@ import {
   projectStableMSTeamsGroupAllowlist,
   projectStableMSTeamsTeamsConfig,
 } from "../resolve-allowlist.js";
-import type { MSTeamsConfig } from "../runtime-api.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import { createMessageHandlerDeps } from "./message-handler.test-support.js";
 
