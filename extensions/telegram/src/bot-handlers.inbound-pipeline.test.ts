@@ -47,6 +47,3 @@ describe("buildTelegramInboundDebounceKey", () => {
     expect(buildTelegramGroupPeerId(7, { scope: "none" })).toBe("7");
   });
 });
-
-// Claimed for #187677 by scripts/claim-window.sh; replaced by the real regression.
-it.todo("buffers a forwarded rich message instead of bypassing the inbound debounce");
