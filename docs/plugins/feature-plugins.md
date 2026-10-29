@@ -108,6 +108,15 @@ The project has three public SDK imports:
 Browser code owns its DOM and bundles its framework dependencies. It does not
 import Control UI internals or return the host framework's templates.
 
+For plugin-owned messages, `translateControlUiMessage(messages, locale, key, params?)`
+from `openclaw/plugin-sdk/control-ui` performs synchronous dotted-key lookup and
+string interpolation. The `messages` callback returns the plugin's nested string
+dictionary for a locale, or `undefined`. Missing keys fall back to `en`; empty
+strings stay empty, and non-string results return the key. Word placeholders such
+as `{name}` use the optional string parameters; unresolved placeholders stay intact.
+The helper does not load catalogs, select a locale, or retain state. Keep those
+responsibilities, including reactive reads and lazy translation assets, in the plugin.
+
 ## Define operations once
 
 `defineFeatureContract` declares named queries and actions with TypeBox input
