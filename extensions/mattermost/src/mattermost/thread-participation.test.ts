@@ -52,11 +52,6 @@ describe("mattermost thread participation", () => {
     vi.restoreAllMocks();
   });
 
-  it("remembers a thread the bot replied in", async () => {
-    await recordMattermostThreadParticipation("acct", "chan", "root-1");
-    await expect(hasParticipation()).resolves.toBe(true);
-  });
-
   it("isolates participation by account, channel, and thread", async () => {
     await recordMattermostThreadParticipation("acct", "chan", "root-1");
     for (const [account, thread, channel] of [

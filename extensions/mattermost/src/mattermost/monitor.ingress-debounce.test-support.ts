@@ -278,7 +278,11 @@ export function registerMattermostIngressDebounceTests(harness: {
       expect(f.bodies()).toEqual(["before", expected]);
       if (name === "command") {
         expect(contexts()[1]).toMatchObject({
+          WasMentioned: true,
+          BodyForAgent: "/new",
           CommandBody: "/new",
+          CommandAuthorized: true,
+          CommandSource: "text",
         });
       }
       await f.post(provider, { id: "after", message: "after" });

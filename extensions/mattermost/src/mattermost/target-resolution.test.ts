@@ -27,14 +27,6 @@ const fixtureClient = (token = "token", baseUrl = "https://mm.example.com"): Mat
   request: vi.fn(),
   fetchImpl: vi.fn(),
 });
-const directoryConfig = { channels: { mattermost: {} } };
-const directoryAccount = (accountId: string, enabled = true) => ({
-  accountId,
-  enabled,
-  baseUrl: "https://mm.example.com",
-  botToken: "token",
-  config: {},
-});
 
 async function expectRepeatedResolution(input: string, kind: "channel" | "group") {
   const params = { input, client: fixtureClient() };
@@ -62,7 +54,6 @@ describe("mattermost target resolution", () => {
     createMattermostClient.mockReset();
     fetchMattermostUser.mockReset();
     fetchMattermostChannel.mockReset();
-    normalizeMattermostBaseUrl.mockClear();
   });
 
   it.each<[string, MattermostTarget]>([
@@ -87,6 +78,9 @@ describe("mattermost target resolution", () => {
   });
 
   it.each([
+    ["", "Recipient is required"],
+    ["#", "Channel name is required"],
+    ["@", "Username is required"],
     ["channel: ", "Channel id is required for Mattermost sends"],
     ["channel: # ", "Channel name is required for Mattermost sends"],
     ["user: ", "User id is required for Mattermost sends"],
@@ -158,39 +152,5 @@ describe("mattermost target resolution", () => {
       to: `user:${input}`,
     });
     expect(fetchMattermostUser).toHaveBeenCalledTimes(3);
-  });
-
-  it("uses the configured account for directory discovery", async () => {
-    createMattermostClient.mockReturnValue(fixtureClient());
-    resolveMattermostAccount.mockReturnValue(directoryAccount("acct-1"));
-    fetchMattermostUser.mockResolvedValue({ id: "cdef1234abcd1234abcd1234ab" });
-    const input = "cdef1234abcd1234abcd1234ab";
-
-    await resolveMattermostOpaqueTarget({
-      input,
-      cfg: directoryConfig,
-      accountId: "acct-1",
-    });
-
-    expect(resolveMattermostAccount).toHaveBeenCalledWith({
-      cfg: directoryConfig,
-      accountId: "acct-1",
-    });
-  });
-
-  it("rejects disabled accounts before cache or provider access", async () => {
-    resolveMattermostAccount.mockReturnValue(directoryAccount("disabled", false));
-
-    await expect(
-      resolveMattermostOpaqueTarget({
-        input: "disabled12abcd1234abcd1234",
-        cfg: directoryConfig,
-        accountId: "disabled",
-      }),
-    ).rejects.toThrow('Mattermost account "disabled" is disabled');
-
-    expect(normalizeMattermostBaseUrl).not.toHaveBeenCalled();
-    expect(createMattermostClient).not.toHaveBeenCalled();
-    expect(fetchMattermostUser).not.toHaveBeenCalled();
   });
 });

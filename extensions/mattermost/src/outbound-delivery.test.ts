@@ -69,23 +69,21 @@ it.each([
   );
 });
 
-it("applies a message rewrite exactly once before the provider post", async () => {
-  const handler = installSendingHook({ content: "rewritten once" });
-  await deliver("original", { accountId: "default" });
-
+it.each([
+  ["applies a message rewrite exactly once", { content: "rewritten once" }, "rewritten once"],
+  ["does not create a provider post when the shared hook cancels", { cancel: true }, undefined],
+])("%s", async (_name, hookResult, sent) => {
+  const handler = installSendingHook(hookResult);
+  const result = await deliver("original", { accountId: "default" });
   expect(handler).toHaveBeenCalledTimes(1);
-  expect(sendMessageMattermostMock).toHaveBeenCalledExactlyOnceWith(
-    "channel:CHAN1",
-    "rewritten once",
-    expect.objectContaining({ accountId: "default", onDeliveryResult: expect.any(Function) }),
-  );
-});
-
-it("does not create a provider post when the shared hook cancels", async () => {
-  const handler = installSendingHook({ cancel: true });
-  const result = await deliver("do not send", { accountId: "default" });
-
-  expect(handler).toHaveBeenCalledTimes(1);
-  expect(sendMessageMattermostMock).not.toHaveBeenCalled();
-  expect(result).toMatchObject({ status: "suppressed", results: [] });
+  if (sent) {
+    expect(sendMessageMattermostMock).toHaveBeenCalledExactlyOnceWith(
+      "channel:CHAN1",
+      sent,
+      expect.objectContaining({ accountId: "default", onDeliveryResult: expect.any(Function) }),
+    );
+  } else {
+    expect(sendMessageMattermostMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: "suppressed", results: [] });
+  }
 });

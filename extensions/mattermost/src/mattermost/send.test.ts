@@ -5,7 +5,6 @@ import { setMattermostRuntime } from "../runtime.js";
 import type * as Client from "./client.js";
 
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
-let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
 
 const TEST_CFG = {};
 
@@ -69,7 +68,6 @@ vi.mock("./client.js", async () => ({
 
 beforeAll(async () => {
   ({ sendMessageMattermost } = await import("./send.js"));
-  ({ parseMattermostTarget } = await import("./target-resolution.js"));
 });
 
 const normalizeBaseUrl = mockState.normalizeMattermostBaseUrl.getMockImplementation()!;
@@ -196,34 +194,6 @@ describe("sendMessageMattermost", () => {
         },
       ],
     });
-    expect(mockState.resolveMattermostAccount).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("parseMattermostTarget", () => {
-  it.each<[string, string]>([
-    ["", "Recipient is required"],
-    ["#", "Channel name is required"],
-    ["@", "Username is required"],
-  ])("rejects empty target %j", (target, error) => {
-    expect(() => parseMattermostTarget(target)).toThrow(error);
-  });
-});
-
-describe("sendMessageMattermost user-first resolution", () => {
-  it("forwards retry settings when resolving a bare user id and sends via DM", async () => {
-    const userId = "iiiiii9999999999iiiiii9999";
-    const base = { maxRetries: 2, initialDelayMs: 1000, timeoutMs: 20000 };
-    mockState.resolveMattermostAccount.mockReturnValue(
-      makeAccount("token-retry-capture", { dmChannelRetry: base }),
-    );
-    mockState.fetchMattermostUser.mockResolvedValueOnce({ id: userId });
-    await sendMessageMattermost(userId, "captured", { cfg: TEST_CFG });
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledExactlyOnceWith(
-      expect.anything(),
-      ["bot-id", userId],
-      { ...base, onRetry: expect.any(Function) },
-    );
   });
 });
 

@@ -44,7 +44,17 @@ type ChannelJoinIntroParams = {
   threadId?: string | number;
   route: { agentId: string; sessionKey: string };
   inviterLabel?: string;
-  roomAllowed: boolean;
+  /**
+   * False for channels whose introductions shipped after their first release, so an upgrade
+   * never starts posting on its own.
+   */
+  enabledByDefault?: boolean;
+  /**
+   * Room admission. A function is re-evaluated after the room context loads and right before
+   * the turn starts, so revoking the account or group policy meanwhile stops the provider call
+   * and the post.
+   */
+  roomAllowed: boolean | (() => boolean);
   resolveRoomContext: (params: {
     messageLimit: number;
   }) => Promise<ChannelJoinedRoomContext | null>;
@@ -60,7 +70,11 @@ function resolveChannelJoinIntroEnabled(params: ChannelJoinIntroParams): boolean
     ),
   );
   const enabled = accountConfig?.joinIntro ?? channelConfig?.joinIntro;
-  return typeof enabled === "boolean" ? enabled : true;
+  return typeof enabled === "boolean" ? enabled : (params.enabledByDefault ?? true);
+}
+
+function resolveChannelJoinIntroRoomAllowed(params: ChannelJoinIntroParams): boolean {
+  return typeof params.roomAllowed === "function" ? params.roomAllowed() : params.roomAllowed;
 }
 
 function resolveChannelJoinIntroDedupe(channel: string) {
@@ -105,13 +119,17 @@ export async function reportChannelRoomJoin(
     return logChannelJoinIntroOutcome({ kind: "skipped", reason: "disabled" });
   }
   // A self-join has no sender message to mention the bot; admission is room-only.
-  if (!params.roomAllowed) {
+  if (!resolveChannelJoinIntroRoomAllowed(params)) {
     return logChannelJoinIntroOutcome({ kind: "skipped", reason: "room-not-allowed" });
   }
 
   const dedupe = resolveChannelJoinIntroDedupe(params.channel);
   const accountId = normalizeAccountId(params.accountId);
   const dedupeKey = JSON.stringify([params.channel, accountId, params.conversationId]);
+  const releaseAndSkip = (reason: "no-context" | "room-not-allowed", error: string) => {
+    dedupe.release(dedupeKey, { error: new ChannelJoinIntroRetryableError(error) });
+    return logChannelJoinIntroOutcome({ kind: "skipped", reason });
+  };
   try {
     // Reconnects can replay join events, so a durable claim must outlive the current process.
     const claim = await runClaimableDedupeClaimLoop(
@@ -135,10 +153,11 @@ export async function reportChannelRoomJoin(
         messageLimit: CHANNEL_JOIN_INTRO_MESSAGE_LIMIT,
       });
       if (context === null) {
-        dedupe.release(dedupeKey, {
-          error: new ChannelJoinIntroRetryableError("room context was unavailable"),
-        });
-        return logChannelJoinIntroOutcome({ kind: "skipped", reason: "no-context" });
+        return releaseAndSkip("no-context", "room context was unavailable");
+      }
+      // Admission can be revoked while the context loads; nothing has been sent yet.
+      if (!resolveChannelJoinIntroRoomAllowed(params)) {
+        return releaseAndSkip("room-not-allowed", "room admission was revoked");
       }
 
       const message = buildChannelJoinIntroPrompt({
@@ -179,6 +198,10 @@ export async function reportChannelRoomJoin(
         job,
         agentId: params.route.agentId,
       });
+      // Admission awaited work above: last check before the provider call and the post.
+      if (!resolveChannelJoinIntroRoomAllowed(params)) {
+        return releaseAndSkip("room-not-allowed", "room admission was revoked");
+      }
       const result = await runCronIsolatedAgentTurn({
         occurrence,
         cfg: params.cfg,

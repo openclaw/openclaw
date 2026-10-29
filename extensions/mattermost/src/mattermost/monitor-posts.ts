@@ -29,6 +29,7 @@ import {
   shouldRetainMattermostSenderHistory,
 } from "./monitor-auth.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
+import { createMattermostMessageFeedback } from "./monitor-feedback.js";
 import {
   matchesMattermostBotMention,
   normalizeMention,
@@ -39,16 +40,19 @@ import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 import {
   formatMattermostInboundMediaText,
   formatMattermostPendingMediaText,
+  type MattermostMediaInfo,
 } from "./monitor-resources.js";
 import { createMattermostThreadBackfill } from "./monitor-thread-backfill.js";
 import { dispatchMattermostInboundTurn } from "./monitor-turn.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
+import { resolveMattermostPreflightAudioTranscript } from "./preflight-audio.js";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
   logInboundDrop,
   type HistoryEntry,
+  type OpenClawConfig,
 } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 import { hasMattermostThreadParticipationWithPersistence } from "./thread-participation.js";
@@ -272,7 +276,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     }
 
     const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
-    const wasMentioned =
+    let wasMentioned =
       kind !== "direct" &&
       (matchesMattermostBotMention(rawText, botUsername) ||
         core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes));
@@ -302,6 +306,38 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
         groupId: channelId,
         requireMentionOverride: account.requireMention,
       });
+    // A voice message in a mention-gated channel has no text to match. Download it
+    // early and let a spoken mention admit the post, as Discord and Slack do.
+    let preflightMedia: MattermostMediaInfo[] | undefined;
+    if (
+      kind !== "direct" &&
+      shouldRequireMention &&
+      !wasMentioned &&
+      !rawText &&
+      fileIds.length > 0 &&
+      mentionRegexes.length > 0
+    ) {
+      preflightMedia = await resolveMattermostMedia(fileIds);
+      // Audio scope rules are an operator boundary: read the configuration the gateway
+      // holds now, not the snapshot captured when the channel started.
+      // SAFETY: config.current() returns the host-validated runtime snapshot; it is only read here.
+      const currentCfg = core.config.current() as OpenClawConfig;
+      const transcript = await resolveMattermostPreflightAudioTranscript({
+        media: preflightMedia,
+        cfg: currentCfg,
+        accountId: account.accountId,
+        originatingTo: eventPlan.to,
+        sessionKey,
+        chatType: kind,
+        messageThreadId: effectiveReplyToId,
+      });
+      if (transcript && core.channel.mentions.matchesMentionPatterns(transcript, mentionRegexes)) {
+        wasMentioned = true;
+        monitor.logVerboseMessage(
+          `mattermost: audio transcript mentioned the bot channel=${channelId} post=${post.id}`,
+        );
+      }
+    }
     const requireMentionInBotThreads =
       groups?.[channelId]?.requireMentionInBotThreads ??
       groups?.["*"]?.requireMentionInBotThreads ??
@@ -397,7 +433,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       return;
     }
 
-    const mediaList = await resolveMattermostMedia(fileIds);
+    const mediaList = preflightMedia ?? (await resolveMattermostMedia(fileIds));
     const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
     const baseText = formatMattermostInboundMediaText({
       body: bodySource,
@@ -557,11 +593,22 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
         }
       : undefined;
 
+    const feedback = createMattermostMessageFeedback({
+      monitor,
+      agentId: route.agentId,
+      postId: post.id,
+      kind,
+      canDetectMention,
+      effectiveWasMentioned: mentionDecision.effectiveWasMentioned,
+      shouldBypassMention,
+    });
+
     await dispatchMattermostInboundTurn(monitor, {
       post,
       rawText,
       ctxPayload,
       eventPlan,
+      feedback,
       historyKey,
       historyLimit,
       channelHistories,

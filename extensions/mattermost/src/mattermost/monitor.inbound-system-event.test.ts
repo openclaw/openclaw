@@ -24,9 +24,13 @@ import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { FakeWebSocket, mattermostPostEvent } from "./monitor-websocket.test-support.js";
+import { registerMattermostFeedbackTests } from "./monitor.feedback.test-support.js";
 import { registerMattermostIngressDebounceTests } from "./monitor.ingress-debounce.test-support.js";
 import { monitorMattermostProvider } from "./monitor.js";
-import { registerMattermostPreviewDeliveryTests } from "./monitor.preview-delivery.test-support.js";
+import {
+  createFinalDraft,
+  registerMattermostPreviewDeliveryTests,
+} from "./monitor.preview-delivery.test-support.js";
 import { registerMattermostPreviewPolicyTests } from "./monitor.preview-policy.test-support.js";
 import type { OpenClawConfig, ReplyPayload } from "./runtime-api.js";
 
@@ -49,6 +53,7 @@ const mockState = vi.hoisted(() => ({
   recordMattermostThreadParticipation: vi.fn(),
   resolveChannelInfo: vi.fn(),
   resolveMattermostMedia: vi.fn(),
+  resolvePreflightAudioTranscript: vi.fn(),
   resolveUserInfo: vi.fn(),
   runtimeCore: undefined as unknown,
   sendMessageMattermost: vi.fn(),
@@ -161,6 +166,11 @@ vi.mock("./monitor-slash.js", () => ({
   registerMattermostMonitorSlashCommands: mockState.registerMattermostMonitorSlashCommands,
 }));
 
+vi.mock("./preflight-audio.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./preflight-audio.js")>()),
+  resolveMattermostPreflightAudioTranscript: mockState.resolvePreflightAudioTranscript,
+}));
+
 vi.mock("./thread-participation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./thread-participation.js")>()),
   recordMattermostThreadParticipation: mockState.recordMattermostThreadParticipation,
@@ -206,6 +216,7 @@ function installRuntime(
     chunkMarkdownTextWithMode?: PluginRuntime["channel"]["text"]["chunkMarkdownTextWithMode"];
     chunkMode?: "length" | "newline";
     textChunkLimit?: number;
+    mentionRegexes?: RegExp[];
   } = {},
 ) {
   type ReplyDispatcherOptions = {
@@ -273,7 +284,7 @@ function installRuntime(
       };
     },
   );
-  return (mockState.runtimeCore = {
+  const runtimeCore = {
     config: { current: () => cfg },
     logging: {
       shouldLogVerbose: () => Boolean(overrides.verboseDebug),
@@ -315,8 +326,9 @@ function installRuntime(
           params.requireMentionOverride ?? false,
       },
       mentions: {
-        buildMentionRegexes: () => [],
-        matchesMentionPatterns: () => false,
+        buildMentionRegexes: () => overrides.mentionRegexes ?? [],
+        matchesMentionPatterns: (text: string, regexes: RegExp[]) =>
+          regexes.some((regex) => regex.test(text)),
       },
       pairing: { buildPairingReply: () => "pairing required" },
       reply: { settleReplyDispatcher: vi.fn(async ({ onSettled }) => onSettled?.()) },
@@ -346,7 +358,9 @@ function installRuntime(
         resolveTextChunkLimit: () => overrides.textChunkLimit ?? 4000,
       },
     },
-  });
+  };
+  mockState.runtimeCore = runtimeCore;
+  return runtimeCore;
 }
 
 const testConfig: OpenClawConfig = {
@@ -455,18 +469,7 @@ describe("mattermost inbound user posts", () => {
     mockState.getGlobalHookRunner.mockReturnValue(null);
     installRuntime(testConfig);
     mockState.createMattermostClient.mockReturnValue({});
-    mockState.createMattermostDraftStream.mockReturnValue({
-      update: vi.fn(),
-      updateAssistantText: vi.fn(),
-      flush: vi.fn(async () => {}),
-      postId: vi.fn(() => undefined),
-      clear: vi.fn(async () => {}),
-      discardPending: vi.fn(async () => {}),
-      seal: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      settleBoundaries: vi.fn(async () => {}),
-      resolveFinalText: (text: string) => ({ kind: "full" as const, text, publishedParts: [] }),
-    });
+    mockState.createMattermostDraftStream.mockReturnValue(createFinalDraft({}));
     mockState.fetchMattermostMe.mockResolvedValue(botUser);
     mockState.registerMattermostMonitorSlashCommands.mockResolvedValue(undefined);
     mockState.registerPluginHttpRoute.mockReturnValue(vi.fn());
@@ -844,33 +847,6 @@ describe("mattermost inbound user posts", () => {
     });
   });
 
-  it("routes a mention-prefixed text command without debouncing", async () => {
-    const config = mattermostConfig(
-      { chatmode: "oncall", groupAllowFrom: ["user-1"] },
-      { messages: { inbound: { debounceMs: 60_000 } } },
-    );
-    const isControlCommandMessage = vi.fn((text?: string) => text?.trim() === "/reset");
-    installRuntime(config, undefined, {
-      inboundDebounceMs: 60_000,
-      createInboundDebouncer,
-      isControlCommandMessage,
-      shouldHandleTextCommands: () => true,
-    });
-    const ctx = await receivePost(
-      { id: "post-mention-command", message: "@openclaw /reset" },
-      config,
-    );
-    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
-    expect(isControlCommandMessage).toHaveBeenCalledWith("/reset", config);
-    expect(ctx).toMatchObject({
-      WasMentioned: true,
-      BodyForAgent: "/reset",
-      CommandBody: "/reset",
-      CommandAuthorized: true,
-      CommandSource: "text",
-    });
-  });
-
   it.each(["O", undefined])(
     "requires a trusted channel type, using websocket fallback %s",
     async (channelType) => {
@@ -1011,6 +987,7 @@ describe("mattermost inbound user posts", () => {
   );
 
   const harness = { testConfig, createRuntimeCore: installRuntime, receivePost, mockState };
+  registerMattermostFeedbackTests(harness);
   registerMattermostPreviewPolicyTests(harness);
   registerMattermostPreviewDeliveryTests(harness);
 });

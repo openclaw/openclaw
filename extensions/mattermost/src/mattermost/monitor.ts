@@ -26,6 +26,7 @@ import { createMattermostPostHandler } from "./monitor-posts.js";
 import { createMattermostReactionHandler } from "./monitor-reactions.js";
 import { createMattermostMonitorResources } from "./monitor-resources.js";
 import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
+import { createMattermostSystemEventHandler } from "./monitor-system-events.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
 import { createMattermostConnectOnce, type MattermostEventPayload } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
@@ -216,6 +217,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const slashEnabled = getSlashCommandState(account.accountId) != null;
   const handlePost = createMattermostPostHandler(monitor);
   const handleReactionEvent = createMattermostReactionHandler(monitor);
+  const handleSystemEvent = createMattermostSystemEventHandler(monitor);
 
   type DebounceEntry = {
     post: MattermostIngressPost;
@@ -350,6 +352,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     getBotUpdateAt: async () => (await fetchMattermostMe(client)).update_at ?? 0,
     onPosted: ingress.receive,
     onReaction: handleReactionEvent,
+    onSystemEvent: handleSystemEvent,
   });
 
   let slashShutdownCleanup: Promise<void> | null = null;

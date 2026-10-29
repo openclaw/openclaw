@@ -25,6 +25,13 @@ const MATTERMOST_EMOJI_SHORTNAME_BY_GLYPH: Record<string, string> = {
   "💻": "computer",
   "👋": "wave",
   "🙌": "raised_hands",
+  // Status reaction lifecycle glyphs (queued/thinking/tool/done/error/stall/compacting).
+  "🛠": "hammer_and_wrench",
+  "🛫": "airplane_departure",
+  "🏗": "building_construction",
+  "💁": "information_desk_person",
+  "⏳": "hourglass_flowing_sand",
+  "🗜": "compression",
 };
 
 // Mattermost names toned system emoji `<base>_<suffix>`; these five bases are

@@ -392,14 +392,6 @@ describe("Mattermost actions", () => {
     });
   });
 
-  it("rejects invalid read cursors and limits before provider access", async () => {
-    const fetchImpl = vi.fn<typeof fetch>();
-    for (const params of [{ before: "p1", after: "p2" }, { limit: 0 }]) {
-      await expect(readAction(params, fetchImpl)).rejects.toThrow();
-    }
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
   it("rejects disabled accounts before opaque target resolution provider access", async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     await expect(

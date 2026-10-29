@@ -487,8 +487,8 @@ Supported surfaces:
   Microsoft Teams, Mattermost, Slack session cards, and Telegram. To disable
   preview edits entirely, set `streaming.mode` to `off`.
 
-In Telegram's status-only `progress` tool log, consecutive invocations of the
-same tool share one row: `Bash`, then `Bash ×2`, then `Bash ×3`. Repeated reads
+In the status-only `progress` tool log on Telegram and Mattermost, consecutive
+invocations of the same tool share one row: `Bash`, then `Bash ×2`, then `Bash ×3`. Repeated reads
 of the same skill and identical Sessions limits keep their detail
 (`Skill Read: github ×2`, `Sessions: 30 ×2`). A different tool or detail, an
 authored progress item, a preamble, or a plan starts a new row. Failures,

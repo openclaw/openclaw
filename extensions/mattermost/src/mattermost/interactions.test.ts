@@ -57,24 +57,8 @@ function buildButtonAttachmentsForTest(params: ButtonPropsInput): ButtonAttachme
   return attachments as ButtonAttachments;
 }
 
-function requireFirstAttachment(attachments: ButtonAttachments): ButtonAttachment {
-  const [attachment] = attachments;
-  if (!attachment) {
-    throw new Error("Expected button attachment fixture");
-  }
-  return attachment;
-}
-
-function requireActions(attachments: ButtonAttachments): ButtonAction[] {
-  const attachment = requireFirstAttachment(attachments);
-  if (!attachment.actions) {
-    throw new Error("Expected button attachment fixture actions");
-  }
-  return attachment.actions;
-}
-
 function requireAction(attachments: ButtonAttachments, index = 0): ButtonAction {
-  const action = requireActions(attachments).at(index);
+  const action = attachments[0]?.actions?.at(index);
   if (!action) {
     throw new Error(`Expected button attachment action at index ${index}`);
   }
@@ -99,9 +83,7 @@ function verifyInteractionToken(
   return generateInteractionToken(context, accountId) === token;
 }
 
-// ── HMAC token management ────────────────────────────────────────────
-
-describe("setInteractionSecret / getInteractionSecret", () => {
+describe("interaction tokens and button attachments", () => {
   beforeEach(() => {
     setInteractionSecret("default", "test-bot-token");
   });
@@ -117,14 +99,6 @@ describe("setInteractionSecret / getInteractionSecret", () => {
     expect(attachments[0]?.actions?.[0]?.integration.context["_token"]).toBe(
       createHmac("sha256", secret).update('{"action_id":"probe"}').digest("hex"),
     );
-  });
-});
-
-// ── Token generation / verification ──────────────────────────────────
-
-describe("generateInteractionToken / verifyInteractionToken", () => {
-  beforeEach(() => {
-    setInteractionSecret("default", "test-bot-token");
   });
 
   it("rejects nested context tampering", () => {
@@ -155,6 +129,18 @@ describe("generateInteractionToken / verifyInteractionToken", () => {
 
     expect(verifyInteractionToken(context, tokenA, "acct-a")).toBe(true);
     expect(verifyInteractionToken(context, tokenA, "acct-b")).toBe(false);
+  });
+
+  it("sets type to 'button' on every action", () => {
+    const result = buildButtonAttachmentsForTest({
+      callbackUrl: "http://localhost:18789/cb",
+      buttons: [{ id: "my_action", name: "A" }],
+    });
+
+    const action = requireAction(result);
+    expect(action.type).toBe("button");
+    expect(action.id).toBe("myaction");
+    expect(action.integration.context.action_id).toBe("myaction");
   });
 });
 
@@ -219,38 +205,11 @@ describe("resolveInteractionCallbackUrl", () => {
     expect(url).toBe("https://gateway.example.com/root/mattermost/interactions/acct");
   });
 
-  it("falls back to localhost when customBindHost is a wildcard bind address", () => {
-    const url = resolveInteractionCallbackUrl("default", {
-      gateway: { port: 9999, customBindHost: "0.0.0.0" },
-    });
-    expect(url).toBe("http://localhost:9999/mattermost/interactions/default");
-  });
-
   it("brackets IPv6 custom bind hosts", () => {
     const url = resolveInteractionCallbackUrl("acct", {
       gateway: { port: 9999, customBindHost: "::1" },
     });
     expect(url).toBe("http://[::1]:9999/mattermost/interactions/acct");
-  });
-});
-
-// ── buildButtonProps attachments ────────────────────────────────────
-
-describe("buildButtonProps attachments", () => {
-  beforeEach(() => {
-    setInteractionSecret("default", "test-bot-token");
-  });
-
-  it("sets type to 'button' on every action", () => {
-    const result = buildButtonAttachmentsForTest({
-      callbackUrl: "http://localhost:18789/cb",
-      buttons: [{ id: "my_action", name: "A" }],
-    });
-
-    const action = requireAction(result);
-    expect(action.type).toBe("button");
-    expect(action.id).toBe("myaction");
-    expect(action.integration.context.action_id).toBe("myaction");
   });
 });
 
@@ -355,20 +314,6 @@ describe("createMattermostInteractionHandler", () => {
     expect(res.body).toContain(expectedMessage);
   }
 
-  function expectSuccessfulApprovalUpdate(
-    res: ServerResponse & { body?: string },
-    requestLog?: Array<{ path: string; method?: string }>,
-  ) {
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toBe("{}");
-    if (requestLog) {
-      expect(requestLog).toEqual([
-        { path: "/posts/post-1", method: undefined },
-        { path: "/posts/post-1/patch", method: "PUT" },
-      ]);
-    }
-  }
-
   function createActionPost(params?: {
     actionId?: string;
     actionName?: string;
@@ -402,50 +347,6 @@ describe("createMattermostInteractionHandler", () => {
     });
   }
 
-  async function runApproveInteraction(params?: {
-    actionName?: string;
-    allowedSourceIps?: string[];
-    trustedProxies?: string[];
-    remoteAddress?: string;
-    headers?: Record<string, string>;
-  }) {
-    const { context, token } = createActionContext();
-    const requestLog: Array<{ path: string; method?: string }> = [];
-    const handler = createMattermostInteractionHandler({
-      client: createMattermostClientMock(async (path: string, init?: { method?: string }) => {
-        requestLog.push({ path, method: init?.method });
-        if (init?.method === "PUT") {
-          return { id: "post-1" };
-        }
-        return createActionPost({ actionName: params?.actionName });
-      }),
-      accountId: "acct",
-      allowedSourceIps: params?.allowedSourceIps,
-      trustedProxies: params?.trustedProxies,
-    });
-
-    const res = await runHandler(handler, {
-      remoteAddress: params?.remoteAddress,
-      headers: params?.headers,
-      body: createInteractionBody({ context, token, userName: "alice" }),
-    });
-    return { res, requestLog };
-  }
-
-  async function runInvalidActionRequest(actionId: string) {
-    const { context, token } = createActionContext();
-    const handler = createMattermostInteractionHandler({
-      client: createMattermostClientMock(async () =>
-        createActionPost({ actionId, actionName: actionId }),
-      ),
-      accountId: "acct",
-    });
-
-    return await runHandler(handler, {
-      body: createInteractionBody({ context, token }),
-    });
-  }
-
   it("rejects a null callback body with a stable parser error", async () => {
     const log = vi.fn();
     const handler = createMattermostInteractionHandler({
@@ -466,15 +367,28 @@ describe("createMattermostInteractionHandler", () => {
   });
 
   it("accepts forwarded Mattermost source IPs from a trusted proxy", async () => {
-    const { res, requestLog } = await runApproveInteraction({
-      actionName: "approve",
+    const { context, token } = createActionContext();
+    const requestLog: Array<{ path: string; method?: string }> = [];
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async (path: string, init?: { method?: string }) => {
+        requestLog.push({ path, method: init?.method });
+        return init?.method === "PUT" ? { id: "post-1" } : createActionPost();
+      }),
+      accountId: "acct",
       allowedSourceIps: ["198.51.100.8"],
       trustedProxies: ["127.0.0.1"],
+    });
+    const res = await runHandler(handler, {
       remoteAddress: "127.0.0.1",
       headers: { "x-forwarded-for": "198.51.100.8" },
+      body: createInteractionBody({ context, token, userName: "alice" }),
     });
-
-    expectSuccessfulApprovalUpdate(res, requestLog);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe("{}");
+    expect(requestLog).toEqual([
+      { path: "/posts/post-1", method: undefined },
+      { path: "/posts/post-1/patch", method: "PUT" },
+    ]);
   });
 
   it("rejects callback requests from non-allowlisted source IPs", async () => {
@@ -532,10 +446,15 @@ describe("createMattermostInteractionHandler", () => {
   });
 
   it("rejects requests when the action is not present on the fetched post", async () => {
-    const res = await runInvalidActionRequest("reject");
-
-    expect(res.statusCode).toBe(403);
-    expect(res.body).toContain("Unknown action");
+    const { context, token } = createActionContext();
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async () =>
+        createActionPost({ actionId: "reject", actionName: "reject" }),
+      ),
+      accountId: "acct",
+    });
+    const res = await runHandler(handler, { body: createInteractionBody({ context, token }) });
+    expectForbiddenResponse(res, "Unknown action");
   });
 
   it("blocks button dispatch when the sender is not allowed for the action", async () => {

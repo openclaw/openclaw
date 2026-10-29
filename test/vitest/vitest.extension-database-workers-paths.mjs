@@ -105,6 +105,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/line/src/webhook-spool.test.ts",
   "extensions/mattermost/src/mattermost/monitor-ingress.test.ts",
   "extensions/mattermost/src/mattermost/monitor-posts.thread-history.test.ts",
+  "extensions/mattermost/src/mattermost/monitor-system-events.test.ts",
   "extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.ingress-lifecycle.test.ts",
   "extensions/msteams/src/msteams-ingress.test.ts",

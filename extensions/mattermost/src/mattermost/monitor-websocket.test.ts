@@ -4,7 +4,7 @@ import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import type { RuntimeEnv } from "../../runtime-api.js";
-import { createMattermostConnectOnce } from "./monitor-websocket.js";
+import { createMattermostConnectOnce, type MattermostEventPayload } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 
 const createWebSocket = vi.hoisted(() => vi.fn());
@@ -143,8 +143,8 @@ async function closeConnection(socket: FakeWebSocket, connected: Promise<void>, 
 }
 
 const encodeFrame = (payload: unknown) => Buffer.from(JSON.stringify(payload));
-const postEnvelope = (post: Record<string, unknown>, event = "posted") =>
-  JSON.stringify({ event, data: { post: JSON.stringify(post) } });
+const postEnvelope = (post: Record<string, unknown>) =>
+  JSON.stringify({ event: "posted", data: { post: JSON.stringify(post) } });
 
 beforeEach(() => {
   createWebSocket.mockReset();
@@ -225,21 +225,26 @@ it("accepts large valid post envelopes and rejects oversized websocket payloads"
   expect(statusSink).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "recovering" }));
 });
 
-it("dispatches reaction events to the reaction handler", async () => {
+it("dispatches reaction, edit, delete and membership events to their handlers", async () => {
   const socket = new FakeWebSocket();
   const onPosted = vi.fn(async () => {});
   const onReaction = vi.fn(async (payload) => payload);
-  const connectOnce = createConnection(socket, { onPosted, onReaction });
-  const reaction = JSON.stringify({
-    user_id: "user-1",
-    post_id: "post-1",
-    emoji_name: "thumbsup",
-  });
-  const payload = { event: "reaction_added", data: { reaction } };
+  const onSystemEvent = vi.fn<(payload: MattermostEventPayload) => Promise<void>>(async () => {});
+  const connectOnce = createConnection(socket, { onPosted, onReaction, onSystemEvent });
+  const reaction = { event: "reaction_added", data: { reaction: '{"emoji_name":"thumbsup"}' } };
   const connected = startAuthenticated(connectOnce, socket);
-  socket.emit("message", encodeFrame(payload));
+  socket.emit("message", encodeFrame(reaction));
+  for (const event of ["post_edited", "post_deleted", "user_added", "user_removed", "typing"]) {
+    socket.emit("message", encodeFrame({ event, data: { user_id: "user-1" } }));
+  }
   await closeConnection(socket, connected);
-  expect(onReaction).toHaveBeenCalledExactlyOnceWith(payload);
+  expect(onReaction).toHaveBeenCalledExactlyOnceWith(reaction);
+  expect(onSystemEvent.mock.calls.map(([payload]) => payload.event)).toEqual([
+    "post_edited",
+    "post_deleted",
+    "user_added",
+    "user_removed",
+  ]);
   expect(onPosted).not.toHaveBeenCalled();
 });
 
@@ -253,11 +258,6 @@ it("hands posted envelopes to ingress raw without duplicate decoding", async () 
   const decode = vi.spyOn(frame, "toString");
 
   const connected = startAuthenticated(connectOnce, socket);
-  socket.emit("message", Buffer.from(postEnvelope(post, "post_edited")));
-  await new Promise<void>((resolve) => {
-    queueMicrotask(resolve);
-  });
-  expect(onPosted).not.toHaveBeenCalled();
   socket.emit("message", frame);
   await vi.waitFor(() => expect(onPosted).toHaveBeenCalledTimes(1));
   await closeConnection(socket, connected);
