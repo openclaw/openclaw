@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   diagnosticLoads: 0,
   lossless: true,
   initializeSqlite: vi.fn(),
+  releaseStdin: vi.fn(),
 }));
 
 vi.mock("./bun-sqlite-library.js", async (importOriginal) => ({
@@ -51,6 +52,8 @@ vi.mock("../logging/json-console-line.js", async (importOriginal) => {
 vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
 vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
 vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
+// mock-isolation: the real helper would inspect and destroy the test runner's own stdin.
+vi.mock("../process/release-stdin.js", () => ({ releaseProcessStdin: state.releaseStdin }));
 
 function createExitingRuntime() {
   return {
@@ -469,7 +472,6 @@ describe("runtime failure diagnostics", () => {
 });
 
 describe("sealed worker runtime", () => {
-  let destroyStdin: MockInstance<typeof process.stdin.destroy>;
   let disconnect: MockInstance<NonNullable<typeof process.disconnect>>;
   const originalArgv = process.argv;
   const originalExitCode = process.exitCode;
@@ -479,8 +481,7 @@ describe("sealed worker runtime", () => {
     state.run.mockClear();
     process.argv = [process.execPath, "worker.mjs"];
     process.exitCode = undefined;
-    // The executable owns stdin and IPC, not the test runner's real transports.
-    destroyStdin = vi.spyOn(process.stdin, "destroy").mockReturnThis();
+    state.releaseStdin.mockClear();
     disconnect = vi.spyOn(process, "disconnect").mockImplementation(() => {});
     vi.stubEnv("OPENCLAW_DEBUG", undefined);
   });
@@ -502,7 +503,7 @@ describe("sealed worker runtime", () => {
 
       expect(process.exitCode).toBe(1);
       expect(stderr).toHaveBeenCalledExactlyOnceWith("exit 1\n");
-      expect(destroyStdin).toHaveBeenCalledOnce();
+      expect(state.releaseStdin).toHaveBeenCalledOnce();
       expect(disconnect).toHaveBeenCalledOnce();
       expect(state.run).not.toHaveBeenCalled();
       expect(state.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));
@@ -514,7 +515,7 @@ describe("sealed worker runtime", () => {
     state.lossless = true;
     await import("../worker/worker-deploy-entry.js");
     expect(process.exitCode).toBeUndefined();
-    expect(destroyStdin).toHaveBeenCalledOnce();
+    expect(state.releaseStdin).toHaveBeenCalledOnce();
     expect(disconnect).toHaveBeenCalledOnce();
     expect(state.run).toHaveBeenCalledOnce();
     expect(state.error).not.toHaveBeenCalled();
