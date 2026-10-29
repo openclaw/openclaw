@@ -437,14 +437,17 @@ describe("OpenCode session catalog", () => {
     },
   );
 
-  itWithCli.each([1, 2])(
-    "lists and reads sessions through the v%s CLI JSON surfaces",
-    async (version) => {
-      await installFakeOpenCode("hi", "Catalog session", { command: "pwd" }, version);
-      const listed = await listLocalOpenCodeSessionPage({ limit: 20 });
+  itWithCli.each([
+    { version: 1, title: "Cafe\u0301 catalog", query: "CAFÉ" },
+    { version: 2, title: "Café catalog", query: "CAFE\u0301" },
+  ])(
+    "searches and reads canonical titles through the v$version CLI JSON surfaces",
+    async ({ version, title, query }) => {
+      await installFakeOpenCode("hi", title, { command: "pwd" }, version);
+      const listed = await listLocalOpenCodeSessionPage({ limit: 20, searchTerm: query });
       const expectedSession = {
         threadId: "ses_test",
-        name: "Catalog session",
+        name: title,
         cwd: "/workspace",
         source: "opencode-cli",
         canContinue: true,
@@ -499,17 +502,6 @@ describe("OpenCode session catalog", () => {
       ]);
     },
   );
-
-  itWithCli.each([
-    { title: "Caf\u00e9 catalog", query: "Caf\u00e9", name: "composed title" },
-    { title: "Cafe\u0301 catalog", query: "Caf\u00e9", name: "decomposed title" },
-    { title: "Caf\u00e9 catalog", query: "Cafe\u0301", name: "composed title, decomposed query" },
-    { title: "Cafe\u0301 catalog", query: "Cafe\u0301", name: "decomposed title and query" },
-  ])("matches canonically equivalent $name in search", async ({ title, query }) => {
-    await installFakeOpenCode("hi", title, { command: "pwd" });
-    const listed = await listLocalOpenCodeSessionPage({ searchTerm: query });
-    expect(listed.sessions.map((session) => session.name)).toEqual([title]);
-  });
 
   itWithCli("finds live v2 sessions behind an archived API page", async () => {
     await installFakeOpenCode("hi", "Catalog session", {}, 2, true);
