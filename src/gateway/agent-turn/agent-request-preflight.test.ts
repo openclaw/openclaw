@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as scheduler from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -204,7 +205,7 @@ describe("agent request Swarm preflight", () => {
 
   it("carries the admitted scheduler group and cap without trusting saved launch settings", async () => {
     const launched = createDeferred();
-    scheduler.enqueueSwarmRun({
+    enqueueSwarmRun({
       groupId: '["main","agent:main:main","restored-group"]',
       runId: "collector-run",
       maxConcurrent: 32,
