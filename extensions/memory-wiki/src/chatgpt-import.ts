@@ -111,9 +111,9 @@ async function loadConversations(exportInputPath: string): Promise<{
   conversations: Record<string, unknown>[];
 }> {
   const exportPath = path.resolve(exportInputPath);
-  const conversationsPath = exportPath.endsWith(".json")
-    ? exportPath
-    : path.join(exportPath, "conversations.json");
+  const conversationsPath = (await fs.stat(exportPath)).isDirectory()
+    ? path.join(exportPath, "conversations.json")
+    : exportPath;
   const { buffer: raw } = await readRegularFile({ filePath: await fs.realpath(conversationsPath) });
   if (!isUtf8(raw)) {
     throw new Error(

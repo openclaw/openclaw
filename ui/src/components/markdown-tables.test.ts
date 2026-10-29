@@ -8,6 +8,7 @@ import {
   resetTranscriptSession,
 } from "../pages/chat/components/chat-thread-interactions.ts";
 import { installDialogPolyfill, waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
+import { installSessionTitleRegistrar } from "./markdown-link-display.ts";
 import {
   enhanceMarkdownTables,
   handleMarkdownTableInteraction,
@@ -15,7 +16,6 @@ import {
 } from "./markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
-import { installSessionTitleRegistrar } from "./session-title-target-registration.ts";
 
 const writeText = vi.fn(async (_text: string) => undefined);
 

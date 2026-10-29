@@ -39,6 +39,7 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: vi.fn() }),
 }));
 
+// mock-isolation: Replaces Gateway startup to observe the spawn broker without booting a server.
 vi.mock("./server-start.js", () => ({
   startGatewayServerCore: async () => {
     const { runExec } = await import("../process/exec.js");

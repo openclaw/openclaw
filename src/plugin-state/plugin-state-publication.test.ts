@@ -6,6 +6,7 @@ import {
   settleSqliteWorkerOperationContext,
   type SqliteWorkerOperationContext,
 } from "../infra/sqlite-worker-operation-settlement.js";
+import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
@@ -117,7 +118,7 @@ describe("plugin state committed facts", () => {
       }
     });
   });
-  it("updates resident namespaces directly from committed writes", async () => {
+  it("updates resident namespaces from class-attributed worker receipts", async () => {
     await withOpenClawTestState(
       { label: "plugin-state-namespace-read-receipts" },
       async ({ env }) => {
@@ -128,7 +129,13 @@ describe("plugin state committed facts", () => {
           ...options,
           namespace: "sibling",
         });
+        const authorityBytes = () =>
+          getWorkerMessageMetrics().find(
+            (metric) => metric.kind === "authority" && metric.direction === "from_worker",
+          )?.payloadBytesByRequestClass?.plugin_state ?? 0;
+        const before = authorityBytes();
         await store.register("first", { count: 1 });
+        expect(authorityBytes()).toBeGreaterThan(before);
         const dispatch = observePluginStateReads();
         const read = async (key: string, expected: { count: number } | undefined) => {
           const value = await store.lookup(key);

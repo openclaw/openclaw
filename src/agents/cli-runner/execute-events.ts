@@ -514,9 +514,17 @@ export function createCliEventHandlers(params: {
 
   // Emit-always: thinking reaches the event bus and session archive like the
   // embedded reasoning stream; /reasoning and /verbose gate presentation only.
-  const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
+  const emitCliThinkingDelta = ({
+    text,
+    delta,
+    isReasoningSnapshot,
+    modelProgress,
+  }: CliThinkingDelta) => {
     if (params.toolTracking.shouldSuppressAssistantOutput()) {
       return;
+    }
+    if (modelProgress) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progressModel("cli:thinking");
     }
     if (text || delta) {
       observedCliActivity = true;
@@ -528,7 +536,10 @@ export function createCliEventHandlers(params: {
     }));
   };
 
-  const emitCliThinkingProgress = ({ progressTokens }: CliThinkingProgress) => {
+  const emitCliThinkingProgress = ({ progressTokens, modelProgress }: CliThinkingProgress) => {
+    if (!params.toolTracking.shouldSuppressAssistantOutput() && modelProgress) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progressModel("cli:thinking_tokens");
+    }
     observedCliActivity = true;
     emitLiveEvent("thinking", () => ({ progressTokens }));
   };

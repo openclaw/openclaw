@@ -549,22 +549,17 @@ describe("session navigation intent prefetch", () => {
       expect.objectContaining({ cursor: "cursor-1", sessionKey }),
       { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
-    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })).toEqual({
+    const expected = {
       deltaCursor: "cursor-2",
-      transcriptMetadata: { key: sessionKey, kind: "direct" },
+      transcriptMetadata: { key: sessionKey, kind: "direct", sessionId: "session-delta" },
       messages: [...priorMessages, liveMessage, preparedDeltaMessage],
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "session-delta",
-    });
+    };
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })).toEqual(expected);
     expect(store.readSavedAt(cacheKey(sessionKey))).toBeGreaterThan(previousSavedAt ?? 0);
     await store.flush();
-    expect(await new SessionSnapshotStore().read(cacheKey(sessionKey))).toEqual({
-      deltaCursor: "cursor-2",
-      transcriptMetadata: { key: sessionKey, kind: "direct" },
-      messages: [...priorMessages, liveMessage, preparedDeltaMessage],
-      pagination: { hasMore: false, completeSnapshot: true },
-      sessionId: "session-delta",
-    });
+    expect(await new SessionSnapshotStore().read(cacheKey(sessionKey))).toEqual(expected);
   });
 
   it("retains the prior cursor when a delta carries transient active-run replay", async () => {

@@ -275,6 +275,10 @@ This state improves continuity. It is not an authorization or isolation boundary
 
 Start a session as a draft to keep work in progress out of other people's sidebars until you publish it. Drafts are never hidden from admins, who see other people's drafts with a faded ghost marker. This is a coordination feature, not a security boundary.
 
+When Draft sessions are enabled, newly spawned children of a Draft session also start as Draft, including hidden helpers and visible sessions. Publishing the parent later does not publish its children; each session keeps its own audience until you change it.
+
+Disabling Draft creation leaves existing Draft conversations usable, but prevents them from spawning new Draft children. The request fails without sharing the child instead. Continue in the existing conversation or ask an administrator to enable Draft creation.
+
 Catalog listings and progress updates recheck current session visibility for each recipient. Cached provider results do not preserve access to a session that has become draft or incognito. An adopted thread remains bound to its original session instance and plugin ownership. Deleting and recreating a session key does not transfer the old thread to the new creator. Catalog reads and mutations also recheck the stored session after provider enumeration.
 
 ## Turn attribution
