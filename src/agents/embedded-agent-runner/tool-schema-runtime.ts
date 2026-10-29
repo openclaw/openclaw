@@ -62,13 +62,7 @@ export function normalizeProviderToolSchemas<
 }
 
 export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParams): void {
-  // Diagnostics describe what the provider still cannot accept, so inspect the
-  // provider-normalized tools: a raw-schema pass reports keywords the normalizer
-  // already removes (for example Gemini's stripped title length/pattern limits).
-  const tools = normalizeProviderToolSchemas(params);
-  const diagnostics = inspectProviderToolSchemasWithPlugin(
-    buildProviderToolSchemaParams({ ...params, tools }),
-  );
+  const diagnostics = inspectProviderToolSchemasWithPlugin(buildProviderToolSchemaParams(params));
   if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
     return;
   }
@@ -83,9 +77,9 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
     `provider tool schema diagnostics: ${diagnostics.length} ${diagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
     {
       provider: params.provider,
-      toolCount: tools.length,
+      toolCount: params.tools.length,
       diagnosticCount: diagnostics.length,
-      tools: tools.map((tool, index) => `${index}:${tool.name}`),
+      tools: params.tools.map((tool, index) => `${index}:${tool.name}`),
       diagnostics: diagnostics.map((diagnostic) => ({
         index: diagnostic.toolIndex,
         tool: diagnostic.toolName,

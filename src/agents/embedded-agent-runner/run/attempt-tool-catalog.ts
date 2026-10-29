@@ -35,6 +35,7 @@ import {
 import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
+import { normalizeProviderToolSchemas } from "../tool-schema-runtime.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
@@ -108,7 +109,23 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
     });
-    effectiveTools = compacted.tools.map((tool) =>
+    // Code Mode adds its control tools (for example exec) after bundle
+    // normalization. Normalize the final dispatch surface through the same
+    // owner, so provider declarations and their diagnostics see the same schema.
+    const normalizedCompactedTools = attempt.runtimePlan
+      ? attempt.runtimePlan.tools.normalize(compacted.tools)
+      : normalizeProviderToolSchemas({
+          tools: compacted.tools,
+          provider: attempt.provider,
+          config: attempt.config,
+          workspaceDir: input.setup.effectiveWorkspace,
+          env: process.env,
+          modelId: attempt.modelId,
+          modelApi: attempt.model.api,
+          model: attempt.model,
+          runtimeHandle: input.setup.getProviderRuntimeHandle(),
+        });
+    effectiveTools = normalizedCompactedTools.map((tool) =>
       wrapEmbeddedAttemptToolWithActivity(
         wrapToolWithAbortSignal(tool, abortSignal),
         attempt.runId,
