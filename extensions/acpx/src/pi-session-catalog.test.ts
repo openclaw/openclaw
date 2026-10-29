@@ -249,6 +249,21 @@ describe("Pi session catalog", () => {
     ).resolves.toMatchObject({ threadId: "pi-session-0" });
   });
 
+  it.each([
+    { name: "Caf\u00e9 history", query: "Caf\u00e9", label: "composed name" },
+    { name: "Cafe\u0301 history", query: "Caf\u00e9", label: "decomposed name" },
+    { name: "Caf\u00e9 history", query: "Cafe\u0301", label: "composed name, decomposed query" },
+    { name: "Cafe\u0301 history", query: "Cafe\u0301", label: "decomposed name and query" },
+  ])("matches canonically equivalent $label in search", async ({ name, query }) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-catalog-"));
+    temporaryDirectories.push(directory);
+    process.env.PI_CODING_AGENT_SESSION_DIR = directory;
+    const file = path.join(directory, "session.jsonl");
+    await fs.writeFile(file, piJsonl([header("pi-nfc-session"), sessionInfo("info", name)]));
+    const sessions = (await listLocalPiSessionPage({ searchTerm: query })).sessions;
+    expect(sessions.map((session) => session.threadId)).toEqual(["pi-nfc-session"]);
+  });
+
   it("uses the configured Pi session directory and lists oversized sessions", async () => {
     const agentDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-"));
     const homeDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-home-"));
