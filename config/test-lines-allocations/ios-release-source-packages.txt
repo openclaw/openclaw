@@ -1,0 +1,2 @@
+# Extend the release cache trust-boundary test to cover SwiftPM downloads.
+3

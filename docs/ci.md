@@ -228,6 +228,8 @@ iOS Store Release and daily TestFlight check out the exact selected commit at de
 
 Both release destinations share a separate Watch RTC device-library cache, populated only by successful trusted `main` release runs. It retains both `arm64` and `arm64_32` device slices without sharing the simulator cache. The existing build phase verifies each slice's input fingerprint and checksum before reuse; a miss runs the locked Cargo build. Cache transfer failures do not block a release.
 
+The same release job caches Xcode's `SourcePackages` downloads separately from ordinary CI, keyed by runner platform, architecture, Xcode, package manifests, and available lockfiles. Both destinations use the canonical `$RUNNER_TEMP/ios-release-recovery/source` project path, which determines Xcode's default DerivedData directory. Automatic package resolution and clean compilation remain enabled; build products and screenshot DerivedData are excluded. Only successful release jobs save downloads, and cache transfer failures retain the cold resolution path. Changing the canonical project path requires a new cache namespace.
+
 Release qualification disables Spotlight indexing on the disposable runner's Data volume before checkout. After Simulator boot, it requires ten seconds of at least 30% idle host CPU within five minutes before issuing the pairing credential. This keeps first-launch background work out of the Gateway and XCTest deadlines. Local qualification uses the same CPU readiness check and leaves host indexing settings to the operator.
 
 Android screenshot-input PRs and ordinary full manual CI run the existing phone

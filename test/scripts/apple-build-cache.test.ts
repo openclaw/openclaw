@@ -286,14 +286,17 @@ it("never saves Apple inputs from PRs, dispatches, non-main refs, or frozen targ
   }
 });
 
-it("shares release device libraries only between trusted main release destinations", () => {
+it.each([
+  ["watch-rtc-cache", "watch-rtc-release-v1-", "Save Watch RTC release libraries"],
+  ["ios-packages-cache", "ios-release-packages-v1-", "Save iOS release source packages"],
+])("shares %s only between trusted main release destinations", (id, prefix, saveName) => {
   const job = readWorkflow(".github/workflows/ios-store-release.yml").jobs.release;
-  const restore = job.steps.find((step: WorkflowStep) => step.id === "watch-rtc-cache");
-  const save = job.steps.find((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@"));
-  expect(restore.with.key).toMatch(/^watch-rtc-release-v1-/);
+  const restore = job.steps.find((step: WorkflowStep) => step.id === id);
+  const save = job.steps.find((step: WorkflowStep) => step.name === saveName);
+  expect(restore.with.key.startsWith(prefix)).toBe(true);
   expect(restore.with["restore-keys"]).toBeUndefined();
   expect(save.with.path).toBe(restore.with.path);
-  expect(save.with.key).toBe("${{ steps.watch-rtc-cache.outputs.cache-primary-key }}");
+  expect(save.with.key).toBe(`\${{ steps.${id}.outputs.cache-primary-key }}`);
   for (const operation of ["release", "testflight"]) {
     for (const ref of ["refs/heads/main", "refs/heads/topic"]) {
       for (const repository of ["openclaw/openclaw", "fork/openclaw"]) {
