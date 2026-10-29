@@ -33,6 +33,7 @@ import {
   reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
+import { prepareReplyMessageContinuation } from "../../sessions/session-controller.message-join.js";
 import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -65,6 +66,15 @@ vi.mock(
     };
   },
 );
+// mock-isolation: a prepared same-requester join needs a full continuation
+// owner; the test supplies its result and keeps the real admission comparison.
+vi.mock(import("../../sessions/session-controller.message-join.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    prepareReplyMessageContinuation: vi.fn(actual.prepareReplyMessageContinuation),
+  };
+});
 vi.mock("../../auto-reply/reply/message-received-hooks.js", () => ({
   emitMessageReceivedHooks: vi.fn(),
 }));
@@ -523,6 +533,82 @@ describe("gateway steer contract after the injection-start fence", () => {
           }),
         }),
       );
+    },
+  );
+});
+
+describe("same-requester steering into a prepared continuation", () => {
+  it.each(["prepared", "unsupported"] as const)(
+    "keeps the incumbent task-suggestion surface for a capable browser steer (%s)",
+    async (join) => {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:dashboard:s",
+        sessionId: "session-1",
+        target: captureSessionTarget({
+          storeScope: "/synthetic/chat-injection",
+          sessionKey: "agent:main:dashboard:s",
+          incarnation: "session-1",
+          agentId: "main",
+        }),
+        resetTriggered: false,
+      });
+      onTestFinished(() => operation.complete());
+      const starter = makeStarterParams();
+      starter.request.supportsTaskSuggestions = true;
+      operation.bindToolAuthoritySnapshot({
+        fingerprint: () => "steer-authority",
+        project: () => "steer-authority",
+      });
+      operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
+      const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+        async (_text, options, assertCurrent) => {
+          assertCurrent();
+          options?.onQueueAccepted?.(true);
+        },
+      );
+      // An internal completion continuation negotiates no task-suggestion mode.
+      operation.attachBackend({
+        kind: "embedded",
+        runId: "completion-run",
+        supportsTranscriptCommitWait: true,
+        toolAuthorityFingerprint: "steer-authority",
+        cancel() {},
+        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+      });
+      operation.setPhase("running");
+      starter.target = expectDefined(
+        captureReplyMessageInjectionTarget(operation),
+        "active continuation target",
+      );
+      vi.mocked(prepareReplyMessageContinuation).mockResolvedValueOnce(
+        join === "prepared"
+          ? {
+              kind: "prepared",
+              fingerprint: "steer-authority",
+              read: () => "steer-authority",
+              prepareCurrent: async () => {},
+              release() {},
+            }
+          : { kind: "unsupported" },
+      );
+      vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
+        beginActualReplyMessageInjectionTarget,
+      );
+      const attempt = expectDefined(
+        await createChatSendMessageInjectionStarter(starter)(),
+        "steering attempt",
+      );
+      if (join === "prepared") {
+        await expect(attempt.outcome).resolves.toMatchObject({ status: "accepted" });
+        expect(queueMessage).toHaveBeenCalledOnce();
+      } else {
+        // Without a prepared same-requester join, the caller's own surface must still match.
+        await expect(attempt.outcome).resolves.toEqual({
+          status: "rejected",
+          reason: "task_suggestion_delivery_mode_mismatch",
+        });
+        expect(queueMessage).not.toHaveBeenCalled();
+      }
     },
   );
 });
