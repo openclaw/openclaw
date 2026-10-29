@@ -162,10 +162,9 @@ type ControlUiDocumentReadiness =
   | { ready: true; tlsFingerprint?: string }
   | { ready: false; reason: string; status?: number };
 
-/** Wait for a preparing or temporarily slow dashboard; fail immediately for terminal errors. */
-/** An accepted CLI interruption must stop the readiness probe instead of letting it run on. */
 const CONTROL_UI_READINESS_INTERRUPTED = "Control UI readiness check was interrupted.";
 
+/** Wait for a preparing or temporarily slow dashboard; fail immediately for terminal errors. */
 export async function waitForControlUiDocument(params: {
   url: string;
   tlsConfig?: GatewayTlsConfig;
@@ -316,11 +315,11 @@ export async function waitForControlUiDocument(params: {
     }
     try {
       await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - monotonicNow())), params.signal);
-    } catch {
+    } catch (error) {
       if (params.signal?.aborted) {
         return { ready: false, reason: CONTROL_UI_READINESS_INTERRUPTED };
       }
-      throw new Error("Control UI readiness retry delay failed.");
+      throw error;
     }
   }
 }

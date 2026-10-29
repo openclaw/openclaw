@@ -10,6 +10,7 @@ import { callGateway } from "../gateway/call.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { openUrlPrivately } from "../infra/browser-handoff.js";
 import type { SystemPresence } from "../infra/system-presence.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
 import { sleep } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
@@ -165,11 +166,12 @@ export async function runBrowserHatchHandoff(params: {
     const document = await waitForControlUiDocument({
       url: target.documentUrl,
       tlsConfig: target.tlsConfig,
+      signal: getAsyncWorkSignal(),
       onPending: () => {
         progress = params.prompter.progress(t("wizard.guided.controlUiPreparing"));
       },
     });
-    if (!document.ready) {
+    if (!document.ready || getAsyncWorkSignal()?.aborted) {
       return false;
     }
   } catch {

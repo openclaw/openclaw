@@ -224,8 +224,6 @@ export async function dashboardCommand(
         return;
       }
 
-      // The command lifetime owns cancellation: an accepted interruption aborts this
-      // signal, so pending document work stops before any handoff or guidance.
       const documentSignal = getAsyncWorkSignal();
       const document = await waitForControlUiDocument({
         url: target.documentUrl,
@@ -233,10 +231,10 @@ export async function dashboardCommand(
         waitForPending: false,
         ...(documentSignal ? { signal: documentSignal } : {}),
       });
+      if (documentSignal?.aborted) {
+        return;
+      }
       if (!document.ready) {
-        if (documentSignal?.aborted) {
-          return;
-        }
         dashboardJsonFailure(runtime, document.reason);
         return;
       }
@@ -320,10 +318,10 @@ export async function dashboardCommand(
     onPending: () => runtime.log("Control UI assets are preparing; waiting for the dashboard…"),
     ...(documentSignal ? { signal: documentSignal } : {}),
   });
+  if (documentSignal?.aborted) {
+    return;
+  }
   if (!document.ready) {
-    if (documentSignal?.aborted) {
-      return;
-    }
     runtime.error(document.reason);
     runtime.log("Run `openclaw gateway status --deep` for details.");
     runtime.exit(1);
