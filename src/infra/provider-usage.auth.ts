@@ -75,7 +75,9 @@ function retainManagedUsageAuth(auth: ProviderAuth, state: UsageAuthState): Prov
               provider,
             });
             if (current?.apiKey !== apiKey) {
-              throw new Error("Managed provider credential is no longer current");
+              throw new Error(
+                "Managed provider credential is no longer current. Refresh the usage report and retry with the current credentials.",
+              );
             }
           }
         }
