@@ -315,7 +315,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         (!params?.force || params.reason === "embedding-bootstrap-recovery") &&
         // A semantic failure must still allow the distinct keyword-only publication.
         !(this.fullReindexRetryBackoff.failedWithEmbeddings && !syncProvider) &&
-        Date.now() < this.fullReindexRetryBackoff.retryAt;
+        performance.now() < this.fullReindexRetryBackoff.retryAt;
       const deferAutomaticFullReindex = retryFullReindexBackedOff && !needsExplicitIdentityReindex;
       if (deferAutomaticFullReindex && !hasTargetArchiveFiles) {
         // Automatic identity repair honors the failure cooldown. An explicit

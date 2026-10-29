@@ -27,7 +27,7 @@ import {
 // mock-isolation: Capture workshop scheduling without running background experience reviews.
 vi.mock("../../skills/workshop/experience-review-default.js", () => ({
   scheduleSkillExperienceReview: vi.fn(),
-  scheduleUnusedWorkshopSkillArchive: vi.fn(),
+  scheduleDailyWorkshopMaintenance: vi.fn(),
 }));
 
 vi.mock("./lifecycle-hook-helpers.js", () => ({

@@ -22,7 +22,7 @@ export type SubagentSessionEffects = {
   nativeCheck?: SessionEntryCurrentCheck;
 };
 
-export type SubagentRecoveryCurrent = {
+type SubagentRecoveryCurrent = {
   prepare(): Promise<boolean>;
   isHostCurrent(): boolean;
   onPublished?(entry: SubagentRunRecord): void;

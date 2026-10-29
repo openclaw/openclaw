@@ -295,6 +295,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     isCurrent: () => installed && !ownerSettled,
     readPhase: () =>
       ownerSettled ? "settled" : ended() ? "terminal" : state.abortFrozen ? "finishing" : "active",
+    readBackend: () => getAttachedBackend(operation),
     requestStop: (effect) => expireOwner(effect, false),
     expireCleanup: (effect) => expireOwner(effect, true),
     onWarning: (decision) =>

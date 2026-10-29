@@ -1988,6 +1988,8 @@ it.each([
       containing([
         "-configuration",
         "Debug",
+        "ARCHS=arm64",
+        "COMPILER_INDEX_STORE_ENABLE=NO",
         "CODE_SIGNING_ALLOWED=YES",
         "CODE_SIGN_IDENTITY=-",
         "CODE_SIGN_STYLE=Manual",

@@ -11,6 +11,7 @@ import {
   authenticateControlUi,
   captureControlUi,
   controlUiPageOptions,
+  historyMessages,
 } from "./control-ui-gateway.e2e.test-support.ts";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
 import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.ts";
@@ -44,6 +45,18 @@ function readResult(text: string): Record<string, unknown> {
     throw new Error("Automation tool returned no object result");
   }
   return value;
+}
+
+function userMessageText({ content }: Record<string, unknown>): string {
+  return typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content
+          .filter(isRecord)
+          .filter((block) => block.type === "text" && typeof block.text === "string")
+          .map((block) => block.text)
+          .join("\n")
+      : "";
 }
 
 function managementArgs(action: AutomationAction, jobId: string) {
@@ -123,11 +136,21 @@ function startGateway(
 }
 
 function withChat(gateway: QaGatewayChild, sessionKey: string, run: (page: Page) => Promise<void>) {
-  return suite.withPage(controlUiPageOptions(suite.artifactDir), async ({ page }) => {
-    await authenticateControlUi(page, gateway);
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await run(page);
-  });
+  return suite.withPage(
+    controlUiPageOptions(suite.artifactDir),
+    async ({ page }) => {
+      await authenticateControlUi(page, gateway);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await run(page);
+    },
+    async ({ page }) => {
+      const video = page.video();
+      if (video) {
+        await page.close();
+        await video.saveAs(path.join(suite.artifactDir, `${randomUUID()}.webm`));
+      }
+    },
+  );
 }
 
 const withAutomationGateway =
@@ -204,6 +227,17 @@ suite.define(() => {
           return transcript.userMessageCount === 1;
         }, 30_000).toBe(true);
         expect(provider.results.has(marker)).toBe(false);
+        const beforeHistory = historyMessages(
+          await gateway.call("chat.history", { sessionKey, limit: 30 }),
+        ).filter(isRecord);
+        const originalMessage = beforeHistory.find(
+          (message) => message.role === "user" && userMessageText(message) === prompt,
+        );
+        expect(originalMessage).toBeDefined();
+        const originalMetadata = isRecord(originalMessage?.["__openclaw"])
+          ? originalMessage["__openclaw"]
+          : undefined;
+        expect(originalMetadata?.id).toEqual(expect.any(String));
         const before = (await readRawQaSessionStore({ gateway }))[sessionKey];
         if (!before?.sessionId) {
           throw new Error("Original Control UI admission has no persisted session");
@@ -236,34 +270,44 @@ suite.define(() => {
           return {
             sessionId: after?.sessionId,
             status: after?.status,
+            createdActor: after?.createdActor,
           };
         }, 30_000).toEqual({
           sessionId: before.sessionId,
           status: "done",
+          createdActor: before.createdActor,
         });
         const history = await gateway.call("chat.history", { sessionKey, limit: 30 });
         if (!isRecord(history) || !Array.isArray(history.messages)) {
           throw new Error("Resumed session returned no history");
         }
-        const userInputs = history.messages
+        const userMessages = history.messages
           .filter(isRecord)
-          .filter(({ role }) => role === "user")
-          .map(({ content }) =>
-            typeof content === "string"
-              ? content
-              : Array.isArray(content)
-                ? content
-                    .filter(isRecord)
-                    .filter((block) => block.type === "text" && typeof block.text === "string")
-                    .map((block) => block.text)
-                    .join("\n")
-                : "",
-          );
-        expect(userInputs.filter((text) => text === prompt)).toHaveLength(1);
+          .filter(({ role }) => role === "user");
+        const originalMessages = userMessages.filter(
+          (message) => userMessageText(message) === prompt,
+        );
+        expect(originalMessages).toHaveLength(1);
+        expect(originalMessages[0]?.["__openclaw"]).toMatchObject({
+          id: originalMetadata?.id,
+        });
+        expect(originalMessages[0]?.provenance).toMatchObject({ kind: "external_user" });
+        const userInputs = userMessages.map(userMessageText);
         const resumeText =
           "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
         expect(userInputs.filter((text) => text.includes(resumeText))).toHaveLength(1);
+        expect(
+          await gateway.call("cron.list", { sessionKey, includeDisabled: true }),
+        ).toMatchObject({
+          jobs: [expect.objectContaining({ id: created.id, enabled: false })],
+        });
+        await page.reload();
+        await page.getByText(prompt, { exact: true }).waitFor();
         await waitForReply(page, marker);
+        await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+          state: "hidden",
+        });
+        await page.getByText(prompt, { exact: true }).scrollIntoViewIfNeeded();
         await screenshot(page, "resume-created-disabled-automation");
       });
     }),

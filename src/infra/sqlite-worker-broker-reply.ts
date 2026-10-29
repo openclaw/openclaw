@@ -130,6 +130,7 @@ export async function dispatchSqliteWorkerJob(
             nativeLocations: databasePath ? [databasePath] : [],
           };
       try {
+        retained.admission.requestClass = job.observation.requestClass;
         if (retained.databaseIdentity) {
           const existing = job.request.databaseIdentity;
           if (

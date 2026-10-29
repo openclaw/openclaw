@@ -78,10 +78,10 @@ whichever is longer). These retained counts govern `/subagents list`,
 status summaries, descendant completion gating, and per-session concurrency
 checks; they are not proof that an executor is live.
 
-After execution ownership ends, the sweeper can reconcile the child's persisted
-terminal state even if routing metadata remains in memory. The completed result
-then follows normal completion delivery and retry; retained routing metadata does
-not keep the child running.
+Normal completion uses that execution's wait or lifecycle result, then follows
+completion delivery and retry. A collector that yields retains its terminal timing
+and reply even if a later turn advances the child session. Retained routing
+metadata does not keep the child running.
 
 A graceful Gateway shutdown records the top-level requesters of running children,
 then cancels the children through the ordinary abort path. They settle terminally
@@ -190,10 +190,7 @@ Legacy-unverified records have resolvable child and requester owners but lack th
 original session identity or lifecycle revision. They can settle, deliver,
 finish cleanup bookkeeping, resume, and stop under the authorized requester.
 Legacy Stop cancels the exact task and its registered execution, when available;
-it does not guess which current session or successor to interrupt. OpenClaw
-warns once per Gateway process after registry restore, with a count of unique
-legacy run IDs with unfinished work and a few sample IDs. Completed cleanup and
-terminal runs with suppressed delivery are excluded unless a requester wake remains.
+it does not guess which current session or successor to interrupt.
 OpenClaw suppresses child-session mutations, including
 deletion, reset, and transcript cleanup. Missing historical identity is never
 backfilled. A conflicting recorded identity remains a mismatch, not a legacy exception.

@@ -416,8 +416,8 @@ const benchmarkWorkerMessageChannel = benchmarkWorkerDiagnosticChannel("openclaw
 ${instrumented}`;
   } else if (file === "sqlite-worker-operation-admission.ts") {
     replace(
-      "        ? message.payloadBytes\n        : undefined,\n    );",
-      "        ? message.payloadBytes\n        : undefined,\n      undefined,\n      message,\n    );",
+      "      admission.requestClass,\n    );",
+      "      admission.requestClass,\n      message,\n    );",
     );
   } else if (file === "worker-cpu.ts") {
     replace(
