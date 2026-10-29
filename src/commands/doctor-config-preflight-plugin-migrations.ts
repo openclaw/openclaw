@@ -92,6 +92,7 @@ export function createDoctorPluginMigrationPreparation(params: {
   let runtimePluginAliases = new Set<string>();
   let unavailablePluginIds = new Set<string>();
   let discoveryBlockedPluginIds = new Set<string>();
+  let inactivePluginIds = new Set<string>();
   let replacementPluginIds: Readonly<Record<string, string>> = {};
   let sourceSnapshot: ConfigFileSnapshot | undefined;
   const inspectedStatelessPluginIds = new Set<string>();
@@ -114,6 +115,7 @@ export function createDoctorPluginMigrationPreparation(params: {
     runtimePluginAliases = new Set(inspection.runtimePluginAliases);
     unavailablePluginIds = new Set(inspection.unavailablePluginIds);
     discoveryBlockedPluginIds = new Set(inspection.discoveryBlockedPluginIds);
+    inactivePluginIds = new Set(inspection.inactivePluginIds);
     replacementPluginIds = inspection.replacementPluginIds ?? {};
     requirePlugins(inspection.requiredPluginIds, "requiresStateMigration");
     requirePlugins(inspection.inspectionRequiredPluginIds, "requiresDoctorInspection");
@@ -209,6 +211,7 @@ export function createDoctorPluginMigrationPreparation(params: {
       runtimePluginAliases.clear();
       unavailablePluginIds.clear();
       discoveryBlockedPluginIds.clear();
+      inactivePluginIds.clear();
       replacementPluginIds = {};
       inspectedStatelessPluginIds.clear();
       refreshSnapshot = true;
@@ -332,8 +335,8 @@ export function createDoctorPluginMigrationPreparation(params: {
               });
             if (
               !explicitlyEnabled &&
-              !plugin.requiresStateMigration &&
-              !plugin.requiresDoctorInspection
+              ((!plugin.requiresStateMigration && !plugin.requiresDoctorInspection) ||
+                (!successor && hasOwner(inactivePluginIds, plugin.pluginId)))
             ) {
               settlements.push({
                 pluginId: plugin.pluginId,

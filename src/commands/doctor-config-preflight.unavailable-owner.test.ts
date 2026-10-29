@@ -276,7 +276,15 @@ describe("unavailable plugin migration owners", () => {
           entries: { webhooks: { config: {} }, "disabled-fixture": { enabled: false, config: {} } },
         },
       });
-      await defer(...pluginIds.map((id) => makePending(id, { configPaths: protectedConfig(id) })));
+      await defer(
+        ...pluginIds.map((id) =>
+          makePending(id, {
+            configPaths: protectedConfig(id),
+            ...(id === "absent-fixture" ? { requiresDoctorInspection: true } : {}),
+            ...(id === "disabled-fixture" ? { requiresStateMigration: true } : {}),
+          }),
+        ),
+      );
       // Startup is a reader; Doctor owns settlement of this shipped pending row.
       await runStartupConfigPreflight({ gateway: true, observe: false });
       expect(readDeferredPluginMigrations()).toHaveLength(3);
