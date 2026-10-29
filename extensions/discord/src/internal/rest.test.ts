@@ -1,6 +1,8 @@
 import { gzipSync } from "node:zlib";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDiscordClient } from "../client.js";
 import { createDiscordRetryRunner } from "../retry.js";
 import { serializeRequestBody } from "./rest-body.js";
 import { RateLimitError, RequestClient } from "./rest.js";
@@ -290,24 +292,95 @@ function readRequestUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 
-it("settles a queued request when its caller aborts", async () => {
-  // The request is parked behind a long retry delay; cancelling the turn must not
-  // wait for it. Synthetic 429 only, no live Discord account.
-  const controller = new AbortController();
-  const fetchSpy = vi.fn(async () => rateLimitResponse(60, { "Retry-After": "60" }));
-  const client = requestClient(fetchSpy as unknown as typeof globalThis.fetch);
+describe("caller cancellation", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-  const pending = client.post(
-    "/channels/1/messages",
-    { content: "hello" },
-    undefined,
-    controller.signal,
-  );
-  await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
-  const settled = vi.fn();
-  void pending.then(settled, settled);
-  controller.abort();
+  it("drops a queued retry before it is issued and never sends after the cooldown", async () => {
+    // A caller abort during the 429 cooldown must settle the caller and leave no
+    // copied retry behind that fires when the rate limit expires.
+    vi.useFakeTimers({ now: 0 });
+    const controller = new AbortController();
+    const fetchSpy = vi.fn(async () => rateLimitResponse(60, { "Retry-After": "60" }));
+    const client = requestClient(fetchSpy as unknown as typeof globalThis.fetch, {
+      callerSignal: controller.signal,
+    });
 
-  await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1), { timeout: 1_000 });
-  expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const pending = client.post("/channels/1/messages", { body: { content: "hello" } });
+    const settled = vi.fn();
+    void pending.then(settled, settled);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(settled).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles an already-dispatched write normally after its caller aborts", async () => {
+    // #149277: a write already in flight keeps its provider outcome; cancellation
+    // only releases work that was never issued.
+    const controller = new AbortController();
+    const response = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () => await response.promise);
+    const client = requestClient(fetchSpy as unknown as typeof globalThis.fetch, {
+      callerSignal: controller.signal,
+    });
+
+    const pending = client.post("/channels/1/messages", { body: { content: "hello" } });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    controller.abort();
+    response.resolve(createJsonResponse({ id: "m1" }));
+
+    await expect(pending).resolves.toEqual({ id: "m1" });
+  });
+
+  it("rejects an already-cancelled caller without dispatching", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchSpy = vi.fn(async () => createJsonResponse({ id: "never" }));
+    const client = requestClient(fetchSpy as unknown as typeof globalThis.fetch, {
+      callerSignal: controller.signal,
+    });
+
+    await expect(
+      client.post("/channels/1/messages", { body: { content: "hello" } }),
+    ).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("stops the outer retry backoff when the caller aborts", async () => {
+    // Goes through createDiscordClient so it proves the client's callerSignal
+    // forwarding, not just the retry runner's own signal support.
+    const controller = new AbortController();
+    const fetchSpy = vi.fn(async () => rateLimitResponse(60, { "Retry-After": "60" }));
+    const rest = requestClient(fetchSpy as unknown as typeof globalThis.fetch, {
+      queueRequests: false,
+    });
+    const cfg = { channels: { discord: { token: "tok" } } } as OpenClawConfig;
+    const { request } = createDiscordClient({
+      cfg,
+      rest,
+      callerSignal: controller.signal,
+      retry: { attempts: 2, minDelayMs: 60_000, maxDelayMs: 60_000, jitter: 0 },
+    });
+
+    const pending = request(() =>
+      rest.post("/channels/1/messages", { body: { content: "hello" } }),
+    );
+    const settled = vi.fn();
+    void pending.then(settled, settled);
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    controller.abort();
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1), { timeout: 1_000 });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
 });

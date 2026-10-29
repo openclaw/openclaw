@@ -26,6 +26,12 @@ export type RequestClientOptions = {
   /** Complete versioned REST base supplied by the Discord endpoint override. */
   apiBaseUrl?: string;
   signal?: AbortSignal;
+  /**
+   * Originating invocation cancellation. Drops queued work that was never
+   * issued and stops retry waits; requests already dispatched settle normally
+   * so a successful write is never reported as unsent.
+   */
+  callerSignal?: AbortSignal;
   timeout?: number;
   queueRequests?: boolean;
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -131,51 +137,30 @@ export class RequestClient {
     );
   }
 
-  async get(path: string, query?: RequestQuery, signal?: AbortSignal): Promise<unknown> {
-    return await this.request("GET", path, { query }, signal);
+  async get(path: string, query?: RequestQuery): Promise<unknown> {
+    return await this.request("GET", path, { query });
   }
 
-  async post(
-    path: string,
-    data?: RequestData,
-    query?: RequestQuery,
-    signal?: AbortSignal,
-  ): Promise<unknown> {
-    return await this.request("POST", path, { data, query }, signal);
+  async post(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
+    return await this.request("POST", path, { data, query });
   }
 
-  async patch(
-    path: string,
-    data?: RequestData,
-    query?: RequestQuery,
-    signal?: AbortSignal,
-  ): Promise<unknown> {
-    return await this.request("PATCH", path, { data, query }, signal);
+  async patch(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
+    return await this.request("PATCH", path, { data, query });
   }
 
-  async put(
-    path: string,
-    data?: RequestData,
-    query?: RequestQuery,
-    signal?: AbortSignal,
-  ): Promise<unknown> {
-    return await this.request("PUT", path, { data, query }, signal);
+  async put(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
+    return await this.request("PUT", path, { data, query });
   }
 
-  async delete(
-    path: string,
-    data?: RequestData,
-    query?: RequestQuery,
-    signal?: AbortSignal,
-  ): Promise<unknown> {
-    return await this.request("DELETE", path, { data, query }, signal);
+  async delete(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
+    return await this.request("DELETE", path, { data, query });
   }
 
   protected async request(
     method: string,
     path: string,
     params: { data?: RequestData; query?: RequestQuery },
-    signal?: AbortSignal,
   ): Promise<unknown> {
     const routeKey = createRouteKey(method, path);
     // A shared scheduler can drain under another caller's async context. Capture
@@ -189,17 +174,11 @@ export class RequestClient {
           assertReadAuthority?.();
         }
       : assertReadAuthority;
+    const callerSignal = this.options.callerSignal;
+    callerSignal?.throwIfAborted();
     assertCurrent?.();
     if (!this.options.queueRequests) {
-      return await this.executeRequest(
-        method,
-        path,
-        params,
-        routeKey,
-        assertCurrent,
-        effect,
-        signal,
-      );
+      return await this.executeRequest(method, path, params, routeKey, assertCurrent, effect);
     }
     return await this.scheduler.enqueue({
       method,
@@ -207,7 +186,7 @@ export class RequestClient {
       priority: getRequestPriority(method, path),
       query: params.query,
       data: { data: params.data, assertCurrent, effect },
-      ...(signal ? { signal } : {}),
+      ...(callerSignal ? { signal: callerSignal } : {}),
     });
   }
 
@@ -218,7 +197,6 @@ export class RequestClient {
     routeKey = createRouteKey(method, path),
     assertCurrent?: () => void,
     effect = captureEffectAuthority(),
-    callerSignal?: AbortSignal,
   ): Promise<unknown> {
     const url = `${this.options.apiBaseUrl}${appendQuery(path, params.query)}`;
     const headers = new Headers({
@@ -230,11 +208,9 @@ export class RequestClient {
     const body = serializeRequestBody(params.data, headers);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeout).unref();
-    const baseSignal = this.options.signal
+    const signal = this.options.signal
       ? AbortSignal.any([this.options.signal, controller.signal])
       : controller.signal;
-    // A cancelled caller must also stop the transport, not only stop waiting.
-    const signal = callerSignal ? AbortSignal.any([baseSignal, callerSignal]) : baseSignal;
     try {
       assertCurrent?.();
       const init = { method, headers, body, signal };
