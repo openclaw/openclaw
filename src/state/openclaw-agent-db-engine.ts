@@ -99,19 +99,27 @@ export function admitAgentEngineSearchExtensions(
 }
 
 const agentPostgresSql = `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`;
+const agentPostgresV36Sql = withoutAgentPostgresColdArchiveChunks(agentPostgresSql);
+const agentPostgresV35Sql = withLegacyAgentPostgresMemoryPaths(agentPostgresV36Sql);
+const agentPostgresV34Sql = withLegacyPostgresIndexOrdering(
+  agentPostgresV35Sql,
+  "schema-nullability",
+);
+const agentPostgresV33Sql = withLegacyPostgresIndexOrdering(agentPostgresV34Sql);
+const agentPostgresV30Sql = withLegacyAgentPostgresMemoryRevisionTriggers(agentPostgresV33Sql);
+const agentPostgresV29Sql = withLegacyAgentPostgresTrajectoryStorage(agentPostgresV30Sql);
+const agentPostgresV28Sql = withLegacyAgentPostgresIndexes(agentPostgresV29Sql);
 
-function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
-  const agentPostgresV36Sql = withoutAgentPostgresColdArchiveChunks(agentPostgresSql);
-  const agentPostgresV35Sql = withLegacyAgentPostgresMemoryPaths(agentPostgresV36Sql);
-  const agentPostgresV34Sql = withLegacyPostgresIndexOrdering(
-    agentPostgresV35Sql,
-    "schema-nullability",
-  );
-  const agentPostgresV33Sql = withLegacyPostgresIndexOrdering(agentPostgresV34Sql);
-  const agentPostgresV30Sql = withLegacyAgentPostgresMemoryRevisionTriggers(agentPostgresV33Sql);
-  const agentPostgresV29Sql = withLegacyAgentPostgresTrajectoryStorage(agentPostgresV30Sql);
-  const agentPostgresV28Sql = withLegacyAgentPostgresIndexes(agentPostgresV29Sql);
-  return [
+export const agentEngineSchema: StoreSchema = {
+  id: "agent",
+  version: OPENCLAW_AGENT_SCHEMA_VERSION,
+  sqlite: "",
+  postgres: agentPostgresSql,
+  postgresVectorDecoderVersion: 2,
+  postgresVectorSearchVersion: 2,
+  postgresTextSearchVersion: 2,
+  search: agentTranscriptSearchSchema,
+  postgresMigrations: [
     {
       version: AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
       fromSchema: { postgres: withLegacyAgentPostgresWriteLayout(agentPostgresV28Sql) },
@@ -280,29 +288,7 @@ function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,
     },
-  ];
-}
-
-export const agentEngineSchema: StoreSchema = {
-  id: "agent",
-  version: OPENCLAW_AGENT_SCHEMA_VERSION,
-  sqlite: "",
-  postgres: agentPostgresSql,
-  postgresVectorDecoderVersion: 2,
-  postgresVectorSearchVersion: 2,
-  postgresTextSearchVersion: 2,
-  search: agentTranscriptSearchSchema,
-  get postgresMigrations() {
-    // Keep historical PostgreSQL schemas out of SQLite startup; materialize once when requested.
-    const value = createAgentPostgresMigrations();
-    Object.defineProperty(this, "postgresMigrations", {
-      value,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-    return value;
-  },
+  ],
 };
 
 function admitAgentPostgres(

@@ -15,5 +15,9 @@ export function isInternalFormattingArtifact(text: string | undefined): boolean 
 
 /** Returns true only for the exact, case-insensitive whole-reply control token. */
 export function isSilentReplyText(text?: string): boolean {
-  return text?.trim().toUpperCase() === SILENT_REPLY_TOKEN;
+  const trimmed = text?.trim();
+  // Ordinary replies cannot be the token; avoid an uppercase copy of their full text.
+  return (
+    trimmed?.length === SILENT_REPLY_TOKEN.length && trimmed.toUpperCase() === SILENT_REPLY_TOKEN
+  );
 }

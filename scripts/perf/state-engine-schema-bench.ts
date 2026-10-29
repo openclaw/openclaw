@@ -3,7 +3,6 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/state-engine-schema-bench.ts
  * Add --owner-source <saved-state-db-engine.ts> for a baseline; alternate launch order.
  * Run --allocation separately for sampled allocation; --iterations defaults to 100.
- * Add --owner agent to measure the agent database instead of shared state.
  * --expected-schema-sha256 pins the fully materialized schema contract before capture.
  * This reads static schema definitions only, never opens a database, and does not
  * measure cold dependency loading or whole-Gateway startup. ESM retains each instance.
@@ -22,7 +21,6 @@ import { parseArgs } from "node:util";
 
 const { values } = parseArgs({
   options: {
-    owner: { type: "string", default: "state" },
     "owner-source": { type: "string" },
     iterations: { type: "string", default: "100" },
     allocation: { type: "boolean", default: false },
@@ -30,15 +28,13 @@ const { values } = parseArgs({
   },
 });
 const iterations = Number(values.iterations);
-const owner = values.owner;
-assert(owner === "state" || owner === "agent", "--owner must be state or agent");
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(globalThis.gc, "Run with --expose-gc");
 const unusedStateDir = path.resolve(`.local/state-engine-schema-bench-${process.pid}`);
 process.env.OPENCLAW_STATE_DIR = unusedStateDir;
 process.env.OPENCLAW_HOME = unusedStateDir;
 process.env.OPENCLAW_CONFIG_PATH = path.join(unusedStateDir, "openclaw.json");
-const ownerUrl = new URL(`../../src/state/openclaw-${owner}-db-engine.ts`, import.meta.url);
+const ownerUrl = new URL("../../src/state/openclaw-state-db-engine.ts", import.meta.url);
 const source = readFileSync(values["owner-source"] ?? ownerUrl, "utf8");
 const compiled = stripTypeScriptTypes(source);
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -56,7 +52,7 @@ const inspector = new Session();
 try {
   // Materialize once outside capture; this also warms the exact dependency graph.
   const warm = await import(`${ownerUrl.href}?schema-bench=warm`);
-  const serialized = JSON.stringify(warm[`${owner}EngineSchema`]);
+  const serialized = JSON.stringify(warm.stateEngineSchema);
   const schemaSha256 = hash(serialized);
   if (values["expected-schema-sha256"]) {
     assert.equal(schemaSha256, values["expected-schema-sha256"]);
@@ -110,7 +106,6 @@ try {
   assert.equal(loaded - loadedBefore, iterations, "Every iteration must evaluate a fresh owner");
   console.log(
     JSON.stringify({
-      owner,
       ownerSha256: hash(source),
       schemaSha256,
       schemaBytes,

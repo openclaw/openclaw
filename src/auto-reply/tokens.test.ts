@@ -1,6 +1,15 @@
 /** Tests silent-reply and heartbeat token parsing helpers. */
 import { describe, it, expect } from "vitest";
-import { isInternalFormattingArtifact } from "./tokens.js";
+import { isInternalFormattingArtifact, isSilentReplyText } from "./tokens.js";
+
+it("recognizes only whole silent replies, including case and Unicode whitespace", () => {
+  for (const text of ["NO_REPLY", "no_reply", "\u00a0No_Reply\u2028"]) {
+    expect(isSilentReplyText(text)).toBe(true);
+  }
+  for (const text of [undefined, "", "NO_REPL", "NO_REPLY!", "NO REPLY", "x".repeat(65_536)]) {
+    expect(isSilentReplyText(text)).toBe(false);
+  }
+});
 
 describe("isInternalFormattingArtifact", () => {
   it("matches Harmony channel markers (#88128)", () => {
