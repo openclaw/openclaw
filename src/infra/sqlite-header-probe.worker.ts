@@ -37,6 +37,7 @@ const results = paths.map((pathname) => {
 if (unreadable) {
   // The parent names the unreadable source; a stack trace would not.
   process.stderr.write(JSON.stringify(unreadable));
-  process.exit(3);
+  process.exitCode = 3;
+} else {
+  process.stdout.write(JSON.stringify(results));
 }
-process.stdout.write(JSON.stringify(results));

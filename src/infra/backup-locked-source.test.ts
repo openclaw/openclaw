@@ -1,33 +1,29 @@
 import { expect, it } from "vitest";
-import { describeLockedBackupSource } from "./backup-locked-source.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 
-const lockedAt = (code: string, path: string) => Object.assign(new Error(code), { code, path });
 const cookies = String.raw`C:\state\browser\work\user-data\Default\Network\Cookies`;
+const stop =
+  'If the OpenClaw-managed browser profile "work" is running, stop it with `openclaw browser --browser-profile work stop`';
 
 it.each([
+  ["EBUSY", cookies, `is in use by another process (EBUSY). ${stop}`],
+  ["EPERM", cookies, `could not be read (EPERM). Check that this user can read it. ${stop}`],
+  ["EBUSY", "/state/agents/main/notes.db", "in use by another process (EBUSY). Close that process"],
   [
-    lockedAt("EBUSY", cookies),
-    /profile "work" has .*Cookies open \(EBUSY\).*--browser-profile work stop/,
+    "EACCES",
+    "/state/agents/main/notes.db",
+    "could not be read (EACCES). Check that this user can read it.",
   ],
-  [lockedAt("EPERM", "/state/browser/openclaw/user-data/Default/Cookies"), /profile "openclaw"/],
-  [
-    lockedAt("EBUSY", "/state/agents/main/notes.db"),
-    /Another process has \/state\/agents\/main\/notes\.db open/,
-  ],
-  [lockedAt("ENOENT", cookies), /^$/],
-  [new Error("plain"), /^$/],
-])("describes the recovery step for %o", (error, expected) => {
-  expect(describeLockedBackupSource(error)).toMatch(expected);
-});
-
-it("names the managed browser stop step when archiving reads a locked profile file", async () => {
-  await expect(
-    writeTarArchiveWithRetry({
-      tempArchivePath: "unused.tar.gz",
-      runTar: async () => {
-        throw lockedAt("EBUSY", cookies);
-      },
-    }),
-  ).rejects.toThrow(/after 1 attempt\) The OpenClaw-managed browser profile "work"/);
+  ["ENOENT", cookies, "after 1 attempt)"],
+])("names the recovery step when archiving reads a %s source", async (code, path, hint) => {
+  const failure = writeTarArchiveWithRetry({
+    tempArchivePath: "unused.tar.gz",
+    runTar: async () => {
+      throw Object.assign(new Error(code), { code, path });
+    },
+  });
+  await expect(failure).rejects.toThrow(hint);
+  if (code === "EACCES" || code === "ENOENT") {
+    await expect(failure).rejects.not.toThrow("another process");
+  }
 });
