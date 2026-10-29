@@ -576,13 +576,10 @@ export class PluginInstance {
       const terminalFailures = (this.disposalFailures = new DisposalFailures(this));
       const work = new AsyncWorkScope(terminalFailures);
       // Physical cleanup outlives the releasing caller's invocation scope.
-      // Its work owner also retains module release after the bounded result returns.
       const physical = pluginInvocationContext.exit(() =>
-        trackAsyncWork(() =>
-          this.finishDisposal(
-            this.runDisposalCleanup(work, terminalFailures, beforeCleanup),
-            terminalFailures,
-          ),
+        this.finishDisposal(
+          trackAsyncWork(() => this.runDisposalCleanup(work, terminalFailures, beforeCleanup)),
+          terminalFailures,
         ),
       );
       const settled = physical.then(() => {

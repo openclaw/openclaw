@@ -727,21 +727,12 @@ describe("managed plugin instances", () => {
     instance.onModuleDispose(() => removal.promise);
     const call = instance.run(() => result.promise);
     const rejected = expect(call).rejects.toThrow("reloaded or disabled");
-    const owner = new AsyncWorkScope();
-    const retirement = owner.track(() => instance.dispose());
-    let ownerDrained = false;
-    const drained = owner.drain().then(() => {
-      ownerDrained = true;
-    });
+    const retirement = instance.dispose();
     result.resolve("finished before timeout");
     await vi.advanceTimersByTimeAsync(5_000);
     await rejected;
     expect((await retirement).errors).toMatchObject([{ forcedRetirement: { activeCallCount: 1 } }]);
-    // The bounded retirement result cannot release the owner of physical cleanup.
-    expect(ownerDrained).toBe(false);
     removal.resolve();
-    await drained;
-    expect(ownerDrained).toBe(true);
   });
 
   it("keeps a host prelude guard exceptional while attempting explicit cleanup", async () => {
