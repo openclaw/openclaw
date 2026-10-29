@@ -69,10 +69,10 @@ export function resolveCronScopedToolEditRefusal(params: {
 }
 
 // Only these fields keep a trusted job's operator authority when a scoped conversation edits it.
+// `name` is excluded: the run prompt includes it.
 const TRUSTED_LIFECYCLE_PATCH_KEYS: ReadonlySet<string> = new Set([
   "enabled",
   "schedule",
-  "name",
   "displayName",
   "description",
   "deleteAfterRun",
@@ -104,7 +104,7 @@ export function assertTrustedJobNarrowingOwner(
   if (!callerScope || !cronTrustedJobOwnedByCaller(job, callerScope, { requireAccount: true })) {
     throw new TypeError(
       "This automation runs with operator access and its owner record has no account, so from " +
-        "here you can only pause, resume, reschedule, rename or remove it. To change what it runs, " +
+        "here you can only pause, resume, reschedule or remove it. To change what it runs or its name, " +
         "where it reports or where failures alert, create a new automation here or use the Automations page.",
     );
   }
