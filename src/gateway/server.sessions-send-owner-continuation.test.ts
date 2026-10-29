@@ -16,8 +16,11 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../agents/cron-creator-authority-context.js";
+import { settleRequesterRun } from "../agents/requester-run-settlement.js";
+import * as runWait from "../agents/run-wait.js";
 import * as completionDelivery from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
-import { SessionFollowupCompletion } from "../agents/subagents/completion/session-followup-completion.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { revokeRequesterCronAuthority } from "../agents/subagents/requester-cron-authority.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -122,21 +125,28 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
     const parentFinished = createDeferred();
     const inlineWaitStarted = createDeferred();
     const requesterAccepted = createDeferred();
-    const completionClosed = createDeferred();
-    let closeCompletion: (() => void) | undefined;
+    const completionSettled = createDeferred();
+    let childRunId: string | undefined;
     let requesterReceipt: unknown;
-    const onCompletionClosed = () => completionClosed.resolve();
+    const stopObservingCompletion = subscribeSubagentRunChanges("persistence", () => {
+      const entry = childRunId ? subagentRuns.get(childRunId) : undefined;
+      if (
+        entry &&
+        (entry.delivery?.status === "delivered" ||
+          entry.delivery?.status === "suspended" ||
+          entry.delivery?.status === "discarded" ||
+          entry.delivery?.disposition === "permanent_failure" ||
+          entry.cleanupCompletedAt !== undefined)
+      ) {
+        completionSettled.resolve();
+      }
+    });
+    const waitForReply = runWait.waitForAgentRunReply;
     const observeInlineWait = vi
-      .spyOn(SessionFollowupCompletion.prototype, "take")
-      .mockImplementationOnce(function (this: SessionFollowupCompletion, timeoutMs) {
-        observeInlineWait.mockRestore();
-        const pending = this.take(timeoutMs);
-        if (timeoutMs !== undefined) {
-          this.signal.addEventListener("abort", onCompletionClosed, { once: true });
-          closeCompletion = () => {
-            this.close();
-            this.signal.removeEventListener("abort", onCompletionClosed);
-          };
+      .spyOn(runWait, "waitForAgentRunReply")
+      .mockImplementation((params) => {
+        const pending = waitForReply(params);
+        if (params.timeoutMs === 1_000) {
           inlineWaitStarted.resolve();
         }
         return pending;
@@ -236,6 +246,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       await opts.userTurnTranscriptRecorder?.persistApproved();
       let text = "child result";
       if (opts.sessionKey === child) {
+        childRunId = runId;
         await childMayFinish.promise;
         if (outcome === "child error") {
           throw new Error("synthetic child failure");
@@ -314,7 +325,8 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         },
       };
     });
-    const { operationalRunInstance } = createTestAdmittedRunContext(originalRun);
+    const originalAdmission = createTestAdmittedRunContext(originalRun);
+    const { operationalRunInstance } = originalAdmission;
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
     registerAgentRunContext(originalRun, {
       agentId: "main",
@@ -373,6 +385,17 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         );
         await vi.advanceTimersByTimeAsync(1_000);
         await withinTest(sent, signal);
+        // The original run ends here; its embedded runner hands accepted children back.
+        await settleRequesterRun(
+          {
+            sessionKey: parent,
+            agentId: "main",
+            runId: originalRun,
+            admittedRunContext: originalAdmission,
+          },
+          { meta: { durationMs: 1 } },
+          () => {},
+        );
       } finally {
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext(originalRun);
@@ -382,7 +405,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       await withinTest(
         awaitGateBeforeSettlement(
           requesterAccepted.promise,
-          completionClosed.promise,
+          completionSettled.promise,
           "Completion ended before private requester admission",
         ),
         signal,
@@ -409,11 +432,14 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       }
       effectMayFinish.resolve();
       await withinTest(parentFinished.promise, signal);
-      await withinTest(completionClosed.promise, signal);
+      await withinTest(completionSettled.promise, signal);
       expect(parentError).toBeUndefined();
       expect(requesterReceipt).toMatchObject({
         status: "ok",
         inputProcessingCompleted: true,
+      });
+      expect(subagentRuns.get(expectDefined(childRunId, "child run ID"))).toMatchObject({
+        delivery: { status: "delivered" },
       });
       if (outcome === "success" || outcome === "child error") {
         expect(pluginError).toBeUndefined();
@@ -425,7 +451,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       }
     } finally {
       unblock();
-      closeCompletion?.();
+      stopObservingCompletion();
       observeInlineWait.mockRestore();
       observeRequesterAdmission.mockRestore();
       if (vi.isFakeTimers()) {
