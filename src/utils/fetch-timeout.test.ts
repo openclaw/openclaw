@@ -67,10 +67,12 @@ describe("fetch timeouts", () => {
   beforeEach(() => {
     warn.mockClear();
     vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
   });
 
   afterEach(() => {
     cleanups.splice(0).forEach((cleanup) => cleanup());
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -118,15 +120,36 @@ describe("fetch timeouts", () => {
   });
 
   it("annotates timeout logs when the timer fires late", async () => {
-    vi.setSystemTime(0);
+    let elapsedMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
     timeout({ url: "https://example.com/v1/responses" });
-    vi.setSystemTime(2_000);
+    elapsedMs = 2_025;
     await vi.advanceTimersByTimeAsync(25);
     const record = warn.mock.calls[0]![1];
     const hint = "timer delayed 2000ms, likely event-loop starvation";
     expect(record).toMatchObject({ timerDelayMs: 2000, eventLoopDelayHint: hint });
     expect(String(record.consoleMessage)).toContain(hint);
   });
+
+  it.each([-60_000, 60_000])(
+    "keeps refreshed timeout diagnostics independent of a %ims wall-clock step",
+    async (wallStepMs) => {
+      let elapsedMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      const { signal, refresh } = timeout();
+      await vi.advanceTimersByTimeAsync(10);
+      elapsedMs = 10;
+      refresh();
+      vi.setSystemTime(Date.now() + wallStepMs);
+      elapsedMs = 35;
+      await vi.advanceTimersByTimeAsync(25);
+      expect(signal).toMatchObject({ aborted: true, reason: timeoutError });
+      const record = warn.mock.calls[0]?.[1];
+      expect(record).toMatchObject({ timeoutMs: 25, elapsedMs: 25 });
+      expect(record).not.toHaveProperty("timerDelayMs");
+      expect(record).not.toHaveProperty("eventLoopDelayHint");
+    },
+  );
 
   it.each(["https://api.telegram.org", ""])(
     "redacts Telegram tokens with URL prefix '%s'",
