@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { summarizeStringEntries } from "../../../shared/string-sample.js";
 import { resolveAgentConfig } from "../../agent-scope-config.js";
+import { describeAgentIdForName } from "../../identity.js";
 import { resolveSenderRestrictedSpawnError } from "../../spawn-requester-policy.js";
 
 // Normalized agent ids are at most 64 chars, so this count also bounds the listed bytes.
@@ -163,7 +164,14 @@ export function resolveRequesterSpawnTargetPolicy(params: {
     };
   }
   const policy = resolveSubagentTargetPolicy({ ...params, allowAgents });
-  return policy.ok ? policy : { ok: false, error: policy.error };
+  if (policy.ok) {
+    return policy;
+  }
+  const { allowedIds } = resolveSubagentAllowedTargetIds({ ...params, allowAgents });
+  const hint = params.requestedAgentId
+    ? describeAgentIdForName(params.cfg, params.requestedAgentId, (id) => allowedIds.includes(id))
+    : undefined;
+  return { ok: false, error: hint ? `${policy.error}. ${hint}` : policy.error };
 }
 
 /** Validate one requested target against subagent spawn policy. */

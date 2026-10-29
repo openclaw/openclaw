@@ -5,6 +5,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
 import { listAgentEntries, listAgentIds } from "../agent-scope-config.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentEntryDisplayName } from "../identity.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import {
   resolveSubagentAllowedTargetIds,
@@ -76,11 +77,10 @@ export function createAgentsListTool(opts?: {
       const configuredIds = listAgentIds(cfg);
       const configuredNameMap = new Map<string, string>();
       for (const entry of configuredAgents) {
-        const name = entry?.name?.trim() ?? "";
-        if (!name) {
-          continue;
+        const name = resolveAgentEntryDisplayName(entry);
+        if (name) {
+          configuredNameMap.set(normalizeAgentId(entry.id), name);
         }
-        configuredNameMap.set(normalizeAgentId(entry.id), name);
       }
 
       const allowed = resolveSubagentAllowedTargetIds({

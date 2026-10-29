@@ -1,9 +1,9 @@
 // Combines configured agents and existing on-disk agent state for lightweight UI use.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listGatewayOwnedAgentIds } from "../agents/agent-roster.js";
 import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentEntryDisplayName } from "../agents/identity.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionScope } from "../config/sessions.js";
@@ -89,9 +89,7 @@ export async function listGatewayAgentsBasic(cfg: OpenClawConfig): Promise<
       continue;
     }
     const id = normalizeAgentId(entry.id);
-    const configuredName = normalizeOptionalString(entry.name);
-    const identityName = normalizeOptionalString(entry.identity?.name);
-    configuredById.set(id, configuredName ?? identityName);
+    configuredById.set(id, resolveAgentEntryDisplayName(entry));
   }
 
   const allowedIds = configuredById.size > 0 ? new Set(listGatewayOwnedAgentIds(cfg)) : null;
