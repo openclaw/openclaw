@@ -183,7 +183,7 @@ it("shows activation Doctor progress before child completion while JSON and ledg
       results: steps,
     });
     assert(step);
-    expect(step.exitCode, doctorResult?.stderr || step.stderrTail).toBe(0);
+    expect(step.exitCode, doctorResult?.stderr || step.stderrTail || undefined).toBe(0);
     fence.assertCurrent();
   });
   try {
