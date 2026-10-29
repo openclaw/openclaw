@@ -86,21 +86,15 @@ describe("lineGatewayAdapter.startAccount", () => {
     expect(warn.mock.calls[0]?.[0]).toContain("channels.line.webhookPath");
   });
 
-  // Sent ids persist under the bot's own user id, so a re-pointed account never
-  // inherits the previous bot's record, and an unknown bot stays memory-only.
+  // Sent ids persist under the bot's own user id; an unknown bot stays memory-only.
   it.each([
-    {
-      name: "the probe reports the bot",
-      probe: { ok: true, bot: { userId: "U-bot" } },
-      last: "U-bot",
-    },
-    { name: "the probe failed", probe: { ok: false, error: "timeout" }, last: undefined },
-  ] satisfies { name: string; probe: LineProbeResult; last: string | undefined }[])(
-    "records the bot user id for sent messages when $name",
-    async ({ probe, last }) => {
+    [{ ok: true, bot: { userId: "U-bot" } }, "U-bot"],
+    [{ ok: false, error: "timeout" }, undefined],
+  ] satisfies [LineProbeResult, string | undefined][])(
+    "records the probed bot user id for %j",
+    async (probe, botUserId) => {
       await startWithProbe(probe);
-
-      expect(rememberLineBotUserIdMock.mock.calls).toEqual([["default", last]]);
+      expect(rememberLineBotUserIdMock.mock.calls).toEqual([["default", botUserId]]);
     },
   );
 });
