@@ -37,21 +37,24 @@ describe("brew helpers", () => {
 
   it("does not resolve a brew from whitespace-padded PATH entries", async () => {
     await withBrewDir(async (tmp) => {
-      const bin = path.join(tmp, "pad", "bin");
-      const executable = path.join(bin, "brew");
-      await writeExecutable(executable);
+      const decoyBin = path.join(tmp, "pad", "bin");
+      const decoyExecutable = path.join(decoyBin, "brew");
+      const controlBin = path.join(tmp, "control", "bin");
+      const controlExecutable = path.join(controlBin, "brew");
+      await Promise.all([decoyExecutable, controlExecutable].map(writeExecutable));
 
-      for (const paddedEntry of [` ${bin}`, `${bin} `]) {
-        await withEnvAsync(
-          { PATH: `${paddedEntry}${path.delimiter}/nonexistent-openclaw-bin` },
-          async () => {
-            expect(resolveBrewExecutable({ homeDir: path.join(tmp, "home") })).toBeUndefined();
-          },
-        );
+      // Padded entries are not real directories, so a literal lookup must skip
+      // them and let the later valid entry win, like the OS exec search does.
+      for (const paddedEntry of [` ${decoyBin}`, `${decoyBin} `]) {
+        await withEnvAsync({ PATH: `${paddedEntry}${path.delimiter}${controlBin}` }, async () => {
+          expect(resolveBrewExecutable({ homeDir: path.join(tmp, "home") })).toBe(
+            controlExecutable,
+          );
+        });
       }
 
-      await withEnvAsync({ PATH: bin }, async () => {
-        expect(resolveBrewExecutable({ homeDir: path.join(tmp, "home") })).toBe(executable);
+      await withEnvAsync({ PATH: decoyBin }, async () => {
+        expect(resolveBrewExecutable({ homeDir: path.join(tmp, "home") })).toBe(decoyExecutable);
       });
     });
   });
