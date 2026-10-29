@@ -256,7 +256,7 @@ it("keeps paired-node catalogs non-archived and metadata-only", async () => {
 it("isolates federated host failures while preserving selected healthy hosts", async () => {
   const control = createControl({
     listPage: vi.fn(async () => ({
-      sessions: [session("local-match", { name: "Match locally", source: "cli" })],
+      sessions: [session("local-match", { name: "Cafe\u0301 locally", source: "cli" })],
       nextCursor: "local-page-3",
     })),
   });
@@ -266,10 +266,10 @@ it("isolates federated host failures while preserving selected healthy hosts", a
     }
     return nodePage(
       [
-        session("remote-match", { name: "Remote match", source: "vscode" }),
+        session("remote-match", { name: "Remote Cafe\u0301", source: "vscode" }),
         session("preview-only", {
           name: "Other title",
-          preview: "match appears only in private transcript text",
+          preview: "CAFÉ appears only in private transcript text",
           source: "cli",
         }),
       ],
@@ -289,7 +289,7 @@ it("isolates federated host failures while preserving selected healthy hosts", a
 
   const result = await listCatalog(runtime, control, {
     query: {
-      search: "match",
+      search: "CAFÉ",
       limitPerHost: 7,
       hostIds: [
         CODEX_LOCAL_SESSION_HOST_ID,
@@ -309,7 +309,7 @@ it("isolates federated host failures while preserving selected healthy hosts", a
   expect(control.listPage).toHaveBeenCalledWith({
     cursor: "local-page-2",
     limit: 7,
-    searchTerm: "match",
+    searchTerm: "CAFÉ",
   });
   expect(invoke).toHaveBeenCalledTimes(2);
   expect(invoke.mock.calls.map(([request]) => request.params)).toEqual(
@@ -318,7 +318,7 @@ it("isolates federated host failures while preserving selected healthy hosts", a
         agentId: "main",
         cursor: `${id}-page-2`,
         limit: 7,
-        searchTerm: "match",
+        searchTerm: "CAFÉ",
       })),
     ),
   );

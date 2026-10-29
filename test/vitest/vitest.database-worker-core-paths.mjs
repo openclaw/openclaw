@@ -743,6 +743,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/skills/workshop/drafts.test.ts",
   "src/skills/workshop/experience-review.test.ts",
   "src/skills/workshop/library.test.ts",
+  "src/skills/workshop/skill-diet.test.ts",
   "src/auto-reply/reply/commands-plugins.test.ts",
   "src/boards/board-store.test.ts",
   "src/boards/sqlite-board-store.worker.test.ts",

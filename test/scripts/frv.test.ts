@@ -445,7 +445,10 @@ describe("FRV continuation preflight", () => {
       html_url: `https://github.com/${REPOSITORY}/actions/runs/81`,
     };
     const logs = {
-      dispatch: `Artifact dispatch ${stage} target ${TARGET_SHA}: https://github.com/${REPOSITORY}/actions/runs/81 (attempt 1)`,
+      dispatch: [
+        `Artifact dispatch ${stage} target ${TARGET_SHA}: https://github.com/${REPOSITORY}/actions/runs/81 (attempt 1)`,
+        ...(stage === "npm" ? ["Artifact preparation npm identity: job 901 (attempt 1)"] : []),
+      ].join("\n"),
     };
     const client = {
       ...methods,
@@ -455,7 +458,7 @@ describe("FRV continuation preflight", () => {
           [
             "name: Full Release Validation",
             "env:",
-            '  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"',
+            '  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"',
             "jobs:",
             "  prepare_npm_package:",
             '    name: "Prepare release npm artifacts"',
@@ -496,7 +499,7 @@ describe("FRV continuation preflight", () => {
       ],
       getJobLog: async (id: number) => (id === 90 ? logs.dispatch : methods.getJobLog(id)),
       getRun: vi.fn(async (id: string) => (id === "81" ? producer : methods.getRun(id))),
-      getAttemptJobs: async () => [job("test")],
+      getAttemptJobs: async (_runId: string, _attempt: number) => [job("test")],
       rerunFailed: vi.fn(),
       rerunParent: vi.fn(),
     };
@@ -536,11 +539,25 @@ describe("FRV continuation preflight", () => {
     });
   });
 
-  it.each(["npm", "docker"])(
-    "retries only failed %s producer jobs, preserves green diagnostics, and verifies the parent",
-    async (stage) => {
+  it.each([
+    { stage: "npm", missingPreparationIdentity: false },
+    { stage: "npm", missingPreparationIdentity: true },
+    { stage: "docker", missingPreparationIdentity: false },
+  ])(
+    "retries failed $stage jobs and verifies the parent (missing preparation identity: $missingPreparationIdentity)",
+    async ({ stage, missingPreparationIdentity }) => {
       const fixture = artifactFixture(stage);
       fixture.producer.conclusion = "failure";
+      if (missingPreparationIdentity) {
+        fixture.logs.dispatch = fixture.logs.dispatch.split("\n")[0]!;
+        const getParentJobs = fixture.client.getParentJobs;
+        fixture.client.getParentJobs = async () =>
+          (await getParentJobs()).map((entry) =>
+            entry.name === "Prepare release npm artifacts"
+              ? Object.assign(entry, { conclusion: "failure" })
+              : entry,
+          );
+      }
       let parentAttempt = 1;
       const read = fixture.client.getRun.getMockImplementation()!;
       fixture.client.getRun.mockImplementation(async (id) =>
@@ -568,6 +585,140 @@ describe("FRV continuation preflight", () => {
       });
     },
   );
+
+  it.each([
+    { candidateConsumed: true, identityCount: 0 },
+    { candidateConsumed: false, identityCount: 2 },
+  ])(
+    "rejects unsafe npm preparation logs before mutation ($candidateConsumed consumed, $identityCount identities)",
+    async ({ candidateConsumed, identityCount }) => {
+      const fixture = artifactFixture("npm");
+      fixture.producer.conclusion = "failure";
+      const [dispatch, identity] = fixture.logs.dispatch.split("\n");
+      fixture.logs.dispatch = [dispatch, ...Array(identityCount).fill(identity)].join("\n");
+      const recoveryPlan = {
+        ...fixture.plan,
+        ...(candidateConsumed ? { candidate: { producer: { runId: "606" } } } : {}),
+      };
+
+      await expect(continueFailed(recoveryPlan, "77", fixture.client)).rejects.toThrow(
+        "Original npm preparation identity is unavailable or ambiguous",
+      );
+      expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+      expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a consumed producer rerun before mutation and shows authenticated reuse", async () => {
+    const fixture = artifactFixture("npm");
+    fixture.producer.conclusion = "failure";
+    fixture.client.getAttemptJobs = async () => [
+      {
+        ...job("renamed preparation job"),
+        id: 901,
+        run_attempt: 1,
+        conclusion: "failure",
+      },
+    ];
+    const consumedPlan = {
+      ...fixture.plan,
+      candidate: { producer: { runId: "606" } },
+    };
+
+    await expect(continueFailed(consumedPlan, "77", fixture.client)).rejects.toThrow(
+      "artifact:npm producer 81 already supplied the sealed candidate evidence; rerunning cannot preserve those consumed immutable bytes. Dispatch a fresh all-group FRV with reuse_evidence=true to authenticate reuse instead.",
+    );
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the recorded npm preparation identity is absent", async () => {
+    const fixture = artifactFixture("npm");
+    fixture.producer.conclusion = "failure";
+    fixture.client.getAttemptJobs = async () => [
+      { ...job("different preparation job"), id: 902, run_attempt: 1 },
+    ];
+    const consumedPlan = {
+      ...fixture.plan,
+      candidate: { producer: { runId: "606" } },
+    };
+
+    await expect(continueFailed(consumedPlan, "77", fixture.client)).rejects.toThrow(
+      "artifact:npm producer 81 preparation identity is missing or ambiguous",
+    );
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { stage: "npm", carriedPreparation: true },
+    { stage: "docker", carriedPreparation: false },
+  ])(
+    "keeps consumed-candidate recovery for $stage producers that preserve bytes",
+    async ({ stage, carriedPreparation }) => {
+      const fixture = artifactFixture(stage);
+      fixture.producer.conclusion = "failure";
+      if (carriedPreparation) {
+        fixture.client.getAttemptJobs = async () => [
+          { ...job("renamed preparation job"), id: 901, run_attempt: 1 },
+        ];
+      }
+      const consumedPlan = {
+        ...fixture.plan,
+        candidate: { producer: { runId: "606" } },
+      };
+
+      await expect(
+        continueFailed(consumedPlan, "77", fixture.client, { dryRun: true }),
+      ).resolves.toMatchObject({ action: "would-rerun" });
+    },
+  );
+
+  it("recognizes a carried npm preparation by its execution fingerprint", async () => {
+    const fixture = artifactFixture("npm");
+    fixture.producer.run_attempt = 2;
+    fixture.producer.conclusion = "failure";
+    const preparation = {
+      ...job("Prepare npm artifacts / Prepare publishable npm package"),
+      id: 901,
+      run_attempt: 1,
+    };
+    fixture.client.getAttemptJobs = async (_runId: string, attempt: number) =>
+      attempt === 1 ? [preparation] : [{ ...preparation, id: 999, run_attempt: 2 }];
+
+    await expect(
+      continueFailed(
+        { ...fixture.plan, candidate: { producer: { runId: "606" } } },
+        "77",
+        fixture.client,
+        { dryRun: true },
+      ),
+    ).resolves.toMatchObject({ action: "would-rerun" });
+  });
+
+  it("rejects a replacement npm preparation even without a second descriptor", async () => {
+    const fixture = artifactFixture("npm");
+    fixture.producer.run_attempt = 2;
+    fixture.producer.conclusion = "failure";
+    const preparation = {
+      ...job("Prepare npm artifacts / Prepare publishable npm package"),
+      id: 901,
+      run_attempt: 1,
+    };
+    fixture.client.getAttemptJobs = async (_runId: string, attempt: number) =>
+      attempt === 1
+        ? [preparation]
+        : [{ ...preparation, id: 999, run_attempt: 2, conclusion: "failure" }];
+
+    await expect(
+      continueFailed(
+        { ...fixture.plan, candidate: { producer: { runId: "606" } } },
+        "77",
+        fixture.client,
+      ),
+    ).rejects.toThrow("already supplied the sealed candidate evidence");
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+  });
 
   it("does not claim recovery for a failed candidate producer with undispatched consumers", async () => {
     const fixture = artifactFixture("candidate");
