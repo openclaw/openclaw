@@ -399,7 +399,7 @@ describe("gateway WebSocket chat abort ownership", () => {
           }
           dispatchEntered.resolve();
           await dispatchRelease.promise;
-          throw new Error("dispatch rejected before a late abort");
+          throw new Error(`${"warning: ".repeat(80)}dispatch rejected before a late abort`);
         });
 
         const sendParameters = {

@@ -1,10 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   renderAssistantRequestFailureCopy,
   renderRecordedAssistantFailureCopy,
 } from "../agents/failover/assistant-request-failure-copy.js";
 import { renderCodexAppServerFailureCopy } from "../agents/failover/user-copy.js";
+import { isHostMissingReplyNoticeText } from "../agents/reply-completion.js";
 import {
   appendSessionTranscriptReport,
   type SessionTranscriptWriteScope,
@@ -12,7 +12,6 @@ import {
 import type { CustomMessageReportAppend } from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { sanitizeSessionRunError, truncateSessionRunError } from "./session-run-error-format.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
@@ -34,7 +33,6 @@ export async function recordGatewaySessionRunFailure(
 ): Promise<void> {
   const { runId } = params;
   const storageFailure = classifyGatewayStorageFailure(params.error);
-  const message = sanitizeUserFacingText(formatErrorMessage(params.error), { errorContext: true });
   const sanitized = sanitizeSessionRunError(params.error) || "unknown error";
   const error = truncateSessionRunError(sanitized, 512);
   const report: CustomMessageReportAppend = {
@@ -44,7 +42,11 @@ export async function recordGatewaySessionRunFailure(
         ? STATE_CONTENTION_SUMMARY
         : (renderAssistantRequestFailureCopy({ storageFailure }) ??
           renderCodexAppServerFailureCopy(sanitized) ??
-          renderRecordedAssistantFailureCopy({ errorMessage: message }) ??
+          (isHostMissingReplyNoticeText(sanitized) ? sanitized : undefined) ??
+          renderRecordedAssistantFailureCopy(
+            { errorMessage: sanitized },
+            { includeRawFormatDetails: false },
+          ) ??
           "Your request couldn't be completed."),
     display: params.suppressErrorNotice !== true,
     excludeFromContext: true,
