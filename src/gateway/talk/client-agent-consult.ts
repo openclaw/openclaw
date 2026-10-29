@@ -378,7 +378,8 @@ export function createTalkClientAgentConsultRunner(params: {
                   (registeredRun?.isCurrent(phase) ?? true);
               }
               return {
-                cleanupBeforeRun: releaseVoice || undefined,
+                // Owned failures keep their registration until the existing failure claim settles.
+                cleanupBeforeRun: owner ? undefined : releaseVoice || undefined,
                 ...(registration
                   ? {
                       abortSignal: registration.controller.signal,
