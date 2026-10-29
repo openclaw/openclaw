@@ -54,9 +54,14 @@ enabled and no managed provider is selected. Native hosted search and
 OpenClaw's managed `web_search` dynamic tool are mutually exclusive so
 managed search cannot bypass native domain restrictions. OpenClaw uses the
 managed tool when hosted search is unavailable, explicitly disabled, or
-replaced by a selected managed provider. OpenClaw keeps Codex's standalone
-`web.run` extension disabled because production app-server traffic rejects
-its user-defined `web` namespace. `tools.web.search.enabled: false`
+replaced by a selected managed provider. A custom provider can use Codex's
+standalone `web.run` extension when it is the app-server's configured provider,
+its native `model_providers.<id>.supports_standalone_web_search` setting is
+`true`, and the capability RPC permits search. OpenClaw enables standalone
+search only for that verified provider; ordinary OpenAI traffic keeps hosted
+search. The provider must implement the standalone search endpoint as well as
+inference; Responses compatibility alone does not establish support.
+`tools.web.search.enabled: false`
 disables both paths, as do tool-disabled LLM-only runs. Codex treats
 `"cached"` as a preference and resolves it to live external access for
 unrestricted app-server turns. Automatic managed fallback is blocked when

@@ -8,10 +8,16 @@ import { parse } from "yaml";
 import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8")) as {
+const source = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+const workflow = parse(source) as {
   jobs: Record<
     string,
-    { if?: string; env?: Record<string, string>; steps: Array<Record<string, unknown>> }
+    {
+      if?: string;
+      env?: Record<string, string>;
+      needs?: string[];
+      steps: Array<Record<string, unknown>>;
+    }
   >;
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
@@ -165,6 +171,33 @@ describe("full release same-parent recovery workflow", () => {
     }
     expect(workloadDispatches).toBeGreaterThan(0);
     expect(artifactDispatches).toBeGreaterThan(0);
+    expect(String(workflow.jobs.qualify_npm_package?.if)).not.toContain("github.run_attempt");
+    expect(workflow.jobs.release_execution_plan?.needs).toEqual(
+      expect.arrayContaining([
+        "prepare_npm_package",
+        "qualify_npm_package",
+        "prepare_plugin_npm",
+        "prepare_docker_release",
+      ]),
+    );
+    for (const jobName of ["release_decision", "diagnostic_drain"]) {
+      expect(workflow.jobs[jobName]?.needs).toEqual(
+        expect.arrayContaining([
+          "prepare_npm_package",
+          "qualify_npm_package",
+          "prepare_plugin_npm",
+          "prepare_docker_release",
+        ]),
+      );
+    }
+    expect(workflow.jobs.summary?.env).toMatchObject({
+      NPM_PREPARATION_RESULT: "${{ needs.prepare_npm_package.result }}",
+      NPM_QUALIFICATION_RESULT: "${{ needs.qualify_npm_package.result }}",
+      PLUGIN_NPM_PREPARATION_RESULT: "${{ needs.prepare_plugin_npm.result }}",
+      DOCKER_PREPARATION_RESULT: "${{ needs.prepare_docker_release.result }}",
+    });
+    expect(source).not.toContain("continuationSource");
+    expect(source).not.toContain("continuation_plan_json");
   });
 
   it("routes compact reuse revalidation through the admitted verifier and exact target", () => {

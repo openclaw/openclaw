@@ -2502,6 +2502,38 @@ describe("FRV watch", () => {
     await expect(poll()).resolves.toMatchObject({ complete: true });
   });
 
+  it("labels every failed artifact qualification job as a blocker", async () => {
+    const statePath = path.join(tempDirs.make("frv-producer-blockers-"), "state.json");
+    const messages: string[] = [];
+    const client = {
+      ...unsealedWatcherReads,
+      repository: REPOSITORY,
+      getRun: async (runId: string) =>
+        runId === "77" ? rootRun(1, "failure") : runFor(child("normalCi", "808"), 1, "failure"),
+      getParentJobs: async () => [
+        { ...job("Prepare release npm artifacts"), id: 5, run_attempt: 1 },
+      ],
+      getJobLog: async () =>
+        `Dispatched full-release-artifacts.yml: https://github.com/${REPOSITORY}/actions/runs/808 (attempt 1)`,
+      getAttemptJobs: async () => [
+        job("Prepare npm artifacts / Check npm dependencies", "failure"),
+        job("Prepare npm artifacts / Check npm package contents", "timed_out"),
+      ],
+    };
+
+    await expect(
+      watchRelease("77", client, {
+        statePath,
+        once: true,
+        emit: (event) => messages.push(event.message),
+      }),
+    ).resolves.toMatchObject({ complete: true });
+    expect(messages.filter((message) => message.includes("blocker"))).toEqual([
+      expect.stringContaining("Check npm dependencies"),
+      expect.stringContaining("Check npm package contents"),
+    ]);
+  });
+
   it.each([
     "execution plan",
     "invalid plan schema",
