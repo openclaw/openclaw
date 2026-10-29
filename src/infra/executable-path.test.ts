@@ -211,9 +211,6 @@ describe("executable path helpers", () => {
   );
 
   it("spawn resolution prefers a PATHEXT match over an extensionless npm shim", async () => {
-    // A global npm install drops a POSIX shim next to the real launcher, so `claude` and
-    // `claude.cmd` share a directory on PATH. Windows cannot CreateProcess the bare shim,
-    // so the spawn resolver probes PATHEXT first and keeps the bare name as a fallback.
     await withMockedPlatform("win32", async () => {
       await withTestDir({ prefix: "openclaw-exec-shim-" }, async (binDir) => {
         const shimPath = path.join(binDir, "claude");
