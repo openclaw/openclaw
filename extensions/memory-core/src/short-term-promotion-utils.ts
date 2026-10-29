@@ -437,6 +437,14 @@ export function compareStoreTimestampDesc(
   return rightMs > leftMs ? 1 : -1;
 }
 
+/** Explicitly tainted origins must never promote through any durable write path. */
+export function isPromotionOriginBlocked(candidate: {
+  provenance?: MemoryEntryProvenance;
+}): boolean {
+  const originClass = candidate.provenance?.originClass;
+  return originClass === "untrusted" || originClass === "system";
+}
+
 // Retention must keep the entries the promotion ranker can still act on. Only
 // an interactive recall writes recallCount and userQueryHashes, and the
 // ranker requires uniqueQueries (userQueryHashes) to clear minUniqueQueries,
@@ -448,10 +456,33 @@ function hasRecallEvidence(entry: ShortTermRecallEntry): boolean {
   return entry.recallCount > 0 || (entry.userQueryHashes?.length ?? 0) > 0;
 }
 
+// Protection is only worth a slot while the promotion path could still act on
+// the row. The ranker rejects already promoted rows, blocked origins,
+// contaminated snippets and rows outside the short-term corpus, so protecting
+// them would let dead rows hold every slot and starve fresh staging
+// admission (openclaw/openclaw#150635).
+function isProtectionEligible(entry: ShortTermRecallEntry): boolean {
+  if (!hasRecallEvidence(entry)) {
+    return false;
+  }
+  if (entry.promotedAt) {
+    return false;
+  }
+  if (isPromotionOriginBlocked(entry)) {
+    return false;
+  }
+  if (!isShortTermMemoryPath(entry.path)) {
+    return false;
+  }
+  return !isContaminatedDreamingSnippet(entry.snippet, {
+    allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
+  });
+}
+
 function compareShortTermRecallRetention(a: ShortTermRecallEntry, b: ShortTermRecallEntry): number {
-  const evidenceDiff = Number(hasRecallEvidence(b)) - Number(hasRecallEvidence(a));
-  if (evidenceDiff !== 0) {
-    return evidenceDiff;
+  const protectionDiff = Number(isProtectionEligible(b)) - Number(isProtectionEligible(a));
+  if (protectionDiff !== 0) {
+    return protectionDiff;
   }
   const lastDiff = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
   if (lastDiff !== 0) {
