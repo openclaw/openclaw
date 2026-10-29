@@ -37,6 +37,13 @@ and launch options. The separate runtime changes program files, not the node's
 state directory. Activation requires the candidate to reconnect successfully;
 if startup fails, the launcher falls back to the previous runtime.
 
+With Node.js on macOS and Linux, packages that advertise `byte-pipe-v1` use a private,
+length-prefixed JSON stream between the launcher and node. This channel carries
+bootstrap, readiness, and restart messages without transferring file descriptors.
+Each message is limited to 1 MiB; queued writes are limited to 256 messages and
+4 MiB. An invalid frame closes the channel, and loss of the launcher stops the
+node. Bun, Windows, and installed packages without this capability keep native IPC.
+
 If the node shares its state directory with a Gateway installed before node
 automatic updates were introduced, update that Gateway once first. Older
 Gateways reject a local node whose version differs from their own. Updated

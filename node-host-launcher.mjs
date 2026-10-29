@@ -1,6 +1,7 @@
 // The node supervisor must select its runtime before importing config or SQLite.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import {
   closeSync,
   existsSync,
@@ -15,12 +16,16 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { Socket } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveOpenClawCliInvocation } from "./cli-invocation.mjs";
 
 const CHILD_ARGUMENT = "--openclaw-node-host-child";
 const MANAGED_CHILD_ARGUMENT = "--openclaw-node-host-managed-child";
+const PIPE_CHILD_ARGUMENT = "--openclaw-node-host-pipe-child";
+const MANAGED_PIPE_CHILD_ARGUMENT = "--openclaw-node-host-managed-pipe-child";
+const CHANNEL_MARKER = Symbol.for("openclaw.node-host.launcher-channel");
 const CHILD_MARKER = Symbol.for("openclaw.node-host.launcher-child");
 const MANAGED_STATE_MARKER = Symbol.for("openclaw.node-host.managed-state-path");
 const RESTART_INTERVAL_MS = 12 * 60 * 60 * 1_000;
@@ -31,6 +36,81 @@ const normalize = (value) => {
   const trimmed = value?.trim();
   return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
 };
+
+// This protocol carries JSON messages only. Ordinary stream reads cannot import
+// SCM_RIGHTS descriptors; no Node IPC API or global process method is patched.
+class LauncherMessageChannel extends EventEmitter {
+  connected = true;
+  pending = Buffer.alloc(0);
+  writes = 0;
+
+  constructor(stream) {
+    super();
+    this.stream = stream;
+    const disconnected = () => {
+      if (!this.connected) {
+        return;
+      }
+      this.connected = false;
+      this.emit("disconnect");
+    };
+    stream.on("error", disconnected);
+    stream.on("close", disconnected);
+    stream.on("end", () => stream.destroy());
+    stream.on("data", (chunk) => {
+      this.pending = Buffer.concat([this.pending, chunk]);
+      try {
+        while (this.pending.length >= 4) {
+          const size = this.pending.readUInt32BE(0);
+          if (size === 0 || size > 1024 * 1024) {
+            throw new Error("Invalid node launcher frame size.");
+          }
+          if (this.pending.length < size + 4) {
+            break;
+          }
+          const message = JSON.parse(this.pending.subarray(4, size + 4).toString("utf8"));
+          this.pending = this.pending.subarray(size + 4);
+          this.emit("message", message);
+        }
+      } catch (error) {
+        stream.destroy(error);
+      }
+    });
+  }
+
+  send(message, callback) {
+    try {
+      if (!this.connected) {
+        throw new Error("The node launcher channel is closed.");
+      }
+      const bytes = Buffer.from(JSON.stringify(message));
+      if (
+        bytes.length > 1024 * 1024 ||
+        this.writes >= 256 ||
+        this.stream.writableLength + bytes.length + 4 > 4 * 1024 * 1024
+      ) {
+        throw new Error("The node launcher channel capacity was exceeded.");
+      }
+      const frame = Buffer.allocUnsafe(bytes.length + 4);
+      frame.writeUInt32BE(bytes.length);
+      bytes.copy(frame, 4);
+      this.writes++;
+      this.stream.write(frame, (error) => {
+        this.writes--;
+        callback(error);
+      });
+    } catch (error) {
+      queueMicrotask(() => callback(error));
+    }
+  }
+
+  ref() {
+    this.stream.ref();
+  }
+  unref() {
+    this.stream.unref();
+  }
+}
 
 function parseInvocation(args, env) {
   const words = [];
@@ -277,9 +357,19 @@ function activateRuntime(currentPath, runtimeRoot) {
 export const isNodeHostLauncherChild = () => process[CHILD_MARKER] === true;
 
 export async function runNodeHostLauncher({ entryPath, packageRoot }) {
-  const managedChild = process.argv[2] === MANAGED_CHILD_ARGUMENT;
-  if (process.argv[2] === CHILD_ARGUMENT || managedChild) {
-    if (!process.send || !process.connected) {
+  const pipeChild = [PIPE_CHILD_ARGUMENT, MANAGED_PIPE_CHILD_ARGUMENT].includes(process.argv[2]);
+  const managedChild = [MANAGED_CHILD_ARGUMENT, MANAGED_PIPE_CHILD_ARGUMENT].includes(
+    process.argv[2],
+  );
+  if (process.argv[2] === CHILD_ARGUMENT || managedChild || pipeChild) {
+    if (pipeChild) {
+      if (!fstatSync(3).isSocket()) {
+        throw new Error("The node launcher requires its private stream.");
+      }
+      process[CHANNEL_MARKER] = new LauncherMessageChannel(new Socket({ fd: 3 }));
+    }
+    const channel = process[CHANNEL_MARKER];
+    if (!(channel?.connected || (process.send && process.connected))) {
       throw new Error("The private node launcher argument requires a supervisor connection.");
     }
     const managedStatePath = managedChild ? process.argv[3] : undefined;
@@ -293,8 +383,8 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
     if (managedStatePath) {
       process[MANAGED_STATE_MARKER] = managedStatePath;
     }
-    process.once("disconnect", () => process.kill(process.pid, "SIGTERM"));
-    process.channel?.unref();
+    (channel ?? process).once("disconnect", () => process.kill(process.pid, "SIGTERM"));
+    (channel ?? process.channel)?.unref();
     return false;
   }
   if (isNodeHostLauncherChild()) {
@@ -414,9 +504,16 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
         }
       }
       const selected = candidate ?? active;
-      const childArguments = selected.runtimeRoot
-        ? [MANAGED_CHILD_ARGUMENT, statePath]
-        : [CHILD_ARGUMENT];
+      // Existing installed runtimes retain their Node IPC protocol. The selected
+      // package explicitly advertises byte-pipe support, so mixed-version updates work.
+      // Bun cannot yet read an inherited socket through net.Socket({ fd }).
+      const pipeTransport =
+        process.platform !== "win32" &&
+        !process.versions.bun &&
+        selected.manifest.openclaw?.nodeLauncherTransport === "byte-pipe-v1";
+      const childArgument = pipeTransport ? PIPE_CHILD_ARGUMENT : CHILD_ARGUMENT;
+      const managedArgument = pipeTransport ? MANAGED_PIPE_CHILD_ARGUMENT : MANAGED_CHILD_ARGUMENT;
+      const childArguments = selected.runtimeRoot ? [managedArgument, statePath] : [childArgument];
       let ready = false;
       let candidateFailed = false;
       let bootstrap;
@@ -430,8 +527,11 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
         });
         child = spawn(childInvocation.command, childInvocation.args, {
           env: childEnv,
-          stdio: ["inherit", "inherit", "inherit", "ipc"],
+          stdio: ["inherit", "inherit", "inherit", pipeTransport ? "pipe" : "ipc"],
         });
+        const messages = pipeTransport ? new LauncherMessageChannel(child.stdio[3]) : child;
+        // EOF drains the stream independently of process exit. Sending a signal
+        // on EOF can race a successful exit and replace its status with SIGTERM.
         if (candidate) {
           readyTimer = setTimeout(() => {
             candidateFailed = true;
@@ -444,7 +544,7 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
           }, READY_TIMEOUT_MS);
           readyTimer.unref();
         }
-        child.on("message", (message) => {
+        messages.on("message", (message) => {
           if (!message || typeof message !== "object") {
             return;
           }
@@ -464,7 +564,7 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
               )
             ) {
               bootstrap = { execArgv: message.execArgv, env: message.env };
-              child.send({ type: "openclaw.node.bootstrap-result", ok: true }, () => {});
+              messages.send({ type: "openclaw.node.bootstrap-result", ok: true }, () => {});
             }
             return;
           }
@@ -531,10 +631,10 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
             pending = next;
             releaseActivation = claimed;
             lastAcceptedRestartAt = performance.now();
-            child.send({ type: "openclaw.node.restart-result", ok: true }, () => {});
+            messages.send({ type: "openclaw.node.restart-result", ok: true }, () => {});
           } catch (error) {
             claimed?.();
-            child.send(
+            messages.send(
               { type: "openclaw.node.restart-result", ok: false, error: error.message },
               () => {},
             );

@@ -3,6 +3,7 @@
   "version": "2026.10.8",
   "openclaw": {
     "updateAdmissionProtocol": 1,
+    "nodeLauncherTransport": "byte-pipe-v1",
     "databaseEngines": [
       "sqlite",
       "postgres"

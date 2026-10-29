@@ -69,7 +69,10 @@ async function writePackage(root: string, version: string, body: string, schema 
       name: "openclaw",
       type: "module",
       version,
-      openclaw: { schemaVersions: { state: schema, agent: schema } },
+      openclaw: {
+        nodeLauncherTransport: "byte-pipe-v1",
+        schemaVersions: { state: schema, agent: schema },
+      },
     }),
   );
   await fs.writeFile(
@@ -270,6 +273,40 @@ syncBuiltinESMExports();
 }
 
 describe("managed node launcher", () => {
+  it("acknowledges large bootstrap data using the supported transport", async () => {
+    // Windows keeps legacy IPC and has a smaller per-variable environment limit.
+    const payloadSize = process.platform === "win32" ? 8000 : 80000;
+    const f = await fixture(`
+if (!process.env.TEST_BOOTSTRAPPED) {
+  await requestNodeHostLauncherBootstrap({execArgv: [], env: {...process.env, TEST_BOOTSTRAPPED:'1', TEST_LARGE:'x'.repeat(${payloadSize})}});
+  process.exit(0);
+}
+await ready();
+report({nativeIPC: typeof process.send === 'function', length: process.env.TEST_LARGE.length});
+`);
+    const result = await f.run().done;
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual({
+      nativeIPC: process.platform === "win32" || Boolean(process.versions.bun),
+      length: payloadSize,
+    });
+  });
+
+  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+    "fails closed when a launcher frame exceeds its bound",
+    async () => {
+      const f = await fixture(`
+const channel = process[Symbol.for('openclaw.node-host.launcher-channel')];
+const header = Buffer.alloc(4); header.writeUInt32BE(1024 * 1024 + 1);
+channel.stream.write(header);
+channel.ref();
+`);
+      const result = await f.run().done;
+      expect(result.signal).toBe("SIGTERM");
+      expect(result.stdout).toBe("");
+    },
+  );
+
   it("runs the stored node service command through a live launcher parent", async () => {
     const f = await fixture(`
 await ready();
@@ -332,6 +369,11 @@ setTimeout(async () => {
   }, 30);
 }, 30);
 `);
+    // An installed runtime can still use the legacy Node IPC channel.
+    const manifestPath = path.join(candidate.packageRoot, "package.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    delete manifest.openclaw.nodeLauncherTransport;
+    await fs.writeFile(manifestPath, JSON.stringify(manifest));
     const result = await completed(
       f.update(candidate, {}, ["connect", "one-use-code", "--profile", "work", "--no-color"]),
     );
