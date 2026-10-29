@@ -39,6 +39,7 @@ const repositoryScriptEntries = [
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
   "scripts/perf/catalog-worker-churn-measure.mjs!",
+  "scripts/perf/code-mode-control-schema-measure.ts!",
   "scripts/perf/code-mode-result-load-measure.ts!",
   "scripts/perf/completion-payload-bytes-measure.ts!",
   "scripts/perf/connect-profile-binding-measure.ts!",
@@ -893,6 +894,8 @@ const repositoryScriptEntries = [
   "scripts/perf/branch-rotation-measure-preload.ts!",
   // The plugin scope census is loaded by the documented stress --gateway-preload option.
   "scripts/perf/plugin-scope-attribution-preload.mjs!",
+  // The documented stress --gateway-preload option selects this main-isolate probe.
+  "scripts/perf/main-code-space-preload.mjs!",
   // The documented placement shutdown reproduction is invoked as a standalone CLI.
   "scripts/perf/worker-placement-reconcile-shutdown-measure.ts!",
   // Their headers document these standalone measurement CLIs by path.
