@@ -68,7 +68,7 @@ even when its heartbeat is old; elapsed time never authorizes takeover.
 
 ## CLI invocations against the Gateway
 
-Every CLI invocation boots a complete runtime and opens its own read-only database connection, whether it runs inside the Gateway container (`docker compose exec openclaw-gateway openclaw <command>`) or in the one-shot `openclaw-cli` service (`docker compose run --rm openclaw-cli <command>`). Both consume the same host CPU and the same state directory, and the Compose file reserves neither CPU nor memory for them, so several overlapping jobs — scheduled `channels status`, `cron list`, or `agents list` polls — can stall Gateway turns and drop channel connections. Avoid overlapping CLI jobs regardless of how they are invoked, and use the Gateway's [HTTP probes](/install/docker#health-checks) for routine health polling instead of repeated CLI calls.
+CLI jobs can be expensive against a busy Gateway, and the cost depends on the command: several commands start plugin runtimes and open their own database connection, while others (for example `config file`) only resolve configuration and exit. Running them inside the Gateway container (`docker compose exec openclaw-gateway openclaw <command>`) and in the one-shot `openclaw-cli` service (`docker compose run --rm openclaw-cli <command>`) both consume the same host CPU and the same state directory, and the Compose file reserves neither CPU nor memory for them, so several overlapping jobs — scheduled status or list polls — can stall Gateway turns and drop channel connections. Avoid overlapping CLI jobs regardless of how they are invoked, and use the Gateway's [HTTP probes](/install/docker#health-checks) for routine health polling instead of repeated CLI calls.
 
 ## Stop grace period
 
