@@ -77,6 +77,24 @@ describe("Google Chat approval card action registry", () => {
     expect(suppressesText(`/approve ${approvalId} nope`)).toBe(false);
   });
 
+  it("suppresses plugin approval follow-ups only for the matching card and allowed decision", () => {
+    const pluginApprovalId = `plugin:${approvalId}`;
+    registerExecApprovalCard({ approvalId: pluginApprovalId, approvalKind: "plugin" });
+
+    expect(suppressesText(`Please approve: /approve ${pluginApprovalId} allow-once`)).toBe(true);
+    expect(suppressesText(`/approve plugin:${approvalId.slice(0, 8)} deny`)).toBe(true);
+    for (const manualCommand of [
+      `/approve ${approvalId} allow-once`,
+      `/approve plugin:deadbeef allow-once`,
+      `/approve ${pluginApprovalId} allow-always`,
+    ]) {
+      expect(suppressesText(manualCommand)).toBe(false);
+    }
+    expect(suppressesText(`/approve ${pluginApprovalId} allow-once`, Date.now() + 60_001)).toBe(
+      false,
+    );
+  });
+
   it.each<{ extra: ReplyPayload; suppressed: boolean }>([
     { extra: {}, suppressed: true },
     { extra: { mediaUrl: "https://example.test/image.png" }, suppressed: false },
