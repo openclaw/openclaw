@@ -52,6 +52,7 @@ const repositoryScriptEntries = [
   "scripts/perf/local-workspace-request-bytes-measure.ts!",
   "scripts/perf/node-worker-churn-measure.mjs!",
   "scripts/perf/placement-retirement-replies.mjs!",
+  "scripts/perf/plugin-state-authority-receipts.ts!",
   "scripts/perf/plugin-state-claims-measure.ts!",
   "scripts/perf/reef-state-request-bytes.ts!",
   "scripts/perf/schema-crossing-measure.ts!",
