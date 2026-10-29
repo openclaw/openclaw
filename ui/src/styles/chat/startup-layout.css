@@ -97,6 +97,11 @@
   background: transparent;
 }
 
+/* Keep room for a pin and its gaps before the first comment is added. */
+div.chat-thread:where(.chat-thread--annotations) {
+  --chat-thread-annotation-inset: 32px;
+}
+
 /* Embedded transcripts size against their pane, not the desktop viewport.
    Avatar-free threads need only a small reading inset at narrow widths. */
 @container chat-conversation (max-width: 560px) {

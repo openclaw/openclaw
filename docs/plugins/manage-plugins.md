@@ -439,7 +439,7 @@ managed install directory is removed once unless you pass `--keep-files`. With a
 running Gateway, ordinary uninstall waits for the package's runtime owners to
 stop before removing files and returns after the new inventory is applied.
 
-Claw Add installs plugins as shared dependencies. Deleting an agent created by
+Template Add installs plugins as shared dependencies. Deleting an agent created by
 Add does not uninstall its plugins. Before uninstalling a plugin, check which
 agents use it; uninstall may break those agents.
 

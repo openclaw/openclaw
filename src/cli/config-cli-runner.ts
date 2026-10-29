@@ -227,6 +227,7 @@ export async function runConfigOperations(params: {
       .catch(() => undefined));
   const roster = new ConfigMutationAgentRoster(next, snapshot.sourceConfigBeforeMigrations);
   let unsetPaths: PathSegment[][] = [];
+  const allowedAgentRosterRemovals: string[] = [];
   let explicitSetPaths: PathSegment[][] = [];
   let suppliedValuePaths: PathSegment[][] = [];
   const appliedOperations: ConfigSetOperation[] = [];
@@ -302,6 +303,10 @@ export async function runConfigOperations(params: {
         unsetPaths.push(writePath);
       }
       if (unsetResult.removed) {
+        // Deleting a keyed agent entry is the explicit removal the roster-loss guard requires.
+        if (writePath.length === 3 && writePath[0] === "agents" && writePath[1] === "entries") {
+          allowedAgentRosterRemovals.push(String(writePath[2]));
+        }
         // Canonical agent IDs (even numeric IDs) are keys, not list indices.
         const arrayIndex =
           unsetResult.leafContainer === "array" &&
@@ -537,6 +542,7 @@ export async function runConfigOperations(params: {
             }
           : {}),
         ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
+        ...(allowedAgentRosterRemovals.length > 0 ? { allowedAgentRosterRemovals } : {}),
         ...(normalizedExplicitSetPaths.length > 0
           ? { explicitSetPaths: normalizedExplicitSetPaths }
           : {}),

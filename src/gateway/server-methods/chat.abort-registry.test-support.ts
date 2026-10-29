@@ -9,8 +9,10 @@ import {
   writeSubagentSessionEntry,
 } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { observeSwarmSchedulerWork } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
+import {
+  enqueueSwarmRun,
+  observeSwarmSchedulerWork,
+} from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
@@ -30,8 +32,8 @@ type SeedRun = Omit<FixtureRun, "sessionEntry" | "childAgentId" | "requesterSess
     lifecycleRevision?: string;
   };
 
-vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../server-recovery-runtime-context.js")>()),
+vi.mock("../server-lifecycle-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-lifecycle-runtime-context.js")>()),
   bindGatewayLifecycleRequest:
     () =>
     async ({ method }: { method: string }) => {

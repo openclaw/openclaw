@@ -615,7 +615,7 @@ worker fails, the Gateway logs a warning with the reason and counts the failure 
 `status` as `workerPools.modelCatalog.workerFailures`. Other than stalled native
 admission, failures republish the affected agent catalogs on a new worker.
 
-Catalog and authentication refresh tasks carry the host's prepared Claw consent
+Catalog and authentication refresh tasks carry the host's prepared Template consent
 provenance. Worker config reconstruction and provider imports consume these facts
 without opening or copying the shared state database. Host config publication and
 Doctor retain their existing provenance refresh and artifact-preserving inspection

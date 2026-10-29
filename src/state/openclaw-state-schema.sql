@@ -1204,7 +1204,7 @@ CREATE TABLE IF NOT EXISTS agent_deletion_journal (
 
 CREATE TABLE IF NOT EXISTS agent_provenance (
   agent_id TEXT PRIMARY KEY,
-  created_via TEXT NOT NULL CHECK (created_via IN ('operator', 'agent', 'claw')),
+  created_via TEXT NOT NULL CHECK (created_via IN ('operator', 'agent', 'template')),
   creator_agent_id TEXT,
   created_at_ms INTEGER NOT NULL
 ) STRICT;
@@ -2641,12 +2641,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_inference_turns_pending_run
   ON worker_inference_turns(session_id, run_epoch, run_id)
   WHERE state = 'pending';
 
-CREATE TABLE IF NOT EXISTS claw_installs (
+CREATE TABLE IF NOT EXISTS template_installs (
   agent_id TEXT NOT NULL PRIMARY KEY,
   schema_version TEXT NOT NULL,
   source_kind TEXT NOT NULL,
-  claw_name TEXT NOT NULL,
-  claw_version TEXT NOT NULL,
+  template_name TEXT NOT NULL,
+  template_version TEXT NOT NULL,
   package_root TEXT NOT NULL,
   manifest_path TEXT NOT NULL,
   integrity_kind TEXT NOT NULL,
@@ -2666,7 +2666,7 @@ CREATE TABLE IF NOT EXISTS claw_installs (
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS claw_workspace_files (
+CREATE TABLE IF NOT EXISTS template_workspace_files (
   agent_id TEXT NOT NULL,
   target_path TEXT NOT NULL,
   schema_version TEXT NOT NULL,
@@ -2679,7 +2679,7 @@ CREATE TABLE IF NOT EXISTS claw_workspace_files (
   PRIMARY KEY (agent_id, target_path)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS claw_package_refs (
+CREATE TABLE IF NOT EXISTS template_package_refs (
   agent_id TEXT NOT NULL,
   package_kind TEXT NOT NULL,
   package_source TEXT NOT NULL,
@@ -2687,10 +2687,10 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   package_version TEXT NOT NULL,
   package_integrity TEXT NOT NULL,
   schema_version TEXT NOT NULL,
-  claw_name TEXT NOT NULL,
+  template_name TEXT NOT NULL,
   package_status TEXT NOT NULL,
   relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
-  origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
+  origin TEXT NOT NULL CHECK (origin IN ('template-introduced', 'pre-existing')),
   independent_owner INTEGER NOT NULL CHECK (independent_owner IN (0, 1)),
   extension_id TEXT,
   extension_format TEXT,
@@ -2703,7 +2703,7 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS claw_cron_refs (
+CREATE TABLE IF NOT EXISTS template_cron_refs (
   agent_id TEXT NOT NULL,
   manifest_id TEXT NOT NULL,
   schema_version TEXT NOT NULL,
@@ -2717,13 +2717,13 @@ CREATE TABLE IF NOT EXISTS claw_cron_refs (
   PRIMARY KEY (agent_id, manifest_id)
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS claw_mcp_server_refs (
+CREATE TABLE IF NOT EXISTS template_mcp_server_refs (
   agent_id TEXT NOT NULL,
   name TEXT NOT NULL,
   schema_version TEXT NOT NULL,
   config_digest TEXT NOT NULL,
   relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
-  origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
+  origin TEXT NOT NULL CHECK (origin IN ('template-introduced', 'pre-existing')),
   independent_owner INTEGER NOT NULL DEFAULT 0 CHECK (independent_owner IN (0, 1)),
   status TEXT NOT NULL,
   error TEXT,

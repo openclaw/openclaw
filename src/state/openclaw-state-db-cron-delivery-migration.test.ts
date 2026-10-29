@@ -25,6 +25,7 @@ import {
 } from "./openclaw-state-db.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -54,6 +55,7 @@ function legacyReceiptDatabase() {
   const databasePath = database.path;
   closeState();
   const legacy = new DatabaseSync(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
     ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state;

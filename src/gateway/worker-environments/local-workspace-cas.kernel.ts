@@ -142,7 +142,11 @@ export function readLocalWorkspaceSourcePaths(db: EngineConnection, digest: Uint
 }
 
 /** Fetch directory packs level by level inside the caller's read snapshot. */
-export function readLocalWorkspaceTree(db: EngineConnection, root: Uint8Array) {
+export function readLocalWorkspaceTree(
+  db: EngineConnection,
+  root: Uint8Array,
+  options?: { allowMissing?: boolean },
+) {
   const records = new Map<string, LocalWorkspaceManifestRecord>();
   let pending = [localWorkspaceDigestReference(root)];
   while (pending.length) {
@@ -157,7 +161,7 @@ export function readLocalWorkspaceTree(db: EngineConnection, root: Uint8Array) {
           .select(["records_json", "children_json"])
           .where("tree_digest", "in", batch.map(localWorkspaceDigestBytes)),
       ).rows;
-      if (rows.length !== batch.length) {
+      if (rows.length !== batch.length && !options?.allowMissing) {
         throw new Error("Local workspace baseline nodes are missing");
       }
       for (const row of rows) {
@@ -174,7 +178,8 @@ export function readLocalWorkspaceTree(db: EngineConnection, root: Uint8Array) {
     }
     pending = next;
   }
-  // Sibling links are internal to an owner-produced pack; absent child packs fail the batch check.
+  // Repair may use surviving paths as selection hints, never as a complete baseline.
+  // Ordinary reads require every child pack; sibling links remain internal to each pack.
   return records;
 }
 

@@ -269,8 +269,16 @@ export async function executeWorkspaceManifestComputation(
     case "workspace.manifest.pair": {
       const baseRaw = decodeUtf8(command.input.baseRaw);
       const currentRaw = decodeUtf8(command.input.currentRaw);
-      const base = parseWorkerWorkspaceManifest(baseRaw, command.input.baseRef);
-      const current = parseWorkerWorkspaceManifest(currentRaw, command.input.currentRef);
+      const base = parseWorkerWorkspaceManifest(
+        baseRaw,
+        command.input.baseRef,
+        command.input.buildCacheInputs,
+      );
+      const current = parseWorkerWorkspaceManifest(
+        currentRaw,
+        command.input.currentRef,
+        command.input.buildCacheInputs,
+      );
       const compared = parseChangedWorkspaceResult(base, current);
       return { base, current, ...compared, paths: compared.entries.map((entry) => entry.path) };
     }

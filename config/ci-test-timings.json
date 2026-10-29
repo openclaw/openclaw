@@ -1823,7 +1823,7 @@
     "src/agents/subagents/registry/subagent-registry.nested.e2e.test.ts": 1,
     "src/auto-reply/reply.triggers.trigger-handling.e2e.test.ts": 11,
     "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts": 46,
-    "src/claws/lifecycle.e2e.test.ts": 282,
+    "src/templates/lifecycle.e2e.test.ts": 282,
     "src/cli/plugins-search-command.clawhub.e2e.test.ts": 14,
     "src/cli/program.nodes-basic.e2e.test.ts": 10,
     "src/cli/program.nodes-diagnostics-auth.e2e.test.ts": 3,

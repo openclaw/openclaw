@@ -33,12 +33,12 @@ Open **Knowledge** from the Control UI sidebar.
 
 **Settings** has four sections:
 
-| Section          | Shows                                                                                                                              |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Stores & sharing | Agents, their stores, and membership changes; see [Stores](/plugins/knowledge/stores-and-access#manage-stores-from-the-control-ui) |
-| Vocabulary       | The effective ontology: page and relationship types, fields, counts, and examples                                                  |
-| Vault status     | Store identity and status for the selected agent                                                                                   |
-| Maintenance      | Schedule, next and last run, and per-store results                                                                                 |
+| Section          | Shows                                                                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stores & sharing | Agents, their stores, membership changes, and conversation access; see [Stores](/plugins/knowledge/stores-and-access#manage-stores-from-the-control-ui) |
+| Vocabulary       | The effective ontology: page and relationship types, fields, counts, and examples                                                                       |
+| Vault status     | Store identity and status for the selected agent                                                                                                        |
+| Maintenance      | Schedule, next and last run, and per-store results                                                                                                      |
 
 Operator access needs `operator.read` (or higher) and `operatorRead: true`. A
 named operator role limits browsing to its agents, and a Gateway shared by

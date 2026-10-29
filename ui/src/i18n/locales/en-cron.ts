@@ -21,6 +21,8 @@ const enCron = {
       triggerIntervalTooShort:
         "Condition-triggered automations must run at least every 30 seconds.",
       cronExprRequired: "Cron expression is required.",
+      cronExprInvalid: "Enter 5 fields like 0 9 * * * or 6 fields like 0 0 9 * * *.",
+      cronTzInvalid: "Enter a valid IANA timezone, such as America/New_York.",
       staggerAmountInvalid: "Stagger must be greater than 0.",
       triggerScriptRequired: "Trigger script is required when the condition trigger is enabled.",
       triggerScriptPayloadUnsupported:

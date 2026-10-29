@@ -643,7 +643,12 @@ export function NewSessionComposer(props: {
               />
             </Show>
             {options().permissionControl}
-            <Show when={!options().nativeTerminal && options().draftAvailable}>
+            <Show
+              when={
+                !options().nativeTerminal &&
+                (options().draftAvailable || options().visibility === "draft")
+              }
+            >
               <NewSessionDraftVisibility options={options()} />
             </Show>
             <Show when={!options().nativeTerminal}>

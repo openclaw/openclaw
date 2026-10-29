@@ -56,8 +56,6 @@ import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
-import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
@@ -85,6 +83,7 @@ import {
 } from "./list.auth-overview.js";
 import { groupByProvider, isRich } from "./list.format.js";
 import type { runAuthProbes } from "./list.probe.js";
+import { resolveStatusUtilityModel } from "./list.status-utility.js";
 import type { ProviderAuthOverview, StatusRuntimeAuthRoute } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -225,7 +224,8 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
-  for (const warning of getModelCatalogWarnings(await readModelCatalog(cfg, opts.agent?.trim()))) {
+  const gatewayCatalog = await readModelCatalog(cfg, opts.agent?.trim());
+  for (const warning of getModelCatalogWarnings(gatewayCatalog)) {
     runtime.error(terminalText`${warning.message} ${warning.fixHint}`);
   }
   const explicitAgentId = opts.agent?.trim();
@@ -314,21 +314,11 @@ export async function modelsStatusCommand(
       const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
       const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
       const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
-      // Narration/titles ride the utility model on a plain API auth path that can
-      // differ from the primary's (e.g. OAuth primary, api_key utility); show the
-      // resolved ref so a broken utility credential is inspectable here.
-      const utilitySetting = readUtilityModelSetting(cfg, workspaceAgentId);
-      const utilityModelRef = resolveUtilityModelRefForAgent({ cfg, agentId: workspaceAgentId });
-      const utilityFallbacks = utilitySetting.kind === "disabled" ? [] : utilitySetting.fallbacks;
-      const utilityModelSource =
-        utilitySetting.kind === "explicit" ||
-        utilityFallbacks.some((ref) => ref.trim() === utilityModelRef)
-          ? "config"
-          : utilitySetting.kind === "disabled"
-            ? "disabled"
-            : utilityModelRef
-              ? "provider-default"
-              : "none";
+      const {
+        ref: utilityModelRef,
+        fallbacks: utilityFallbacks,
+        source: utilityModelSource,
+      } = resolveStatusUtilityModel({ cfg, agentId: workspaceAgentId, gatewayCatalog });
       const configuredAllowRefs = [
         ...resolveConfiguredModelPolicyAllow({ cfg, agentId: workspaceAgentId }).refs,
       ];

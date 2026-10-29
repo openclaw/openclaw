@@ -192,6 +192,7 @@ export function ScheduleSection(props: CronProps) {
           <CronInput
             {...props}
             field="cronTz"
+            errorKey="cronTz"
             label={t("cron.form.timezoneOptional")}
             help={t("cron.form.timezoneHelp")}
             list="cron-tz-suggestions"

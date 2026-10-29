@@ -14,7 +14,7 @@ import {
   buildBackupArchivePath,
   canonicalizePathForContainment,
   resolveBackupAgentRoots,
-  resolveRequiredBackupPath,
+  resolveBackupArchivePath,
 } from "./backup-shared.js";
 import { prepareBackupArchive } from "./backup-verify.js";
 import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
@@ -279,7 +279,7 @@ export async function backupRestoreCommand(
   runtime: RuntimeEnv,
   options: { archive: string; target?: string; json?: boolean },
 ) {
-  const targetPath = resolveRequiredBackupPath(options.target, "--target");
+  const targetPath = resolveBackupArchivePath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
   const {
     result: verified,

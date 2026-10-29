@@ -17,7 +17,6 @@ import {
   rowDemandsVisibility,
   RowVisibilityReason,
   SIDEBAR_SESSION_PAGE_SIZE,
-  SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
 } from "./app-sidebar-session-types.ts";
 import { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -441,9 +440,7 @@ function SessionPagination(params: {
     section = createMemo(() => params.section);
   const canShowMore = createMemo(() => section().visibleRowCount < section().totalRowCount);
   const canShowLess = createMemo(
-    () =>
-      section().visibleRowCount > SIDEBAR_SESSION_SEE_LESS_THRESHOLD &&
-      section().visibleRowCount > section().collapsedVisibleRowCount,
+    () => section().visibleRowCount > section().collapsedVisibleRowCount,
   );
   return (
     <Show when={canShowMore() || canShowLess()}>
@@ -470,7 +467,7 @@ function SessionPagination(params: {
             aria-label={t("usage.details.collapse")}
             onClick={() => {
               host().clearSessionSelection();
-              host().setVisibleSessionLimit(section().id, SIDEBAR_SESSION_PAGE_SIZE);
+              host().resetVisibleSessionLimit(section().id);
             }}
           >
             {t("usage.details.collapse")}

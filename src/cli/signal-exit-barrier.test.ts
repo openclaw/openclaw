@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { holdDoctorMaintenanceExit } from "../commands/doctor-maintenance-exit.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import {
@@ -9,6 +10,7 @@ import {
   registerSignalExitGate,
   registerSignalExitOwner,
   waitForCliSignalExit,
+  waitForSignalExitBarriers,
 } from "./signal-exit-barrier.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
@@ -55,6 +57,34 @@ it("retains an exclusive process exit owner until its exact release", async () =
   await expect(waitForCliSignalExit()).resolves.toBe(0);
   expect(process.exitCode).toBe(0);
   expect(exit).not.toHaveBeenCalled();
+});
+
+it("keeps the first stop cause while a later signal retains its exit status", async () => {
+  exitProbe();
+  const finished = createDeferredCore();
+  const interrupt = vi.fn();
+  const release = registerSignalExitGate(finished.promise, interrupt);
+  const report = vi.fn();
+  const doctor = holdDoctorMaintenanceExit(report);
+  try {
+    exitAfterSignalExitBarriers(0, "unhandled rejection");
+    const draining = waitForSignalExitBarriers("SIGTERM");
+    exitAfterSignalExitBarriers(7, "uncaught exception");
+    expect(interrupt).toHaveBeenCalledExactlyOnceWith(undefined, "unhandled rejection");
+    expect(doctor.signal.reason.message).toBe(
+      "Doctor interrupted by unhandled rejection; cancelling inspections and settling admitted repairs before exit.",
+    );
+    expect(report).toHaveBeenCalledExactlyOnceWith(doctor.signal.reason.message);
+    doctor.release();
+    finished.resolve();
+    await draining;
+    await expect(waitForCliSignalExit()).resolves.toBe(143);
+  } finally {
+    doctor.release();
+    finished.resolve();
+    release();
+    await waitForCliSignalExit();
+  }
 });
 
 it.each([

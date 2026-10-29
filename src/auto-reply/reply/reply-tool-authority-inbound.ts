@@ -159,8 +159,6 @@ function applyReplyToolAuthorityCaller(
     operatorAuthority: overlay.operatorAuthority,
     toolsAllow: overlay.toolsAllow,
     disableTools: overlay.disableTools,
-    forceRestartSafeTools: overlay.forceRestartSafeTools,
-    forceCodeModeTools: overlay.forceCodeModeTools,
     run: {
       ...snapshot.run,
       requesterOrigin: undefined,
@@ -199,8 +197,6 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   toolsAllow?: string[];
   disableTools: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
 }): ReplyToolAuthorityOverlay {
   const { ctx } = params;
   const senderId = normalizeOptionalString(ctx.SenderId);
@@ -242,8 +238,6 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     runtimePluginToolGrant: undefined,
     toolsAllow: params.toolsAllow,
     disableTools: params.disableTools,
-    forceRestartSafeTools: params.forceRestartSafeTools,
-    forceCodeModeTools: params.forceCodeModeTools,
     traceAuthorized:
       params.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
     approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),

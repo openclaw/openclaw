@@ -21,7 +21,9 @@ npm run plugin:validate
 
 `plugins init` creates a minimal TypeScript tool plugin by default. The first
 argument is the plugin id; `--name` sets the display name. OpenClaw uses the
-id for the default output directory and package naming. Tool scaffolds use
+id for the default output directory and package naming. Scoped tool and provider
+ids keep their npm scope: `@author/tools` creates `@author/openclaw-plugin-tools`.
+Tool scaffolds use
 `defineToolPlugin` and generate `package.json` scripts `plugin:build` and
 `plugin:validate` that build then call `openclaw plugins build`/`validate`.
 

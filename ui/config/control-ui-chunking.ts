@@ -120,10 +120,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "node_modules/@tanstack/virtual-core/dist/esm/lazy-measurements.js":
     case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
       return "virtual-core-runtime";
-    case "ui/src/pages/claws/creator-flow.ts":
-    case "ui/src/pages/claws/draft-navigation.ts":
+    case "ui/src/pages/templates/creator-flow.ts":
+    case "ui/src/pages/templates/draft-navigation.ts":
     case "ui/src/i18n/locales/en-agents-home.ts":
-      // Chat and the roster co-load both; Claws accepts the extra virtualizer bytes.
+      // Chat and the roster co-load both; Templates accepts the extra virtualizer bytes.
       return "virtual-core-runtime";
     case "src/shared/dedupe-by-key.ts":
       // Config search shares this helper without loading optional session UI.
@@ -150,7 +150,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/sessions/session-message-subscriptions.runtime.ts":
     case "packages/gateway-client/src/session-subscriptions.ts":
     case "ui/src/pages/labs/labs-feature-state.ts":
-    case "ui/src/pages/labs/claws-lab-feature.ts":
+    case "ui/src/pages/labs/templates-lab-feature.ts":
     case "ui/src/i18n/locales/en-session-skill-library.ts":
     case "ui/src/pages/plugins/detail-tabs.ts":
     case "ui/src/components/confirm-dialog.ts":

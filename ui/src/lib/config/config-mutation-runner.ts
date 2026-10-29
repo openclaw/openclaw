@@ -3,6 +3,22 @@ import type { RuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 export type ConfigMutationOwner = Pick<RuntimeConfigCapability, "runExternalMutation">;
 
+type ConfigMutationRefusalReason = Extract<
+  Awaited<ReturnType<RuntimeConfigCapability["runExternalMutation"]>>,
+  { ok: false }
+>["reason"];
+
+/** A config writer refused the mutation before its task started or failed. */
+export class ConfigMutationRefusedError extends Error {
+  constructor(
+    message: string,
+    readonly reason: ConfigMutationRefusalReason,
+  ) {
+    super(message);
+    this.name = "ConfigMutationRefusedError";
+  }
+}
+
 /** Serialize config writers while preserving structured Gateway failures for their callers. */
 export function createConfigMutationRunner(connectionError: string) {
   return async <T>(
@@ -24,7 +40,7 @@ export function createConfigMutationRunner(connectionError: string) {
       }
     }, options);
     if (!mutation.ok) {
-      throw taskError ?? new Error(mutation.error);
+      throw taskError ?? new ConfigMutationRefusedError(mutation.error, mutation.reason);
     }
     return {
       value: mutation.value,

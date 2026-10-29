@@ -6,6 +6,7 @@ import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid
 import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
+import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
@@ -20,6 +21,7 @@ registerEnglishCatalog(registerSessionNavigationEnglish);
 const MicrophoneMenu = lazy(() => import("./chat-composer-microphone-menu.tsx"), {
   export: "MicrophoneMenu",
 });
+warmWhenIdle(MicrophoneMenu.preload);
 
 // The device affordance and microphone hint share one pointer-intent window.
 const MICROPHONE_HOVER_DELAY_MS = 250;

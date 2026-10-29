@@ -167,7 +167,7 @@ it.each(["automatic", "original"] as const)(
   },
 );
 
-it.each(["automatic", "original"] as const)(
+it.each(["automatic", "original", "stopped"] as const)(
   "retains PostgreSQL before/after attribution and engine-specific integrity for admitted %s capture",
   async (mode) => {
     const f = await fixture();
@@ -222,29 +222,40 @@ it.each(["automatic", "original"] as const)(
     const backup = await f.capture({
       additionalPaths: [postgres],
       postgresOffline: true,
+      stopped: mode === "stopped",
       originalCaptureSourcePaths: mode === "original" ? [f.shared, postgres] : undefined,
     });
-    expect(events).toEqual(["fingerprint", "capture", "fingerprint"]);
-    expect(fingerprint).toHaveBeenCalledTimes(2);
-    expect(backup.sourceGenerations[postgres]).toBe("postgres-generation");
+    expect(events).toEqual(
+      mode === "stopped" ? ["capture"] : ["fingerprint", "capture", "fingerprint"],
+    );
+    expect(fingerprint).toHaveBeenCalledTimes(mode === "stopped" ? 0 : 2);
+    expect(backup.sourceGenerations[postgres]).toBe(
+      mode === "stopped" ? undefined : "postgres-generation",
+    );
     expect(backup.originalCaptureSourcePaths).toEqual(mode === "original" ? [f.shared] : undefined);
-    if (mode === "original") {
+    if (mode === "original" || mode === "stopped") {
       expect(backup.sourceGenerations[f.shared]).toBeUndefined();
     } else {
       expect(backup.sourceGenerations[f.shared]).toEqual(expect.any(String));
     }
     for (const entry of backup.databases) {
       const calls = integrity.mock.calls.filter(([, label]) => label === entry.snapshotPath);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]![2]).toEqual(
-        entry.path === f.shared ? { check: "full", ftsSchemas: expect.any(Array) } : undefined,
-      );
+      expect(calls).toHaveLength(mode === "stopped" ? 0 : 1);
+      if (mode !== "stopped") {
+        expect(calls[0]![2]).toEqual(
+          entry.path === f.shared ? { check: "full", ftsSchemas: expect.any(Array) } : undefined,
+        );
+      }
     }
     const checks = prepare.mock.calls
       .map(([sql]) => sql)
       .filter((sql) => /^PRAGMA (?:quick_check|integrity_check|foreign_key_check)/u.test(sql));
-    expect(checks.filter((sql) => sql.startsWith("PRAGMA integrity_check"))).toHaveLength(2);
-    expect(checks.filter((sql) => sql.startsWith("PRAGMA foreign_key_check"))).toHaveLength(2);
+    expect(checks.filter((sql) => sql.startsWith("PRAGMA integrity_check"))).toHaveLength(
+      mode === "stopped" ? 0 : 2,
+    );
+    expect(checks.filter((sql) => sql.startsWith("PRAGMA foreign_key_check"))).toHaveLength(
+      mode === "stopped" ? 0 : 2,
+    );
     expect(checks.some((sql) => sql.startsWith("PRAGMA quick_check"))).toBe(false);
     expect([f.shared, postgres].map((file) => fs.readFileSync(file))).toEqual(before);
     expect(fs.readdirSync(f.stagingRoot)).toEqual([]);

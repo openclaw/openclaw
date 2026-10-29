@@ -291,7 +291,7 @@ it("releases background-result write custody during suspension while the turn ru
     finishCommit.resolve();
     await withinTest(completion, signal);
     expect(getGatewaySuspendStatus(suspensionId)).toMatchObject({
-      status: "draining",
+      status: "ready",
       writeCustody: [],
     });
     expect(getSessionMutationCount()).toBe(0);

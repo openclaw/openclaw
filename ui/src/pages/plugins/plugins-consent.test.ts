@@ -81,6 +81,7 @@ function createConsentHarness(
   });
   return {
     consent,
+    context,
     request,
     listeners,
     progress: consent.read().installProgress,
@@ -230,4 +231,23 @@ it("blocks repeat install when saved-state reads fail, then reconciles aliases",
     canRetry: false,
     finishedAt: expect.any(Number),
   });
+});
+
+it("reports an update-suspended install as blocked without sending it", async () => {
+  const { consent, context, message, progress, request } = createConsentHarness(async (method) => {
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  vi.mocked(context.runtimeConfig.runExternalMutation).mockResolvedValueOnce({
+    ok: false,
+    reason: "suspended",
+    error: "Configuration writes are temporarily suspended.",
+  });
+  const identity = "clawhub:community-calendar";
+  await consent.install(installRequest, identity);
+  expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
+  expect(message(identity)).toEqual({
+    kind: "error",
+    text: "Installation blocked: an OpenClaw upgrade is in progress, try again when it finishes.",
+  });
+  expect(progress.has(identity)).toBe(false);
 });

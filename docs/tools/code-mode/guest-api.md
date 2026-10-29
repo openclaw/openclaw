@@ -303,7 +303,7 @@ store entries do not enter model context. Loading network-derived data carries
 its provenance into the receiving cell's normal untrusted-content wrapper.
 
 Both executors support these helpers in interactive cells with a bound session.
-Headless and `restartSafe` cells reject store operations, as do cells without
+Headless cells reject store operations, as do cells without
 an available session manager. Read `API.read("results.d.ts")` for the contract.
 
 ## Reading paginated file data

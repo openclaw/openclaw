@@ -120,7 +120,15 @@ retain document-ID-only access.
 
 In the Control UI, session writers can use **New Session**, send messages in
 their own conversations, fork from a persisted user message in an owned settled
-conversation, and stop their own active runs. Their model, effort,
+conversation, use **Advanced → Fork conversation** on their own conversation,
+and stop their own active runs. Whole-conversation forks preserve the saved
+conversation history; while the source is working, they copy through its last
+completed reply. A whole-conversation fork of a Draft stays Draft unless the
+creation request explicitly selects another audience. If new Draft creation is
+disabled, creating that Draft copy is refused; the existing Draft remains available
+for continued work.
+Forking does not grant access to another creator's conversation
+or change the source's workspace and isolation rules. Their model, effort,
 fast-mode, and non-full permission choices use the same session grant and the
 Gateway's allowed model catalog. Full permission mode, sandbox changes, and
 changes to an existing session's context window still require administrator access.
@@ -612,9 +620,11 @@ dispatch so authorization failures have one standard structured response:
   `operator.write` when `runtimeId` requests runtime-specific command eligibility.
   Session placement methods derive
   their scope from the requested target before schema validation:
-  `sessions.dispatch` needs `operator.write` for `deviceId` and
-  `operator.admin` for `profileId` or a target-less
-  `cloudWorkers.projectProfiles` lookup. `sessions.move` needs `operator.write`
+  `sessions.dispatch` needs `operator.write` for explicit `deviceId`, `autoDevice`,
+  or `profileId`. Cloud profile dispatch additionally requires an administrator
+  or a current role’s `workerProfiles` grant for the session’s verified creator.
+  Setup remains administrator-only. A target-less
+  `cloudWorkers.projectProfiles` lookup requires `operator.admin`. `sessions.move` needs `operator.write`
   for Gateway or device targets and `operator.admin` for profile targets.
   `abandonSource: true` remains `operator.write` but is schema-valid only with
   a Gateway target and runtime-valid only for an exact offline device source.
@@ -622,7 +632,7 @@ dispatch so authorization failures have one standard structured response:
   malformed move target use `operator.write` so the handler can return the
   precise schema error. All three methods retain session ownership,
   participation, and commit-time revalidation fences. `operator.read` alone
-  cannot start, stop, or move a session. Cloud profile allocation and mutation,
+  cannot start, stop, or move a session. Cloud profile setup and configuration,
   pairing and Connect machine, raw `environments.create` or
   `environments.destroy`, incognito sessions, direct `execNode` execution, and
   arbitrary host or node paths remain `operator.admin`.

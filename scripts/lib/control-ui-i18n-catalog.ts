@@ -32,7 +32,6 @@ import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
-import { registerClawsEnglish } from "../../ui/src/i18n/locales/en-claws.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerConnectionRecoveryEnglish } from "../../ui/src/i18n/locales/en-connection-recovery.ts";
@@ -81,6 +80,7 @@ import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-
 import { registerSkillWorkshopEnglish } from "../../ui/src/i18n/locales/en-skill-workshop.ts";
 import { registerSkillsBrowserEnglish } from "../../ui/src/i18n/locales/en-skills-browser.ts";
 import { registerSystemsEnglish } from "../../ui/src/i18n/locales/en-systems.ts";
+import { registerTemplatesEnglish } from "../../ui/src/i18n/locales/en-templates.ts";
 import { registerTerminalEnglish } from "../../ui/src/i18n/locales/en-terminal.ts";
 import { registerToolDiagnosticsEnglish } from "../../ui/src/i18n/locales/en-tool-diagnostics.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
@@ -141,7 +141,7 @@ const sourceFiles = [
   "en-chat-session.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
-  "en-claws.ts",
+  "en-templates.ts",
   "en-code-blocks.ts",
   "en-command-palette.ts",
   "en-connection-recovery.ts",
@@ -411,7 +411,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     },
     registerActivityEnglish.catalog,
     registerAgentsHomeEnglish.catalog,
-    registerClawsEnglish.catalog,
+    registerTemplatesEnglish.catalog,
     registerAppsEnglish.catalog,
     registerLogbookEnglish.catalog,
     registerLogsEnglish.catalog,

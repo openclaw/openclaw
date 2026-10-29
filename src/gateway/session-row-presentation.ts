@@ -6,7 +6,7 @@ import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
-import { registerSerializedJsonArray, serializedJsonArrayBytes } from "./serialized-json.js";
+import { serializedJsonArrayBytes } from "./serialized-json.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type { VisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -44,7 +44,10 @@ import {
   type PublicationView,
   type SessionRowView,
 } from "./session-row-publication.js";
-import { serializeSessionRow, sessionRowEncodingBytes } from "./session-row-serialization.js";
+import {
+  registerSerializedSessionRowArray,
+  sessionRowEncodingBytes,
+} from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeSessionAgentRun,
@@ -99,7 +102,7 @@ export function shareSidebarSessionRows(
   let shared = sharedLists.get(rows);
   if (!shared) {
     shared = { ...shareSessionRowFacts(rows), rowsRevision: sessionRowsRevision(rows) };
-    registerSerializedJsonArray(shared.sessions, shared.sessions.map(serializeSessionRow));
+    registerSerializedSessionRowArray(shared.sessions);
     sharedLists.set(rows, shared);
   }
   const baseRevision = ifRowsRevision?.startsWith(SESSION_ROWS_DELTA_PREFIX)
@@ -123,7 +126,7 @@ export function shareSidebarSessionRows(
     );
     if (changed.length < rows.length) {
       const delta = shareSessionRowFacts(changed);
-      registerSerializedJsonArray(delta.sessions, delta.sessions.map(serializeSessionRow));
+      registerSerializedSessionRowArray(delta.sessions);
       return {
         ...delta,
         rowsRevision: shared.rowsRevision,
@@ -325,7 +328,9 @@ export function prepareProjectedSessionPresentation(
             record,
             sharing.getCacheKey(),
             (key, entry, agentId, storePath) => {
-              const owner = agentId ? undefined : resolveRequestedSessionAgentId(cfg, key);
+              const owner = agentId
+                ? undefined
+                : resolveRequestedSessionAgentId(cfg, key, undefined, "read");
               return canReadLinkedEntry(
                 key,
                 entry,
@@ -605,7 +610,7 @@ export function prepareProjectedSessionPresentation(
           shared.sessions.reduce((bytes, row) => bytes + sessionRowEncodingBytes(row), 0) +
           serializedJsonArrayBytes(shared.sessions);
       } else {
-        registerSerializedJsonArray(current, current.map(serializeSessionRow));
+        registerSerializedSessionRowArray(current);
       }
       publicationState?.lists.setRows(
         view,

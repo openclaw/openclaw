@@ -64,6 +64,18 @@ function workerCalls(type: keyof GitReadOperations) {
   return vi.mocked(runGitWorkerOperation).mock.calls.filter(([command]) => command.type === type);
 }
 
+function collectCheckoutDiffPhases() {
+  const events: DiagnosticEventPayload[] = [];
+  const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
+    includeTrusted: ["diagnostic.phase.completed"],
+  });
+  onTestFinished(stop);
+  return () =>
+    events
+      .filter((event) => event.type === "diagnostic.phase.completed")
+      .filter((event) => event.name === "checkout.diff");
+}
+
 describe("typed Git read ownership", () => {
   it("retains interleaved PR histories while sharing checks of the same checkout refs", async () => {
     const read = (sha: string, branch = "feature", refreshIndex = false) =>
@@ -105,11 +117,7 @@ describe("typed Git read ownership", () => {
   });
 
   it("reports validation for cache hits and shared misses without replaying cached Git work", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
-      includeTrusted: ["diagnostic.phase.completed"],
-    });
-    onTestFinished(stop);
+    const readPhases = collectCheckoutDiffPhases();
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation, options) => {
       if (options?.diffTiming) {
         options.diffTiming.durations["worker-queue"] =
@@ -125,9 +133,7 @@ describe("typed Git read ownership", () => {
     await Promise.all([runGitReadOperation(operation), runGitReadOperation(operation)]);
     await runGitReadOperation(operation);
     await waitForDiagnosticEventsDrained();
-    const phases = events
-      .filter((event) => event.type === "diagnostic.phase.completed")
-      .filter((event) => event.name === "checkout.diff");
+    const phases = readPhases();
     expect(phases).toHaveLength(3);
     expect(phases.map((event) => event.details?.outcome)).toEqual([
       "cache-miss",
@@ -148,11 +154,7 @@ describe("typed Git read ownership", () => {
   });
 
   it("reports bounded revision components while retaining independent request shapes", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
-      includeTrusted: ["diagnostic.phase.completed"],
-    });
-    onTestFinished(stop);
+    const readPhases = collectCheckoutDiffPhases();
     gitRead.mockResolvedValue(emptyDiff);
     const unchanged = {
       head: "private-head",
@@ -183,9 +185,7 @@ describe("typed Git read ownership", () => {
       await read();
     }
     await waitForDiagnosticEventsDrained();
-    const phases = events
-      .filter((event) => event.type === "diagnostic.phase.completed")
-      .filter((event) => event.name === "checkout.diff");
+    const phases = readPhases();
     expect(phases.map((event) => event.details?.missReason)).toEqual(
       ["head", "index", "untracked-set", "worktree-mtime", "metadata"].flatMap((component) => [
         "cold",
@@ -201,11 +201,7 @@ describe("typed Git read ownership", () => {
   });
 
   it("distinguishes unavailable revisions and bounded capacity eviction history", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event), {
-      includeTrusted: ["diagnostic.phase.completed"],
-    });
-    onTestFinished(stop);
+    const readPhases = collectCheckoutDiffPhases();
     const read = (cwd: string) => runGitReadOperation({ type: "checkout.diff", input: { cwd } });
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation, options) => {
       if (operation.type !== "checkout.revision") {
@@ -224,9 +220,7 @@ describe("typed Git read ownership", () => {
     await read("/bounded-eviction-0");
     await read("/bounded-eviction-2");
     await waitForDiagnosticEventsDrained();
-    const phases = events
-      .filter((event) => event.type === "diagnostic.phase.completed")
-      .filter((event) => event.name === "checkout.diff");
+    const phases = readPhases();
     const reasons = phases.map((event) => event.details?.missReason);
     expect(reasons.slice(0, 2)).toEqual(["no-revision", "oversized"]);
     expect(reasons.slice(-2)).toEqual(["cold", "evicted"]);
@@ -463,12 +457,7 @@ describe("typed Git read ownership", () => {
 
   it("keeps warm polls on the freshness path beyond the cold wait budget", async () => {
     vi.useFakeTimers();
-    const events: DiagnosticEventPayload[] = [];
-    onTestFinished(
-      onTrustedInternalDiagnosticEvent((event) => events.push(event), {
-        includeTrusted: ["diagnostic.phase.completed"],
-      }),
-    );
+    const readPhases = collectCheckoutDiffPhases();
     const poll = () =>
       runGitReadOperation(
         { type: "checkout.diff", input: { cwd: "/poll-warm-freshness" } },
@@ -496,11 +485,7 @@ describe("typed Git read ownership", () => {
       expect(gitRead).toHaveBeenCalledTimes(2);
       await vi.runAllTimersAsync();
       await waitForDiagnosticEventsDrained();
-      expect(
-        events.filter(
-          (event) => event.type === "diagnostic.phase.completed" && event.name === "checkout.diff",
-        ),
-      ).toHaveLength(3);
+      expect(readPhases()).toHaveLength(3);
     } finally {
       revision.resolve({ key: "edited" });
       await Promise.allSettled(requests);

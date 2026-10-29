@@ -96,7 +96,6 @@ type EnglishCatalog = TranslationMap & {
       systemNotice: TranslationMap &
         Record<
           | "guardian"
-          | "restartRecovery"
           | "automationRecovery"
           | "gatewayRestarted"
           | "cliHarnessContext"
@@ -920,6 +919,9 @@ const startupEnglish = {
       sectionLabel: "Gateway",
       menuLabel: "Gateway: {gateway}",
       primaryTag: "primary",
+      configReadOnly: "Gateway configuration is read-only.",
+      configReadOnlyHint:
+        "To make changes, update the configuration file or deployment settings for this Gateway.",
       setPrimary: "Set as primary…",
       openSettings: "Gateway settings",
       connected: "Connected",
@@ -1045,7 +1047,7 @@ const startupEnglish = {
     plugins: "Plugins",
     skillWorkshop: "Skill workshop",
     devices: "Devices",
-    claws: "Claws",
+    templates: "Templates",
     cloudWorkers: "Cloud environments",
     chat: "Chat",
     dashboards: "Dashboards",
@@ -1413,7 +1415,6 @@ const startupEnglish = {
     common: {
       emptyValue: "—",
       unknown: "unknown",
-      atLeast: "≥ {value}",
       approx: "≈ {value}",
     },
     loading: {
@@ -1578,9 +1579,9 @@ const startupEnglish = {
     sessionsPaused: "{count} paused",
     sessionPausedNote: "{name} is paused",
     sessionsPausedNote: "{count} sessions are paused",
-    handoffResumed: "Resumed · {duration} later",
-    handoffSessionsOne: "1 session",
-    handoffSessions: "{count} sessions",
+    handoffResumed: "Resumed · {duration} Later",
+    handoffSessionsOne: "1 Session",
+    handoffSessions: "{count} Sessions",
     handoffSessionStatus: {
       attention: "Needs your input",
       paused: "Paused",
@@ -1730,16 +1731,8 @@ const startupEnglish = {
     incognitoExpiredBody:
       "Incognito sessions last for 24 hours or until the Gateway restarts. Your unsent input stays in this tab.",
     newIncognitoSession: "New Incognito session",
-    restartRecoveryTitle: "This task was interrupted by a restart.",
-    restartRecoveryDisabled: "Your transcript is safe. Resume to continue in this session.",
-    restartRecoveryNewSession:
-      "This provider cannot safely resume tool work here. Your transcript can continue in a new session.",
-    resumeSession: "Resume",
-    resumeInNewSession: "Resume in new session",
-    resumingSession: "Resuming…",
     systemNotice: {
       guardian: {},
-      restartRecovery: {},
       automationRecovery: {},
       gatewayRestarted: {},
       cliHarnessContext: {},

@@ -1,12 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../lib/reactive/i18n.ts";
-import { CLAWS_LAB_FEATURE } from "./claws-lab-feature.ts";
 import {
   BOOLEAN_GATE,
   labFeatureOverridePath,
   type LabFeature,
   type LabFeatureDefinition,
 } from "./labs-feature-state.ts";
+import { TEMPLATES_LAB_FEATURE } from "./templates-lab-feature.ts";
 
 export const LAB_FEATURES = (
   [
@@ -70,7 +70,7 @@ export const LAB_FEATURES = (
       docsUrl: "https://docs.openclaw.ai/web/control-ui/chat",
       configPath: ["gateway", "controlUi", "experimental", "chatBubbles"],
     },
-    CLAWS_LAB_FEATURE,
+    TEMPLATES_LAB_FEATURE,
     {
       ...BOOLEAN_GATE,
       id: "hostDesktop",

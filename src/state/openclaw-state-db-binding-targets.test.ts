@@ -21,6 +21,7 @@ import {
 } from "./openclaw-state-db.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -69,6 +70,7 @@ function createVersion14Bindings() {
   closeOpenClawStateDatabaseForTest();
 
   using legacy = openNodeSqliteDatabase(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   // A compatible future column must survive; copying only canonical columns loses its data.
   legacy.exec(`

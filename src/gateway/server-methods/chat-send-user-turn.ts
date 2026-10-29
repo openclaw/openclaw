@@ -23,9 +23,9 @@ import {
   discardPreparedInboundMedia,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
-import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { transferGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
@@ -289,16 +289,28 @@ export function prepareChatSendUserTurn(params: {
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
-  const recoveredRequester = readChatInputRecoveryAdmission(session.clientRunId)?.requesterProfile;
+  const recoveredRequester = readQueuedChatInputAdmission(session.clientRunId)?.requesterProfile;
   const requester = client?.authenticatedUserProfile;
   const externalInput =
     !request.systemInputProvenance || request.systemInputProvenance.kind === "external_user";
-  if (
+  if (recoveredRequester && externalInput) {
+    bindRequesterProfile(ctx, {
+      ...recoveredRequester,
+      isCurrent: () => {
+        try {
+          admission.assertWorkAdmissionCurrent?.();
+          return recoveredRequester.isCurrent();
+        } catch {
+          return false;
+        }
+      },
+    });
+  } else if (
     client &&
     requester &&
-    (recoveredRequester || client.authenticatedUserId || client.internal?.authenticatedOperator) &&
+    (client.authenticatedUserId || client.internal?.authenticatedOperator) &&
     isBrowserOperatorUiClient(request.clientInfo) &&
-    (recoveredRequester || !isSyntheticGatewayCaller(client)) &&
+    !isSyntheticGatewayCaller(client) &&
     externalInput
   ) {
     const authenticatedUserId = client.authenticatedUserId;
@@ -311,9 +323,6 @@ export function prepareChatSendUserTurn(params: {
           admission.assertWorkAdmissionCurrent?.();
         } catch {
           return false;
-        }
-        if (recoveredRequester) {
-          return recoveredRequester.id === profileId && recoveredRequester.isCurrent();
         }
         return (
           !client.invalidated &&

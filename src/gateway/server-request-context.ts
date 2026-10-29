@@ -87,7 +87,6 @@ type GatewayRequestContextRuntime = Pick<
   | "broadcastVoiceWakeChanged"
   | "broadcastVoiceWakeRoutingChanged"
   | "unavailableGatewayMethods"
-  | "inputRecovery"
 > &
   Pick<
     GatewayCoreRuntime,
@@ -571,7 +570,6 @@ export function createGatewayRequestContext(
     broadcastVoiceWakeChanged: runtime.broadcastVoiceWakeChanged,
     broadcastVoiceWakeRoutingChanged: runtime.broadcastVoiceWakeRoutingChanged,
     unavailableGatewayMethods: runtime.unavailableGatewayMethods,
-    inputRecovery: runtime.inputRecovery,
   };
   return bindSessionRowProjection(context, runtime.getSessionRowProjection);
 }

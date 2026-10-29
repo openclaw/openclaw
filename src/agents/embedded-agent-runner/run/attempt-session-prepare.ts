@@ -6,7 +6,6 @@ import type { ContextEngine } from "../../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
-  isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../../sessions/input-provenance.js";
@@ -359,9 +358,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         const candidate = resolveOrphanRepairPlan({
           sessionManager,
           prompt: attempt.prompt,
-          preserveLeaf:
-            attempt.skipPreparedUserTurnMessage === true ||
-            isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
+          preserveLeaf: attempt.skipPreparedUserTurnMessage === true,
         });
         const reconciledCurrentUser = reconcilePrePersistedCurrentUserTurn({
           activeSession,
@@ -378,8 +375,13 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
           candidate.removeLeaf = false;
         }
         // Keep unanswered user input in history through failed internal continuations.
+        // A restart adds a separate system input to this same conversation.
+        const isRestartInput =
+          attempt.inputProvenance?.kind === "internal_system" &&
+          attempt.inputProvenance.sourceTool === "restart";
         const preserveUnansweredUser =
-          shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance) &&
+          (isRestartInput ||
+            shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance)) &&
           (!orphanProvenance || orphanProvenance.kind === "external_user");
         const foreignOrphan = candidate && foreignInputs?.ownsEntry(candidate.messageEntry.id);
         if (reconciledCurrentUser || preserveUnansweredUser || foreignOrphan) {

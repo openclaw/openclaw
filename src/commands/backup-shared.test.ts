@@ -1,35 +1,29 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveRequiredBackupPath } from "./backup-shared.js";
+import { resolveBackupArchivePath, resolveRequiredBackupPath } from "./backup-shared.js";
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
-describe("resolveRequiredBackupPath", () => {
-  it.each([
-    [undefined, "--repository"],
-    ["   ", "<snapshot>"],
-  ] as const)("rejects %j for %s", (value, label) => {
-    expect(() => resolveRequiredBackupPath(value, label)).toThrow(
-      `Missing required ${label} value.`,
-    );
+describe.each([
+  ["repository", resolveRequiredBackupPath, false],
+  ["archive", resolveBackupArchivePath, true],
+] as const)("%s paths", (_kind, resolve, literal) => {
+  it.each([undefined, "", " \t "])("rejects blank values: %j", (value) => {
+    expect(() => resolve(value, "--target")).toThrow("Missing required --target value.");
   });
 
-  it("trims and resolves relative paths from cwd", () => {
-    expect(resolveRequiredBackupPath("  backups/archive  ", "--target")).toBe(
-      path.resolve("backups/archive"),
-    );
-  });
+  it.each(["  backups/archive  ", path.resolve("archive output ")])(
+    "resolves relative and absolute paths: %j",
+    (value) => {
+      expect(resolve(value, "--target")).toBe(path.resolve(literal ? value : value.trim()));
+    },
+  );
 
   it("expands tilde from the effective home", () => {
     const home = path.resolve("effective-home");
     vi.stubEnv("OPENCLAW_HOME", home);
-    expect(resolveRequiredBackupPath("~/backups", "--repository")).toBe(path.join(home, "backups"));
-  });
-
-  it("preserves absolute paths", () => {
-    const absolute = path.resolve("absolute-backup");
-    expect(resolveRequiredBackupPath(`  ${absolute}  `, "--scratch")).toBe(absolute);
+    expect(resolve("~/backups ", "--target")).toBe(
+      path.join(home, literal ? "backups " : "backups"),
+    );
   });
 });

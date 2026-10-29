@@ -448,8 +448,13 @@ suite.define(() => {
           }
           expect(generating.composer.left).toBeCloseTo(chat.composer.left, 0);
           expect(generating.composer.right).toBeCloseTo(chat.composer.right, 0);
-          expect(chat.thread!.left).toBeCloseTo(chat.composer.left, 0);
-          expect(chat.thread!.right).toBeCloseTo(chat.composer.right, 0);
+          // Comment pins may need more room than the composer; both share the usable center.
+          expect(chat.thread!.left).toBeGreaterThanOrEqual(chat.composer.left);
+          expect(chat.thread!.right).toBeLessThanOrEqual(chat.composer.right);
+          expect(chat.thread!.left + chat.thread!.right).toBeCloseTo(
+            chat.composer.left + chat.composer.right,
+            0,
+          );
         }
       },
     );

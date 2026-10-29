@@ -234,6 +234,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/trajectory-runtime-append.ts|typescript/unbound-method|2",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
+        // Rollback failure retains both caught errors in one AggregateError cause.
+        "scripts/pr-lib/cache-lifetime.mjs|preserve-caught-error|1",
         // These owners sort only fresh private arrays, preserving their source collections.
         "src/agents/agent-bundle-lsp-env.ts|unicorn/no-array-sort|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",

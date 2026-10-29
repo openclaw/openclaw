@@ -45,7 +45,7 @@ export function recordUpdateModelRetirement(
   }
   const detail =
     status === "deferred"
-      ? "Model retirement repair deferred until plugin convergence."
+      ? "Model retirement repair deferred until plugin package convergence: the updating parent still owns plugin installation. Run openclaw update repair after the package update finishes."
       : "Deferred model retirement repair completed after plugin convergence.";
   recordUpdateRunStep(
     run.runId,
@@ -57,6 +57,17 @@ export function recordUpdateModelRetirement(
     },
     { env },
   );
+  if (status === "completed") {
+    recordUpdateRunStep(
+      run.runId,
+      {
+        step: `warning:${RETIREMENT_STEP}:deferred`,
+        status: "skipped",
+        detail,
+      },
+      { env },
+    );
+  }
   // Completion must follow the package warnings in the bounded status history.
   recordUpdateRunStep(
     run.runId,

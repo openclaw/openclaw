@@ -138,7 +138,9 @@ syntax and whole-list inputs still work with `set`, `patch`, and `unset`; writes
 persist the current keyed roster. Indexed edits use the current roster order.
 Within a batch, a submitted list keeps its order across subsequent keyed edits,
 including when agent IDs are numeric strings. Existing roster-deletion and
-`$include` ownership protections still apply.
+`$include` ownership protections still apply. `config unset agents.entries.<id>`,
+or a patch that sets it to `null`, removes only that config entry; use
+`openclaw agents delete` to also clean up the agent's state.
 
 When a legacy roster expands a single-agent installation in the root config file,
 writes retire its `default` marker and preserve the existing agent's responsibilities

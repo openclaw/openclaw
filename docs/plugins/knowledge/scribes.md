@@ -3,7 +3,7 @@ summary: "Knowledge scribes: conversations Knowledge starts for you that keep a 
 read_when:
   - You want Knowledge to learn from your conversations or from Memory without asking each time
   - You are turning on the scheduled consolidation of unlinked claims
-  - A scribe shows Failing or Needs reauthorization on the Scribes tab
+  - A scribe shows Failing or Conversation not found on the Scribes tab
 title: "Knowledge scribes"
 sidebarTitle: "Scribes"
 ---
@@ -14,7 +14,7 @@ to the viewed agent's store. Part of the [Knowledge plugin](/plugins/knowledge)
 guide.
 
 Open **Knowledge** in the Control UI and select the **Scribes** tab. Scribes
-that are starting, on, paused, failing, or need reauthorization are listed under
+that are starting, on, paused, failing, or whose conversation is not found are listed under
 **On**. The rest are under **Available**, including a once scribe that is done,
 which can be started again.
 
@@ -116,15 +116,15 @@ the run message, and its schedule is the scribe's schedule.
 
 ## States
 
-| State                 | Meaning                                                                                                                                        |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Available             | No scribe conversation, a conversation that never received its prompt, or an ongoing scribe that was turned off.                               |
-| Starting              | The conversation received its prompt but has not reported its status yet.                                                                      |
-| On                    | Its automation is enabled and the last run did not fail.                                                                                       |
-| Paused                | Its automation is disabled.                                                                                                                    |
-| Failing               | The last run failed, the scheduler disabled it after repeated failures, a turn reported a failure, or the start turn stopped without a status. |
-| Done                  | A once scribe finished.                                                                                                                        |
-| Needs reauthorization | The automation exists but its conversation was archived or deleted.                                                                            |
+| State                  | Meaning                                                                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Available              | No scribe conversation, a conversation that never received its prompt, or an ongoing scribe that was turned off.                               |
+| Starting               | The conversation received its prompt but has not reported its status yet.                                                                      |
+| On                     | Its automation is enabled and the last run did not fail.                                                                                       |
+| Paused                 | Its automation is disabled.                                                                                                                    |
+| Failing                | The last run failed, the scheduler disabled it after repeated failures, a turn reported a failure, or the start turn stopped without a status. |
+| Done                   | A once scribe finished.                                                                                                                        |
+| Conversation not found | The automation exists but its conversation was archived or deleted. Repair restores an archived one or starts a new one.                       |
 
 The Scribes tab derives an ongoing scribe's state from its automation: whether
 it exists and targets the scribe's conversation, whether it is enabled, and its
@@ -140,14 +140,14 @@ summary.
 Open a scribe for its schedule, next and last run, model, failure alert, and
 recent runs.
 
-| Control           | Effect                                                                                                                                        |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Run now           | Runs the automation immediately. If a run is already in progress, it does not start another.                                                  |
-| Pause / Resume    | Disables or enables the automation.                                                                                                           |
-| Turn off…         | Removes the automation. The conversation is kept.                                                                                             |
-| Open conversation | Opens the scribe's conversation.                                                                                                              |
-| Repair            | Restores an archived conversation, or creates one, and asks it to re-check and recreate its automation, keeping its schedule and run message. |
-| Start again…      | For a failing scribe without an automation: opens the start dialog and sends a new prompt in the same conversation.                           |
+| Control           | Effect                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run now           | Runs the automation immediately. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                                             |
+| Pause / Resume    | Disables or enables the automation.                                                                                                                                                                                                                                                                                                                      |
+| Turn off…         | Removes the automation. The conversation is kept.                                                                                                                                                                                                                                                                                                        |
+| Open conversation | Opens the scribe's conversation.                                                                                                                                                                                                                                                                                                                         |
+| Repair            | Gets the automation running again. For an archived conversation it restores the conversation and turns the automation back on, without a model turn. For a deleted conversation, or a failing scribe, it asks the scribe's conversation (a new one when deleted) to recreate its automation there, keeping its schedule and run message, and turn it on. |
+| Start again…      | For a failing scribe without an automation: opens the start dialog and sends a new prompt in the same conversation.                                                                                                                                                                                                                                      |
 
 Controls need write access. Pause, resume, and turn off are rejected if the
 automation changed since the page read it; the page shows the error, and
@@ -160,10 +160,10 @@ reopening the scribe shows its current state.
 - Conversation counts and the `MEMORY.md` size come from Gateway reads. A count
   the Gateway cannot provide is left out rather than estimated.
 - The tab reads status lines from the conversation's last 100 messages.
-- The page finds a scribe's conversation by its `Scribe · <title>` name and, for an
-  ongoing scribe, picks the one its automation targets. Renaming the conversation
-  hides it from the tab: a once scribe starts a new conversation next time, and an
-  ongoing one shows Needs reauthorization.
+- An ongoing scribe's conversation is the session its automation targets, read by
+  session key, so renaming it is safe. A scribe without an automation is found by
+  its `Scribe · <title>` name; renaming that conversation means the scribe starts a
+  new one next time.
 
 ## Related
 

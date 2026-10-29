@@ -159,8 +159,8 @@ const { loadPluginMetadataSnapshot } =
 const { createPreparedModelCatalogWorkerInput } =
   await import("../../src/agents/prepared-model-catalog-worker.js");
 const { AuthStorage } = await import("../../src/agents/sessions/auth-storage.js");
-const { captureClawInstallSchemaVersionFacts } =
-  await import("../../src/claws/provenance-runtime-read.js");
+const { captureTemplateInstallSchemaVersionFacts } =
+  await import("../../src/templates/provenance-runtime-read.js");
 const { prepareSharedAuthStoreOwnership } =
   await import("../../src/agents/auth-profiles/path-resolve.js");
 await prepareSharedAuthStoreOwnership(env);
@@ -397,7 +397,7 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
           kind: "catalog",
           ...(timed ? { refresh: true } : {}),
           syntheticAuth: [],
-          clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
+          templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({ env }),
         },
       },
       { timeoutMs: 120_000 },

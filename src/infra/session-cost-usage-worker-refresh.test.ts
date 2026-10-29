@@ -87,13 +87,10 @@ function expectUsage(entry: UsageCostRollupEntry, tokens: number, records: numbe
     Object.values(entry.rollup.buckets).reduce((sum, b) => sum + b.totals.totalTokens, 0),
   ).toBe(tokens);
 }
-function expectIncomplete(entry: UsageCostRollupEntry, total: number) {
-  expect(entry.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
-    usageReport: { state: "unavailable" },
-    totalTokens: total,
-    totalCost: total,
-    missingCostEntries: 1,
-  });
+function expectMeasured(entry: UsageCostRollupEntry, total: number) {
+  const totals = entry.rollup.buckets[String(timestamp)]?.totals;
+  expect(totals).toMatchObject({ totalTokens: total, totalCost: total, missingCostEntries: 0 });
+  expect(totals).not.toHaveProperty("usageReport");
 }
 
 it("stops reading subsequent transcript pages when its owner cancels", async () => {
@@ -109,12 +106,12 @@ it("stops reading subsequent transcript pages when its owner cancels", async () 
   expect(readSequences).toEqual([1, 4]);
 });
 
-it("keeps known billing separate from unavailable usage across incremental refreshes", async () => {
+it("ignores unknown usage across incremental refreshes", async () => {
   const before = await scan(initial);
   const interrupted = [...initial, makeRow(9, "aborted", "a", 100, true)];
   const afterAbort = await scan(interrupted, before);
-  expectIncomplete(afterAbort, 3);
-  expectIncomplete(
+  expectMeasured(afterAbort, 3);
+  expectMeasured(
     await scan([...interrupted, makeRow(12, "completed", "aborted", 4)], afterAbort),
     7,
   );

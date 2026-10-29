@@ -40,7 +40,6 @@ export const GatewayRemoteConfigSchema = z
 
 export const SecuritySchema = z
   .strictObject({
-    preset: z.enum(["personal", "corporate"]).optional(),
     audit: z
       .strictObject({
         suppressions: z

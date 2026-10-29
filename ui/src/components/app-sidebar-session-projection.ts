@@ -21,7 +21,7 @@ import {
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
 import {
-  SIDEBAR_SESSION_PAGE_SIZE,
+  sidebarSessionPagination,
   isListedInPinnedSection,
   type SidebarPinZone,
   visibleSessionChildren,
@@ -630,14 +630,15 @@ export class SidebarSessionProjection {
       const collapsed =
         (renderHeader || section.id.startsWith("agent:")) &&
         input.collapsedSections.has(section.id);
-      const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
+      const { initialLimit, key } = sidebarSessionPagination(grouping, section.id);
+      const visibleLimit = input.visibleSessionLimits.get(key) ?? initialLimit;
       const requiredRowCount = section.rows.reduce(
         (count, row) => count + Number(row.active || row.pinned),
         0,
       );
       const collapsedVisibleRowCount = Math.max(
         requiredRowCount,
-        Math.min(totalRowCount, SIDEBAR_SESSION_PAGE_SIZE),
+        Math.min(totalRowCount, initialLimit),
       );
       let visibleRowCount = 0;
       if (!collapsed) {

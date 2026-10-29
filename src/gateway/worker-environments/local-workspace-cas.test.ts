@@ -82,6 +82,15 @@ it.each([2, 64])("loads %i directories with reads bounded by tree depth", (count
     localWorkspaceDigestBytes(childRoot.treeRef),
   );
   expect(() => readLocalWorkspaceTree(db, root)).toThrow("baseline nodes are missing");
+  const surviving = readLocalWorkspaceTree(db, root, { allowMissing: true });
+  expect(surviving.has("dir-0")).toBe(true);
+  expect(surviving.has("dir-0/first.txt")).toBe(false);
+  expect(surviving.has("dir-1/first.txt")).toBe(true);
+  db.prepare("UPDATE local_workspace_tree_packs SET records_json = ? WHERE tree_digest = ?").run(
+    "{",
+    root,
+  );
+  expect(() => readLocalWorkspaceTree(db, root, { allowMissing: true })).toThrow(SyntaxError);
 });
 
 it("shares an unchanged subdirectory pack across different projection roots", () => {

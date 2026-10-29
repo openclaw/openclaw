@@ -6,9 +6,9 @@ describe("flattenMarkdownToPlainText", () => {
     ["fenced code blocks", "Before\n```ts\nconst hidden = true;\n```\nAfter", "Before After"],
     ["inline code", "Use `pnpm test` now", "Use pnpm test now"],
     [
-      "links",
-      "Read the [deployment guide](https://example.com/deploy)",
-      "Read the deployment guide",
+      "links and escaped image markers",
+      String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,
+      String.raw`Read the deployment guide, \!important, \\diagram`,
     ],
     ["images", "Status ![green check](https://example.com/check.png)", "Status green check"],
     [

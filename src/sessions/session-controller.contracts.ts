@@ -439,6 +439,10 @@ export type SessionEffectRef = {
   run: <T>(run: () => Promise<T>) => Promise<T>;
 };
 export type Effect = {
+  admissionTransitions?: Map<
+    object,
+    (transition: SessionAdmissionTransition, isActive: SessionEffectRef["isActive"]) => void
+  >;
   diagnostic?: LifecycleDiagnosticOperation;
   sourceInput?: SessionControllerInput;
   agent?: AgentWorkAdmissionIdentity;

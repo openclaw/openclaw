@@ -21,6 +21,7 @@ import {
   type StoreWriterTiming,
 } from "../shared/store-writer-queue.js";
 import { shortenHomePath } from "../utils.js";
+import { isAgentDatabaseStartupReadReady } from "./agent-database-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { agentDatabaseWriteAdmissionState as admission } from "./openclaw-agent-write-admission-state.js";
@@ -252,8 +253,14 @@ export async function runOpenClawAgentWorkerWrite<T>(
 export function runOpenClawAgentBoardReadAdmission<T>(
   options: OpenClawAgentDatabaseOptions,
   run: () => Promise<T>,
+  snapshotOnly = false,
 ): Promise<T> {
   const pathname = resolveOpenClawAgentSqlitePath(options);
+  // Display snapshots need no write ordering while startup refuses all board mutations.
+  // Authority-consumer callbacks retain the FIFO even during startup.
+  if (snapshotOnly && isAgentDatabaseStartupReadReady(pathname, { env: options.env })) {
+    return run();
+  }
   const storePath = readDatabasePathIdentitySync(pathname).canonicalPath;
   return runWithSqliteDatabaseAdmissionTurn([pathname], () =>
     runQueuedStoreWrite({

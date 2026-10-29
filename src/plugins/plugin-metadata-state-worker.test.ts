@@ -6,7 +6,6 @@ import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { sqliteFamilyHashes as familyHashes } from "../../test/helpers/sqlite-family-hashes.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { sourceHostPluginConflict } from "../claws/plugin-capability-probe.js";
 import { captureConfigHealthStateStore } from "../config/io.health-state.js";
 import {
   resolveConfigWidePluginMetadataSnapshot,
@@ -29,6 +28,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { sourceHostPluginConflict } from "../templates/plugin-capability-probe.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledDiscovery from "./bundled-discovery-state.js";
@@ -111,7 +111,7 @@ async function seed(env: NodeJS.ProcessEnv, value: InstalledPluginIndex) {
   return database.path;
 }
 
-it("prepares Claw metadata off-thread and observes committed inventory and policy changes", async () => {
+it("prepares Template metadata off-thread and observes committed inventory and policy changes", async () => {
   const env = environment();
   await seed(env, index());
   const pkg = {

@@ -1,7 +1,6 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { withClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   copyConfigResolutionFacts,
   restoreConfigResolutionFacts,
@@ -38,6 +37,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { captureAuthProfileCredentialCommits } from "../state/user-model-account-authority.js";
+import { withTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -556,36 +556,38 @@ if (parentPort) {
                 try {
                   const work = new AsyncWorkScope();
                   const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
-                    withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
-                      // Never select a Codex binary here; report the parent's decision.
-                      withHandedOffCodexClientVersion(request.codexClientVersion, () =>
-                        work.run(() =>
-                          runCatalogRequest(
-                            value,
-                            request,
-                            work,
-                            async () => {
-                              if (previous?.fingerprint === fingerprint) {
-                                return previous.prepared;
-                              }
-                              replacing = true;
-                              return (attempted = await prepareWorkerGeneration(value));
-                            },
-                            async () => {
-                              // Admission can outlast a refresh on slow filesystems; only completed
-                              // generation preparation starts the provider-discovery deadline.
-                              stopProgress();
-                              const response = await channel?.request(null);
-                              response?.consumed();
-                              if (response && response.input !== true) {
-                                throw new Error(
-                                  "prepared model catalog request retired before discovery",
-                                );
-                              }
-                            },
+                    withTemplateInstallSchemaVersionFacts(
+                      request.templateInstallSchemaVersions,
+                      () =>
+                        // Never select a Codex binary here; report the parent's decision.
+                        withHandedOffCodexClientVersion(request.codexClientVersion, () =>
+                          work.run(() =>
+                            runCatalogRequest(
+                              value,
+                              request,
+                              work,
+                              async () => {
+                                if (previous?.fingerprint === fingerprint) {
+                                  return previous.prepared;
+                                }
+                                replacing = true;
+                                return (attempted = await prepareWorkerGeneration(value));
+                              },
+                              async () => {
+                                // Admission can outlast a refresh on slow filesystems; only completed
+                                // generation preparation starts the provider-discovery deadline.
+                                stopProgress();
+                                const response = await channel?.request(null);
+                                response?.consumed();
+                                if (response && response.input !== true) {
+                                  throw new Error(
+                                    "prepared model catalog request retired before discovery",
+                                  );
+                                }
+                              },
+                            ),
                           ),
                         ),
-                      ),
                     ),
                   );
                   if (attempted && result.status === "ok") {

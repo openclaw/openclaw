@@ -210,8 +210,8 @@ export async function installManagedPlugin(
           },
         },
         onCapabilityConsent: params.onCapabilityConsent,
-        requireCapabilityConsent: params.clawManaged === true,
-        requireClawHubTrust: params.clawManaged === true,
+        requireCapabilityConsent: params.templateManaged === true,
+        requireClawHubTrust: params.templateManaged === true,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         beforePersistentEffect: prepareEffect,
         ...(params.request.acknowledgeCapabilities
@@ -292,7 +292,7 @@ export async function installManagedPlugin(
         throw new PluginInstallPersistedError(installed.pluginId, error);
       }
     };
-    return params.request.source === "clawhub" && !params.clawManaged
+    return params.request.source === "clawhub" && !params.templateManaged
       ? await withClawPackageLifecycleLease(
           { kind: "plugin", source: "clawhub", ref: params.request.packageName },
           performInstall,

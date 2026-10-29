@@ -55,13 +55,23 @@ function queueFixture(context: QueueContext, stateDir: string) {
           kind: "agentTurn",
           sessionKey: "agent:main:main",
           message: "generated image ready",
+          expectedMediaUrls: ["/tmp/synthetic-image.png"],
           messageId,
           ...overrides,
         },
         context,
       ),
     event: (text: string) =>
-      enqueueSessionDelivery({ kind: "systemEvent", sessionKey: "agent:main:main", text }, context),
+      enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: text,
+          messageId: text,
+          expectedMediaUrls: ["/tmp/synthetic-image.png"],
+        },
+        context,
+      ),
     seed: (entry: Parameters<typeof seedDeliveryQueueEntry>[0]["entry"]) =>
       seedDeliveryQueueEntry({ queueName: "session", stateDir, entry }),
     started: (entry: Parameters<typeof markStarted>[0]) => markStarted(entry, context),
@@ -333,7 +343,7 @@ describe("session-delivery queue recovery", () => {
       });
 
       expect(summary.failed).toBe(1);
-      await q.expectPending({ id, retryCount: 1, lastChargedAgentRunAttempt: 0 });
+      await q.expectPending({ id, retryCount: 1 });
     });
   });
 
@@ -539,7 +549,7 @@ describe("session-delivery queue recovery", () => {
       expect(summary.recovered).toBe(1);
       const pending = await q.pending();
       expect(pending).toEqual([
-        expect.objectContaining({ kind: "systemEvent", text: "leave fresh entry queued" }),
+        expect.objectContaining({ kind: "agentTurn", message: "leave fresh entry queued" }),
       ]);
     });
 

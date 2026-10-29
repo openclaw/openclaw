@@ -25,7 +25,7 @@ import * as transcriptHydration from "../../config/sessions/session-transcript-h
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
-import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import {
   historyLane,
   targetDiscoveryLane,
@@ -286,7 +286,7 @@ it.each(["bounded", "anchors"] as const)(
             commandId: "adopt-current-run",
             phaseId: "turn",
             sessionId: target.sessionId,
-            expectedState: buildRestartRecoveryExpectedState(current.entry!),
+            expectedState: buildSessionTranscriptTurnExpectedState(current.entry!),
             lifecycle: {},
             runId: "current-run",
           },

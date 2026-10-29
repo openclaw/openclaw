@@ -70,6 +70,7 @@ export function createSessionMenuSettings(options: SessionMenuSettingsOptions) {
   };
   return {
     communicationState,
+    row: details.row,
     get communicationAvailable() {
       return Boolean(communicationState().session.effectiveCommunication);
     },

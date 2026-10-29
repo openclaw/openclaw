@@ -41,11 +41,6 @@ div.chat-thread:where(.chat-thread--comment-pins) {
   position: relative;
 }
 
-/* Reserve a narrow gutter for pins even when a selected line fills the viewport. */
-div.chat-thread:where(.chat-thread--comment-pins) .chat-thread-inner {
-  padding-inline-end: 28px;
-}
-
 openclaw-chat-comment-pins {
   contain: layout;
   position: absolute;

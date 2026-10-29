@@ -185,7 +185,11 @@ the detached updater and the restarted Gateway, so reconnecting does not lose
 the outcome. An external supervisor's native update keeps the run ID from its
 `update migrate` receipt. It is recorded as a succeeded CLI run, starting at
 migration, when the supervisor accepts the release and runs `update finish`.
-Retrying `update finish` keeps that one record. Post-core finalization children report back to their parent without
+Retrying `update finish` keeps that one record. Native updates record pending
+advisory Doctor inspections before running them against the serving Gateway.
+Their findings appear in the same history; interrupted or incomplete inspections
+remain retryable with `update finish` without changing the accepted outcome.
+Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 

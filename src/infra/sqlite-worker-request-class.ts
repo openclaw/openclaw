@@ -70,7 +70,7 @@ const families = [
   "bootstrap",
   "capture",
   "channelIngress",
-  "claws",
+  "templates",
   "config",
   "conversation",
   "conversationBindings",

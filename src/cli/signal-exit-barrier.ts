@@ -34,7 +34,7 @@ const activeBarriers = resolveGlobalSet<SignalExitBarrier>(
 );
 const activeGates = resolveGlobalSet<{
   finished: Promise<void>;
-  interrupt?: (signal?: CliExitSignal) => void;
+  interrupt?: (signal?: CliExitSignal, reason?: string) => void;
 }>(Symbol.for("openclaw.signalExitGates"), "close-and-restart");
 const activeFinalizers = resolveGlobalSet<SignalExitBarrier>(
   Symbol.for("openclaw.signalExitFinalizers"),
@@ -43,7 +43,7 @@ const activeFinalizers = resolveGlobalSet<SignalExitBarrier>(
 
 export function registerSignalExitGate(
   finished: Promise<void>,
-  interrupt?: (signal?: CliExitSignal) => void,
+  interrupt?: (signal?: CliExitSignal, reason?: string) => void,
 ): () => void {
   const gate = { finished, interrupt };
   activeGates.add(gate);
@@ -78,7 +78,7 @@ export function exitAfterSignalExitBarriers(code: number | string, reason?: stri
     pendingProcessExit = Promise.resolve(code);
     return;
   }
-  pendingProcessExit = waitForSignalExitBarriers()
+  pendingProcessExit = waitForSignalExitBarriers(undefined, reason)
     .then(() => code)
     // The output stream may itself be broken; cleanup owners report their own failures.
     .catch(() => (code === 0 || code === "0" ? 1 : code))
@@ -95,8 +95,9 @@ export function exitAfterSignalExitBarriers(code: number | string, reason?: stri
     });
 }
 
-export function waitForSignalExitBarriers(signal?: CliExitSignal): Promise<void> {
-  pendingSignalExitDrain ??= drainSignalExitBarriers(signal).finally(() => {
+export function waitForSignalExitBarriers(signal?: CliExitSignal, reason?: string): Promise<void> {
+  // The first drain owns cancellation's cause; a later signal can still own the exit code.
+  pendingSignalExitDrain ??= drainSignalExitBarriers(signal, reason).finally(() => {
     pendingSignalExitDrain = undefined;
   });
   if (signal && !cliSignalExit) {
@@ -111,10 +112,10 @@ export function waitForSignalExitBarriers(signal?: CliExitSignal): Promise<void>
   return pendingSignalExitDrain;
 }
 
-async function drainSignalExitBarriers(signal?: CliExitSignal): Promise<void> {
+async function drainSignalExitBarriers(signal?: CliExitSignal, reason?: string): Promise<void> {
   const gates = [...activeGates];
   for (const gate of gates) {
-    gate.interrupt?.(signal);
+    gate.interrupt?.(signal, reason);
   }
   const gateResults = await Promise.allSettled(gates.map((gate) => gate.finished));
   const barrierResults = await Promise.allSettled(
@@ -172,7 +173,7 @@ const cliSignalListeners = {
 const onCliSigpipe = () => {};
 const onCliOutputError = (error: NodeJS.ErrnoException) => {
   if (error.code === "EPIPE" && cliSignalOwners > 0) {
-    exitAfterSignalExitBarriers(141);
+    exitAfterSignalExitBarriers(141, "output pipe closed (EPIPE)");
   }
 };
 

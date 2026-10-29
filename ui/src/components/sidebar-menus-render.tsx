@@ -239,8 +239,26 @@ function renderSidebarMenus(
         })
       }
     </Show>,
-    <Show when={projected.agentCreateDialogOpen}>
-      {renderSidebarAgentCreateDialogForMenus(projected, view)}
+    <Show when={projected.agentCreateDialogOpen && view.sessionDataContext} keyed>
+      {(context) => (
+        <Loading>
+          <AgentCreateDialog
+            context={context}
+            onCancel={() => projected.closeAgentCreateDialog()}
+            onCreate={(identity) => {
+              projected.closeAgentCreateDialog();
+              void import("../app/create-agent.ts")
+                .then(({ createApplicationAgent }) => createApplicationAgent(context, identity))
+                .catch((error: unknown) =>
+                  showToast({
+                    message: t("agentChip.creationFailed", { error: formatUiError(error) }),
+                    durationMs: 12_000,
+                  }),
+                );
+            }}
+          />
+        </Loading>
+      )}
     </Show>,
     <Show when={projected.identityMenuPosition} keyed>
       {(menu) => {
@@ -535,33 +553,4 @@ function renderSidebarMenus(
       {(menu) => renderSidebarCatalogViewMenuForMenus(projected, view, menu)}
     </Show>,
   ];
-}
-
-function renderSidebarAgentCreateDialogForMenus(
-  menus: SidebarMenus,
-  host: SidebarMenusOwner,
-): JSX.Element | null {
-  const context = host.sessionDataContext;
-  if (!context) {
-    return null;
-  }
-  return (
-    <Loading>
-      <AgentCreateDialog
-        context={context}
-        onCancel={() => menus.closeAgentCreateDialog()}
-        onCreate={(identity) => {
-          menus.closeAgentCreateDialog();
-          void import("../app/create-agent.ts")
-            .then(({ createApplicationAgent }) => createApplicationAgent(context, identity))
-            .catch((error: unknown) =>
-              showToast({
-                message: t("agentChip.creationFailed", { error: formatUiError(error) }),
-                durationMs: 12_000,
-              }),
-            );
-        }}
-      />
-    </Loading>
-  );
 }

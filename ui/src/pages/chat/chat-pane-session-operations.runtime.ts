@@ -1,16 +1,9 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionsRecoverParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { formatUiError } from "../../lib/format-error.ts";
-import {
-  readSessionMethodAccess,
-  type SessionMethodAccess,
-} from "../../lib/session-method-access.ts";
+import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { setChatError } from "./chat-history-state.ts";
-import type { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import {
   NEW_SESSION_ACTIVE_RUN_MESSAGE,
   NEW_SESSION_CREATE_FAILED_MESSAGE,
@@ -28,77 +21,6 @@ type SessionOperation = {
   isCurrent: () => boolean;
   onSessionChange: (nextSessionKey: string) => boolean | void;
 };
-
-export async function recoverCapturedChatSession({
-  state,
-  context,
-  sessions,
-  paneId,
-  isCurrent,
-  onSessionChange,
-  params,
-  sourceSessionKey,
-  generation,
-  creation,
-}: SessionOperation & {
-  params: SessionsRecoverParams;
-  sourceSessionKey: string;
-  generation: number;
-  creation: ChatPaneSessionCreation["sessionCreation"];
-}): Promise<boolean> {
-  if (!isCurrent() || state.sessionKey !== sourceSessionKey) {
-    return false;
-  }
-  const access = readSessionMethodAccess(context.gateway.snapshot, {
-    method: "sessions.recover",
-    params,
-  });
-  if (!access.allowed) {
-    setChatError(state, access.reason);
-    return false;
-  }
-  const recovery = await sessions.recover(params);
-  if (!isCurrent() || state.sessionKey !== sourceSessionKey) {
-    return false;
-  }
-  if (!recovery) {
-    setChatError(state, state.sessionsError ?? NEW_SESSION_CREATE_FAILED_MESSAGE);
-    return false;
-  }
-  if (recovery.continuation.status === "rejected") {
-    if (
-      params.mode === "in-place" &&
-      params.sessionId &&
-      params.recoveryCycleId &&
-      recovery.key === sourceSessionKey &&
-      recovery.sessionId === params.sessionId &&
-      isRecord(recovery.continuation.error.details) &&
-      recovery.continuation.error.details.reason === "restart-safe-tools-unavailable"
-    ) {
-      creation.restartFallback = {
-        key: sourceSessionKey,
-        sessionId: params.sessionId,
-        recoveryCycleId: params.recoveryCycleId,
-        generation,
-      };
-    }
-    setChatError(state, formatUiError(recovery.continuation.error.message));
-    return false;
-  }
-  creation.restartFallback = null;
-  const nextSessionKey = recovery.key;
-  if (areUiSessionKeysEquivalent(nextSessionKey, sourceSessionKey)) {
-    return true;
-  }
-  if (onSessionChange(nextSessionKey) === false) {
-    return false;
-  }
-  preparePaneSessionHandoff(context, paneId, nextSessionKey, {
-    attachments: [],
-    draft: "",
-  });
-  return true;
-}
 
 export async function createCapturedChatSession({
   state,

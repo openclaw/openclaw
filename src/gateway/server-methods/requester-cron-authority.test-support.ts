@@ -22,6 +22,7 @@ import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { loadCronStore } from "../../cron/store.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db-lifecycle.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -92,7 +93,6 @@ export function admission(
       : undefined,
     hasRestoredCronContinuation: false,
     isOneShotModelRun: false,
-    isRestartRecoveryResumeRun: false,
   });
 }
 
@@ -200,11 +200,12 @@ export async function createCreatorTransportTools(params: {
   admitted: runContext.AdmittedRunContext;
   creator?: cronAuthority.CronCreatorAuthorityCapability;
   senderIsOwner: boolean;
-  forceRestartSafeTools?: boolean;
   workspaceDir?: string;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   sandbox?: SandboxContext;
   turnSourceChannel?: string;
+  trigger?: string;
+  inputProvenance?: InputProvenance;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
 }): Promise<CreatorTransportTools> {
   const { transport, config, admitted, creator, senderIsOwner } = params;
@@ -315,7 +316,8 @@ export async function createCreatorTransportTools(params: {
       config,
       agentId: "main",
       ...toolContext,
-      forceRestartSafeTools: params.forceRestartSafeTools,
+      trigger: params.trigger,
+      inputProvenance: params.inputProvenance,
       sessionPermissionPolicy: params.sessionPermissionPolicy,
       sandbox: params.sandbox,
       cronCreatorToolAllowlistRef: creatorTools,

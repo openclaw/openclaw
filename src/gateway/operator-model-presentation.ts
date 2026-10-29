@@ -142,7 +142,8 @@ export function projectOperatorModelRead<
     ...(result.defaults && policy ? { defaults: policy.defaults(result.defaults) } : {}),
     ...(result.metadata && policy ? { metadata: policy.metadata(result.metadata) } : {}),
     ...(result.sessionInfo ? { sessionInfo: presentation.session(result.sessionInfo) } : {}),
-    ...(result.messages
+    // Access-only metadata filtering must not decode and re-encode unchanged history.
+    ...(result.messages && presentation.restrictsModels
       ? {
           messages: (result.messages instanceof SerializedJsonArray
             ? result.messages.materialize()
