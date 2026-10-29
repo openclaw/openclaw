@@ -6,7 +6,6 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.ui.design.ClawListPanel
-import ai.openclaw.app.ui.design.ClawStatusRow
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -69,9 +68,7 @@ private fun DreamingPanel(summary: GatewayDreamingSummary) {
         HealthStatus(nativeString("Signal Index"), if (summary.phaseSignalHealthy) nativeString("Healthy") else nativeString("Needs attention"), summary.phaseSignalHealthy),
         HealthStatus(nativeString("Promoted"), nativeString("\${summary.promotedToday} today · \${summary.promotedTotal} total", summary.promotedToday, summary.promotedTotal), true),
       )
-    ClawListPanel(items = healthRows, contentPadding = PaddingValues(0.dp), dividerColor = ClawTheme.colors.border) { row ->
-      ClawStatusRow(title = row.title, value = row.value, healthy = row.healthy)
-    }
+    SettingsStatusPanel(rows = healthRows)
     DreamDiaryPanel(summary = summary)
   }
 }

@@ -102,9 +102,7 @@ internal fun HealthLogsSettingsScreen(
         ),
         HealthStatus(nativeString("Runs"), if (pendingRunCount > 0) nativeString("\$pendingRunCount active", pendingRunCount) else nativeString("Idle"), true),
       )
-    ClawListPanel(items = healthRows, contentPadding = PaddingValues(0.dp), dividerColor = ClawTheme.colors.border) { row ->
-      ClawStatusRow(title = row.title, value = row.value, healthy = row.healthy)
-    }
+    SettingsStatusPanel(rows = healthRows)
     SettingsRefreshControls(isConnected, logsState.refreshing, logsState.errorText, viewModel::refreshHealthLogs, label = nativeString("Refresh Logs"))
     SettingsSummaryContent(logsState, isConnected, nativeString("Connect the gateway to load recent logs.")) { summary ->
       GatewayLogsPanel(summary = summary, onLogClick = { selectedLogEntry = it })
@@ -155,6 +153,22 @@ internal data class HealthStatus(
   val value: String,
   val healthy: Boolean,
 )
+
+/** Status rows carry no horizontal inset of their own, so the panel supplies the standard list-panel inset. */
+@Composable
+internal fun SettingsStatusPanel(
+  rows: List<HealthStatus>,
+  modifier: Modifier = Modifier,
+) {
+  ClawListPanel(
+    items = rows,
+    modifier = modifier,
+    contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs),
+    dividerColor = ClawTheme.colors.border,
+  ) { row ->
+    ClawStatusRow(title = row.title, value = row.value, healthy = row.healthy)
+  }
+}
 
 @Composable
 private fun GatewayLogsPanel(
