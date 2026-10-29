@@ -666,13 +666,7 @@ run_quiet_step() {
     if [[ -s "$log" ]]; then
         tail -n 80 "$log" >&2 || true
     fi
-    # Preserve signal exit codes (130=SIGINT, 143=SIGTERM) so callers
-    # like run_doctor can distinguish user cancellation from normal errors.
-    # Return 1 for all other failures to keep existing caller semantics.
-    if (( cmd_exit > 128 )); then
-        return "$cmd_exit"
-    fi
-    return 1
+    return "$cmd_exit"
 }
 
 run_required_step() {
@@ -1511,7 +1505,7 @@ install_homebrew() {
                 exit 1
             fi
             ui_info "Homebrew not found, installing"
-            run_quiet_step "Installing Homebrew" run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+            run_quiet_step "Installing Homebrew" run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh" || return $?
 
             # Add Homebrew to PATH for this session
             if [[ -f "/opt/homebrew/bin/brew" ]]; then
@@ -1680,7 +1674,7 @@ ensure_node() {
         if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
             install_node_with_existing_nvm || return 1
         else
-            install_homebrew || return 1
+            install_homebrew || return $?
             install_node || return 1
         fi
     fi
@@ -2981,7 +2975,7 @@ install_openclaw_from_git() {
         fi
     fi
 
-    ensure_node "$repo_dir" || return 1
+    ensure_node "$repo_dir" || return $?
     ensure_pnpm "$repo_dir"
 
     local install_lockfile_flag
@@ -3875,7 +3869,7 @@ main() {
     ui_stage "Preparing environment"
 
     if [[ "$INSTALL_METHOD" == npm ]]; then
-        ensure_node || return 1
+        ensure_node || return $?
     fi
 
     ui_stage "Installing OpenClaw"

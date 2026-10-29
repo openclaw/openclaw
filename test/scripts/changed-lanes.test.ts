@@ -1236,6 +1236,15 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("runs the npm package-lock guard for dependency package surfaces", () => {
+    for (const file of [
+      "scripts/lib/npm-lock-package-selection.mjs",
+      "scripts/lib/npm-lock-package-selection.d.mts",
+      "scripts/lib/record-shared.mjs",
+      "scripts/lib/record-shared.d.mts",
+    ]) {
+      expect(shouldRunNpmLockGuard([file])).toBe(true);
+      expect(createNpmLockGuardCommand([file])).not.toBeNull();
+    }
     expect(
       shouldRunNpmLockGuard([
         "extensions/slack/package.json",

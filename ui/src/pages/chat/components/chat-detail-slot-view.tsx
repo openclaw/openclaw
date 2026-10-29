@@ -134,6 +134,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
               }
             }}
             onOpenSessionLink={props.chat.onOpenSessionLink}
+            onBrowseFiles={props.onBrowseFiles}
             onRevealInWorkspace={(path: string) => {
               revealSessionWorkspaceFile(props.host, path);
               props.host.updateSidebarLayout(openSlot(props.host.sidebarLayout, "workspace"));

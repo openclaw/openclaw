@@ -945,6 +945,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
 
   </Accordion>
   <Accordion title="Stop and abort">
+    - A signed-in person can stop work they started from another browser or device while they still have permission to control that conversation. Each accepted turn keeps its initiating person, including queued follow-ups. Owning or joining a conversation does not grant Stop over another person's work. Administrator access and existing device-bound, internal-tool, and legacy cancellation rules remain unchanged; work without a retained initiating-person identity uses those existing rules.
     - Click **Stop**. Runs with an exact local run ID call `chat.abort`; when selected-session state reports active work but the Control UI has no local run ID, it calls `sessions.abort` instead. Participant display updates do not interrupt Stop while the request is being prepared. For non-global sessions, that selected-session path also discards queued follow-ups so they cannot restart work after the stop.
     - Exact-run Stop cancels that parent's associated sub-agents and Swarm collectors, including their descendants. Successful cancellation prevents selected queued children from starting while running siblings stop; it leaves unrelated parent turns and session-wide queues alone.
     - If Stop reports incomplete descendant cancellation, inspect the remaining native subagent runs with `/subagents list` and ask the agent to retry their cancellation with `subagents`. Do not treat the parent's stopped state as confirmation that every child stopped or that runtime cleanup was instantaneous. See [Sub-agent stopping](/tools/subagents#stopping) for scope details.
@@ -1052,6 +1053,12 @@ page by default. **Source** and **Preview** share the same filename tab and slim
 toolbar. Same-origin HTML attachment previews accept UTF-8 content up to 2 MiB;
 other text attachment previews remain limited to 256 KiB. Unsupported, external,
 oversized, or unavailable attachments keep their original **Download** action. Cross-origin HTML attachments are download-only.
+
+Relative file links in a chat attachment offer **Browse files** so you can explicitly
+choose an accessible file from **Files**. The conversation and attachment tab stay
+open. Attachment links do not identify an original folder or automatically select
+a matching file; current workspace contents may differ from the delivered attachment.
+**Cancel** keeps you in the attachment.
 
 Self-contained HTML can use inline CSS and JavaScript under the default
 `scripts` sandbox setting. The page runs on the existing separate-origin sandbox

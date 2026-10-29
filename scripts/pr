@@ -91,7 +91,7 @@ pr_subcommand_classification() {
     ls | workspace | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | tooling-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-workflow-successor | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
+    gc | lock-recover | tooling-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-workflow-successor | prepare-publish-for-proof | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -128,10 +128,17 @@ requested_subcommand="${1-}"
 PR_WORKFLOW_SUCCESSOR=""
 pr_read_workflow_successor_request() {
   [ "${1-}" = prepare-workflow-successor ] || return 0
-  [ "$#" -eq 16 ] && [[ "${2-}" =~ ^[1-9][0-9]*$ ]] || return 2
+  { [ "$#" -eq 16 ] || [ "$#" -eq 17 ]; } && [[ "${2-}" =~ ^[1-9][0-9]*$ ]] || return 2
   shift 2
-  local binding="" from="" to="" head="" tree="" review="" hosted="" value
+  local binding="" from="" to="" head="" tree="" review="" hosted="" value purpose=""
   while [ "$#" -gt 0 ]; do
+    if [ "$1" = --for-proof ]; then
+      [ -z "$purpose" ] || return 2
+      purpose=proof
+      shift
+      continue
+    fi
+    [ "$#" -ge 2 ] || return 2
     value="$2"
     [[ "$value" =~ ^[0-9a-f]{40}$ ]] || return 2
     case "$1" in
@@ -150,6 +157,7 @@ pr_read_workflow_successor_request() {
     [ -n "$tree" ] && [ -n "$review" ] && [ -n "$hosted" ] || return 2
   printf -v PR_WORKFLOW_SUCCESSOR '{"binding":"%s","from":"%s","to":"%s","head":"%s","tree":"%s","review":"%s","hostedHead":"%s"}' \
     "$binding" "$from" "$to" "$head" "$tree" "$review" "$hosted"
+  [ -z "$purpose" ] || PR_WORKFLOW_SUCCESSOR="${PR_WORKFLOW_SUCCESSOR%\}},\"purpose\":\"proof\"}"
 }
 pr_read_workflow_successor_request "$@" || {
   echo "prepare-workflow-successor requires an exact binding, old/new workflow, head, tree, correction review and hosted head." >&2
@@ -320,9 +328,9 @@ try {
     };
     const requireSuccessor = (source, value, anchor = "refs/remotes/origin/main") => {
       const request = JSON.parse(value);
-      const keys = ["binding", "from", "head", "hostedHead", "review", "to", "tree"];
+      const keys = ["binding", "from", "head", "hostedHead", ...(request.purpose === "proof" ? ["purpose"] : []), "review", "to", "tree"];
       if (JSON.stringify(Object.keys(request).sort()) !== JSON.stringify(keys) ||
-          !Object.values(request).every(value => typeof value === "string" && oid.test(value)) ||
+          !Object.entries(request).every(([key, value]) => key === "purpose" || typeof value === "string" && oid.test(value)) ||
           !current || request.binding !== current.oid || request.from !== current.source ||
           request.to !== source || request.from === source) throw new Error("Workflow successor identity changed");
       // The common predicate authenticates main and excludes any merge outcome;
@@ -1293,7 +1301,7 @@ fi
 
 is_main_only_pr_command() {
   case "$1" in
-    prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-workflow-successor | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
+    prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-workflow-successor | prepare-publish-for-proof | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -1372,11 +1380,15 @@ Usage:
   scripts/pr prepare-correction-init <PR>
   scripts/pr prepare-correction-continue <PR> --expected-head <SHA> --expected-tree <OID> --incoming-head <SHA> --incoming-review <OID> --publication-receipt <push|sync> --publication-oid <OID>
   scripts/pr prepare-correction-review-init <PR>
-  scripts/pr prepare-workflow-successor <PR> --expected-binding <OID> --from-workflow <SHA> --to-workflow <SHA> --expected-head <SHA> --expected-tree <OID> --expected-review <OID> --expected-hosted-head <SHA>
+  scripts/pr prepare-workflow-successor <PR> --expected-binding <OID> --from-workflow <SHA> --to-workflow <SHA> --expected-head <SHA> --expected-tree <OID> --expected-review <OID> --expected-hosted-head <SHA> [--for-proof]
     Continue an unchanged approved correction with exact current official-main tooling.
     Recover any retained operation lock separately after proving its tools quiescent.
     Preserves source, review and publication facts; archives and invalidates gates before the binding CAS.
     Does not publish, merge or waive gates. Run ordinary prepare-gates after success.
+    --for-proof instead requires the exact typed pending-proof publication review; ordinary gates remain blocked.
+  scripts/pr prepare-publish-for-proof <PR>
+    Publish an exact signed correction for enumerated proof prerequisites. Keeps NEEDS WORK and unresolved findings.
+    Requires no armed auto-merge/queue. Never qualifies gates or merge, and never creates a GraphQL commit alias.
   scripts/pr prepare-baseline-refresh <PR> --expected-head <SHA> --baseline <SHA> [--resolutions <file>]
   scripts/pr prepare-baseline-successor <PR> --expected-head <SHA> --expected-tree <OID> --expected-review <OID> --predecessor-head <SHA> --predecessor-binding <OID> --baseline <SHA> [--resolutions <file>]
   scripts/pr prepare-baseline-signing-request <PR> --expected-head <SHA> --baseline <SHA> --signer <fingerprint> [--resolutions <file>] [successor identity options]
@@ -1496,6 +1508,8 @@ main() {
   fi
 
   local cmd="${1-}"
+  # Publication purpose is selected by a native entry, never inherited from a shell.
+  local PREP_PUBLICATION_PURPOSE=qualified
   shift || true
 
   if [ "$cmd" = "lock-recover" ]; then
@@ -1647,7 +1661,10 @@ main() {
       fi
       ;;
     prepare-workflow-successor)
-      [ "$#" -eq 15 ] && [ -n "${PR_WORKFLOW_SUCCESSOR:-}" ] || { usage; exit 2; }
+      { [ "$#" -eq 15 ] || [ "$#" -eq 16 ]; } && [ -n "${PR_WORKFLOW_SUCCESSOR:-}" ] || { usage; exit 2; }
+      ;;
+    prepare-publish-for-proof)
+      [ "$#" -eq 1 ] || { usage; exit 2; }
       ;;
     ci-dispatch)
       [ "$#" -eq 1 ] || { [ "$#" -eq 3 ] && [ "$2" = --backend ] && [ "$3" = crabbox ]; } || { usage; exit 2; }
@@ -1762,6 +1779,10 @@ main() {
       ;;
     prepare-workflow-successor)
       prepare_workflow_successor "$1"
+      ;;
+    prepare-publish-for-proof)
+      [ "$#" -eq 1 ] || { usage; exit 2; }
+      prepare_publish_for_proof "$1"
       ;;
     prepare-baseline-refresh)
       prepare_baseline_refresh "$@"

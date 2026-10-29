@@ -17,8 +17,9 @@ async function createWorkflow() {
 }
 
 it("resolves relative Lobster paths inside the repo root", () => {
-  const relative = "extensions/lobster";
-  expect(resolveLobsterCwd(relative)).toBe(path.resolve(process.cwd(), relative));
+  for (const relative of ["extensions/lobster", "demo ", " demo", "demo\t"]) {
+    expect(resolveLobsterCwd(relative)).toBe(path.resolve(process.cwd(), relative));
+  }
 });
 
 describe("createEmbeddedLobsterRunner", () => {

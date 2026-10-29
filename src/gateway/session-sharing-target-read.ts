@@ -83,6 +83,9 @@ export async function prepareSessionSharingRead(params: {
       return prepareSessionMutationFacts({ ...params, allowMissing: true });
     }
     const { cfg, projection } = params;
+    if (!projection) {
+      return prepareSessionMutationFacts({ ...params, allowMissing: true });
+    }
     const query = { key: params.sessionKey, agentId: params.agentId };
     const resident = projection?.sharingTarget(query);
     const source = resident && projection?.readSource({ ...query, storePath: resident.storePath });
@@ -101,7 +104,7 @@ export async function prepareSessionSharingRead(params: {
       source.path === configuredSource.physicalPath
         ? { ...resident, readSource: source }
         : undefined;
-    if (!captured || !projection) {
+    if (!captured) {
       return prepareSessionMutationFacts({ ...params, allowMissing: true });
     }
     const assertRouting = captureSessionMutationRouting(cfg, undefined, [params]);

@@ -196,7 +196,11 @@ function WorkspacePanel(props: Props & { workspaceState: SessionWorkspaceState }
       props.workspaceState.previews.find(
         (entry) => entry.id === props.workspaceState.activePreviewId,
       )?.catalogVisible === true);
-  const Detail = (detail: { content: SidebarContent; previewId: string }) => {
+  const Detail = (detail: {
+    content: SidebarContent;
+    previewId: string;
+    onBrowseFiles: () => void;
+  }) => {
     const preview = () =>
       props.workspaceState.previews.find((entry) => entry.id === detail.previewId);
     const fileSource = () =>
@@ -218,6 +222,7 @@ function WorkspacePanel(props: Props & { workspaceState: SessionWorkspaceState }
           active={active()}
           content={detail.content}
           filePresentation={props.workspace?.presentation}
+          onBrowseFiles={detail.onBrowseFiles}
           fileBack={
             props.workspace?.presentation === "mobile"
               ? {

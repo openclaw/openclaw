@@ -1,6 +1,6 @@
+import assert from "node:assert/strict";
 // Keep network/package-manager admission outside this database recovery regression.
 import "./update-command-execution.test-support.js";
-import assert from "node:assert/strict";
 import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -10,9 +10,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { buildBackupArchivePath } from "../../commands/backup-shared.js";
 import { createConfigIO } from "../../config/io.js";
 import * as serviceMembership from "../../daemon/service-process-membership.js";
+import { buildBackupArchivePath } from "../../infra/backup-archive-path-policy.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";

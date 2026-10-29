@@ -225,6 +225,7 @@ describe.skipIf(!isLiveTestEnabled())("navigation authority on redirects (real C
       }
       expect(sourceRequests).toBe(1);
       expect(targetRequests).toBe(revoke ? 0 : 1);
+      const guardedTargetRequests = targetRequests;
       if (revoke) {
         // A rejected operation must not poison the selected tab for its next owner.
         current = true;
@@ -237,6 +238,11 @@ describe.skipIf(!isLiveTestEnabled())("navigation authority on redirects (real C
         });
         expect(page.url()).toBe(targetUrl);
         expect(targetRequests).toBe(1);
+      }
+      if (process.env.OPENCLAW_LIVE_PROOF === "1") {
+        console.info(
+          `[browser-proof] redirects owner=${owner} revoke=${revoke} sourceRequests=${sourceRequests} guardedDestinationRequests=${guardedTargetRequests} subsequentOwner=${revoke ? "succeeded" : "not-needed"}`,
+        );
       }
     } finally {
       releaseRedirect?.resolve();

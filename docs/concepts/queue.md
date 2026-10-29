@@ -166,6 +166,11 @@ steering the active run.
 
 ## Queued-turn cancellation
 
+Accepted personal browser input keeps its initiating identity while queued. The
+same signed-in person can stop it from another device if they still have access
+to control the conversation. Another person's queued input keeps its own
+cancellation authority, even when the conversation's assigned owner changes.
+
 While a prompt sits in the followup/collect queue (for example a TUI or
 webchat `chat.send` arriving while another turn is active), Gateway keeps a
 **Gateway-owned cancel identity** for that client `runId` until the queued

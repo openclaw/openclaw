@@ -126,9 +126,6 @@ it.each([false, true])(
     const generation = ownPreparedPluginGeneration({
       pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
       pluginRegistry: inspection.registry,
-      remoteCatalog: null,
-      inlineProviderModels: [],
-      configuredCatalogEntries: [],
     });
     await inspection.release();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

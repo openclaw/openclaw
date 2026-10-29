@@ -5,7 +5,6 @@ import type { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { verifyBackupArchive } from "../commands/backup-verify.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -16,6 +15,7 @@ import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import {
   withBackupFixture,
   createVerifiedBackup,

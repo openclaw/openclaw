@@ -119,7 +119,7 @@ export function searchQaBusMessages(params: {
     .map(cloneMessage);
 }
 
-export function resolveQaBusPollStartCursor(params: {
+function resolveQaBusPollStartCursor(params: {
   currentCursor: number;
   requestedCursor?: number;
 }): number {

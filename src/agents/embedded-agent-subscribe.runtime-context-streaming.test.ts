@@ -31,7 +31,7 @@ async function stream(text: string, size: number, inspect?: (visible: string) =>
   }
   return ctx.state.assistantStream?.text ?? "";
 }
-it.each(["", "MEDIA: ./chart.png\n"])(
+it.each(["", "MEDIA: ./chart.png\n", "See [[N]]. ", "x=[[1,2],[3,4]]; ", "a[[0]] "])(
   "bounds stream work: %j",
   async (prefix) => {
     const text = prefix + source;
@@ -59,6 +59,8 @@ it.each([1, 3, 7, 13])("preserves directives at %i-character deltas", async (siz
     "Intro.\n\nMEDIA: ./a.png\n\nOutro",
     "Intro.\n\nMEDIA: /tmp/x.pdf\n\nMiddle.\n\nMEDIA: ./b.png\n\nOutro",
     "Intro [[audio_as_voice]]\n\nMEDIA: ./voice.ogg\n\nOutro",
+    "Intro [[Notes]] then [[audio_as_voice]]\n\nSpoken body.\n\nOutro.",
+    "`[[audio_as_voice]]``",
     "[[reply_to_current]]Intro.\n\nMEDIA: ./a.png\n\nOutro",
     "Intro.\n\n```text\nMEDIA: ./literal.png\n```\n\nOutro",
     "Intro.\n\n    MEDIA: ./indented.png\n\nOutro",

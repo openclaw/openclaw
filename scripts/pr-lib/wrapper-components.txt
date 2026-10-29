@@ -335,6 +335,7 @@ src/agents/sandbox/host-paths.ts
 src/agents/sandbox/network-mode.ts
 src/agents/session-dirs.ts
 src/agents/session-slug.ts
+src/agents/core-tool-facts.ts
 src/agents/tool-catalog.ts
 src/agents/tool-description-presets.ts
 src/agents/tool-policy-match.ts

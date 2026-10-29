@@ -1,5 +1,5 @@
 import { createMemo, createSignal, onCleanup } from "solid-js";
-import { isKnownCoreToolId } from "../../../../src/agents/tool-catalog.ts";
+import { isKnownCoreToolId } from "../../../../src/agents/core-tool-facts.ts";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
