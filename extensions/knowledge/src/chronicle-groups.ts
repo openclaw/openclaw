@@ -45,7 +45,8 @@ export function assertSourceGrouping(input: TimelineInput) {
  * between the entity and a page makes that page a source and supplies the row's
  * note; a claim naming the entity joins the group of its source page, where a
  * source-event claim dates the row and stands in for a missing note. The row
- * date is the source's own occurrence date, else its source-event date. Claims
+ * date is the source's own occurrence date, else its source-event date, found
+ * by source even when that claim does not name the entity. Claims
  * from an undated source, dated claims without one, and claims dated outside
  * the row's date (a past event a later source reports) stay individual rows.
  * Current notes win over superseded or expired ones.
@@ -92,8 +93,24 @@ export function sourceRows(
       group(source).claims.push(record);
     }
   }
+  // A source's event claim dates it for every entity, including ones the claim does not list.
+  let events: Map<string, LoadedRecord> | undefined;
+  const eventOf = (source: LoadedRecord) => {
+    if (!events) {
+      events = new Map();
+      for (const record of byId.values()) {
+        const isEvent = record.kind === "claim" && record.metadata.source_event;
+        if (isEvent && record.metadata.source_page && !events.has(record.metadata.source_page)) {
+          events.set(record.metadata.source_page, record);
+        }
+      }
+    }
+    return events.get(source.id);
+  };
   const rows: SourceRow[] = [];
-  for (const { source, note, event, claims } of groups.values()) {
+  for (const found of groups.values()) {
+    const { source, note, claims } = found;
+    const event = found.event ?? (recordDate(source, "occurred_at") ? undefined : eventOf(source));
     const date = recordDate(source, "occurred_at") ?? (event && recordDate(event, "occurred_at"));
     if (!date) {
       standalone.push(...claims);

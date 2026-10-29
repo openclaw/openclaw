@@ -352,8 +352,16 @@ it("group source derives an entity Timeline from relationship notes and sourced 
   ]);
   await rm(path.join(f.root, "private", "relationships", "rel_note_links.md"));
 
+  // An undated source is dated by its event claim even when that claim lists only Alice.
+  await f.put(
+    "rel_article_bobby",
+    edge("note_article", "person_bobby", "discusses"),
+    "private",
+    "Bobby is quoted in the article.",
+  );
   const bobby = await f.service.timeline({ entity: "person_bobby", group: "source" }, f.owner);
   expect(bobby.items.map((row) => [row.record.id, row.summary, row.claims])).toStrictEqual([
+    ["note_article", "Bobby is quoted in the article.", 0],
     ["meeting_review", "The launch review took place.", 0],
   ]);
   const ranged = await f.service.timeline(
