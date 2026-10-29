@@ -15,6 +15,7 @@ import {
   type RealtimeVoiceTranscriptEntry,
   type TalkEventInput,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { startFaceTimeAudioPump } from "./audio-pump.js";
 import type { FaceTimeConfig } from "./config.js";
@@ -79,7 +80,7 @@ export async function startFaceTimeTalkDriver(params: {
     recordRealtimeVoiceTranscript(
       transcript,
       entry.role,
-      entry.text.slice(0, MAX_TRANSCRIPT_ENTRY_CHARS),
+      truncateUtf16Safe(entry.text, MAX_TRANSCRIPT_ENTRY_CHARS),
       40,
     );
     while (
