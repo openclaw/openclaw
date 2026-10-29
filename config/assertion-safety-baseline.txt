@@ -425,7 +425,7 @@ extensions/matrix/src/setup-core.ts	5
 extensions/matrix/src/setup-dm-policy.ts	5
 extensions/matrix/src/test-runtime.ts	9
 extensions/matrix/src/tool-actions.ts	1
-extensions/mattermost/src/channel.ts	5
+extensions/mattermost/src/channel.ts	1
 extensions/mattermost/src/mattermost/client.ts	5
 extensions/mattermost/src/mattermost/directory.ts	2
 extensions/mattermost/src/mattermost/interactions.ts	3

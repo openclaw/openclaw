@@ -3,6 +3,7 @@ export {
   listMattermostDirectoryPeers,
 } from "./mattermost/directory.js";
 export { probeMattermost } from "./mattermost/probe.js";
+export { runMattermostMessageAction } from "./mattermost/actions.js";
 export { addMattermostReaction, removeMattermostReaction } from "./mattermost/reactions.js";
 export { readMattermostMessages } from "./mattermost/read.js";
 export { sendMessageMattermost } from "./mattermost/send.js";

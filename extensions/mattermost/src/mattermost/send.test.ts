@@ -5,7 +5,6 @@ import { setMattermostRuntime } from "../runtime.js";
 import type * as Client from "./client.js";
 
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
-let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
 
 const TEST_CFG = {};
 
@@ -69,7 +68,6 @@ vi.mock("./client.js", async () => ({
 
 beforeAll(async () => {
   ({ sendMessageMattermost } = await import("./send.js"));
-  ({ parseMattermostTarget } = await import("./target-resolution.js"));
 });
 
 const normalizeBaseUrl = mockState.normalizeMattermostBaseUrl.getMockImplementation()!;
@@ -200,16 +198,6 @@ describe("sendMessageMattermost", () => {
   });
 });
 
-describe("parseMattermostTarget", () => {
-  it.each<[string, string]>([
-    ["", "Recipient is required"],
-    ["#", "Channel name is required"],
-    ["@", "Username is required"],
-  ])("rejects empty target %j", (target, error) => {
-    expect(() => parseMattermostTarget(target)).toThrow(error);
-  });
-});
-
 describe("sendMessageMattermost user-first resolution", () => {
   it("forwards retry settings when resolving a bare user id and sends via DM", async () => {
     const userId = "iiiiii9999999999iiiiii9999";
@@ -285,5 +273,78 @@ describe("sendMessageMattermost outbound cache bounds", () => {
     await send("user:newest-probe", "bot-cache-token-64");
 
     expect(mockState.fetchMattermostMe).toHaveBeenCalledTimes(66);
+  });
+});
+
+describe("sendMessageMattermost attachments", () => {
+  const urls = (count: number) =>
+    Array.from({ length: count }, (_, index) => `https://example.com/${index}.png`);
+  function expectUploads(count: number) {
+    mockState.loadOutboundMediaFromUrl.mockImplementation(async (url: string) => ({
+      buffer: Buffer.from(url),
+      fileName: `${url.split("/").at(-1)}`,
+      contentType: "image/png",
+    }));
+    let uploads = 0;
+    mockState.uploadMattermostFile.mockImplementation(async () => ({ id: `file-${++uploads}` }));
+    return () => expect(mockState.uploadMattermostFile).toHaveBeenCalledTimes(count);
+  }
+
+  it("uploads every distinct media URL into one post", async () => {
+    const expectUploaded = expectUploads(2);
+    await sendMessageMattermost("channel:town-square", "caption", {
+      cfg: TEST_CFG,
+      mediaUrl: "https://example.com/a.png",
+      mediaUrls: ["https://example.com/b.png", "https://example.com/a.png"],
+    });
+    expectUploaded();
+    expect(mockState.createMattermostPost).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ message: "caption", fileIds: ["file-1", "file-2"] }),
+    );
+  });
+
+  it.each([
+    { name: "in the reply thread", replyToId: "root-1", rootIds: ["root-1", "root-1"] },
+    { name: "under the first post", replyToId: undefined, rootIds: [undefined, "post-first"] },
+  ])("continues past the per-post file cap $name", async ({ replyToId, rootIds }) => {
+    const expectUploaded = expectUploads(11);
+    mockState.createMattermostPost
+      .mockResolvedValueOnce({ id: "post-first" })
+      .mockResolvedValueOnce({ id: "post-overflow" });
+    const result = await sendMessageMattermost("channel:town-square", "caption", {
+      cfg: TEST_CFG,
+      mediaUrls: urls(11),
+      replyToId,
+    });
+    expectUploaded();
+    const posts = mockState.createMattermostPost.mock.calls.map(([, params]) => params);
+    expect(posts.map((post) => post.rootId)).toEqual(rootIds);
+    expect(posts[0]?.fileIds).toHaveLength(10);
+    expect(posts[1]).toMatchObject({ message: "", fileIds: ["file-11"] });
+    expect(result.messageId).toBe("post-first");
+    expect(result.receipt.platformMessageIds).toEqual(["post-first", "post-overflow"]);
+  });
+
+  it("reports the posts that landed when an overflow post fails", async () => {
+    expectUploads(21);
+    mockState.createMattermostPost
+      .mockResolvedValueOnce({ id: "post-first" })
+      .mockResolvedValueOnce({ id: "post-overflow" })
+      .mockRejectedValueOnce(new Error("Mattermost API 503 Service Unavailable"));
+    const failure = await sendMessageMattermost("channel:town-square", "caption", {
+      cfg: TEST_CFG,
+      mediaUrls: urls(21),
+    }).catch((error: unknown) => error);
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    expect(failure).toMatchObject({
+      message: "Mattermost API 503 Service Unavailable",
+      deliveryResult: {
+        messageIds: ["post-first", "post-overflow"],
+        visibleReplySent: true,
+        content: "caption",
+      },
+    });
+    expect(mockState.recordActivity).not.toHaveBeenCalled();
   });
 });

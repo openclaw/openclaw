@@ -21,6 +21,8 @@ type ReactionParams = {
   accountId?: string | null;
   authorizedTarget?: string;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  /** Host-owned caller authority, rechecked by the client before every request. */
+  assertDirectAdapterHandoff?: () => void;
 };
 
 const BOT_USER_CACHE_TTL_MS = 10 * 60_000;
@@ -57,6 +59,64 @@ export async function removeMattermostReaction(params: ReactionParams): Promise<
 
 type AuthorizedReactionTarget = { kind: "channel"; id: string } | { kind: "user"; id: string };
 
+/**
+ * Delegated post actions (react, edit, delete, pin) may only touch posts inside the
+ * conversation the runner authorized: the same channel, or the DM with that user.
+ */
+export async function authorizeMattermostPostForConversation(params: {
+  client: MattermostClient;
+  postId: string;
+  authorizedTarget?: string;
+  cacheKey: string;
+  label?: string;
+}): Promise<{ post: MattermostPost; botUserId?: string }> {
+  const label = params.label ?? "reaction";
+  const target = parseAuthorizedReactionTarget(params.authorizedTarget);
+  if (!target) {
+    throw new Error(
+      `Mattermost delegated ${label}s require a canonical authorized conversation target.`,
+    );
+  }
+  const post = await params.client.request<MattermostPost>(
+    `/posts/${encodeURIComponent(params.postId)}`,
+  );
+  const postChannelId = post.channel_id?.trim();
+  if (!postChannelId) {
+    throw new Error(`Mattermost ${label} post is missing its conversation binding.`);
+  }
+  if (target.kind === "channel") {
+    if (postChannelId !== target.id) {
+      throw new Error(`Mattermost ${label} post belongs to a different conversation.`);
+    }
+    return { post };
+  }
+  const botUserId = await resolveBotUserId(params.client, params.cacheKey);
+  if (!botUserId) {
+    throw new Error(`Mattermost ${label}s failed: could not resolve bot user id.`);
+  }
+  const channel = await fetchMattermostChannel(params.client, postChannelId);
+  // Keep both slots: Mattermost permits self-DMs, so a Set would collapse the
+  // duplicate IDs and could authorize a different peer's conversation.
+  const participants =
+    channel.name
+      ?.split("__")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .toSorted() ?? [];
+  const authorizedParticipants = [botUserId, target.id].toSorted();
+  if (
+    channel.type !== "D" ||
+    participants.length !== 2 ||
+    participants[0] !== authorizedParticipants[0] ||
+    participants[1] !== authorizedParticipants[1]
+  ) {
+    throw new Error(`Mattermost ${label} post belongs to a different direct conversation.`);
+  }
+  return { post, botUserId };
+}
+
+export { resolveBotUserId as resolveMattermostBotUserId };
+
 function parseAuthorizedReactionTarget(rawTarget?: string): AuthorizedReactionTarget | null {
   const normalized = rawTarget ? normalizeMattermostMessagingTarget(rawTarget) : undefined;
   if (!normalized) {
@@ -88,59 +148,22 @@ async function runMattermostReaction(
     baseUrl,
     botToken,
     allowPrivateNetwork: resolved.config.network?.dangerouslyAllowPrivateNetwork === true,
+    assertRequestCurrent: params.assertDirectAdapterHandoff,
   });
 
   const cacheKey = `${baseUrl}:${botToken}`;
   try {
-    async function authorizeMattermostReactionResource(): Promise<string | undefined> {
-      const { postId, authorizedTarget } = params;
-      const target = parseAuthorizedReactionTarget(authorizedTarget);
-      if (!target) {
-        throw new Error(
-          "Mattermost delegated reactions require a canonical authorized conversation target.",
-        );
-      }
-
-      const post = await client.request<MattermostPost>(`/posts/${encodeURIComponent(postId)}`);
-      const postChannelId = post.channel_id?.trim();
-      if (!postChannelId) {
-        throw new Error("Mattermost reaction post is missing its conversation binding.");
-      }
-      if (target.kind === "channel") {
-        if (postChannelId !== target.id) {
-          throw new Error("Mattermost reaction post belongs to a different conversation.");
-        }
-        return undefined;
-      }
-
-      const botUserId = await resolveBotUserId(client, cacheKey);
-      if (!botUserId) {
-        throw new Error("Mattermost reactions failed: could not resolve bot user id.");
-      }
-      const channel = await fetchMattermostChannel(client, postChannelId);
-      // Keep both slots: Mattermost permits self-DMs, so a Set would collapse the
-      // duplicate IDs and could authorize a different peer's conversation.
-      const participants =
-        channel.name
-          ?.split("__")
-          .map((entry) => entry.trim())
-          .filter(Boolean)
-          .toSorted() ?? [];
-      const authorizedParticipants = [botUserId, target.id].toSorted();
-      if (
-        channel.type !== "D" ||
-        participants.length !== 2 ||
-        participants[0] !== authorizedParticipants[0] ||
-        participants[1] !== authorizedParticipants[1]
-      ) {
-        throw new Error("Mattermost reaction post belongs to a different direct conversation.");
-      }
-      return botUserId;
-    }
     const authorizedUserId =
       params.conversationReadOrigin === "direct-operator"
         ? undefined
-        : await authorizeMattermostReactionResource();
+        : (
+            await authorizeMattermostPostForConversation({
+              client,
+              postId: params.postId,
+              authorizedTarget: params.authorizedTarget,
+              cacheKey,
+            })
+          ).botUserId;
     const userId = authorizedUserId ?? (await resolveBotUserId(client, cacheKey));
     if (!userId) {
       return { ok: false, error: "Mattermost reactions failed: could not resolve bot user id." };

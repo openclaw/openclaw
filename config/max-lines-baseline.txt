@@ -67,7 +67,6 @@ extensions/imessage/src/send.ts
 extensions/lmstudio/src/setup.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
-extensions/mattermost/src/channel.ts
 extensions/memory-core/doctor-contract-api.test.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-phases.test.ts
