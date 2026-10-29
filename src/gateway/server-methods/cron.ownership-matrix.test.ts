@@ -414,7 +414,7 @@ describe("cron ownership access matrix", () => {
       );
       const stored = async () =>
         (await loadCronStore(storePath)).jobs.find((job) => job.id === seeded.id);
-      return { id: seeded.id, context, stored };
+      return { id: seeded.id, context, stored, cron };
     };
     const trusted = { version: 1, mode: "trusted" } as const;
     const payload: CronJob["payload"] = { kind: "agentTurn", message: "m", toolsAllow: ["read"] };
@@ -514,5 +514,42 @@ describe("cron ownership access matrix", () => {
     );
     expect(restore.respond.mock.calls[0]?.[0]).toBe(true);
     expect((await reloaded.stored())?.scheduledToolPolicy).toEqual(policy(S_A, "default"));
+
+    // An operator cap that lands while a conversation edit waits makes the job trusted; the
+    // locked definition must decide, so neither the delivery edit nor scratch survives.
+    const plainPayload = { kind: "agentTurn", message: "m" } as const;
+    const raced = await seedService({ owner: ownerNoAccount, payload: plainPayload });
+    const makeTrusted = () =>
+      raced.cron.update(raced.id, { payload: { kind: "agentTurn", toolsAllow: ["read"] } });
+    raced.context.cron.updateWithPrecondition.mockImplementationOnce(async (...args) => {
+      await makeTrusted();
+      return await raced.cron.updateWithPrecondition(...args);
+    });
+    const racedDelivery = await updateAs(
+      "scoped",
+      { id: raced.id, patch: { delivery } },
+      raced.context,
+    );
+    expect(String(racedDelivery.respond.mock.calls[0]?.[2]?.message)).toContain(
+      "changed while the update was pending",
+    );
+    expect(await raced.stored()).toMatchObject({
+      delivery: { mode: "none" },
+      scheduledToolPolicy: trusted,
+    });
+    const scratchRace = await seedService({ owner: ownerNoAccount, payload: plainPayload });
+    scratchRace.context.cron.writeScratch.mockImplementationOnce(async (_id, params) => {
+      await scratchRace.cron.update(scratchRace.id, {
+        payload: { kind: "agentTurn", toolsAllow: ["read"] },
+      });
+      params.commitGuard?.();
+      return { ok: true, scratch: { content: params.content, revision: 1 }, currentRevision: 1 };
+    });
+    const racedScratch = await invokeCron(
+      "cron.scratch.set",
+      { id: scratchRace.id, content: "run differently" },
+      { context: scratchRace.context, client: createCronCallerClient("ops", "default", S_A) },
+    );
+    expect(String(racedScratch.respond.mock.calls[0]?.[2]?.message)).toContain("operator access");
   });
 });

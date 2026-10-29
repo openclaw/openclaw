@@ -226,6 +226,13 @@ export const cronHandlers: GatewayRequestHandlers = {
           `Cannot authorize toolsAllow: ${patch.payload?.toolsAllow?.join(", ") ?? ""}. Recreate the automation from a fresh authenticated owner turn to capture app authority.`,
         );
       }
+      // The locked definition decides; a job that became trusted (or stopped being) while this
+      // update waited would otherwise keep a narrowing decision made for a different authority.
+      if (cronUpdateNarrowsTrustedJob(jobToUpdate, patch, callerScope) !== narrowsTrustedJob) {
+        throw new TypeError(
+          "This automation changed while the update was pending. Read it again and retry.",
+        );
+      }
       if (narrowsTrustedJob) {
         assertTrustedJobNarrowingOwner(jobToUpdate, callerScope);
       }
