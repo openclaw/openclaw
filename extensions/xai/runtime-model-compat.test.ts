@@ -74,7 +74,7 @@ describe("xai runtime model compat", () => {
     });
 
     expect(model.thinkingLevelMap).toEqual({
-      off: null,
+      off: undefined,
       minimal: null,
       low: null,
       medium: null,
@@ -92,7 +92,7 @@ describe("xai runtime model compat", () => {
 
     expect(model.compat).toMatchObject({ supportsReasoningEffort: false });
     expect(model.thinkingLevelMap).toEqual({
-      off: null,
+      off: undefined,
       minimal: null,
       low: null,
       medium: null,

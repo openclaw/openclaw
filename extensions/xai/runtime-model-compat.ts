@@ -17,7 +17,7 @@ type XaiThinkingLevelMap = Partial<
 >;
 
 const XAI_UNSUPPORTED_REASONING_EFFORTS = {
-  off: null,
+  off: undefined,
   minimal: null,
   low: null,
   medium: null,
