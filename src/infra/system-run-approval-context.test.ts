@@ -119,6 +119,36 @@ describe("resolveSystemRunApprovalRuntimeContext", () => {
     ).toEqual({ ok: true, plan: null, argv, commandText, ...identity, cwd });
   });
 
+  test("falls back to params.sessionKey when the plan has no sessionKey", () => {
+    expect(
+      resolveSystemRunApprovalRuntimeContext({
+        plan: {
+          argv: ["jq", "--version"],
+          cwd: "/tmp",
+          commandText: "jq --version",
+          agentId: "main",
+          sessionKey: null,
+        },
+        sessionKey: "agent:main:dashboard:abc123",
+      }),
+    ).toEqual({
+      ok: true,
+      plan: {
+        argv: ["jq", "--version"],
+        cwd: "/tmp",
+        commandText: "jq --version",
+        commandPreview: null,
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:abc123",
+      },
+      argv: ["jq", "--version"],
+      cwd: "/tmp",
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:abc123",
+      commandText: "jq --version",
+    });
+  });
+
   test("returns request validation errors from command fallback", () => {
     expect(runtimeContext({ rawCommand: "jq --version" })).toEqual({
       ok: false,
