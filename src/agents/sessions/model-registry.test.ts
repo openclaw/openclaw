@@ -155,6 +155,60 @@ describe("ModelRegistry", () => {
     });
   });
 
+  /** Reads effort tiers off the runtime model's provider-specific compat union. */
+  const effortTiers = (model: { compat?: unknown } | undefined) =>
+    (model?.compat as { supportedReasoningEfforts?: readonly string[] } | undefined)
+      ?.supportedReasoningEfforts;
+
+  it("loads stored catalogs without effort provenance and keeps discovered provenance", () => {
+    // Data written by earlier releases has no provenance field: it must still
+    // validate and load, keeping its authored effort metadata unchanged.
+    const stored = createRegistry(
+      writeRoot({
+        openrouter: providerConfig([
+          {
+            id: "acme/stored-model",
+            name: "Stored Model",
+            reasoning: true,
+            thinkingLevelMap: { off: null, high: "high" },
+            compat: { supportedReasoningEfforts: ["high", "low"] },
+          },
+        ]),
+      }),
+    );
+    const storedModel = stored.find("openrouter", "acme/stored-model");
+
+    expect(storedModel).toBeDefined();
+    expect(storedModel?.thinkingLevelMap).toEqual({ off: null, high: "high" });
+    expect(effortTiers(storedModel)).toEqual(["high", "low"]);
+    expect(storedModel?.catalogReasoningEfforts).toBeUndefined();
+
+    // Discovered rows keep their catalog provenance on the published runtime
+    // model so thinking resolution can follow a capability refresh (#160758).
+    const discovered = ModelRegistry.inMemory(AuthStorage.inMemory());
+    discovered.registerProvider("openrouter", {
+      baseUrl: "https://openrouter.ai/api/v1",
+      api: "openai-completions",
+      models: [
+        {
+          id: "acme/effort-model",
+          name: "Effort Model",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          compat: { supportedReasoningEfforts: ["xhigh", "high", "medium", "low"] },
+          thinkingLevelMap: { off: null },
+          catalogReasoningEfforts: true,
+        },
+      ],
+    } as unknown as ProviderConfigInput);
+    const published = discovered.find("openrouter", "acme/effort-model");
+
+    expect(published?.catalogReasoningEfforts).toBe(true);
+    expect(effortTiers(published)).toEqual(["xhigh", "high", "medium", "low"]);
+  });
+
   it("forks a catalog with request-isolated auth and provider mutations", async () => {
     const template = createRegistry(exampleCatalog("test-token-placeholder"));
     template.registerProvider("template-only", oauthProviderConfig("Template only", "template"));

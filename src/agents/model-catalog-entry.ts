@@ -54,6 +54,7 @@ export function modelCatalogRowToEntry(
     ...(row.family ? { family: row.family } : {}),
     reasoning: row.reasoning,
     ...(row.thinkingLevelMap ? { thinkingLevelMap: { ...row.thinkingLevelMap } } : {}),
+    ...(row.catalogReasoningEfforts ? { catalogReasoningEfforts: true } : {}),
     ...(row.input ? { input: [...row.input] } : {}),
     ...(row.params ? { params: { ...row.params } } : {}),
     ...(row.compat ? { compat: row.compat } : {}),

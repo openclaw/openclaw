@@ -226,6 +226,7 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
     baseUrl: candidate?.baseUrl,
     reasoning: params.configuredReasoning ?? candidate?.configuredReasoning ?? candidate?.reasoning,
     thinkingLevelMap: candidate?.thinkingLevelMap,
+    ...(candidate?.catalogReasoningEfforts ? { catalogReasoningEfforts: true } : {}),
     ...(candidate?.params ? { params: candidate.params } : {}),
     compat: candidate?.compat,
   };

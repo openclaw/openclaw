@@ -199,11 +199,23 @@ export function mergeProviderModels(
       parameterCount: _parameterCount,
       family: _family,
       inference: _inference,
+      catalogReasoningEfforts: implicitCatalogReasoningEfforts,
       ...implicitMetadata
     } = implicitModel;
+    // Authored effort metadata owns the row: catalog provenance may not survive
+    // a configured declaration, or a runtime capability refresh could replace
+    // the operator's own thinking map, effort tiers, or effort mapping (#160758).
+    const configDeclaresEfforts =
+      explicitModel.thinkingLevelMap !== undefined ||
+      explicitModel.compat?.supportedReasoningEfforts !== undefined ||
+      explicitModel.compat?.supportsReasoningEffort !== undefined ||
+      explicitModel.compat?.reasoningEffortMap !== undefined;
     return Object.assign(
       {},
       implicitMetadata,
+      ...(implicitCatalogReasoningEfforts && !configDeclaresEfforts
+        ? [{ catalogReasoningEfforts: true }]
+        : []),
       explicitModel,
       {
         input,

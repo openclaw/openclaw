@@ -266,6 +266,18 @@ export async function resolveRuntimePreferredSuppressedModel(
   return resolvePluginDynamicModelWithRegistry({ ...params, runtimeHooks });
 }
 
+/**
+ * A row whose effort metadata came from the provider's live catalog can go stale
+ * in-process while the provider's capability cache refreshes. Resolve it through
+ * the provider's own dynamic-model hook so the executable row matches the effort
+ * choices the session offers (#160758).
+ */
+export function isCatalogDerivedRuntimeRow(
+  model: { catalogReasoningEfforts?: boolean } | undefined,
+): boolean {
+  return model?.catalogReasoningEfforts === true;
+}
+
 export function shouldCompareProviderRuntimeResolvedModel(params: {
   provider: string;
   modelId: string;
@@ -356,7 +368,8 @@ export async function resolveModelWithPreparedRegistry(
   }
   if (
     explicitModel?.kind === "resolved" &&
-    !shouldCompareProviderRuntimeResolvedModel({ ...params, runtimeHooks })
+    !shouldCompareProviderRuntimeResolvedModel({ ...params, runtimeHooks }) &&
+    !isCatalogDerivedRuntimeRow(explicitModel.model)
   ) {
     return explicitModel.model;
   }
