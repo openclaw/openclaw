@@ -24,6 +24,7 @@ function stagedEntry(key: string) {
     firstRecalledAt: STAGED_AT,
     lastRecalledAt: STAGED_AT,
     queryHashes: [],
+    userQueryHashes: [],
     recallDays: [],
     conceptTags: [],
   };
