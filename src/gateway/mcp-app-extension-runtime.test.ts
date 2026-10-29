@@ -66,6 +66,7 @@ vi.mock("./mcp-app-tool-approval.js", () => ({ requestMcpAppToolApproval: mocks.
 vi.mock("./operator-run-authority.js", () => ({
   captureGatewayOperatorRunAuthority: mocks.source,
 }));
+// mock-isolation: Policy resolution is stubbed to assert tool policy metadata wiring without depending on live policy storage.
 vi.mock("./session-resource-tool-policy.js", () => ({
   resolveSessionResourceToolPolicy: mocks.toolPolicy,
 }));
