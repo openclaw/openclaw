@@ -481,7 +481,7 @@ async function updateCommandInternal(
         env,
         timeoutMs: updateStepTimeoutMs,
         signal: run.deadline?.signal,
-        assertCurrent: () => fence.assertCurrent(),
+        assertCurrent: executionGuards.assertCurrent,
       });
       retainedRuntimeStep = {
         name: retentionStep.name,
