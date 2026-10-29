@@ -1,7 +1,9 @@
 import { channel } from "node:diagnostics_channel";
 import { createServer, type ServerResponse } from "node:http";
 import { setImmediate } from "node:timers/promises";
+import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
 import {
+  createAnthropicMessagesTransportStreamFn,
   createOpenAICompletionsTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "@openclaw/ai/transports";
@@ -13,8 +15,15 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import "../llm/ai-transport-host.js";
+import { withGuardedFetchBeforeRequest } from "../infra/net/fetch-request-authority.js";
+import {
+  getModelTransportContext,
+  withModelTransportContext,
+} from "../llm/model-transport-context.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { streamWithIdleTimeout } from "./embedded-agent-runner/run/llm-idle-timeout.js";
+import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
+import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const sseEvent = (data: unknown, event?: string) =>
@@ -232,4 +241,222 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
       }
     }
   });
+});
+
+const anthropicTransports = [
+  { name: "foreground transport", createStream: createAnthropicMessagesTransportStreamFn },
+  { name: "auxiliary SDK", createStream: () => streamAnthropic },
+];
+const anthropicStart = sseEvent(
+  {
+    type: "message_start",
+    message: {
+      id: "msg_fixture",
+      type: "message",
+      role: "assistant",
+      model: "fixture-model",
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 0 },
+    },
+  },
+  "message_start",
+);
+const anthropicEnd =
+  sseEvent(
+    {
+      type: "message_delta",
+      delta: { stop_reason: "end_turn", stop_sequence: null },
+      usage: { output_tokens: 2 },
+    },
+    "message_delta",
+  ) + sseEvent({ type: "message_stop" }, "message_stop");
+
+describe.each(anthropicTransports)("guarded Anthropic $name observations", (transport) => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each(["success", "421 replay", "refusal", "abort after headers"])(
+    "%s keeps request identities separate from peer receipts",
+    async (scenario, { signal }) => {
+      vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
+      const headersReceived = createDeferred();
+      const peerClosed = createDeferred();
+      const terminalsReceived = createDeferred();
+      const expectedRequests = scenario === "refusal" ? 0 : scenario === "421 replay" ? 2 : 1;
+      // sendHeaders precedes socket writes. Only the independent peer counts receipts.
+      const observed = new Map<object, { sends: number; terminals: Set<string> }>();
+      const unrelated = new Set<object>();
+      let receipts = 0;
+      let unrelatedReceipts = 0;
+      let heldResponse: ServerResponse | undefined;
+      const server = await reserveTestPortListener({
+        offsets: [0],
+        signal,
+        createListener: () =>
+          createServer((request, response) => {
+            request.resume();
+            if (request.url === "/unrelated") {
+              unrelatedReceipts += 1;
+              response.end("unrelated");
+              return;
+            }
+            receipts += 1;
+            request.socket.once("close", () => peerClosed.resolve());
+            if (scenario === "421 replay" && receipts === 1) {
+              response.writeHead(421);
+              response.end();
+              return;
+            }
+            response.writeHead(200, { "content-type": "text/event-stream" });
+            response.write(anthropicStart);
+            if (scenario === "abort after headers") {
+              heldResponse = response;
+            } else {
+              response.end(anthropicEnd);
+            }
+          }),
+      });
+      const origin = `http://127.0.0.1:${server.claim.port}`;
+      const requestId = `fixture:${transport.name}`;
+      const subscriptions = ["create", "headers", "trailers", "error"].map((event) => ({
+        channel: channel(`undici:request:${event}`),
+        event,
+      }));
+      subscriptions.push({ channel: channel("undici:client:sendHeaders"), event: "send" });
+      const listeners = subscriptions.map(({ channel: diagnostic, event }) => {
+        const listener = (message: unknown) => {
+          // Undici carries the same request object through creation, sends and terminals.
+          const { request } = message as DiagnosticsChannel.RequestCreateMessage;
+          if (String(request.origin) !== origin) {
+            return;
+          }
+          if (event === "create") {
+            if (getModelTransportContext()?.requestId === requestId) {
+              observed.set(request, { sends: 0, terminals: new Set() });
+            } else {
+              unrelated.add(request);
+            }
+          }
+          const observation = observed.get(request);
+          if (!observation) {
+            return;
+          }
+          if (event === "send") {
+            observation.sends += 1;
+          } else if (event === "headers") {
+            headersReceived.resolve();
+          } else if (event === "trailers" || event === "error") {
+            // Repeated error callbacks are not extra requests; retain conflicting terminals.
+            observation.terminals.add(event);
+            if (
+              observed.size === expectedRequests &&
+              [...observed.values()].every((value) => value.terminals.size > 0)
+            ) {
+              terminalsReceived.resolve();
+            }
+          }
+        };
+        diagnostic.subscribe(listener);
+        return () => diagnostic.unsubscribe(listener);
+      });
+      const abort = new AbortController();
+      let settleStream: Promise<unknown> | undefined;
+      let settleUnrelated: Promise<unknown> | undefined;
+      try {
+        const model = makeProviderModelFixture<"anthropic-messages">({
+          id: "fixture-model",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          baseUrl: `${origin}/v1`,
+        });
+        const guard = vi.fn(() => {
+          if (scenario === "refusal") {
+            throw new Error("fixture egress refused");
+          }
+        });
+        const consuming = withModelTransportContext({ runId: "fixture", requestId }, async () => {
+          const stream = await withGuardedFetchBeforeRequest(guard, () =>
+            transport.createStream()(
+              model,
+              { messages: [{ role: "user", content: "reply", timestamp: 1 }] },
+              { apiKey: "synthetic-test-key", maxRetries: 0, signal: abort.signal },
+            ),
+          );
+          return await stream.result();
+        });
+        settleStream = consuming.catch(() => undefined);
+        const background = withModelTransportContext(
+          { runId: "unrelated", requestId: "unrelated" },
+          async () => {
+            const response = await buildGuardedModelFetch(model)(`${origin}/unrelated`, {
+              signal: abort.signal,
+            });
+            return await response.text();
+          },
+        );
+        settleUnrelated = background.catch(() => undefined);
+        expect(await withinTest(background, signal)).toBe("unrelated");
+        if (scenario === "abort after headers") {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              headersReceived.promise,
+              consuming,
+              "stream settled before response headers",
+            ),
+            signal,
+          );
+          abort.abort(new Error("fixture cancelled after headers"));
+        }
+        const result = await withinTest(consuming, signal);
+        expect(guard).toHaveBeenCalledOnce();
+        expect(result.stopReason).toBe(
+          scenario === "refusal"
+            ? "error"
+            : scenario === "abort after headers"
+              ? "aborted"
+              : "stop",
+        );
+        if (scenario === "refusal") {
+          expect(result.errorMessage).toContain("fixture egress refused");
+        } else {
+          await withinTest(terminalsReceived.promise, signal);
+        }
+        if (scenario === "abort after headers") {
+          // Prove cancellation before fixture teardown can close the peer on our behalf.
+          await withinTest(peerClosed.promise, signal);
+          expect(heldResponse?.writableEnded).toBe(false);
+        }
+      } finally {
+        abort.abort();
+        await Promise.all([settleStream, settleUnrelated]);
+        try {
+          await closeProviderTransportDispatcherPool();
+        } finally {
+          for (const unsubscribe of listeners) {
+            unsubscribe();
+          }
+          server.listener.closeAllConnections();
+          try {
+            await server.releaseListener();
+          } finally {
+            await server.claim.release();
+          }
+        }
+      }
+      // Keep the listener through dispatcher drainage so late conflicts cannot disappear.
+      expect(receipts).toBe(expectedRequests);
+      expect(observed.size).toBe(expectedRequests);
+      expect([...observed.values()].map((value) => value.sends)).toEqual(
+        Array.from({ length: expectedRequests }, () => 1),
+      );
+      expect([...observed.values()].map((value) => [...value.terminals])).toEqual(
+        Array.from({ length: expectedRequests }, () => [
+          scenario === "abort after headers" ? "error" : "trailers",
+        ]),
+      );
+      expect(unrelatedReceipts).toBe(1);
+      expect(unrelated.size).toBe(1);
+    },
+  );
 });
