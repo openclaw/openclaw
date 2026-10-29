@@ -123,13 +123,15 @@ it.skipIf(process.platform === "win32").each([
   { kind: "execa", signal: "SIGTERM" },
   { kind: "fallback", signal: "SIGINT" },
   { kind: "fallback", signal: "SIGTERM" },
+  { kind: "doctor-stalled", signal: "SIGTERM" },
+  { kind: "doctor-handle", signal: "SIGTERM" },
 ])("preserves the $kind signal lifecycle ($signal)", ({ kind, signal }) => {
   const root = directories.make("cli-signal-owner-");
   const result = spawnSync(
     process.execPath,
     createNodeEvalArgs(
       `import { once } from 'node:events';
-         import { installCliSignalExitHandlers, registerSignalExitBarrier } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
+         import { installCliSignalExitHandlers, installCliDoctorSignalExitHandlers, registerSignalExitBarrier } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
          const releaseSignals = installCliSignalExitHandlers();
          if (${JSON.stringify(kind)} === 'fallback') {
            installCliSignalExitHandlers();
@@ -141,7 +143,27 @@ it.skipIf(process.platform === "win32").each([
          process.once("beforeExit", () => {
            if (${JSON.stringify(kind)} === "fallback") process.stdout.write("|natural");
          });
-         if (${JSON.stringify(kind)} === 'execa') {
+         if (${JSON.stringify(kind)}.startsWith('doctor-')) {
+           installCliDoctorSignalExitHandlers();
+           let deadline;
+           const schedule = globalThis.setTimeout;
+           globalThis.setTimeout = (run, ms, ...args) => {
+             if (ms === 330_000) {
+               deadline = run;
+               return { unref() {} };
+             }
+             return schedule(run, ms, ...args);
+           };
+           if (${JSON.stringify(kind)} === 'doctor-stalled') {
+             registerSignalExitBarrier(() => new Promise(() => {}));
+           } else {
+             setInterval(() => {}, 1000);
+           }
+           process.emit('SIGTERM');
+           await new Promise(setImmediate);
+           if (!deadline) throw new Error('Doctor did not arm a termination deadline');
+           deadline();
+         } else if (${JSON.stringify(kind)} === 'execa') {
            const { execa } = await import('execa');
            const child = execa(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
            await once(child.nodeChildProcess, 'spawn');
@@ -166,7 +188,11 @@ it.skipIf(process.platform === "win32").each([
     },
   );
   expect(result.error, result.stderr).toBeUndefined();
-  if (kind === "execa") {
+  if (kind.startsWith("doctor-")) {
+    expect(result.status, result.stderr).toBe(143);
+    expect(result.stderr).toContain("Doctor shutdown exceeded 330000ms");
+    expect(result.stderr).toContain("openclaw doctor --lint");
+  } else if (kind === "execa") {
     expect(result.signal, result.stderr).toBe("SIGTERM");
     expect(result.stderr).toBe("");
   } else if (kind === "fallback") {
