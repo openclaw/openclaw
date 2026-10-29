@@ -14,11 +14,6 @@ import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import type { PendingInvoke, PendingSystemRunEvent } from "./node-registry.invoke-stream.js";
 import type { NodeSession } from "./node-session.types.js";
 
-export type NodeSystemRunEventSource = {
-  expectedTarget: SessionEventTarget;
-  release: () => void;
-};
-
 export function resolvePendingSystemRunEvent(params: {
   command: string;
   params?: unknown;
@@ -88,9 +83,7 @@ function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined 
   return timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 1) : null;
 }
 
-export function authorizedSystemRunEventExpiresAt(
-  timeoutMs: number | null | undefined,
-): number | null {
+function authorizedSystemRunEventExpiresAt(timeoutMs: number | null | undefined): number | null {
   if (typeof timeoutMs !== "number") {
     return null;
   }
@@ -98,7 +91,7 @@ export function authorizedSystemRunEventExpiresAt(
   return resolveExpiresAtMsFromDurationMs(durationMs) ?? 0;
 }
 
-export function authorizedSystemRunEventKey(params: {
+function authorizedSystemRunEventKey(params: {
   nodeId: string;
   connId: string;
   runId: string;

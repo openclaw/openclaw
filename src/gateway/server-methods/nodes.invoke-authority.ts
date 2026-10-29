@@ -6,7 +6,7 @@ import {
 } from "../../infra/event-session-routing.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
-import type { NodeSystemRunEventSource } from "../node-registry.system-run.js";
+import type { NodeSystemRunEventSource } from "../node-invoke.types.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import type {

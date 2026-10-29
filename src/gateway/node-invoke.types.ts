@@ -1,5 +1,10 @@
+import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import type { NodeSystemRunEventSource } from "./node-registry.system-run.js";
+
+export type NodeSystemRunEventSource = {
+  expectedTarget: SessionEventTarget;
+  release: () => void;
+};
 
 export type NodeInvokeParams = {
   nodeId: string;

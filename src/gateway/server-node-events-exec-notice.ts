@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
-  type SessionEventTarget,
 } from "../auto-reply/reply/session-event-handoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -33,49 +32,6 @@ const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RECENT_EXEC_FINISHED_RUNS = 2000;
 const recentExecFinishedRuns = new Map<string, number>();
-
-/** Transfer the authorized exec notice and its captured route to one ordinary turn. */
-export function enqueueNodeExecNotice(params: {
-  sessionKey: string;
-  agentId: string;
-  authorization: ReturnType<NodeEventContext["authorizeNodeSystemRunEvent"]>;
-  runId: string;
-  text: string;
-  expectedTarget: SessionEventTarget;
-  assertAcceptanceCurrent: () => void;
-}) {
-  const { sessionKey, agentId, runId, text, expectedTarget, assertAcceptanceCurrent } = params;
-  // The registry owns this snapshot; the terminal payload never supplies a route.
-  // Calls without a host-bound route retain the captured session fallback.
-  const deliveryContext =
-    (typeof params.authorization === "object"
-      ? params.authorization.invocationDeliveryContext
-      : undefined) ?? expectedTarget.deliveryContext;
-  assertAcceptanceCurrent();
-  const eventOptions = withSystemEventOwner(
-    { sessionKey, contextKey: runId ? `exec:${runId}` : "exec", deliveryContext },
-    agentId,
-  );
-  const occurrence = enqueueSystemEventEntry(text, eventOptions);
-  if (!occurrence) {
-    return undefined;
-  }
-  try {
-    return enqueueSessionEventForHost(text, {
-      agentId,
-      sessionKey,
-      source: "node",
-      contextKey: eventOptions.contextKey,
-      deliveryContext,
-      expectedTarget,
-      occurrences: [occurrence],
-      assertAcceptanceCurrent,
-    });
-  } catch (error) {
-    consumeSelectedSystemEventEntries(eventOptions.sessionKey, [occurrence]);
-    throw error;
-  }
-}
 
 function shouldDropDuplicateExecFinished(params: {
   sessionKey: string;
@@ -145,11 +101,11 @@ export async function handleNodeExecEvent(
   }
   const authorization = typeof auth === "object" ? auth : undefined;
   const release = authorization?.release;
-  if (cfg.tools?.exec?.notifyOnExit === false || obj.suppressNotifyOnExit === true) {
-    release?.();
-    return undefined;
-  }
-  if (event === "exec.denied") {
+  if (
+    cfg.tools?.exec?.notifyOnExit === false ||
+    obj.suppressNotifyOnExit === true ||
+    event === "exec.denied"
+  ) {
     release?.();
     return undefined;
   }
@@ -199,31 +155,49 @@ export async function handleNodeExecEvent(
       ) {
         return undefined;
       }
-      const receipt = enqueueNodeExecNotice({
-        sessionKey: expectedTarget.sessionKey ?? eventSessionKey,
-        agentId: expectedTarget.agentId ?? agentId,
-        authorization: auth,
-        runId,
-        text,
-        expectedTarget,
-        // The registry accepted this notice before the node connection could depart.
-        assertAcceptanceCurrent: config.assertCurrent,
-      });
-      if (receipt) {
-        const accepted = await receipt.accepted;
-        if (!accepted.ok) {
-          throw new Error(accepted.error);
-        }
-        void receipt.settled
-          .then((outcome) => {
-            if (outcome.status !== "completed") {
-              ctx.logGateway.warn(`exec event not delivered node=${nodeId}: ${outcome.status}`);
-            }
-          })
-          .finally(release);
-        releaseOnExit = undefined;
+      // Only the registry's captured route or session fallback may select the destination.
+      const deliveryContext =
+        authorization?.invocationDeliveryContext ?? expectedTarget.deliveryContext;
+      const targetAgentId = expectedTarget.agentId ?? agentId;
+      const eventOptions = withSystemEventOwner(
+        {
+          sessionKey: expectedTarget.sessionKey ?? eventSessionKey,
+          contextKey: runId ? `exec:${runId}` : "exec",
+          deliveryContext,
+        },
+        targetAgentId,
+      );
+      const occurrence = enqueueSystemEventEntry(text, eventOptions);
+      if (!occurrence) {
         return undefined;
       }
+      let receipt;
+      try {
+        receipt = enqueueSessionEventForHost(text, {
+          agentId: targetAgentId,
+          ...eventOptions,
+          source: "node",
+          expectedTarget,
+          occurrences: [occurrence],
+          // The registry accepted this notice before the node connection could depart.
+          assertAcceptanceCurrent: config.assertCurrent,
+        });
+      } catch (error) {
+        consumeSelectedSystemEventEntries(eventOptions.sessionKey, [occurrence]);
+        throw error;
+      }
+      const accepted = await receipt.accepted;
+      if (!accepted.ok) {
+        throw new Error(accepted.error);
+      }
+      void receipt.settled
+        .then((outcome) => {
+          if (outcome.status !== "completed") {
+            ctx.logGateway.warn(`exec event not delivered node=${nodeId}: ${outcome.status}`);
+          }
+        })
+        .finally(release);
+      releaseOnExit = undefined;
       return undefined;
     } finally {
       // Accepted receipts retain their own source; rejected and ignored notices end here.
