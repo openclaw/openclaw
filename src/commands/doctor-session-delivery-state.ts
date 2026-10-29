@@ -39,6 +39,7 @@ import {
   scanDoctorSessionEntryRecords,
 } from "./doctor/shared/session-entry-rewrite.js";
 import {
+  hasRetiredRestartTombstone,
   migrateLegacySessionEntryState,
   type SessionEntryStateRepair,
 } from "./doctor/shared/session-entry-shape.js";
@@ -224,6 +225,7 @@ export function repairCanonicalSessionEntries(
 function needsLegacySessionEntryRepair(entry: Record<string, unknown>): boolean {
   return (
     hasLegacySessionEntryState(entry) ||
+    hasRetiredRestartTombstone(entry) ||
     SESSION_ENTRY_NUMERIC_FIELDS.some((field) => typeof entry[field] === "string")
   );
 }
@@ -245,15 +247,19 @@ export async function repairLegacySessionEntryStates(params: {
   ) => void;
 }): Promise<SessionDeliveryStateRepairReport> {
   try {
+    const recoveredTombstones = new Set<string>();
     const plan = prepareSessionEntryRepairs({
       ...params,
       source: "raw",
       rawNeedsRepair: needsLegacySessionEntryRepair,
-      rawTransform: (entry, _sessionKey, updatedAt) => {
+      rawTransform: (entry, sessionKey, updatedAt) => {
         if (!needsLegacySessionEntryRepair(entry)) {
           return { entry };
         }
         const next = migrateLegacySessionEntryState(entry, updatedAt);
+        if (hasRetiredRestartTombstone(entry)) {
+          recoveredTombstones.add(sessionKey);
+        }
         return {
           ...next,
           entry: hasLegacySessionProviderState(entry)
@@ -292,6 +298,12 @@ export async function repairLegacySessionEntryStates(params: {
       assertCurrent();
       note(backup.changes.map((change) => `- ${change}`).join("\n"), "Session SQLite backups");
       report.repaired = plan.apply(assertTargetCurrent);
+      for (const sessionKey of recoveredTombstones) {
+        note(
+          `Recovered legacy restart tombstone for ${sessionKey}; obsolete claims and pending delivery retired (original state backed up).`,
+          "Session recovery warning",
+        );
+      }
       params.onInspectedTargets?.(plan.inspectedTargets);
       note(
         `- Canonicalized entry state for ${report.repaired} durable session row(s).`,

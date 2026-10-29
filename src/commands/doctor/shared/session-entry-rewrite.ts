@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -53,6 +54,8 @@ import {
   sessionDeliveryChannel,
 } from "../../../utils/delivery-context.read.js";
 import {
+  hasRetiredRestartTombstone,
+  migrateLegacySessionEntryState,
   migrateLegacySessionRunOutcome,
   type SessionEntryStateRepair,
 } from "./session-entry-shape.js";
@@ -101,6 +104,7 @@ export function scanDoctorSessionEntryRecords(
             SELECT 1 FROM json_each(entry_json::json)
             WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
               OR key IN ('provider', 'lastProvider', 'room')
+              OR key = 'mainRestartRecovery'
               OR (key = 'pendingFinalDelivery' AND json_typeof(value) = 'boolean')
               OR (key = 'status' AND value #>> '{}' IN ('running', 'queued'))
               OR (key IN (${sql.join(SESSION_ENTRY_NUMERIC_FIELDS)}) AND json_typeof(value) = 'string')
@@ -109,6 +113,7 @@ export function scanDoctorSessionEntryRecords(
             SELECT 1 FROM json_each(entry_json)
             WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
               OR key IN ('provider', 'lastProvider', 'room')
+              OR key = 'mainRestartRecovery'
               OR (key = 'pendingFinalDelivery' AND type IN ('true', 'false'))
               OR (key = 'status' AND value IN ('running', 'queued'))
               OR (key IN (${sql.join(SESSION_ENTRY_NUMERIC_FIELDS)}) AND type = 'text')
@@ -179,15 +184,20 @@ export async function repairLegacySessionRunOutcomes(
   scope: DoctorSessionScanScope,
   assertCurrent: () => void,
   visitStartupRow: (row: StartupSessionRow) => void,
+  warn: (message: string) => void,
 ): Promise<number> {
   assertCurrent();
   const expectedIdentity = readDatabasePathIdentitySync(scope.storePath);
   const sessionKeys: string[] = [];
+  const tombstones = new Set<string>();
   withEngineStoreAdmission(() =>
     scanDoctorSessionEntryRecords(
       scope,
       ({ entry, sessionKey }) => {
-        if (entry.status === "running" || entry.status === "queued") {
+        if (hasRetiredRestartTombstone(entry)) {
+          tombstones.add(sessionKey);
+        }
+        if (entry.status === "running" || entry.status === "queued" || tombstones.has(sessionKey)) {
           sessionKeys.push(sessionKey);
         }
       },
@@ -207,26 +217,43 @@ export async function repairLegacySessionRunOutcomes(
       expectedIdentity.birthtime,
     );
   };
+  if (tombstones.size > 0) {
+    const { createVerifiedSqliteSnapshot } = await import("../../../infra/sqlite-snapshot.js");
+    await createVerifiedSqliteSnapshot({
+      sourcePath: scope.storePath,
+      targetPath: `${scope.storePath}.pre-startup-migration-restart-recovery-${randomUUID()}.bak`,
+      preserveRowIds: true,
+      beforePublish: assertRepairCurrent,
+    });
+    assertRepairCurrent();
+  }
   const repair = () =>
     withEngineStoreAdmission(() => {
       assertRepairCurrent();
       return rewriteDoctorSessionEntries({
         scope,
         sessionKeys,
-        rawTransform: (entry, _sessionKey, updatedAt) => ({
-          entry: migrateLegacySessionRunOutcome(entry, updatedAt),
-        }),
+        rawTransform: (entry, _sessionKey, updatedAt) =>
+          hasRetiredRestartTombstone(entry)
+            ? migrateLegacySessionEntryState(entry, updatedAt)
+            : { entry: migrateLegacySessionRunOutcome(entry, updatedAt) },
         expectedIdentity,
         assertCurrent,
       });
     });
-  return agentEngineInput()
+  const repaired = await (agentEngineInput()
     ? repair()
     : withOpenClawAgentDatabaseAsync(
         toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey: "" })),
         repair,
         assertRepairCurrent,
-      );
+      ));
+  for (const sessionKey of tombstones) {
+    warn(
+      `Recovered legacy restart tombstone for ${sessionKey}; obsolete claims and pending delivery retired (original state backed up).`,
+    );
+  }
+  return repaired;
 }
 
 /** Rewrites bounded entry batches after rereading each authoritative row inside its commit. */

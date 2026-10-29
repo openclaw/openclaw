@@ -24,6 +24,7 @@ import {
   normalizePendingFinalDelivery,
 } from "../../../config/sessions/store-entry-shape.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { hasAgentRunContextExecutionOwner } from "../../../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 
 export type SessionEntryStateRepair = {
@@ -31,11 +32,83 @@ export type SessionEntryStateRepair = {
   numericChanges?: SessionEntryNumericSnapshot;
 };
 
+/** Startup and offline Doctor may retire old claims, never a live execution owner. */
+export function hasRetiredRestartTombstone(value: Record<string, unknown>): boolean {
+  if (!isRecord(value.mainRestartRecovery) || !isRecord(value.mainRestartRecovery.tombstone)) {
+    return false;
+  }
+  const runs = Array.isArray(value.restartRecoveryRuns) ? value.restartRecoveryRuns : [];
+  const claims = Array.isArray(value.mainRestartRecovery.foregroundClaims)
+    ? value.mainRestartRecovery.foregroundClaims
+    : [];
+  return ![
+    value.activeWriterRunId,
+    value.lifecycleRunId,
+    value.restartRecoveryDeliveryRunId,
+    ...runs.map((run) => (isRecord(run) ? run.runId : undefined)),
+    ...claims.map((claim) => (isRecord(claim) ? claim.runId : undefined)),
+  ].some((id) => typeof id === "string" && hasAgentRunContextExecutionOwner(id));
+}
+
 /** Retire file-era activity metadata without reconstructing an execution. */
 export function migrateLegacySessionRunOutcome(
   value: Record<string, unknown>,
   updatedAt: unknown = value.updatedAt,
 ): Record<string, unknown> {
+  if (
+    isRecord(value.mainRestartRecovery) &&
+    value.mainRestartRecovery.tombstone &&
+    !hasRetiredRestartTombstone(value)
+  ) {
+    return value;
+  }
+  if (hasRetiredRestartTombstone(value)) {
+    const next = { ...value };
+    // Tombstones predate the current admission owner. A continuation is not required.
+    delete next.mainRestartRecovery;
+    for (const key of Object.keys(next)) {
+      if (key.startsWith("restartRecovery")) {
+        delete next[key];
+      }
+    }
+    delete next.activeWriterRunId;
+    delete next.lifecycleRunId;
+    if (next.archiveReason === "restart-recovery") {
+      delete next.archivedAt;
+      delete next.archivedBy;
+      delete next.archiveReason;
+    }
+    // Replaying a final under retired sender authority can duplicate or misroute it.
+    // The caller backs up the original row before retiring its delivery custody.
+    const pending = normalizePendingFinalDelivery(next.pendingFinalDelivery);
+    const deliveryUnknown =
+      !pending?.deliveries?.length ||
+      pending.deliveries.some(({ state }) => state !== "delivered" && state !== "suppressed");
+    if ((pending || next.pendingFinalDelivery === true) && deliveryUnknown) {
+      next.lastRunError =
+        "Legacy restart recovery retired pending final delivery with an unknown outcome; the original is preserved in the pre-startup migration backup.";
+      if (pending?.context && !next.pendingDeliveryNotice) {
+        next.pendingDeliveryNotice = {
+          createdAt: pending.createdAt,
+          context: pending.context,
+          intentId: pending.intentId ?? `legacy-restart:${String(next.sessionId)}`,
+          state: "owed",
+        };
+      }
+    }
+    delete next.pendingFinalDelivery;
+    for (const key of LEGACY_SESSION_ENTRY_STATE_FIELDS) {
+      if (key.startsWith("pendingFinalDelivery")) {
+        delete next[key];
+      }
+    }
+    next.status = "interrupted";
+    next.abortedLastRun = true;
+    if (next.archivedAt === undefined && !next.modelSelectionLocked && !next.acp) {
+      next.resumeAfterRestart ??= { queuedInputIds: [] };
+    }
+    return next;
+  }
   if (value.status !== "running" && value.status !== "queued") {
     return value;
   }
