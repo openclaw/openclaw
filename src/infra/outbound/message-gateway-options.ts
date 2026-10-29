@@ -29,7 +29,9 @@ export async function isUnsettledGatewayRequestTimeout(error: unknown): Promise<
     return false;
   }
   const { isGatewayTransportError } = await loadMessageGatewayRuntime();
-  return isGatewayTransportError(error) && error.kind === "timeout";
+  return (
+    isGatewayTransportError(error) && error.kind === "timeout" && error.requestDispatched === true
+  );
 }
 
 export async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
