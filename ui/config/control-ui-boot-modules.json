@@ -1278,7 +1278,6 @@
   "src/shared/plugin-inline-view.ts",
   "src/shared/resume-handoff.ts",
   "src/shared/run-failure-notice.ts",
-  "src/shared/shell-quote.ts",
   "src/shared/skill-workshop-change-notice.ts",
   "src/shared/text/citation-control-markers.ts",
   "src/shared/tool-approval-reviews.ts",

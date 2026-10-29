@@ -5,6 +5,36 @@ import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 const loadI18n = useLazyEnglishTest();
 
 it.each([false, true])(
+  "merges conflict notice copy without replacing transcript copy (optional first=%s)",
+  async (optionalFirst) => {
+    const { en, manager } = await loadI18n({
+      chat: { workspaceConflict: { summary: "Lokale Versionen beibehalten." } },
+    });
+    const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
+    const { registerChatSessionEnglish } = await import("./locales/en-chat-session.ts");
+    const { registerChatSessionOptionalEnglish } =
+      await import("./locales/en-chat-session-optional.ts");
+    await manager.setLocale("de");
+    const registrars = [registerChatSessionEnglish, registerChatSessionOptionalEnglish];
+    const ordered = optionalFirst ? registrars.toReversed() : registrars;
+    registerEnglishCatalog(ordered[0]!);
+    const namespace = en.chat.workspaceConflict;
+    registerEnglishCatalog(ordered[1]!);
+    registerChatSessionEnglish();
+
+    expect(manager.t("chat.workspaceConflict.summary")).toBe("Lokale Versionen beibehalten.");
+    expect(manager.t("chat.workspaceConflict.showCommands")).toBe("Show commands");
+    expect(manager.t("chat.workspaceConflict.eventTitleOne")).toBe(
+      "Cloud result applied with 1 conflict",
+    );
+    expect(manager.t("chat.workspaceConflict.stagedResult")).toBe("Staged cloud result");
+    expect(manager.t("chat.workspaceConflict.morePaths", { count: "2" })).toBe("+2 more paths");
+    expect(manager.getLocale()).toBe("de");
+    expect(en.chat.workspaceConflict).toBe(namespace);
+  },
+);
+
+it.each([false, true])(
   "merges creator copy in either registration order (creator first=%s)",
   async (creatorFirst) => {
     const { en, manager } = await loadI18n({
