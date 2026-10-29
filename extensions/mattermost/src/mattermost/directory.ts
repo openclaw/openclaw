@@ -55,7 +55,6 @@ export async function listMattermostDirectoryGroups(
   if (!clients.length) {
     return [];
   }
-  // Canonical forms compare equal here; channels keep their original name and display name.
   const q = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
   const seenIds = new Set<string>();
   const entries: ChannelDirectoryEntry[] = [];
