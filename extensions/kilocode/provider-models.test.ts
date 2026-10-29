@@ -133,6 +133,18 @@ it("detects text-only models without image modality", async () => {
   expect(modelById(models, "chat")).toMatchObject({ input: ["text"], reasoning: false });
 });
 
+it("disables tools only for rows whose advertised parameters omit them", async () => {
+  const { supported_parameters: _omitted, ...unadvertised } = chatModel;
+  const models = await discoverModels([
+    chatModel,
+    { ...chatModel, id: "tools", supported_parameters: ["tools", "tool_choice"] },
+    { ...unadvertised, id: "unadvertised" },
+  ]);
+  expect(modelById(models, "chat").compat).toEqual({ supportsTools: false });
+  expect(modelById(models, "tools").compat).toEqual({ supportsTools: true });
+  expect(modelById(models, "unadvertised").compat).toBeUndefined();
+});
+
 it("excludes image-output models while retaining chat and static routing entries", async () => {
   const models = await discoverModels([
     { ...chatModel, id: "image", architecture: { output_modalities: ["image", "text"] } },
