@@ -126,7 +126,7 @@ export function prepareConversationCapabilityProfile(params: ConversationCapabil
 
 /** Resolve live tool policy without constructing descriptive catalog metadata. */
 export function resolveConversationCapabilityPolicy(params: ConversationCapabilityProfileParams) {
-  const messageProvider = params.messageProvider;
+  const messageProvider = params.messageProvider ?? params.messageChannel;
   const senderIsOwner = params.senderIsOwner;
   const effective = resolveEffectiveToolPolicy(params);
   const { policy: sandboxToolPolicy, renameOnly: sandboxSessionRenameOnly } =
