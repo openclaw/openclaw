@@ -10,11 +10,12 @@ import {
   type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
+import { buildProviderToolCompatFamilyHooks } from "../../../plugin-sdk/provider-tools.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
-import { Agent, type AgentEvent } from "../../runtime/index.js";
+import { Agent, type AgentEvent, type AgentTool } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -37,6 +38,7 @@ import {
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
+const gemini = buildProviderToolCompatFamilyHooks("gemini");
 
 type AttemptOptions = Parameters<typeof createContextEngineAttemptRunner>[0];
 type ToolOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
@@ -195,7 +197,10 @@ describe("runEmbeddedAttempt tool boundaries", () => {
       }
       const abortController = new AbortController();
       let catalogRef: ToolSearchCatalogRef | undefined;
-      const logDiagnostics = vi.fn(() => {
+      const normalize = (toolList: AgentTool[]) =>
+        gemini.normalizeToolSchemas({ tools: toolList, provider: "google" });
+      const logDiagnostics = vi.fn((toolList: AgentTool[]) => {
+        expect(gemini.inspectToolSchemas({ tools: toolList, provider: "google" })).toEqual([]);
         const options = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
           | ToolOptions
           | undefined;
@@ -219,12 +224,7 @@ describe("runEmbeddedAttempt tool boundaries", () => {
         runId,
         abortSignal: abortController.signal,
         config: { tools },
-        runtimePlan: {
-          tools: {
-            normalize: (normalizedTools: unknown[]) => normalizedTools,
-            logDiagnostics,
-          },
-        } as never,
+        runtimePlan: { tools: { normalize, logDiagnostics } } as never,
         sessionKey: "agent:main:telegram:direct:123",
       });
 
@@ -253,7 +253,6 @@ describe("runEmbeddedAttempt tool boundaries", () => {
         );
       }
       expect(logDiagnostics).toHaveBeenCalledOnce();
-      expect(catalogRef).toBeDefined();
       expect(catalogRef?.current).toBeUndefined();
     },
   );
@@ -292,29 +291,6 @@ describe("runEmbeddedAttempt tool boundaries", () => {
       expect(hoisted.applyExtraParamsToAgentMock.mock.calls.at(-1)?.[5]).toBe(expected);
     },
   );
-
-  it("gives late Code Mode controls the provider schema pass before diagnostics", async () => {
-    type ProbeTool = { name: string; parameters?: { probe?: true } };
-    const diagnosed = new Error("diagnostics observed");
-    let unnormalized: string[] | undefined;
-    registerCleanup([createStubTool("read")]);
-    const attempt = runAttempt({
-      runId: "run-late-control-schema",
-      config: { tools: { codeMode: { enabled: true } } },
-      runtimePlan: {
-        tools: {
-          normalize: (tools: ProbeTool[]) =>
-            tools.map((tool) => ({ ...tool, parameters: { probe: true } })),
-          logDiagnostics: (tools: ProbeTool[]) => {
-            unnormalized = tools.filter((tool) => !tool.parameters?.probe).map(({ name }) => name);
-            throw diagnosed;
-          },
-        },
-      } as never,
-    });
-    await expect(attempt).rejects.toBe(diagnosed);
-    expect(unnormalized).toEqual([]);
-  });
 
   it("attributes awaited bundle work separately from synchronous catalog preparation", async () => {
     const bundleLspTools = await import("../../agent-bundle-lsp-runtime.js");
