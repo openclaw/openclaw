@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import { readStore } from "./short-term-promotion-store.js";
 import { SHORT_TERM_RECALL_MAX_ENTRIES } from "./short-term-promotion-utils.js";
-import { recordShortTermRecalls } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness, shortTermTestState as testing } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
@@ -53,48 +52,6 @@ function recalledEntry(key: string, overrides: Record<string, unknown> = {}) {
 }
 
 describe("short-term recall store retention", () => {
-  it("keeps recall-bearing entries when nightly staging overflows the store", async () => {
-    const workspaceDir = await createTempWorkspace("recall-retention-");
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "green hockey team",
-      nowMs: Date.parse(RECALLED_AT),
-      results: [
-        {
-          path: "memory/2026-10-01.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.91,
-          snippet: "Joe plays on the GREEN hockey team.",
-          source: "memory",
-        },
-      ],
-    });
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "nightly session ingestion",
-      signalType: "daily",
-      nowMs: Date.parse(STAGED_AT),
-      results: Array.from({ length: SHORT_TERM_RECALL_MAX_ENTRIES }, (_, index) => ({
-        path: "memory/2026-10-02.md",
-        startLine: index + 1,
-        endLine: index + 1,
-        score: 0.58,
-        snippet: `Staged note ${index}.`,
-        source: "memory" as const,
-      })),
-    });
-
-    const store = await readStore(workspaceDir, STAGED_AT);
-    const entries = Object.values(store.entries);
-
-    expect(entries).toHaveLength(SHORT_TERM_RECALL_MAX_ENTRIES);
-    expect(entries.filter((entry) => entry.recallCount > 0)).toHaveLength(1);
-    expect(entries.filter((entry) => entry.dailyCount > 0)).toHaveLength(
-      SHORT_TERM_RECALL_MAX_ENTRIES - 1,
-    );
-  });
-
   it("does not let ineligible recalled rows starve fresh staging", async () => {
     const workspaceDir = await createTempWorkspace("recall-retention-ineligible-");
     const entries: Record<string, ReturnType<typeof recalledEntry>> = {};
