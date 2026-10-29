@@ -15,6 +15,7 @@ import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const removeInternalSessionEffectsSession = vi.hoisted(() => vi.fn(async () => {}));
+// mock-isolation: Cleanup is gated by the race fixture without deleting real internal-session effects.
 vi.mock("../../internal-session-effects.js", () => ({ removeInternalSessionEffectsSession }));
 afterAll(() => clearRuntimeConfigSnapshot());
 

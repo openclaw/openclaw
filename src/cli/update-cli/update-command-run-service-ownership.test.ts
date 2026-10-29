@@ -252,7 +252,8 @@ it.each([
       });
       const advisory = inspected.serviceMutationSkipMessage;
       expect(advisory).toContain("automatic service restart was skipped");
-      expect(advisory).toContain("Restart the Gateway you launched manually after the update");
+      expect(advisory).toContain("Gateway service inspection is unavailable");
+      expect(advisory).not.toContain("Restart the Gateway you launched manually");
       expect(advisory).toContain("recorded service definition was left unchanged");
       expect(advisory).toContain("openclaw gateway status --deep");
       expect(inspected.blockMessage).toBeUndefined();
@@ -272,7 +273,7 @@ it.each([
           message: expect.stringContaining(
             scenario === "timeout"
               ? "The systemd manager inspection deadline expired"
-              : "Restart the Gateway you launched manually",
+              : "Gateway service inspection is unavailable",
           ),
         }),
       ]);

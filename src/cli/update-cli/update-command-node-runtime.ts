@@ -108,6 +108,8 @@ export async function preparePackageUpdateRuntime(params: {
   executor: UpdateCommandExecutor;
   timeoutMs: number;
   tag: string;
+  assertPackageRuntimeCurrent?: () => Promise<void>;
+  admittedPackageRuntime?: import("../../infra/package-update-activation-runtime.types.js").PackageActivationRuntime;
   invocationCwd?: string;
   channel?: import("../../infra/update-channels.js").UpdateChannel;
   requestedChannel?: import("../../infra/update-channels.js").UpdateChannel | null;
@@ -128,6 +130,7 @@ export async function preparePackageUpdateRuntime(params: {
   if (params.opts.run) {
     params.opts.run.executorFence = fence;
   }
+  await params.assertPackageRuntimeCurrent?.();
   const result = await resolvePackageRuntimePreflight({
     root: params.root,
     service: params.managedService,
@@ -139,13 +142,14 @@ export async function preparePackageUpdateRuntime(params: {
     installedRoot: params.root,
     timeoutMs: params.timeoutMs,
     nodeRunner:
-      params.managedServiceRoot && canRefreshManagedServiceNode
+      params.admittedPackageRuntime?.path ??
+      (params.managedServiceRoot && canRefreshManagedServiceNode
         ? params.packageUpdateNodeRunner
-        : (managedServiceNodeRunner ?? params.packageUpdateNodeRunner),
+        : (managedServiceNodeRunner ?? params.packageUpdateNodeRunner)),
     fallbackNodeRunner:
       canRefreshManagedServiceNode && !process.versions.bun ? resolveNodeRunner() : undefined,
     runtimeRecovery:
-      !managedServiceNodeRunner || canRefreshManagedServiceNode
+      !params.admittedPackageRuntime && (!managedServiceNodeRunner || canRefreshManagedServiceNode)
         ? createPackageRuntimeRecovery({
             root: params.root,
             opts: params.opts,
@@ -155,7 +159,14 @@ export async function preparePackageUpdateRuntime(params: {
         : undefined,
   });
   fence.assertCurrent();
+  await params.assertPackageRuntimeCurrent?.();
   if (result.ok) {
+    if (params.admittedPackageRuntime) {
+      result.value.activationRuntime = params.admittedPackageRuntime;
+      if (managedServiceNodeRunner && managedServiceNodeRunner !== result.value.nodeRunner) {
+        result.value.replacedNodeRunner = managedServiceNodeRunner;
+      }
+    }
     if (params.packageInstallEnv && result.value.nodeRunner) {
       Object.assign(
         params.packageInstallEnv,

@@ -133,6 +133,12 @@ it.each([
         }
         if (!selected && !foreign) {
           expect(inspection.serviceMutationSkipMessage).toContain(
+            "A service definition is present and was left unchanged",
+          );
+          expect(inspection.serviceMutationSkipMessage).toContain(
+            "Stop the Gateway through its owner",
+          );
+          expect(inspection.serviceMutationSkipMessage).not.toContain(
             "Restart the Gateway you launched manually",
           );
           expect(inspection.serviceEnv).toBeUndefined();
