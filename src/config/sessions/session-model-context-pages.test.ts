@@ -17,9 +17,11 @@ const database = {} as never;
 function navigationRow(seq: number) {
   return {
     entry: {
+      id: `entry-${seq}`,
       seq,
+      parentId: seq === 0 ? null : `entry-${seq - 1}`,
+      timestamp: "2026-07-17T00:00:00.000Z",
       type: "message" as const,
-      parentId: seq === 0 ? null : seq - 1,
       message: { role: "user" as const, content: `message ${seq}`, timestamp: seq },
     },
     bytes: 16,
