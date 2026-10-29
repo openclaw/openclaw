@@ -301,6 +301,7 @@ export function executePluginStateCommand(
           (store) => {
             const result = withPluginStateWorkerReceipt(
               store.db,
+              command,
               () => executePluginStateOperation(store, command.input, handler),
               (): PluginStateOperationCommit => ({
                 pluginStateOperation: {
@@ -356,7 +357,7 @@ export function executePluginStateCommand(
       admit("transaction");
       runOpenClawStateWriteTransaction(
         (store) => {
-          withPluginStateWorkerReceipt(store.db, () =>
+          withPluginStateWorkerReceipt(store.db, command, () =>
             deletePluginStateEntry(store.db, command.input),
           );
           admit("commit");
@@ -368,7 +369,7 @@ export function executePluginStateCommand(
     return ok(
       runOpenClawStateWriteTransaction(
         (store) => {
-          const result = withPluginStateWorkerReceipt(store.db, () => {
+          const result = withPluginStateWorkerReceipt(store.db, command, () => {
             switch (command.type) {
               case "pluginState.appendJournal":
                 return registerPluginStateSequencedJournalEntryInDatabase(store, command.input);

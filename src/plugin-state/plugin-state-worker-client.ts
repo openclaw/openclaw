@@ -569,6 +569,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       createAdmission: withPluginStatePublication(
         baseAdmission,
         context,
+        typedCommand,
         onCommitted,
         writeScope,
         effect,
@@ -608,11 +609,10 @@ export function executePluginStateOperationInWorker(
   },
 ): Promise<PluginStateOperationResult> {
   const { env, assertActive, assertCurrent, sessionEntryCurrent, context, ...input } = params;
-  const readOnly = input.writeStores.length === 0;
   return execute(
     { env, assertActive, sessionEntryCurrent, context },
     { type: "pluginState.executeOperation", input },
-    readOnly
+    input.writeStores.length === 0
       ? (options.missing ??
           (() => {
             throw new Error("Plugin state operation source does not exist");

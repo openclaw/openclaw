@@ -6,12 +6,14 @@ import {
   settleSqliteWorkerOperationContext,
   type SqliteWorkerOperationContext,
 } from "../infra/sqlite-worker-operation-settlement.js";
+import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import * as stateWriter from "../state/openclaw-state-worker-store.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { observePluginStateReads } from "./plugin-state-fixtures.test-support.js";
@@ -23,6 +25,7 @@ import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   importPluginStateEntriesForDoctor,
+  prepareCorePluginStateReplacement,
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
 import type { PluginStateRow } from "./plugin-state-store.kernel.js";
@@ -60,6 +63,100 @@ function observe() {
 }
 
 describe("plugin state committed facts", () => {
+  it("resolves batched submitted values after a lost acknowledgement without replay", async () => {
+    await withOpenClawTestState({ label: "plugin-state-batch-references" }, async ({ env }) => {
+      const store = prepareCorePluginStateReplacement<string>({
+        ownerId: "core:receipt-test",
+        namespace: "batch",
+        maxEntries: 3,
+        env,
+      });
+      await store.replace(new Map([["old", "before"]]));
+      await store.entries();
+      const bytes = () =>
+        getWorkerMessageMetrics().find(
+          (metric) => metric.kind === "authority" && metric.direction === "from_worker",
+        )?.payloadBytesByRequestClass?.plugin_state ?? 0;
+      const before = bytes();
+      const dispatch = sqliteWorkerOwnerProbe.command(stateWriter, async (command, args, scope) => {
+        const result = await scope.execute(command, args);
+        if (command.type === "pluginState.replace") {
+          throw new Error("acknowledgement lost");
+        }
+        return result;
+      });
+      const value = "x".repeat(64 * 1024);
+      await expect(
+        store.replace(
+          new Map([
+            ["key-\ud800", "superseded"],
+            ["key-\ufffd", value],
+            ["other", `${value}2`],
+          ]),
+        ),
+      ).rejects.toMatchObject({
+        code: "PLUGIN_STATE_WRITE_FAILED",
+        cause: { message: "acknowledgement lost" },
+      });
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(bytes() - before).toBeLessThan(2048);
+      dispatch.mockRestore();
+      expect((await store.entries()).map((entry) => [entry.key, entry.value])).toEqual([
+        ["key-\ufffd", value],
+        ["other", `${value}2`],
+      ]);
+    });
+  });
+
+  it("bounds write receipts independently of submitted JSON while publishing exact rows", async () => {
+    await withOpenClawTestState({ label: "plugin-state-submitted-receipts" }, async ({ env }) => {
+      const store = createPluginStateKeyedStore<{ text: string }>("receipt-test", {
+        namespace: "receipts",
+        maxEntries: 1,
+        env,
+      });
+      const bytes = () =>
+        getWorkerMessageMetrics().find(
+          (metric) => metric.kind === "authority" && metric.direction === "from_worker",
+        )?.payloadBytesByRequestClass?.plugin_state ?? 0;
+      await store.register("warm", { text: "warm" });
+      await store.entries();
+      const seen = observe();
+      try {
+        for (const size of [1024, 64 * 1024]) {
+          const value = { text: "x".repeat(size) };
+          const before = bytes();
+          const write = store.register("key-\ud800", value, { ttlMs: 60_000 });
+          value.text = "mutated after submission";
+          await write;
+          expect(bytes() - before).toBeLessThan(2048);
+          expect(await store.lookup("key-\ufffd")).toEqual({ text: "x".repeat(size) });
+          expect(await store.lookup("warm")).toBeUndefined();
+          expect(seen.fact("key-\ufffd")).toMatchObject({
+            kind: "postimage",
+            value: { value_json: JSON.stringify({ text: "x".repeat(size) }) },
+          });
+          const entries = await store.entries();
+          expect(entries).toHaveLength(1);
+          expect(entries[0]!.expiresAt! - entries[0]!.createdAt).toBe(60_000);
+          const observation = await store.observe("key-\ufffd");
+          const casBefore = bytes();
+          expect(
+            await store.compareAndApply("key-\ufffd", observation.comparison, {
+              operation: "update",
+              action: "set",
+              value: { text: "y".repeat(size) },
+            }),
+          ).toEqual({ status: "applied" });
+          expect(bytes() - casBefore).toBeLessThan(2048);
+          expect(await store.lookup("key-\ufffd")).toEqual({ text: "y".repeat(size) });
+        }
+      } finally {
+        seen.unsubscribe();
+      }
+    });
+  });
+
   it("shares committed facts and invalidation across SQLite text-key aliases", async () => {
     await withOpenClawTestState({ label: "plugin-state-key-aliases" }, async ({ env }) => {
       const store = createPluginStateKeyedStore<number>("receipt-test", {

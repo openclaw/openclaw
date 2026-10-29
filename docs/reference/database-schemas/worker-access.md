@@ -7305,6 +7305,14 @@ SQL snapshot path. Write-capable operations keep their transaction-local SQL
 view. Synchronous compatibility writes publish committed facts to the same owner;
 transaction-local synchronous reads never use a committed resident view.
 
+Plugin-state write receipts reference the command's immutable submitted JSON when
+it matches the committed postimage. The host resolves that admission-local
+reference before validating and installing the row; timestamps, expiry, and
+eviction tombstones still come from the worker. Settlement recovery uses the same
+reference. Worker-generated values retain full postimages. This changes only
+process-lifetime receipt transport, not the Plugin SDK, stored rows, transactions,
+or write ordering.
+
 Runtime-health cleanup selects from that same complete view. An empty selection
 skips the worker request; positive clears retain their ordered worker operation
 and deletion authority. There is no separate successful-clear cache.
