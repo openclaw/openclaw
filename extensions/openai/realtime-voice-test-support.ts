@@ -2,10 +2,10 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
+import type { InternalRealtimeVoiceProviderApi } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, vi, type Mock } from "vitest";
 
@@ -118,53 +118,9 @@ type FakeWebSocketConstructor<T extends FakeWebSocketLike> = {
   instances: T[];
 };
 
-type InternalRealtimeVoiceProviderApi = {
-  isBrowserSessionConfigured: (ctx: {
-    cfg?: object;
-    providerConfig: Record<string, unknown>;
-    agentId?: string;
-  }) => boolean;
-  isGatewayRelayConfigured: (ctx: {
-    cfg?: object;
-    providerConfig: Record<string, unknown>;
-    agentId?: string;
-  }) => boolean | undefined;
-  resolveBrowserSessionCapabilities: (ctx: {
-    cfg?: object;
-    providerConfig: Record<string, unknown>;
-    agentId?: string;
-    model?: string;
-    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-  }) => {
-    handlesAgentConsult?: boolean;
-    supportsToolCalls?: boolean;
-    supportsVideoFrames?: boolean;
-    supportsGatewayControl?: boolean;
-    transports?: string[];
-  };
-  resolveGatewayRelayCapabilities: (ctx: {
-    cfg?: object;
-    providerConfig: Record<string, unknown>;
-    model?: string;
-  }) => {
-    handlesAgentConsult?: boolean;
-    supportsToolCalls?: boolean;
-    transports?: string[];
-  };
-  projectPublicProjection: (ctx: {
-    providerConfig: Record<string, unknown>;
-    config: Record<string, unknown>;
-  }) => {
-    config: Record<string, unknown>;
-    clientHints?: { modelSource?: "gateway"; gatewayRelaySupported: boolean };
-  };
-  validateGatewayRelayLaunch: (ctx: {
-    cfg?: object;
-    providerConfig: Record<string, unknown>;
-    model?: string;
-    autoRespondToAudio?: boolean;
-  }) => string | undefined;
-};
+type OpenAIInternalRealtimeVoiceProviderApi = Required<
+  Omit<InternalRealtimeVoiceProviderApi, "cancelBrowserSession">
+>;
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
 const OPENAI_REALTIME_REJECTED_KEY_MESSAGE =
@@ -249,11 +205,11 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
 
   function readInternalRealtimeVoiceProviderApi(
     provider: object,
-  ): InternalRealtimeVoiceProviderApi {
+  ): OpenAIInternalRealtimeVoiceProviderApi {
     return Reflect.get(
       provider,
       INTERNAL_REALTIME_VOICE_PROVIDER,
-    ) as InternalRealtimeVoiceProviderApi;
+    ) as OpenAIInternalRealtimeVoiceProviderApi;
   }
 
   function createNativeBridge(
@@ -375,21 +331,12 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     });
   }
 
-  function createJsonResponse(body: unknown, init?: { status?: number }): Response {
-    return new Response(JSON.stringify(body), {
-      status: init?.status ?? 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-  }
-
   function mockRealtimeClientSecretResponse(
     overrides: { clientSecret?: string; expiresAt?: number } = {},
   ): ReturnType<typeof vi.fn> {
     const release = vi.fn(async () => undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: createJsonResponse({
+      response: Response.json({
         client_secret: { value: overrides.clientSecret ?? "client-secret-123" },
         ...(overrides.expiresAt === undefined ? {} : { expires_at: overrides.expiresAt }),
       }),
@@ -398,28 +345,12 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     return release;
   }
 
-  function createQuicksilverBrowserBrokerFixture(
-    overrides: {
-      session?: {
-        provider?: "openai";
-        transport?: "webrtc";
-        clientSecret?: string;
-        offerUrl?: string;
-      };
-      capabilities?: {
-        handlesAgentConsult?: true;
-        supportsToolCalls?: boolean;
-        supportsVideoFrames?: boolean;
-        transports?: Array<"webrtc">;
-      };
-    } = {},
-  ) {
+  function createQuicksilverBrowserBrokerFixture(clientSecret = "quicksilver-token") {
     const session: RealtimeVoiceBrowserSession = {
       provider: "openai" as const,
       transport: "webrtc" as const,
-      clientSecret: "quicksilver-token",
+      clientSecret,
       offerUrl: "/plugins/openai/realtime/calls",
-      ...overrides.session,
     };
     const createBrowserSession = vi.fn(
       async (_request: unknown, _auth: unknown): Promise<RealtimeVoiceBrowserSession> => session,
@@ -431,12 +362,11 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
         handlesAgentConsult: true as const,
         supportsToolCalls: false,
         supportsVideoFrames: false,
-        ...overrides.capabilities,
       },
       createBrowserSession,
       cancelBrowserSession,
     };
-    return { broker, createBrowserSession, cancelBrowserSession };
+    return { broker, createBrowserSession };
   }
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -560,7 +490,6 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     connectReadyBridge,
     expectedResponseCreateEvent,
     expectedResponseCancelEvent,
-    createJsonResponse,
     createQuicksilverBrowserBrokerFixture,
     mockRealtimeClientSecretResponse,
     rejectedKeyMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,

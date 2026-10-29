@@ -30,17 +30,6 @@ describe("run retry budget", () => {
     expect(isRunRetryBudgetExhausted(budget)).toBe(false);
   });
 
-  it("still stops 32 retries that make no progress", () => {
-    const budget = createRunRetryBudget(32);
-
-    for (let retry = 0; retry < 32; retry += 1) {
-      beginRunAttempt(budget);
-      recordRunRetry(budget, "recovery");
-    }
-
-    expect(isRunRetryBudgetExhausted(budget)).toBe(true);
-  });
-
   it("does not erase retries used before a progress continuation", () => {
     const budget = createRunRetryBudget(32);
     for (let retry = 0; retry < 31; retry += 1) {

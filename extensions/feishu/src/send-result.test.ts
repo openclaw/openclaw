@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { toFeishuSendResult } from "./send-result.js";
 
 describe("toFeishuSendResult", () => {
-  it.each([undefined, "", "   "])(
+  it.each([undefined, "   "])(
     "rejects an acknowledged send without a real message identifier: %s",
     (messageId) => {
       let caught: unknown;

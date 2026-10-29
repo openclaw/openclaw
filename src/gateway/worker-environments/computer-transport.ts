@@ -1,14 +1,20 @@
 import { randomUUID } from "node:crypto";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { ComputerTakeControlParamsSchema } from "../../agents/tools/computer-tool-control.js";
 import { isComputerObservationAction } from "../../agents/tools/computer-tool-shared.js";
 import type { ComputerToolTransport } from "../../agents/tools/computer-tool.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { NODE_WORKER_DESKTOP_COMPUTER_COMMAND } from "../../infra/node-commands.js";
 import { parseComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../../plugins/runtime-state.js";
+import { assertionSucceeds } from "../../shared/assertion.js";
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protocol.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
@@ -17,6 +23,7 @@ import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-comma
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { invokeNodeWithReadinessRetry } from "../node-invoke-readiness.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import { publishNodePermissionMissing } from "../server-methods/nodes.permission-missing.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
@@ -42,7 +49,10 @@ type WorkerComputerTransport = Omit<ComputerToolTransport, "invoke"> & {
 
 export type PreparedWorkerComputer = {
   descriptor: WorkerComputerLaunchDescriptor;
-  bind(operationalRunInstance: OperationalRunInstanceRef): WorkerComputerTransport;
+  bind(
+    operationalRunInstance: OperationalRunInstanceRef,
+    workerSource?: { authority: AgentRunDelegatedAuthority; assertCurrent: () => void },
+  ): WorkerComputerTransport;
   close(reason: string): Promise<void>;
 };
 
@@ -61,12 +71,18 @@ type WorkerComputerOwnerOptions = {
   store: Pick<WorkerEnvironmentStore, "get">;
   resolveGatewayContext: GatewayContextResolver;
   getNodeTransport: () => NodeWorkerSupervisorTransport | undefined;
-  desktopRegistry?: Pick<DesktopSessionRegistry, "hasController" | "onControlChanged">;
+  cleanupSignal?: AbortSignal;
+  desktopRegistry?: Pick<
+    DesktopSessionRegistry,
+    "hasController" | "onControlChanged" | "takeControl"
+  >;
   warn: (message: string) => void;
 };
 
 /** Captures one environment's desktop under its placement or conversation attachment owner. */
 export function createEnvironmentComputerTransportOwner(options: WorkerComputerOwnerOptions) {
+  // Retries can rebuild bindings and attachment preparations within one admitted run.
+  const takeoversByRun = new WeakMap<AgentRunDelegatedAuthority, Set<string>>();
   return async (
     source: WorkerEnvironmentComputerAuthority,
   ): Promise<PreparedWorkerComputer | undefined> => {
@@ -189,10 +205,33 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
       (privateNode !== undefined ||
         context.nodeRegistry.get(node.nodeId)?.computerUse?.provider.generation ===
           providerGeneration);
+    const commandIsAllowed = (command: (typeof COMPUTER_COMMANDS)[number]) => {
+      const currentNode = context.nodeRegistry.get(node.nodeId);
+      const declaredCommands = privateNode ? [...COMPUTER_COMMANDS] : (currentNode?.commands ?? []);
+      return isNodeCommandAllowed({
+        command,
+        declaredCommands,
+        allowlist: resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
+          ...currentNode,
+          approvedCommands: declaredCommands,
+        }),
+      }).ok;
+    };
+    const hasController = () =>
+      options.desktopRegistry?.hasController(environment.environmentId, environment.ownerEpoch);
 
     const parseRequest = (request: Parameters<ComputerToolTransport["invoke"]>[0]) => {
       if (request.nodeId !== node.nodeId) {
         throw new Error("Computer control is bound to this session's desktop");
+      }
+      if (
+        request.command === "computer.act" &&
+        Value.Check(ComputerTakeControlParamsSchema, request.commandParams)
+      ) {
+        return {
+          operation: "take-control" as const,
+          executionId: request.commandParams.executionId,
+        };
       }
       const close =
         request.command === "computer.act" && request.commandParams.action === "__close_execution";
@@ -212,23 +251,24 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         ),
       );
       if (input.operation === "capabilities") {
-        throw new Error("Session computer cannot request another capability probe");
+        throw new Error("Session computer cannot request another capability check");
       }
       return input;
     };
 
     const send = async (
-      input: ReturnType<typeof parseRequest>,
+      input: Exclude<ReturnType<typeof parseRequest>, { operation: "take-control" }>,
       params: {
         timeoutMs?: number;
         signal?: AbortSignal;
         idempotencyKey?: string;
+        authorizeDispatch?: () => Promise<boolean>;
         isDispatchAuthorized: () => boolean;
         onDispatchReady?: (invokeId: string) => void;
       },
     ): Promise<InvokeResult> => {
       const isCurrent = () => resourceBindingIsCurrent() && params.isDispatchAuthorized();
-      if (!isCurrent()) {
+      if (!resourceBindingIsCurrent()) {
         throw new Error("Session computer authority closed before dispatch");
       }
       const command = input.operation === "snapshot" ? "screen.snapshot" : "computer.act";
@@ -269,9 +309,19 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
 
     return {
       descriptor,
-      bind(operationalRunInstance) {
-        const authority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
-        if (!authority || operationalRunInstance.runId !== source.runId) {
+      bind(operationalRunInstance, workerSource) {
+        const worker = source.turnClaim?.owner.kind === "worker";
+        workerSource?.assertCurrent();
+        const runAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
+        const authority = worker ? workerSource?.authority : runAuthority;
+        if (
+          !runAuthority ||
+          !authority ||
+          !validateAgentRunDelegatedAuthority(authority) ||
+          authority.operationalRunInstance.instanceId !== operationalRunInstance.instanceId ||
+          authority.operationalRunInstance.runId !== operationalRunInstance.runId ||
+          operationalRunInstance.runId !== source.runId
+        ) {
           throw new Error("Session computer requires the exact admitted run");
         }
         const identity: AgentRuntimeIdentity = {
@@ -284,13 +334,31 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               ? { ...authority, kind: "worker", turnClaim: source.turnClaim }
               : { ...authority, kind: "local" },
         };
+        const permissionError = (error: unknown, command: string) => {
+          const permission = publishNodePermissionMissing({
+            error,
+            nodeId: node.nodeId,
+            nodeName: node.displayName,
+            command,
+            agentRuntimeIdentity: identity,
+            context,
+          });
+          return permission
+            ? new GatewayClientRequestError({
+                code: "UNAVAILABLE",
+                message: permission.message,
+                details: { permissionMissing: permission.permissionMissing },
+              })
+            : undefined;
+        };
         // Tool construction can also build a schema-only projection. Only an actual
         // operation opens a binding; independent projections never retire the active tool.
         let execution: { logicalId: string; physicalId: string } | undefined;
-        let bindingClosed = false;
         let bindingClosing: Promise<unknown> | undefined;
         const inFlight = new Set<Promise<unknown>>();
         const inputControllers = new Set<AbortController>();
+        const completedTakeovers = takeoversByRun.get(runAuthority) ?? new Set<string>();
+        takeoversByRun.set(runAuthority, completedTakeovers);
         let releaseControlListener: (() => void) | undefined;
         let inputNeedsObservation = false;
         let controlGeneration = 0;
@@ -298,17 +366,18 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         const assertCurrent = () => {
           if (
             closed ||
-            bindingClosed ||
+            lifetime.signal.aborted ||
             !bindingIsCurrent() ||
             !validateAgentRunDelegatedAuthority(authority)
           ) {
             throw new Error("Session computer run authority closed");
           }
+          workerSource?.assertCurrent();
           assertPlacement();
         };
         assertCurrent();
         const execute = async (
-          input: Exclude<ReturnType<typeof parseRequest>, { operation: "close" }>,
+          input: Exclude<ReturnType<typeof parseRequest>, { operation: "close" | "take-control" }>,
           request: Pick<
             Parameters<ComputerToolTransport["invoke"]>[0],
             "timeoutMs" | "signal" | "idempotencyKey"
@@ -330,34 +399,21 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
           const assertInvocationCurrent = () => {
             assertCurrent();
             assertAuthorized?.();
-            if (
-              isInput &&
-              options.desktopRegistry?.hasController(
-                environment.environmentId,
-                environment.ownerEpoch,
-              )
-            ) {
+            if (isInput && hasController()) {
               throw new Error(
-                "Computer input paused while the operator has control; release control in the Desktop panel to resume",
+                "Computer input paused while the operator has control; use take_control when asked to resume, or release control in the Desktop panel",
               );
             }
             if (isInput && inputNeedsObservation) {
               throw new Error(
-                "COMPUTER_STALE_OBSERVATION: take a fresh screenshot after the operator releases control",
+                "COMPUTER_STALE_OBSERVATION: take a fresh screenshot after desktop control changes",
               );
             }
             controller.signal.throwIfAborted();
           };
           const command = input.operation === "snapshot" ? "screen.snapshot" : "computer.act";
           const commandParams = input.params;
-          const isCurrent = () => {
-            try {
-              assertInvocationCurrent();
-              return true;
-            } catch {
-              return false;
-            }
-          };
+          const isCurrent = () => assertionSucceeds(assertInvocationCurrent);
           const signal = AbortSignal.any([
             lifetime.signal,
             controller.signal,
@@ -382,23 +438,12 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
                 timeoutMs: params.timeoutMs,
                 signal: params.signal,
                 idempotencyKey: params.idempotencyKey,
+                ...(params.authorizeDispatch
+                  ? { authorizeDispatch: params.authorizeDispatch }
+                  : {}),
                 isDispatchAuthorized: () => isCurrent() && params.isDispatchAuthorized(),
                 onDispatchReady: params.onDispatchReady,
               });
-            };
-            const commandIsAllowed = () => {
-              const currentNode = context.nodeRegistry.get(node.nodeId);
-              const declaredCommands = privateNode
-                ? [...COMPUTER_COMMANDS]
-                : (currentNode?.commands ?? []);
-              return isNodeCommandAllowed({
-                command,
-                declaredCommands,
-                allowlist: resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
-                  ...currentNode,
-                  approvedCommands: declaredCommands,
-                }),
-              }).ok;
             };
             const result = await applyPluginNodeInvokePolicy({
               context,
@@ -422,11 +467,14 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
             assertInvocationCurrent();
             if (result) {
               if (!result.ok) {
-                throw new Error(result.message ?? "Session computer action denied");
+                throw (
+                  permissionError(asOptionalObjectRecord(result.details)?.nodeError, command) ??
+                  new Error(result.message ?? "Session computer action denied")
+                );
               }
               return result.payloadJSON ? JSON.parse(result.payloadJSON) : result.payload;
             }
-            if ((privateNode && command === "computer.act") || !commandIsAllowed()) {
+            if ((privateNode && command === "computer.act") || !commandIsAllowed(command)) {
               throw new Error("Session computer command has no active policy or permission");
             }
             const raw = await dispatch({
@@ -434,9 +482,15 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               timeoutMs: request.timeoutMs,
               signal,
               idempotencyKey: request.idempotencyKey,
-              isDispatchAuthorized: () => isCurrent() && commandIsAllowed(),
+              isDispatchAuthorized: () => isCurrent() && commandIsAllowed(command),
             });
             assertInvocationCurrent();
+            if (!raw.ok) {
+              throw (
+                permissionError(raw.error, command) ??
+                new Error(raw.error?.message ?? "Session desktop command failed")
+              );
+            }
             return payload(raw);
           } finally {
             inputControllers.delete(controller);
@@ -447,7 +501,6 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
             if (bindingClosing) {
               return bindingClosing;
             }
-            bindingClosed = true;
             lifetime.abort();
             releaseControlListener?.();
             bindingClosing = (async () => {
@@ -465,7 +518,10 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
                   executionId: execution.physicalId,
                   reason: reason.slice(0, 64),
                 },
-                { isDispatchAuthorized: resourceBindingIsCurrent },
+                {
+                  signal: options.cleanupSignal,
+                  isDispatchAuthorized: resourceBindingIsCurrent,
+                },
               );
               if (!resourceBindingIsCurrent()) {
                 throw new Error("Session computer cleanup owner changed");
@@ -490,7 +546,9 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
           async invoke(request, assertAuthorized) {
             const input = parseRequest(request);
             const logicalId =
-              input.operation === "close" ? input.executionId : input.params.executionId;
+              input.operation === "close" || input.operation === "take-control"
+                ? input.executionId
+                : input.params.executionId;
             if (execution && logicalId !== execution.logicalId) {
               throw new Error("Session computer execution owner changed");
             }
@@ -499,6 +557,43 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
             }
             assertCurrent();
             request.signal?.throwIfAborted();
+            assertAuthorized?.();
+            if (input.operation === "take-control") {
+              if (!environment.desktop || !options.desktopRegistry) {
+                throw new Error("Agent takeover is unavailable for this session desktop");
+              }
+              if (!commandIsAllowed("computer.act")) {
+                throw new Error("Session computer command has no active policy or permission");
+              }
+              // Every takeover needs a replay identity before it can evict a human controller.
+              if (!request.idempotencyKey) {
+                throw new Error("Agent takeover requires an idempotency key");
+              }
+              const takeoverKey = JSON.stringify([
+                environment.environmentId,
+                environment.ownerEpoch,
+                request.idempotencyKey,
+              ]);
+              if (!completedTakeovers.has(takeoverKey)) {
+                // Even without a controller, retire observations started before takeover.
+                inputNeedsObservation = true;
+                controlGeneration += 1;
+                options.desktopRegistry.takeControl(
+                  environment.environmentId,
+                  environment.ownerEpoch,
+                );
+                completedTakeovers.add(takeoverKey);
+              }
+              assertCurrent();
+              assertAuthorized?.();
+              request.signal?.throwIfAborted();
+              if (hasController()) {
+                throw new Error(
+                  "The operator took control again; observe before requesting another takeover",
+                );
+              }
+              return { ok: true };
+            }
             // Remote execution IDs are correlation only. The Gateway alone mints
             // the native owner, so a copied UUID cannot join or close another binding.
             execution ??= { logicalId, physicalId: randomUUID() };
@@ -524,10 +619,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               if (
                 input.operation === "snapshot" &&
                 controlGeneration === observedControlGeneration &&
-                !options.desktopRegistry?.hasController(
-                  environment.environmentId,
-                  environment.ownerEpoch,
-                )
+                !hasController()
               ) {
                 inputNeedsObservation = false;
               }
@@ -565,14 +657,14 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
 /** Placement admission retains its exact turn claim; attachments use the same transport owner. */
 export function createWorkerComputerTransportOwner(
   options: WorkerComputerOwnerOptions & {
-    placements: Pick<WorkerSessionPlacementStore, "get" | "validateTurnClaim">;
+    placements: Pick<WorkerSessionPlacementStore, "get" | "getAsync" | "validateTurnClaim">;
   },
 ) {
   const create = createEnvironmentComputerTransportOwner(options);
-  return (claim: WorkerSessionTurnClaim): Promise<PreparedWorkerComputer | undefined> => {
-    const placement = options.placements.get(claim.sessionId);
+  return async (claim: WorkerSessionTurnClaim): Promise<PreparedWorkerComputer | undefined> => {
+    const placement = await options.placements.getAsync(claim.sessionId);
     if (placement?.state !== "active" || !options.placements.validateTurnClaim(claim)) {
-      return Promise.reject(new Error("Session desktop placement is no longer active"));
+      throw new Error("Session desktop placement is no longer active");
     }
     return create({
       environmentId: placement.environmentId,

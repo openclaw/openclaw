@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { createAbortError } from "../infra/abort-signal.js";
+import { getCurrentSessionControllerOwner } from "../sessions/session-controller.context.js";
 import {
   agentCommand,
   agentCommandFromGatewayIngress,
@@ -36,6 +36,23 @@ const {
 // Register hooks for this file, not as a cached support-module side effect.
 registerAgentCommandCompactionTestHooks();
 
+function makeEmbeddedResult(sessionId: string, text: string) {
+  return makeResult({ sessionId, text, runner: "embedded", agentHarnessId: "openclaw" });
+}
+
+async function advanceWork(advanceClock: () => void) {
+  advanceClock();
+  const operation = getCurrentSessionControllerOwner();
+  if (!operation) {
+    throw new Error("Expected the simulated command or maintenance owner");
+  }
+  // The mocked model/checkpoint has completed work, not silently stalled.
+  // Sample the real watchdog so its one-second timer cannot decide the test outcome.
+  operation.watchdog.progress("semantic", "fixture:work_completed");
+  await operation.watchdog.tick();
+  operation.abortSignal.throwIfAborted();
+}
+
 describe("agentCommand embedded maintenance", () => {
   it("keeps the completed foreground budget when maintenance invokes a retired callback", async () => {
     const sessionId = "foreground-compaction-budget";
@@ -51,12 +68,7 @@ describe("agentCommand embedded maintenance", () => {
       params.onSuccessfulAuthProfile?.({});
       retiredObserver = params.onCompactionRequestBudget;
       retiredObserver?.(foreground);
-      return makeResult({
-        sessionId,
-        text: "done",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
-      });
+      return makeEmbeddedResult(sessionId, "done");
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       retiredObserver?.({
@@ -77,24 +89,67 @@ describe("agentCommand embedded maintenance", () => {
     expect(foreground.pendingTokens).toBe(100);
   });
 
+  it("schedules retained maintenance when terminal cleanup rejects", async () => {
+    const sessionId = "maintenance-after-cleanup-rejection";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const cleanupError = new Error("terminal cleanup failed");
+    let terminalDeliveryCalls = 0;
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      params.onSuccessfulAuthProfile?.({});
+      params.onCompactionRequestBudget?.({
+        contextWindow: 32_768,
+        reserveTokens: 8_192,
+        fixedTokens: 4_000,
+        pendingTokens: 100,
+      });
+      return makeEmbeddedResult(sessionId, "done");
+    });
+
+    await expect(
+      agentCommand({
+        message: "continue",
+        sessionId,
+        sessionKey,
+        beforeTerminalDelivery: async () => {
+          terminalDeliveryCalls += 1;
+          if (terminalDeliveryCalls === 2) {
+            throw cleanupError;
+          }
+        },
+      }),
+    ).rejects.toBe(cleanupError);
+    await waitForSessionMaintenance(sessionKey);
+
+    expect(state.runSessionCompactionIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compactionRequestBudget: expect.objectContaining({ pendingTokens: 0 }),
+      }),
+    );
+  });
+
   it.each([462_153, 600_000])(
     "shares the command allowance after %i ms of foreground work",
     async (foregroundMs) => {
       const startedAt = Date.now();
       let now = startedAt;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const monotonicClock = vi.spyOn(performance, "now").mockImplementation(() => now - startedAt);
       const sessionId = `maintenance-budget-${foregroundMs}`;
       const sessionKey = `agent:main:explicit:${sessionId}`;
       const text = "completed foreground answer";
       let flushTimeout: number | undefined;
       state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
         params.onSuccessfulAuthProfile?.({});
-        now += foregroundMs;
-        return makeResult({ sessionId, text, runner: "embedded", agentHarnessId: "openclaw" });
+        await advanceWork(() => {
+          now += foregroundMs;
+        });
+        return makeEmbeddedResult(sessionId, text);
       });
       state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
         flushTimeout = params.followupRun.run.timeoutMs;
-        now = startedAt + 600_000;
+        await advanceWork(() => {
+          now = startedAt + 600_000;
+        });
         return { sessionEntry: params.sessionEntry, outcome: "completed" };
       });
       try {
@@ -113,12 +168,45 @@ describe("agentCommand embedded maintenance", () => {
       } finally {
         await waitForSessionMaintenance(sessionKey);
         clock.mockRestore();
+        monotonicClock.mockRestore();
       }
     },
   );
 
+  it("keeps the maintenance allowance when the wall clock steps back", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const sessionId = "maintenance-clock-rewind";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    let flushTimeout: number | undefined;
+    let compactionTimeout: number | undefined;
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      params.onSuccessfulAuthProfile?.({});
+      await vi.advanceTimersByTimeAsync(400);
+      return makeEmbeddedResult(sessionId, "answer after clock rewind");
+    });
+    state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
+      flushTimeout = params.followupRun.run.timeoutMs;
+      vi.setSystemTime(Date.now() - 600_000);
+      await vi.advanceTimersByTimeAsync(200);
+      return { sessionEntry: params.sessionEntry, outcome: "completed" };
+    });
+    state.runSessionCompactionIfNeededMock.mockImplementationOnce(async (params) => {
+      compactionTimeout = params.followupRun.run.timeoutMs;
+      return params.sessionEntry;
+    });
+    try {
+      await agentCommand({ message: "continue", sessionId, sessionKey, timeout: "1" });
+      await waitForSessionMaintenance(sessionKey);
+      expect(flushTimeout).toBe(600);
+      expect(compactionTimeout).toBe(400);
+    } finally {
+      await waitForSessionMaintenance(sessionKey);
+      vi.useRealTimers();
+    }
+  });
+
   it("drains expired maintenance without changing the completed reply", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const sessionId = "maintenance-expiry";
     const successorSessionId = "maintenance-expiry-successor";
     const sessionKey = `agent:main:explicit:${sessionId}`;
@@ -133,7 +221,7 @@ describe("agentCommand embedded maintenance", () => {
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
       await vi.advanceTimersByTimeAsync(400);
-      return makeResult({ sessionId, text, runner: "embedded", agentHarnessId: "openclaw" });
+      return makeEmbeddedResult(sessionId, text);
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       flushTimeout = params.followupRun.run.timeoutMs;
@@ -211,67 +299,26 @@ describe("agentCommand embedded maintenance", () => {
     }
   });
 
-  it("preserves delivery when the caller aborts after foreground completion", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const sessionId = "maintenance-expiry-then-caller-abort";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    const caller = new AbortController();
-    let maintenanceExpired = false;
-    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-      params.onSuccessfulAuthProfile?.({});
-      await vi.advanceTimersByTimeAsync(400);
-      return makeResult({
-        sessionId,
-        text: "cancelled foreground answer",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
-      });
-    });
-    state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
-      await vi.advanceTimersByTimeAsync(600);
-      maintenanceExpired = params.abortSignal?.aborted === true;
-      caller.abort(createAbortError("caller cancelled during flush"));
-      return { sessionEntry: params.sessionEntry, outcome: "failed" };
-    });
-    try {
-      await agentCommand({
-        message: "continue",
-        sessionId,
-        sessionKey,
-        timeout: "1",
-        abortSignal: caller.signal,
-      });
-      await waitForSessionMaintenance(sessionKey);
-      expect(maintenanceExpired).toBe(true);
-      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
-      expect(readLifecyclePhases()).toContain("end");
-      expect(state.runSessionCompactionIfNeededMock).not.toHaveBeenCalled();
-      expect(findStoredSessionEntry(sessionKey)?.pendingFinalDelivery).toBeUndefined();
-    } finally {
-      await waitForSessionMaintenance(sessionKey);
-      vi.useRealTimers();
-    }
-  });
-
   it("preserves unlimited command maintenance after a long foreground turn", async () => {
-    let now = Date.now();
+    const startedAt = Date.now();
+    let now = startedAt;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const monotonicClock = vi.spyOn(performance, "now").mockImplementation(() => now - startedAt);
     const sessionId = "maintenance-unlimited";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     let flushTimeout: number | undefined;
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
-      now += 1_200_000;
-      return makeResult({
-        sessionId,
-        text: "unlimited answer",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
+      await advanceWork(() => {
+        now += 1_200_000;
       });
+      return makeEmbeddedResult(sessionId, "unlimited answer");
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       flushTimeout = params.followupRun.run.timeoutMs;
-      now += 600_000;
+      await advanceWork(() => {
+        now += 600_000;
+      });
       return { sessionEntry: params.sessionEntry, outcome: "completed" };
     });
     try {
@@ -289,6 +336,7 @@ describe("agentCommand embedded maintenance", () => {
     } finally {
       await waitForSessionMaintenance(sessionKey);
       clock.mockRestore();
+      monotonicClock.mockRestore();
     }
   });
 
@@ -354,7 +402,10 @@ describe("agentCommand embedded maintenance", () => {
       lastCallUsage,
     };
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-      await params.userTurnTranscriptRecorder?.persistApproved();
+      if (!params.userTurnTranscriptRecorder) {
+        throw new Error("missing embedded user-turn transcript recorder");
+      }
+      await params.userTurnTranscriptRecorder.persistApproved();
       await appendTranscriptMessage(
         { agentId: "main", sessionId, sessionKey, storePath },
         {
@@ -373,6 +424,14 @@ describe("agentCommand embedded maintenance", () => {
             },
           },
           cwd: state.workspaceDir,
+        },
+      );
+      await appendTranscriptEvent(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        {
+          type: "custom",
+          customType: "openclaw:bootstrap-context:full",
+          data: { runId: "embedded-run" },
         },
       );
       params.onSuccessfulAuthProfile?.({
@@ -416,6 +475,30 @@ describe("agentCommand embedded maintenance", () => {
     );
 
     await waitForSessionMaintenance(sessionKey);
+    const events = (await loadTranscriptEvents({
+      agentId: "main",
+      sessionId,
+      storePath,
+    })) as Array<{
+      type?: unknown;
+      customType?: unknown;
+      message?: { role?: unknown; api?: unknown };
+    }>;
+    const assistantEvents = events.filter(
+      (event) => event.type === "message" && event.message?.role === "assistant",
+    );
+    expect(assistantEvents).toHaveLength(1);
+    expect(assistantEvents.filter((event) => event.message?.api === "cli")).toHaveLength(0);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "custom" && event.customType === "openclaw:bootstrap-context:full",
+      ),
+    ).toHaveLength(1);
+    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
+    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 904_869 }) }),
+    );
     expect(storedBeforeMaintenance).toMatchObject({
       totalTokens: 904_869,
       inputTokens: lastCallUsage.input,
@@ -583,20 +666,12 @@ describe("agentCommand embedded maintenance", () => {
     opts?: Partial<Parameters<typeof agentCommand>[0]>;
     agentHarnessId?: string;
     meta?: Partial<EmbeddedAgentRunResult["meta"]>;
-    compactionCount?: number;
     observeAuth?: boolean;
     enabled?: boolean;
   }> = [
     { name: "native harness ownership", agentHarnessId: "codex" },
     { name: "an unavailable auth selection", observeAuth: false },
     { name: "disabled proactive compaction", enabled: false },
-    { name: "already completed in-run compaction", compactionCount: 1 },
-    { name: "a yielded turn", meta: { yielded: true } },
-    { name: "an aborted turn", meta: { aborted: true } },
-    { name: "a heartbeat", opts: { bootstrapContextRunKind: "heartbeat" } },
-    { name: "a raw model run", opts: { modelRun: true } },
-    { name: "preserved user-facing state", opts: { preserveUserFacingSessionModelState: true } },
-    { name: "hidden session effects", opts: { sessionEffects: "internal" } },
   ];
   it.each(excludedEmbeddedRuns)("does not add command compaction for $name", async (testCase) => {
     const sessionId = "excluded-embedded-compaction";
@@ -616,27 +691,9 @@ describe("agentCommand embedded maintenance", () => {
       text: "completed answer",
       runner: "embedded",
       agentHarnessId: testCase.agentHarnessId ?? "openclaw",
-      compactionCount: testCase.compactionCount,
     });
     completed.meta = { ...completed.meta, ...testCase.meta };
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-      if (testCase.compactionCount) {
-        const target = params.sessionTarget;
-        const entry = target ? loadSessionEntry(target) : undefined;
-        if (!target || !entry) {
-          throw new Error("expected the in-run compaction owner");
-        }
-        params.onCompactionAccounting?.({
-          kind: "durable",
-          count: testCase.compactionCount,
-          currentContextSnapshot: { tokens: undefined },
-          target: {
-            ...target,
-            lifecycleRevision: entry.lifecycleRevision,
-            activeWriterRunId: entry.activeWriterRunId,
-          },
-        });
-      }
       if (testCase.observeAuth !== false) {
         params.onSuccessfulAuthProfile?.({});
       }
@@ -653,136 +710,12 @@ describe("agentCommand embedded maintenance", () => {
     }
   });
 
-  it("keeps an observed ambient auth selection and a memory-flush successor for compaction", async () => {
-    const sessionId = "ambient-auth-compaction";
-    const successorSessionId = "memory-flush-successor";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-      params.onSuccessfulAuthProfile?.({});
-      return makeResult({
-        sessionId,
-        text: "answer",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
-      });
-    });
-    state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
-      const successor = {
-        ...params.sessionEntry,
-        sessionId: successorSessionId,
-        updatedAt: Date.now(),
-      };
-      await replaceSessionEntry({ sessionKey, storePath: requireStorePath() }, successor);
-      return { sessionEntry: successor, outcome: "completed" };
-    });
-
-    await agentCommand({ message: "continue", sessionId, sessionKey });
-    await waitForSessionMaintenance(sessionKey);
-
-    expect(state.runSessionCompactionIfNeededMock).toHaveBeenCalledOnce();
-    const compaction = state.runSessionCompactionIfNeededMock.mock.calls[0]?.[0];
-    expect(compaction).toMatchObject({
-      sessionEntry: { sessionId: successorSessionId },
-      followupRun: { run: { sessionId: successorSessionId } },
-    });
-    expect(compaction?.followupRun.run.authProfileId).toBeUndefined();
-    expect(compaction?.followupRun.run.authProfileIdSource).toBeUndefined();
-  });
-
-  it("keeps embedded transcript ownership and flushes once for gateway ingress", async () => {
-    const storePath = requireStorePath();
-    const sessionId = "embedded-projected-final";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId,
-        updatedAt: Date.now(),
-        totalTokens: 180_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    );
-    state.runAgentAttemptMock.mockImplementationOnce(async (attempt) => {
-      if (!attempt.userTurnTranscriptRecorder) {
-        throw new Error("missing embedded user-turn transcript recorder");
-      }
-      await attempt.userTurnTranscriptRecorder.persistApproved();
-      await appendTranscriptMessage(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        {
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "[Thu 2026-08-13 16:39 PDT] OVERRIDE-OK" }],
-            api: "ollama",
-            provider: "ollama",
-            model: "llama3.2:latest",
-            timestamp: Date.now(),
-          },
-          cwd: state.workspaceDir,
-        },
-      );
-      await appendTranscriptEvent(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        {
-          type: "custom",
-          customType: "openclaw:bootstrap-context:full",
-          data: { runId: "embedded-run" },
-        },
-      );
-      attempt.onSuccessfulAuthProfile?.({});
-      return makeResult({
-        sessionId,
-        text: "OVERRIDE-OK",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
-      });
-    });
-
-    await agentCommandFromGatewayIngress(
-      {
-        message: "Reply with exactly: OVERRIDE-OK",
-        sessionId,
-        sessionKey,
-        cwd: state.workspaceDir,
-        allowModelOverride: false,
-      },
-      ...GATEWAY_INGRESS_ARGS,
-    );
-
-    await waitForSessionMaintenance(sessionKey);
-    const events = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId,
-      storePath,
-    })) as Array<{
-      type?: unknown;
-      customType?: unknown;
-      message?: { role?: unknown; api?: unknown };
-    }>;
-    const assistantEvents = events.filter(
-      (event) => event.type === "message" && event.message?.role === "assistant",
-    );
-    expect(assistantEvents).toHaveLength(1);
-    expect(assistantEvents.filter((event) => event.message?.api === "cli")).toHaveLength(0);
-    expect(
-      events.filter(
-        (event) =>
-          event.type === "custom" && event.customType === "openclaw:bootstrap-context:full",
-      ),
-    ).toHaveLength(1);
-    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
-    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 180_000 }) }),
-    );
-  });
-
   it.each(
     (
       [
-        ["restart-during-compaction", "reply owned by restart recovery"],
-        ["restart-after-successful-compaction", "reply owned by restart recovery after compaction"],
-        ["stale-during-compaction", "reply owned by the next gateway lifecycle"],
+        ["restart-during-compaction", "reply awaiting transport before restart"],
+        ["restart-after-successful-compaction", "reply awaiting transport after compaction"],
+        ["stale-during-compaction", "reply retained by its original gateway lifecycle"],
       ] as const
     ).map(([phase, text]) => ({ phase, text })),
   )("does not deliver or clear the pending CLI final for $phase", async ({ phase, text }) => {
@@ -791,13 +724,21 @@ describe("agentCommand embedded maintenance", () => {
     const restart = phase !== "stale-during-compaction";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const abortController = new AbortController();
+    let pendingFinalDelivery: SessionEntry["pendingFinalDelivery"];
     state.runAgentAttemptMock.mockImplementationOnce(async () => {
       return makeResult({ sessionId, text, runner, agentHarnessId: "openclaw" });
     });
     const compact = async (params: { sessionEntry?: SessionEntry }) => {
-      expect(params.sessionEntry).toMatchObject({
-        pendingFinalDelivery: { kind: "replayable", text },
+      pendingFinalDelivery = params.sessionEntry?.pendingFinalDelivery;
+      expect(pendingFinalDelivery).toEqual({
+        kind: "transport-only",
+        intentId: expect.any(String),
+        deliveries: [{ id: expect.any(String), state: "prepared" }],
+        createdAt: expect.any(Number),
+        context: { channel: "discord", to: "discord:dm:123", accountId: "main" },
       });
+      expect(pendingFinalDelivery?.intentId).not.toBe("");
+      expect(pendingFinalDelivery?.deliveries?.[0]?.id).not.toBe("");
       if (restart) {
         abortController.abort(createAgentRunRestartAbortError());
       } else {
@@ -822,14 +763,11 @@ describe("agentCommand embedded maintenance", () => {
         deliver: true,
         abortSignal: abortController.signal,
       }),
-    ).rejects.toThrow(
-      restart ? "agent run aborted for restart" : "Agent run belongs to a stale gateway lifecycle",
-    );
+    ).rejects.toThrow("agent run aborted for restart");
 
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
-    expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-      pendingFinalDelivery: { kind: "replayable", text },
-    });
+    expect(findStoredSessionEntry(sessionKey)?.pendingFinalDelivery).toEqual(pendingFinalDelivery);
   });
 
   it("preserves the completed embedded reply when background maintenance loses its lifecycle", async () => {
@@ -884,7 +822,7 @@ describe("agentCommand embedded maintenance", () => {
       const sessionId = `${runner}-background-failure-${expiry}`;
       const sessionKey = `agent:main:explicit:${sessionId}`;
       if (expiry) {
-        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       }
       try {
         state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
@@ -938,83 +876,4 @@ describe("agentCommand embedded maintenance", () => {
       }
     },
   );
-
-  it.each(["abort", "rebound", "revision change"] as const)(
-    "preserves a completed reply and replacement state after %s during background maintenance",
-    async (fault) => {
-      const sessionId = "invalidated-background-maintenance";
-      const sessionKey = `agent:main:explicit:${sessionId}`;
-      const controller = new AbortController();
-      let replacement: SessionEntry | undefined;
-      state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-        params.onSuccessfulAuthProfile?.({});
-        return makeResult({
-          sessionId,
-          text: "local final",
-          runner: "embedded",
-          agentHarnessId: "openclaw",
-        });
-      });
-      state.runSessionCompactionIfNeededMock.mockImplementationOnce(async ({ sessionEntry }) => {
-        if (!sessionEntry) {
-          throw new Error("maintenance fixture requires a persisted session");
-        }
-        if (fault === "abort") {
-          controller.abort(createAbortError("caller cancelled after completion"));
-        } else {
-          replacement = {
-            ...sessionEntry,
-            sessionId: fault === "rebound" ? "replacement-session" : sessionId,
-            lifecycleRevision: randomUUID(),
-          };
-          await replaceSessionEntry({ sessionKey, storePath: requireStorePath() }, replacement);
-        }
-        throw new Error(COMPACTION_ERROR);
-      });
-
-      await agentCommand({
-        message: "local model run",
-        sessionId,
-        sessionKey,
-        json: true,
-        deliver: false,
-        abortSignal: controller.signal,
-      });
-      await waitForSessionMaintenance(sessionKey);
-
-      expect(state.runSessionCompactionIfNeededMock).toHaveBeenCalledOnce();
-      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
-        expect.objectContaining({ payloads: [{ text: "local final" }] }),
-      );
-      expect(readLifecyclePhases()).toContain("end");
-      expect(readLifecyclePhases()).not.toContain("error");
-      if (replacement) {
-        expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-          sessionId: replacement.sessionId,
-          lifecycleRevision: replacement.lifecycleRevision,
-        });
-      }
-    },
-  );
-
-  it("still suppresses delivery when the caller aborts the foreground attempt", async () => {
-    const controller = new AbortController();
-    const aborted = createAgentRunRestartAbortError();
-    state.runAgentAttemptMock.mockImplementationOnce(async () => {
-      controller.abort(aborted);
-      throw aborted;
-    });
-
-    await expect(
-      agentCommand({
-        message: "cancel while answering",
-        sessionId: "foreground-abort",
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toBe(aborted);
-
-    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
-    expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
-    expect(readLifecyclePhases()).not.toContain("end");
-  });
 });

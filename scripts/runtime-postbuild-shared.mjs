@@ -2,6 +2,11 @@
 import fs from "node:fs";
 import { dirname } from "node:path";
 
+export const CLI_DIAGNOSTIC_COMPANIONS = [
+  "cli-process-diagnostics.test-support.cjs",
+  "cli-process-tree.test-support.cjs",
+];
+
 /**
  * Writes text only when contents changed and returns whether a write happened.
  */

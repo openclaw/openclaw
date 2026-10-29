@@ -1,7 +1,3 @@
-/**
- * Result-shaping helpers for Codex app-server attempt terminal text, replay
- * safety, startup failures, and malformed image errors.
- */
 import type { AgentHarnessAttemptTimeout } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import type {
   AgentMessage,
@@ -10,7 +6,6 @@ import type {
 import type { CodexSystemPromptReport } from "./attempt-context.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 
-/** Joins terminal assistant text blocks into the final attempt answer. */
 export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
   return result.assistantTexts.join("\n\n").trim();
 }
@@ -32,7 +27,6 @@ export function buildCodexAppServerPromptTimeoutOutcome(
   };
 }
 
-/** Explains why an incomplete app-server turn cannot be safely replayed. */
 export function resolveCodexAppServerReplayBlockedReason(
   result: EmbeddedRunAttemptResult,
 ):
@@ -58,7 +52,6 @@ export function resolveCodexAppServerReplayBlockedReason(
   return undefined;
 }
 
-/** Builds an attempt result for failures before the app-server turn starts. */
 export function buildCodexTurnStartFailureResult(params: {
   params: EmbeddedRunAttemptParams;
   message: string;
@@ -96,7 +89,6 @@ export function buildCodexTurnStartFailureResult(params: {
   };
 }
 
-/** Detects app-server errors caused by invalid image payload data. */
 export function isInvalidCodexImagePayloadError(message: unknown): boolean {
   if (typeof message !== "string" || !message.trim()) {
     return false;

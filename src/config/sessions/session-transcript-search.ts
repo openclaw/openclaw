@@ -3,115 +3,91 @@
 // this module owns the query path and schedules the shared reconcile owner
 // when doctor imports or out-of-band writes leave derived rows behind.
 import { sql } from "kysely";
+import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
+import { DatabaseSearchCapabilityUnavailableError } from "../../infra/database-engine/capability-unavailable.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
-import { truncateUtf16Safe } from "../../utils.js";
+  captureOpenClawAgentDatabaseExecution,
+  supportsOpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution.js";
+import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import {
   captureLifecycleDatabaseScope,
+  prepareSqliteScope,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { hasSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   startSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
+import {
+  boundSessionTranscriptSearchSnippet,
+  sessionTranscriptSearchFtsQuery,
+  sessionTranscriptSearchLimit,
+  validateSessionTranscriptSearchQuery,
+} from "./session-transcript-search-policy.js";
 import type {
   SessionTranscriptSearchParams,
+  SessionTranscriptSearchReadResult,
   SessionTranscriptSearchResult,
 } from "./session-transcript-search.types.js";
+import { transcriptSearchLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
-const SEARCH_SNIPPET_MAX_CHARS = 500;
-const SEARCH_LIMIT_MAX = 25;
-const SEARCH_QUERY_MAX_CHARS = 4096;
-
-function toFtsQuery(query: string): string {
-  return query
-    .trim()
-    .split(/\s+/u)
-    .map((token) => `"${token.replaceAll('"', '""')}"`)
-    .join(" AND ");
-}
-
-/** Tracks both transcript changes and search availability for derived-result caches. */
-export function readSessionTranscriptSearchVersion(params: {
-  agentId: string;
-  env?: NodeJS.ProcessEnv;
-  sessionId: string;
-  sessionKey?: string;
-  storePath?: string;
-}): string | null {
-  const scope = resolveSqliteReadScope(params);
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const db = getNodeSqliteKysely<DB>(database.db);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("session_windows as window")
-        .leftJoin(
-          "transcript_rewrite_watermarks as rewrite",
-          "rewrite.session_id",
-          "window.session_id",
-        )
-        .leftJoin(
-          "session_transcript_index_state as projection",
-          "projection.session_id",
-          "window.session_id",
-        )
-        .leftJoin(
-          "session_transcript_cold_archives as cold",
-          "cold.session_id",
-          "window.session_id",
-        )
-        .select((eb) => [
-          "rewrite.generation",
-          "projection.indexed_seq",
-          "projection.leaf_event_id",
-          "projection.needs_rebuild",
-          "projection.updated_at",
-          "cold.archive_sha256",
-          eb
-            .selectFrom("transcript_events as event")
-            .select("event.seq")
-            .whereRef("event.session_id", "=", "window.session_id")
-            .orderBy("event.seq", "desc")
-            .limit(1)
-            .as("max_seq"),
-        ])
-        .where("window.session_id", "=", params.sessionId),
-    );
-    if (!row) {
-      return null;
-    }
-    const { identity, incarnation } = readOpenClawAgentDatabaseIdentity(database);
-    const databaseIdentity =
-      typeof identity === "string" ? ["file", identity] : ["incognito", incarnation];
-    return JSON.stringify([databaseIdentity, row]);
-  }, toDatabaseOptions(scope));
-  return result.found ? result.value : null;
-}
-
-/** Query a captured disk owner off-thread; reconciliation remains host-owned. */
+/** Search committed memory facts or the durable worker; reconciliation remains host-owned. */
 export async function searchSessionTranscripts(
   params: SessionTranscriptSearchParams,
   preparedDatabase?: { agentId: string; path: string },
 ): Promise<SessionTranscriptSearchResult> {
-  validateSearchQuery(params.query);
+  validateSessionTranscriptSearchQuery(params.query);
+  const memory = captureSessionActorStorageOwner(
+    {
+      ...params,
+      storePath: preparedDatabase?.path ?? params.storePath,
+    },
+    { assertCurrent() {}, authorize() {} },
+  );
+  if (memory) {
+    const query = { type: "session.history.search" as const, input: structuredClone(params) };
+    if (memory.binding?.agentId === memory.agentId && memory.binding.path === memory.path) {
+      return memory.binding.actor.storage!.read(query, memory.authority);
+    }
+    const sessionKey = memory.owner?.listSessions(memory.authority)[0]?.target.sessionKey;
+    if (sessionKey) {
+      const result = await withSessionActorStorage(
+        { agentId: memory.agentId, storePath: memory.path, sessionKey, env: params.env },
+        {
+          authority: memory.authority,
+          lifetime: {
+            assertCurrent: () => memory.authority.assertCurrent(),
+            assertReadable: () => memory.authority.assertCurrent(),
+          },
+        },
+        (binding) => binding.actor.storage.read(query, binding.authority),
+      );
+      if (result) {
+        return result;
+      }
+    }
+    return { hits: [], indexing: false, truncated: false };
+  }
   const scope = captureLifecycleDatabaseScope(
     preparedDatabase
       ? {
@@ -120,7 +96,7 @@ export async function searchSessionTranscripts(
           path: preparedDatabase.path,
           env: params.env,
         }
-      : resolveSqliteReadScope(params),
+      : await prepareSqliteScope({ ...params, sessionKey: params.sessionKey ?? "" }),
   );
   const options = toDatabaseOptions(scope);
   const request = {
@@ -129,153 +105,220 @@ export async function searchSessionTranscripts(
     env: scope.env,
     sessionKeys: params.sessionKeys?.slice(),
   };
-  const finish = (result: SessionTranscriptSearchResult): SessionTranscriptSearchResult => {
-    if (result.indexing) {
+  let statusOwnerFailure: { error: unknown } | undefined;
+  const readIndexStatus = async (
+    assertCurrent?: () => void,
+    signal?: AbortSignal,
+  ): Promise<boolean> => {
+    signal?.throwIfAborted();
+    assertCurrent?.();
+    let indexing: boolean;
+    try {
+      if (statusOwnerFailure) {
+        throw statusOwnerFailure.error;
+      }
+      indexing = await readSessionTranscriptIndexStatus(options, assertCurrent, signal);
+    } catch {
+      // Writable maintenance failure must not discard an authorized read-only result.
+      signal?.throwIfAborted();
+      assertCurrent?.();
+      return true;
+    }
+    signal?.throwIfAborted();
+    assertCurrent?.();
+    if (indexing) {
       startSessionTranscriptIndexReconcile(options);
     }
-    return {
-      ...result,
-      indexing: result.indexing || isSessionTranscriptIndexReconcileRunning(options),
-    };
+    return indexing;
   };
-  if (isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options)) {
-    // Process-local SQLite cannot cross the worker boundary without changing its lifetime.
-    return finish(searchSessionTranscriptsReadOnlySync(request, options));
+  let execution: OpenClawAgentDatabaseExecution | undefined;
+  try {
+    try {
+      // Retain writer admission while the search checks projection readiness.
+      if (supportsOpenClawAgentDatabaseExecution(options)) {
+        execution = captureOpenClawAgentDatabaseExecution(options);
+      }
+    } catch (error) {
+      statusOwnerFailure = { error };
+    }
+    return await withSessionHistoryWorkerDatabase(
+      options,
+      async (owner) => {
+        const result = await owner.searchTranscripts(request, (signal) =>
+          readIndexStatus(owner.assertCurrent, signal),
+        );
+        owner.assertCurrent();
+        return {
+          ...result,
+          indexing: result.indexing || isSessionTranscriptIndexReconcileRunning(options),
+        };
+      },
+      transcriptSearchLane,
+    );
+  } catch (error) {
+    if (error instanceof WorkerTaskError && error.code === "timeout") {
+      throw new WorkerTaskError(
+        "Session transcript search timed out; narrow the session selection or use more specific query keywords, then retry. A timeout does not mean that no matching conversation exists.",
+        "timeout",
+        { cause: error },
+      );
+    }
+    throw error;
+  } finally {
+    await execution?.release();
   }
-  return await withSessionHistoryWorkerDatabase(options, async (owner) => {
-    const result = await owner.searchTranscripts(request);
-    owner.assertCurrent();
-    return finish(result);
-  });
 }
 
-function validateSearchQuery(input: string): string {
-  const query = input.trim();
-  if (!query) {
-    throw new Error("query must not be empty");
-  }
-  if (query.length > SEARCH_QUERY_MAX_CHARS) {
-    throw new Error(`query must not exceed ${SEARCH_QUERY_MAX_CHARS} characters`);
-  }
-  return query;
-}
-
-/** Native read kernel; indexing reports dirty rows without scheduling a writer. */
+/** Native query kernel; projection readiness belongs to the maintenance owner. */
 export function searchSessionTranscriptsReadOnlySync(
   params: SessionTranscriptSearchParams,
   preparedDatabase?: OpenClawAgentDatabaseOptions,
-): SessionTranscriptSearchResult {
-  const query = validateSearchQuery(params.query);
+): SessionTranscriptSearchReadResult {
+  const query = validateSessionTranscriptSearchQuery(params.query);
   const scope = preparedDatabase ? { agentId: params.agentId } : resolveSqliteReadScope(params);
   const databaseOptions = preparedDatabase ?? toDatabaseOptions(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      runSqliteDeferredTransactionSync(
+    (database) => ({
+      ...runSqliteReadSnapshotSync(
         database.db,
         () => {
-          const indexing = hasSessionsNeedingTranscriptIndexReconcile(database.db);
-          const limit = Math.min(Math.max(1, params.limit ?? 10), SEARCH_LIMIT_MAX);
+          const limit = sessionTranscriptSearchLimit(params.limit);
           // Shared databases hold multiple logical agents. Filter before LIMIT;
           // reserved global/unknown sentinels retain their store-wide scope.
-          const sessionFilterValues = params.sessionKeys ?? [
-            toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" }),
-          ];
-          const sessionKeySet = sqliteStringSet(sessionFilterValues);
           const db = getNodeSqliteKysely<DB>(database.db);
+          const search = admitStoreSearch(database.db, agentTranscriptSearchSchema);
+          if (!search.fullText) {
+            throw new DatabaseSearchCapabilityUnavailableError(
+              "fullText",
+              search.diagnostics.join("; "),
+            );
+          }
+          const textIndex = search.text.transcript!;
+          const literalQuery = sessionTranscriptSearchFtsQuery(query, params.match);
+          const ranking = search.fullText.rank(textIndex, literalQuery);
+          const agentPrefix = toAgentStoreSessionKey({
+            agentId: scope.agentId,
+            requestKey: "*",
+          }).slice(0, -1);
+          const selectedWindows = db
+            .selectFrom("session_windows")
+            .select(["session_id", "session_key"])
+            .where((eb) =>
+              params.sessionKeys === undefined
+                ? eb.or([
+                    isPostgresSqlConnection(database.db)
+                      ? /* kysely-allow-raw: Literal prefix comparison preserves underscores in agent IDs. */ sql<boolean>`left(${eb.ref("session_key")}, ${agentPrefix.length}) = ${agentPrefix}`
+                      : /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */ sql<boolean>`${eb.ref("session_key")} GLOB ${toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" })}`,
+                    eb("session_key", "in", ["global", "unknown"]),
+                  ])
+                : params.sessionKeys.length > 0
+                  ? eb("session_key", "in", sqliteStringSet(params.sessionKeys))
+                  : eb.and([]),
+            )
+            .$if(params.sessionId !== undefined, (builder) =>
+              builder.where("session_id", "=", params.sessionId!),
+            );
           const archivedTranscriptsExcluded =
             executeSqliteQueryTakeFirstSync(
               database.db,
               db
                 .selectFrom("session_transcript_cold_archives as cold")
-                .innerJoin("session_windows as window", "window.session_id", "cold.session_id")
-                .select((eb) => eb.fn.countAll<number>().as("count"))
-                .$if(params.sessionKeys === undefined, (builder) =>
-                  builder.where((eb) =>
-                    eb.or([
-                      /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */
-                      sql<boolean>`${eb.ref("window.session_key")} GLOB ${sessionFilterValues[0]}`,
-                      eb("window.session_key", "in", ["global", "unknown"]),
-                    ]),
-                  ),
-                )
-                .$if(
-                  params.sessionKeys !== undefined && sessionFilterValues.length > 0,
-                  (builder) => builder.where("window.session_key", "in", sessionKeySet),
-                )
-                .$if(params.sessionId !== undefined, (builder) =>
-                  builder.where("window.session_id", "=", params.sessionId!),
-                ),
+                .innerJoin(selectedWindows.as("window"), "window.session_id", "cold.session_id")
+                .select((eb) => eb.fn.countAll<number>().as("count")),
             )?.count ?? 0;
-          // MATCH, snippet(), and bm25() are FTS5 primitives without a Kysely
-          // representation. session_key lives on the window row so key renames
+          const match = search.fullText.match(textIndex, literalQuery);
+          const order =
+            params.order === "recent"
+              ? sql`session_transcript_fts.timestamp desc, fts_rowid desc`
+              : sql`rank ${/* kysely-allow-raw: Capability order is the closed asc/desc union. */ sql.raw(ranking.order)}, session_transcript_fts.timestamp desc, session_transcript_fts.message_id asc`;
+          // session_key lives on the window row so key renames
           // never leave stale keys inside the index. Sessions flagged needs_rebuild
           // are excluded: their rows may still hold rewound-away branch text that
           // sessions_history no longer exposes, so they stay hidden until reconcile
           // rebuilds them (indexing=true tells the caller to retry).
+          const candidates = db
+            .selectFrom("session_transcript_fts")
+            // Keep MATCH outermost; the narrow map rejects excluded content before hydration.
+            .crossJoin("session_transcript_fts_rows as mapped")
+            .crossJoin(selectedWindows.as("window"))
+            .where("mapped.id", "=", search.fullText.identity(textIndex))
+            .whereRef("window.session_id", "=", "mapped.session_id")
+            .where(match)
+            // Depend on the scoped window so SQLite cannot read role before excluding sessions.
+            .$if(Boolean(params.role), (builder) =>
+              isPostgresSqlConnection(database.db)
+                ? builder.where("role", "=", params.role!)
+                : builder.where((eb) =>
+                    eb
+                      .case()
+                      .when("window.session_key", "is not", null)
+                      .then(eb("role", "=", params.role!))
+                      .else(false)
+                      .end(),
+                  ),
+            )
+            .where(
+              "mapped.session_id",
+              "not in",
+              db
+                .selectFrom("session_transcript_index_state")
+                .select("session_id")
+                .where("needs_rebuild", "!=", 0),
+            )
+            .select([
+              "window.session_key",
+              search.fullText.identity(textIndex).as("fts_rowid"),
+              ranking.value.as("rank"),
+            ]);
+          const selectedHits =
+            params.order === "recent"
+              ? candidates.orderBy(order).limit(limit + 1)
+              : db
+                  .with(
+                    (cte) => cte("scores").materialized(),
+                    () => candidates,
+                  )
+                  .selectFrom("scores")
+                  .crossJoin("session_transcript_fts")
+                  .where((eb) =>
+                    eb(search.fullText!.identity(textIndex), "=", eb.ref("scores.fts_rowid")),
+                  )
+                  // Keep every tie at the cutoff before reading metadata for the final ordering.
+                  .where("scores.rank", "in", (eb) =>
+                    eb
+                      .selectFrom("scores")
+                      .select("rank")
+                      .orderBy("rank", ranking.order)
+                      .limit(limit + 1),
+                  )
+                  .select(["scores.session_key", "scores.fts_rowid", "scores.rank"])
+                  .orderBy("scores.rank", ranking.order)
+                  .orderBy("session_transcript_fts.timestamp", "desc")
+                  .orderBy("session_transcript_fts.message_id", "asc")
+                  .limit(limit + 1);
           const rows = executeSqliteQuerySync(
             database.db,
             db
-              .selectFrom("session_transcript_fts")
-              .innerJoin(
-                "session_windows",
-                "session_windows.session_id",
-                "session_transcript_fts.session_id",
+              .with(
+                (cte) => cte("hits").materialized(),
+                () => selectedHits,
               )
+              .selectFrom("hits")
+              .crossJoin("session_transcript_fts")
+              .where((eb) =>
+                eb(search.fullText!.identity(textIndex), "=", eb.ref("hits.fts_rowid")),
+              )
+              .where(match)
               .select([
-                "session_windows.session_key",
+                "hits.session_key",
                 "session_transcript_fts.session_id",
                 "message_id",
                 "role",
                 "timestamp",
-                /* kysely-allow-raw: FTS5 snippet primitive. */
-                sql`snippet(session_transcript_fts, 0, '', '', ' … ', 48)`.as("snippet"),
-                /* kysely-allow-raw: FTS5 ranking primitive. */
-                sql`bm25(session_transcript_fts)`.as("rank"),
+                "hits.rank as rank",
+                search.fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet"),
               ])
-              .where(
-                /* kysely-allow-raw: FTS5 table MATCH with a bound search query. */
-                sql<boolean>`session_transcript_fts MATCH ${toFtsQuery(query)}`,
-              )
-              .$if(params.sessionKeys === undefined, (builder) =>
-                builder.where((eb) =>
-                  eb.or([
-                    /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */
-                    sql<boolean>`${eb.ref("session_windows.session_key")} GLOB ${sessionFilterValues[0]}`,
-                    eb("session_windows.session_key", "in", ["global", "unknown"]),
-                  ]),
-                ),
-              )
-              .$if(params.sessionKeys !== undefined && sessionFilterValues.length > 0, (builder) =>
-                builder.where("session_windows.session_key", "in", sessionKeySet),
-              )
-              .$if(Boolean(params.sessionId), (builder) =>
-                builder.where("session_transcript_fts.session_id", "=", params.sessionId!),
-              )
-              .$if(Boolean(params.role), (builder) => builder.where("role", "=", params.role!))
-              .where(
-                "session_transcript_fts.session_id",
-                "not in",
-                db
-                  .selectFrom("session_transcript_index_state")
-                  .select("session_id")
-                  .where("needs_rebuild", "!=", 0)
-                  .$if(Boolean(params.sessionId), (builder) =>
-                    builder.where("session_id", "=", params.sessionId!),
-                  ),
-              )
-              .$if(params.order === "recent", (builder) =>
-                builder
-                  .orderBy("timestamp", "desc")
-                  /* kysely-allow-raw: FTS5 implicit rowid is not a generated schema column. */
-                  .orderBy(sql`session_transcript_fts.rowid`, "desc"),
-              )
-              .$if(params.order !== "recent", (builder) =>
-                builder
-                  .orderBy("rank", "asc")
-                  .orderBy("timestamp", "desc")
-                  .orderBy("message_id", "asc"),
-              )
-              .limit(limit + 1),
+              .orderBy(order),
           ).rows;
           const hits = rows.flatMap((row): SessionTranscriptSearchResult["hits"] => {
             if (
@@ -297,24 +340,22 @@ export function searchSessionTranscriptsReadOnlySync(
                 messageId: row.message_id,
                 role: row.role,
                 timestamp: Number.isFinite(timestamp) ? timestamp : 0,
-                snippet:
-                  row.snippet.length > SEARCH_SNIPPET_MAX_CHARS
-                    ? `${truncateUtf16Safe(row.snippet, SEARCH_SNIPPET_MAX_CHARS)}…`
-                    : row.snippet,
-                score: Number.isFinite(rank) ? -rank : 0,
+                snippet: boundSessionTranscriptSearchSnippet(row.snippet),
+                score: ranking.toRank(rank),
               },
             ];
           });
           return {
+            found: true,
             hits: hits.slice(0, limit),
-            indexing,
             truncated: hits.length > limit,
             ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
           };
         },
         { databaseLabel: database.path, operationLabel: "session transcript search" },
       ),
+    }),
     databaseOptions,
   );
-  return result.found ? result.value : { hits: [], indexing: false, truncated: false };
+  return result.found ? result.value : { found: false, hits: [], truncated: false };
 }

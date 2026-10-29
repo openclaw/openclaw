@@ -41,7 +41,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/ip.ts src/ipv4.ts src/redact-sensitive-url.ts src/url-protocol.ts src/url-userinfo.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts net-policy"
   },
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",

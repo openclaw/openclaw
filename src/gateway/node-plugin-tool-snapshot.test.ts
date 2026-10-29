@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
+  listConnectedNodePluginTools,
   normalizeNodePluginToolDescriptors,
+  removeConnectedNodePluginTools,
+  replaceConnectedNodePluginTools,
 } from "./node-plugin-tool-snapshot.js";
 
 function descriptor(name: string, command = "demo.echo"): NodePluginToolDescriptor {
@@ -14,63 +17,72 @@ function descriptor(name: string, command = "demo.echo"): NodePluginToolDescript
   };
 }
 
-describe("normalizeNodePluginToolDescriptors", () => {
-  it("trusts unregistered descriptors inside the approved command surface", () => {
-    const tools = normalizeNodePluginToolDescriptors({
-      nodeId: "node-1",
-      tools: [descriptor("demo_echo"), descriptor("demo_blocked", "demo.blocked")],
-      allowedCommands: ["demo.echo"],
-      registeredDescriptors: new Map(),
-    });
+function normalize(
+  tools: NodePluginToolDescriptor[],
+  overrides: Partial<Parameters<typeof normalizeNodePluginToolDescriptors>[0]> = {},
+) {
+  return normalizeNodePluginToolDescriptors({
+    nodeId: "node-1",
+    tools,
+    allowedCommands: ["demo.echo"],
+    registeredDescriptors: new Map(),
+    ...overrides,
+  });
+}
 
+function registered(agentTool: { name: string; description: string; parameters?: unknown }) {
+  return createRegisteredNodePluginToolDescriptorMap([
+    { pluginId: "demo", command: { command: "demo.echo", agentTool } },
+  ]);
+}
+
+describe("normalizeNodePluginToolDescriptors", () => {
+  it("returns independently ordered lists without changing published node tools", () => {
+    const tools = Object.freeze([
+      { descriptor: descriptor("z_tool"), registered: false },
+      { descriptor: descriptor("a_tool"), registered: true },
+    ]);
+    replaceConnectedNodePluginTools({ nodeId: "snapshot-test", tools });
+    try {
+      const listed = listConnectedNodePluginTools();
+      expect(listed.map((tool) => tool.descriptor.name)).toEqual(["a_tool", "z_tool"]);
+      listed.pop();
+      expect(listConnectedNodePluginTools()).toHaveLength(2);
+      expect(tools.map((tool) => tool.descriptor.name)).toEqual(["z_tool", "a_tool"]);
+    } finally {
+      removeConnectedNodePluginTools("snapshot-test");
+    }
+  });
+
+  it("trusts unregistered descriptors inside the approved command surface", () => {
+    const tools = normalize([descriptor("demo_echo"), descriptor("demo_blocked", "demo.blocked")]);
     expect(tools.map((tool) => tool.descriptor.name)).toEqual(["demo_echo"]);
   });
 
   it("drops descriptors that claim the reserved node-mcp id without the MCP shape", () => {
-    const spoofed: NodePluginToolDescriptor = {
-      pluginId: "node-mcp",
-      name: "spoofed_tool",
-      description: "Claims node-mcp trust for an arbitrary command",
-      command: "demo.echo",
-    };
-    const genuine: NodePluginToolDescriptor = {
-      pluginId: "node-mcp",
-      name: "srv_echo",
-      description: "Real node-hosted MCP tool",
-      command: "mcp.tools.call.v1",
-      mcp: { server: "srv", tool: "echo" },
-    };
-
-    const tools = normalizeNodePluginToolDescriptors({
-      nodeId: "node-1",
-      tools: [spoofed, genuine],
-      allowedCommands: ["demo.echo", "mcp.tools.call.v1"],
-      registeredDescriptors: new Map(),
-    });
+    const tools = normalize(
+      [
+        { ...descriptor("spoofed_tool"), pluginId: "node-mcp" },
+        {
+          ...descriptor("srv_echo", "mcp.tools.call.v1"),
+          pluginId: "node-mcp",
+          mcp: { server: "srv", tool: "echo" },
+        },
+      ],
+      { allowedCommands: ["demo.echo", "mcp.tools.call.v1"] },
+    );
 
     expect(tools.map((tool) => tool.descriptor.name)).toEqual(["srv_echo"]);
   });
 
-  it("prefers matching registered metadata and caps its description", () => {
-    const registeredDescriptors = createRegisteredNodePluginToolDescriptorMap([
-      {
-        pluginId: "demo",
-        command: {
-          command: "demo.echo",
-          agentTool: {
-            name: "demo_echo",
-            description: `  ${"r".repeat(1200)}  `,
-            parameters: { type: "object", properties: { text: { type: "string" } } },
-          },
-        },
-      },
-    ]);
-
-    const tools = normalizeNodePluginToolDescriptors({
-      nodeId: "node-1",
-      tools: [descriptor("demo_echo")],
-      allowedCommands: ["demo.echo"],
-      registeredDescriptors,
+  it("distinguishes registered metadata from node-supplied metadata and caps its description", () => {
+    const tools = normalize([descriptor("demo_echo"), descriptor("demo_status", "demo.status")], {
+      allowedCommands: ["demo.echo", "demo.status"],
+      registeredDescriptors: registered({
+        name: "demo_echo",
+        description: `  ${"r".repeat(1200)}  `,
+        parameters: { type: "object", properties: { text: { type: "string" } } },
+      }),
     });
 
     expect(tools[0]?.descriptor.description).toHaveLength(1024);
@@ -78,29 +90,6 @@ describe("normalizeNodePluginToolDescriptors", () => {
       type: "object",
       properties: { text: { type: "string" } },
     });
-  });
-
-  it("marks descriptors by whether gateway registration backs them", () => {
-    const registeredDescriptors = createRegisteredNodePluginToolDescriptorMap([
-      {
-        pluginId: "demo",
-        command: {
-          command: "demo.echo",
-          agentTool: {
-            name: "demo_echo",
-            description: "Registered echo",
-          },
-        },
-      },
-    ]);
-
-    const tools = normalizeNodePluginToolDescriptors({
-      nodeId: "node-1",
-      tools: [descriptor("demo_echo"), descriptor("demo_status", "demo.status")],
-      allowedCommands: ["demo.echo", "demo.status"],
-      registeredDescriptors,
-    });
-
     expect(
       tools.map((tool) => ({ name: tool.descriptor.name, registered: tool.registered })),
     ).toEqual([
@@ -114,12 +103,7 @@ describe("normalizeNodePluginToolDescriptors", () => {
       descriptor(`tool_${String(index).padStart(3, "0")}`),
     ).toReversed();
 
-    const normalized = normalizeNodePluginToolDescriptors({
-      nodeId: "node-1",
-      tools,
-      allowedCommands: ["demo.echo"],
-      registeredDescriptors: new Map(),
-    });
+    const normalized = normalize(tools);
 
     expect(normalized).toHaveLength(128);
     expect(normalized[0]?.descriptor.name).toBe("tool_000");
@@ -127,14 +111,6 @@ describe("normalizeNodePluginToolDescriptors", () => {
   });
 
   it("returns no descriptors when gateway publication is disabled", () => {
-    expect(
-      normalizeNodePluginToolDescriptors({
-        nodeId: "node-1",
-        tools: [descriptor("demo_echo")],
-        allowedCommands: ["demo.echo"],
-        registeredDescriptors: new Map(),
-        enabled: false,
-      }),
-    ).toEqual([]);
+    expect(normalize([descriptor("demo_echo")], { enabled: false })).toEqual([]);
   });
 });

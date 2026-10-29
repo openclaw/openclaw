@@ -5,11 +5,12 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
+import {
+  executeOpenClawStateWorker,
+  openOpenClawStateWorkerCleanupStore,
+} from "../state/openclaw-state-worker-store.js";
+import { withGatewayServiceInstallation } from "./gateway-service-installation-context.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { openSharedStateSqliteWorkerStore } from "./sqlite-worker-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -28,75 +29,67 @@ function readAppVersion(databasePath: string) {
   }
 }
 
-describe("existing-schema shared-state workers", () => {
-  it("preserves installed release metadata through managed and ordinary worker opens", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("worker-existing-schema-") };
-    const database = openOpenClawStateDatabase({ env });
-    const databasePath = database.path;
-    database.db
-      .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
-      .run("synthetic-installed-runtime");
-    await closeOpenClawStateDatabaseAsync();
+async function fixture() {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("worker-existing-schema-") };
+  const { db, path: databasePath } = openOpenClawStateDatabase({ env });
+  db.prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'").run(
+    "synthetic-installed-runtime",
+  );
+  await closeOpenClawStateDatabaseAsync();
+  return { env, databasePath };
+}
 
-    await withExistingOpenClawStateSchema({ path: databasePath }, async () => {
-      const captured = captureOpenClawStateWorkerContext({ path: databasePath, env });
-      for (const ownerKey of ["agent:main:first", "agent:main:second"]) {
-        expect(
-          await executeOpenClawStateWorker(captured, { type: "flows.list", input: { ownerKey } }),
-        ).toEqual([]);
-        expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
-      }
-    });
+function read(context: ReturnType<typeof captureOpenClawStateWorkerContext>) {
+  return executeOpenClawStateWorker(context, {
+    type: "plugins.conversationBindingApprovals.read",
+    input: undefined,
+  });
+}
 
-    const ordinary = captureOpenClawStateWorkerContext({ path: databasePath, env });
-    await expect(
-      openSharedStateSqliteWorkerStore(
-        {
-          moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),
+describe("shared-state worker schema policies", () => {
+  it("reopens the whole actor when schema policy changes with a cleanup client retained", async () => {
+    const { env, databasePath } = await fixture();
+    const captured = captureOpenClawStateWorkerContext({ path: databasePath, env });
+    expect(await read(captured)).toEqual([]);
+    const cleanup = await openOpenClawStateWorkerCleanupStore(
+      databasePath,
+      captured,
+      () => {},
+      captured.admission.identity,
+    );
+    expect(cleanup).toBeDefined();
+
+    await withGatewayServiceInstallation(
+      {
+        installation: {
+          root: "/synthetic-installed-runtime",
+          version: "2026.10.1",
+          cliVersion: "2026.10.9",
           databasePath,
         },
-        ordinary,
-      ),
-    ).rejects.toThrow("schema policy changed");
-    expect(
-      await executeOpenClawStateWorker(ordinary, {
-        type: "flows.list",
-        input: { ownerKey: "agent:main:ordinary" },
-      }),
-    ).toEqual([]);
+      },
+      async () => {
+        const installed = captureOpenClawStateWorkerContext({ path: databasePath, env });
+        expect(await read(installed)).toEqual([]);
+      },
+    );
+
     expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
+    await cleanup?.close();
   });
 
   it("admits queued checks only while their captured existing-schema scope remains active", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("worker-expired-schema-") };
-    const database = openOpenClawStateDatabase({ env });
-    const databasePath = database.path;
-    database.db
-      .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
-      .run("synthetic-installed-runtime");
-    await closeOpenClawStateDatabaseAsync();
+    const { env, databasePath } = await fixture();
     const outsideScope = AsyncLocalStorage.snapshot();
     const captured = await withExistingOpenClawStateSchema({ path: databasePath }, async () => {
       const context = captureOpenClawStateWorkerContext({ env });
       expect(() => outsideScope(context.admission.assertCurrent)).not.toThrow();
-      expect(
-        await outsideScope(() =>
-          executeOpenClawStateWorker(context, {
-            type: "flows.list",
-            input: { ownerKey: "agent:main:queued" },
-          }),
-        ),
-      ).toEqual([]);
+      expect(await outsideScope(() => read(context))).toEqual([]);
       expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
       return context;
     });
 
-    await expect(
-      executeOpenClawStateWorker(captured, {
-        type: "flows.list",
-        input: { ownerKey: "agent:main:expired" },
-      }),
-    ).rejects.toThrow("schema admission has ended");
+    await expect(read(captured)).rejects.toThrow("schema admission has ended");
     expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
   });
 });

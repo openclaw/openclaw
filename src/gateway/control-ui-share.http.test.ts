@@ -1,87 +1,125 @@
 import fs from "node:fs";
-import { createServer } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { handleControlUiHttpRequest } from "./control-ui.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
+import { AUTH_TOKEN, createTestGatewayServer } from "./server-http.test-harness.js";
 
-describe("public Control UI previews", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  it.each(["", "/control"])("serves a private-data-free preview under %s", async (basePath) => {
-    const root = tempDirs.make("openclaw-social-preview-");
-    const cardBytes = fs.readFileSync(path.resolve("ui/public/apple-touch-icon.png"));
-    fs.writeFileSync(path.join(root, "social-card.png"), cardBytes);
-    const server = createServer((req, res) => {
-      void handleControlUiHttpRequest(req, res, {
-        basePath,
-        root: { kind: "resolved", path: root },
-        config: { gateway: { publicOrigin: "https://gateway.example.test" } },
-        auth: { mode: "token", token: "test-only-token", allowTailscale: false },
-      }).then((handled) => {
-        if (!handled) {
-          res.writeHead(404).end();
-        }
-      });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing test server address");
-    }
-    const origin = `http://127.0.0.1:${address.port}${basePath}`;
-    try {
-      const route = "/share/dashboard/example/private-name";
-      const response = await fetch(`${origin}${route}?token=secret-value&draft=private-draft`);
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toContain("text/html");
-      const html = await response.text();
-      expect(html).toContain('<meta property="og:title" content="OpenClaw dashboard">');
-      expect(html).toContain(`content="https://gateway.example.test${basePath}/share/card.png"`);
-      expect(html).toContain(`href="${basePath}/dashboard/example/private-name"`);
-      expect(html).not.toMatch(/secret-value|private-draft|<script|openclaw-app/);
-      expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
-      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
-      const head = await fetch(`${origin}${route}`, { method: "HEAD" });
-      expect(head.status).toBe(200);
-      expect(await head.text()).toBe("");
-      expect(Number(head.headers.get("content-length"))).toBe(Buffer.byteLength(html));
-      const card = await fetch(`${origin}/share/card.png`);
-      expect(card.status).toBe(200);
-      expect(card.headers.get("content-type")).toContain("image/png");
-      const png = Buffer.from(await card.arrayBuffer());
-      expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-      expect(png).toEqual(cardBytes);
-      const catalog = await fetch(
-        `${origin}/share/chat/example?catalog=example&host=dev%3Amac&thread=a%22%3E%3Cscript%3E&token=secret-value`,
-      );
-      expect(await catalog.text()).toContain(
-        `href="${basePath}/chat/example?catalog=example&amp;host=dev%3Amac&amp;thread=a%22%3E%3Cscript%3E"`,
-      );
-      const bootstrap = await fetch(`${origin}/control-ui-config.json`);
-      expect(bootstrap.status).toBe(401);
-      const escaped = await fetch(`${origin}/share/chat/example/folder%2Ffile%20name`);
-      expect(escaped.status).toBe(200);
-      expect(await escaped.text()).toContain(
-        `href="${basePath}/chat/example/folder%2Ffile%20name"`,
-      );
-      for (const invalid of [
-        "/share",
-        "/share/api/private",
-        "/share/chat//session",
-        "/share/chat/a/~key",
-        "/share/chat/a/%FF",
-        `/share/chat/a/${"x".repeat(8192)}`,
-      ]) {
-        expect((await fetch(`${origin}${invalid}`)).status, invalid).toBe(404);
-      }
-      expect((await fetch(`${origin}${route}`, { method: "POST" })).status).toBe(404);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+function expectPublic(response: Response, status = 200, context?: string) {
+  expect(response.status, context).toBe(status);
+  expect(response.headers.get("x-robots-tag"), context).toBe("noindex, nofollow");
+}
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+it.each(["", "/control"])("serves a private-data-free preview under %s", async (basePath) => {
+  const root = tempDirs.make("openclaw-social-preview-");
+  const cardBytes = fs.readFileSync(path.resolve("ui/public/apple-touch-icon.png"));
+  fs.writeFileSync(path.join(root, "social-card.png"), cardBytes);
+  const videoBytes = Buffer.from("synthetic-public-video");
+  fs.writeFileSync(path.join(root, "social-preview-v1.mp4"), videoBytes);
+  const rootState: ControlUiRootState = { kind: "resolved", path: root };
+  const lease = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      createTestGatewayServer({
+        resolvedAuth: AUTH_TOKEN,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: basePath,
+          controlUiRoot: rootState,
+          getRuntimeConfig: () => ({
+            gateway: { publicOrigin: "https://gateway.example.test" },
+          }),
+        },
+      }),
   });
+  const origin = `http://127.0.0.1:${lease.claim.port}${basePath}`;
+  try {
+    const route = "/share/dashboard/example/private-name";
+    const response = await fetch(`${origin}${route}?token=secret-value&draft=private-draft`);
+    expectPublic(response);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    const html = await response.text();
+    expect(html).toContain('<meta property="og:title" content="OpenClaw dashboard">');
+    expect(html).toContain(`content="https://gateway.example.test${basePath}/share/card.png"`);
+    expect(html).toContain(`href="${basePath}/dashboard/example/private-name"`);
+    expect(html).toContain(
+      `<meta property="og:video" content="https://gateway.example.test${basePath}/share/preview-v1.mp4">`,
+    );
+    expect(html).toContain('<video controls playsinline preload="none"');
+    expect(html).not.toMatch(/autoplay|twitter:player/);
+    expect(response.headers.get("content-security-policy")).toContain("media-src 'self'");
+    expect(html).not.toMatch(/secret-value|private-draft|<script|openclaw-app/);
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    const head = await fetch(`${origin}${route}`, { method: "HEAD" });
+    expectPublic(head);
+    expect(await head.text()).toBe("");
+    expect(Number(head.headers.get("content-length"))).toBe(Buffer.byteLength(html));
+    const card = await fetch(`${origin}/share/card.png`);
+    expectPublic(card);
+    expect(card.headers.get("cache-control")).toBe("no-cache");
+    expect(card.headers.get("content-type")).toContain("image/png");
+    expect(Buffer.from(await card.arrayBuffer())).toEqual(cardBytes);
+    const video = await fetch(`${origin}/share/preview-v1.mp4`);
+    expectPublic(video);
+    expect(video.headers.get("content-type")).toBe("video/mp4");
+    expect(Buffer.from(await video.arrayBuffer())).toEqual(videoBytes);
+    const catalog = await fetch(
+      `${origin}/share/chat/example?catalog=example&host=dev%3Amac&thread=a%22%3E%3Cscript%3E&token=secret-value`,
+    );
+    expect(await catalog.text()).toContain(
+      `href="${basePath}/chat/example?catalog=example&amp;host=dev%3Amac&amp;thread=a%22%3E%3Cscript%3E"`,
+    );
+    const bootstrap = await fetch(`${origin}/control-ui-config.json`);
+    expect(bootstrap.status).toBe(401);
+    expect(bootstrap.headers.get("x-robots-tag")).toBeNull();
+    const escaped = await fetch(`${origin}/share/chat/example/folder%2Ffile%20name`);
+    expect(escaped.status).toBe(200);
+    expect(await escaped.text()).toContain(`href="${basePath}/chat/example/folder%2Ffile%20name"`);
+    for (const invalid of [
+      "/share",
+      "/share/api/private",
+      "/share/chat//session",
+      "/share/chat/a/~key",
+      "/share/chat/a/%FF",
+      `/share/chat/a/${"x".repeat(8192)}`,
+    ]) {
+      const rejected = await fetch(`${origin}${invalid}`);
+      expectPublic(rejected, 404, invalid);
+    }
+    for (const [requestPath, options, status] of [
+      ["/share/card.png", { method: "HEAD" }, 200],
+      ["/share/card.png", { headers: { "if-none-match": "*" } }, 304],
+      ["/share/card.png", { headers: { "accept-encoding": "identity;q=0, *;q=0" } }, 406],
+      [route, { method: "POST" }, 404],
+      ["/share/card.png", { method: "POST" }, 404],
+      ["/share/preview-v1.mp4", { method: "HEAD" }, 200],
+      ["/share/preview-v1.mp4", { method: "POST" }, 404],
+      ["/share/preview-v2.mp4", {}, 404],
+      ["/share/session?token=invalid", {}, 404],
+      ["/share/session/media?token=invalid", {}, 404],
+      ["/share/session/card.png?token=invalid", {}, 200],
+    ] as const) {
+      const reply = await fetch(`${origin}${requestPath}`, options);
+      expectPublic(reply, status, requestPath);
+      await reply.arrayBuffer();
+    }
+    fs.unlinkSync(path.join(root, "social-card.png"));
+    for (const requestPath of ["/share/card.png", "/share/session/card.png?token=invalid"]) {
+      const missing = await fetch(`${origin}${requestPath}`);
+      expectPublic(missing, 404);
+    }
+    Object.assign(rootState, { kind: "preparing" });
+    const preparing = await fetch(`${origin}/share/card.png`);
+    expectPublic(preparing, 503);
+  } finally {
+    lease.listener.closeAllConnections();
+    try {
+      await lease.releaseListener();
+    } finally {
+      await lease.claim.release();
+    }
+  }
 });

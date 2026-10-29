@@ -1,8 +1,8 @@
-// Gmail setup utilities write helper files and normalize Gmail setup settings.
 import fs from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveExecutable } from "../infra/executable-path.js";
+import { canAccessSync } from "../infra/path-existence.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { hasBinary } from "../skills/loading/config.js";
@@ -28,26 +28,13 @@ function findExecutablesOnPath(bins: string[]): string[] {
       if (seen.has(candidate)) {
         continue;
       }
-      try {
-        fs.accessSync(candidate, fs.constants.X_OK);
+      if (canAccessSync(candidate, fs.constants.X_OK)) {
         matches.push(candidate);
         seen.add(candidate);
-      } catch {
-        // keep scanning
       }
     }
   }
   return matches;
-}
-
-function ensurePathIncludes(dirPath: string, position: "append" | "prepend") {
-  const pathEnv = process.env.PATH ?? "";
-  const parts = pathEnv.split(path.delimiter).filter(Boolean);
-  if (parts.includes(dirPath)) {
-    return;
-  }
-  const next = position === "prepend" ? [dirPath, ...parts] : [...parts, dirPath];
-  process.env.PATH = next.join(path.delimiter);
 }
 
 function ensureGcloudOnPath(): boolean {
@@ -61,12 +48,13 @@ function ensureGcloudOnPath(): boolean {
     "/usr/local/Caskroom/google-cloud-sdk/latest/google-cloud-sdk/bin/gcloud",
   ];
   for (const candidate of candidates) {
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      ensurePathIncludes(path.dirname(candidate), "append");
+    if (canAccessSync(candidate, fs.constants.X_OK)) {
+      const dirPath = path.dirname(candidate);
+      const parts = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+      if (!parts.includes(dirPath)) {
+        process.env.PATH = [...parts, dirPath].join(path.delimiter);
+      }
       return true;
-    } catch {
-      // keep scanning
     }
   }
   return false;
@@ -102,7 +90,7 @@ async function resolvePythonExecutablePath(): Promise<string | undefined> {
       continue;
     }
     const lines = res.stdout.trim().split(/\r?\n/);
-    const resolved = lines[0]?.trim().split(/\s+/)[0];
+    const resolved = lines[0]?.trim();
     if (!resolved) {
       continue;
     }
@@ -115,12 +103,9 @@ async function resolvePythonExecutablePath(): Promise<string | undefined> {
       // so a compatible interpreter later on PATH is selected instead.
       continue;
     }
-    try {
-      fs.accessSync(resolved, fs.constants.X_OK);
+    if (canAccessSync(resolved, fs.constants.X_OK)) {
       cachedPythonPath = resolved;
       return resolved;
-    } catch {
-      // keep scanning
     }
   }
   cachedPythonPath = null;
@@ -213,28 +198,14 @@ export async function ensureSubscription(
     ["pubsub", "subscriptions", "describe", subscription, "--project", projectId],
     30_000,
   );
-  if (describe.code === 0) {
-    await runGcloud([
-      "pubsub",
-      "subscriptions",
-      "update",
-      subscription,
-      "--project",
-      projectId,
-      "--push-endpoint",
-      pushEndpoint,
-    ]);
-    return;
-  }
   await runGcloud([
     "pubsub",
     "subscriptions",
-    "create",
+    describe.code === 0 ? "update" : "create",
     subscription,
     "--project",
     projectId,
-    "--topic",
-    topicName,
+    ...(describe.code === 0 ? [] : ["--topic", topicName]),
     "--push-endpoint",
     pushEndpoint,
   ]);
@@ -300,14 +271,11 @@ export async function ensureTailscaleEndpoint(params: {
 export async function resolveProjectIdFromGogCredentials(): Promise<string | null> {
   const candidates = gogCredentialsPaths();
   for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
     try {
       const raw = fs.readFileSync(candidate, "utf-8");
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const clientId = extractGogClientId(parsed);
-      const projectNumber = extractProjectNumber(clientId);
+      const projectNumber = clientId?.match(/^(\d+)-/)?.[1] ?? null;
       if (!projectNumber) {
         continue;
       }
@@ -354,12 +322,4 @@ function extractGogClientId(parsed: Record<string, unknown>): string | null {
   const web = parsed.web as Record<string, unknown> | undefined;
   const candidate = installed?.client_id || web?.client_id || parsed.client_id || "";
   return typeof candidate === "string" ? candidate : null;
-}
-
-function extractProjectNumber(clientId: string | null): string | null {
-  if (!clientId) {
-    return null;
-  }
-  const match = clientId.match(/^(\d+)-/);
-  return match?.[1] ?? null;
 }

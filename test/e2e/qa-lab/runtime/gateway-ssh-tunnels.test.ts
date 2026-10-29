@@ -7,13 +7,15 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
-import { waitForFile } from "../../../helpers/process-wait.js";
+import { waitForDead } from "../../../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
-import { runGatewaySshTunnels } from "./gateway-ssh-tunnels.js";
+import { runGatewaySshTunnels, sshTrustPreparedMarker } from "./gateway-ssh-tunnels.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describeOnTestbox = process.env.OPENCLAW_TESTBOX === "1" ? describe : describe.skip;
@@ -23,40 +25,23 @@ const accountKnownHostsPath = path.join(os.userInfo().homedir, ".ssh", "known_ho
 const producerReadyMarker = "OPENCLAW_QA_PRODUCER_READY";
 const execFile = promisify(execFileCallback);
 const producerChildSource = `
-import { pathToFileURL } from "node:url";
-const producerPath = process.env.OPENCLAW_QA_PRODUCER_PATH;
-const artifactBase = process.env.OPENCLAW_QA_ARTIFACT_BASE;
-const fixtureReadyPath = process.env.OPENCLAW_QA_FIXTURE_READY_PATH;
-const fixtureProcessPath = process.env.OPENCLAW_QA_FIXTURE_PROCESS_PATH;
-const fixtureRoot = process.env.OPENCLAW_QA_FIXTURE_ROOT;
-if (!producerPath || !artifactBase) {
-  throw new Error("missing producer child paths");
-}
-const { runGatewaySshTunnels } = await import(pathToFileURL(producerPath).href);
+import { runGatewaySshTunnels } from ${JSON.stringify(pathToFileURL(producerPath).href)};
 const startSignal = new Promise((resolve) => process.stdin.once("data", resolve));
 process.stdout.write("${producerReadyMarker}\\n");
 await startSignal;
-const evidence = await runGatewaySshTunnels({
-  artifactBase,
-  fixtureProcessPath,
-  fixtureReadyPath,
-  fixtureRoot,
-  repoRoot: process.cwd(),
-});
+const evidence = await runGatewaySshTunnels(JSON.parse(process.env.OPENCLAW_QA_PRODUCER_OPTIONS));
 process.exitCode = evidence.entries[0]?.result.status === "pass" ? 0 : 1;
 `;
 
-describe("Gateway SSH tunnel QA preflight", () => {
-  it("records blocked evidence outside Testbox without privileged setup", async () => {
-    const artifactBase = tempDirs.make("openclaw-gateway-ssh-guard-");
-    const evidence = await withEnvAsync({ OPENCLAW_TESTBOX: undefined }, async () =>
-      runGatewaySshTunnels({ artifactBase, repoRoot: process.cwd() }),
-    );
+it("records blocked evidence outside Testbox without privileged setup", async () => {
+  const artifactBase = tempDirs.make("openclaw-gateway-ssh-guard-");
+  const evidence = await withEnvAsync({ OPENCLAW_TESTBOX: undefined }, async () =>
+    runGatewaySshTunnels({ artifactBase, repoRoot: process.cwd() }),
+  );
 
-    expect(evidence.entries[0]?.result).toMatchObject({ status: "blocked" });
-    await expect(fs.access(path.join(artifactBase, ".ssh-namespace"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+  expect(evidence.entries[0]?.result).toMatchObject({ status: "blocked" });
+  await expect(fs.access(path.join(artifactBase, ".ssh-namespace"))).rejects.toMatchObject({
+    code: "ENOENT",
   });
 });
 
@@ -84,11 +69,13 @@ function startProducer(
       cwd: process.cwd(),
       env: {
         ...process.env,
-        OPENCLAW_QA_ARTIFACT_BASE: artifactBase,
-        OPENCLAW_QA_FIXTURE_PROCESS_PATH: fixture?.processPath,
-        OPENCLAW_QA_FIXTURE_READY_PATH: fixture?.readyPath,
-        OPENCLAW_QA_FIXTURE_ROOT: fixture?.root,
-        OPENCLAW_QA_PRODUCER_PATH: producerPath,
+        OPENCLAW_QA_PRODUCER_OPTIONS: JSON.stringify({
+          artifactBase,
+          repoRoot: process.cwd(),
+          fixtureProcessPath: fixture?.processPath,
+          fixtureReadyPath: fixture?.readyPath,
+          fixtureRoot: fixture?.root,
+        }),
       },
       stdio: ["pipe", "pipe", "pipe"],
     },
@@ -98,46 +85,56 @@ function startProducer(
   child.stderr.setEncoding("utf8");
   let stdout = "";
   let stderr = "";
-  let resolveReady: () => void;
-  let rejectReady: (error: Error) => void;
-  const ready = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
+  const ready = createDeferred();
+  const trustPrepared = createDeferred();
   child.stdout.on("data", (chunk) => {
     stdout += String(chunk);
     if (stdout.includes(producerReadyMarker)) {
-      resolveReady();
+      ready.resolve();
+    }
+    if (stdout.includes(sshTrustPreparedMarker)) {
+      trustPrepared.resolve();
     }
   });
   child.stderr.on("data", (chunk) => {
     stderr += String(chunk);
   });
-  const completion = new Promise<void>((resolve, reject) => {
-    child.once("error", (error) => {
-      rejectReady(error);
-      reject(error);
-    });
-    child.once("close", (code, signal) => {
+  const completion = once(child, "close")
+    .then(([code, signal]) => {
       activeChildren.delete(child);
-      if (code === 0) {
-        resolve();
-        return;
+      if (code !== 0) {
+        throw new Error(
+          `Gateway SSH tunnel producer exited ${code ?? "null"}/${signal ?? "none"}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+        );
       }
-      const error = new Error(
-        `Gateway SSH tunnel producer exited ${code ?? "null"}/${signal ?? "none"}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
-      );
-      rejectReady(error);
-      reject(error);
+    })
+    .catch((error: unknown) => {
+      ready.reject(error);
+      throw error;
     });
-  });
   void completion.catch(() => {});
   return {
     completion,
     kill: () => terminateChild(child),
-    ready,
+    ready: ready.promise,
     start: () => child.stdin.end("start\n"),
+    waitForTrustPrepared: () =>
+      awaitGateBeforeSettlement(
+        trustPrepared.promise,
+        completion,
+        `timeout waiting for ${fixture?.readyPath}`,
+      ),
   };
+}
+
+function producerFixture(name: string, failReadiness = false) {
+  const artifactBase = tempDirs.make(`openclaw-gateway-ssh-${name}-`);
+  const fixture = {
+    root: tempDirs.make(`openclaw-gateway-ssh-${name}-root-`),
+    processPath: path.join(artifactBase, "namespace-pid"),
+    readyPath: failReadiness ? artifactBase : path.join(artifactBase, "trust-prepared"),
+  };
+  return { artifactBase, ...fixture, producer: startProducer(artifactBase, fixture) };
 }
 
 async function killPrivilegedProcessGroup(pid: number) {
@@ -154,6 +151,8 @@ async function readSummary(artifactBase: string) {
   ) as {
     cleanupReleased?: boolean;
     knownHostsIsolated?: boolean;
+    hostKeyDiagnostic?: string;
+    unreachableDiagnostic?: string;
   };
 }
 
@@ -169,70 +168,84 @@ async function readOptionalFile(filePath: string) {
 }
 
 describeOnTestbox("Gateway SSH tunnel QA producer", () => {
-  it("proves real forwarding, cleanup, and operator diagnostics", async () => {
-    const artifactBase = tempDirs.make("openclaw-gateway-ssh-evidence-");
+  it("keeps overlapping and killed producers isolated from account SSH state", async ({
+    signal,
+  }) => {
     const gatewayStartupEnv = snapshotGatewayStartupEnv();
-    const evidence = await runGatewaySshTunnels({
-      artifactBase,
-      repoRoot: process.cwd(),
-    });
-
-    expect(snapshotGatewayStartupEnv()).toEqual(gatewayStartupEnv);
+    const accountKnownHostsBefore = await readOptionalFile(accountKnownHostsPath);
+    const artifacts = ["first", "second"].map((id) =>
+      tempDirs.make(`openclaw-gateway-ssh-overlap-${id}-`),
+    );
+    const producer = startProducer(artifacts[1]!);
+    await producer.ready;
+    producer.start();
+    const [evidence] = await Promise.all([
+      runGatewaySshTunnels({ artifactBase: artifacts[0]!, repoRoot: process.cwd() }),
+      producer.completion,
+    ]);
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]?.result.status).toBe("pass");
-    const summary = JSON.parse(
-      await fs.readFile(path.join(artifactBase, "gateway-ssh-tunnels-summary.json"), "utf8"),
-    ) as {
-      cleanupReleased?: boolean;
-      hostKeyDiagnostic?: string;
-      knownHostsIsolated?: boolean;
-      unreachableDiagnostic?: string;
-    };
-    expect(summary.cleanupReleased).toBe(true);
-    expect(summary.knownHostsIsolated).toBe(true);
-    expect(summary.hostKeyDiagnostic).toMatch(
-      /REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i,
-    );
-    expect(summary.unreachableDiagnostic).toMatch(/Connection refused|connect to host|ssh exited/i);
-  }, 120_000);
-
-  it("keeps overlapping and killed producers isolated from account SSH state", async () => {
-    const accountKnownHostsBefore = await readOptionalFile(accountKnownHostsPath);
-    const firstArtifactBase = tempDirs.make("openclaw-gateway-ssh-overlap-first-");
-    const secondArtifactBase = tempDirs.make("openclaw-gateway-ssh-overlap-second-");
-    const first = startProducer(firstArtifactBase);
-    const second = startProducer(secondArtifactBase);
-    await Promise.all([first.ready, second.ready]);
-    first.start();
-    second.start();
-
-    await Promise.all([first.completion, second.completion]);
-    const summaries = await Promise.all([
-      readSummary(firstArtifactBase),
-      readSummary(secondArtifactBase),
-    ]);
-    expect(summaries.every((summary) => summary.cleanupReleased === true)).toBe(true);
-    expect(summaries.every((summary) => summary.knownHostsIsolated === true)).toBe(true);
+    const summaries = await Promise.all(artifacts.map(readSummary));
+    for (const summary of summaries) {
+      expect(summary).toMatchObject({
+        cleanupReleased: true,
+        knownHostsIsolated: true,
+        hostKeyDiagnostic: expect.stringMatching(
+          /REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i,
+        ),
+        unreachableDiagnostic: expect.stringMatching(
+          /Connection refused|connect to host|ssh exited/i,
+        ),
+      });
+    }
+    expect(snapshotGatewayStartupEnv()).toEqual(gatewayStartupEnv);
     expect(await readOptionalFile(accountKnownHostsPath)).toEqual(accountKnownHostsBefore);
 
-    const killedArtifactBase = tempDirs.make("openclaw-gateway-ssh-killed-");
-    const killedRoot = tempDirs.make("openclaw-gateway-ssh-killed-root-");
-    const fixtureReadyPath = path.join(killedArtifactBase, "trust-prepared");
-    const fixtureProcessPath = path.join(killedArtifactBase, "namespace-pid");
-    const killed = startProducer(killedArtifactBase, {
-      processPath: fixtureProcessPath,
-      readyPath: fixtureReadyPath,
-      root: killedRoot,
-    });
+    const { producer: killed, processPath: killedProcessPath } = producerFixture("killed");
     await killed.ready;
     killed.start();
-    await waitForFile(fixtureReadyPath, 10_000);
-    const namespacePid = Number.parseInt(await fs.readFile(fixtureProcessPath, "utf8"), 10);
+    await withinTest(killed.waitForTrustPrepared(), signal);
+    const namespacePid = Number.parseInt(await fs.readFile(killedProcessPath, "utf8"), 10);
     expect(namespacePid).toBeGreaterThan(1);
     await killPrivilegedProcessGroup(namespacePid);
     await expect(killed.completion).rejects.toThrow(
-      /namespaced Gateway SSH tunnel producer exited/,
+      "namespaced Gateway SSH tunnel producer exited null/SIGKILL",
     );
+
+    for (const failureMode of ["readiness-write", "parent-exit"]) {
+      const {
+        artifactBase,
+        root,
+        processPath,
+        producer: failed,
+      } = producerFixture(failureMode, failureMode === "readiness-write");
+      await failed.ready;
+      failed.start();
+      if (failureMode === "parent-exit") {
+        await withinTest(failed.waitForTrustPrepared(), signal);
+        const pid = Number.parseInt(await fs.readFile(processPath, "utf8"), 10);
+        expect(pid).toBeGreaterThan(1);
+        await failed.kill();
+        // SIGKILL removes the namespace's ChildProcess owner; only its PID remains.
+        await waitForDead(pid, signal);
+      } else {
+        await expect(failed.completion).rejects.toThrow(
+          "Gateway SSH tunnel producer exited 1/none",
+        );
+      }
+      const failureEvidence: Awaited<ReturnType<typeof runGatewaySshTunnels>> = JSON.parse(
+        await fs.readFile(path.join(artifactBase, "qa-evidence.json"), "utf8"),
+      );
+      expect(failureEvidence.entries[0]?.result).toMatchObject({
+        status: "fail",
+        failure: {
+          reason: expect.stringContaining(
+            failureMode === "readiness-write" ? "EISDIR" : "lost its parent before termination",
+          ),
+        },
+      });
+      await expect(fs.access(root)).rejects.toMatchObject({ code: "ENOENT" });
+    }
     expect(await readOptionalFile(accountKnownHostsPath)).toEqual(accountKnownHostsBefore);
   }, 180_000);
 });

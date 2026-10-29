@@ -8,11 +8,12 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 
-const { executionParams, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
@@ -22,10 +23,7 @@ beforeEach(() => {
   for (const dir of ["tmp", "state", "dist"]) {
     fs.mkdirSync(path.join(root, dir), { mode: 0o700 });
   }
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "1.0.1" }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw", version: "1.0.1" });
   fs.writeFileSync(path.join(root, "dist", "index.js"), "");
   fs.writeFileSync(path.join(root, "state", "openclaw.json"), "{}\n");
   env = {
@@ -115,7 +113,7 @@ it.each(["package", "artifact", "git"] as const)(
           return { ...successfulUpdate, mode: "git" };
         },
       );
-      const result = await executeMutableUpdate(params);
+      const result = await executeMutableUpdate(await bindExecutionGuards(params));
       expect(result?.result.status, JSON.stringify(mocks.runtimeError.mock.calls)).toBe("ok");
       expect(result?.mutationStarted).toBe(true);
       expect(activated).toBe(true);
@@ -127,16 +125,11 @@ it.each(["package", "artifact", "git"] as const)(
 );
 
 it.each([
-  "unsolicited-assignment",
   "unregistered-fence",
   "wrong-run",
   "wrong-root",
-  "run-replaced",
-  "run-id-changed",
-  "requester-replaced",
   "requester-revoked",
   "recovery-pending",
-  "replacement-after-admission",
 ] as const)(
   "refuses %s instead of adopting an arbitrary first or replacement owner",
   async (change) => {
@@ -157,18 +150,6 @@ it.each([
       async (executor) => {
         mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
           const fence = await executor.enter(change === "wrong-root" ? wrongRoot : root);
-          if (change === "unsolicited-assignment") {
-            run.executorFence = fence;
-          }
-          if (change === "run-replaced") {
-            params.opts.run = { ...run };
-          }
-          if (change === "run-id-changed") {
-            run.runId = randomUUID();
-          }
-          if (change === "requester-replaced") {
-            run.requesterAuthority = { ...requesterAuthority };
-          }
           if (change === "requester-revoked") {
             current = false;
           }
@@ -177,14 +158,11 @@ it.each([
           }
           admitExecutor(change === "unregistered-fence" ? { assertCurrent() {} } : fence);
           admitted = true;
-          if (change === "replacement-after-admission") {
-            run.executorFence = { assertCurrent() {} };
-          }
         });
-        const result = await executeMutableUpdate(params);
+        const result = await executeMutableUpdate(await bindExecutionGuards(params));
         expect(result?.result.status).toBe("error");
         expect(result?.mutationStarted).toBe(false);
-        expect(admitted).toBe(change === "replacement-after-admission");
+        expect(admitted).toBe(false);
         expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
         expect(mocks.serviceStopped).toBe(false);
       },

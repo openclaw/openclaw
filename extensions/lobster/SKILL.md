@@ -4,7 +4,7 @@ Lobster executes multi-step workflows with approval checkpoints. Use it when:
 
 - User wants a repeatable automation (triage, monitor, sync)
 - Actions need human approval before executing (send, post, delete)
-- Multiple tool calls should run as one deterministic operation
+- Multiple tool calls should run as one repeatable operation
 
 ## When to use Lobster
 

@@ -138,23 +138,6 @@ function matchingAppServerReplies(requests: AppServerRequest[], id: unknown) {
   );
 }
 
-async function waitForAppServerReply(filePath: string, id: unknown) {
-  const deadline = Date.now() + CHECKPOINT_TIMEOUT_MS;
-  for (;;) {
-    const replies = matchingAppServerReplies(await readJsonl(filePath), id);
-    if (replies.length > 0) {
-      assert.equal(replies.length, 1, "Codex app-server emitted duplicate native replies");
-      const [reply] = replies;
-      assert.ok(reply, "Codex app-server omitted its native reply");
-      return reply;
-    }
-    assert.ok(Date.now() < deadline, "Codex app-server native reply did not arrive");
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-  }
-}
-
 async function startChat(
   runtime: Runtime,
   gateway: QaGatewayChild,
@@ -667,22 +650,6 @@ async function runCase(params: {
         );
 
         proof.releaseNativeCompactRequest.resolve();
-        const rejection = await waitForAppServerReply(appServerLog, nativeCompactRequestId);
-        assert.deepEqual(
-          rejection.error,
-          {
-            code: -32603,
-            message: "QA Codex native compaction rejection",
-            data: { reason: "deterministic_native_failure" },
-          },
-          "Codex native compaction rejection changed",
-        );
-        assert.equal(
-          "result" in rejection,
-          false,
-          "Codex native compaction unexpectedly succeeded",
-        );
-        evidence.nativeCompactRejection = rejection;
       } else if (mode === "heartbeat-upgraded-restart") {
         await waitForCompactionProofCheckpoint(
           proof.hostCommitHeld.promise,
@@ -860,6 +827,26 @@ async function runCase(params: {
         "Native synchronization request count did not match ownership policy",
       );
       if (mode === "heartbeat-upgraded-native-failure") {
+        // The fixture logs its rejection before writing the RPC reply consumed by this heartbeat.
+        const nativeReplies = matchingAppServerReplies(requestsAtTerminal, nativeCompactRequestId);
+        assert.equal(nativeReplies.length, 1, "Codex app-server emitted duplicate native replies");
+        const [rejection] = nativeReplies;
+        assert.ok(rejection, "Codex app-server native reply did not arrive");
+        assert.deepEqual(
+          rejection.error,
+          {
+            code: -32603,
+            message: "QA Codex native compaction rejection",
+            data: { reason: "deterministic_native_failure" },
+          },
+          "Codex native compaction rejection changed",
+        );
+        assert.equal(
+          "result" in rejection,
+          false,
+          "Codex native compaction unexpectedly succeeded",
+        );
+        evidence.nativeCompactRejection = rejection;
         assert.ok(preNativeDurableSnapshot, "Upgraded case omitted its pre-native snapshot");
         assert.deepEqual(
           afterTerminal.compactionIds,

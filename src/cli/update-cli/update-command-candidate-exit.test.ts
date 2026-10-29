@@ -12,8 +12,9 @@ import * as repairAgent from "../../infra/update-repair-agent.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { updateCandidateExitEntrypoints } from "../cli-entrypoint.test-support.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
@@ -24,6 +25,7 @@ const sourceImportArgs = exitFinalizationUrl.pathname.endsWith(".ts")
   : [];
 
 const mocks = vi.hoisted(() => ({
+  servicePid: process.pid + 100_000,
   captureManagedPreflight:
     vi.fn<
       typeof import("./update-command-managed-context.js").captureOwnedManagedUpdatePreflightContext
@@ -38,6 +40,12 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../../infra/update-candidate-canary.js").validateUpdateCandidateCanary>(),
 }));
 
+vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
+  // The simulated running service has no corresponding native host process.
+  inspectServiceProcessMembershipSync: (pid: number) =>
+    pid === mocks.servicePid ? "outside" : "unknown",
+}));
 vi.mock("../../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: mocks.validateCanary,
 }));
@@ -50,7 +58,6 @@ vi.mock("./update-command-managed-context.js", async (original) => ({
   ...(await original<typeof import("./update-command-managed-context.js")>()),
   captureOwnedManagedUpdateContext: async () => undefined,
   captureOwnedManagedUpdatePreflightContext: mocks.captureManagedPreflight,
-  revalidateUpdateDatabaseContext: async (context: unknown) => context,
 }));
 vi.mock("./update-command-service.js", async (original) => ({
   ...(await original<typeof import("./update-command-service.js")>()),
@@ -62,11 +69,7 @@ vi.mock("../../infra/update-triage.js", () => ({
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 it("settles a failed candidate without inference repair and preserves its process exit", async () => {
   const base = dirs.make("candidate-repair-exit-");
@@ -142,9 +145,12 @@ it("settles a failed candidate without inference repair and preserves its proces
     inspected: true,
     runtimeInspected: true,
     running: true,
+    servicePid: mocks.servicePid,
     serviceEnv: env,
   });
+  const opts = { json: true, yes: true, run };
   const execution = await executeMutableUpdate({
+    executionGuards: createUpdateCommandExecutionGuards(opts, root),
     root,
     installKind: "package",
     updateInstallKind: "package",
@@ -164,7 +170,7 @@ it("settles a failed candidate without inference repair and preserves its proces
     packageInstallSpec: "openclaw@2026.9.4",
     packageTargetVersion: "2026.9.4",
     packageInstallTarget: target,
-    opts: { json: true, yes: true, run },
+    opts,
   });
   expect(execution).not.toBeNull();
   if (!execution) {

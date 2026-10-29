@@ -27,6 +27,7 @@ var languageLabels = map[string]string{
 	"id":    "Indonesian",
 	"pl":    "Polish",
 	"th":    "Thai",
+	"sv":    "Swedish",
 }
 
 func languageKey(lang string) string {
@@ -38,7 +39,7 @@ func prettyLanguageLabel(lang string) string {
 	if trimmed == "" {
 		return lang
 	}
-	if label, ok := languageLabels[languageKey(trimmed)]; ok {
+	if label, ok := languageLabels[strings.ToLower(trimmed)]; ok {
 		return label
 	}
 	return trimmed
@@ -50,7 +51,7 @@ func translationPrompt(srcLang, tgtLang string, glossary []GlossaryEntry) string
 		prettyLanguageLabel(srcLang),
 		prettyLanguageLabel(tgtLang),
 		documentationQualityRules,
-		localePromptRules(tgtLang),
+		localeRules[languageKey(tgtLang)],
 		protectedProductNameRule(),
 		buildGlossaryPrompt(glossary),
 	))
@@ -73,24 +74,6 @@ func protectedProductNameRule() string {
 		strings.Join(alwaysProtectedProductNames, ", "),
 		strings.Join(contextualDisplay, ", "),
 	)
-}
-
-func isAlwaysProtectedProductName(value string) bool {
-	for _, name := range alwaysProtectedProductNames {
-		if value == name {
-			return true
-		}
-	}
-	return false
-}
-
-func contextualProtectedProductName(value string) (string, bool) {
-	for _, name := range contextualProtectedProductNames {
-		if value == name {
-			return name, true
-		}
-	}
-	return "", false
 }
 
 var localeRules = map[string]string{
@@ -141,12 +124,11 @@ var localeRules = map[string]string{
 - Use “Anda” when direct address is necessary.`,
 	"pl": `Locale rules:
 - Prefer impersonal Polish instructional constructions and avoid gendered direct address when it is not required.`,
+	"sv": `Locale rules:
+- Use standard Swedish technical terminology, natural compound words, and Swedish sentence-style capitalization.
+- Use “du/din/ditt/dina” for direct address; do not switch to formal “Ni/Er”.`,
 	"th": `Locale rules:
 - Do not insert spaces between every Thai word; use spacing around Latin text, digits, and protected terms only where natural in Thai.`,
-}
-
-func localePromptRules(tgtLang string) string {
-	return localeRules[languageKey(tgtLang)]
 }
 
 const documentationQualityRules = `Documentation quality rules:

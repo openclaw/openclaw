@@ -1,4 +1,3 @@
-// Mattermost plugin module implements session route behavior.
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,

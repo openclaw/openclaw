@@ -1,19 +1,21 @@
 import assert from "node:assert/strict";
 import { on } from "node:events";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { MessageChannel } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { OpenClawAgentDatabaseWriteAdmission } from "../../state/openclaw-agent-db.js";
-import type { ReclamationDatabaseOptions } from "./session-accessor.sqlite-lifecycle-types.js";
 import { runReclamationWorkerPort } from "./session-accessor.sqlite-mutation-worker.runtime.js";
 import type {
   SqliteReclamationWorkerCloseRequest,
   SqliteReclamationWorkerRequest,
-} from "./session-accessor.sqlite-reclamation-worker.js";
+} from "./session-accessor.sqlite-reclamation-worker.types.js";
 
 const gc = vi.hoisted(() => ({
   pending: undefined as (() => void) | undefined,
   collect: vi.fn(),
+  result: undefined as WeakRef<object> | undefined,
 }));
 
 vi.mock("../../infra/worker-idle-gc.js", () => ({
@@ -31,6 +33,12 @@ vi.mock("../../state/openclaw-agent-canonical-validation-receipt.js", () => ({})
 vi.mock("../../state/openclaw-agent-db-readonly-open.js", () => ({}));
 vi.mock("../../state/openclaw-state-db-cache.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-identity.js", () => ({
+  readOpenClawAgentDatabaseIdentity: () => ({
+    identity: "1:2",
+    birthtime: "1",
+    incarnation: "fixture-incarnation",
+    filename: "/fixture/agent.sqlite",
+  }),
   createOpenClawAgentDatabaseClaim: () => ({ assertCurrent() {}, release() {} }),
 }));
 vi.mock("../../state/openclaw-agent-db-lease.js", () => ({
@@ -58,22 +66,19 @@ vi.mock("../../state/openclaw-agent-db.js", () => {
       }),
   };
 });
-vi.mock("./session-accessor.sqlite-worker-coordination.js", () => ({
-  runWithSqliteMutationWorkerCoordination: <T>(
-    _coordination: unknown,
-    _operationId: number,
-    options: ReclamationDatabaseOptions,
-    run: (options: ReclamationDatabaseOptions) => Promise<T>,
-  ) => run(options),
-}));
+// mock-isolation: Exercise worker settlement without opening a reclamation database.
 vi.mock("./session-accessor.sqlite-reclamation.js", () => ({
-  reclaimSqliteSessionInTransaction: () => ({ kind: "maintenance-statistics", value: true }),
-}));
-vi.mock("./session-accessor.sqlite-reclamation-commit.js", () => ({
-  markSqliteReclamationSettled: () => {},
+  reclaimSqliteSessionInTransaction: () => {
+    const result = {
+      kind: "maintenance-finalize",
+      value: { archivedTranscripts: [], committedEntryIndices: [] },
+    };
+    gc.result = new WeakRef(result);
+    return result;
+  },
 }));
 
-it("keeps idle collection after buffered admission replies and cancels it for the next request", async () => {
+it("releases replies and preserves idle collection across buffered admissions", async () => {
   const { port1: parentPort, port2: worker } = new MessageChannel();
   const replies = on(parentPort, "message");
   const databaseOptions = { agentId: "fixture", path: "/fixture/agent.sqlite", env: {} };
@@ -82,7 +87,6 @@ it("keeps idle collection after buffered admission replies and cancels it for th
     databasePath: "/fixture/state.sqlite",
     stateContext: {
       environment: { OPENCLAW_STATE_DIR: "/fixture" },
-      coordinatorRuntime: { directory: "/fixture/runtime", keepAlive: false },
     },
   };
   const running = runReclamationWorkerPort(worker, databaseOptions);
@@ -102,8 +106,13 @@ it("keeps idle collection after buffered admission replies and cancels it for th
       {
         type: "reclaim",
         operationId: ++operationId,
-        commitGate: new SharedArrayBuffer(4),
-        plan: { kind: "maintenance-statistics", databaseOptions, materializedPlans: [] },
+        plan: {
+          kind: "maintenance-finalize",
+          agentId: databaseOptions.agentId,
+          databaseOptions,
+          entries: [],
+          materializedPlans: [],
+        },
         coordination,
       } satisfies SqliteReclamationWorkerRequest,
       [],
@@ -114,7 +123,6 @@ it("keeps idle collection after buffered admission replies and cancels it for th
       {
         type: "admission",
         operationId: reply.operationId,
-        admissionId: reply.admissionId,
         allowed: true,
       },
       [],
@@ -136,6 +144,14 @@ it("keeps idle collection after buffered admission replies and cancels it for th
     expect(await receive("reclaimed")).toMatchObject({ operationId: 2, settled: true });
     gc.pending?.();
     expect(gc.collect).toHaveBeenCalledOnce();
+    const control = new WeakRef({});
+    for (let pass = 0; pass < 4; pass++) {
+      await nextTurn();
+      queryObjects(WeakRef);
+    }
+    await nextTurn();
+    expect(control.deref()).toBeUndefined();
+    expect(gc.result?.deref()).toBeUndefined();
   } finally {
     if (pendingAdmission) {
       admit(pendingAdmission);

@@ -91,6 +91,19 @@ final class TalkDirectiveTests: XCTestCase {
         XCTAssertEqual(result.stripped, "Hello there.")
     }
 
+    func testIntegerOptionsIgnoreOverflowAndPreserveTruncation() {
+        for number in ["1e100", "-1e100"] {
+            let result = TalkDirectiveParser.parse(
+                "{\"voice\":\"abc123\",\"seed\":\(number),\"rate\":\(number),\"latency\":\(number)}\nHello.")
+            XCTAssertEqual(result.directive, TalkDirective(voiceId: "abc123"))
+            XCTAssertEqual(result.stripped, "Hello.")
+        }
+
+        let result = TalkDirectiveParser.parse("{\"seed\":-123.9,\"rate\":200.9,\"latency\":1.9}\nHello.")
+        XCTAssertEqual(result.directive, TalkDirective(rateWPM: 200, seed: -123, latencyTier: 1))
+        XCTAssertEqual(result.stripped, "Hello.")
+    }
+
     func testTracksUnknownKeys() {
         let text = """
         {"voice":"abc","mystery":"value","extra":1}

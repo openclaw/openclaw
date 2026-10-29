@@ -5,20 +5,20 @@ import {
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
-import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
+import { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import {
   emitCodexAppServerEvent,
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { joinPresentSections } from "./run-attempt-state.js";
 import { CodexThreadPolicyHandoffError } from "./thread-policy.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
   const {
     prompt,
-    state,
+    state: preparingState,
     trajectoryRecorder,
     startupTimeoutMs,
     buildNativeHookRelayFinalConfigPatch,
@@ -33,8 +33,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   const {
     connection,
     runtimeParams,
-    preparedAuthBinding,
-    buildActiveRunAttemptParams,
+    clientOptions,
     startupAuthAccountCacheKey,
     startupEnvApiKeyCacheKey,
     bundleMcpThreadConfig,
@@ -45,7 +44,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   } = runtime;
   const { toolBridge, toolState } = attemptTools;
   const developerInstructions = joinPresentSections(
-    turnState.promptBuild.developerInstructions,
+    turnState.promptBuild.threadDeveloperInstructions ??
+      turnState.promptBuild.developerInstructions,
     attemptTools.configuredMcp?.diagnosticNotice,
   );
   const {
@@ -55,9 +55,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     appServer,
     pluginConfig,
     computerUseConfig,
-    startupClientAuthProfileId,
     runtimeArtifactRequest,
-    startupPreparedAuth,
     agentDir,
     sessionAgentId,
     effectiveWorkspace,
@@ -68,7 +66,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     resolveReviewerPolicyContext,
     resolveRuntimeOptionsForCurrentBinding,
     startupAuthProfileId,
-    startupAuthRequirement,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
   const loopDetectionEnabled =
@@ -83,25 +80,29 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       data: { phase: "startup" },
     });
     const startupResult = await startCodexAttemptThread({
-      assertCurrent: connection.assertCurrent,
+      assertCurrent: () => {
+        connection.assertCurrent();
+        runtime.nativeExecutionPolicy.source?.();
+      },
+      assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
+      authority: connection.authority,
       attemptClientFactory,
       bindingStore,
       runtime: connection.options.runtime,
       appServer: pluginAppServer,
       pluginConfig,
       computerUseConfig,
-      startupAuthProfileId: startupClientAuthProfileId,
-      startupAuthRequirement,
-      startupAuthBindingFingerprint: preparedAuthBinding?.fingerprint,
+      clientOptions,
       ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
-      startupPreparedAuth,
       startupAuthAccountCacheKey,
       startupEnvApiKeyCacheKey,
       agentDir,
       config: params.config,
       shellEnvironment: connection.shellEnvironment,
+      shellPathPrepend: connection.shellPathPrepend,
+      shellGitConfigParameters: connection.shellGitConfigParameters,
       disableLoginShell: connection.disableLoginShell,
-      buildAttemptParams: buildActiveRunAttemptParams,
+      buildAttemptParams: () => ({ ...runtimeParams }),
       ...(effectiveRuntimeModelId !== runtimeParams.modelId
         ? { runtimeModelId: effectiveRuntimeModelId }
         : {}),
@@ -109,20 +110,31 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       effectiveWorkspace,
       effectiveCwd,
       dynamicTools: toolBridge.specs,
+      askUserAvailable: toolBridge.availableTools.some((tool) => tool.name === "ask_user"),
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
+      refreshableInstructions:
+        joinPresentSections(
+          context.refreshableInstructions,
+          turnState.promptBuild.turnDeveloperInstructions,
+        ) || undefined,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
+      nativeModelAdmission: resources.nativeModelAdmission,
       nativeHookRelayRequired:
-        Boolean(resources.nativeProcessAuthority && nativeToolSurfaceEnabled) ||
-        (connection.options.nativeHookRelay?.enabled !== false &&
+        params.requireWorkspaceOnly !== true &&
+        ((nativeToolSurfaceEnabled &&
           params.pluginHarnessToolPolicyRestricted !== true &&
-          connection.nativeHookRelayEvents.includes("pre_tool_use") &&
-          (hasBeforeToolCallPolicy() ||
-            (appServer.loopDetectionPreToolUseRelay &&
-              Boolean(connection.sandboxSessionKey) &&
-              loopDetectionEnabled))),
+          (resources.nativeProcessAuthority?.requiresProcessAdmission ||
+            resources.nativeModelAdmission === "required")) ||
+          (connection.options.nativeHookRelay?.enabled !== false &&
+            params.pluginHarnessToolPolicyRestricted !== true &&
+            connection.nativeHookRelayEvents.includes("pre_tool_use") &&
+            (hasBeforeToolCallPolicy() ||
+              (appServer.loopDetectionPreToolUseRelay &&
+                Boolean(connection.sandboxSessionKey) &&
+                loopDetectionEnabled)))),
       bundleMcpThreadConfig,
       configuredMcpDynamicSurface: attemptTools.configuredMcp !== undefined,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
@@ -131,20 +143,25 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       sandboxExecServerEnabled,
       sandbox,
       contextEngineProjection: promptState.contextEngineProjection,
+      historyBootstrapItems: promptState.historyBootstrapItems,
+      historyDeltaItems: promptState.historyDeltaItems,
       startupTimeoutMs,
       signal: runAbortController.signal,
       onStartupTimeout: () => runAbortController.abort("codex_startup_timeout"),
       onExecutionDisconnect: (error) => {
-        state.executionDisconnectError = error;
+        preparingState.executionDisconnectError = error;
         embeddedAgentLog.warn(error.message);
         runAbortController.abort("client_closed");
       },
       spawnedBy: params.spawnedBy,
     });
-    state.client = startupResult.client;
-    state.thread = startupResult.thread;
+    // Keep cleanup and the active turn on the same state object.
+    const state = Object.assign(preparingState, {
+      client: startupResult.client,
+      thread: startupResult.thread,
+      turnRouter: startupResult.turnRouter,
+    });
     state.runtimeArtifact = startupResult.runtimeArtifact;
-    state.turnRouter = startupResult.turnRouter;
     state.turnRoute = startupResult.turnRoute;
     // Adopt cleanup ownership before any fallible validation of the started thread.
     state.sandboxExecEnvironment = startupResult.sandboxEnvironment;
@@ -155,15 +172,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     await attemptTools.captureCronCreatorToolAllowlist();
     pluginAppServer = startupResult.pluginAppServer;
     toolBridge.setRemoteWorkspaceFileReader?.(
-      ({ path, maxBytes, workspaceRoot, signal, timeoutMs }) =>
-        readBoundedCodexRemoteWorkspaceFile({
-          client: startupResult.client,
-          path,
-          maxBytes,
-          workspaceRoot,
-          signal,
-          timeoutMs,
-        }),
+      createCodexRemoteWorkspaceFileReader(startupResult.client, connection.authority),
     );
     if (
       usesSupervisionConnection &&
@@ -175,10 +184,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     }
     if (state.thread.lifecycle.action === "started" || state.thread.lifecycle.action === "forked") {
       const activePolicy = resolveReviewerPolicyContext(state.thread);
-      const activeConfig = await resolveRuntimeOptionsForCurrentBinding({
-        modelProvider: activePolicy.modelProvider,
-        model: activePolicy.model,
-      });
+      const activeConfig = await resolveRuntimeOptionsForCurrentBinding(activePolicy);
       connection.assertCurrent();
       const activeAppServer = resolveCodexAppServerForModelProvider({
         appServer: activeConfig,
@@ -230,10 +236,13 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     });
     connection.mutable.pluginAppServer = pluginAppServer;
     // Monitor setup still belongs to startup's resource cleanup boundary.
-    await resources.registerNativeSubagentMonitor(state.thread.threadId);
+    await resources.registerNativeSubagentMonitor(state);
+    return { ...resources, state };
   } catch (error) {
     throw error instanceof CodexThreadPolicyHandoffError
       ? error
-      : (state.executionDisconnectError ?? error);
+      : (preparingState.executionDisconnectError ?? error);
   }
 }
+
+export type StartedCodexAttemptResources = Awaited<ReturnType<typeof startCodexAttemptRuntime>>;

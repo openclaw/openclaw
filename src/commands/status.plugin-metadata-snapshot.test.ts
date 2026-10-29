@@ -79,7 +79,6 @@ it("builds plugin metadata once for a status scan", async () => {
         opts: createStatusGatewayProbeBudget(),
         showSecrets: false,
         includeChannelsData: false,
-        skipUpdateCheck: true,
         resolveHasConfiguredChannels: () => false,
       });
 

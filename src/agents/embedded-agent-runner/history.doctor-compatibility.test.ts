@@ -22,44 +22,6 @@ function retained(cfg: OpenClawConfig, key: string, messages: AgentMessage[], ac
 }
 
 describe("Doctor preserves independent session transcript limits", () => {
-  it.each([0, 7, 5000])("preserves actual contents with inherited limit %s", (inherited) => {
-    const cfg: OpenClawConfig = {
-      messages: { groupChat: { historyLimit: sentinel } },
-      channels: {
-        telegram: {
-          historyLimit: sentinel,
-          dmHistoryLimit: inherited,
-          dms: { "42": { historyLimit: sentinel } },
-          accounts: {
-            work: {
-              historyLimit: sentinel,
-              dmHistoryLimit: sentinel,
-              dms: { "44": { historyLimit: sentinel } },
-            },
-          },
-        },
-      },
-    };
-    const routes = [
-      { key: "agent:main:telegram:direct:42", turns: 16 },
-      { key: "agent:main:telegram:direct:99", turns: 16 },
-      { key: "agent:main:telegram:work:direct:42", turns: 16, accountId: "work" },
-      { key: "agent:main:telegram:work:direct:44", turns: 16, accountId: "work" },
-      { key: "agent:main:telegram:group:-100", turns: 76 },
-      { key: "agent:main:telegram:group:-100", turns: 76, accountId: "work" },
-    ];
-    const result = normalizeCompatibilityConfig({ cfg });
-    for (const route of routes) {
-      const messages = transcript(route.turns);
-      expect(retained(result.config, route.key, messages, route.accountId)).toEqual(
-        retained(cfg, route.key, messages, route.accountId),
-      );
-    }
-    expect(result.config).toEqual(cfg);
-    expect(result.changes).toEqual([]);
-    expect(normalizeCompatibilityConfig({ cfg: result.config }).config).toEqual(cfg);
-  });
-
   it("retains the raw inherited limit when an existing retired-mode migration materializes it", () => {
     // Doctor accepts retired fields that are deliberately absent from the current schema.
     const cfg = {

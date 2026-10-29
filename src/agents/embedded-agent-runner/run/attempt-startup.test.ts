@@ -1,85 +1,103 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+
+const prepare = (attempt: Parameters<typeof prepareEmbeddedSkills>[0]["attempt"]) =>
+  prepareEmbeddedSkills({
+    includeCodeModeSkills: true,
+    attempt,
+    effectiveWorkspace: "/tmp/workspace",
+    sandbox: null,
+    sessionAgentId: "main",
+  });
+const snapshot = () => ({ prompt: "skills prompt", skills: [] });
+const detached = { sessionPersistence: "detached", disableTools: true, config: {} } as const;
 
 const mocks = vi.hoisted(() => ({
   applySkillEnvOverrides: vi.fn(),
+  applySkillEnvOverridesFromSnapshot: vi.fn(),
   mapSandboxSkillEntriesForPrompt: vi.fn(),
-  resolveCodeModeSkills: vi.fn(),
+  prepareInstalledSkillCatalog: vi.fn(),
+  prepareWorkspaceSkills: vi.fn(async () => []),
 }));
 
-vi.mock("../../code-mode-skills.js", () => ({
-  resolveCodeModeSkills: mocks.resolveCodeModeSkills,
+vi.mock("../../installed-skill-runtime.js", () => ({
+  prepareInstalledSkillCatalog: mocks.prepareInstalledSkillCatalog,
 }));
 
 vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverrides: mocks.applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot: vi.fn(),
+  applySkillEnvOverridesFromSnapshot: mocks.applySkillEnvOverridesFromSnapshot,
 }));
 
-vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
-  resolveEmbeddedRunSkillEntries: vi.fn(() => ({
-    shouldLoadSkillEntries: true,
-    skillEntries: [],
-    loadSkillEntries: vi.fn(() => []),
-  })),
+// mock-isolation: inject skill entries without filesystem discovery while testing startup cleanup.
+vi.mock("../../../skills/loading/workspace-skill-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../skills/loading/workspace-skill-loader.js")>()),
+  prepareWorkspaceSkills: mocks.prepareWorkspaceSkills,
 }));
 
-vi.mock("../../../skills/loading/workspace-skill-prompt.js", () => ({
-  resolveSkillsPrompt: vi.fn(() => "skills prompt"),
-}));
-
-vi.mock("../sandbox-skills.js", () => ({
-  createSandboxPromptEntryLoader: vi.fn(
-    ({ loadEntries }: { loadEntries: () => unknown[] }) => loadEntries,
-  ),
-  resolveSandboxSkillRuntimeInputs: vi.fn(() => ({
-    skillsEligibility: undefined,
-    skillUsagePaths: [],
-    skillsPromptWorkspaceDir: "/tmp/workspace",
-    skillsSnapshot: undefined,
-    skillsWorkspaceDir: "/tmp/workspace",
-    workspaceOnly: false,
-  })),
+vi.mock("../sandbox-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sandbox-skills.js")>()),
   mapSandboxSkillEntriesForPrompt: mocks.mapSandboxSkillEntriesForPrompt,
 }));
 
-describe("prepareEmbeddedSkills", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.prepareInstalledSkillCatalog.mockReset().mockReturnValue([]);
+  mocks.applySkillEnvOverrides.mockReturnValue(() => {});
+  mocks.applySkillEnvOverridesFromSnapshot.mockReturnValue(() => {});
+});
 
-  it("restores environment overrides when later preparation fails", async () => {
+it.each([false, true])(
+  "restores environment overrides after failure (snapshot=%s)",
+  async (hasSnapshot) => {
     const restore = vi.fn();
     mocks.applySkillEnvOverrides.mockReturnValue(restore);
-    mocks.resolveCodeModeSkills.mockImplementation(() => {
+    mocks.applySkillEnvOverridesFromSnapshot.mockReturnValue(restore);
+    mocks.prepareInstalledSkillCatalog.mockImplementation(() => {
       throw new Error("skill reader preparation failed");
     });
 
     await expect(
-      prepareEmbeddedSkills({
-        includeCodeModeSkills: true,
-        attempt: { config: {} } as EmbeddedRunAttemptParams,
-        effectiveWorkspace: "/tmp/workspace",
-        sandbox: null,
-        sessionAgentId: "main",
+      prepare({
+        config: {},
+        skillsSnapshot: hasSnapshot ? snapshot() : undefined,
       }),
     ).rejects.toThrow("skill reader preparation failed");
     expect(restore).toHaveBeenCalledOnce();
-  });
+  },
+);
 
-  it("does not load skills or apply their environment during settled finalization", async () => {
-    const prepared = await prepareEmbeddedSkills({
-      includeCodeModeSkills: true,
-      attempt: { operation: "settled-tool-finalization" } as EmbeddedRunAttemptParams,
-      effectiveWorkspace: "/tmp/workspace",
-      sandbox: null,
-      sessionAgentId: "main",
-    });
-
-    expect(prepared.skillsPrompt).toBe("");
-    expect(prepared.skillsSnapshotForRun).toBeUndefined();
-    expect(mocks.applySkillEnvOverrides).not.toHaveBeenCalled();
-    expect(mocks.mapSandboxSkillEntriesForPrompt).not.toHaveBeenCalled();
+it.each([
+  { operation: "settled-tool-finalization" },
+  { ...detached, modelRun: true },
+  { ...detached, promptMode: "none" },
+] as const)("does not prepare skills or apply their environment for %j", async (attempt) => {
+  expect(await prepare(attempt)).toMatchObject({
+    skillsPrompt: "",
+    skillsSnapshotForRun: undefined,
+    codeModeSkills: [],
   });
+  for (const mock of Object.values(mocks)) {
+    expect(mock).not.toHaveBeenCalled();
+  }
 });
+
+it.each([
+  ["durable", true, true],
+  ["detached", false, true],
+  ["detached", true, false],
+] as const)(
+  "preserves skills (persistence=%s, raw=%s, disableTools=%s)",
+  async (sessionPersistence, modelRun, disableTools) => {
+    const prepared = await prepare({
+      sessionPersistence,
+      modelRun,
+      disableTools,
+      config: {},
+      skillsSnapshot: snapshot(),
+    });
+    prepared.restoreSkillEnv();
+
+    expect(prepared.skillsPrompt).toBe("skills prompt");
+  },
+);

@@ -1,7 +1,10 @@
 import { projectPluginHttpRoutes } from "./http-route-owner.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { invalidateProviderRegistryIndex } from "./provider-registry-index.js";
 import { pluginArrays, pluginMaps } from "./registry-empty.js";
+import { capturePluginLifecycleAuthority, isPluginRecordBorrowed } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import { getSelectedContextEngineOwner } from "./runtime/load-context-state.js";
 
 function projectArray<T>(source: T[], target: T[] | undefined, owns: (entry: T) => boolean): void {
   if (target) {
@@ -42,7 +45,27 @@ export function projectPluginContributions(
   projectPluginHttpRoutes(source, record, target);
   const owns = (entry: { pluginId?: string }) => entry.pluginId === pluginId;
   for (const key of pluginArrays) {
-    projectArray<{ pluginId?: string }>(source[key], target?.[key], owns);
+    if (key === "channels" && target && isPluginRecordBorrowed(target, record)) {
+      const channels = source.channels.filter(owns);
+      if (channels.length > 0) {
+        const instance = getPluginInstance(record);
+        const isCurrent = capturePluginLifecycleAuthority(target, record, { scopedRuntime: true });
+        if (!instance || !isCurrent) {
+          throw new Error(`Plugin ${pluginId} channel runtime cannot be borrowed`);
+        }
+        // A loan shares the live instance, not its lifetime. Fence the whole registration,
+        // including registrar-created callbacks and the read grants they return.
+        const wrap = instance.createRegistryView(target, (run) => {
+          if (!isCurrent()) {
+            throw new Error("Channel runtime borrower is no longer active");
+          }
+          return run();
+        });
+        target.channels.push(...channels.map((entry) => wrap(entry)));
+      }
+    } else {
+      projectArray<{ pluginId?: string }>(source[key], target?.[key], owns);
+    }
   }
   invalidateProviderRegistryIndex((target ?? source).providers);
   for (const key of pluginMaps) {
@@ -53,11 +76,14 @@ export function projectPluginContributions(
     target?.compactionProviders,
     (entry) => entry.ownerPluginId === pluginId,
   );
-  projectMap(
-    source.contextEngines,
-    target?.contextEngines,
-    (entry) => entry.owner === `plugin:${pluginId}`,
-  );
+  projectMap(source.contextEngines, target?.contextEngines, (entry, id) => {
+    if (entry.owner !== `plugin:${pluginId}`) {
+      return false;
+    }
+    // Retained closures must obey the target generation's prepared owner selection too.
+    const selectedOwner = target ? getSelectedContextEngineOwner(target, id) : undefined;
+    return selectedOwner === undefined || selectedOwner === entry.owner;
+  });
   projectMap(
     source.pluginRuntimeArtifacts,
     target?.pluginRuntimeArtifacts,

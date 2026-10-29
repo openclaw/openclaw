@@ -24,18 +24,18 @@ describe("slack directory live cursor pagination", () => {
     });
   });
 
-  it("lists peers across advancing cursors", async () => {
+  it("paginates canonical peer matches", async () => {
     slackClientMocks.usersList
       .mockResolvedValueOnce({
-        members: [{ id: "U1", name: "one" }],
+        members: [{ id: "U1", name: "one", profile: { display_name: "Mu\u0308ller" } }],
         response_metadata: { next_cursor: "cursor-1" },
       })
       .mockResolvedValueOnce({
-        members: [{ id: "U2", name: "two" }],
+        members: [{ id: "U2", name: "two", profile: { display_name: "Mu\u0308ller" } }],
         response_metadata: { next_cursor: "" },
       });
 
-    const rows = await listSlackDirectoryPeersLive(params);
+    const rows = await listSlackDirectoryPeersLive({ ...params, query: "Müller" });
 
     expect(rows.map((row) => row.id)).toEqual(["user:U1", "user:U2"]);
     expect(slackClientMocks.usersList).toHaveBeenCalledTimes(2);

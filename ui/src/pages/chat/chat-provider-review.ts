@@ -3,12 +3,13 @@ import { t } from "../../i18n/index.ts";
 import { registerChatProviderReviewEnglish } from "../../i18n/locales/en-chat-provider-review.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
-  areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
+  normalizeDefaultMainSessionAliasForUi,
   resolveUiSelectedSessionAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
-import { readChatQueueForScope, updateQueuedMessagesForSession } from "./chat-queue.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { readChatQueueForScope } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 
 registerChatProviderReviewEnglish();
@@ -28,9 +29,12 @@ export function chatProviderReviewRow(
   sessionKey = host.sessionKey,
   agentId = resolveUiSelectedSessionAgentId(host),
 ): GatewaySessionRow | undefined {
+  const normalizedKey = normalizeDefaultMainSessionAliasForUi(sessionKey);
+  const global = isUiGlobalSessionKey(sessionKey);
   const matches = (row: GatewaySessionRow, resultAgentId?: string | null) =>
-    areUiSessionKeysEquivalent(row.key, sessionKey) &&
-    (!isUiGlobalSessionKey(sessionKey) || (row.agentId ?? resultAgentId) === agentId);
+    Boolean(normalizedKey) &&
+    normalizeDefaultMainSessionAliasForUi(row.key) === normalizedKey &&
+    (!global || (row.agentId ?? resultAgentId) === agentId);
   const row =
     host.sessionsResult?.sessions.find((candidate) =>
       matches(candidate, host.sessionsResultAgentId),
@@ -62,5 +66,5 @@ export function holdProviderReviewQueuedInputs(
         sendError: t("chat.providerReview.queuedInputHeld"),
       }),
     }));
-  return updates.length === 0 || updateQueuedMessagesForSession(host, updates);
+  return updates.length === 0 || chatOutboxOwner(host).update(host, updates) !== null;
 }

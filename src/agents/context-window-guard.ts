@@ -1,9 +1,3 @@
-/**
- * Resolves effective model context windows and formats guard warnings/blocks.
- *
- * Configured model values can cap provider metadata, and local endpoints get
- * more actionable remediation text.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredContextTokenLimits } from "./context-resolution.js";
 import { isLocalProviderEndpoint } from "./provider-attribution.js";
@@ -36,6 +30,9 @@ export function resolveContextWindowInfo(params: {
   modelId: string;
   modelContextTokens?: number;
   modelContextWindow?: number;
+  /** Positively observed same-route serving limit, never a static catalog default. */
+  modelServingContextWindow?: number;
+  modelContextWindowSource?: "synthetic";
   defaultTokens: number;
 }): ContextWindowInfo {
   const configured = resolveConfiguredContextTokenLimits(
@@ -44,16 +41,31 @@ export function resolveContextWindowInfo(params: {
   );
   const fromModelsConfig =
     configured.effectiveConfiguredTokens ?? configured.configuredContextWindow;
+  const reportedTokens = normalizePositiveInt(params.modelContextTokens);
+  const nativeWindow =
+    normalizePositiveInt(configured.fixedContextWindow) ??
+    (params.modelContextWindowSource === "synthetic"
+      ? null
+      : normalizePositiveInt(params.modelContextWindow));
   const fromModel =
-    normalizePositiveInt(params.modelContextTokens) ??
-    normalizePositiveInt(params.modelContextWindow);
+    reportedTokens && nativeWindow
+      ? Math.min(reportedTokens, nativeWindow)
+      : (reportedTokens ?? nativeWindow);
+  const estimate =
+    params.modelContextWindowSource === "synthetic"
+      ? normalizePositiveInt(params.modelContextWindow)
+      : null;
   const defaultTokens =
     normalizePositiveInt(params.defaultTokens) ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS;
-  return fromModelsConfig
-    ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
+  const resolved: ContextWindowInfo = fromModelsConfig
+    ? { tokens: fromModelsConfig, source: "modelsConfig" }
     : fromModel
-      ? { tokens: fromModel, source: "model" as const }
-      : { tokens: defaultTokens, source: "default" as const };
+      ? { tokens: fromModel, source: "model" }
+      : { tokens: estimate ?? defaultTokens, source: "default" };
+  const servingWindow = params.modelServingContextWindow;
+  return servingWindow !== undefined && servingWindow <= resolved.tokens
+    ? { tokens: servingWindow, source: "model" }
+    : resolved;
 }
 
 type ContextWindowGuardResult = ContextWindowInfo & {
@@ -63,28 +75,8 @@ type ContextWindowGuardResult = ContextWindowInfo & {
   shouldBlock: boolean;
 };
 
-type ContextWindowGuardThresholds = {
-  hardMinTokens: number;
-  warnBelowTokens: number;
-};
-
-type ContextWindowGuardHint = {
-  likelySelfHosted: boolean;
-};
-
-function resolveContextWindowGuardHint(params: {
-  runtimeBaseUrl?: string | null;
-}): ContextWindowGuardHint {
-  return {
-    likelySelfHosted: isLocalProviderEndpoint(params.runtimeBaseUrl),
-  };
-}
-
 /** Derive warning/block floors from the resolved model context window. */
-function resolveContextWindowGuardThresholds(
-  contextWindowTokens: number,
-): ContextWindowGuardThresholds {
-  const tokens = normalizePositiveInt(contextWindowTokens) ?? 0;
+function resolveContextWindowGuardThresholds(tokens: number) {
   return {
     hardMinTokens: Math.max(
       CONTEXT_WINDOW_HARD_MIN_TOKENS,
@@ -105,8 +97,7 @@ export function formatContextWindowWarningMessage(params: {
   runtimeBaseUrl?: string | null;
 }): string {
   const base = `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} (warn<${params.guard.warnBelowTokens}) source=${params.guard.source}`;
-  const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
-  if (!hint.likelySelfHosted) {
+  if (!isLocalProviderEndpoint(params.runtimeBaseUrl)) {
     return base;
   }
   if (params.guard.source === "modelsConfig") {
@@ -129,8 +120,7 @@ export function formatContextWindowBlockMessage(params: {
   const base =
     `Model context window too small (${params.guard.tokens} tokens; ` +
     `source=${params.guard.source}). Minimum is ${params.guard.hardMinTokens}.`;
-  const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
-  if (!hint.likelySelfHosted) {
+  if (!isLocalProviderEndpoint(params.runtimeBaseUrl)) {
     return base;
   }
   if (params.guard.source === "modelsConfig") {
@@ -149,22 +139,16 @@ export function formatContextWindowBlockMessage(params: {
 /** Evaluate whether the resolved context window should warn or block. */
 export function evaluateContextWindowGuard(params: {
   info: ContextWindowInfo;
-  warnBelowTokens?: number;
-  hardMinTokens?: number;
 }): ContextWindowGuardResult {
   const normalizedTokens = normalizePositiveInt(params.info.tokens);
   const tokens = normalizedTokens ?? 0;
   const referenceTokens = normalizePositiveInt(params.info.referenceTokens) ?? tokens;
   const resolvedThresholds = resolveContextWindowGuardThresholds(referenceTokens);
-  const warnBelow = Math.max(
-    1,
-    Math.floor(params.warnBelowTokens ?? resolvedThresholds.warnBelowTokens),
-  );
-  const defaultHardMin = Math.min(
+  const warnBelow = resolvedThresholds.warnBelowTokens;
+  const hardMin = Math.min(
     resolvedThresholds.hardMinTokens,
     Math.max(tokens, CONTEXT_WINDOW_HARD_MIN_TOKENS),
   );
-  const hardMin = Math.max(1, Math.floor(params.hardMinTokens ?? defaultHardMin));
   return {
     ...params.info,
     tokens,

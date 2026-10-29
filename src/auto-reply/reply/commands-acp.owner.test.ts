@@ -1,167 +1,298 @@
-import { appendFile, readFile, writeFile } from "node:fs/promises";
-import { expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  readDurableAcpSignals,
+  withAcpCancellationFixture,
+} from "../../acp/control-plane/manager.cancel-session.worker.test-support.js";
 import { getAcpSessionManager, testing } from "../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../acp/control-plane/manager.lifecycle.js";
 import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
+import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
+import type { AcpRuntimeEvent } from "../../plugin-sdk/acp-runtime.js";
+import { sessionControllerMailboxes } from "../../sessions/session-controller.mailbox.js";
 import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
 } from "../../state/user-channel-identities.js";
-import { setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { installDiscordRegistryHooks } from "../test-helpers/command-auth-registry-fixture.js";
 import { handleAcpCommand } from "./commands-acp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
-installDiscordRegistryHooks();
+describe("ACP command authority", () => {
+  installDiscordRegistryHooks();
 
-const principals = [
-  { principal: "first-admin", senderId: "100", transition: "none" },
-  { principal: "second-admin", senderId: "101", transition: "none" },
-  { principal: "channel-member", senderId: "ordinary-member", transition: "none" },
-  { principal: "demoted-admin", senderId: "100", transition: "role" },
-  { principal: "unlinked-admin", senderId: "100", transition: "unlink" },
-  { principal: "reassigned-admin", senderId: "100", transition: "reassign" },
-  { principal: "admin-with-accepted-write", senderId: "100", transition: "accepted" },
-] as const;
+  it.each([
+    [false, "101", "none"],
+    [false, "ordinary-member", "none"],
+    [false, "100", "role"],
+    [false, "100", "unlink"],
+    [false, "100", "reassign"],
+    [false, "100", "accepted"],
+    [true, "100", "role"],
+    [true, "100", "accepted"],
+  ] as const)(
+    "fences ACP setMode=%s sender=%s transition=%s",
+    async (setMode, senderId, transition) => {
+      const action = setMode ? "set-mode plan" : "permissions auto-approve";
+      const effect = setMode ? "mode=plan" : "approval_policy=auto-approve";
+      const option = setMode ? "runtimeMode" : "permissionProfile";
+      const value = setMode ? "plan" : "auto-approve";
+      await withAdminIngress(async ({ cfg, admins, context, state }) => {
+        const backendId = "command-owner-proof";
+        cfg.acp = { enabled: true, backend: backendId, allowedAgents: ["main"] };
+        cfg.agents = {
+          ownership: "explicit",
+          entries: { main: { workspace: state.workspaceDir } },
+        };
+        cfg.session = { store: state.path("command-sessions.json") };
+        setRuntimeConfigSnapshot(cfg, cfg);
 
-it.each(
-  [
-    {
-      action: "permissions auto-approve",
-      effect: "approval_policy=auto-approve",
-      option: "permissionProfile",
-      value: "auto-approve",
-    },
-    { action: "set-mode plan", effect: "mode=plan", option: "runtimeMode", value: "plan" },
-  ].flatMap((action) => principals.map((principal) => Object.assign({}, action, principal))),
-)(
-  "fences the real /acp $action effect for $principal",
-  async ({ action, effect, option, value, principal, senderId, transition }) => {
-    await withAdminIngress(async ({ cfg, admins, context, state }) => {
-      const backendId = "command-owner-proof";
-      cfg.acp = { enabled: true, backend: backendId, allowedAgents: ["main"] };
-      cfg.agents = {
-        ownership: "explicit",
-        entries: { main: { workspace: state.workspaceDir } },
-      };
-      cfg.session = { store: state.path("command-sessions.json") };
-      setRuntimeConfigSnapshot(cfg, cfg);
-
-      const effectsPath = state.path("acp-command-effects.log");
-      const boundaryReached = createDeferredCore();
-      const releaseBoundary = createDeferredCore();
-      let commandStarted = false;
-      const recordControl = async (entry: string) => {
-        await appendFile(effectsPath, `${entry}\n`);
-        if (transition === "accepted") {
-          boundaryReached.resolve();
-          await releaseBoundary.promise;
-        }
-      };
-      registerAcpRuntimeBackend({
-        id: backendId,
-        runtime: {
-          ownerAwareSessions: 1,
-          async ensureSession(input) {
-            await appendFile(effectsPath, "initialize\n");
-            return {
-              agentId: input.agentId,
-              sessionKey: input.sessionKey,
-              backend: backendId,
-              runtimeSessionName: input.sessionKey,
-              backendSessionId: `runtime:${input.sessionKey}`,
-            };
+        const effects: string[] = [];
+        const boundaryReached = createDeferred();
+        const releaseBoundary = createDeferred();
+        let commandStarted = false;
+        const recordControl = async (entry: string) => {
+          effects.push(entry);
+          if (transition === "accepted") {
+            boundaryReached.resolve();
+            await releaseBoundary.promise;
+          }
+        };
+        registerAcpRuntimeBackend({
+          id: backendId,
+          runtime: {
+            ownerAwareSessions: 1,
+            async ensureSession(input) {
+              effects.push("initialize");
+              return {
+                agentId: input.agentId,
+                sessionKey: input.sessionKey,
+                backend: backendId,
+                runtimeSessionName: input.sessionKey,
+                backendSessionId: `runtime:${input.sessionKey}`,
+              };
+            },
+            async getCapabilities() {
+              if (commandStarted && ["role", "unlink", "reassign"].includes(transition)) {
+                boundaryReached.resolve();
+                await releaseBoundary.promise;
+              }
+              return {
+                controls: ["session/set_config_option", "session/set_mode"],
+                configOptionKeys: ["approval_policy"],
+              };
+            },
+            async setConfigOption({ key, value: wireValue }) {
+              await recordControl(`${key}=${wireValue}`);
+              return { configOptions: [{ id: key, currentValue: wireValue }] };
+            },
+            setMode: async ({ mode }) => recordControl(`mode=${mode}`),
+            async close() {
+              effects.push("close");
+            },
+            async cancel() {},
+            runTurn() {
+              throw new Error("An ACP options command must not start a provider turn");
+            },
           },
-          async getCapabilities() {
-            if (commandStarted && ["role", "unlink", "reassign"].includes(transition)) {
-              boundaryReached.resolve();
-              await releaseBoundary.promise;
-            }
-            return {
-              controls: ["session/set_config_option", "session/set_mode"],
-              configOptionKeys: ["approval_policy"],
-            };
-          },
-          async setConfigOption({ key, value: wireValue }) {
-            await recordControl(`${key}=${wireValue}`);
-            return { configOptions: [{ id: key, currentValue: wireValue }] };
-          },
-          async setMode({ mode }) {
-            await recordControl(`mode=${mode}`);
-          },
-          async close() {
-            await appendFile(effectsPath, "close\n");
-          },
-          async cancel() {},
-          runTurn() {
-            throw new Error("An ACP options command must not start a provider turn");
-          },
-        },
-      });
-      testing.resetAcpSessionManagerForTests();
-      const manager = getAcpSessionManager();
-      let commandRun: ReturnType<typeof handleAcpCommand> | undefined;
-      try {
-        const ctx = await context(senderId);
-        const params = buildCommandTestParams(`/acp ${action}`, cfg, ctx, {
-          workspaceDir: state.workspaceDir,
         });
-        params.sessionKey = ctx.SessionKey;
-        const target = { cfg, sessionKey: params.sessionKey, agentId: params.agentId };
-        await manager.initializeSession({ ...target, agent: "main", mode: "persistent" });
-        await writeFile(effectsPath, "");
-        const before = manager.resolveSession(target);
-
-        commandStarted = true;
-        commandRun = handleAcpCommand(params, true);
-        if (transition !== "none") {
-          expect(
-            await Promise.race([
-              boundaryReached.promise.then(() => "boundary"),
-              commandRun.then(() => "finished"),
-            ]),
-          ).toBe("boundary");
-          const admin = admins[0]!;
-          if (transition === "role" || transition === "accepted") {
-            setUserProfileRole(admin.profile.id, "member");
-          } else {
-            unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-            if (transition === "reassign") {
-              linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
-            }
-          }
-          releaseBoundary.resolve();
-        }
-        const result = await commandRun;
-        const applied =
-          principal !== "channel-member" && (transition === "none" || transition === "accepted");
-        expect(await readFile(effectsPath, "utf8")).toBe(applied ? `${effect}\n` : "");
-        const after = manager.resolveSession(target);
-        if (applied) {
-          expect(result?.reply?.text).toContain("Updated ACP");
-          expect(after.kind).toBe("ready");
-          if (after.kind === "ready") {
-            expect(after.meta.runtimeOptions).toMatchObject({ [option]: value });
-          }
-        } else {
-          expect(after).toEqual(before);
-          expect(result?.reply?.text).toContain(
-            principal === "channel-member" ? "owner-only command" : "authority changed",
-          );
-        }
-      } finally {
-        releaseBoundary.resolve();
-        await commandRun;
-        await disposeAcpSessionManagerInstance(manager, "test complete");
-        unregisterAcpRuntimeBackend(backendId);
         testing.resetAcpSessionManagerForTests();
+        const manager = getAcpSessionManager();
+        let commandRun: ReturnType<typeof handleAcpCommand> | undefined;
+        try {
+          const ctx = await context(senderId);
+          const params = buildCommandTestParams(`/acp ${action}`, cfg, ctx, {
+            workspaceDir: state.workspaceDir,
+          });
+          params.sessionKey = ctx.SessionKey;
+          const target = { cfg, sessionKey: params.sessionKey, agentId: params.agentId };
+          await manager.initializeSession({ ...target, agent: "main", mode: "persistent" });
+          effects.length = 0;
+          const before = manager.resolveSession(target);
+
+          commandStarted = true;
+          commandRun = handleAcpCommand(params, true);
+          if (transition !== "none") {
+            await awaitGateBeforeSettlement(
+              boundaryReached.promise,
+              commandRun,
+              "Command finished before authority boundary",
+            );
+            const admin = admins[0]!;
+            if (transition === "role" || transition === "accepted") {
+              setUserProfileRole(admin.profile.id, "member");
+            } else {
+              unlinkUserChannelIdentity(admin.profile.id, admin.identity);
+              if (transition === "reassign") {
+                linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
+              }
+            }
+            releaseBoundary.resolve();
+          }
+          const result = await commandRun;
+          const applied =
+            senderId !== "ordinary-member" && (transition === "none" || transition === "accepted");
+          expect(effects).toEqual(applied ? [effect] : []);
+          const after = manager.resolveSession(target);
+          if (applied) {
+            expect(result?.reply?.text).toContain("Updated ACP");
+            expect(after).toMatchObject({
+              kind: "ready",
+              meta: { runtimeOptions: { [option]: value } },
+            });
+          } else {
+            expect(after).toEqual(before);
+            expect(result?.reply?.text).toContain(
+              senderId === "ordinary-member" ? "owner-only command" : "authority changed",
+            );
+          }
+        } finally {
+          releaseBoundary.resolve();
+          await commandRun;
+          await disposeAcpSessionManagerInstance(manager, "test complete");
+          unregisterAcpRuntimeBackend(backendId);
+          testing.resetAcpSessionManagerForTests();
+        }
+      });
+    },
+  );
+});
+
+type Fixture = Parameters<Parameters<typeof withAcpCancellationFixture>[0]>[0];
+type CommandFixture = Fixture & { hook: ReturnType<typeof vi.fn> };
+
+async function runAcpCommand(f: Fixture, body: string) {
+  const params = buildCommandTestParams(body, f.target.cfg, {
+    Provider: "discord",
+    Surface: "discord",
+    OriginatingChannel: "discord",
+    OriginatingTo: "channel:parent-1",
+    AccountId: "default",
+    CommandTargetSessionKey: f.target.sessionKey,
+  });
+  params.command.senderId = "user-1";
+  params.command.senderIsOwner = true;
+  return await handleAcpCommand(params, true);
+}
+
+function startTurn(
+  f: Fixture,
+  requestId: string,
+  onEvent?: (event: AcpRuntimeEvent) => void,
+): Promise<void> {
+  return f.manager.runTurn({
+    ...f.target,
+    admittedRunContext: createTestAdmittedRunContext(requestId),
+    provenance: "system",
+    mode: "prompt",
+    text: requestId,
+    requestId,
+    ...(onEvent ? { onEvent } : {}),
+  });
+}
+
+async function withCommandFixture(run: (f: CommandFixture) => Promise<void>) {
+  await withAcpCancellationFixture(async (f) => {
+    testing.setAcpSessionManagerForTests(f.manager);
+    const hook = vi.fn();
+    registerInternalHook("command:stop", hook);
+    try {
+      await run(Object.assign(f, { hook }));
+    } finally {
+      unregisterInternalHook("command:stop", hook);
+      testing.resetAcpSessionManagerForTests();
+    }
+  });
+}
+
+it.each(["running", "idle"] as const)("/acp cancel stops an %s backend", async (phase) => {
+  await withCommandFixture(async (f) => {
+    const pending: Promise<void>[] = [];
+    const queuedEvents: AcpRuntimeEvent[] = [];
+    if (phase === "running") {
+      const entered = createDeferred();
+      f.runTurn.mockImplementationOnce(async function* (input) {
+        entered.resolve();
+        await new Promise<void>((resolve) => {
+          input.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        yield { type: "done", status: "cancelled" };
+      });
+      pending.push(
+        startTurn(f, "running"),
+        startTurn(f, "queued-child-run", (event) => {
+          queuedEvents.push(event);
+        }),
+      );
+      await entered.promise;
+    }
+    try {
+      const reply = (await runAcpCommand(f, "/acp cancel"))?.reply?.text;
+      expect(reply).toContain(`Cancel requested for ACP session ${f.target.sessionKey}`);
+      await Promise.all(pending);
+      expect(f.hook).toHaveBeenCalledOnce();
+      if (phase === "running") {
+        expect(f.runTurn).toHaveBeenCalledOnce();
+        expect(queuedEvents).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
+        expect(readDurableAcpSignals(f, "queued-child-run")).toMatchObject([
+          { kind: "run_failed", payload_json: expect.stringContaining("cancelled") },
+        ]);
+      } else {
+        expect(f.cancel).toHaveBeenCalledWith(expect.objectContaining({ reason: "manual-cancel" }));
+        expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
       }
-    });
-  },
-);
+    } finally {
+      await Promise.allSettled(pending);
+    }
+  });
+});
+
+it("/acp steer waits for the target's running turn, then returns its output", async () => {
+  await withCommandFixture(async (f) => {
+    const order: string[] = [];
+    const entered = createDeferred();
+    const release = createDeferred();
+    f.runTurn
+      .mockImplementationOnce(async function* () {
+        entered.resolve();
+        await release.promise;
+        order.push("running:end");
+        yield { type: "done" };
+      })
+      .mockImplementationOnce(async function* (input) {
+        order.push(`${input.mode}:start`);
+        yield { type: "text_delta", text: "steered output" };
+        yield { type: "done" };
+      });
+    const running = startTurn(f, "running");
+    let steer: ReturnType<typeof runAcpCommand> | undefined;
+    try {
+      await entered.promise;
+      steer = runAcpCommand(f, "/acp steer tighten logging");
+      // The steer waits in the target session's mailbox behind the running turn.
+      await vi.waitFor(() =>
+        expect(
+          [...sessionControllerMailboxes()]
+            .find((mailbox) => mailbox.owner.aliases.has(f.target.sessionKey))
+            ?.entries.map((input) => input.phase),
+        ).toEqual(["claimed", "waiting"]),
+      );
+      release.resolve();
+      await running;
+      const reply = (await steer)?.reply?.text;
+      expect(order).toEqual(["running:end", "steer:start"]);
+      expect(reply).toContain("steered output");
+    } finally {
+      release.resolve();
+      await Promise.allSettled([running, steer]);
+    }
+  });
+});

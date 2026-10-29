@@ -72,7 +72,8 @@ vi.mock("../sessions/session-diff.js", async (importOriginal) => ({
     compactionTestState.captureSessionDiffBaselineMock(params),
 }));
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => compactionTestState.cfg,
   readConfigFileSnapshotForWrite: async () => ({ snapshot: { valid: false } }),
 }));
@@ -82,14 +83,15 @@ vi.mock("./agent-runtime-config.js", () => ({
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
-  const { rebasePluginMetadataSnapshotManifestRegistry } =
-    await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
+  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
   const { createPluginMetadataSnapshot } =
     await import("../config/plugin-auto-enable.test-helpers.js");
   return {
+    ...actual,
     isPluginMetadataSnapshotCompatible: () => false,
-    rebasePluginMetadataSnapshotManifestRegistry,
     resolvePluginMetadataSnapshot: () =>
+      createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
+    resolvePluginMetadataSnapshotAsync: async () =>
       createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
   };
 });
@@ -107,11 +109,15 @@ vi.mock("./agent-scope.js", async () => {
     resolveAgentConfig: () => undefined,
     resolveAgentDir: () => compactionTestState.agentDir ?? "/tmp/openclaw-agent",
     resolveDefaultAgentId: () => "main",
-    resolveEffectiveModelFallbacks: () => undefined,
     resolveSessionAgentId: () => "main",
     resolveAgentWorkspaceDir: () => compactionTestState.workspaceDir ?? "/tmp/openclaw-workspace",
   };
 });
+
+vi.mock("./model-selection-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-selection-config.js")>()),
+  resolveEffectiveModelFallbacks: () => undefined,
+}));
 
 vi.mock("./model-catalog.js", async () => {
   const { buildPreparedModelCatalogSnapshot } =
@@ -165,6 +171,7 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: () => ({ profiles: {} }),
+    ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
     saveAuthProfileStore: vi.fn(),
     updateAuthProfileStoreWithLock: vi.fn(async () => ({ profiles: {} })),
   };
@@ -172,7 +179,7 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
 
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
-    resolveSession: () => null,
+    resolveSessionAsync: async () => null,
   }),
 }));
 
@@ -192,8 +199,9 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
   }),
 }));
 
+// mock-isolation: Compaction fixtures must not open the host approval store or discover executable nodes.
 vi.mock("./exec-defaults.js", () => ({
-  resolveNodeExecEligibility: () => ({ canExec: false }),
+  resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
 }));
 
 vi.mock("./model-fallback-runner.js", () => ({
@@ -391,7 +399,7 @@ function readCompactionLifecyclePhases(): Array<string | undefined> {
 
 const COMPACTION_ERROR =
   "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.";
-const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined, {}] as const;
+const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined] as const;
 
 // Vitest rewrites imported references, but not re-export specifiers. Materialize
 // these runtime bindings after its hoisted mocks register, or exports become undefined.

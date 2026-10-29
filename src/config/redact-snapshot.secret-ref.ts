@@ -4,21 +4,3 @@ export function isSecretRefShape(
 ): value is Record<string, unknown> & { source: string; id: string } {
   return typeof value.source === "string" && typeof value.id === "string";
 }
-
-/** Redacts a SecretRef id while preserving non-secret structural fields for restore matching. */
-export function redactSecretRefId(params: {
-  value: Record<string, unknown> & { source: string; id: string };
-  values: string[];
-  redactedSentinel: string;
-  isConcreteSensitiveString: (value: string) => boolean;
-}): Record<string, unknown> {
-  const { value, values, redactedSentinel, isConcreteSensitiveString } = params;
-  const redacted: Record<string, unknown> = { ...value };
-  if (isConcreteSensitiveString(value.id)) {
-    // `${ENV_VAR}` placeholders are already indirect references; collect and redact only concrete
-    // ids so raw replacement cannot erase harmless template syntax.
-    values.push(value.id);
-    redacted.id = redactedSentinel;
-  }
-  return redacted;
-}

@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
-  ActivateSetupInferenceResult,
   SetupInferenceCandidate,
   SetupInferenceDetection,
   SetupInferenceFailureStatus,
@@ -23,21 +22,6 @@ const SETUP_FAILURE_REASON_KEYS: Record<SetupInferenceFailureStatus, string> = {
   unavailable: "wizard.guided.failureUnavailable",
   unknown: "wizard.guided.failureUnknown",
 };
-
-async function noteActivationFailure(params: {
-  prompter: WizardPrompter;
-  label: string;
-  result: Extract<ActivateSetupInferenceResult, { ok: false }>;
-}): Promise<void> {
-  await params.prompter.note(
-    t("wizard.guided.testFailure", {
-      label: params.label,
-      reason: t(SETUP_FAILURE_REASON_KEYS[params.result.status]),
-      detail: params.result.error,
-    }),
-    t("wizard.guided.aiAccessTitle"),
-  );
-}
 
 export async function runManualStage(params: {
   detection: SetupInferenceDetection;
@@ -115,13 +99,19 @@ export async function runManualStage(params: {
       }),
     );
     if (result.ok) {
-      return activationLines(result);
+      return [
+        ...result.lines,
+        t("wizard.guided.repliedIn", { seconds: (result.latencyMs / 1000).toFixed(1) }),
+      ];
     }
-    await noteActivationFailure({
-      prompter: params.prompter,
-      label: candidate?.label ?? choice,
-      result,
-    });
+    await params.prompter.note(
+      t("wizard.guided.testFailure", {
+        label: candidate?.label ?? choice,
+        reason: t(SETUP_FAILURE_REASON_KEYS[result.status]),
+        detail: result.error,
+      }),
+      t("wizard.guided.aiAccessTitle"),
+    );
     if (candidate?.kind === "existing-model") {
       await params.prompter.note(
         t("wizard.guided.existingModelKept"),
@@ -129,11 +119,4 @@ export async function runManualStage(params: {
       );
     }
   }
-}
-
-function activationLines(result: Extract<ActivateSetupInferenceResult, { ok: true }>): string[] {
-  return [
-    ...result.lines,
-    t("wizard.guided.repliedIn", { seconds: (result.latencyMs / 1000).toFixed(1) }),
-  ];
 }

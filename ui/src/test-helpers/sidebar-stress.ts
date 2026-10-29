@@ -3,7 +3,7 @@ import { SESSION_PLACEMENT_STATES } from "../../../packages/gateway-protocol/src
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "./app-sidebar.ts";
-import "../components/app-sidebar.ts";
+import "../components/app-sidebar.tsx";
 export const owner = {
   type: "human",
   id: "nora",
@@ -110,7 +110,10 @@ function fixtures(): GatewaySessionRow[] {
   for (const state of ["open", "draft", "merged", "closed"] as const) {
     add("pr-" + state);
   }
+  // Previews off keeps this row single-line, where the trailing endcap intentionally
+  // takes title space as viewers join while the title's logical start stays anchored.
   add("crowded", {
+    agentStatus: { note: "Needs a decision", attention: "key", expiresAt: Date.now() + 600000 },
     incognito: true,
     hasActiveRun: true,
     status: "running",
@@ -193,9 +196,6 @@ export async function settled(sidebar: Awaited<ReturnType<typeof mountSidebar>>[
   await vi.dynamicImportSettled();
   await sidebar.updateComplete;
   await Promise.all(
-    [...sidebar.querySelectorAll("openclaw-session-owner-chip")].map((x) => x.updateComplete),
-  );
-  await Promise.all(
     [...sidebar.querySelectorAll("openclaw-viewer-avatar")].map((x) => x.updateComplete),
   );
   await new Promise<void>((resolve) => {
@@ -230,7 +230,7 @@ export async function mount(width: number) {
     harness.sessions.setPullRequestSummary(key("pr-" + state), { numbers: [123, 456], state });
   }
   harness.sessions.setPullRequestSummary(key("crowded"), { numbers: [123], state: "open" });
-  const approvals = ["approval", "crowded"].map((id) => ({
+  const approvals = ["approval"].map((id) => ({
     id: "stress-approval-" + id,
     kind: "exec" as const,
     request: { command: "echo fixture", sessionKey: key(id) },
@@ -241,9 +241,11 @@ export async function mount(width: number) {
   const { sidebar } = mounted;
   sidebar.style.cssText = `display:block;width:${width}px;height:1000px`;
   sidebar.connected = true;
-  sidebar.hasSessionDraft = (k) => k === key("unsent-draft") || k === key("crowded");
-  sidebar.outboxAttentionCountForSession = (k) =>
-    k === key("outbox") || k === key("crowded") ? 9 : 0;
+  sidebar.storedOutboxes = {
+    total: 18,
+    attentionCountForSession: (k) => (k === key("outbox") || k === key("crowded") ? 9 : 0),
+    hasSessionDraft: (k) => k === key("unsent-draft") || k === key("crowded"),
+  };
   gateway.publishEvent("question.requested", {
     id: "stress-question",
     agentId: "main",

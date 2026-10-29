@@ -1,125 +1,95 @@
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import {
   transcriptGetFixture,
   transcriptListFixture,
   transcriptStatusFixture,
 } from "../../../src/transcripts/library.test-support.js";
-import { lazyCompile } from "./protocol-validator.js";
-import {
-  TranscriptsGetResultSchema,
-  TranscriptsListResultSchema,
-  TranscriptsStatusResultSchema,
-} from "./schema/transcripts.js";
-import {
-  validateTranscriptsExportParams,
-  validateTranscriptsGetParams,
-  validateTranscriptsListParams,
-  validateTranscriptsStatusParams,
-} from "./validator-registry.js";
+import * as p from "./index.js";
+import { copies, schemaValidation, validation } from "./schema/protocol-validation.test-support.js";
+
+const status = schemaValidation(p.TranscriptsStatusResultSchema);
+const get = schemaValidation(p.TranscriptsGetResultSchema);
+const listParams = validation(p.validateTranscriptsListParams);
+const getParams = validation(p.validateTranscriptsGetParams);
+const exportParams = validation(p.validateTranscriptsExportParams);
+const sourceRow = { source: { providerId: "fixture" }, state: "not-active", activeSelectors: [] };
+const withSources = (configuredSources: unknown[]) => ({
+  ...transcriptStatusFixture,
+  configuredSources,
+});
 
 describe("transcript UI wire contracts", () => {
   it("accepts closed startup diagnostics without raw errors or unbounded extra rows", () => {
-    const validate = lazyCompile(TranscriptsStatusResultSchema);
-    const row = { source: { providerId: "fixture" }, state: "not-active", activeSelectors: [] };
-    const response = (startDiagnostic: unknown) => ({
-      ...transcriptStatusFixture,
-      configuredSources: [{ ...row, startDiagnostic }],
-    });
-    for (const code of [
-      "starting",
-      "retrying",
-      "id-conflict",
-      "admitted-start-failed",
-      "start-failed",
-      "ended",
-    ]) {
-      expect(validate(response(code))).toBe(true);
-    }
-    expect(validate(response("raw provider error"))).toBe(false);
-    expect(
-      validate({
-        ...transcriptStatusFixture,
-        configuredSources: [{ ...row, startDiagnostic: "start-failed", error: "private" }],
-      }),
-    ).toBe(false);
-    expect(
-      validate({
-        ...transcriptStatusFixture,
-        configuredSources: Array.from({ length: 101 }, () => ({
-          ...row,
-          startDiagnostic: "starting",
-        })),
-      }),
-    ).toBe(false);
+    const response = (startDiagnostic: unknown) => withSources([{ ...sourceRow, startDiagnostic }]);
+    status.accepts(
+      ...[
+        "starting",
+        "retrying",
+        "id-conflict",
+        "admitted-start-failed",
+        "start-failed",
+        "ended",
+      ].map(response),
+    );
+    const failed = { ...sourceRow, startDiagnostic: "start-failed" };
+    status.rejects(
+      response("raw provider error"),
+      withSources([{ ...failed, error: "private" }]),
+      withSources(Array.from({ length: 101 }, () => failed)),
+    );
   });
   it("validates shared UI fixture responses against the canonical wire schemas", () => {
-    expect(lazyCompile(TranscriptsListResultSchema)(transcriptListFixture)).toBe(true);
-    expect(lazyCompile(TranscriptsGetResultSchema)(transcriptGetFixture)).toBe(true);
-    expect(lazyCompile(TranscriptsStatusResultSchema)(transcriptStatusFixture)).toBe(true);
-    const validateGet = lazyCompile(TranscriptsGetResultSchema);
-    const utterances = Array.from({ length: 2000 }, (_, sequence) => ({
-      sequence,
-      text: "speech",
-    }));
-    expect(validateGet({ ...transcriptGetFixture, utterances })).toBe(true);
-    expect(
-      validateGet({
-        ...transcriptGetFixture,
-        utterances: [...utterances, { sequence: 2000, text: "outside the recent window" }],
-      }),
-    ).toBe(false);
+    schemaValidation(p.TranscriptsListResultSchema).accepts(transcriptListFixture);
+    status.accepts(transcriptStatusFixture);
+    const utterances = copies({ sequence: 0, text: "speech" }, 2000);
+    const response = (rows: typeof utterances) => ({ ...transcriptGetFixture, utterances: rows });
+    get.accepts(transcriptGetFixture, response(utterances));
+    get.rejects(response([...utterances, { sequence: 2000, text: "outside" }]));
   });
 
   it("keeps pagination and search bounded and rejects mutation arguments", () => {
-    expect(validateTranscriptsListParams({})).toBe(true);
-    expect(
-      validateTranscriptsListParams({
-        limit: 100,
-        query: "x".repeat(256),
-        startedAfter: "2026-08-20T00:00:00Z",
-      }),
-    ).toBe(true);
-    expect(validateTranscriptsListParams({ limit: 200 })).toBe(true);
-    for (const limit of [0, 201, -1, 1.5, "50"]) {
-      expect(validateTranscriptsListParams({ limit })).toBe(false);
-    }
-    expect(validateTranscriptsListParams({ query: "x".repeat(257) })).toBe(false);
-    expect(validateTranscriptsGetParams({ selector: "opaque/full-value", limit: 100 })).toBe(true);
-    expect(
-      validateTranscriptsGetParams({ selector: "opaque", includeUtterances: true, limit: 101 }),
-    ).toBe(false);
-    expect(validateTranscriptsGetParams({ selector: "opaque", agentId: "forged" })).toBe(false);
-    expect(validateTranscriptsExportParams({ selector: "opaque", format: "jsonl" })).toBe(true);
-    expect(validateTranscriptsExportParams({ selector: "opaque", format: "markdown" })).toBe(true);
-    expect(validateTranscriptsExportParams({ selector: "opaque", format: "audio" })).toBe(false);
-    expect(validateTranscriptsStatusParams({})).toBe(true);
-    expect(validateTranscriptsStatusParams({ enabled: true, autoStart: [] })).toBe(false);
+    listParams.accepts({
+      limit: 100,
+      query: "x".repeat(256),
+      startedAfter: "2026-08-20T00:00:00Z",
+    });
+    listParams.rejects(...[0, 201, 1.5, "50"].map((limit) => ({ limit })), {
+      query: "x".repeat(257),
+    });
+    getParams.accepts({ selector: "opaque/full-value", limit: 100 });
+    getParams.rejects(
+      { selector: "opaque", includeUtterances: true, limit: 101 },
+      { selector: "opaque", agentId: "forged" },
+    );
+    exportParams.accepts(
+      ...["jsonl", "markdown"].map((format) => ({ selector: "opaque", format })),
+    );
+    exportParams.rejects({ selector: "opaque", format: "audio" });
+    validation(p.validateTranscriptsStatusParams).accepts({});
+    validation(p.validateTranscriptsStatusParams).rejects({ enabled: true, autoStart: [] });
   });
 
   it("keeps auto-start descriptors optional, closed, and limited to existing locator fields", () => {
-    const validate = lazyCompile(TranscriptsStatusResultSchema);
     const response = (autoStart: unknown) => ({
       ...transcriptStatusFixture,
       providers: [{ ...transcriptStatusFixture.providers[0], autoStart }],
     });
-    expect(
-      validate(
-        response({
-          accountId: "optional",
-          guildId: "required",
-          channelId: "required",
-          meetingUrl: "optional",
-        }),
-      ),
-    ).toBe(true);
-    expect(validate(response({}))).toBe(true);
-    for (const descriptor of [
-      { fileId: "required" },
-      { sessionId: "optional" },
-      { accountId: true },
-      { channelId: "unknown" },
-    ]) {
-      expect(validate(response(descriptor))).toBe(false);
-    }
+    status.accepts(
+      response({
+        accountId: "optional",
+        guildId: "required",
+        channelId: "required",
+        meetingUrl: "optional",
+      }),
+      response({}),
+    );
+    status.rejects(
+      ...[
+        { fileId: "required" },
+        { sessionId: "optional" },
+        { accountId: true },
+        { channelId: "unknown" },
+      ].map(response),
+    );
   });
 });

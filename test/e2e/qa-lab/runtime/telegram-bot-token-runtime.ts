@@ -292,10 +292,7 @@ export async function runTelegramBotTokenRuntime(
 }
 
 export const testing = {
-  parseOptions,
-  parseTelegramCredentialPayload,
   resolveLeasedToken,
-  sanitizeRuntimeLogs,
   waitForProductStartup,
 };
 

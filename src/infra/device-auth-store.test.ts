@@ -1,425 +1,197 @@
-// Covers SQLite-backed device auth token storage and clearing.
 import fs from "node:fs";
-import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
-import {
-  clearDeviceAuthToken,
-  clearOriginDeviceToken,
-  loadDeviceAuthToken,
-  loadDeviceAuthTokenReadOnly,
-  loadDeviceAuthTokens,
-  loadOriginDeviceToken,
-  loadOriginDeviceTokenReadOnly,
-  storeDeviceAuthToken,
-  storeOriginDeviceToken,
-} from "./device-auth-store.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { withClientCredentialStore } from "./client-credential-store.test-support.js";
+import * as tokens from "./device-auth-store.js";
+import { observeDeviceAuthHostSql } from "./device-auth-store.sql.test-support.js";
+import { holdDeviceAuthWriterForTest } from "./device-auth-store.test-support.js";
 
-function createEnv(stateDir: string): NodeJS.ProcessEnv {
-  return {
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_TEST_FAST: "1",
-  };
-}
+afterEach(() => vi.restoreAllMocks());
 
-afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  vi.restoreAllMocks();
-});
-
-describe("infra/device-auth-store", () => {
-  it("reads no device auth and creates no database when shared state is absent", async () => {
-    await withTempDir("openclaw-device-auth-readonly-missing-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-
-      expect(
-        await loadDeviceAuthTokenReadOnly({ deviceId: "device-1", role: "operator", env }),
-      ).toBeNull();
-      expect(
-        await loadOriginDeviceTokenReadOnly({
-          gatewayScope: "wss://one.example",
-          deviceId: "device-1",
-          role: "operator",
-          env,
-        }),
-      ).toBeNull();
-      expect(fs.existsSync(databasePath)).toBe(false);
-    });
-  });
-
-  it("reads existing device auth without opening writable shared state", async () => {
-    await withTempDir("openclaw-device-auth-readonly-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      await storeDeviceAuthToken({
-        deviceId: "device-1",
-        role: "operator",
-        token: "local-token",
+describe("local device token cache", () => {
+  it("isolates device, role, and Gateway origin even with a surplus scope on unscoped calls", async () => {
+    await withOpenClawTestState({ label: "credential-token-scopes" }, async ({ env }) => {
+      const lookup = {
         env,
-      });
-      await storeOriginDeviceToken({
-        gatewayScope: "wss://one.example",
-        deviceId: "device-1",
-        role: "operator",
-        token: "origin-token",
-        env,
-      });
-      await closeOpenClawStateDatabaseAsync();
-      const databaseDirectory = path.dirname(path.join(stateDir, "state", "openclaw.sqlite"));
-      const artifactsBeforeRead = fs.readdirSync(databaseDirectory).toSorted();
-
-      expect(
-        (await loadDeviceAuthTokenReadOnly({ deviceId: "device-1", role: "operator", env }))?.token,
-      ).toBe("local-token");
-      expect(
-        (
-          await loadOriginDeviceTokenReadOnly({
-            gatewayScope: "wss://one.example",
-            deviceId: "device-1",
-            role: "operator",
-            env,
-          })
-        )?.token,
-      ).toBe("origin-token");
-      expect(fs.readdirSync(databaseDirectory).toSorted()).toEqual(artifactsBeforeRead);
-    });
-  });
-
-  it("never exposes a device token to a different gateway origin", async () => {
-    await withTempDir("openclaw-device-auth-origin-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      await storeOriginDeviceToken({
-        gatewayScope: "wss://one.example/rpc",
-        deviceId: "device-1",
-        role: "operator",
-        token: "origin-one-token",
-        env,
-      });
-
-      expect(
-        await loadOriginDeviceToken({
-          gatewayScope: "wss://two.example/rpc",
-          deviceId: "device-1",
-          role: "operator",
-          env,
-        }),
-      ).toBeNull();
-      await clearOriginDeviceToken({
-        gatewayScope: "wss://two.example/rpc",
-        deviceId: "device-1",
-        role: "operator",
-        env,
-      });
-      expect(
-        (
-          await loadOriginDeviceToken({
-            gatewayScope: "wss://one.example/rpc",
-            deviceId: "device-1",
-            role: "operator",
-            env,
-          })
-        )?.token,
-      ).toBe("origin-one-token");
-    });
-  });
-
-  it("upserts and clears only the exact origin, device, and normalized role", async () => {
-    await withTempDir("openclaw-device-auth-origin-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      await storeOriginDeviceToken({
-        gatewayScope: "wss://one.example",
-        deviceId: "device-1",
+        deviceId: "device-one",
         role: " operator ",
-        token: "old-token",
-        scopes: [" operator.write ", "operator.read", "operator.read"],
-        env,
-      });
-      const replacement = await storeOriginDeviceToken({
-        gatewayScope: "wss://one.example",
-        deviceId: "device-1",
-        role: "operator",
-        token: "new-token",
-        scopes: ["operator.pairing"],
-        env,
-      });
-      await storeOriginDeviceToken({
         gatewayScope: "wss://two.example",
-        deviceId: "device-1",
-        role: "operator",
-        token: "other-origin-token",
-        env,
+      };
+      const stored = await tokens.storeDeviceAuthToken({
+        ...lookup,
+        token: "local",
+        scopes: [" operator.read ", "operator.read"],
       });
-
-      expect(replacement).toEqual({
-        token: "new-token",
-        role: "operator",
-        scopes: ["operator.pairing"],
-        updatedAtMs: expect.any(Number),
+      await tokens.storeDeviceAuthToken({
+        ...lookup,
+        deviceId: "device-two",
+        token: "other-device",
       });
-      await clearOriginDeviceToken({
+      await tokens.storeDeviceAuthToken({ ...lookup, role: "node", token: "node" });
+      await tokens.storeOriginDeviceToken({
+        ...lookup,
         gatewayScope: "wss://one.example",
-        deviceId: "device-1",
-        role: " operator ",
-        env,
+        token: "one",
       });
+      await tokens.storeOriginDeviceToken({
+        ...lookup,
+        gatewayScope: "wss://two.example",
+        token: "two",
+      });
+      expect(stored).toMatchObject({ role: "operator", scopes: ["operator.read"] });
+      expect(await tokens.loadDeviceAuthToken(lookup)).toEqual(stored);
       expect(
-        await loadOriginDeviceToken({
-          gatewayScope: "wss://one.example",
-          deviceId: "device-1",
-          role: "operator",
-          env,
-        }),
-      ).toBeNull();
-      expect(
-        (
-          await loadOriginDeviceToken({
-            gatewayScope: "wss://two.example",
-            deviceId: "device-1",
-            role: "operator",
-            env,
-          })
-        )?.token,
-      ).toBe("other-origin-token");
-    });
-  });
-
-  it("stores and loads normalized device auth tokens in SQLite", async () => {
-    await withOpenClawTestState({ label: "device-auth" }, async ({ stateDir, env }) => {
-      vi.spyOn(Date, "now").mockReturnValue(1234);
-
-      const entry = await storeDeviceAuthToken({
-        deviceId: "device-1",
-        role: " operator ",
-        token: "secret",
-        scopes: [" operator.write ", "operator.read", "operator.read"],
-        env,
-      });
-
-      expect(entry).toEqual({
-        token: "secret",
-        role: "operator",
-        scopes: ["operator.read", "operator.write"],
-        updatedAtMs: 1234,
-      });
-      expect(await loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toEqual(
-        entry,
-      );
-      expect(await loadDeviceAuthTokens({ deviceId: "device-1", env })).toEqual([entry]);
-      expect(fs.existsSync(path.join(stateDir, "identity", "device-auth.json"))).toBe(false);
-    });
-  });
-
-  it("isolates device ids and overwrites only the normalized role", async () => {
-    await withOpenClawTestState({ label: "device-auth" }, async ({ env }) => {
-      vi.spyOn(Date, "now").mockReturnValueOnce(1).mockReturnValueOnce(2).mockReturnValueOnce(3);
-
-      await storeDeviceAuthToken({ deviceId: "device-1", role: "node", token: "node", env });
-      await storeDeviceAuthToken({ deviceId: "device-2", role: "operator", token: "other", env });
-      const replacement = await storeDeviceAuthToken({
-        deviceId: "device-1",
-        role: " operator ",
-        token: "replacement",
-        scopes: ["operator.admin"],
-        env,
-      });
-
-      expect(await loadDeviceAuthTokens({ deviceId: "device-1", env })).toEqual([
-        { token: "node", role: "node", scopes: [], updatedAtMs: 1 },
-        replacement,
+        await tokens.loadDeviceAuthToken({ env, deviceId: "device-one", role: "operator" }),
+      ).toEqual(stored);
+      expect((await tokens.loadDeviceAuthTokens(lookup)).map((entry) => entry.role)).toEqual([
+        "node",
+        "operator",
       ]);
       expect(
-        (await loadDeviceAuthToken({ deviceId: "device-2", role: "operator", env }))?.token,
-      ).toBe("other");
-    });
-  });
-
-  it("fails closed for malformed canonical scope metadata", async () => {
-    await withOpenClawTestState({ label: "device-auth" }, async ({ env }) => {
-      const { db } = openOpenClawStateDatabase({ env });
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<{
-          device_auth_tokens: {
-            device_id: string;
-            role: string;
-            token: string;
-            scopes_json: string;
-            updated_at_ms: number;
-          };
-        }>(db)
-          .insertInto("device_auth_tokens")
-          .values({
-            device_id: "device-1",
-            role: "operator",
-            token: "secret",
-            scopes_json: "not-json",
-            updated_at_ms: 1,
-          }),
-      );
-
-      expect(await loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toBeNull();
-      expect(await loadDeviceAuthTokens({ deviceId: "device-1", env })).toEqual([]);
-    });
-  });
-
-  it("fails closed with repair guidance while retired JSON remains", async () => {
-    await withTempDir("openclaw-device-auth-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      const legacyPath = path.join(stateDir, "identity", "device-auth.json");
-      fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-      fs.writeFileSync(legacyPath, '{"version":1}');
-      openOpenClawStateDatabase({ env })
-        .db.prepare(
-          "INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms) VALUES (?, ?, ?, ?, ?)",
-        )
-        .run("device-1", "operator", "sqlite-token", "[]", 1);
-      openOpenClawStateDatabase({ env }).db.exec("DROP TABLE gateway_origin_device_tokens;");
-
-      await expect(
-        async () => await loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env }),
-      ).rejects.toThrow("openclaw doctor --fix");
-      await expect(
-        async () =>
-          await storeDeviceAuthToken({
-            deviceId: "device-1",
-            role: "operator",
-            token: "replacement",
-            env,
-          }),
-      ).rejects.toThrow("openclaw doctor --fix");
-      await expect(
-        async () =>
-          await loadOriginDeviceToken({
-            gatewayScope: "wss://one.example",
-            deviceId: "device-1",
-            role: "operator",
-            env,
-          }),
-      ).rejects.toThrow("openclaw doctor --fix");
-      await expect(
-        async () =>
-          await storeOriginDeviceToken({
-            gatewayScope: "wss://one.example",
-            deviceId: "device-1",
-            role: "operator",
-            token: "origin-token",
-            env,
-          }),
-      ).rejects.toThrow("openclaw doctor --fix");
-      await expect(
-        async () =>
-          await clearOriginDeviceToken({
-            gatewayScope: "wss://one.example",
-            deviceId: "device-1",
-            role: "operator",
-            env,
-          }),
-      ).rejects.toThrow("openclaw doctor --fix");
+        await tokens.clearOriginDeviceToken({ ...lookup, gatewayScope: "wss://one.example" }),
+      ).toBe(true);
       expect(
-        openOpenClawStateDatabase({ env })
-          .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get("gateway_origin_device_tokens"),
-      ).toBeUndefined();
-    });
-  });
-
-  it("clears only the requested role and device", async () => {
-    await withTempDir("openclaw-device-auth-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      await storeDeviceAuthToken({
-        deviceId: "device-1",
-        role: "operator",
-        token: "operator",
-        env,
+        await tokens.loadOriginDeviceToken({ ...lookup, gatewayScope: "wss://one.example" }),
+      ).toBeNull();
+      expect(
+        await tokens.loadOriginDeviceToken({ ...lookup, gatewayScope: "wss://two.example" }),
+      ).toMatchObject({ token: "two" });
+      expect(await tokens.clearDeviceAuthToken(lookup)).toBe(true);
+      expect(
+        await tokens.loadOriginDeviceToken({ ...lookup, gatewayScope: "wss://two.example" }),
+      ).toMatchObject({ token: "two" });
+      expect(await tokens.loadDeviceAuthToken({ ...lookup, deviceId: "device-two" })).toMatchObject(
+        { token: "other-device" },
+      );
+      expect(await tokens.loadDeviceAuthToken({ ...lookup, role: "node" })).toMatchObject({
+        token: "node",
       });
-      await storeDeviceAuthToken({ deviceId: "device-1", role: "node", token: "node", env });
-      await storeDeviceAuthToken({ deviceId: "device-2", role: "operator", token: "other", env });
-
-      await clearDeviceAuthToken({ deviceId: "device-1", role: " operator ", env });
-
-      expect(await loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toBeNull();
-      expect((await loadDeviceAuthToken({ deviceId: "device-1", role: "node", env }))?.token).toBe(
-        "node",
-      );
-      expect(
-        (await loadDeviceAuthToken({ deviceId: "device-2", role: "operator", env }))?.token,
-      ).toBe("other");
     });
   });
 
-  it("keeps credentials rotated after a stale request snapshot", async () => {
-    await withTempDir("openclaw-device-auth-rotation-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      const targets = [
-        {
-          name: "device",
-          load: async () =>
-            await loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env }),
-          store: async (token: string, expectedToken?: string | null) =>
-            await storeDeviceAuthToken({
-              deviceId: "device-1",
-              role: "operator",
-              token,
-              scopes: ["operator.read"],
-              env,
-              ...(expectedToken === undefined ? {} : { expectedToken }),
-            }),
-          clear: async (expectedToken: string) =>
-            await clearDeviceAuthToken({
-              deviceId: "device-1",
-              role: "operator",
-              env,
-              expectedToken,
-            }),
-        },
-        {
-          name: "origin",
-          load: async () =>
-            await loadOriginDeviceToken({
-              gatewayScope: "wss://one.example",
-              deviceId: "device-1",
-              role: "operator",
-              env,
-            }),
-          store: async (token: string, expectedToken?: string | null) =>
-            await storeOriginDeviceToken({
-              gatewayScope: "wss://one.example",
-              deviceId: "device-1",
-              role: "operator",
-              token,
-              scopes: ["operator.read"],
-              env,
-              ...(expectedToken === undefined ? {} : { expectedToken }),
-            }),
-          clear: async (expectedToken: string) =>
-            await clearOriginDeviceToken({
-              gatewayScope: "wss://one.example",
-              deviceId: "device-1",
-              role: "operator",
-              env,
-              expectedToken,
-            }),
-        },
-      ];
+  it.each([false, true])(
+    "does not overwrite or remove a newer observed token (origin=%s)",
+    async (origin) => {
+      await withOpenClawTestState({ label: "credential-token-cas" }, async ({ env }) => {
+        const lookup = {
+          env,
+          deviceId: "device",
+          role: "operator",
+          gatewayScope: "wss://one.example",
+        };
+        const store = (token: string, expectedToken?: string | null) =>
+          origin
+            ? tokens.storeOriginDeviceToken({ ...lookup, token, expectedToken })
+            : tokens.storeDeviceAuthToken({ ...lookup, token, expectedToken });
+        const load = () =>
+          origin ? tokens.loadOriginDeviceToken(lookup) : tokens.loadDeviceAuthToken(lookup);
+        const clear = (expectedToken: string) =>
+          origin
+            ? tokens.clearOriginDeviceToken({ ...lookup, expectedToken })
+            : tokens.clearDeviceAuthToken({ ...lookup, expectedToken });
+        await store("first", null);
+        expect(await store("unexpected", null)).toBeNull();
+        await store("rotated", "first");
+        expect(await store("stale", "first")).toBeNull();
+        expect(await clear("first")).toBe(false);
+        expect(await load()).toMatchObject({ token: "rotated" });
+        expect(await clear("rotated")).toBe(true);
+        expect(await load()).toBeNull();
+      });
+    },
+  );
 
-      for (const target of targets) {
-        const prepared = await target.store(`${target.name}-prepared`, null);
-        expect(prepared).not.toBeNull();
-        expect(await target.store(`${target.name}-stale-insert`, null)).toBeNull();
-        expect(await target.load()).toEqual(prepared);
-        const rotated = await target.store(`${target.name}-rotated`);
-        expect(rotated).not.toBeNull();
+  it("fails closed on malformed scope metadata while retaining the raw token observation", async () => {
+    await withOpenClawTestState({ label: "credential-token-malformed" }, async ({ env }) => {
+      await tokens.storeDeviceAuthToken({
+        env,
+        deviceId: "device",
+        role: "operator",
+        token: "raw-token",
+      });
+      withClientCredentialStore(env, false, (db) =>
+        db
+          .prepare("UPDATE device_auth_tokens SET scopes_json = ? WHERE device_id = ? AND role = ?")
+          .run("not-json", "device", "operator"),
+      );
+      const onSnapshot = vi.fn();
+      expect(
+        await tokens.loadDeviceAuthToken({ env, deviceId: "device", role: "operator", onSnapshot }),
+      ).toBeNull();
+      expect(onSnapshot).toHaveBeenCalledWith({ entry: null, expectedToken: "raw-token" });
+      expect(await tokens.loadDeviceAuthTokens({ env, deviceId: "device" })).toEqual([]);
+    });
+  });
 
-        expect(await target.store(`${target.name}-stale-replacement`, prepared!.token)).toBeNull();
-        expect(await target.clear(prepared!.token)).toBe(false);
-        expect(await target.load()).toEqual(rotated);
+  it("keeps token work off the main thread and never opens selected shared state", async () => {
+    await withOpenClawTestState({ label: "credential-token-worker" }, async (state) => {
+      const lookup = { env: state.env, deviceId: "device", role: "operator" };
+      const databasePath = state.statePath("client", "credentials.sqlite");
+      const sql = observeDeviceAuthHostSql(databasePath);
+      try {
+        expect(await tokens.loadDeviceAuthTokenReadOnly(lookup)).toBeNull();
+        expect(fs.existsSync(databasePath)).toBe(false);
+        await tokens.storeDeviceAuthToken({ ...lookup, token: "one" });
+        await tokens.storeDeviceAuthToken({ ...lookup, token: "two", expectedToken: "one" });
+        expect(await tokens.loadDeviceAuthToken(lookup)).toMatchObject({ token: "two" });
+        expect(await tokens.clearDeviceAuthToken(lookup)).toBe(true);
+        expect(await tokens.loadDeviceAuthToken(lookup)).toBeNull();
+        expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
+        expect(Object.values(sql.counts().data)).toEqual(Array(7).fill(0));
+        expect(Object.values(sql.counts().unknown)).toEqual(Array(7).fill(0));
+      } finally {
+        sql.restore();
       }
+    });
+  });
+
+  it("rechecks live mutation authority after waiting for another local owner", async () => {
+    await withOpenClawTestState({ label: "credential-token-authority" }, async (state) => {
+      const lookup = { env: state.env, deviceId: "device", role: "operator" };
+      const original = await tokens.storeDeviceAuthToken({ ...lookup, token: "original" });
+      const release = await holdDeviceAuthWriterForTest(
+        state.statePath("client", "credentials.sqlite"),
+      );
+      let current = true;
+      const assertCurrent = vi.fn(() => {
+        if (!current) {
+          throw new Error("retired credential operation");
+        }
+      });
+      try {
+        const mutation = tokens.storeDeviceAuthToken({
+          ...lookup,
+          token: "replacement",
+          assertCurrent,
+        });
+        const rejected = expect(mutation).rejects.toThrow("retired credential operation");
+        await vi.waitFor(() => expect(assertCurrent).toHaveBeenCalled());
+        await delay(20);
+        current = false;
+        await release();
+        await rejected;
+        expect(await tokens.loadDeviceAuthToken(lookup)).toEqual(original);
+      } finally {
+        await release();
+      }
+    });
+  });
+
+  it("does not publish a token snapshot after caller cancellation", async () => {
+    await withOpenClawTestState({ label: "credential-token-cancel" }, async ({ env }) => {
+      const controller = new AbortController();
+      const onSnapshot = vi.fn();
+      const reading = tokens.loadDeviceAuthToken({
+        env,
+        deviceId: "device",
+        role: "operator",
+        signal: controller.signal,
+        onSnapshot,
+      });
+      controller.abort(new Error("credential read canceled"));
+      await expect(reading).rejects.toThrow("credential read canceled");
+      expect(onSnapshot).not.toHaveBeenCalled();
     });
   });
 });

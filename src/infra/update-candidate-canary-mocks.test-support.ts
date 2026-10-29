@@ -10,8 +10,11 @@ export function mockCanaryChildProcesses(
         const argv: unknown = args[1];
         if (
           Array.isArray(argv) &&
-          typeof argv[0] === "string" &&
-          /[/\\]dist[/\\](?:index|infra[/\\]update-migrated-finalize\.worker)\.js$/.test(argv[0])
+          argv.some(
+            (arg) =>
+              typeof arg === "string" &&
+              /[/\\]dist[/\\](?:index|infra[/\\]update-migrated-finalize\.worker)\.js$/.test(arg),
+          )
         ) {
           return Reflect.apply(spawn, thisArg, args);
         }
@@ -32,6 +35,39 @@ export function mockCanarySnapshotCommands(
         return snapshot(...args);
       }
       return original.runUtf8CommandWithTimeout(...args);
+    },
+  };
+}
+
+export function mockCanarySqliteOperationAdmission(
+  original: typeof import("./sqlite-worker-operation-admission.js"),
+  admission: {
+    active: boolean;
+    beforeGrant?: (stage: string) => void;
+    afterGrant?: (stage: string) => void;
+  },
+) {
+  return {
+    ...original,
+    createSqliteWorkerOperationAdmission: (
+      ...args: Parameters<typeof original.createSqliteWorkerOperationAdmission>
+    ) => {
+      const [admit, attachment] = args;
+      return original.createSqliteWorkerOperationAdmission((request, grant) => {
+        admission.active = true;
+        try {
+          admission.beforeGrant?.(request.stage);
+          admit(request, (beforeRelease) => {
+            const granted = grant(beforeRelease);
+            if (granted) {
+              admission.afterGrant?.(request.stage);
+            }
+            return granted;
+          });
+        } finally {
+          admission.active = false;
+        }
+      }, attachment);
     },
   };
 }

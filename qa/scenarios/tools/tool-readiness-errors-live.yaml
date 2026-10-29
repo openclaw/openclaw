@@ -1,0 +1,110 @@
+title: Setup failures are not retried as transient
+
+scenario:
+  id: tool-readiness-errors-live
+  surface: tools
+  coverage:
+    secondary:
+      - web-search.provider-credentials
+      - agent-runtime.tool-switching
+  gatewayConfigPatch:
+    tools:
+      web:
+        search:
+          enabled: true
+          provider: brave
+  objective: Prove a live model treats a web_search provider without credentials and an exec node target with no paired node as lasting setup facts, instead of retrying or rewording.
+  successCriteria:
+    - Each case calls the failing tool at least once, so the setup error is exercised.
+    - With no Brave credentials, the agent calls web_search at most twice per turn.
+    - With no paired node, the agent calls exec at most twice per turn.
+    - The summary records follow-up retries and whether the first reply names the setup cause.
+  docsRefs:
+    - docs/tools/web.md
+  codeRefs:
+    - src/web-search/runtime-error.ts
+    - src/agents/tools/web-search-output.ts
+    - src/agents/bash-tools.exec-host-node-phases.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Selects a web search provider without credentials.
+    channel: qa-channel
+    retryCount: 0
+    summary: Ask for a web search with an unconfigured provider and for a node command with no paired node, each followed by a second request in the same session, and count calls to the failed tool.
+    config:
+      requiredProviderMode: live-frontier
+      cases:
+        - key: agent:qa:readiness-web-search
+          tool: web_search
+          setupPattern: "not set up|not configured|no credentials|api key|credential"
+          prompt: Use web_search to find the current stable release version of the Rust programming language and tell me the version number.
+          followUp: What is the current stable release of Python? Look it up.
+        - key: agent:qa:readiness-node-exec
+          tool: exec
+          setupPattern: "no (paired )?node|not paired|none available|pair a node|node must be paired|paired node"
+          prompt: Run the command `hostname` on my paired node (use exec with host=node) and tell me the output.
+          followUp: Now check the uptime on that same node.
+
+flow:
+  steps:
+    - name: setup failures stop retries
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: Live model behavior requires live-frontier.
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: reset
+        - set: results
+          value: []
+        - forEach:
+            items:
+              ref: config.cases
+            item: testCase
+            actions:
+              - call: runAgentPrompt
+                args:
+                  - ref: env
+                  - sessionKey:
+                      expr: testCase.key
+                    message:
+                      expr: testCase.prompt
+                    timeoutMs:
+                      expr: "liveTurnTimeoutMs(env, 180000)"
+              - call: readSessionTranscriptSummary
+                saveAs: firstTurn
+                args:
+                  - ref: env
+                  - expr: testCase.key
+              - call: runAgentPrompt
+                args:
+                  - ref: env
+                  - sessionKey:
+                      expr: testCase.key
+                    message:
+                      expr: testCase.followUp
+                    timeoutMs:
+                      expr: "liveTurnTimeoutMs(env, 180000)"
+              - call: readSessionTranscriptSummary
+                saveAs: transcript
+                args:
+                  - ref: env
+                  - expr: testCase.key
+              - set: results
+                value:
+                  expr: "[...results, { key: testCase.key, tool: testCase.tool, setupPattern: testCase.setupPattern, firstText: String(firstTurn.finalText ?? ''), finalText: String(transcript.finalText ?? ''), firstCalls: firstTurn.assistantToolCallCounts?.[testCase.tool] ?? 0, tools: transcript.assistantToolCallCounts ?? {} }]"
+        - set: summary
+          value:
+            expr: "results.map((result) => ({ key: result.key, firstCalls: result.firstCalls, followUpCalls: (result.tools[result.tool] ?? 0) - result.firstCalls, namesSetup: new RegExp(result.setupPattern, 'i').test(result.firstText), tools: result.tools, firstText: result.firstText.slice(0, 400), finalText: result.finalText.slice(0, 400) }))"
+        - assert:
+            expr: "summary.every((entry) => entry.firstCalls >= 1)"
+            message:
+              expr: "`setup failure was not exercised: ${JSON.stringify(summary)}`"
+        - assert:
+            expr: "summary.every((entry) => entry.firstCalls <= 2 && entry.followUpCalls <= 2)"
+            message:
+              expr: "`agent retried a setup failure: ${JSON.stringify(summary)}`"
+      detailsExpr: "JSON.stringify(summary)"

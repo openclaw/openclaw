@@ -596,7 +596,7 @@ function hasSuccessfulRecentReleaseGate(workflowRuns: WorkflowRun[], sha: string
   return isSuccessfulRecentRun(releaseGate, nowMs);
 }
 
-function runBelongsToPullRequest(
+export function runBelongsToPullRequest(
   run: WorkflowRun,
   pr: number,
   pullRequestCommitShas: Set<string>,

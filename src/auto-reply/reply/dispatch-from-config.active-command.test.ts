@@ -1,8 +1,15 @@
-// Exercises control-command reachability without relaxing ordinary reply admission.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred, raceWithTimeoutResult } from "../../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  raceWithTimeoutResult,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import { listActiveReplyRunSessionKeys } from "../../sessions/session-controller.queries.js";
+import * as controllerWait from "../../sessions/session-controller.wait.js";
+import { createCommandTurnContext } from "../command-turn-context.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
+import type { MsgContext } from "../templating.js";
 import {
   createDispatcher,
   setDiscordTestRegistry,
@@ -12,12 +19,15 @@ import {
   describe0BeforeEach0,
   dispatchReplyFromConfig,
   globalBeforeAll0,
-  replyRunRegistry,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
-import { getActiveReplyRunCount } from "./reply-run-registry.registry.js";
+  getSessionControllerOperation,
+  isSessionRunActiveForKey,
+} from "./dispatch-from-config.test-support.js";
+import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import { readReplySourceInput } from "./reply-source-binding.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+type Resolver = NonNullable<DispatchFromConfigParams["replyResolver"]>;
 beforeAll(globalBeforeAll0);
 beforeEach(() => {
   describe0BeforeEach0();
@@ -26,358 +36,225 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-describe("dispatch active command admission", () => {
-  it.each([
-    { source: "text", body: "/think high", commandName: "think" },
-    { source: "text", body: "/help", commandName: "help" },
-    { source: "native", body: "/help", commandName: "help" },
-    { source: "text", body: "/tasks", commandName: "tasks" },
-    { source: "native", body: "/tasks", commandName: "tasks" },
-  ] as const)(
-    "delivers authorized $source $body while its session operation is active",
-    async ({ source, body, commandName }) => {
-      const sessionKey = "agent:main:command-reply-active";
-      const activeOperation = createReplyOperation({
-        sessionKey,
-        sessionId: "active-session",
-        resetTriggered: false,
-      });
-      activeOperation.setPhase("running");
-      onTestFinished(() => activeOperation.complete());
-      const waitingForActive = createDeferred<{ status: "waiting_for_active" }>();
-      const waitForIdle = replyRunRegistry.waitForIdle.bind(replyRunRegistry);
-      vi.spyOn(replyRunRegistry, "waitForIdle").mockImplementation((key, ...args) => {
-        if (key === sessionKey) {
-          waitingForActive.resolve({ status: "waiting_for_active" });
-        }
-        return waitForIdle(key, ...args);
-      });
-
-      const acknowledgement = { text: "Command completed." };
-      const replyResolver = vi.fn(async () => markCommandReplyForDelivery(acknowledgement));
-      const dispatcher = createDispatcher();
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          CommandAuthorized: true,
-          CommandSource: source,
-          CommandTurn: {
-            ...(source === "native"
-              ? ({ kind: "native", source: "native" } as const)
-              : ({ kind: "text-slash", source: "text" } as const)),
-            authorized: true,
-            commandName,
-            body,
-          },
-          SessionKey: sessionKey,
-          Body: body,
-          RawBody: body,
-          CommandBody: body,
-          BodyForAgent: body,
-        }),
-        cfg: {
-          diagnostics: { enabled: true },
-          session: { sendPolicy: { default: "allow" } },
-        } as OpenClawConfig,
-        dispatcher,
-        replyResolver,
-      });
-
-      try {
-        const outcome = await Promise.race([
-          dispatchPromise.then((result) => ({ status: "settled" as const, result })),
-          waitingForActive.promise,
-        ]);
-
-        expect(outcome).toMatchObject({
-          status: "settled",
-          result: { queuedFinal: true },
-        });
-        expect(replyResolver).toHaveBeenCalledOnce();
-        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(acknowledgement);
-        expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
-      } finally {
-        activeOperation.complete();
-        await dispatchPromise;
-      }
-      expect(getActiveReplyRunCount()).toBe(0);
-    },
-  );
-
-  it.each([
-    { source: "text", body: "/bash echo unsafe", commandName: "bash", authorized: true },
-    { source: "native", body: "/compact", commandName: "compact", authorized: true },
-    { source: "text", body: "/reset", commandName: "reset", authorized: false },
-    { source: "text", body: "/new", commandName: "new", authorized: false },
-    { source: "text", body: "/help", commandName: "help", authorized: false },
-    { source: "native", body: "/help", commandName: "help", authorized: false },
-  ] as const)(
-    "keeps $source $body (authorized=$authorized) behind active-session admission",
-    async ({ source, body, commandName, authorized }) => {
-      const sessionKey = "agent:main:executable-command-active";
-      const activeOperation = createReplyOperation({
-        sessionKey,
-        sessionId: "active-session",
-        resetTriggered: false,
-      });
-      activeOperation.setPhase("running");
-
-      const callerAbort = new AbortController();
-      const replyResolver = vi.fn(async () =>
-        markCommandReplyForDelivery({ text: "Shell command completed." }),
-      );
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          CommandAuthorized: authorized,
-          CommandSource: source,
-          CommandTurn: {
-            ...(source === "native"
-              ? ({ kind: "native", source: "native" } as const)
-              : ({ kind: "text-slash", source: "text" } as const)),
-            authorized,
-            commandName,
-            body,
-          },
-          SessionKey: sessionKey,
-          Body: body,
-          RawBody: body,
-          CommandBody: body,
-          BodyForAgent: body,
-        }),
-        cfg: {
-          diagnostics: { enabled: true },
-          session: { sendPolicy: { default: "allow" } },
-        } as OpenClawConfig,
-        dispatcher: createDispatcher(),
-        replyOptions: { abortSignal: callerAbort.signal },
-        replyResolver,
-      });
-
-      try {
-        await expect(
-          raceWithTimeoutResult(
-            dispatchPromise.then(() => "settled" as const),
-            100,
-            "pending" as const,
-          ),
-        ).resolves.toBe("pending");
-        expect(replyResolver).not.toHaveBeenCalled();
-      } finally {
-        callerAbort.abort();
-        activeOperation.complete();
-      }
-      await dispatchPromise;
-      expect(replyResolver).not.toHaveBeenCalled();
-      expect(getActiveReplyRunCount()).toBe(0);
-    },
-  );
-
-  it.each([
-    ["login", "/login cancel"],
-    ["reset", "/reset"],
-    ["new", "/new"],
-    ["reset", "/reset continue"],
-    ["new", "/new continue"],
-  ])(
-    "admits %s control (%s) past a pending command ticket while executable commands wait",
-    async (controlName, controlBody) => {
-      const sessionKey = "agent:main:login-ticket";
-      const releaseLogin = createDeferred();
-      const loginEntered = vi.fn();
-      const controlEntered = vi.fn();
-      const shellEntered = vi.fn();
-      const dispatchCommand = (
-        body: string,
-        commandName: string,
-        replyResolver: NonNullable<Parameters<typeof dispatchReplyFromConfig>[0]["replyResolver"]>,
-      ) =>
-        dispatchReplyFromConfig({
-          ctx: buildTestCtx({
-            Provider: "discord",
-            Surface: "discord",
-            CommandAuthorized: true,
-            CommandSource: "text",
-            CommandTurn: {
-              kind: "text-slash",
-              source: "text",
-              authorized: true,
-              commandName,
-              body,
-            },
-            SessionKey: sessionKey,
-            MessageSid: body,
-            Body: body,
-            RawBody: body,
-            CommandBody: body,
-            BodyForAgent: body,
-          }),
-          cfg: {
-            diagnostics: { enabled: true },
-            session: { sendPolicy: { default: "allow" } },
-          },
-          dispatcher: createDispatcher(),
-          replyResolver,
-        });
-      const login = dispatchCommand("/login openrouter", "login", async () => {
-        loginEntered();
-        await releaseLogin.promise;
-        return markCommandReplyForDelivery({ text: "Login ended." });
-      });
-      const pending = [login];
-      try {
-        await vi.waitFor(() => expect(loginEntered).toHaveBeenCalledOnce());
-        const shell = dispatchCommand("/bash echo ready", "bash", async () => {
-          shellEntered();
-          return markCommandReplyForDelivery({ text: "Shell command completed." });
-        });
-        pending.push(shell);
-        const control = dispatchCommand(controlBody, controlName, async () => {
-          controlEntered();
-          return markCommandReplyForDelivery({ text: "Control command completed." });
-        });
-        pending.push(control);
-
-        await vi.waitFor(() => expect(controlEntered).toHaveBeenCalledOnce());
-        expect(shellEntered).not.toHaveBeenCalled();
-        expect(replyRunRegistry.isActive(sessionKey)).toBe(true);
-        releaseLogin.resolve();
-        await Promise.all(pending);
-        expect(shellEntered).toHaveBeenCalledOnce();
-        expect(getActiveReplyRunCount()).toBe(0);
-      } finally {
-        releaseLogin.resolve();
-        await Promise.all(pending);
-      }
-    },
-  );
-
-  it("delivers a directive acknowledgement while its terminal path stays serialized", async () => {
-    const sessionKey = "agent:main:directive-reply-active";
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-    });
-    activeOperation.setPhase("running");
-
-    const acknowledgement = { text: "Thinking level set to high.", isStatusNotice: true };
-    const finalReply = { text: "The calculation is complete." };
+function commandFixture(source: "text" | "native", target: boolean) {
+  const key = target
+    ? "agent:main:telegram:group:status-target"
+    : "agent:main:command-reply-active";
+  const sourceKey = target ? "agent:main:telegram:slash:user-auth" : key;
+  const pending: ReturnType<typeof dispatchReplyFromConfig>[] = [];
+  const start = (
+    body: string,
+    replyResolver: Resolver,
+    overrides: Partial<MsgContext> = {},
+    replyOptions?: DispatchFromConfigParams["replyOptions"],
+  ) => {
     const dispatcher = createDispatcher();
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        CommandAuthorized: true,
-        CommandSource: "text",
-        CommandTurn: {
-          kind: "text-slash",
-          source: "text",
-          authorized: true,
-          commandName: "think",
-          body: "/think high",
-        },
-        SessionKey: sessionKey,
-        Body: "/think high",
-        RawBody: "/think high",
-        CommandBody: "/think high",
-        BodyForAgent: "/think high",
+    const authorized = overrides.CommandAuthorized ?? true;
+    const ctx = buildTestCtx({
+      CommandSource: source,
+      CommandAuthorized: authorized,
+      CommandTurn: createCommandTurnContext(source, {
+        authorized,
+        commandName: body.slice(1).split(" ")[0],
+        body,
       }),
-      cfg: {
-        diagnostics: { enabled: true },
-        session: { sendPolicy: { default: "allow" } },
-      } as OpenClawConfig,
-      dispatcher,
-      replyResolver: async (_resolverCtx, options) => {
-        await options?.onBlockReply?.(acknowledgement);
-        return finalReply;
-      },
+      Body: body,
+      RawBody: body,
+      CommandBody: body,
+      BodyForAgent: body,
+      SessionKey: sourceKey,
+      ...(target
+        ? { Provider: "telegram", Surface: "telegram", CommandTargetSessionKey: key }
+        : {}),
+      ...overrides,
     });
+    const work = dispatchReplyFromConfig({
+      ctx,
+      dispatcher,
+      replyResolver,
+      replyOptions,
+      cfg: { diagnostics: { enabled: true }, session: { sendPolicy: { default: "allow" } } },
+    });
+    pending.push(work);
+    return { work, dispatcher };
+  };
+  return {
+    key,
+    sourceKey,
+    start,
+    close: async () => {
+      await Promise.all(pending);
+      expect(listActiveReplyRunSessionKeys()).toEqual([]);
+    },
+  };
+}
 
+async function withActive(
+  source: "text" | "native",
+  target: boolean,
+  run: (
+    fixture: ReturnType<typeof commandFixture> & {
+      operation: ReturnType<typeof createReplyOperation>;
+    },
+  ) => Promise<void>,
+) {
+  const fixture = commandFixture(source, target);
+  const operation = createReplyOperation({
+    sessionKey: fixture.key,
+    sessionId: target ? "status-target-active-session" : "active-session",
+    resetTriggered: false,
+  });
+  operation.setPhase("running");
+  onTestFinished(() => operation.complete());
+  try {
+    await run({ ...fixture, operation });
+  } finally {
+    operation.complete();
+    await fixture.close();
+  }
+}
+
+it.each([
+  ["text", "/status", true, false],
+  ["native", "/status", true, false],
+  ["native", "/status", true, true],
+  ["native", "/compact", true, false],
+  ["native", "/help", false, false],
+] as const)("admits %s %s (authorized=%s, target=%s)", async (source, body, authorized, target) => {
+  await withActive(source, target, async ({ key, sourceKey, operation, start }) => {
+    const waiting = createDeferred();
+    const wait = controllerWait.waitForSessionRunIdle;
+    vi.spyOn(controllerWait, "waitForSessionRunIdle").mockImplementation((sessionKey, ...args) => {
+      if (sessionKey === key) {
+        waiting.resolve();
+      }
+      return wait(sessionKey, ...args);
+    });
+    const acknowledgement = {
+      text: target ? "🧠 Model: mock | ⚙️ Status: ok" : "Command completed.",
+    };
+    const resolver: Resolver = async (_ctx, options) => {
+      const binding = readReplySourceInput(options);
+      if (target) {
+        expect(binding?.mailbox.owner.aliases.has(sourceKey)).toBe(true);
+      }
+      if (target || body !== "/status") {
+        expect(options?.replyOperation).toBeUndefined();
+        expect(binding?.claim).toBeUndefined();
+      }
+      return target ? acknowledgement : markCommandReplyForDelivery(acknowledgement);
+    };
+    const { work, dispatcher } = start(body, resolver, { CommandAuthorized: authorized });
+    expect(await Promise.race([work, waiting.promise])).toMatchObject({ queuedFinal: true });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(acknowledgement);
+    expect(getSessionControllerOperation(key)).toBe(operation);
+    expect(operation.result).toBeNull();
+  });
+});
+
+it.each([
+  ["/bash echo unsafe", true],
+  ["/reset", false],
+] as const)("blocks %s behind active admission (authorized=%s)", async (body, authorized) => {
+  const resolver = vi.fn(async () =>
+    markCommandReplyForDelivery({ text: "Shell command completed." }),
+  );
+  await withActive("text", false, async ({ start }) => {
+    const abort = new AbortController();
+    const { work } = start(
+      body,
+      resolver,
+      { CommandAuthorized: authorized },
+      { abortSignal: abort.signal },
+    );
     try {
-      await vi.waitFor(() => {
-        expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(acknowledgement);
-      });
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-      expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
       await expect(
         raceWithTimeoutResult(
-          dispatchPromise.then(() => "settled" as const),
+          work.then(() => "settled" as const),
           100,
           "pending" as const,
         ),
       ).resolves.toBe("pending");
+      expect(resolver).not.toHaveBeenCalled();
     } finally {
-      activeOperation.complete();
+      abort.abort();
     }
-    await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(finalReply);
-    expect(getActiveReplyRunCount()).toBe(0);
   });
+  expect(resolver).not.toHaveBeenCalled();
+});
 
-  it("admits authorized native /status on the source while the target has an active run", async () => {
-    const sourceSessionKey = "agent:main:telegram:slash:user-auth";
-    const targetSessionKey = "agent:main:telegram:group:status-target";
-    const targetOperation = createReplyOperation({
-      sessionKey: targetSessionKey,
-      sessionId: "status-target-active-session",
-      resetTriggered: false,
+it.each(["/login cancel", "/reset", "/new continue"])(
+  "admits %s past a command ticket while executable commands wait",
+  async (body) => {
+    const { key, start, close } = commandFixture("text", false);
+    const release = createDeferred();
+    const loginStarted = createDeferred();
+    const controlStarted = createDeferred();
+    const shellEntered = vi.fn();
+    const dispatch = (command: string, resolver: Resolver) =>
+      start(command, resolver, {
+        Provider: "discord",
+        Surface: "discord",
+        MessageSid: command,
+      }).work;
+    const login = dispatch("/login openrouter", async () => {
+      loginStarted.resolve();
+      await release.promise;
+      return markCommandReplyForDelivery({ text: "Login ended." });
     });
-    targetOperation.setPhase("running");
+    try {
+      await awaitGateBeforeSettlement(
+        loginStarted.promise,
+        login,
+        "login settled before its resolver",
+      );
+      void dispatch("/bash echo ready", async () => {
+        shellEntered();
+        return markCommandReplyForDelivery({ text: "Shell command completed." });
+      });
+      const control = dispatch(body, async () => {
+        controlStarted.resolve();
+        return markCommandReplyForDelivery({ text: "Control command completed." });
+      });
+      await awaitGateBeforeSettlement(
+        controlStarted.promise,
+        control,
+        "control settled before its resolver",
+      );
+      expect(shellEntered).not.toHaveBeenCalled();
+      expect(isSessionRunActiveForKey(key)).toBe(true);
+    } finally {
+      release.resolve();
+      await close();
+    }
+    expect(shellEntered).toHaveBeenCalledOnce();
+  },
+);
 
-    const replyResolver = vi.fn(async () => ({
-      text: "🧠 Model: mock | ⚙️ Status: ok",
-    }));
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      CommandSource: "native",
-      CommandAuthorized: true,
-      CommandTurn: {
-        kind: "native",
-        source: "native",
-        authorized: true,
-        commandName: "status",
-        body: "/status",
-      },
-      SessionKey: sourceSessionKey,
-      CommandTargetSessionKey: targetSessionKey,
-      Body: "/status",
-      RawBody: "/status",
-      CommandBody: "/status",
-      BodyForAgent: "/status",
+it("lets text /steer reach queue policy beside its active turn", async ({ signal }) => {
+  await withActive("text", false, async ({ key, operation, start }) => {
+    const reached = createDeferred<boolean>();
+    start("/steer use the corrected approach", async () => {
+      reached.resolve(operation.result === null);
+      return undefined;
     });
+    expect(await withinTest(reached.promise, signal)).toBe(true);
+    expect(getSessionControllerOperation(key)).toBe(operation);
+  });
+});
 
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
+it("delivers directive output without claiming the active turn", async () => {
+  await withActive("text", false, async ({ key, operation, start }) => {
+    const block = { text: "Thinking level set to high.", isStatusNotice: true };
+    const final = { text: "The calculation is complete." };
+    const { work, dispatcher } = start("/think high", async (_ctx, options) => {
+      await options?.onBlockReply?.(block);
+      return final;
     });
-
-    type DispatchOutcome =
-      | { status: "settled"; result: Awaited<typeof dispatchPromise> }
-      | { status: "pending" };
-    const outcome = await raceWithTimeoutResult<DispatchOutcome>(
-      dispatchPromise.then((result) => ({ status: "settled" as const, result })),
-      200,
-      { status: "pending" as const },
-    );
-    expect(outcome).toMatchObject({
-      status: "settled",
-      result: {
-        queuedFinal: true,
-      },
-    });
-    expect(replyResolver).toHaveBeenCalledOnce();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: "🧠 Model: mock | ⚙️ Status: ok",
-    });
-    expect(targetOperation.result).toBeNull();
-    expect(replyRunRegistry.get(targetSessionKey)).toBe(targetOperation);
-    targetOperation.complete();
-    expect(getActiveReplyRunCount()).toBe(0);
+    await vi.waitFor(() => expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(block));
+    await expect(work).resolves.toMatchObject({ queuedFinal: true });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(final);
+    expect(getSessionControllerOperation(key)).toBe(operation);
+    expect(operation.result).toBeNull();
   });
 });

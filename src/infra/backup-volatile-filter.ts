@@ -1,19 +1,21 @@
-// Filters volatile files from backup manifests.
 import path from "node:path";
 import { isLegacyAuditMigrationBackupPath } from "./backup-audit-paths.js";
 
-/**
- * Paths that are known to change during a live backup and commonly trigger
- * tar EOF errors. These files are actively appended to (logs, sockets, pid
- * markers) while `tar.c()` is reading them, which races with the size recorded
- * at `lstat()` time.
- *
- * Skipping them is safe: they are either recreated on startup, are transient
- * by nature, or have durable equivalents elsewhere in state. Snapshotting a
- * partial tail of a live log has no restoration value.
- */
-
+// These live-mutation paths are transient or have durable equivalents in state;
+// archiving their changing bytes would race the size captured by the tar header.
 const CHROMIUM_SINGLETON_FILES = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
+const VOLATILE_DIRECTORY_RULES = [
+  // Older installs keep the obsolete Control UI cache until Doctor removes it.
+  [["sandbox/skills-workspaces", "cache/control-ui-assets", "tmp/plugin-captures"], undefined],
+  [
+    ["sessions", "cron/runs", "logs"],
+    [".jsonl", ".log"],
+  ],
+  [
+    ["delivery-queue", "session-delivery-queue"],
+    [".json", ".delivered", ".tmp"],
+  ],
+] as const;
 const SQLITE_MEMORY_TRANSIENT_PATH_PATTERN =
   /(?:^|\/)(?:[^/]+\.sqlite\.(?:generation-(?:lock|writer)|reindex-lock)\.sqlite|[^/]+\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-wal|-shm|-journal)?$/iu;
 
@@ -49,35 +51,10 @@ export function isTransientSqliteBackupPath(filePath: string): boolean {
   return SQLITE_MEMORY_TRANSIENT_PATH_PATTERN.test(normalizedPath);
 }
 
-function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string): boolean {
-  const agentsRoot = path.posix.join(stateDirPosix, "agents");
-  if (!isUnder(filePosix, agentsRoot)) {
-    return false;
-  }
-  const relative = path.posix.relative(agentsRoot, filePosix);
-  const parts = relative.split("/").filter(Boolean);
-  return parts.length >= 3 && parts[1] === "sessions";
-}
-
-function isManagedBrowserSingletonPath(filePosix: string, stateDirPosix: string): boolean {
-  const browserRoot = path.posix.join(stateDirPosix, "browser");
-  if (!isUnder(filePosix, browserRoot)) {
-    return false;
-  }
-  const parts = path.posix.relative(browserRoot, filePosix).split("/").filter(Boolean);
-  return (
-    parts.length === 3 && parts[1] === "user-data" && CHROMIUM_SINGLETON_FILES.has(parts[2] ?? "")
-  );
-}
-
-function filePathCandidates(input: string): string[] {
-  const normalized = normalizePosix(input);
-  if (normalized.startsWith("/") || /^[A-Za-z]:\//u.test(normalized)) {
-    return [normalized];
-  }
-  // node-tar may pass absolute input paths to filters without the leading
-  // slash, even when the source list used absolute paths.
-  return [normalized, normalizePosix(`/${normalized}`)];
+function relativePathParts(filePosix: string, root: string): string[] {
+  return isUnder(filePosix, root)
+    ? path.posix.relative(root, filePosix).split("/").filter(Boolean)
+    : [];
 }
 
 type VolatileFilterPlan = {
@@ -85,25 +62,11 @@ type VolatileFilterPlan = {
   stateDirs: string[];
 };
 
-/**
- * Returns true if the given absolute path should be skipped during backup
- * because it is a live-mutation target.
- *
- * Rules:
- *   - `{stateDir}/sessions/**`/`*.{jsonl,log}` (legacy)
- *   - `{stateDir}/agents/<agentId>/sessions/**`/`*.{jsonl,log}`
- *   - `{stateDir}/cron/runs/**`/`*.{jsonl,log}`
- *   - `{stateDir}/logs/**`/`*.{jsonl,log}`
- *   - `{stateDir}/{delivery-queue,session-delivery-queue}/**`/`*.{json,delivered,tmp}`
- *   - `{stateDir}/browser/<profile>/user-data/Singleton{Cookie,Lock,Socket}`
- *   - `{stateDir}/sandbox/skills-workspaces/**`
- *   - `{stateDir}/**`/`*.{sock,pid,tmp}`
- */
 export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterPlan): boolean {
   if (!absolutePath) {
     return false;
   }
-  const candidates = filePathCandidates(absolutePath);
+  const filePosix = normalizePosix(absolutePath);
 
   for (const stateDir of plan.stateDirs) {
     if (!stateDir) {
@@ -111,69 +74,41 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
     }
     const stateDirPosix = normalizePosix(stateDir);
 
-    for (const filePosix of candidates) {
+    if (
+      isUnder(filePosix, stateDirPosix) &&
+      isLegacyAuditMigrationBackupPath(filePosix, stateDirPosix)
+    ) {
+      return true;
+    }
+    const browserParts = relativePathParts(filePosix, path.posix.join(stateDirPosix, "browser"));
+    if (
+      browserParts.length === 3 &&
+      browserParts[1] === "user-data" &&
+      CHROMIUM_SINGLETON_FILES.has(browserParts[2] ?? "")
+    ) {
+      return true;
+    }
+
+    for (const [directories, extensions] of VOLATILE_DIRECTORY_RULES) {
       if (
-        isUnder(filePosix, stateDirPosix) &&
-        isLegacyAuditMigrationBackupPath(filePosix, stateDirPosix)
+        (!extensions || hasExtension(filePosix, extensions)) &&
+        directories.some((directory) =>
+          isUnder(filePosix, path.posix.join(stateDirPosix, directory)),
+        )
       ) {
         return true;
       }
-      if (isManagedBrowserSingletonPath(filePosix, stateDirPosix)) {
+    }
+
+    if (hasExtension(filePosix, [".jsonl", ".log"])) {
+      const agentParts = relativePathParts(filePosix, path.posix.join(stateDirPosix, "agents"));
+      if (agentParts.length >= 3 && agentParts[1] === "sessions") {
         return true;
       }
+    }
 
-      const sandboxSkillsRoot = path.posix.join(stateDirPosix, "sandbox", "skills-workspaces");
-      if (isUnder(filePosix, sandboxSkillsRoot)) {
-        return true;
-      }
-
-      // Rebuildable, manifest-verified bundles bridge already-open Control UI
-      // documents across updates; restoring them would only copy stale package bytes.
-      const controlUiAssetCacheRoot = path.posix.join(stateDirPosix, "cache", "control-ui-assets");
-      if (isUnder(filePosix, controlUiAssetCacheRoot)) {
-        return true;
-      }
-
-      const pluginCaptureRoot = path.posix.join(stateDirPosix, "tmp", "plugin-captures");
-      if (isUnder(filePosix, pluginCaptureRoot)) {
-        return true;
-      }
-
-      const sessionsRoot = path.posix.join(stateDirPosix, "sessions");
-      if (isUnder(filePosix, sessionsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
-        return true;
-      }
-
-      if (
-        isAgentSessionTranscriptPath(filePosix, stateDirPosix) &&
-        hasExtension(filePosix, [".jsonl", ".log"])
-      ) {
-        return true;
-      }
-
-      const cronRunsRoot = path.posix.join(stateDirPosix, "cron", "runs");
-      if (isUnder(filePosix, cronRunsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
-        return true;
-      }
-
-      const logsRoot = path.posix.join(stateDirPosix, "logs");
-      if (isUnder(filePosix, logsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
-        return true;
-      }
-
-      for (const queueDir of ["delivery-queue", "session-delivery-queue"]) {
-        const queueRoot = path.posix.join(stateDirPosix, queueDir);
-        if (
-          isUnder(filePosix, queueRoot) &&
-          hasExtension(filePosix, [".json", ".delivered", ".tmp"])
-        ) {
-          return true;
-        }
-      }
-
-      if (isUnder(filePosix, stateDirPosix) && isTransientBackupPath(filePosix)) {
-        return true;
-      }
+    if (isUnder(filePosix, stateDirPosix) && isTransientBackupPath(filePosix)) {
+      return true;
     }
   }
 

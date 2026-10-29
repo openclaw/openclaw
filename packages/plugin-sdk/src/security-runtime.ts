@@ -1,5 +1,3 @@
-// Public package facade for security runtime helpers.
-
 export {
   appendRegularFile,
   assertNoSymlinkParents,

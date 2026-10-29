@@ -1,8 +1,8 @@
-// Nostr plugin module owns durable ingress identity and legacy-state migration.
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
-import { isRecord as isNostrIngressRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-export { isNostrIngressRecord };
+import {
+  createChannelIngressError,
+  type ChannelIngressQueue,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const NOSTR_INGRESS_PAYLOAD_VERSION = 1;
 
@@ -12,16 +12,10 @@ export type NostrIngressPayload = {
   rawEvent: string;
 };
 
-export class NostrIngressPermanentError extends Error {
-  constructor(
-    readonly reason: string,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "NostrIngressPermanentError";
-  }
-}
+export const NostrIngressPermanentError = createChannelIngressError<string>(
+  "NostrIngressPermanentError",
+  { withReason: true },
+);
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value === "string" && value.trim()) {
@@ -31,7 +25,7 @@ function requiredString(value: unknown, field: string): string {
 }
 
 export function inspectNostrIngressEvent(event: unknown): { eventId: string; laneKey: string } {
-  if (!isNostrIngressRecord(event)) {
+  if (!isRecord(event)) {
     throw new NostrIngressPermanentError("invalid-event", "Nostr event must be an object.");
   }
   return {
@@ -44,10 +38,8 @@ export function inspectNostrIngressEvent(event: unknown): { eventId: string; lan
 export async function migrateNostrLegacyRecentEventIds(params: {
   queue: ChannelIngressQueue<NostrIngressPayload>;
   eventIds: readonly string[];
-  migratedAt?: number;
-}): Promise<number> {
-  const migratedAt = params.migratedAt ?? Date.now();
-  let migrated = 0;
+}): Promise<void> {
+  const migratedAt = Date.now();
   for (const eventId of new Set(params.eventIds)) {
     if (!eventId.trim()) {
       continue;
@@ -66,8 +58,5 @@ export async function migrateNostrLegacyRecentEventIds(params: {
         throw new Error(`Failed to migrate Nostr replay event ${eventId}.`);
       }
     }
-    // Existing ingress state already rejects the retired LRU's replay.
-    migrated += 1;
   }
-  return migrated;
 }
