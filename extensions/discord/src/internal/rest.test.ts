@@ -290,5 +290,24 @@ function readRequestUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 
-// Claimed for #187537 by scripts/claim-window.sh; replaced by the real regression.
-it.todo("settles a queued request when its caller aborts");
+it("settles a queued request when its caller aborts", async () => {
+  // The request is parked behind a long retry delay; cancelling the turn must not
+  // wait for it. Synthetic 429 only, no live Discord account.
+  const controller = new AbortController();
+  const fetchSpy = vi.fn(async () => rateLimitResponse(60, { "Retry-After": "60" }));
+  const client = requestClient(fetchSpy as unknown as typeof globalThis.fetch);
+
+  const pending = client.post(
+    "/channels/1/messages",
+    { content: "hello" },
+    undefined,
+    controller.signal,
+  );
+  await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+  const settled = vi.fn();
+  void pending.then(settled, settled);
+  controller.abort();
+
+  await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1), { timeout: 1_000 });
+  expect(fetchSpy).toHaveBeenCalledTimes(1);
+});
