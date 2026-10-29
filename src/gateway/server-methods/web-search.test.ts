@@ -127,6 +127,32 @@ it.each([
   expect(config.tools?.web?.search?.cacheTtlMinutes).toBe(15);
 });
 
+it.each([
+  [60_000, "success"],
+  [-60_000, "success"],
+  [60_000, "error"],
+  [-60_000, "error"],
+] as const)("reports elapsed latency after a %i ms wall-clock step (%s)", async (step, outcome) => {
+  let wallNow = 1_700_000_000_000;
+  let elapsedNow = 1_000;
+  const wallClock = vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+  const elapsedClock = vi.spyOn(performance, "now").mockImplementation(() => elapsedNow);
+  try {
+    mocks.search.mockImplementationOnce(async () => {
+      wallNow += step;
+      elapsedNow += 125;
+      if (outcome === "error") {
+        throw new Error("403 reflected-private-key");
+      }
+      return { provider: "example", result: sourceResult };
+    });
+    await expectProbe({ status: outcome === "success" ? "ok" : "error", latencyMs: 125 });
+  } finally {
+    wallClock.mockRestore();
+    elapsedClock.mockRestore();
+  }
+});
+
 it("probes only the configured service beside an external harness", async () => {
   runtimeMocks.runtime.mockReturnValue({ id: "custom-harness" });
   await expectFailure(probe(), "INVALID_REQUEST");
