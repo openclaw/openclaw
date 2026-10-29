@@ -11,7 +11,11 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
-import { containsEnvVarReference } from "./env-substitution.js";
+import {
+  containsEnvVarReference,
+  renderEnvTemplateToken,
+  scanEnvTemplateTokens,
+} from "./env-substitution.js";
 import { REDACTED_SENTINEL } from "./redact-sentinel.js";
 import {
   replaceSensitiveValuesInRaw,
@@ -22,7 +26,6 @@ import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 const log = createSubsystemLogger("config/redaction");
-const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 
 function isSensitivePath(path: string): boolean {
   if (path.endsWith("[]")) {
@@ -33,7 +36,16 @@ function isSensitivePath(path: string): boolean {
 
 function isConcreteSensitiveString(value: string): boolean {
   const trimmed = value.trim();
-  return trimmed !== "" && !ENV_VAR_PLACEHOLDER_PATTERN.test(trimmed);
+  const reference = scanEnvTemplateTokens(trimmed)[0];
+  const secretFreeReference =
+    reference?.kind === "substitution" &&
+    !reference.defaultValue &&
+    renderEnvTemplateToken(reference) === trimmed;
+  return trimmed !== "" && !secretFreeReference;
+}
+
+function hasAuthoredSecretFallback(value: string): boolean {
+  return scanEnvTemplateTokens(value).some((token) => Boolean(token.defaultValue));
 }
 
 function isWholeObjectSensitivePath(path: string): boolean {
@@ -325,14 +337,21 @@ export function redactConfigSnapshot(
   // different values, so their redaction must not contribute to this collection.
   const sensitiveValues: string[] = [];
   const redactedConfig = redactObject(snapshot.config, context, sensitiveValues);
-  const redactedParsed = snapshot.parsed ? redactObject(snapshot.parsed, context) : snapshot.parsed;
-  let redactedRaw = snapshot.raw
-    ? replaceSensitiveValuesInRaw({
-        raw: snapshot.raw,
-        sensitiveValues,
-        redactedSentinel: REDACTED_SENTINEL,
-      })
-    : null;
+  const authoredSensitiveValues: string[] = [];
+  const redactedParsed = snapshot.parsed
+    ? redactObject(snapshot.parsed, context, authoredSensitiveValues)
+    : snapshot.parsed;
+  // Authored fallbacks can differ from resolved secrets and be escaped in JSON5.
+  // Withhold that raw view; the structured view still supports sentinel restoration.
+  const rawHasSecretFallback = authoredSensitiveValues.some(hasAuthoredSecretFallback);
+  let redactedRaw =
+    snapshot.raw && !rawHasSecretFallback
+      ? replaceSensitiveValuesInRaw({
+          raw: snapshot.raw,
+          sensitiveValues,
+          redactedSentinel: REDACTED_SENTINEL,
+        })
+      : null;
   if (
     redactedRaw &&
     shouldFallbackToStructuredRawRedaction({
