@@ -444,9 +444,10 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
 });
 
 describe("gateway steer contract after the injection-start fence", () => {
-  it.each([false, true])(
-    "keeps work alive after an uncertain steer (statusOnly=%s)",
+  it.each([false, true, "prepared", "unsupported"] as const)(
+    "keeps uncertain custody and the incumbent task-suggestion surface (%s)",
     async (statusOnly) => {
+      const browser = typeof statusOnly === "string";
       const operation = createReplyOperation({
         sessionKey: "agent:main:dashboard:s",
         sessionId: "session-1",
@@ -460,11 +461,25 @@ describe("gateway steer contract after the injection-start fence", () => {
       });
       onTestFinished(() => operation.complete());
       const starter = makeStarterParams();
-      if (statusOnly) {
+      if (statusOnly === true) {
         starter.turn.ctx.InputProvenance = {
           kind: "internal_system",
           sourceTool: "progress_card_refresh",
         };
+      }
+      starter.request.supportsTaskSuggestions = browser;
+      if (browser) {
+        vi.mocked(prepareReplyMessageContinuation).mockResolvedValueOnce(
+          statusOnly === "prepared"
+            ? {
+                kind: "prepared",
+                fingerprint: "steer-authority",
+                read: () => "steer-authority",
+                prepareCurrent: async () => {},
+                release() {},
+              }
+            : { kind: "unsupported" },
+        );
       }
       const cancel = vi.fn();
       operation.bindToolAuthoritySnapshot({
@@ -477,7 +492,7 @@ describe("gateway steer contract after the injection-start fence", () => {
         async (_text, options, assertCurrent) => {
           assertCurrent();
           options?.onQueueAccepted?.(true);
-          return { transcriptCommit: "unconfirmed", errorMessage };
+          return browser ? undefined : { transcriptCommit: "unconfirmed", errorMessage };
         },
       );
       operation.attachBackend({
@@ -503,6 +518,15 @@ describe("gateway steer contract after the injection-start fence", () => {
         await createChatSendMessageInjectionStarter(starter)(),
         "steering attempt",
       );
+      if (browser) {
+        await expect(attempt.outcome).resolves.toEqual(
+          statusOnly === "prepared"
+            ? { status: "accepted" }
+            : { status: "rejected", reason: "task_suggestion_delivery_mode_mismatch" },
+        );
+        expect(queueMessage).toHaveBeenCalledTimes(statusOnly === "prepared" ? 1 : 0);
+        return;
+      }
       await expect(attempt.outcome).resolves.toMatchObject({
         status: "indeterminate",
         errorMessage,
@@ -537,82 +561,6 @@ describe("gateway steer contract after the injection-start fence", () => {
   );
 });
 
-describe("same-requester steering into a prepared continuation", () => {
-  it.each(["prepared", "unsupported"] as const)(
-    "keeps the incumbent task-suggestion surface for a capable browser steer (%s)",
-    async (join) => {
-      const operation = createReplyOperation({
-        sessionKey: "agent:main:dashboard:s",
-        sessionId: "session-1",
-        target: captureSessionTarget({
-          storeScope: "/synthetic/chat-injection",
-          sessionKey: "agent:main:dashboard:s",
-          incarnation: "session-1",
-          agentId: "main",
-        }),
-        resetTriggered: false,
-      });
-      onTestFinished(() => operation.complete());
-      const starter = makeStarterParams();
-      starter.request.supportsTaskSuggestions = true;
-      operation.bindToolAuthoritySnapshot({
-        fingerprint: () => "steer-authority",
-        project: () => "steer-authority",
-      });
-      operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
-      const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
-        async (_text, options, assertCurrent) => {
-          assertCurrent();
-          options?.onQueueAccepted?.(true);
-        },
-      );
-      // An internal completion continuation negotiates no task-suggestion mode.
-      operation.attachBackend({
-        kind: "embedded",
-        runId: "completion-run",
-        supportsTranscriptCommitWait: true,
-        toolAuthorityFingerprint: "steer-authority",
-        cancel() {},
-        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
-      });
-      operation.setPhase("running");
-      starter.target = expectDefined(
-        captureReplyMessageInjectionTarget(operation),
-        "active continuation target",
-      );
-      vi.mocked(prepareReplyMessageContinuation).mockResolvedValueOnce(
-        join === "prepared"
-          ? {
-              kind: "prepared",
-              fingerprint: "steer-authority",
-              read: () => "steer-authority",
-              prepareCurrent: async () => {},
-              release() {},
-            }
-          : { kind: "unsupported" },
-      );
-      vi.mocked(beginReplyMessageInjectionTarget).mockImplementationOnce(
-        beginActualReplyMessageInjectionTarget,
-      );
-      const attempt = expectDefined(
-        await createChatSendMessageInjectionStarter(starter)(),
-        "steering attempt",
-      );
-      if (join === "prepared") {
-        await expect(attempt.outcome).resolves.toMatchObject({ status: "accepted" });
-        expect(queueMessage).toHaveBeenCalledOnce();
-      } else {
-        // Without a prepared same-requester join, the caller's own surface must still match.
-        await expect(attempt.outcome).resolves.toEqual({
-          status: "rejected",
-          reason: "task_suggestion_delivery_mode_mismatch",
-        });
-        expect(queueMessage).not.toHaveBeenCalled();
-      }
-    },
-  );
-});
-
 describe("createChatSendMessageInjectionStarter", () => {
   function makeSteerStarterParams(params?: {
     body?: string;
@@ -624,70 +572,33 @@ describe("createChatSendMessageInjectionStarter", () => {
     replyOptionImages?: ChatImageContent[];
     isInternalTextSlashCommandTurn?: boolean;
   }): Parameters<typeof createChatSendMessageInjectionStarter>[0] {
-    const sessionKey = "agent:main:steer-test";
-    const sessionId = "steer-test-session";
+    const starter = makeStarterParams();
     const rawMessage = params?.rawMessage ?? params?.body ?? "raw steer";
-    const operation = createReplyOperation({
-      sessionKey,
-      sessionId,
-      target: captureSessionTarget({
-        storeScope: "/synthetic/chat-injection",
-        sessionKey,
-        incarnation: sessionId,
-        agentId: "main",
-      }),
-      resetTriggered: false,
-    });
-    onTestFinished(() => operation.complete());
-    const sourceRef = reserveTestSource(sessionKey, sessionId);
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      runId: "active-run",
-      supportsQueueMessageImages: true,
-      cancel: vi.fn(),
-      messageInjection: {
-        isAvailable: () => true,
-        queueMessage: vi.fn(async () => {}),
+    starter.request = {
+      p: {
+        sessionKey: starter.session.sessionKey,
+        message: rawMessage,
+        idempotencyKey: "steer-input",
       },
-    });
-    const target = expectDefined(
-      captureReplyMessageInjectionTarget(operation),
-      "Expected the running test operation to accept steering",
-    );
-
-    return {
-      target,
-      sourceRef,
-      abortSignal: new AbortController().signal,
-      request: {
-        p: { sessionKey, message: rawMessage, idempotencyKey: "steer-input" },
-        rawMessage,
-        supportsTaskSuggestions: false,
-      },
-      session: {
-        agentId: "main",
-        resolvedSessionModel: { provider: "openai", model: "test-model" },
-        cfg: {},
-        entry: undefined,
-        sessionKey,
-        storePath: "",
-        clientRunId: "active-run",
-      },
-      turn: {
-        ctx: { Provider: "dashboard", Body: params?.body, media: params?.media },
-        isInternalTextSlashCommandTurn: params?.isInternalTextSlashCommandTurn ?? false,
-        replyOptionImages: params?.replyOptionImages ?? [],
-        replyOptionMedia: [],
-      },
-      imageOrder: [],
-      documentContext: params?.documentContext,
-      userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-        input: { text: params?.body ?? rawMessage, media: params?.media },
-        target: createTestUserTurnTranscriptTarget({ sessionKey, sessionId }),
-      }),
-      logGateway: { warn: () => {} } as never,
+      rawMessage,
+      supportsTaskSuggestions: false,
     };
+    starter.session.resolvedSessionModel = { provider: "openai", model: "test-model" };
+    starter.turn = {
+      ctx: { Provider: "dashboard", Body: params?.body, media: params?.media },
+      isInternalTextSlashCommandTurn: params?.isInternalTextSlashCommandTurn ?? false,
+      replyOptionImages: params?.replyOptionImages ?? [],
+      replyOptionMedia: [],
+    };
+    starter.documentContext = params?.documentContext;
+    starter.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: { text: params?.body ?? rawMessage, media: params?.media },
+      target: createTestUserTurnTranscriptTarget({
+        sessionKey: starter.session.sessionKey,
+        sessionId: "session-1",
+      }),
+    });
+    return starter;
   }
 
   async function expectSteer(
