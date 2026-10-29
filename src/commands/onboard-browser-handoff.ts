@@ -171,13 +171,14 @@ export async function runBrowserHatchHandoff(params: {
         progress = params.prompter.progress(t("wizard.guided.controlUiPreparing"));
       },
     });
-    if (!document.ready || getAsyncWorkSignal()?.aborted) {
+    if (!document.ready) {
       return false;
     }
   } catch {
     return false;
   } finally {
     progress?.stop();
+    getAsyncWorkSignal()?.throwIfAborted();
   }
 
   const baseline = await probeDashboardPresence(target, HANDOFF_PROBE_TIMEOUT_MS);
