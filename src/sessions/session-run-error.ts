@@ -1,6 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
+import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import {
+  renderAssistantRequestFailureCopy,
+  renderRecordedAssistantFailureCopy,
+} from "../agents/failover/assistant-request-failure-copy.js";
 import { renderCodexAppServerFailureCopy } from "../agents/failover/user-copy.js";
 import {
   appendSessionTranscriptReport,
@@ -9,8 +12,9 @@ import {
 import type { CustomMessageReportAppend } from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
-import { sanitizeSessionRunError } from "./session-run-error-format.js";
+import { sanitizeSessionRunError, truncateSessionRunError } from "./session-run-error-format.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
 const RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE = "run-failed-before-reply";
@@ -30,15 +34,18 @@ export async function recordGatewaySessionRunFailure(
 ): Promise<void> {
   const { runId } = params;
   const storageFailure = classifyGatewayStorageFailure(params.error);
-  const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
+  const message = sanitizeUserFacingText(formatErrorMessage(params.error), { errorContext: true });
+  const sanitized = sanitizeSessionRunError(params.error) || "unknown error";
+  const error = truncateSessionRunError(sanitized, 512);
   const report: CustomMessageReportAppend = {
     customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
     content:
       params.errorKind === "state_contention"
         ? STATE_CONTENTION_SUMMARY
         : (renderAssistantRequestFailureCopy({ storageFailure }) ??
-          renderCodexAppServerFailureCopy(error) ??
-          `Your request couldn't be completed: ${error}`),
+          renderCodexAppServerFailureCopy(sanitized) ??
+          renderRecordedAssistantFailureCopy({ errorMessage: message }) ??
+          "Your request couldn't be completed."),
     display: params.suppressErrorNotice !== true,
     excludeFromContext: true,
     details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },

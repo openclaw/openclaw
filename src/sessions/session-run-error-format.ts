@@ -13,6 +13,20 @@ export function sanitizeSessionRunError(error: unknown): string {
   return redactSensitiveText(text, { mode: "tools" });
 }
 
+export function truncateSessionRunError(
+  error: string,
+  maxChars = SESSION_RUN_ERROR_MAX_CHARS,
+): string {
+  if (error.length <= maxChars) {
+    return error;
+  }
+  // Keep both the operation and terminal diagnosis when warnings fill the middle.
+  const marker = " ... ";
+  const headChars = Math.floor((maxChars - marker.length) / 3);
+  const tailChars = maxChars - marker.length - headChars;
+  return `${sliceUtf16Safe(error, 0, headChars).trimEnd()}${marker}${sliceUtf16Safe(error, -tailChars).trimStart()}`;
+}
+
 export function resolveSessionRunError(
   outcome: { error?: string; errorKind?: unknown },
   status: SessionRunStatus,
@@ -30,12 +44,5 @@ export function resolveSessionRunError(
   const error =
     renderStorageFailureSummary(classifyGatewayStorageFailure(outcome.error)) ??
     sanitizeSessionRunError(outcome.error);
-  if (error.length <= SESSION_RUN_ERROR_MAX_CHARS) {
-    return error || undefined;
-  }
-  // Nested failure wrappers must leave room for the terminal diagnosis in session rows.
-  const marker = " ... ";
-  const headChars = Math.floor((SESSION_RUN_ERROR_MAX_CHARS - marker.length) / 3);
-  const tailChars = SESSION_RUN_ERROR_MAX_CHARS - marker.length - headChars;
-  return `${sliceUtf16Safe(error, 0, headChars).trimEnd()}${marker}${sliceUtf16Safe(error, -tailChars).trimStart()}`;
+  return truncateSessionRunError(error) || undefined;
 }

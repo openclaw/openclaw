@@ -32,7 +32,7 @@ it.each([
       code: "EACCES",
     }),
     '{"code":"EACCES"}',
-    'Your request couldn\'t be completed: {"code":"EACCES"}',
+    "Your request couldn't be completed.",
   ],
 ] as const)(
   "appends failure copy and retains its diagnostic: %s",

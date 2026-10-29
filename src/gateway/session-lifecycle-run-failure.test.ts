@@ -401,7 +401,7 @@ describe("durable pre-reply run failure", () => {
       expect(h.chat()[0]?.[1]).not.toHaveProperty("suppressErrorNotice");
       expect(await reports()).toMatchObject([
         {
-          content: `Your request couldn't be completed: ${notice}`,
+          content: "Your request couldn't be completed.",
           display: true,
           details: { runId, error: notice },
         },
@@ -557,7 +557,7 @@ describe("durable pre-reply run failure", () => {
         {
           type: "custom_message",
           customType: "run-failed-before-reply",
-          content: `Your request couldn't be completed: ${error}`,
+          content: "Your request couldn't be completed.",
           display: true,
           details: { runId, error },
         },
@@ -591,7 +591,7 @@ describe("durable pre-reply run failure", () => {
       const failureCopy =
         "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
       expect(report).toMatchObject({
-        content: `Your request couldn't be completed: ${failureCopy}`,
+        content: failureCopy,
         details: { runId, error: failureCopy },
       });
       expect(JSON.stringify(report)).not.toContain("Missing bearer");
@@ -645,7 +645,8 @@ describe("durable pre-reply run failure", () => {
           {
             type: "custom_message",
             customType: "run-failed-before-reply",
-            content: `Your request couldn't be completed: ${reason}`,
+            content:
+              "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
             details: { runId, error: reason },
           },
         ]);
@@ -695,6 +696,7 @@ describe("durable pre-reply run failure", () => {
       const report = entries[0] as { details: { error: string } };
       expect(report.details.error.length).toBeLessThanOrEqual(512);
       expect(report.details.error).not.toContain("\n");
+      expect(report.details.error).toMatch(/upload failed$/);
       const lastRunError = loadSessionEntry(target)?.lastRunError;
       expect(lastRunError).not.toContain(secret);
       expect(lastRunError).not.toContain("abcdefghijklmnopqrstuvwxyz");
@@ -714,17 +716,24 @@ describe("durable pre-reply run failure", () => {
       prefix:
         "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: operation=upload stage=capture: ",
       context: "Cloud worker finished",
+      cause: "Cloud workspace reconciliation exceeds the 25000 entry limit.",
+    },
+    {
+      name: "warning-prefixed stderr",
+      prefix: `codex app-server exited: code=1 signal=null stderr="${"warning: ".repeat(50)}`,
+      context: "codex app-server exited:",
+      cause: 'fatal: startup owner unavailable"',
     },
     {
       name: "Unicode diagnostic context",
       prefix: `Worker: ${"🦞".repeat(200)}: `,
       context: "Worker:",
+      cause: "Cloud workspace reconciliation exceeds the 25000 entry limit.",
     },
-  ])("retains the terminal cause of a bounded $name", async ({ prefix, context }) => {
+  ])("retains the terminal cause of a bounded $name", async ({ prefix, context, cause }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       await seed();
-      const cause = "Cloud workspace reconciliation exceeds the 25000 entry limit.";
       await persistGatewaySessionLifecycleEvent({
         ...target,
         event: { ...event, data: { ...event.data, error: `${prefix}${cause}` } },
@@ -735,6 +744,19 @@ describe("durable pre-reply run failure", () => {
       expect(failed?.lastRunError).toContain(cause);
       expect(failed?.lastRunError?.length).toBeLessThanOrEqual(160);
       expect(failed?.lastRunError).not.toMatch(/[\uD800-\uDFFF]/u);
+      const [report] = (await reports()) as Array<{ content: string; details: { error: string } }>;
+      expect(report?.details.error).toContain(context);
+      expect(report?.details.error).toContain(cause);
+      expect(report?.details.error.length).toBeLessThanOrEqual(512);
+      expect(report?.details.error).not.toMatch(/[\uD800-\uDFFF]/u);
+      const visible = projectChatDisplayMessages(
+        await readSessionMessagesAsync(target, { mode: "full", reason: "failure diagnostic" }),
+      );
+      expect(visible.at(-1)).toMatchObject({
+        openclawRunError: { runId, summary: "Your request couldn't be completed." },
+      });
+      expect(visible.at(-1)).not.toHaveProperty("details.error");
+      expect(report?.content).toBe("Your request couldn't be completed.");
     });
   });
 
@@ -919,7 +941,8 @@ describe("CLI history through Gateway terminal persistence", () => {
         ).toEqual([
           expect.objectContaining({
             customType: "run-failed-before-reply",
-            content: "Your request couldn't be completed: Run timed out",
+            content:
+              "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
             display: true,
             excludeFromContext: true,
             details: { runId: "cli-timeout-run", error: "Run timed out" },
@@ -952,7 +975,8 @@ describe("CLI history through Gateway terminal persistence", () => {
         expect.objectContaining({
           type: "custom_message",
           customType: "run-failed-before-reply",
-          content: "Your request couldn't be completed: Run timed out",
+          content:
+            "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
           display: true,
           excludeFromContext: true,
           details: { runId: "cli-timeout-run", error: "Run timed out" },
