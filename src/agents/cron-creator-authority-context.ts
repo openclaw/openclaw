@@ -12,7 +12,10 @@ import {
   type CronCreatorAuthorityRunScope,
   type CronManagementEntitlement,
 } from "../gateway/cron-creator-authority-grant.js";
-import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
+import type {
+  CronAuthenticatedChannelRequester,
+  CronManagementGrantBinding,
+} from "../gateway/cron-creator-authority-grant.types.js";
 import {
   getAgentRunContext,
   validateAgentRunDelegatedAuthority,
@@ -240,8 +243,32 @@ export function bindCronManagementGrant(runId: string | undefined, config?: Open
   if (!isCronModelManagementAllowed(config)) {
     return undefined;
   }
+  return bindCronManagementScope(
+    activeCronCreatorAuthority.getStore(),
+    getGatewayToolCallerIdentity()?.approvalAuthority,
+    runId,
+  );
+}
+
+/**
+ * Retains admitted management before a host-owned bridge (CLI MCP loopback) constructs tools
+ * outside this scope. The bridge binds the run's delegated authority per request; every
+ * currentness fence still runs at bind and mint time, and the tool applies the model policy.
+ */
+export function captureCronManagementGrantIssuer(runId: string | undefined) {
   const scope = activeCronCreatorAuthority.getStore();
-  const authority = getGatewayToolCallerIdentity()?.approvalAuthority;
+  if (!scope?.managementEntitlement || scope.runId !== runId) {
+    return undefined;
+  }
+  return (authority: AgentRunDelegatedAuthority) =>
+    bindCronManagementScope(scope, authority, runId);
+}
+
+function bindCronManagementScope(
+  scope: CronCreatorAuthorityRunScope | undefined,
+  authority: AgentRunDelegatedAuthority | undefined,
+  runId: string | undefined,
+): CronManagementGrantBinding | undefined {
   if (
     !scope?.managementEntitlement ||
     !scope.active ||

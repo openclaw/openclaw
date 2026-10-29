@@ -432,6 +432,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                     receiptAdmission: lineage.admission,
                     cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
                     mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
+                    cronManagementAuthority: boundClientGrant.cronManagementAuthority,
                     agentId: scopedTools.agentId,
                     sessionKey: requestContext.sessionKey,
                     requesterOrigin: requestContext.requesterOrigin,

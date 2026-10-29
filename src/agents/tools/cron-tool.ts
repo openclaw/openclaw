@@ -56,7 +56,7 @@ import {
   resolveCronCreatorExecToolTarget,
 } from "./cron-tool-creator-cap.js";
 import { buildCronToolDescription } from "./cron-tool-description.js";
-import { createCronToolGatewayCaller } from "./cron-tool-gateway.js";
+import { createCronToolGatewayCaller, isOlderGatewayRejectingParam } from "./cron-tool-gateway.js";
 import { CronToolOutputSchema } from "./cron-tool-output-schema.js";
 import { formatCronTerminalPresentation } from "./cron-tool-presentation.js";
 import {
@@ -128,15 +128,6 @@ function assertCronSelfRemoveScope(
   throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
 }
 
-function isOlderGatewayRejectingParam(error: unknown, method: string, param: string): boolean {
-  return (
-    error instanceof GatewayClientRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes(`invalid ${method} params`) &&
-    error.message.includes(`unexpected property '${param}'`)
-  );
-}
-
 export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const config = opts?.config ?? getRuntimeConfigSnapshot() ?? undefined;
   const assertStreamConfigCurrent = captureCronStreamPolicyConfigCurrentness(opts);
@@ -178,6 +169,13 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
       assertCurrentRun?.();
+      // CLI MCP loopback constructs tools outside the admitted run scope; its grant
+      // carries the run's management binding on the per-call caller identity instead.
+      const management =
+        managementAuthority ??
+        (isCronModelManagementAllowed(config)
+          ? getGatewayToolCallerIdentity()?.cronManagementAuthority
+          : undefined);
       let streamExecPolicy: CronStreamExecPolicy | undefined;
       let streamExecutionApproval: CronStreamExecApprovalReceipt | undefined;
       const mutationResult = (result: unknown) =>
@@ -196,7 +194,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
       if (
-        managementAuthority?.managementOnly &&
+        management?.managementOnly &&
         !CRON_MANAGEMENT_METHODS.some((method) => method === `cron.${action}`)
       ) {
         throw new Error(
@@ -286,7 +284,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
           };
         };
         const callGateway = createCronToolGatewayCaller({
-          managementAuthority,
+          managementAuthority: management,
           requesterAuthority,
           operationSignal,
           readStreamExecPolicy: () => streamExecPolicy,
@@ -379,8 +377,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 inventoryHint: `${includeDisabled ? "Enabled and disabled automations are included." : "Disabled automations are omitted."} Counts and pagination describe this filtered view. Absence does not prove deletion or source termination. For a known watcher, use get jobId to inspect its saved state and streamStatus.`,
                 ...(!selfRemoveOnlyJobId
                   ? {
-                      scope: managementAuthority ? "gateway" : "caller",
-                      ...(!managementAuthority
+                      scope: management ? "gateway" : "caller",
+                      ...(!management
                         ? {
                             scopeHint:
                               "Restricted automation inventory. For Gateway-wide management, use a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page.",
@@ -553,7 +551,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 params,
                 "update",
               );
-              if (!managementAuthority || !allowCommandJobs) {
+              if (!management || !allowCommandJobs) {
                 assertNoCronShellExecution(canonicalPatch);
               }
               assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
@@ -568,9 +566,9 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
                 throw new Error("job required");
               }
-              let creatorOptions = managementAuthority ? undefined : opts;
+              let creatorOptions = management ? undefined : opts;
               if (
-                managementAuthority &&
+                management &&
                 opts?.resolveCreatorToolAuthority &&
                 isRecord(patch.payload) &&
                 Object.hasOwn(patch.payload, "toolsAllow")
@@ -591,7 +589,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                     id,
                     expectedConfigRevision,
                     patch,
-                    adminManagement: Boolean(managementAuthority) && allowCommandJobs,
+                    adminManagement: Boolean(management) && allowCommandJobs,
                     creatorToolAllowlist: creatorOptions?.creatorToolAllowlist,
                     creatorToolAllowlistCaptureRef: creatorOptions?.creatorToolAllowlistCaptureRef,
                     resolveCreatorToolAuthority: creatorOptions?.resolveCreatorToolAuthority,
@@ -644,7 +642,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               if (result.enqueued !== true || result.run) {
                 return jsonResult(result);
               }
-              const followUp = managementAuthority?.managementOnly
+              const followUp = management?.managementOnly
                 ? "check it later on the Automations page"
                 : "check it later with runs jobId runId";
               if (!isRecord(result)) {

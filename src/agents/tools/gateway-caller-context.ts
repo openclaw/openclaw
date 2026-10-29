@@ -8,7 +8,10 @@ import {
 } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
-import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
+import type {
+  CronCreatorAuthorityGrant,
+  CronManagementGrantBinding,
+} from "../../gateway/cron-creator-authority-grant.types.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
@@ -108,6 +111,8 @@ type GatewayToolCallerIdentity = {
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   /** Host-only native issuer retained by the current MCP grant; never serialized. */
   mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
+  /** Host-only management binding retained by the current MCP grant; never serialized. */
+  cronManagementAuthority?: CronManagementGrantBinding;
   cronManagementGrant?: CronCreatorAuthorityGrant;
   /** Cron permission can end while the admitted run retains its other tools. */
   cronAuthorityCheck?: () => boolean;
@@ -160,6 +165,7 @@ type AdmittedGatewayToolCallerParams = {
   receiptAdmission?: GatewayToolCallerReceiptAdmission;
   cronAuthorityCheck?: () => boolean;
   mintCronRequesterGrant?: GatewayToolCallerIdentity["mintCronRequesterGrant"];
+  cronManagementAuthority?: GatewayToolCallerIdentity["cronManagementAuthority"];
   approvalSignals?: readonly AbortSignal[];
   agentId?: string;
   sessionKey?: string;
@@ -276,6 +282,9 @@ export function createAdmittedGatewayToolCallerIdentity(
     ...(params.approvalSignals?.length ? { approvalSignals: params.approvalSignals } : {}),
     ...(params.mintCronRequesterGrant
       ? { mintCronRequesterGrant: params.mintCronRequesterGrant }
+      : {}),
+    ...(params.cronManagementAuthority
+      ? { cronManagementAuthority: params.cronManagementAuthority }
       : {}),
     turnSourceChannel: params.turnSourceChannel,
     turnSourceLocal: params.turnSourceLocal,
@@ -640,6 +649,7 @@ export async function withGatewayToolCallerIdentity<T>(
       cronCreatorAuthorityGrant:
         identity.cronCreatorAuthorityGrant ?? inheritedOwner?.cronCreatorAuthorityGrant,
       mintCronRequesterGrant: inheritedValue("mintCronRequesterGrant"),
+      cronManagementAuthority: inheritedValue("cronManagementAuthority"),
       cronManagementGrant: identity.cronManagementGrant ?? inheritedOwner?.cronManagementGrant,
       cronAuthorityCheck: composeReceiptAuthority(
         inheritedOwner?.cronAuthorityCheck,

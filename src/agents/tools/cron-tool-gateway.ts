@@ -1,5 +1,6 @@
 import { attachPluginCommandCreation } from "../../cron/plugin-command-creation.js";
 import type { CronStreamExecPolicy } from "../../cron/stream-exec-authority.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import { attachCronStreamExecPolicy } from "../../gateway/cron-creator-authority-grant.js";
 import type {
   bindCronManagementGrant,
@@ -11,6 +12,20 @@ import {
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { callGatewayTool, shouldUseInProcessGatewayTool } from "./gateway.js";
+
+/** Older Gateways reject additive request fields; callers retry without them. */
+export function isOlderGatewayRejectingParam(
+  error: unknown,
+  method: string,
+  param: string,
+): boolean {
+  return (
+    error instanceof GatewayClientRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes(`invalid ${method} params`) &&
+    error.message.includes(`unexpected property '${param}'`)
+  );
+}
 
 /** Each cron request carries its current creator or management grants. */
 export function createCronToolGatewayCaller({

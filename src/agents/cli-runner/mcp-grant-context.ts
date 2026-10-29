@@ -7,6 +7,7 @@ import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import { cloneExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import {
   bindActiveCronAuthorityCurrentness,
+  captureCronManagementGrantIssuer,
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
 import type { DelegationCapability } from "../delegation-capability.js";
@@ -37,6 +38,7 @@ export function finalizeCliMcpGrant(
     return undefined;
   }
   const cronRequesterGrantIssuer = captureCronRequesterGrantIssuer(context.runId);
+  const cronManagementGrantIssuer = captureCronManagementGrantIssuer(context.runId);
   const cronAuthorityCheck = bindActiveCronAuthorityCurrentness(context.runId);
   const personalToolParticipants = source.toolAuthorityFingerprint
     ? source.replyOperation?.personalToolParticipants
@@ -49,6 +51,7 @@ export function finalizeCliMcpGrant(
       ...(nativeAuthorityPending ? { nativeCronCreatorToolAllowlist: null } : {}),
     },
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
+    ...(cronManagementGrantIssuer ? { cronManagementGrantIssuer } : {}),
     ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
     admittedRunContext: source.admittedRunContext,
     toolPolicyConfig: source.config,

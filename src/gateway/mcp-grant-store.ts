@@ -36,7 +36,10 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { ReplyTurnParticipants } from "../sessions/session-controller.contracts.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
-import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
+import type {
+  CronCreatorAuthorityGrant,
+  CronManagementGrantBinding,
+} from "./cron-creator-authority-grant.types.js";
 
 /** Set by MCP authentication; caller-token conversation headers cannot select a binding. */
 export type McpCurrentConversationOrigin = "run-bound-grant" | "server-session" | "caller-token";
@@ -177,6 +180,10 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
     signal?: AbortSignal,
     isCurrent?: () => boolean,
   ) => CronCreatorAuthorityGrant;
+  /** Admitted automation management, bound to the run's delegated authority per request. */
+  cronManagementGrantIssuer?: (
+    authority: AgentRunDelegatedAuthority,
+  ) => CronManagementGrantBinding | undefined;
   /** Retained Cron permission, independent of this grant's other tool authority. */
   cronAuthorityCheck?: () => boolean;
   abortSignal?: AbortSignal;
@@ -315,6 +322,7 @@ export function mintMcpLoopbackClientGrant(
     messageActionTurnCapability: params.messageActionTurnCapability || undefined,
     memoryAudience: params.memoryAudience,
     cronRequesterGrantIssuer: params.cronRequesterGrantIssuer,
+    cronManagementGrantIssuer: params.cronManagementGrantIssuer,
     cronAuthorityCheck: params.cronAuthorityCheck,
     abortSignal: params.abortSignal,
     assertCurrent: params.assertCurrent,
@@ -517,6 +525,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       messageActionTurnCapability?: string;
       memoryAudience?: MemoryAudience;
       mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
+      cronManagementAuthority?: CronManagementGrantBinding;
       cronAuthorityCheck?: () => boolean;
       questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
@@ -551,6 +560,7 @@ export function resolveMcpLoopbackClientGrant(params: {
     }
   });
   const issueCronRequesterGrant = grant.cronRequesterGrantIssuer;
+  const cronManagementAuthority = grant.cronManagementGrantIssuer?.(delegatedAuthority);
   // Cached tools and OAuth refreshes must share the prepared store for this
   // grant; cloning on each request would discard refreshed credentials.
   return {
@@ -572,6 +582,19 @@ export function resolveMcpLoopbackClientGrant(params: {
           return issueCronRequesterGrant(delegatedAuthority, signal, isCurrent);
         }
       : undefined,
+    ...(cronManagementAuthority
+      ? {
+          cronManagementAuthority: {
+            managementOnly: cronManagementAuthority.managementOnly,
+            mint: (method: string, signal?: AbortSignal) => {
+              if (!isCurrent()) {
+                throw new Error("cron management MCP grant is no longer active");
+              }
+              return cronManagementAuthority.mint(method, signal);
+            },
+          },
+        }
+      : {}),
     questionAnswerAuthority,
     skillLibraryAuthoring: grant.skillLibraryAuthoring,
     ...(grant.bundledTools ? { bundledTools: grant.bundledTools } : {}),

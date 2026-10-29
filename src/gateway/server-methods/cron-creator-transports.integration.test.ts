@@ -35,6 +35,7 @@ import {
   SESSION,
   CREATOR,
   cfg as baseCfg,
+  cron as cronService,
   stateDir,
   admission,
   inRun,
@@ -318,6 +319,78 @@ it.each([
       );
     } finally {
       release.resolve();
+      if (transportTools?.mcpCapture) {
+        revokeMcpLoopbackClientGrant(transportTools.mcpCapture.token);
+      }
+      try {
+        if (transport === "cli") {
+          await closeMcpLoopbackServer();
+        }
+      } finally {
+        caller.release();
+      }
+    }
+  },
+);
+
+it.each(["cli", "embedded"] as const)(
+  "lists Gateway-wide automations for a Control UI administrator through the %s transport",
+  { timeout: 30_000 },
+  async (transport) => {
+    // Operator-created, so the caller-scoped inventory for agent "main" hides it.
+    const otherAgentJob = await cronService.add({
+      name: "Other agent report",
+      agentId: "ops",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "Report" },
+      delivery: { mode: "none" },
+    });
+    const caller = captureGatewayDeviceRevocation(
+      fixture.context,
+      { deviceId: "admin-device", role: "operator" },
+      () => true,
+    );
+    const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
+    client.internal = { controlUiAdmin: true };
+    const runId = `control-ui-admin-${transport}-list`;
+    const adminAdmission = expectDefined(
+      admission(runId, client, undefined, caller.isCurrent),
+      "Control UI admin admission",
+    );
+    expect(adminAdmission.managementEntitlement).toEqual({ source: "control-ui-admin" });
+    let transportTools: CreatorTransportTools | undefined;
+    try {
+      if (transport === "cli") {
+        await ensureMcpLoopbackServer();
+      }
+      await inRun(
+        runId,
+        adminAdmission,
+        boundTo(fixture, async (_identity, admitted, capability) => {
+          const tools = await createCreatorTransportTools({
+            transport,
+            config,
+            admitted,
+            creator: expectDefined(capability, "management capability"),
+            senderIsOwner: true,
+          });
+          transportTools = tools;
+          const result = (await tools.invoke(AUTOMATIONS_TOOL_NAME, {
+            action: "list",
+            includeDisabled: true,
+          })) as { content?: Array<{ text?: string }> };
+          const listed = JSON.parse(expectDefined(result.content?.[0]?.text, "list result")) as {
+            scope?: string;
+            jobs?: Array<{ id: string }>;
+          };
+          expect(listed.scope).toBe("gateway");
+          expect(listed.jobs?.map((job) => job.id)).toContain(otherAgentJob.id);
+        }),
+      );
+    } finally {
       if (transportTools?.mcpCapture) {
         revokeMcpLoopbackClientGrant(transportTools.mcpCapture.token);
       }
