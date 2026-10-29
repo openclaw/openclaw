@@ -49,29 +49,54 @@ async function connectResumeGateway(opts: ResumeCliOptions, handoffTarget: boole
       ? { allowConfiguredAuthForExactTarget: true, suppressEnvAuthFallback: true }
       : {}),
   });
+  // The transport exists before the handshake completes, so cancellation must be
+  // registered here: the reported interruption arrives while the peer withholds it.
+  let interrupted = false;
+  let signalInterrupted = () => {};
+  const interruptedWait = new Promise<void>((resolve) => {
+    signalInterrupted = resolve;
+  });
+  const releaseClientGate = trackResumeClientGate(client, () => {
+    interrupted = true;
+    signalInterrupted();
+  });
   try {
-    await new Promise<void>((resolve, reject) => {
+    const handshake = new Promise<void>((resolve, reject) => {
       client.onConnected = resolve;
       client.onConnectError = reject;
       client.onDisconnected = (reason) => reject(new Error(reason || "Gateway connection closed"));
       client.start();
     });
-    return client;
+    await Promise.race([handshake, interruptedWait]);
+    if (interrupted) {
+      throw new Error("Gateway connection interrupted.");
+    }
+    return { client, releaseClientGate };
   } catch (error) {
-    await client.stop();
+    try {
+      await client.stop();
+    } finally {
+      releaseClientGate();
+    }
     throw await formatResumeConnectionError(error);
   }
 }
 
 /** The pre-TUI client has no cancellation owner yet, so an accepted CLI interruption
  *  closes it here instead of leaving the transport open behind the signal barrier. */
-function trackResumeClientGate(client: { stop: () => Promise<void> }): () => void {
+function trackResumeClientGate(
+  client: { stop: () => Promise<void> },
+  onInterrupt?: () => void,
+): () => void {
   let releaseGate = () => {};
   const gateFinished = new Promise<void>((resolve) => {
     releaseGate = resolve;
   });
   const unregisterGate = registerSignalExitGate(gateFinished, () => {
-    void client.stop();
+    // The owning branch awaits the same shutdown; keep an interruption from
+    // raising an unhandled rejection when the transport teardown fails.
+    void client.stop().catch(() => undefined);
+    onInterrupt?.();
   });
   return () => {
     releaseGate();
@@ -101,11 +126,10 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
   let sessionKey: string | null;
   if (handoff) {
     const parsed = parseAgentSessionKey(handoff.sessionKey)!;
-    const client = await connectResumeGateway(
+    const { client, releaseClientGate } = await connectResumeGateway(
       { ...connectionOptions, url: handoff.gatewayUrl },
       true,
     );
-    const releaseClientGate = trackResumeClientGate(client);
     try {
       let result: unknown;
       try {
@@ -128,12 +152,14 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       connection = client.connection;
       sessionKey = result.key;
     } finally {
-      await client.stop();
-      releaseClientGate();
+      try {
+        await client.stop();
+      } finally {
+        releaseClientGate();
+      }
     }
   } else {
-    const client = await connectResumeGateway(connectionOptions, false);
-    const releaseClientGate = trackResumeClientGate(client);
+    const { client, releaseClientGate } = await connectResumeGateway(connectionOptions, false);
     let sessions: Awaited<ReturnType<typeof loadRecentSessions>>;
     try {
       connection = client.connection;
@@ -146,8 +172,11 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
     } catch (error) {
       throw await formatResumeConnectionError(error);
     } finally {
-      await client.stop();
-      releaseClientGate();
+      try {
+        await client.stop();
+      } finally {
+        releaseClientGate();
+      }
     }
     if (explicitGlobalSession) {
       sessionKey = `agent:${explicitGlobalSession.agentId}:global`;

@@ -257,6 +257,21 @@ describe("runResumeCommand", () => {
     expect(mocks.connect).not.toHaveBeenCalled();
     expect(mocks.runTui).not.toHaveBeenCalled();
   });
+  it("closes the handshake-stage client when the peer withholds the acknowledgement", async () => {
+    const client = createGatewayClient([]);
+    // The peer never acknowledges: the connection stays in its handshake stage.
+    client.start = vi.fn();
+    mocks.connect.mockResolvedValue(client);
+
+    const pending = runResumeCommand(undefined, { handoff: createHandoff() });
+    await vi.waitFor(() => expect(client.start).toHaveBeenCalledOnce());
+    await waitForSignalExitBarriers("SIGTERM");
+
+    expect(client.stop).toHaveBeenCalled();
+    // The handshake abort surfaces through the command's connection-error path.
+    await expect(pending).rejects.toThrow();
+  });
+
   it("closes the pre-TUI client when the command is interrupted", async () => {
     const client = createGatewayClient([]);
     let rejectResolve: (error: Error) => void = () => {};
