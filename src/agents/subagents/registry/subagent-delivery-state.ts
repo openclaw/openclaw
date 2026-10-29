@@ -21,7 +21,6 @@ export function resetRequesterSettleWakeRetry(
     status: "pending",
     attemptCount: 0,
     privateInput: undefined,
-    replayCount: undefined,
     nextAttemptAt: undefined,
     lastError: undefined,
   };
@@ -68,9 +67,6 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
     createdAt: entry.createdAt,
     execution: {
       status: entry.execution.status,
-      ...(entry.execution.interruptionReason
-        ? { interruptionReason: entry.execution.interruptionReason }
-        : {}),
       ...(entry.execution.startedAt !== undefined ? { startedAt: entry.execution.startedAt } : {}),
       ...(entry.execution.endedAt !== undefined ? { endedAt: entry.execution.endedAt } : {}),
       ...(entry.execution.outcome ? { outcome: { status: entry.execution.outcome.status } } : {}),
@@ -152,14 +148,6 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
     ? entry.deleteCleanupDispatchedAt
     : undefined;
   entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
-  entry.terminalOwner =
-    entry.terminalOwner === "interrupted-recovery" &&
-    Number.isFinite(entry.execution.endedAt) &&
-    entry.execution.outcome?.status === "error" &&
-    entry.endedReason === "subagent-error" &&
-    entry.pauseReason !== "sessions_yield"
-      ? "interrupted-recovery"
-      : undefined;
   if (entry.completion) {
     entry.completion.terminalReply = normalizeAgentRunTerminalReplySnapshot(
       entry.completion.terminalReply,
@@ -251,37 +239,6 @@ export function isCompletedRequesterDeliveryBlocked(
     entry.delivery?.suspendedReason === "permanent_failure" &&
     (entry.delivery.lastDropReason === "message_tool_delivery_missing" ||
       entry.delivery.lastDropReason === "visible_reply_missing")
-  );
-}
-
-/** Returns true when required delivery still owns the row after its child session is gone. */
-export function hasRetainedRequiredCompletionDelivery(
-  entry: Pick<
-    SubagentRunRecord,
-    "completion" | "delivery" | "expectsCompletionMessage" | "suppressCompletionDelivery"
-  >,
-): boolean {
-  const delivery = entry.delivery;
-  if (
-    entry.expectsCompletionMessage !== true ||
-    entry.suppressCompletionDelivery === true ||
-    entry.completion?.required !== true ||
-    !delivery?.payload
-  ) {
-    return false;
-  }
-  if (isDeliverySuspended(entry)) {
-    return true;
-  }
-  if (delivery.status === "in_progress") {
-    // The correlated session queue owns this delivery and resumes it separately.
-    return true;
-  }
-  return (
-    delivery.status === "pending" &&
-    delivery.disposition !== "ambiguous" &&
-    delivery.disposition !== "intentional_non_delivery" &&
-    delivery.disposition !== "permanent_failure"
   );
 }
 

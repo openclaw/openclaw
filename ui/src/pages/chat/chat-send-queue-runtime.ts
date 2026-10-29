@@ -74,8 +74,8 @@ export function settleQueuedChatSendFailure(
     reportFailure();
     return "failed";
   }
-  if (err instanceof GatewayProtocolRequestTimeoutError && err.requestSent) {
-    // Admission deduplicates recorded input. Reconnect can resend this exact key.
+  if (err instanceof GatewayProtocolRequestTimeoutError) {
+    // Keep the same key after refused or uncertain sends; admission deduplicates input.
     finishScopedChatSending(host, scope);
     // A live receipt or another pane can retire this row before the ACK deadline.
     // Missing custody is not a failed storage write, and must not resurrect it.

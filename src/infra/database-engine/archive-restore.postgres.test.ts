@@ -84,6 +84,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
               const admin = new Client({ connectionString: connection });
               const client = new Client({ connectionString: isolated.href });
               const recovery = new Client({ connectionString: recoveryConnection.href });
+              const recoveryRows = async (sql: string) => (await recovery.query(sql)).rows;
               const namespaces = new Set<string>();
               const config: OpenClawConfig = {
                 database: {
@@ -392,11 +393,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                           if (anchor.engine === "postgres") {
                             expect(namespaces.has(anchor.namespace)).toBe(false);
                             expect(
-                              (
-                                await recovery.query(
-                                  `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
-                                )
-                              ).rows,
+                              await recoveryRows(
+                                `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
+                              ),
                             ).toEqual([{ value: store.value }]);
                           }
                         }
@@ -422,11 +421,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     ).toEqual(bytes);
                   }
                   expect(
-                    (
-                      await recovery.query(
-                        "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
+                    ),
                   ).toEqual([
                     {
                       count: stores.filter((store) => !sqliteAgent || store.family !== "agent")
@@ -465,11 +462,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     });
                     namespaces.add(anchor.namespace);
                     expect(
-                      (
-                        await recovery.query(
-                          `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
-                        )
-                      ).rows,
+                      await recoveryRows(
+                        `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
+                      ),
                     ).toEqual([{ value: store.value }]);
                     for (const name of ["manifest.json", "anchor.sqlite", "database.sqlite"]) {
                       await expect(
@@ -671,18 +666,14 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   );
                   assert(legacy.engine === "postgres");
                   expect(
-                    (
-                      await recovery.query(
-                        `SELECT display_name FROM "${legacy.namespace}".user_profiles`,
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      `SELECT display_name FROM "${legacy.namespace}".user_profiles`,
+                    ),
                   ).toEqual([{ display_name: global.value }]);
                   expect(
-                    (
-                      await recovery.query(
-                        "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
+                    ),
                   ).toEqual([{ count: 1 }]);
 
                   // A later unavailable provider must clean namespaces already prepared for earlier stores.
@@ -718,11 +709,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   await tar.c({ file: corruptArchive, cwd: corruptRoot, gzip: true }, [
                     backup.archiveRoot,
                   ]);
-                  const before = (
-                    await recovery.query(
-                      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
-                    )
-                  ).rows;
+                  const before = await recoveryRows(
+                    "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                  );
                   resetDatabaseEngineSelectionForTest();
                   clearRuntimeConfigSnapshot();
                   await expect(
@@ -732,11 +721,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     }),
                   ).rejects.toThrow("incomplete target was cleaned");
                   expect(
-                    (
-                      await recovery.query(
-                        "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                    ),
                   ).toEqual(before);
 
                   await fs.writeFile(corruptManifest, originalManifest);
@@ -762,11 +749,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     }),
                   ).rejects.toThrow("manifest.json");
                   expect(
-                    (
-                      await recovery.query(
-                        "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                    ),
                   ).toEqual(before);
                 }
               } finally {

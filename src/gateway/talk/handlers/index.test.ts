@@ -157,7 +157,7 @@ const mocks = vi.hoisted(() => ({
   gatewayControlClose: vi.fn(async () => undefined),
   gatewayControl: { bindBridge: vi.fn(), bindControl: vi.fn() },
   createTalkClientGatewayControlOwner: vi.fn(),
-  agentRuntime: {},
+  agentRuntime: { session: { prepareSessionEntryPatch: vi.fn() } },
 }));
 
 vi.mock("../../../config/config.js", async (importOriginal) => ({

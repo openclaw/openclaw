@@ -21,7 +21,7 @@ import { recordSessionParticipantInWorker } from "./session-sharing-store.async.
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
@@ -369,7 +369,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
           ]);
           expect(historyReads).not.toHaveBeenCalled();
 
-          const expectedState = buildRestartRecoveryExpectedState(
+          const expectedState = buildSessionTranscriptTurnExpectedState(
             actor.snapshot(authority)!.entry!,
           );
           const recordAndAdopt = async (contributionCount: number) => {

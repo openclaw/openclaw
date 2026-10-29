@@ -35,3 +35,9 @@ export function isSessionToolOverrides(
 export function isTalkVoiceChangeEvent(
   value: unknown,
 ): value is import("../../../../packages/gateway-protocol/src/schema/talk-voice.js").TalkVoiceChangeEvent;
+export function isSessionFileReadMetadata(
+  value: unknown,
+): value is Pick<
+  import("../../../../packages/gateway-protocol/src/schema/sessions.js").SessionsFilesGetResult,
+  "root" | "source"
+>;

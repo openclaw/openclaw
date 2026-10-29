@@ -1,7 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
+import { Compile } from "typebox/compile";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { validateToolArguments } from "../../packages/llm-core/src/validation.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -13,7 +15,6 @@ import {
 } from "../infra/diagnostic-events.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import * as diagnostics from "../logging/code-mode-diagnostic.js";
-import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
@@ -23,7 +24,6 @@ import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import { bindCodeModeSessionStore } from "./code-mode-session-store.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
-import { controlledTool } from "./code-mode.controlled-tool.test-support.js";
 import {
   applyCodeModeCatalog,
   buildCodeModeCatalogPrompt,
@@ -37,7 +37,6 @@ import {
   resultDetails,
   runUntilCompleted,
   testing,
-  waitUntilCompleted,
   createHeadlessCodeModeHarness,
   codeModeRunner,
   expectCompleted,
@@ -58,6 +57,8 @@ import { clearToolSearchCatalog } from "./tool-search.js";
 import { createToolSurfacePresentationForTest } from "./tool-surface-plan.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
+
+vi.mock("typebox/compile", { spy: true });
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -93,11 +94,6 @@ function complete(tools: AnyAgentTool[], code: string) {
   });
 }
 
-function markReplaySafe(tool: AnyAgentTool) {
-  setPluginToolMeta(tool, { ...getPluginToolMeta(tool)!, replaySafe: true });
-  return tool;
-}
-
 function contractedTool(name: string, pluginId?: string) {
   return Object.assign(pluginTool(name, "Deferred", pluginId), {
     outputSchema: Type.Object({ ok: Type.Boolean() }, { additionalProperties: false }),
@@ -118,6 +114,39 @@ function expectFragments(value: unknown, included: string[], excluded: string[] 
 }
 
 describe("Code Mode catalog and model-visible surface", () => {
+  it("reuses control validators across turns while retaining each turn's limits and cancellation", async () => {
+    const compile = vi.mocked(Compile);
+    const validate = (tools: AnyAgentTool[]) => {
+      for (const tool of tools) {
+        const args = tool.name === "exec" ? { code: "return 42;" } : { runId: "owned-cell" };
+        expect(
+          validateToolArguments(tool, {
+            type: "toolCall",
+            id: "call",
+            name: tool.name,
+            arguments: args,
+          }),
+        ).toEqual(args);
+      }
+    };
+    validate(createCodeModeHarness().tools);
+    compile.mockClear();
+    for (const timeoutMs of [1_000, 2_000, 3_000]) {
+      const controller = new AbortController();
+      const { tools } = createCodeModeHarness({
+        codeMode: { timeoutMs },
+        abortSignal: controller.signal,
+      });
+      validate(tools);
+      const exec = tools[0]!;
+      expect(exec.description).toContain(`${timeoutMs} ms wall-clock budget`);
+      const cancelled = new Error(`cancelled turn ${timeoutMs}`);
+      controller.abort(cancelled);
+      await expect(exec.execute("cancelled", { code: "return 42;" })).rejects.toBe(cancelled);
+    }
+    expect(compile).not.toHaveBeenCalled();
+  });
+
   it("refreshes guest metadata after catalog replacement and restriction", async () => {
     const { ctx, tools, exec } = catalog([fakeTool("lookup", "Original metadata")]);
     const read = () => exec.execute("metadata", { code: "return catalog.all();" });
@@ -597,88 +626,6 @@ it("returns missing implicitly optional daily memory through Code Mode", async (
   });
 });
 
-function replay(targets: AnyAgentTool[], options?: Parameters<typeof createCodeModeHarness>[0]) {
-  const { tools } = createCatalogCodeModeHarness(targets, options);
-  return {
-    execTool: tools[0]!,
-    waitTool: tools[1]!,
-    run: (code: string, restartSafe = true) =>
-      runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code, restartSafe }),
-  };
-}
-
-it("keeps restart safety when an audited read outlives the inline deadline", async () => {
-  const { tool: target, started, release } = controlledTool(fakeTool("read", "Read"));
-  const { execTool, waitTool } = replay([target]);
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-  const running = execTool.execute("slow-replay", {
-    restartSafe: true,
-    code: 'return await read({ value: "slow" });',
-  });
-  try {
-    await started.promise;
-    await vi.advanceTimersByTimeAsync(10_000);
-    const waiting = resultDetails(await running);
-    expect(waiting).toMatchObject({ status: "waiting", replaySafe: true });
-    vi.useRealTimers();
-    release.resolve();
-    expect(await waitUntilCompleted({ details: waiting, waitTool })).toMatchObject({
-      status: "completed",
-      replaySafe: true,
-    });
-    expect(target.execute).toHaveBeenCalledOnce();
-  } finally {
-    vi.useRealTimers();
-    release.resolve();
-    await running;
-  }
-});
-
-it.each([
-  { kind: "MCP replay-safe metadata", forced: false, error: "cannot call namespace tools" },
-  { kind: "model-cleared exec flag", forced: true, error: "not proven replay-safe" },
-])("enforces restart safety despite $kind", async ({ forced, error }) => {
-  const target = forced
-    ? pluginTool("fake_forced_write", "Write")
-    : markReplaySafe(
-        mcpTool({
-          name: "mcp_github_read_file",
-          serverName: "github",
-          toolName: "read_file",
-        }),
-      );
-  const { run } = replay([target], { forceRestartSafeTools: forced });
-  const code = forced
-    ? 'const [write] = await catalog.search("fake_forced_write"); return await write({});'
-    : 'return await MCP.github.readFile({ path: "README.md" });';
-  expect(await run(code, !forced)).toMatchObject({
-    status: "failed",
-    replaySafe: true,
-    error: expect.stringContaining(error),
-  });
-  expect(target.execute).not.toHaveBeenCalled();
-});
-
-it("preserves bridge evidence when a later restart-safe call is rejected", async () => {
-  const read = markReplaySafe(pluginTool("catalog", "Read"));
-  const write = pluginTool("fake_unsafe_write", "Write");
-  const result = await replay([read, write]).run(`
-    const [read] = await catalog.search("catalog");
-    await read({});
-    const [write] = await catalog.search("fake_unsafe_write");
-    return await write({});
-  `);
-  expect(result).toMatchObject({
-    status: "failed",
-    failurePhase: "bridge",
-    bridgeDispatchStarted: true,
-    replaySafe: true,
-    error: expect.stringContaining("not proven replay-safe"),
-  });
-  expect(read.execute).toHaveBeenCalledOnce();
-  expect(write.execute).not.toHaveBeenCalled();
-});
-
 const catalogs: Array<ReturnType<typeof createCodeModeHarness>["ctx"]> = [];
 
 function sessionStoreHarness(
@@ -692,8 +639,7 @@ function sessionStoreHarness(
   applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });
   bindCodeModeSessionStore(h.catalogRef, manager);
   const runner = codeModeRunner(h.tools);
-  const exec = (code: string, restartSafe = false) =>
-    runner.run(code, "store-cell", { restartSafe });
+  const exec = (code: string) => runner.run(code, "store-cell");
   return {
     ...h,
     manager,
@@ -831,9 +777,7 @@ describe("session store bridge", () => {
     await h.check('await store("network", await network_fixture({})); return true;', true);
     clearToolSearchCatalog(h.ctx);
     const next = sessionStoreHarness(executor, h.manager);
-    const loaded = await next.execute('return (await load("network")).text;', "store-cell", {
-      restartSafe: false,
-    });
+    const loaded = await next.execute('return (await load("network")).text;', "store-cell");
     expectCompleted(resultDetails(loaded), "untrusted fixture");
     expect(loaded.content[0]).toMatchObject({
       text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
@@ -854,13 +798,7 @@ describe("session store bridge", () => {
     await h.check('return (await load("key")) === undefined;', true);
   });
 
-  it("rejects unbound, restartSafe, and headless session-store access", async () => {
-    const h = sessionStoreHarness(executor);
-    const safe = await h.exec('return await load("key");', true);
-    expect(safe).toMatchObject({
-      status: "failed",
-      error: expect.stringContaining("restart-safe"),
-    });
+  it("rejects unbound and headless session-store access", async () => {
     const unbound = createCodeModeHarness({ codeMode: { executor } });
     catalogs.push(unbound.ctx);
     applyCodeModeCatalog({ ...unbound.ctx, tools: unbound.tools });

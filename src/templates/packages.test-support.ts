@@ -1,0 +1,80 @@
+import { buildPluginCapabilitySummary } from "../plugins/capability-summary.js";
+import type { TemplateAddPlan, ResolvedTemplatePackage } from "./types.js";
+
+const emptyCapabilitySummary = buildPluginCapabilitySummary({
+  manifest: {},
+  origin: "global",
+});
+export const emptyPluginCapabilityEvidence = {
+  ...emptyCapabilitySummary,
+  grantsByPluginId: { audit: emptyCapabilitySummary.grants },
+};
+export const emptyPluginPlanEvidence = {
+  declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+  capabilityGrants: emptyPluginCapabilityEvidence.grants,
+  capabilityGrantsByPluginId: emptyPluginCapabilityEvidence.grantsByPluginId,
+};
+
+export function packageInstallPlan(
+  packages: ResolvedTemplatePackage[],
+  ownerAction: "install" | "reuse" = "install",
+): TemplateAddPlan {
+  return {
+    schemaVersion: "openclaw.templateAddPlan.v1",
+    manifestSchemaVersion: 1,
+    stability: "experimental",
+    dryRun: true,
+    mutationAllowed: false,
+    planIntegrity: "sha256:plan",
+    template: {
+      kind: "package",
+      name: "incident-template",
+      version: "1.0.0",
+      packageRoot: "/tmp/template",
+      manifestPath: "/tmp/template/template.json",
+      integrityKind: "artifact",
+      integrity: "sha256:template",
+      byteLength: 123,
+    },
+    agent: {
+      requestedId: "incident",
+      finalId: "incident-2",
+      workspace: "/tmp/incident-2",
+      config: { id: "incident-2", workspace: "/tmp/incident-2" },
+    },
+    summary: {
+      totalActions: packages.length,
+      agentActions: 0,
+      workspaceActions: 0,
+      packageActions: packages.length,
+      mcpServerActions: 0,
+      cronJobActions: 0,
+      blockedActions: 0,
+      capabilityEscalations: 0,
+    },
+    capabilityChanges: [],
+    actions: packages.map((pkg) => ({
+      kind: "package",
+      id: `${pkg.kind}:${pkg.ref}`,
+      action: "install",
+      target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
+      details: {
+        ...pkg,
+        ownerAction,
+        ...(pkg.kind === "plugin"
+          ? {
+              installId: pkg.ref.split("/").at(-1),
+              ...emptyPluginPlanEvidence,
+              capabilityGrantsByPluginId: {
+                [pkg.ref.split("/").at(-1) ?? "unknown"]: emptyPluginCapabilityEvidence.grants,
+              },
+            }
+          : {}),
+      },
+      blocked: false,
+    })),
+    readiness: { ready: true, requirements: [] },
+    blockers: [],
+    diagnostics: [],
+  };
+}

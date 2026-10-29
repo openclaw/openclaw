@@ -813,7 +813,6 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   width: 100%;
   margin: 8px 0;
   font-size: var(--control-ui-text-xs);
-  text-transform: uppercase;
 }
 
 .chat-handoff-resume__rule::after {

@@ -18,6 +18,7 @@ import {
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-thread-canvas.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
@@ -30,6 +31,7 @@ type CachedChatItems = {
     index: number;
     identity: string;
     prefix: string | null;
+    ownedCanvas: ReturnType<typeof collectOwnedCanvasPreviews>;
   } | null;
 };
 
@@ -369,7 +371,11 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
   ) {
     return false;
   }
-  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix);
+  const text = stripOwnedCanvasShortcodes(
+    trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix),
+    item.runId,
+    live.ownedCanvas,
+  );
   if (!reasoning && (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip)) {
     return false;
   }
@@ -447,6 +453,7 @@ export function buildCachedChatItems(
           index: liveStreamIndex,
           identity: liveStreamIdentity(input),
           prefix: accumulatedStreamText(input.streamSegments, sanitizeStreamText),
+          ownedCanvas: collectOwnedCanvasPreviews(items),
         };
   return items;
 }

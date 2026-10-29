@@ -314,8 +314,11 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
             )}
           </Show>
           <Show when={searchTruncated()}>
-            <div class="workspace-desktop__notice" role="status">
-              {t("chat.workspaceFiles.truncated")}
+            <div class="workspace-desktop__notice">
+              <div role="status">{t("chat.workspaceFiles.searchIncomplete")}</div>
+              <button type="button" class="btn btn--sm" onClick={closeSearch}>
+                {t("chat.workspaceFiles.browseFiles")}
+              </button>
             </div>
           </Show>
           <Show

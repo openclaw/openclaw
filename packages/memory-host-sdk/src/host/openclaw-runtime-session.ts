@@ -25,7 +25,7 @@ export { warnPluginSdkDeprecation };
 export { readTranscriptExportSnapshotReadOnlySync };
 export { readRestoredSessionTranscript } from "../../../../src/config/sessions/session-cold-storage-read.js";
 export { readTranscriptStatsBatchReadOnlyAsync } from "../../../../src/config/sessions/session-transcript-stats-batch.js";
-export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-cold-storage-state.js";
+export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-transcript-cold-error.js";
 export { cloneEnvWithPlatformSemantics };
 
 /** Synchronous SDK calls cannot open memory-only session storage. */

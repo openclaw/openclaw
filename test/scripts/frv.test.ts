@@ -13,9 +13,6 @@ import {
   watchRelease,
 } from "../../scripts/frv.mjs";
 import {
-  INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS,
-  INSTALL_SMOKE_CALLER_DEPENDENTS,
-  INSTALL_SMOKE_JOB_NEEDS,
   planReleaseChildRerun,
   releaseChildSpec,
   releaseCompositeJobsSha256,
@@ -2162,7 +2159,6 @@ describe("FRV manual retry admission", () => {
 
 describe("FRV child rerun", () => {
   const producer = "install_smoke_release_checks / installer_smoke_candidate_payload";
-  const consumer = "install_smoke_release_checks / installer_smoke_nonroot";
 
   it("sends one failed-jobs rerun, verifies the new attempt, and records an audit line", async () => {
     const scenario = rerunScenario({});
@@ -2256,54 +2252,13 @@ describe("FRV child rerun", () => {
     ).resolves.toMatchObject({ action: "reran-child", reruns: [{ runAttempt: 3 }] });
   });
 
-  it("reruns the green producer when a failed consumer binds its run attempt", async () => {
-    const scenario = rerunScenario({});
-    const log = vi.fn();
-    const client = {
-      ...scenario.client,
-      getAttemptJobs: async (_runId: string, attempt: number) => [
-        { ...job(producer), id: 21, labels: ["blacksmith-8vcpu-ubuntu-2404"] },
-        {
-          ...job(consumer, attempt === 1 ? "failure" : "success"),
-          id: 22,
-          labels: ["ubuntu-24.04"],
-        },
-      ],
-      getVariable: async () => "github",
-      rerunFailed: vi.fn(),
-      rerunJob: vi.fn(async () => scenario.client.rerunFailed()),
-    };
-    await expect(
-      continueFailed(plan([scenario.selected]), "77", client, { child: "normalCi", log }),
-    ).resolves.toMatchObject({
-      reruns: [{ jobId: 21, jobName: producer, mode: "producer", runnerBackend: "github" }],
-    });
-    expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(21);
-    expect(client.rerunFailed).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(`[frv]   failed: ${consumer} [ubuntu-24.04]`);
-  });
-
-  it("pins the payload rerun graph to the install-smoke workflow and its Release Checks caller", () => {
-    const workflow = (file: string) =>
-      parseYaml(readFileSync(`.github/workflows/${file}`, "utf8")) as {
-        jobs: Record<
-          string,
-          {
-            name?: string;
-            needs?: string | string[];
-            steps?: { run?: string }[];
-            uses?: string;
-          }
-        >;
-      };
-    const needs = (entry: { needs?: string | string[] }) => [entry.needs ?? []].flat();
-    const installSmoke = Object.entries(workflow("install-smoke-reusable.yml").jobs);
-    expect(Object.fromEntries(installSmoke.map(([id, entry]) => [id, needs(entry)]))).toEqual(
-      INSTALL_SMOKE_JOB_NEEDS,
-    );
+  it("keeps install-smoke payload verifiers independent of the consumer run attempt", () => {
+    const installSmoke = parseYaml(
+      readFileSync(".github/workflows/install-smoke-reusable.yml", "utf8"),
+    ) as { jobs: Record<string, { steps?: { run?: string }[] }> };
     expect(
       new Set(
-        installSmoke
+        Object.entries(installSmoke.jobs)
           .filter(([, entry]) =>
             entry.steps?.some(
               (step) =>
@@ -2313,50 +2268,32 @@ describe("FRV child rerun", () => {
           )
           .map(([id]) => id),
       ),
-    ).toEqual(INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS);
-    const caller = Object.values(workflow("openclaw-release-checks.yml").jobs).filter((entry) =>
-      needs(entry).includes("install_smoke_release_checks"),
-    );
-    expect(
-      new Set(
-        caller.map((entry) =>
-          entry.uses?.endsWith("full-release-child-evidence.yml")
-            ? `${entry.name} / Seal child receipt`
-            : entry.name,
-        ),
-      ),
-    ).toEqual(INSTALL_SMOKE_CALLER_DEPENDENTS);
+    ).toEqual(new Set());
   });
 
   it.each([
-    ["a failed consumer", ["installer_smoke_update", "installer_smoke"], "producer"],
+    ["a failed consumer", ["installer_smoke_update", "installer_smoke"]],
     [
       "a failed upstream image whose rerun re-executes a consumer",
       ["installer_smoke_update_image", "root_dockerfile_image", "installer_smoke"],
-      "all-jobs",
     ],
     [
       "a failed root image whose rerun reaches only the status aggregate",
       ["root_dockerfile_image", "root_dockerfile_image_ready", "installer_smoke"],
-      "failed-jobs",
     ],
-    [
-      "a failed Bun consumer that verifies the producer attempt",
-      ["bun_global_install_smoke"],
-      "failed-jobs",
-    ],
-  ])("plans the install-smoke rerun for %s", (_case, failed, mode) => {
+    ["a failed Bun consumer that verifies the producer attempt", ["bun_global_install_smoke"]],
+  ])("plans a failed-jobs install-smoke rerun for %s", (_case, failed) => {
     const jobs = [
       job(producer),
       ...failed.map((name) => job(`install_smoke_release_checks / ${name}`, "failure")),
       job("Verify release checks", "failure"),
     ];
-    expect(planReleaseChildRerun({ childKey: "releaseChecks", jobs })).toMatchObject({ mode });
+    expect(planReleaseChildRerun({ childKey: "releaseChecks", jobs })).toMatchObject({
+      mode: "failed-jobs",
+    });
   });
 
-  it("continue --failed reruns the whole child when payload consumers need upstream failures", async () => {
-    // Shape of release run 40055394364 attempt 1, whose failed-jobs rerun failed the
-    // installer_smoke_update payload tuple check.
+  it("continue --failed reruns failed install-smoke jobs without the green producer", async () => {
     const failed = [
       "install_smoke_release_checks / installer_smoke_update_image",
       "install_smoke_release_checks / root_dockerfile_image",
@@ -2370,24 +2307,18 @@ describe("FRV child rerun", () => {
         job(producer),
         ...failed.map((name) => job(name, attempt === 1 ? "failure" : "success")),
       ],
-      rerunFailed: vi.fn(),
-      rerunRun: vi.fn(async () => scenario.client.rerunFailed()),
+      rerunFailed: vi.fn(async () => scenario.client.rerunFailed()),
     };
     await expect(
       continueFailed(plan([scenario.selected]), "77", client, { dryRun: true }),
-    ).resolves.toMatchObject({
-      action: "would-rerun",
-      payloadReruns: [{ child: "normalCi", failed: failed.toSorted(), mode: "all-jobs" }],
-    });
+    ).resolves.toMatchObject({ action: "would-rerun" });
     const log = vi.fn();
     await withFastPolling(() =>
       expect(
         continueFailed(plan([scenario.selected]), "77", client, { log }),
       ).resolves.toMatchObject({ action: "reran-parent", finalRunId: "77" }),
     );
-    expect(client.rerunRun).toHaveBeenCalledExactlyOnceWith("101");
-    expect(client.rerunFailed).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("rerunning all jobs"));
+    expect(client.rerunFailed).toHaveBeenCalledExactlyOnceWith("101");
   });
 
   it.each([

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
@@ -10,6 +10,7 @@ import {
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createMobileRootContentFixture as rootContent } from "../chat-mobile-host.test-support.ts";
 import { SessionAutomationMobileList } from "./chat-automation-mobile.tsx";
@@ -86,7 +87,7 @@ function source(request = jobsRequest(job()), offline = false, scopes = ["operat
   };
 }
 
-function mobile(request: ReturnType<typeof sequence>, overview = false) {
+function mobile(request: ReturnType<typeof sequence>) {
   const current = source(request);
   const view = mountSolid(() => {
     let host!: HTMLElement;
@@ -95,26 +96,23 @@ function mobile(request: ReturnType<typeof sequence>, overview = false) {
     return (
       <section ref={(element) => (host = element)}>
         {inventory.lifecycle}
-        {!overview && <output>{inventory.loaded() ? inventory.total() : "unknown"}</output>}
         <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
-        {overview && (
-          <ChatDetailsMobileContent
-            details={{
-              sessionKey: props.sessionKey,
-              selectedSession: { key: props.sessionKey, kind: "direct" },
-              currentAgentId: "ops",
-              messages: [],
-            }}
-            presented
-            page={{
-              kind: "root",
-              content: {
-                ...rootContent(),
-                automations: { inventory, summary: { label: "Automations" } },
-              },
-            }}
-          />
-        )}
+        <ChatDetailsMobileContent
+          details={{
+            sessionKey: props.sessionKey,
+            selectedSession: { key: props.sessionKey, kind: "direct" },
+            currentAgentId: "ops",
+            messages: [],
+          }}
+          presented
+          page={{
+            kind: "root",
+            content: {
+              ...rootContent(),
+              automations: { inventory, summary: { label: "Automations" } },
+            },
+          }}
+        />
       </section>
     );
   });
@@ -158,6 +156,45 @@ function component(
 }
 
 afterEach(() => document.body.replaceChildren());
+
+it("keeps cached continuation inert through an inventory failure until recovery", async () => {
+  vi.useFakeTimers();
+  const request = createGatewayRequestMock();
+  request.mockRejectedValueOnce(new Error("Temporary inventory failure"));
+  request.mockResolvedValue(
+    page(Array.from({ length: 11 }, (_, index) => job({ id: `job-${index}` }))),
+  );
+  const current = component(request);
+  try {
+    current.update({
+      desktop: { expanded: true, onExpandedChange: vi.fn() },
+      cached: {
+        more: true,
+        rows: [{ id: "job-0", name: "Check the task", running: false, state: "", result: {} }],
+      },
+    });
+    await advance();
+    const more = current.find<HTMLButtonElement>(".chat-summary__automation-more")!;
+    expect(more.disabled).toBe(false);
+    expect(more.getAttribute("aria-disabled")).toBe("true");
+    more.click();
+    expect(request).toHaveBeenCalledOnce();
+    current.cron();
+    await advance();
+    expect(more.hasAttribute("aria-disabled")).toBe(false);
+    more.click();
+    flush();
+    expect(current.element.querySelectorAll(".chat-summary__automation")).toHaveLength(11);
+    expect(request).toHaveBeenCalledTimes(2);
+    request.mockResolvedValueOnce(page());
+    current.cron();
+    await advance();
+    await current.empty();
+  } finally {
+    current.unmount();
+    vi.useRealTimers();
+  }
+});
 
 it.each([false, true])("coalesces hidden refreshes: %s", async (hiddenEvents) => {
   const pending = createDeferred<Page>();
@@ -628,48 +665,12 @@ it.each([false, true])("retires automation access and late pages: loaded=%s", as
   expect(current.element.textContent).not.toContain("Retired automation");
 });
 
-it("shares the mobile session inventory with consumers without starting another catalog", async () => {
-  const checkedAt = Date.now() - 30_000;
-  const result = () =>
-    page([
-      job({
-        lastMeaningfulResult: {
-          outcome: "blocked",
-          summary: "Waiting for Windows CI",
-          atMs: checkedAt,
-        },
-        lastRunStatus: "error",
-        lastRunAtMs: checkedAt - 60_000,
-        lastTriggerEvalAtMs: checkedAt,
-      }),
-    ]);
-  const current = mobile(createGatewayRequestMock(async () => result()));
-  const { container } = current;
-  const ready = () =>
-    waitForSolid(() => {
-      expect(container.textContent).toContain("Check the task");
-      expect(container.querySelector('[aria-busy="false"]')).not.toBeNull();
-    });
-  await ready();
-  expect(container.querySelector("output")?.textContent).toBe("1");
-  expect(container.textContent).toContain("Waiting for Windows CI");
-  expect(container.textContent).toContain("Check failed");
-  expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
-    new Date(checkedAt).toISOString(),
-  );
-  expect(current.request).toHaveBeenCalledTimes(1);
-  current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
-  await ready();
-  expect(current.request).toHaveBeenCalledTimes(2);
-  current.unmount();
-});
-
 it("shares pending reads, retained results, and failed refresh recovery between the mobile list and overview", async () => {
   const checkedAt = Date.now() - 30_000;
   const first = createDeferred<Page>();
   const refresh = createDeferred<Page>();
   const recovery = createDeferred<Page>();
-  const current = mobile(sequence(first.promise, refresh.promise, recovery.promise), true);
+  const current = mobile(sequence(first.promise, refresh.promise, recovery.promise));
   const view = current;
   await waitForSolid(() => {
     expect(view.container.textContent).toContain("Loading automations…");
@@ -687,7 +688,8 @@ it("shares pending reads, retained results, and failed refresh recovery between 
           atMs: checkedAt - 60_000,
         },
         lastRunStatus: "error",
-        lastRunAtMs: checkedAt,
+        lastRunAtMs: checkedAt - 60_000,
+        lastTriggerEvalAtMs: checkedAt,
       }),
     ]),
   );
@@ -702,6 +704,11 @@ it("shares pending reads, retained results, and failed refresh recovery between 
     new Date(checkedAt).toISOString(),
   );
   const retainedRows = [...rows()];
+  expect(retainedRows[0]?.textContent).toContain("Waiting for mobile review");
+  expect(retainedRows[0]?.textContent).toContain("Check failed");
+  expect(retainedRows[0]?.querySelector("time")?.getAttribute("datetime")).toBe(
+    new Date(checkedAt).toISOString(),
+  );
   retainedRows[0]!.focus();
   current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
   await waitForSolid(() =>
@@ -734,45 +741,61 @@ it("shares pending reads, retained results, and failed refresh recovery between 
 });
 
 it("expands 25 retained jobs in tens independently of RPC pagination and resets on reentry", async () => {
-  const pending = createDeferred<Page>();
+  const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
+  Object.defineProperty(Element.prototype, "animate", {
+    configurable: true,
+    value: () => ({ cancel() {} }),
+  });
+  onTestFinished(() => restorePropertyDescriptor(Element.prototype, "animate", animate));
   const jobs = Array.from({ length: 25 }, (_, index) =>
     job({ id: `job-${index}`, name: `Automation ${index + 1}` }),
   );
-  const current = component(
-    createGatewayRequestMock()
-      .mockResolvedValueOnce(page(jobs))
-      .mockImplementationOnce(() => pending.promise),
-  );
+  const current = component(sequence(page(jobs), page(jobs), page()));
+  const remember =
+    vi.fn<NonNullable<Parameters<typeof ChatSummaryAutomations>[0]["onDetailsSnapshot"]>>();
+  const desktop = { expanded: true, onExpandedChange: vi.fn() };
   const { element } = current;
   await current.ready("Automation 1");
+  current.update({ desktop, onDetailsSnapshot: remember });
+  await waitForSolid(() =>
+    expect(element.querySelector("summary")?.getAttribute("aria-expanded")).toBe("true"),
+  );
   const rows = () => element.querySelectorAll<HTMLAnchorElement>(".chat-summary__automation");
   expect(rows()).toHaveLength(10);
   const more = element.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!;
-  more.focus();
-  more.click();
-  flush();
-  expect(rows()).toHaveLength(20);
-  expect(document.activeElement).toBe(rows()[10]);
-  more.focus();
-  more.click();
-  flush();
-  expect(rows()).toHaveLength(25);
-  expect(document.activeElement).toBe(rows()[20]);
+  for (const [index, count] of [20, 25].entries()) {
+    more.focus();
+    more.click();
+    flush();
+    expect(rows()).toHaveLength(count);
+    expect(document.activeElement).toBe(rows()[(index + 1) * 10]);
+  }
   expect(element.querySelector(".chat-summary__automation-more")).toBeNull();
   expect(current.request).toHaveBeenCalledTimes(1);
   current.update({ onNavigate: vi.fn() });
   expect(rows()).toHaveLength(25);
   current.update({ presented: false });
   current.update({ presented: true });
+  await current.ready("Automation 1");
   expect(rows()).toHaveLength(10);
   expect(current.request).toHaveBeenCalledTimes(2);
-  pending.reject(new Error("refresh failed"));
-  await waitForSolid(() => {
-    expect(element.textContent).not.toContain("Couldn't update automations.");
-    expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
+  remember.mockClear();
+  current.update({ desktop: { ...desktop, expanded: false } });
+  await waitForSolid(() => expect(remember.mock.lastCall?.[0].automations?.rows).toHaveLength(10));
+  expect(remember.mock.lastCall?.[0].automations?.rows[0]).toMatchObject({
+    id: "job-0",
+    name: "Automation 1",
   });
-  expect(rows()).toHaveLength(10);
+  expect(rows()).toHaveLength(0);
+  current.update({ desktop });
+  await waitForSolid(() => expect(rows()).toHaveLength(10));
   expect(element.querySelector("summary")?.textContent?.trim()).toBe("Automations");
+  current.cron();
+  await waitForSolid(() =>
+    expect(remember.mock.lastCall?.[0].automations).toMatchObject({ rows: [], more: false }),
+  );
+  expect(rows()).toHaveLength(0);
+  expect(current.request).toHaveBeenCalledTimes(3);
 });
 
 it("retains reconnect facts and distinguishes auto-disabled from paused and stale running", async () => {

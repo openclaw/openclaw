@@ -34,7 +34,7 @@ const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.str
 const packagePath = (root: string, name = "meta") =>
   join(root, "packages", name, `openclaw-${name}-${version}.tgz`);
 
-function fixture() {
+function fixture(family = "") {
   const root = tempDirs.make("openclaw-clawhub-bootstrap-");
   const artifactRoot = join(root, "artifact");
   const matrix = (
@@ -52,7 +52,7 @@ function fixture() {
       packageDir: `extensions/${name}`,
       publishTag: "beta",
       bootstrapMode,
-      family: "",
+      family,
       requiresManualOverride,
     };
   });
@@ -165,27 +165,43 @@ it.each([{ version: "2026.7.1-alpha.3" }, { publishTag: "alpha" }])(
 );
 
 describe("ClawHub bootstrap artifact manifest", () => {
-  it("binds the exact package set and packed file identity", async () => {
+  it.each(["", "bundle-plugin", "code-plugin"])(
+    "binds exact bytes with family %j",
+    async (family) => {
+      const paths = fixture(family);
+      const created = await createManifest(paths);
+      for (const [name, size] of [
+        ["meta", 11],
+        ["existing", 15],
+      ] as const) {
+        const entry = created.entries.find((item) => item.packageName === `@openclaw/${name}`);
+        expect(entry).toMatchObject({
+          artifactPath: `packages/${name}/openclaw-${name}-2026.7.1-beta.3.tgz`,
+          family,
+          size,
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        });
+      }
+      expect(created).toMatchObject({
+        clawhubToolchainIntegrity,
+        clawhubToolchainSha256,
+        clawhubToolchainVersion,
+      });
+
+      await expect(verifyManifest(paths)).resolves.toEqual(created);
+    },
+  );
+
+  it("rejects unknown families in bootstrap matrices and manifests", async () => {
     const paths = fixture();
     const created = await createManifest(paths);
-    for (const [name, size] of [
-      ["meta", 11],
-      ["existing", 15],
-    ] as const) {
-      const entry = created.entries.find((item) => item.packageName === `@openclaw/${name}`);
-      expect(entry).toMatchObject({
-        artifactPath: `packages/${name}/openclaw-${name}-2026.7.1-beta.3.tgz`,
-        size,
-        sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
-      });
-    }
-    expect(created).toMatchObject({
-      clawhubToolchainIntegrity,
-      clawhubToolchainSha256,
-      clawhubToolchainVersion,
-    });
-
-    await expect(verifyManifest(paths)).resolves.toEqual(created);
+    const matrix = JSON.parse(readFileSync(paths.matrixPath, "utf8"));
+    matrix[0].family = "unknown-plugin";
+    writeJson(paths.matrixPath, matrix);
+    await expect(createManifest(paths)).rejects.toThrow("matrix[0].family is invalid.");
+    created.entries[0].family = "unknown-plugin";
+    writeJson(paths.manifestPath, created);
+    await expect(verifyManifest(paths)).rejects.toThrow("matrix[0].family is invalid.");
   });
 
   it("rejects changed bytes and extra artifact files", async () => {

@@ -258,6 +258,7 @@ describe("CLI runtime admission", () => {
           "server.acp-native-model.product.test.ts",
           "server-sidecar-retention.test.ts",
           "server.config-patch.test.ts",
+          "server-runtime-subscriptions.test.ts",
         ].flatMap((file) => ["--exclude", file]),
       ),
     ],

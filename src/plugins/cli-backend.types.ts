@@ -2,6 +2,7 @@ import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
+import type { CliBackendTurnStatus } from "./cli-backend-turn-status.types.js";
 
 type CliBackendNoOutputWatchdog = {
   /** Fraction of overall timeout used when fixed timeout is not set. */
@@ -129,6 +130,8 @@ export type CliBackendExecutionMode = "agent" | "side-question";
 /** Exact backend-native plus canonical OpenClaw tool surface for one CLI run. */
 export type CliBackendToolAvailability = {
   native: readonly string[];
+  /** Read-only native discovery of the already-authorized catalog; grants no execution authority. */
+  discovery?: readonly string[];
   /** Canonical OpenClaw tool names served through the host-isolated transport. */
   openClaw: readonly string[];
 };
@@ -262,6 +265,8 @@ export type CliBackendExecuteContext = {
   registerMessageInjection?: (injection: CliBackendMessageInjection) => void;
   /** Offers graceful turn interruption; the host drops the registration when this run closes. */
   registerTurnInterrupt?: (interrupt: CliBackendTurnInterrupt) => void;
+  /** Optional read-only assessment outside the prompt queue; the host owns its time bound. */
+  registerTurnStatus?: (status: CliBackendTurnStatus) => void;
   /** Closure-bound approval capability; retained copies fail after the run closes. */
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,
@@ -537,6 +542,8 @@ type CliBackendPluginBase = {
    * Core rejects other names before grant/capture and excludes node/tool-disabled runs.
    */
   projectNativeToolAuthority?: (nativeTools: readonly string[]) => readonly string[];
+  /** Native tool that only discovers schemas from the authorized MCP catalog. */
+  nativeToolSearch?: string;
   /**
    * Operator-selected native tools kept on OpenClaw-mediated agent turns, which
    * otherwise expose no native tools. Core applies the same list to ordinary and

@@ -10,6 +10,7 @@ import {
   stageSessionPendingInput,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { readPendingInputSource } from "../../config/sessions/session-pending-input-source.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
@@ -190,6 +191,12 @@ describe("registered chat read scope", () => {
         const interrupted = expectDefined(receipts[2], "interrupted receipt");
         cancelled.finish("cancelled");
         interrupted.finish("interrupted");
+        await interrupted.settled?.();
+        const retained = await readPendingInputSource(scope, "synthetic-page-2:user", true);
+        expect(retained?.snapshot.pending).toMatchObject({
+          state: "interrupted",
+          message_json: JSON.stringify(interrupted.message),
+        });
         const context = await createHistoryReadContext();
         const history = async (pendingBefore?: number) => {
           const [ok, payload, error] = await request(context, client, "chat.history", {
@@ -209,18 +216,17 @@ describe("registered chat read scope", () => {
         };
         const first = (await history()).pendingInputs;
         expect(first).toEqual({
-          total: 23,
+          total: 22,
           items: [],
           queuedCount: 0,
           nextBefore: expect.any(Number),
         });
         const second = (await history(first.nextBefore)).pendingInputs;
         expect(second).toMatchObject({
-          total: 23,
+          total: 22,
           items: [
             { id: queued.inputId, state: "queued" },
             { id: cancelled.inputId, state: "cancelled" },
-            { id: interrupted.inputId, state: "interrupted" },
           ],
         });
         expect(second).not.toHaveProperty("nextBefore");
@@ -233,12 +239,12 @@ describe("registered chat read scope", () => {
         await queued.run(() => appendTranscriptMessage(scope, { message: queued.message }));
         queued.finish("interrupted");
         expect((await history(first.nextBefore)).pendingInputs).toMatchObject({
-          total: 22,
-          items: [
-            { id: cancelled.inputId, state: "cancelled" },
-            { id: interrupted.inputId, state: "interrupted" },
-          ],
+          total: 21,
+          items: [{ id: cancelled.inputId, state: "cancelled" }],
         });
+        expect(
+          (await readPendingInputSource(scope, "synthetic-page-2:user", true))?.snapshot.pending,
+        ).toEqual(retained?.snapshot.pending);
         await upsertSessionEntryCore(scope, {
           sessionId: "replacement-physical-session",
           updatedAt: 2,

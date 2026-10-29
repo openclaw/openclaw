@@ -6,6 +6,8 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { OutputRuntimeEnv } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { formatCliCommand } from "../command-format.js";
 import type { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 
@@ -48,20 +50,29 @@ export async function runGatewaySuspend(
       throw new Error("--wait is too large");
     }
   }
-  const deadlineMs = waitMs === undefined ? undefined : Date.now() + waitMs;
+  // The wait window is consumed by sleeps on the monotonic clock; the
+  // deadline must live there too, or a wall-clock step (NTP correction, VM
+  // resume) keeps issuing prepares past the operator-advertised --wait.
+  const deadlineMs = waitMs === undefined ? undefined : monotonicNow() + waitMs;
   const maxAttempts = waitMs === undefined ? 1 : Math.ceil(waitMs / MIN_SUSPEND_POLL_DELAY_MS) + 1;
   let latest: GatewaySuspendPrepareResult | undefined;
+  const signal = getAsyncWorkSignal();
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (signal?.aborted) {
+      return;
+    }
     // A sleep can overshoot the deadline; never issue a prepare that could
     // suspend the Gateway after the operator's advertised --wait window.
-    if (attempt > 0 && deadlineMs !== undefined && Date.now() >= deadlineMs) {
+    if (attempt > 0 && deadlineMs !== undefined && monotonicNow() >= deadlineMs) {
       break;
     }
     latest = (await deps.callGateway("gateway.suspend.prepare", options.rpcOpts, {
       requestId,
     })) as GatewaySuspendPrepareResult;
     if (latest.status === "ready") {
+      // A dispatched prepare may acquire a lease; retain its receipt even if
+      // interruption was accepted while the mutating request was in flight.
       if (options.json) {
         deps.runtime.writeJson({ ...latest, requestId });
         return;
@@ -79,6 +90,9 @@ export async function runGatewaySuspend(
       );
       return;
     }
+    if (signal?.aborted) {
+      return;
+    }
     if (latest.status === "draining") {
       throw new Error("Gateway suspension unexpectedly entered drain mode");
     }
@@ -87,12 +101,19 @@ export async function runGatewaySuspend(
       break;
     }
 
-    const remainingMs = deadlineMs - Date.now();
+    const remainingMs = deadlineMs - monotonicNow();
     if (remainingMs <= 0) {
       break;
     }
     const delayMs = Math.min(remainingMs, Math.max(MIN_SUSPEND_POLL_DELAY_MS, latest.retryAfterMs));
-    await sleep(delayMs);
+    try {
+      await sleep(delayMs, undefined, { signal });
+    } catch (error) {
+      if (!signal?.aborted) {
+        throw error;
+      }
+      return;
+    }
   }
 
   if (!latest || latest.status !== "busy") {

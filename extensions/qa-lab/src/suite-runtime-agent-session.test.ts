@@ -503,7 +503,7 @@ describe("qa suite runtime agent session helpers", () => {
     await transcript.appendMany([
       ...pending("checkpoint-1", "await qa_restart_wait(); return 'CHECKPOINT-1';"),
       toolResult("checkpoint-1-wait", "wait", { status: "completed" }),
-      ...pending("audit", "return await catalog.search('qa_restart_unsafe_probe');"),
+      ...pending("audit", "return await catalog.search('read');"),
     ]);
 
     await expect(readPending("CHECKPOINT-1")).resolves.toMatchObject({

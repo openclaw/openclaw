@@ -91,7 +91,7 @@ async function runManagedRepair(
     const interactive = outcome.startsWith("interactive-");
     const declined = outcome === "interactive-declined";
     const clean = declined || outcome.startsWith("clean-") || outcome.startsWith("update-");
-    const archiveVerification = outcome === "archive-verification";
+    const archiveVerification = is("archive-verification", "update-parent-stopped");
     const current = clean || archiveVerification;
     const inspectionOnly = outcome === "clean-force-inspect";
     const force = outcome.startsWith("clean-force-");
@@ -449,6 +449,9 @@ async function runManagedRepair(
       }
       if (modernUpdate) {
         expect(events.filter((event) => event !== "repair")).toEqual([]);
+        if (archiveTransform) {
+          expect(archiveTransform).not.toHaveBeenCalled();
+        }
         expectUnchanged();
         return;
       }

@@ -477,16 +477,35 @@ self.addEventListener("fetch", (event) => {
     if (url.searchParams.has(NATIVE_AUTH_PARAM)) {
       return;
     }
+    const navigationKeys = url.searchParams.getAll("__openclawSessionKey");
+    const composerFocus = url.searchParams.getAll("__openclawComposerFocus");
     const sessionEntry =
       new URL(self.location.href).searchParams.get("session-entry") === "1" &&
       pathname.startsWith("/chat/") &&
       pathname !== "/chat/" &&
+      navigationKeys.length <= 1 &&
+      navigationKeys.every((key) => {
+        if (!key.trim()) {
+          return false;
+        }
+        for (let index = 0; index < key.length; index += 1) {
+          const code = key.charCodeAt(index);
+          if (code <= 0x1f || code === 0x7f) {
+            return false;
+          }
+        }
+        return true;
+      }) &&
+      composerFocus.length <= 1 &&
+      composerFocus.every((value) => value === "1") &&
       [...url.searchParams.keys()].every(
         (key) =>
           key === "dashboard" ||
           key === "draft" ||
           key === "openclaw_mount_recovery" ||
-          key === "__openclawSessionFacePreference",
+          key === "__openclawSessionFacePreference" ||
+          key === "__openclawSessionKey" ||
+          key === "__openclawComposerFocus",
       );
     const route = pathname.replace(/\/$/u, "") || "/";
     // Static routes and dedicated dynamic namespaces come from the router.

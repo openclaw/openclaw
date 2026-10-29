@@ -6,7 +6,6 @@ import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { CODE_MODE_NODES_TOOL_ID, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
 import { createCodeModeCatalogBindings, type CodeModeCatalogBinding } from "./code-mode-catalog.js";
-import { markCodeModeCheckpoint } from "./code-mode-checkpoint.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -63,6 +62,29 @@ export type { CodeModeFailureCode, CodeModeHeadlessResult } from "./code-mode-ru
 type CodeModeToolContext = ToolSearchToolContext & { modelContextWindowTokens?: number };
 
 const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
+
+const CODE_MODE_EXEC_PARAMETERS = Type.Object({
+  title: Type.Optional(executionTitleSchema({ required: true })),
+  // `command` stays runtime-only for hook compatibility. Requiring `code`
+  // prevents schema-valid empty calls from constrained models.
+  code: Type.String({
+    description:
+      "Required JavaScript; no TypeScript annotations, Python, shell, `require`, or `import`. Use `return value`; a trailing expression yields `null`.",
+  }),
+  awaitResults: Type.Optional(
+    Type.Boolean({
+      description:
+        "Required task results: keep this call owned through event-driven tool waits, without model polling. Explicit background services stay detached. Guest budget and run/tool deadlines still apply.",
+    }),
+  ),
+});
+
+const CODE_MODE_WAIT_PARAMETERS = Type.Object({
+  runId: Type.String({
+    description:
+      'Top-level runId from an exec result with status "waiting", never a nested tool sessionId.',
+  }),
+});
 
 const CODE_MODE_CATALOG_INDEX_HEADING = [
   "Enabled async tool globals (descriptions are intentionally deferred):",
@@ -195,13 +217,11 @@ function createCodeModeExecDescription(config: ReturnType<typeof resolveCodeMode
 export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   const runtimeRefresh = captureAgentPluginRuntimeRefresh();
   // The surface planner owns activation. Capture limits once so an admitted
-  // control remains executable during model overrides and restart recovery.
+  // control remains executable during model overrides.
   const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
   const resultBudget = resolveToolResultBudget(ctx.modelContextWindowTokens);
   const formatResult = (
     rawResult: Awaited<ReturnType<typeof runCodeModeExec | typeof runWait>>,
-    toolCallId: string,
-    toolName: string,
     runtime: ToolSearchRuntime | undefined,
     signal?: AbortSignal,
   ) => {
@@ -212,7 +232,6 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       compact: true,
     });
     runtime?.sourceReplyCell.attach(controlResult, result.status);
-    markCodeModeCheckpoint(controlResult, toolCallId, toolName, result);
     return recordCodeModeToolOutcome(
       copyInternalToolResultState(controlResult, {
         ...controlResult,
@@ -225,27 +244,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     name: CODE_MODE_EXEC_TOOL_NAME,
     label: "exec",
     description: createCodeModeExecDescription(config),
-    parameters: Type.Object({
-      title: Type.Optional(executionTitleSchema({ required: true })),
-      // `command` stays runtime-only for hook compatibility. Requiring `code`
-      // prevents schema-valid empty calls from constrained models.
-      code: Type.String({
-        description:
-          "Required JavaScript; no TypeScript annotations, Python, shell, `require`, or `import`. Use `return value`; a trailing expression yields `null`.",
-      }),
-      awaitResults: Type.Optional(
-        Type.Boolean({
-          description:
-            "Required task results: keep this call owned through event-driven tool waits, without model polling. Explicit background services stay detached. Guest budget and run/tool deadlines still apply.",
-        }),
-      ),
-      restartSafe: Type.Optional(
-        Type.Boolean({
-          description:
-            "Do not set on a new exec. Set true only when OpenClaw explicitly requests replay after a gateway restart; never for write, edit, exec, or any mutation. True rejects unmarked or namespace surfaces.",
-        }),
-      ),
-    }),
+    parameters: CODE_MODE_EXEC_PARAMETERS,
     execute: async (
       toolCallId: string,
       args: unknown,
@@ -265,7 +264,6 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         resultBudget,
         code: input.code,
         assistantTurnId: getAgentToolAssistantTurnId(),
-        restartSafe: ctx.forceRestartSafeTools === true || input.restartSafe,
         awaitResults: input.awaitResults,
         signal,
         onUpdate,
@@ -273,7 +271,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           runtime = value;
         },
       });
-      return formatResult(result, toolCallId, CODE_MODE_EXEC_TOOL_NAME, runtime, signal);
+      return formatResult(result, runtime, signal);
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
@@ -282,12 +280,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     hideFromChannelProgress: true,
     description:
       'Resume only when the outer exec result has status "waiting", using its top-level runId. A completed exec may return a still-running tool operation inside value; manage that operation through its enabled tool in a new exec. Never pass a nested sessionId or process ID to wait.',
-    parameters: Type.Object({
-      runId: Type.String({
-        description:
-          'Top-level runId from an exec result with status "waiting", never a nested tool sessionId.',
-      }),
-    }),
+    parameters: CODE_MODE_WAIT_PARAMETERS,
     execute: async (
       toolCallId: string,
       args: unknown,
@@ -307,7 +300,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           runtime = value;
         },
       });
-      return formatResult(result, toolCallId, CODE_MODE_WAIT_TOOL_NAME, runtime, signal);
+      return formatResult(result, runtime, signal);
     },
   } as AnyAgentTool);
   return [execTool, waitTool];

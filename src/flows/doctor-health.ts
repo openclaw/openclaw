@@ -164,8 +164,8 @@ async function runDoctorHealthFlowWithResult(
     createDoctorHealthFindingBuffer(effectiveRuntime);
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
-  const recordConfigWriteRefusal = (ctx: DoctorHealthFlowContext): boolean => {
-    const refusal = startup.showDoctorConfigWriteRefusal(ctx);
+  const recordRepairRefusal = (ctx: DoctorHealthFlowContext): boolean => {
+    const refusal = startup.showDoctorRepairRefusal(ctx);
     if (!refusal) {
       return false;
     }
@@ -206,7 +206,11 @@ async function runDoctorHealthFlowWithResult(
     const automaticHeartbeatRepair = await prepareAutomaticHeartbeatRepair(options);
     // Published updater markers opt only custody and backup into maintenance.
     const maintenanceOptions = automaticHeartbeatRepair ? { ...options, repair: true } : options;
-    if (options.repair === true || options.yes === true || interactiveRepair) {
+    // Standalone Doctor warms archives before stopping the Gateway; update already owns the stop.
+    if (
+      !repairMode.updateInProgress &&
+      (options.repair === true || options.yes === true || interactiveRepair)
+    ) {
       preparedArchiveDiscovery = await measure("doctor.archive-preparation", () =>
         startup.prepareDoctorMaintenanceArchives(
           databasePreflight,
@@ -435,7 +439,7 @@ async function runDoctorHealthFlowWithResult(
       healthContext = ctx;
       const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
       await measure("doctor.contributions", () => runDoctorHealthContributions(ctx));
-      if (recordConfigWriteRefusal(ctx)) {
+      if (recordRepairRefusal(ctx)) {
         return undefined;
       }
       if (maintenance) {
@@ -546,7 +550,7 @@ async function runDoctorHealthFlowWithResult(
       showDoctorHealthSummary(healthContext ?? startupFindings);
       return;
     }
-    if (recordConfigWriteRefusal(ctx)) {
+    if (recordRepairRefusal(ctx)) {
       return;
     }
     const pluginWarnings: string[] = [];

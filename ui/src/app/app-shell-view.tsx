@@ -11,6 +11,7 @@ import {
   ContextNewSessionAction,
   renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
@@ -341,6 +342,28 @@ export function ApplicationShell(props: {
               props.host.resizeNavigation(event.detail.splitRatio)
             }
           />
+        </Show>
+        <Show when={view().runtime.readOnlyConfig} keyed>
+          {(notice) => (
+            <p
+              class="shell-config-read-only callout info"
+              inert={view().mobileNavLayout && view().navDrawerOpen}
+            >
+              <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
+              {notice.message || t("nav.gateway.configReadOnlyHint")}
+              <Show when={notice.docsUrl}>
+                {" "}
+                <a
+                  href={notice.docsUrl}
+                  target={EXTERNAL_LINK_TARGET}
+                  rel={buildExternalLinkRel()}
+                  data-link-reader-external
+                >
+                  {t("common.learnMore")}
+                </a>
+              </Show>
+            </p>
+          )}
         </Show>
         <main
           id="control-ui-main"

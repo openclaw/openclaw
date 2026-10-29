@@ -18,6 +18,7 @@ import {
   createTestGitHubPublicationRuntime as createGitHubPublicationRuntime,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  overrideCommands as respond,
   persistClaimPublicationWorkspace,
   persistPublicationTestSession,
   publicationRequest as sessionRequest,
@@ -56,13 +57,6 @@ const worktree = (overrides = {}) => ({
   ...publicationWorktree(),
   ...overrides,
 });
-function respond(override: (argv: string[]) => ReturnType<typeof commandResult> | undefined) {
-  const fallback = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(
-    async (argv: string[], options?: { input?: string }) =>
-      override(argv) ?? (await fallback(argv, options)),
-  );
-}
 async function deferIndexRecovery() {
   const { GitHubPublicationRecoveryPendingError } = await vi.importActual<
     typeof import("./github-publication-git-index.js")
@@ -217,15 +211,12 @@ describe("Gateway GitHub publication boundaries", () => {
   it("rejects a local turn that starts and finishes during snapshot capture", async () => {
     const database = localDatabase();
     const placements = createWorkerSessionPlacementStore({ database });
-    const fallback = mocks.runCommand.getMockImplementation()!;
     let raced = false;
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+    respond(async (argv) => {
       if (!raced && argv.includes("add")) {
         raced = true;
-        const claim = await localClaim(placements, "snapshot");
-        await placements.releaseTurn(claim);
+        await placements.releaseTurn(await localClaim(placements, "snapshot"));
       }
-      return await fallback(argv, options);
     });
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
 
@@ -246,9 +237,8 @@ describe("Gateway GitHub publication boundaries", () => {
     const placements = createWorkerSessionPlacementStore({ database });
     await placements.releaseTurn(await localClaim(placements, "requesting-turn"));
     const other = { sessionId: "other", sessionKey: "agent:main:other", agentId: "main" };
-    const fallback = mocks.runCommand.getMockImplementation()!;
     let raced = false;
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+    respond(async (argv) => {
       if (!raced && argv.includes("add")) {
         raced = true;
         // Another session advances the sequence, then a projection re-reads this idle session.
@@ -261,7 +251,6 @@ describe("Gateway GitHub publication boundaries", () => {
         await placements.releaseTurn(await placements.claimTurn(claim));
         await placements.readProjection([SESSION_ID]);
       }
-      return await fallback(argv, options);
     });
     await expect(
       publish(createTestGitHubPublicationCoordinator({ placements }), "durable-local-reread"),

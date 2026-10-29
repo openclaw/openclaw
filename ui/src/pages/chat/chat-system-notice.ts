@@ -95,18 +95,6 @@ export function projectChatSystemNotice(
   },
 ): ChatItem[] {
   const raw = asRecord(item.message);
-  if (raw?.role === "custom" && raw.customType === "session-send-recovery-blocked") {
-    return [
-      {
-        kind: "notice",
-        key: item.key,
-        timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
-        icon: "cpu",
-        systemEvent: "delivery-warning",
-        text: extractTextCached(item.message) ?? "",
-      },
-    ];
-  }
   if (raw?.role === "custom" && raw.customType === "session-model-change") {
     const details = asRecord(raw.details);
     if (typeof details?.from === "string" && typeof details.to === "string") {
@@ -126,7 +114,7 @@ export function projectChatSystemNotice(
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
   const pendingText =
-    pending && agentUpdate && (pending.status === "cancelled" || pending.status === "interrupted")
+    pending && agentUpdate && pending.status === "cancelled"
       ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
       : pending && pending.status !== "queued"
         ? t(`chat.pendingInputs.${pending.status}`)
@@ -200,15 +188,11 @@ export function projectChatSystemNotice(
       : typeof pluginSteering?.pluginId === "string" && pluginSteering.pluginId.trim()
         ? pluginSteering.pluginId
         : sourceTool?.slice("plugin:".length);
-  const pendingSummaryKey = pending && noticeKind?.pendingSummaryKeys?.[pending.status];
-  const summaryKey = pendingSummaryKey ?? noticeKind?.summaryKey;
-  const text =
-    summaryKey === null
-      ? ""
-      : summaryKey
-        ? t(summaryKey)
-        : (extractTextCached(item.message)?.replace(/^\[System\] /u, "") ?? "");
-  if (!text.trim() && summaryKey !== null) {
+  const summaryKey = noticeKind?.summaryKey;
+  const text = summaryKey
+    ? t(summaryKey)
+    : (extractTextCached(item.message)?.replace(/^\[System\] /u, "") ?? "");
+  if (!text.trim()) {
     return pendingItems;
   }
   return [
@@ -224,8 +208,7 @@ export function projectChatSystemNotice(
       text,
       timestamp: message.timestamp,
       ...optionalBoundaryIdentity(userTurnRunId(item.message)),
-      ...(pendingSummaryKey && pending?.retired ? { retiredPendingInput: pending.retired } : {}),
     },
-    ...(pendingSummaryKey ? [] : pendingItems),
+    ...pendingItems,
   ];
 }

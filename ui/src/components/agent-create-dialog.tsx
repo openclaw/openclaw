@@ -27,6 +27,7 @@ import {
   type GeneratedAvatar,
 } from "../pages/agents/avatar-picker.tsx";
 import "../styles/agent-create-dialog.css";
+import { ModalDialog } from "./modal-dialog.tsx";
 
 registerAgentCreationEnglish();
 
@@ -114,7 +115,7 @@ export function AgentCreateDialog(props: {
   }
 
   return (
-    <openclaw-modal-dialog
+    <ModalDialog
       class="agent-create-modal"
       label={dialogTitle()}
       onModal-cancel={() => props.onCancel()}
@@ -230,6 +231,6 @@ export function AgentCreateDialog(props: {
           </button>
         </openclaw-modal-actions>
       </form>
-    </openclaw-modal-dialog>
+    </ModalDialog>
   );
 }

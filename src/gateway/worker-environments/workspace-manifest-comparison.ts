@@ -1,3 +1,4 @@
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
@@ -10,7 +11,30 @@ import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
 type ManifestNode = WorkerWorkspaceManifestEntry | { path: string; type: "directory" };
-export const OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX = "Cloud workspace result is too large: ";
+const OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX = "Cloud workspace result is too large: ";
+export const OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX =
+  "Cloud workspace staged result exceeds its byte limit";
+const RECOVERY_CANDIDATES_PREFIX = "Largest new files: ";
+
+/** Worker errors preserve messages, not custom fields; these paths are advice, never authority. */
+export function workspaceSizeRecoveryPaths(error: Error): string[] {
+  if (error.message.startsWith(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX)) {
+    return [error.message.slice(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX.length)];
+  }
+  if (!error.message.startsWith(OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX)) {
+    return [];
+  }
+  const line = error.message.split("\n")[1];
+  if (!line?.startsWith(RECOVERY_CANDIDATES_PREFIX)) {
+    return [];
+  }
+  try {
+    const paths: unknown = JSON.parse(line.slice(RECOVERY_CANDIDATES_PREFIX.length));
+    return isStringArray(paths) ? paths : [];
+  } catch {
+    return [];
+  }
+}
 
 export type WorkspaceNode = ManifestNode | { path: string; type: "unsupported" } | undefined;
 
@@ -156,12 +180,16 @@ export function parseChangedWorkspaceResult(
   const remainingBase = manifestNodes(base);
   let recordCount = 0;
   const entries: WorkerWorkspaceManifestEntry[] = [];
+  const newFiles: Array<Extract<WorkerWorkspaceManifestEntry, { type: "file" }>> = [];
   for (const entry of manifestNodes(current).values()) {
     const previous = remainingBase.get(entry.path);
     if (!sameEntry(previous, entry)) {
       recordCount += previous ? 2 : 1;
       if (entry.type !== "directory") {
         entries.push(entry);
+        if (!previous && entry.type === "file" && entry.size > 0) {
+          newFiles.push(entry);
+        }
       }
     }
     remainingBase.delete(entry.path);
@@ -178,9 +206,21 @@ export function parseChangedWorkspaceResult(
       throw new Error(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX + entry.path);
     }
     totalBytes += entry.type === "file" ? entry.size : Buffer.byteLength(entry.target);
-    if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {
-      throw new Error("Cloud workspace staged result exceeds its byte limit");
-    }
+  }
+  if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {
+    const candidates = newFiles.toSorted((left, right) => right.size - left.size).slice(0, 5);
+    throw new Error(
+      OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX +
+        ": " +
+        totalBytes +
+        " bytes across " +
+        entries.length +
+        " changed files/symlinks; " +
+        MAX_RECONCILIATION_TOTAL_BYTES +
+        " byte limit.\n" +
+        RECOVERY_CANDIDATES_PREFIX +
+        JSON.stringify(candidates.map((entry) => entry.path)),
+    );
   }
   return { changed: recordCount > 0, entries };
 }

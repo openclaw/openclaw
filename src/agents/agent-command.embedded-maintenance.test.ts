@@ -676,9 +676,9 @@ describe("agentCommand embedded maintenance", () => {
   it.each(
     (
       [
-        ["restart-during-compaction", "reply owned by restart recovery"],
-        ["restart-after-successful-compaction", "reply owned by restart recovery after compaction"],
-        ["stale-during-compaction", "reply owned by the next gateway lifecycle"],
+        ["restart-during-compaction", "reply awaiting transport before restart"],
+        ["restart-after-successful-compaction", "reply awaiting transport after compaction"],
+        ["stale-during-compaction", "reply retained by its original gateway lifecycle"],
       ] as const
     ).map(([phase, text]) => ({ phase, text })),
   )("does not deliver or clear the pending CLI final for $phase", async ({ phase, text }) => {
@@ -687,13 +687,21 @@ describe("agentCommand embedded maintenance", () => {
     const restart = phase !== "stale-during-compaction";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const abortController = new AbortController();
+    let pendingFinalDelivery: SessionEntry["pendingFinalDelivery"];
     state.runAgentAttemptMock.mockImplementationOnce(async () => {
       return makeResult({ sessionId, text, runner, agentHarnessId: "openclaw" });
     });
     const compact = async (params: { sessionEntry?: SessionEntry }) => {
-      expect(params.sessionEntry).toMatchObject({
-        pendingFinalDelivery: { kind: "replayable", text },
+      pendingFinalDelivery = params.sessionEntry?.pendingFinalDelivery;
+      expect(pendingFinalDelivery).toEqual({
+        kind: "transport-only",
+        intentId: expect.any(String),
+        deliveries: [{ id: expect.any(String), state: "prepared" }],
+        createdAt: expect.any(Number),
+        context: { channel: "discord", to: "discord:dm:123", accountId: "main" },
       });
+      expect(pendingFinalDelivery?.intentId).not.toBe("");
+      expect(pendingFinalDelivery?.deliveries?.[0]?.id).not.toBe("");
       if (restart) {
         abortController.abort(createAgentRunRestartAbortError());
       } else {
@@ -720,10 +728,9 @@ describe("agentCommand embedded maintenance", () => {
       }),
     ).rejects.toThrow("agent run aborted for restart");
 
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
-    expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-      pendingFinalDelivery: { kind: "replayable", text },
-    });
+    expect(findStoredSessionEntry(sessionKey)?.pendingFinalDelivery).toEqual(pendingFinalDelivery);
   });
 
   it("preserves the completed embedded reply when background maintenance loses its lifecycle", async () => {

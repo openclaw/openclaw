@@ -9,6 +9,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // v32 replaces the PostgreSQL vector decoder without rewriting canonical rows.
 export const OPENCLAW_AGENT_SCHEMA_VERSION = 38;
 
+// v36 migrates released starter tables and provenance to canonical Template names.
 // v35 replaces per-worktree workspace nodes with shared immutable trees and scan fingerprints.
 // v34 binds the default cron partition independently of the state directory.
 // v33 extends native PostgreSQL index ordering to predicate-proven non-null keys.
@@ -40,7 +41,7 @@ export const OPENCLAW_AGENT_SCHEMA_VERSION = 38;
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 35;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 36;
 
 export type OpenClawSchemaVersions = {
   state: number;

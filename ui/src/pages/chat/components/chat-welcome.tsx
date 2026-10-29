@@ -28,6 +28,8 @@ export type ChatWelcomeIdentityProps = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
+  /** Undefined leaves bootstrap identity in control; null records a known absence. */
+  assistantAvatarSource?: string | null;
   sessionHost?: UiSessionDefaultsHost | null;
   /** Connected principal's grant; selects starter prompts it can act on. */
   operatorAuth?: WelcomeSuggestionAuth;

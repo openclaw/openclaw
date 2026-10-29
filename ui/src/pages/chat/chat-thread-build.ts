@@ -131,6 +131,7 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
 export function buildChatItems(
   props: BuildChatItemsProps,
   inputOrder: ChatInputOrderState = { keys: [] },
+  mode: "transcript" | "history" = "transcript",
 ): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const inlineInvocations = new Set<string>();
@@ -148,8 +149,7 @@ export function buildChatItems(
       preview: extractChatMessagePreview(item.message),
     };
   });
-  const queuedSends = props.queue ?? [];
-  const segments = props.streamSegments;
+  const { queue: queuedSends = [], streamSegments: segments } = props;
   const activeReasoning = activeChatReasoning(props.reasoning);
   let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
   const resolveProgress = () => {
@@ -172,7 +172,7 @@ export function buildChatItems(
   };
   // Retention and live status share the same explicit or inferred run ownership.
   const activeCommentaryRunId =
-    props.persistCommentary === false && (props.runWorking || props.runActive)
+    mode !== "history" && props.persistCommentary === false && (props.runWorking || props.runActive)
       ? normalizeOptionalString(resolveProgress().runId)
       : undefined;
   const history = composeTranscriptDisplay(
@@ -344,6 +344,23 @@ export function buildChatItems(
 
     items.push(...projectChatSystemNotice(item, normalized));
   }
+  const groupDisplayItems = (hidden?: ReadonlySet<string>) => {
+    const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
+      projectSessionsYieldItems(source, props.showToolCalls, complete);
+    // Keep real user boundaries even when search hides their rows.
+    items = projectRunFailureStreaks(items);
+    const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
+    return groupMessages(
+      projectYields(coalesceToolActivityMessages(items, hidden), complete),
+      { items: complete, people: props.replyPeople, localPerson: props.replyLocalPerson },
+      props.showReasoning ? props.reasoning : undefined,
+      props.showReasoning,
+    );
+  };
+  // History probes must not adopt inputs, resolve timing, or retire live progress.
+  if (mode === "history") {
+    return groupDisplayItems(hiddenHistoryKeys.size > 0 ? hiddenHistoryKeys : undefined);
+  }
   const currentRunId =
     props.runId ??
     (props.stream !== null || queuedSends.some(shouldRenderQueuedSendInThread)
@@ -440,7 +457,6 @@ export function buildChatItems(
       message: createCanvasAssistantMessage(preview, timestamp),
     });
   }
-  items = reconcileLiveCanvasPreviews(items, hiddenHistoryKeys, hiddenKeys);
   const projections: ChatProjection[] = [];
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
@@ -731,15 +747,6 @@ export function buildChatItems(
     hiddenHistoryKeys.size > 0 || hiddenKeys.size > 0
       ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
       : undefined;
-  const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
-    projectSessionsYieldItems(source, props.showToolCalls, complete);
-  // Keep real user boundaries even when search hides their rows.
-  items = projectRunFailureStreaks(items);
-  const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
-  return groupMessages(
-    projectYields(coalesceToolActivityMessages(items, hidden), complete),
-    { items: complete, people: props.replyPeople, localPerson: props.replyLocalPerson },
-    props.showReasoning ? props.reasoning : undefined,
-    props.showReasoning,
-  );
+  items = reconcileLiveCanvasPreviews(items, hiddenHistoryKeys, hiddenKeys);
+  return groupDisplayItems(hidden);
 }

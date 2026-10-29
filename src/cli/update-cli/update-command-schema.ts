@@ -67,6 +67,7 @@ export async function previewUpdateCommand(params: {
     | "requestedChannel"
     | "controlPlaneUpdateSentinelMeta"
     | "packageActivationNotes"
+    | "nodeSecurityWarning"
   >;
   opts: UpdateCommandOptions;
   runId: string;
@@ -89,6 +90,9 @@ export async function previewUpdateCommand(params: {
     }));
   if (preflight) {
     preflight.preflightNotes.push(...(prepared.packageActivationNotes ?? []));
+    if (prepared.nodeSecurityWarning) {
+      preflight.preflightNotes.push(`SECURITY WARNING: ${prepared.nodeSecurityWarning}`);
+    }
     if (target.inspectionWarning) {
       preflight.preflightNotes.push(target.inspectionWarning);
     }
@@ -326,6 +330,7 @@ export async function preflightUpdateCommandSchemas(params: {
       const admission = await inspectUpdateDatabaseContexts({
         roots: switchToGit ? [root, resolveGitInstallDir()] : [root],
         updateInstallKind,
+        packageAlreadyCurrent: params.packageAlreadyCurrent,
         shouldRestart,
         jsonMode: Boolean(opts.json),
         timeoutMs: updateStepTimeoutMs,
@@ -361,7 +366,12 @@ export async function preflightUpdateCommandSchemas(params: {
               channel,
               devTarget,
             })
-          : { schemaVersions: packageTargetSchemaVersions };
+          : {
+              // A no-op keeps the installed runtime, even if registry metadata describes an older build.
+              schemaVersions: params.packageAlreadyCurrent
+                ? undefined
+                : packageTargetSchemaVersions,
+            };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {
         preflightNotes.push(
           "Node compatibility was not checked because the Git target metadata is unavailable.",
@@ -427,6 +437,9 @@ export async function preflightUpdateCommandSchemas(params: {
           preflightNotes.push(
             `Would replace managed gateway service Node (${runtime.value.replacedNodeRunner}) with current Node (${runtime.value.nodeRunner}) for openclaw@${runtime.value.targetVersion}.`,
           );
+        }
+        if (runtime.ok && runtime.value.nodeSecurityWarning) {
+          preflightNotes.push(`SECURITY WARNING: ${runtime.value.nodeSecurityWarning}`);
         }
         if (
           params.packageInstallSpec &&

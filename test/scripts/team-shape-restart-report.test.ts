@@ -158,6 +158,56 @@ it("reports consumed input without an answer as unresolved, retaining actual req
   expect(idleQueued.report.counts.stuckQueued).toBe(1);
 });
 
+it("allows pending work lost at SIGKILL while requiring later sends to settle", () => {
+  const restart = {
+    kind: "sigkill",
+    at: 40,
+    returnedAt: 50,
+    active: [input.sessionKey],
+    idle: [],
+  };
+  const crashed = {
+    ...capture,
+    restarts: [restart],
+    histories: {
+      [input.sessionKey]: {
+        sessionInfo: { hasActiveRun: false },
+        pendingInputs: { items: [{ runId: input.id, state: "queued" }] },
+      },
+    },
+  };
+  const lost = summarizeRestartStress(crashed).report;
+  expect(lost.inputs[0]).toMatchObject({ outcome: "lost-on-crash", crashAt: 40 });
+  expect(lost.invariants.find((item) => item.id === 1)?.status).toBe("pass");
+  expect(lost.counts.stuckQueued).toBe(0);
+
+  const later = summarizeRestartStress({
+    ...crashed,
+    inputs: [...crashed.inputs, { ...input, id: "after-crash", sentAt: 60 }],
+    histories: {
+      [input.sessionKey]: {
+        ...crashed.histories[input.sessionKey],
+        pendingInputs: {
+          items: [
+            { runId: input.id, state: "queued" },
+            { runId: "after-crash", state: "queued" },
+          ],
+        },
+      },
+    },
+  }).report;
+  expect(later.inputs[1]?.outcome).toBe("unresolved");
+  expect(later.invariants.find((item) => item.id === 1)?.status).toBe("fail");
+  expect(later.counts.stuckQueued).toBe(1);
+
+  const unrelated = summarizeRestartStress({
+    ...crashed,
+    restarts: [{ ...restart, active: ["agent:main:another-session"] }],
+  }).report;
+  expect(unrelated.inputs[0]?.outcome).toBe("unresolved");
+  expect(unrelated.invariants.find((item) => item.id === 1)?.status).toBe("fail");
+});
+
 it("flags duplicate effects and final deliveries and visible errors after recovered work", () => {
   const { report } = summarizeRestartStress({
     ...capture,

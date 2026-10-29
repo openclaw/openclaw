@@ -273,10 +273,6 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
-  /** @internal Preserve the recovery owner's replay-safe tool restriction for this turn. */
-  forceRestartSafeTools?: boolean;
-  /** @internal Retain restart-safe Code Mode controls for an interrupted continuation. */
-  forceCodeModeTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
   /**
