@@ -131,30 +131,51 @@ export class RequestClient {
     );
   }
 
-  async get(path: string, query?: RequestQuery): Promise<unknown> {
-    return await this.request("GET", path, { query });
+  async get(path: string, query?: RequestQuery, signal?: AbortSignal): Promise<unknown> {
+    return await this.request("GET", path, { query }, signal);
   }
 
-  async post(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
-    return await this.request("POST", path, { data, query });
+  async post(
+    path: string,
+    data?: RequestData,
+    query?: RequestQuery,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.request("POST", path, { data, query }, signal);
   }
 
-  async patch(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
-    return await this.request("PATCH", path, { data, query });
+  async patch(
+    path: string,
+    data?: RequestData,
+    query?: RequestQuery,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.request("PATCH", path, { data, query }, signal);
   }
 
-  async put(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
-    return await this.request("PUT", path, { data, query });
+  async put(
+    path: string,
+    data?: RequestData,
+    query?: RequestQuery,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.request("PUT", path, { data, query }, signal);
   }
 
-  async delete(path: string, data?: RequestData, query?: RequestQuery): Promise<unknown> {
-    return await this.request("DELETE", path, { data, query });
+  async delete(
+    path: string,
+    data?: RequestData,
+    query?: RequestQuery,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.request("DELETE", path, { data, query }, signal);
   }
 
   protected async request(
     method: string,
     path: string,
     params: { data?: RequestData; query?: RequestQuery },
+    signal?: AbortSignal,
   ): Promise<unknown> {
     const routeKey = createRouteKey(method, path);
     // A shared scheduler can drain under another caller's async context. Capture
@@ -170,7 +191,15 @@ export class RequestClient {
       : assertReadAuthority;
     assertCurrent?.();
     if (!this.options.queueRequests) {
-      return await this.executeRequest(method, path, params, routeKey, assertCurrent, effect);
+      return await this.executeRequest(
+        method,
+        path,
+        params,
+        routeKey,
+        assertCurrent,
+        effect,
+        signal,
+      );
     }
     return await this.scheduler.enqueue({
       method,
@@ -178,6 +207,7 @@ export class RequestClient {
       priority: getRequestPriority(method, path),
       query: params.query,
       data: { data: params.data, assertCurrent, effect },
+      ...(signal ? { signal } : {}),
     });
   }
 
@@ -188,6 +218,7 @@ export class RequestClient {
     routeKey = createRouteKey(method, path),
     assertCurrent?: () => void,
     effect = captureEffectAuthority(),
+    callerSignal?: AbortSignal,
   ): Promise<unknown> {
     const url = `${this.options.apiBaseUrl}${appendQuery(path, params.query)}`;
     const headers = new Headers({
@@ -199,9 +230,11 @@ export class RequestClient {
     const body = serializeRequestBody(params.data, headers);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeout).unref();
-    const signal = this.options.signal
+    const baseSignal = this.options.signal
       ? AbortSignal.any([this.options.signal, controller.signal])
       : controller.signal;
+    // A cancelled caller must also stop the transport, not only stop waiting.
+    const signal = callerSignal ? AbortSignal.any([baseSignal, callerSignal]) : baseSignal;
     try {
       assertCurrent?.();
       const init = { method, headers, body, signal };
