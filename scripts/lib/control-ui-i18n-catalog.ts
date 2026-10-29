@@ -256,6 +256,73 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     }
   }
   Object.assign(workspaceConflict, registerChatSessionEnglish.catalog.chat.workspaceConflict);
+  // Rejoin cold leaves at their original positions for translation-memory source order.
+  const sessionSharing: TranslationMap = {};
+  const sharingCopy = registerChatSessionOptionalEnglish.catalog.chat.sessionSharing;
+  for (const [key, value] of Object.entries(
+    registerChatSessionEnglish.catalog.chat.sessionSharing,
+  )) {
+    sessionSharing[key] = value;
+    const coldKeys: Array<keyof typeof sharingCopy> =
+      key === "closeSearch"
+        ? ["noPeopleFound", "tryAnotherName"]
+        : key === "current"
+          ? ["visibility"]
+          : key === "draft"
+            ? ["publishDraft"]
+            : key === "owner"
+              ? ["noPeople"]
+              : key === "guestWelcomeRetry"
+                ? ["publicAccess"]
+                : key === "worldReadable"
+                  ? [
+                      "notPublic",
+                      "enablePublicAccess",
+                      "disablePublicAccess",
+                      "copyPublicLink",
+                      "publicConfirmTitle",
+                      "publicConfirmMessage",
+                      "publicConfirmEnable",
+                      "publicEnabled",
+                      "publicDisabled",
+                    ]
+                  : [];
+    for (const name of coldKeys) {
+      sessionSharing[name] = sharingCopy[name];
+    }
+  }
+  const subagentsPanel: TranslationMap = {};
+  const panelCopy = registerChatSessionEnglish.catalog.chat.subagentsPanel;
+  for (const [key, value] of Object.entries(
+    registerChatSessionOptionalEnglish.catalog.chat.subagentsPanel,
+  )) {
+    subagentsPanel[key] = value;
+    const hotKeys: Array<keyof typeof panelCopy> =
+      key === "nativeStatus"
+        ? ["title"]
+        : key === "desktopCloseSearch"
+          ? ["desktopWorking"]
+          : key === "mobileFinished"
+            ? ["stopConfirmTitle", "stopConfirmMessage", "stopConfirmAction", "back"]
+            : key === "refresh"
+              ? ["stop", "stopping"]
+              : [];
+    for (const name of hotKeys) {
+      subagentsPanel[name] = panelCopy[name];
+    }
+  }
+  const continueInTerminal: TranslationMap = {};
+  for (const [key, value] of Object.entries(
+    registerChatSessionEnglish.catalog.chat.sessionHeader.continueInTerminal,
+  )) {
+    continueInTerminal[key] = value;
+    if (key === "action") {
+      Object.assign(
+        continueInTerminal,
+        registerChatSessionOptionalEnglish.catalog.chat.sessionHeader.continueInTerminal,
+      );
+    }
+  }
   const toolCards: TranslationMap = {};
   const toolContent = registerChatToolContentEnglish.catalog.chat.toolCards;
   for (const [key, value] of Object.entries(registerChatToolLabelsEnglish.catalog.chat.toolCards)) {
@@ -386,6 +453,12 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         ...registerSessionNavigationEnglish.catalog.chat,
         workspaceConflict,
         sessionDetails,
+        sessionSharing,
+        subagentsPanel,
+        sessionHeader: {
+          ...registerChatSessionEnglish.catalog.chat.sessionHeader,
+          continueInTerminal,
+        },
         sessionSuggestions: {
           ...registerSessionNavigationEnglish.catalog.chat.sessionSuggestions,
           ...registerChatSessionEnglish.catalog.chat.sessionSuggestions,
