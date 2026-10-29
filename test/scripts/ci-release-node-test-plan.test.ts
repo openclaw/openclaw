@@ -65,6 +65,7 @@ function expectInventory(rows: NodeTestShard[], files: string[]) {
 
 it.each([
   ["agentic-gateway-methods", ["gateway-methods", "gateway-methods-isolated"], undefined],
+  ["agentic-agents-support", ["agents-support"], 90],
   ["agentic-cli-process", ["cli-process"], 90],
 ] as const)("keeps %s timing walls until refitted", async (owner, names, timeout) => {
   const configs = names.map((name) => `test/vitest/vitest.${name}.config.ts`);

@@ -35,6 +35,10 @@ export type {
   CliBackendUserInputResult,
 } from "../plugins/cli-backend.types.js";
 export type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
+export type {
+  CliBackendTurnAssessment,
+  CliBackendTurnStatus,
+} from "../plugins/cli-backend-turn-status.types.js";
 export { CliBackendAuthProfilePreparationError } from "../plugins/cli-backend-errors.js";
 export {
   CLI_FRESH_WATCHDOG_DEFAULTS,

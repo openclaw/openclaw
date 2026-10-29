@@ -236,11 +236,12 @@ it("validates a replacement agent file even when the pathname was admitted", asy
   const replacement = `${first.path}.replacement`;
   copyFileSync(first.path, replacement);
   const raw = new (requireNodeSqlite().DatabaseSync)(replacement);
-  raw.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+  raw.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};
+    UPDATE schema_meta SET app_version = '2026.10.8' WHERE meta_key = 'primary'`);
   raw.close();
   renameSync(replacement, first.path);
   using observation = observeReads();
-  expect(() => openReader(options)).toThrow(/newer schema version/iu);
+  expect(() => openReader(options)).toThrow(/OpenClaw 2026\.10\.8;.*doctor --fix/isu);
   expect(validationStatements(observation.queries).length).toBeGreaterThan(0);
 });
 

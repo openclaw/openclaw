@@ -9,6 +9,7 @@ import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { isRetainedSessionTranscriptArchiveName } from "./artifacts.js";
 import { loadSessionEntry, loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry-replace.js";
 import * as lifecycleProjection from "./session-accessor.sqlite-projection.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as childRead from "./session-entry-children-read.js";
@@ -88,10 +89,9 @@ async function cronCase(name: string, extra: Partial<SessionEntry> = {}) {
 }
 
 async function createStore(entries: Record<string, SessionEntry>): Promise<string> {
-  const dir = await fixtureSuite.createCaseDir("store");
-  const storePath = path.join(dir, "sessions.json");
+  const storePath = path.join(await fixtureSuite.createCaseDir("store"), "sessions.json");
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    replaceSessionEntrySync({ sessionKey, storePath }, entry);
   }
   return storePath;
 }
@@ -294,12 +294,10 @@ it("previews pruning without transferring or changing ordinary entries", async (
     [ordinaryKey]: ordinaryEntry,
   });
   appendTranscriptEventSync({ sessionKey, sessionId, storePath }, event);
-
   inspectPages((entries) => {
     expect(entries.map(({ sessionKey: key }) => key)).toEqual([sessionKey]);
   });
   const result = await maintain(storePath, { apply: false });
-
   expect(result).toMatchObject({ preservedRunning: 0, pruned: 1 });
   expect(loadSessionEntry({ sessionKey, storePath })).toEqual(
     sessionEntry(sessionId, now - 8 * DAY_MS),

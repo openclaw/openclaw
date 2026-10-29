@@ -1079,6 +1079,7 @@ jobs:
         id: find
         env:
           GH_TOKEN: ${{ github.token }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           VALIDATION_PURPOSE: ${{ needs.resolve_target.outputs.validation_purpose }}
@@ -2909,7 +2910,9 @@ jobs:
         if: ${{ success() }}
         env:
           GH_TOKEN: ${{ github.token }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           TARGET_REF: ${{ startsWith(github.ref, 'refs/heads/release-ci/') && needs.resolve_target.outputs.sha || inputs.ref }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}

@@ -9,6 +9,7 @@ import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
 } from "../../plugin-sdk/windows-spawn.js";
+import type { CliBackendTurnStatus } from "../../plugins/cli-backend-turn-status.types.js";
 import type {
   CliBackendExecute,
   CliBackendMessageInjection,
@@ -20,6 +21,7 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
 import { isHostGeneratedInputProvenance } from "../../sessions/input-provenance.js";
+import type { ReplyBackendTurnStatus } from "../../sessions/session-controller.turn-status.types.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import {
@@ -45,6 +47,7 @@ import {
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
 import { closePluginIterator, waitForIteratorValue } from "./execute-plugin-iterator.js";
+import { bindCliTurnStatus } from "./execute-plugin-status.js";
 import { createCliPluginWatchdog } from "./execute-plugin-watchdog.js";
 import { createSteeredCliMessageInjection } from "./execute-plugin.steered-transcript.js";
 import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
@@ -467,6 +470,7 @@ export async function executePluginOwnedProcess(params: {
   let watchdog: ReturnType<typeof createCliPluginWatchdog> | undefined;
 
   let messageInjection: CliBackendMessageInjection | undefined;
+  let turnStatus: ReplyBackendTurnStatus | undefined;
   const detachReplyBackend = attachCliReplyBackend(
     run,
     () => {
@@ -474,6 +478,9 @@ export async function executePluginOwnedProcess(params: {
       controller.abort(createCliAbortError());
     },
     {
+      get turnStatus() {
+        return turnStatus;
+      },
       supportsTranscriptCommitWait: true,
       messageInjectionV2: createSteeredCliMessageInjection({
         getInjection: () => messageInjection,
@@ -591,6 +598,14 @@ export async function executePluginOwnedProcess(params: {
         ...(run.executionMode ? { executionMode: run.executionMode } : {}),
         ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
         ...(liveSession ? { liveSession } : {}),
+        registerTurnStatus: (status: CliBackendTurnStatus) => {
+          assertCurrent();
+          const registration: ReplyBackendTurnStatus = bindCliTurnStatus(
+            status,
+            () => turnStatus === registration && assertionSucceeds(assertCurrent),
+          );
+          turnStatus = registration;
+        },
         registerTurnInterrupt: (interrupt) => {
           assertCurrent();
           params.mcpCapture?.registerTurnInterrupt?.({
@@ -698,6 +713,7 @@ export async function executePluginOwnedProcess(params: {
       throw error;
     }
   } finally {
+    turnStatus = undefined;
     params.mcpCapture?.registerTurnInterrupt?.(undefined);
     watchdog?.dispose();
     params.setOnActiveLoopbackAskUserDeadlineChange?.(undefined);

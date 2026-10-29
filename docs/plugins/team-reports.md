@@ -217,6 +217,8 @@ restarting the Gateway with the updated environment.
 `peopleFile` supports symlinks to regular JSON files. FIFOs and other special
 files fail the regular-file check without waiting for a writer. Replace the
 input with a regular roster file before reloading the plugin.
+The file must contain valid UTF-8. If its encoding is invalid, correct the source
+file and reload the plugin; the rejected file is left unchanged.
 
 ### GitHub
 

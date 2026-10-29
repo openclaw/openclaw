@@ -84,8 +84,8 @@ it("reports installation facts with usable guidance", async () => {
     gatewayProbe: { error: "protocol mismatch" },
     gatewaySelf: null,
   });
-  expect(output).toContain(`${serviceRoot} (${serviceVersion})`);
-  expect(output).toContain(`${activeRoot} (2026.9.17)`);
+  expect(output).toContain(`Gateway service's ${serviceVersion} at ${serviceRoot}`);
+  expect(output).toContain(`CLI 2026.9.17 at ${activeRoot}`);
   expect(output).toContain("openclaw doctor --fix");
   expect(output).toContain("openclaw gateway install --force");
 

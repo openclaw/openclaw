@@ -14,7 +14,6 @@ import {
   adoptSubagentRunForRequesterTurnInRuns,
   listUnsettledRequesterChildrenInRuns,
   markRequesterTurnYieldedInRuns,
-  selectRequesterTurnChildren,
   settleRequesterTurnAfterSessionSpawns,
 } from "./subagent-registry-requester-yield.js";
 import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
@@ -124,8 +123,8 @@ afterAll(() => state.cleanup());
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("selectRequesterTurnChildren", () => {
-  it("tracks current requester cohorts without scanning unrelated retained runs", () => {
+describe("markRequesterTurnYieldedInRuns", () => {
+  it("tracks current requester cohorts without scanning unrelated retained runs", async () => {
     subagentRuns.clear();
     try {
       for (let index = 0; index < 256; index++) {
@@ -134,7 +133,7 @@ describe("selectRequesterTurnChildren", () => {
         subagentRuns.set(entry.runId, entry);
       }
       const previous = {
-        ...makeRun("previous"),
+        ...makeRun("previous", false),
         childAgentId: "main",
         requesterAgentId: "main",
         generation: 1,
@@ -165,28 +164,39 @@ describe("selectRequesterTurnChildren", () => {
       const enumeration = vi.spyOn(subagentRuns, "values").mockImplementation(() => {
         throw new Error("Requester selection must not enumerate retained registry rows");
       });
-      const superseded = vi.fn();
-      const select = () =>
-        selectRequesterTurnChildren(
-          subagentRuns,
-          REQUESTER,
-          "main",
-          REQUESTER_TURN,
-          superseded,
-        ).map((entry) => entry.runId);
+      const mark = async (expectedRunIds: string[]) => {
+        const beforeWrite = vi.fn();
+        expect(
+          await markRequesterTurnYieldedInRuns({
+            preparedAuthority: null,
+            requesterSessionKey: REQUESTER,
+            requesterAgentId: "main",
+            requesterTurnRunId: REQUESTER_TURN,
+            runs: subagentRuns,
+            transfer: createRequesterInitialTransferFixture(subagentRuns, beforeWrite),
+          }),
+        ).toBe(expectedRunIds.length);
+        expect(beforeWrite.mock.calls).toEqual(expectedRunIds.length ? [expectedRunIds] : []);
+        const stored = loadSubagentRegistryFromSqlite();
+        for (const runId of expectedRunIds) {
+          expect(subagentRuns.get(runId)?.requesterTurnYielded).toBe(true);
+          expect(stored.get(runId)?.requesterTurnYielded).toBe(true);
+        }
+      };
 
-      expect(select()).toEqual([current.runId]);
-      expect(superseded).toHaveBeenLastCalledWith(previous);
+      await mark([current.runId]);
+      expect(subagentRuns.get(previous.runId)?.requesterTurnYielded).toBeUndefined();
+      expect(subagentRuns.get(independent.runId)?.requesterTurnYielded).toBeUndefined();
       subagentRuns.set(current.runId, { ...current, requesterTurnRunId: "rebound-turn" });
-      expect(select()).toEqual([]);
+      await mark([]);
       subagentRuns.set(current.runId, current);
-      expect(select()).toEqual([current.runId]);
+      await mark([current.runId]);
       subagentRuns.delete(current.runId);
-      expect(select()).toEqual([previous.runId]);
+      await mark([previous.runId]);
       subagentRuns.clear();
-      expect(select()).toEqual([]);
+      await mark([]);
       subagentRuns.set(current.runId, current);
-      expect(select()).toEqual([current.runId]);
+      await mark([current.runId]);
       expect(enumeration).not.toHaveBeenCalled();
     } finally {
       vi.restoreAllMocks();
@@ -372,6 +382,34 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
 });
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
+  it("accounts for a superseded retired receipt without transferring its obligation", async () => {
+    const retired = {
+      ...makeRun("run-retired"),
+      killReconciliation: { killedAt: 2_000, supersededAt: 2_100 },
+    };
+    const current = makeRun("run-current");
+    const runs = runMap(retired, current);
+    const beforeWrite = vi.fn();
+    const schedule = vi.fn();
+
+    expect(await settleRuns([retired, current], { runs, beforeWrite, schedule })).toBe(true);
+    expect(beforeWrite).toHaveBeenCalledExactlyOnceWith(current.runId);
+    expect(runs.get(retired.runId)).toEqual(retired);
+    expect(loadSubagentRegistryFromSqlite().get(current.runId)).toMatchObject({
+      requesterTurnRunId: undefined,
+      requesterSettleWake: {
+        status: "pending",
+        requesterYieldBatch: true,
+        batchRunIds: [current.runId],
+      },
+    });
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(
+      current.runId,
+      runs.get(current.runId),
+      "settle",
+    );
+  });
+
   it.each(["yield intent", "cohort release"] as const)(
     "keeps a selected child's current requester turn at %s",
     async (kind) => {

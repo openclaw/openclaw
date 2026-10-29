@@ -702,6 +702,34 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
     );
   });
 
+  it("keeps the accepted user row when a Gateway restart adds a new resume input", async () => {
+    await withPersistedOrphanBoundary(
+      { parent: true, metadata: true, idempotencyKey: "accepted-user:user" },
+      async ({ input, manager, orphanId, target }) => {
+        const original = manager.getEntry(orphanId);
+        const provenance = { kind: "internal_system" as const, sourceTool: "restart" };
+        input.attempt.inputProvenance = provenance;
+        input.attempt.prompt = "The Gateway restarted. Check current state and continue.";
+
+        await prepareEmbeddedAttemptSessionBoundary(input);
+        const resumeInput: PersistedUserTurnMessage = {
+          role: "user",
+          content: input.attempt.prompt,
+          provenance,
+          timestamp: 2,
+        };
+        await manager.appendMessageAsync(resumeInput);
+
+        const reopened = SessionManager.openBounded(target, { maxBytes: 4096, maxEvents: 20 });
+        expect(reopened.getBranch().filter((entry) => entry.id === orphanId)).toEqual([original]);
+        expect(reopened.buildSessionContext().messages).toMatchObject([
+          { role: "user", content: "orphan wake", idempotencyKey: "accepted-user:user" },
+          { role: "user", content: input.attempt.prompt, provenance },
+        ]);
+      },
+    );
+  });
+
   it("keeps one canonical user turn through an internal retry", async () => {
     await withPersistedOrphanBoundary(
       {

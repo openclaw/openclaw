@@ -3345,6 +3345,7 @@ const RELEASE_TIMING_CONTINUITY_SHARDS = new Set([
 
 // Preserve existing whole-job headroom until these owners have complete timings.
 const LONG_UNFITTED_RELEASE_SHARDS = new Set([
+  "agentic-agents-support",
   "agentic-cli-process",
   "agentic-control-plane-agent-chat",
   "core-runtime-config",

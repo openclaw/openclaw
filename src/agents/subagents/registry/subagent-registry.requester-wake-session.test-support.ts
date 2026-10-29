@@ -23,22 +23,7 @@ import type {
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createExternalRequesterSessionEntry } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
-
-export function pendingRequesterSettleWake(
-  runId: string,
-  batchRunIds = [runId],
-): NonNullable<SubagentRunRecord["requesterSettleWake"]> {
-  return {
-    status: "pending",
-    attemptCount: 0,
-    batchRunIds,
-    requesterYieldBatch: true,
-    rearmGeneration: 1,
-    progressOperationId: runId,
-  };
-}
 
 export function holdRequesterWakeResponses(
   gates: ReadonlyMap<string, Promise<void>>,

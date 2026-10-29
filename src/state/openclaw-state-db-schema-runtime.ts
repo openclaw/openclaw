@@ -69,9 +69,11 @@ import { migrateSessionWatchCursorProvenance } from "./openclaw-state-db-session
 import { isUninitializedNativeStartupDatabase } from "./openclaw-state-db-startup-checkpoint.js";
 import * as retirements from "./openclaw-state-db-table-retirements.js";
 import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-state-db.paths.js";
+import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { assertGatewayServiceSchemaMigrationAllowed } from "./openclaw-state-service-installation.js";
 import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
@@ -122,6 +124,15 @@ export function ensureOpenClawStateRuntimeSchema(
           return [];
         }
         const previousVersion = readStateSchemaContentVersion(db);
+        // Candidate/finalize Doctor and update repair already own offline schema
+        // maintenance. Preserve the migration owner's existing access/refusal order.
+        if (!getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance) {
+          assertGatewayServiceSchemaMigrationAllowed(
+            pathname,
+            previousVersion,
+            OPENCLAW_STATE_SCHEMA_VERSION,
+          );
+        }
         if (previousVersion === 0 && !isUninitializedNativeStartupDatabase(db)) {
           throw new Error(
             "Unrecognized native bootstrap database; preserve it and run openclaw doctor --fix.",

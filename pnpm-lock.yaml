@@ -2870,6 +2870,9 @@ importers:
 
   packages/gateway-client:
     dependencies:
+      '@noble/hashes':
+        specifier: 2.4.0
+        version: 2.4.0
       '@openclaw/gateway-protocol':
         specifier: workspace:*
         version: link:../gateway-protocol

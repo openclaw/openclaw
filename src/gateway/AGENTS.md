@@ -16,6 +16,12 @@
 - Network telemetry/callbacks off turn/token paths. Queue via lifecycle owner with bounds + visible overflow/coalescing.
 - Classify by caller contract, not void returns: authorization, approval, required persistence, user-requested delivery ≠ best-effort; retain ordering/failure semantics. Callback failure must not grant permission/discard required work.
 
+## Usage And Cost
+
+- Keep usage states distinct: measured (zero included), unpriced (missing price shows "Unpriced", never $0), partial (`≥` totals, `—` for ratios of partial counters). A turn is unknown only when it may have billed without a usage report.
+- Price each route from its billing provider's catalog; borrow prices only through manifest `modelPricing.providers.<id>.priceAs`. Subscription usage at API rates is a labeled estimate, not spend.
+- Reports cover every row in range or flag `partial` with the reason; budgets never drop rows silently. Every row names the provider that served it.
+
 ## Write Target And Outcome
 
 - Bind target before first side effect. Never redirect failed writes across accounts, profiles, Gateways, sessions; report/reconcile original target.
