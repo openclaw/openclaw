@@ -1,6 +1,9 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import type {
+  AdmittedRunOperatorAuthority,
+  OperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
 import type { LlmBoundaryOptions } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
@@ -621,6 +624,8 @@ export type SessionControllerMailbox = {
 };
 
 export type SessionControllerSourceAdapter = {
+  /** Original personal ingress, bound at admission; identity evidence, not an execution grant. */
+  initiatingPersonalOperator?: AdmittedRunOperatorAuthority;
   readonly scope?: string;
   readonly authority?: { assertCurrent(): void; signal?: AbortSignal };
   readonly signal?: AbortSignal;

@@ -13,6 +13,7 @@ import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import {
   GitHubPublicationRequesterUnavailableError,
   GitHubPublicationBranchChangedError,
+  GitHubPublicationSessionBranchMismatchError,
   GitHubPublicationWorkspaceChangedError,
 } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
@@ -158,7 +159,10 @@ export async function prepareGitHubPublicationTarget(params: {
     );
     assertCurrent();
     if (localBranch !== worktree.branch) {
-      throw new GitHubPublicationWorkspaceChangedError("GitHub publication branch changed.");
+      throw new GitHubPublicationSessionBranchMismatchError({
+        session: worktree.branch,
+        checkedOut: localBranch,
+      });
     }
     return {
       pushRepository: pr.head.repository,
@@ -184,7 +188,10 @@ export async function prepareGitHubPublicationTarget(params: {
   );
   assertCurrent();
   if (branch !== worktree.branch) {
-    throw new GitHubPublicationWorkspaceChangedError("GitHub publication branch changed.");
+    throw new GitHubPublicationSessionBranchMismatchError({
+      session: worktree.branch,
+      checkedOut: branch,
+    });
   }
   const raw = await requirePublicationCommand(
     [
