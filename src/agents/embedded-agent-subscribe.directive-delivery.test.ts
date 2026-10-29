@@ -328,7 +328,7 @@ it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
         if ("literalText" in scenario) {
           expect
             .soft(delivered.find((payload) => payload.text?.includes(scenario.marker))?.text)
-            .toBe(scenario.literalText + "\n");
+            .toBe(scenario.literalText);
         }
       } else {
         expect.soft(text).not.toContain(scenario.marker);
@@ -509,7 +509,7 @@ it.each([
     expect.soft(blocks.filter((payload) => payload.audioAsVoice)).toHaveLength(edges);
   }
   for (const text of expectedReplies) {
-    expect(delivered.filter((payload) => payload.text === text + "\n")).toHaveLength(1);
+    expect(delivered.filter((payload) => payload.text === text)).toHaveLength(1);
   }
   expect(delivered.filter(isAudioPayload).map((payload) => payload.audioAsVoice)).toEqual([true]);
 });

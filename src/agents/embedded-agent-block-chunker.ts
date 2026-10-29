@@ -580,6 +580,14 @@ export class EmbeddedBlockChunker {
       while (reverse ? index >= minChars : index !== -1) {
         for (let candidate = index; candidate < index + separator.length; candidate++) {
           if (candidate >= minChars && isSafeFenceBreak(unsafeSpans, offset + candidate)) {
+            // Keep a run of empty lines together on the next block. Selecting
+            // its last newline would leave part of the boundary on this block.
+            while (candidate > minChars && buffer[candidate - 1] === "\n") {
+              if (!isSafeFenceBreak(unsafeSpans, offset + candidate - 1)) {
+                break;
+              }
+              candidate -= 1;
+            }
             return { index: candidate };
           }
         }

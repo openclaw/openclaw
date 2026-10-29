@@ -296,7 +296,9 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
           blockSource = pendingBlockSource ?? createBlockReplySource();
         }
         const text = state.cleanBlockTtsDirectiveText.push(
-          visiblePayload.text ?? rawBlockPayloadText,
+          // Keep authored line boundaries without restoring padding removed by
+          // the existing speech-cleaning path (including private-context gaps).
+          visiblePayload.text?.replace(/^[^\S\r\n]+|[^\S\r\n]+$/g, "") ?? rawBlockPayloadText,
         );
         if (blockSource) {
           const hasPendingText = state.cleanBlockTtsDirectiveText.hasBufferedDirectiveText();

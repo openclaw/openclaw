@@ -69,7 +69,7 @@ describe("fenced block streaming", () => {
       delta(tail);
       end(prefix + tail);
       await subscription.waitForPendingEvents();
-      expect(chunks()).toEqual(["Intro", "  ~~~xml\n  <final>literal</final>\n  ~~~", "After"]);
+      expect(chunks()).toEqual(["Intro", "  ~~~xml\n  <final>literal</final>\n  ~~~", "\n\nAfter"]);
     } finally {
       emit({
         type: "tool_execution_end",
@@ -111,7 +111,7 @@ describe("fenced block streaming", () => {
     expect(harness.chunks().length).toBeGreaterThan(1);
     harness.end(text);
     const chunks = harness.chunks();
-    expect(chunks.at(-1)).toBe("After");
+    expect(chunks.at(-1)).toBe("\n\nAfter");
     expect(chunks.every((chunk) => chunk.length <= 1_200)).toBe(true);
     for (const chunk of chunks.slice(0, -1)) {
       expect(chunk.startsWith("```txt\n")).toBe(true);
@@ -348,6 +348,12 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     await h.subscription.waitForPendingEvents();
     const payloads = h.payloads();
     expect(payloads[0]?.text).toBe("Hello.");
+    expect(
+      payloads
+        .slice(0, 2)
+        .map((payload) => payload.text)
+        .join(""),
+    ).toContain("Hello.\n\nAn ordinary paragraph");
     expect(Boolean(payloads[0]?.audioAsVoice)).toBe(true);
     for (const [index, payload] of payloads.entries()) {
       expect(payload.replyToId).toBeUndefined();

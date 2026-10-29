@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { stripLeadingEmptyLines } from "../../shared/text/strip-leading-empty-lines.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   copyReplyPayloadMetadata,
@@ -46,6 +47,8 @@ type NormalizeReplyOptions = {
   responsePrefix?: string;
   applyChannelTransforms?: boolean;
   preserveLeadingSourceBoundary?: boolean;
+  /** The same delivery owner already applied filtering, transforms, and prefix. */
+  prepared?: boolean;
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
@@ -58,6 +61,20 @@ export function normalizeReplyPayloadOutcome(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
 ): NormalizeReplyOutcome {
+  if (opts.prepared) {
+    // A prepared continuation can change dispatch lanes without repeating its
+    // prefix or channel transform; only the block's leading boundary changes.
+    return {
+      kind: "deliver",
+      payload:
+        !opts.preserveLeadingSourceBoundary && payload.text?.startsWith("\n")
+          ? copyReplyPayloadMetadata(payload, {
+              ...payload,
+              text: stripLeadingEmptyLines(payload.text),
+            })
+          : payload,
+    };
+  }
   const suppress = (reason: NormalizeReplySkipReason): NormalizeReplyOutcome => {
     opts.onSkip?.(reason);
     return { kind: "suppress", reason };
