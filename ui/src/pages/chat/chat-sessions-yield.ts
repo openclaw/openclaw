@@ -1,3 +1,4 @@
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
@@ -25,21 +26,34 @@ import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 
+function readYieldReceipt(card: ToolCard): Record<string, unknown> | null {
+  const details = asRecord(card.details);
+  if (details && Object.hasOwn(details, "status")) {
+    return details;
+  }
+  // Plugin result hooks can append text after the receipt; only its leading object is authoritative.
+  const receipt = extractBalancedJsonPrefix((card.outputText ?? "").trimStart(), {
+    openers: ["{"],
+  });
+  return receipt?.startIndex === 0 ? (safeParseJsonRecord(receipt.json) ?? null) : null;
+}
+
 function isConfirmedYield(card: ToolCard): boolean {
   return (
     card.name === "sessions_yield" &&
     Object.hasOwn(card, "args") &&
     card.completed === true &&
     card.isError !== true &&
-    (asRecord(card.details)?.status === "yielded" ||
-      safeParseJsonRecord(card.outputText ?? "")?.status === "yielded")
+    readYieldReceipt(card)?.status === "yielded"
   );
 }
 
-function isConfirmedPrPreparationHandoff(card: ToolCard): boolean {
+// PR preparation and workspace publication both end the turn and resume it
+// with their result; the shared handoff receipt, not the action, proves that.
+function isConfirmedGitHubHandoff(card: ToolCard): boolean {
   if (
     card.name !== "github_publish" ||
-    asRecord(card.args)?.action !== "prepare_pr" ||
+    !Object.hasOwn(card, "args") ||
     card.completed !== true ||
     card.isError === true
   ) {
@@ -145,9 +159,9 @@ function scanSessionsYieldItems(
     const yields = yieldCards.filter(isConfirmedYield);
     const lastYield = yields.at(-1);
     const boundary: ChatItem[] = [];
-    // PR preparation also yields, but its public tool details and non-subagent
+    // GitHub handoffs also yield, but their public tool details and non-subagent
     // lifecycle must not enter the private sessions_yield projection below.
-    const handoff = lastYield ?? cards.findLast(isConfirmedPrPreparationHandoff);
+    const handoff = lastYield ?? cards.findLast(isConfirmedGitHubHandoff);
     if (handoff) {
       // The invisible boundary keeps handed-off rows in place and separates
       // their run from a continuation without declaring an interruption.
@@ -182,7 +196,7 @@ function scanSessionsYieldItems(
       ) {
         handoffRunIds.unshift(handoffRunId);
       }
-      const facts = asRecord(lastYield.details) ?? safeParseJsonRecord(lastYield.outputText ?? "");
+      const facts = readYieldReceipt(lastYield);
       const acknowledgment =
         typeof facts?.acknowledgment === "string" ? facts.acknowledgment.trim() : "";
       if (acknowledgment) {

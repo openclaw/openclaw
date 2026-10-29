@@ -241,7 +241,7 @@ describe("runEmbeddedAttempt tool boundaries", () => {
         unsubscribe();
       }
       expect(cleanup).toHaveBeenCalledExactlyOnceWith(
-        timeout ? "timeout" : cancel ? "cancel" : "completion",
+        timeout ? "timeout" : cancel ? "cancel" : "error",
       );
       if (timeout) {
         expect(events.map(({ event }) => event)).toContainEqual(

@@ -11,6 +11,10 @@ import {
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  resolveMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../gateway/message-action-turn-capability.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import { localPlacement } from "../../gateway/worker-environments/placement-suite.test-support.js";
@@ -26,6 +30,7 @@ import {
   stopSession,
 } from "../../sessions/session-controller.stop.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import { mintReplyMessageActionTurnCapability } from "./agent-runner-utils.js";
 import {
   bindGoalContinuationExecution,
   promoteGoalContinuationYield,
@@ -39,6 +44,7 @@ import {
 import {
   enqueueGoalContinuation,
   isGoalContinuationCurrent,
+  isGoalContinuationPlacementCurrent,
   createGoalContinuationReturn,
 } from "./goal-continuation.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
@@ -172,6 +178,8 @@ function fixture() {
 beforeEach(() => {
   vi.useFakeTimers();
   children.mockResolvedValue([]);
+  workerPlacement.supported = true;
+  workerPlacement.current.mockReset();
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(getFollowupQueueDepth).mockReturnValue(0);
   vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(entry());
@@ -226,15 +234,111 @@ describe("Goal continuation eligibility", () => {
       state: mode === "local" ? "local" : "requested",
       executionMode: mode === "worker-turn" ? "worker-turn" : "remote-exec",
     });
-    expect(await enqueueGoalContinuation(f.params)).toBe(mode === "remote-exec");
+    expect(await enqueueGoalContinuation(f.params)).toBe(
+      mode === "remote-exec" || mode === "local",
+    );
     if (mode === "remote-exec") {
       expect(vi.mocked(enqueueFollowupRun).mock.calls[0]![1].goalContinuation).toEqual({
         ...identity,
         workerGoal: true,
       });
+    } else if (mode === "local") {
+      expect(vi.mocked(enqueueFollowupRun).mock.calls[0]![1].goalContinuation).toEqual({
+        ...identity,
+        localCodexGoal: true,
+      });
     } else {
       expect(enqueueFollowupRun).not.toHaveBeenCalled();
     }
+  });
+  it.each(["local", "worker-required", "no-authority", "revoked"] as const)(
+    "admits unplaced Codex goals only with current local authority (%s)",
+    async (mode) => {
+      const f = fixture();
+      vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue({
+        ...entry(),
+        agentHarnessId: "codex",
+      });
+      workerPlacement.current.mockReturnValue(undefined);
+      if (mode !== "no-authority") {
+        f.params.base.operatorAuthority = {
+          profileId: "operator",
+          scopes: ["operator.admin"],
+          assertCurrent: () => {
+            if (mode === "revoked") {
+              throw new Error("operator revoked");
+            }
+          },
+        };
+      }
+      if (mode === "worker-required") {
+        f.params.base.run.config = { cloudWorkers: { requiredProfile: "worker" } };
+      }
+      if (mode === "revoked") {
+        await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("operator revoked");
+      } else {
+        expect(await enqueueGoalContinuation(f.params)).toBe(mode === "local");
+      }
+      expect(enqueueFollowupRun).toHaveBeenCalledTimes(mode === "local" ? 1 : 0);
+    },
+  );
+  it.each([
+    { marker: "local", current: "local", expected: true },
+    { marker: "local", current: "worker", expected: false },
+    { marker: "worker", current: "local", expected: false },
+    { marker: "worker", current: "worker", expected: true },
+  ] as const)(
+    "revalidates $marker Codex placement at admission when current is $current",
+    async ({ marker, current, expected }) => {
+      workerPlacement.current.mockReturnValue({
+        agentId: "main",
+        sessionKey: "agent:main:goal",
+        sessionId: identity.sessionId,
+        state: current === "local" ? "local" : "requested",
+        executionMode: "remote-exec",
+        generation: 1,
+        turnClaim: null,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+        environmentId: null,
+        activeOwnerEpoch: null,
+        workspaceBaseManifestRef: null,
+        remoteWorkspaceDir: null,
+        workerBundleHash: null,
+        lastTranscriptAckCursor: null,
+        lastLiveEventAckCursor: null,
+        terminalReason: null,
+        terminalAtMs: null,
+        recoveryError: null,
+      });
+      const continuation = {
+        ...identity,
+        ...(marker === "worker"
+          ? { workerGoal: true as const }
+          : { localCodexGoal: true as const }),
+      };
+      await expect(
+        isGoalContinuationPlacementCurrent({
+          continuation,
+          agentId: "main",
+          sessionKey: "agent:main:goal",
+          hasOperatorAuthority: true,
+          requiresWorker: false,
+        }),
+      ).resolves.toBe(expected);
+    },
+  );
+  it("rejects a queued local continuation when current policy requires a worker", async () => {
+    await expect(
+      isGoalContinuationPlacementCurrent({
+        continuation: { ...identity, localCodexGoal: true },
+        agentId: "main",
+        sessionKey: "agent:main:goal",
+        hasOperatorAuthority: true,
+        requiresWorker: true,
+      }),
+    ).resolves.toBe(false);
   });
   it("does not resume paused goals", () => {
     const current = entry();
@@ -254,6 +358,15 @@ describe("Goal continuation eligibility", () => {
     ).toBe(false);
     expect(isGoalContinuationCurrent(identity, { ...current, abortedLastRun: true })).toBe(false);
     expect(isGoalContinuationCurrent(identity, { ...current, agentHarnessId: "codex" })).toBe(
+      false,
+    );
+    expect(
+      isGoalContinuationCurrent(
+        { ...identity, localCodexGoal: true },
+        { ...current, agentHarnessId: "codex" },
+      ),
+    ).toBe(true);
+    expect(isGoalContinuationCurrent(identity, { ...current, agentHarnessId: "external" })).toBe(
       false,
     );
     expect(
@@ -322,6 +435,47 @@ describe("Goal queue custody", () => {
     ]);
     f.operation.complete();
     expect(queued.abortSignal?.aborted).toBe(false);
+  });
+  it.each([
+    { source: "a user turn", event: undefined },
+    { source: "a background completion", event: {} },
+    { source: "a silent completion", event: { deliver: false } },
+  ] as const)("binds channel-turn authority only for successors of $source", async ({ event }) => {
+    const f = fixture();
+    const { base } = f.params;
+    Object.assign(base.run, { messageProvider: "discord", agentAccountId: "default" });
+    Object.assign(base, { originatingChannel: "discord", originatingTo: "channel:123" });
+    if (event) {
+      base.run.internalEventExecution = { ...event, onStarted: vi.fn(), onTerminal: vi.fn() };
+    }
+    expect(await enqueueGoalContinuation(f.params)).toBe(true);
+    const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];
+    const runId = "goal-successor";
+    const sessionCtx = { Provider: "discord", To: "channel:123", AccountId: "default" };
+    const token = mintReplyMessageActionTurnCapability(
+      { followupRun: queued, sessionCtx, opts: { runId } },
+      runId,
+    );
+    try {
+      const lookup = { token, agentId: "main", runId, sessionKey: "agent:main:goal" };
+      Object.assign(lookup, { sessionId: identity.sessionId });
+      if (event) {
+        // The event's captured route never becomes current-conversation authority.
+        expect(token).toBeUndefined();
+        expect(queued.run.internalEventExecution).toBeUndefined();
+        expect(queued.run.sessionEventOrigin).toEqual(event);
+      } else {
+        expect(resolveMessageActionTurnCapability(lookup)).toMatchObject({
+          toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
+        });
+        const otherSession = { ...lookup, sessionKey: "agent:main:other" };
+        expect(resolveMessageActionTurnCapability(otherSession)).toBeUndefined();
+        revokeMessageActionTurnCapability(token);
+        expect(resolveMessageActionTurnCapability(lookup)).toBeUndefined();
+      }
+    } finally {
+      revokeMessageActionTurnCapability(token);
+    }
   });
   it("leaves announcing children from earlier turns with their continuation owner", async () => {
     const f = fixture();

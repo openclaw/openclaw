@@ -27,7 +27,9 @@ Switching back leaves the vault intact.
 Every provider call resolves the requested agent's effective store through the
 same resolver as the native tools. An `owner-private` audience maps to the
 store's private partition; a `conversation` audience maps to that session's
-partition. Missing, foreign, and sandboxed callers are denied.
+partition, or to the private partition when an owner granted the conversation
+read access ([conversation access](/plugins/knowledge/stores-and-access#conversation-access)).
+Missing, foreign, and sandboxed callers are denied.
 
 ## Shared memory reads
 
@@ -101,7 +103,8 @@ nor guarantees that the preference loads in future turns.
 
 ## Knowledge index
 
-Owner-private sessions also receive a short, generated `## Knowledge Index` at
+Owner-private sessions, and conversations an owner granted read access, also
+receive a short, generated `## Knowledge Index` at
 the end of the system prompt, so the agent knows what its vault holds without
 searching first. Knowledge adds it through `before_prompt_build`
 `appendSystemContext`; no setting controls it.
@@ -125,8 +128,9 @@ searching first. Knowledge adds it through `before_prompt_build`
   message, so it stays byte-identical across turns and refreshes after a new
   session or compaction. Records saved during the session appear after the
   next refresh.
-- Conversation audiences, sandboxed sessions, sessions without host memory
-  authority and agents without a provisioned store get no index. Read failures
+- Ungranted conversation audiences, sandboxed sessions, sessions without host
+  memory authority and agents without a provisioned store get no index. Granting
+  or revoking read access changes the index on the conversation's next turn. Read failures
   omit the index and never block the turn.
 
 The index is not owner-approved recall. It injects only labels and clipped
@@ -141,20 +145,22 @@ context.
 - `knowledge_recall` sets or clears a `recall` block on one exact active record:
   `summary` (1–500 characters, required), up to 20 `triggers`, `importance`
   (1–10), and up to 20 host `projects` keys.
-- It requires writes enabled and a current owner-private audience. Conversation
+- It requires writes enabled and a current owner-private audience, or a
+  conversation audience with a read-and-save owner grant. Other conversation
   audiences, operators, and the browser cannot approve recall.
 - Claims with `assertion_origin` of `source` or `agent_inference` cannot be
   approved, because external or inferred text is not owner-approved context.
-- The service writes `approved_by: owner-private` and `approved_at`; callers
-  cannot set them.
+- The service writes `approved_by: owner-private` and `approved_at`, including
+  for approvals made under an owner grant; callers cannot set them.
 - Corrections do not inherit approval. Approve the replacement again.
 
-Candidates are available only to an owner-private audience: trigger candidates
+Candidates are available only to an owner-private audience or a conversation an
+owner granted read access: trigger candidates
 need at least one trigger, project candidates at least one project key. They sort
 by descending importance, then record ID. The default limit is 48 and the
 maximum is 200. Each candidate excerpt is exactly the approved summary; record
-bodies and ingested text never enter it. A conversation audience receives no
-candidates.
+bodies and ingested text never enter it. An ungranted conversation audience
+receives no candidates.
 
 ## Pre-compaction memory flush
 
@@ -170,7 +176,8 @@ writes disabled the provider returns no flush plan, which also prevents a
   project-state changes, and facts about people or projects, with the supporting
   excerpt quoted. It excludes secrets and treats transcript content as data.
 - The source turn's audience is delegated to the flush, so owner-private turns
-  write to the private partition and conversation turns to their own partition.
+  write to the private partition and conversation turns to their own partition,
+  or as their owner grant directs; a read-only grant's flush saves nothing.
   The flush grants no additional authority.
 - During a flush, `knowledge_save_page` and `knowledge_remember` may omit
   `requestId`. Knowledge derives a stable ID from the host flush ID and the page

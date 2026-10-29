@@ -115,7 +115,6 @@ describe("Teams inbound media recovery", () => {
       channelData: {},
       replyToId: "dm-parent",
       attachments: html('<div><attachment id="attachment-1"></attachment></div>'),
-      entities: [],
     });
     expect(botFrameworkMedia).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({

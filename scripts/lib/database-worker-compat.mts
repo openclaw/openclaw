@@ -461,6 +461,9 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return parts.join(".");
   };
+  // Both graph walks reuse the exact callback argument after forwarding is complete.
+  // A cached boolean would incorrectly authorize other arguments in the same call.
+  const inlineArguments = new Map<ts.CallExpression, ts.Expression | undefined>();
   const isInlineInvocation = (node: ts.Node): boolean => {
     const call = node.parent;
     if (!ts.isCallExpression(call)) {
@@ -469,6 +472,10 @@ export function inspectDatabaseWorkerBoundaries(
     if (call.expression === node) {
       return true;
     }
+    if (inlineArguments.has(call)) {
+      return inlineArguments.get(call) === node;
+    }
+    inlineArguments.set(call, undefined);
     const symbol = resolveSymbol(checker.getSymbolAtLocation(call.expression));
     const declaration = symbol?.valueDeclaration?.resolve();
     const callable =
@@ -478,7 +485,9 @@ export function inspectDatabaseWorkerBoundaries(
     }
     const file = path.relative(root, callable.getSourceFile().fileName).split(path.sep).join("/");
     const argument = synchronousScopes.get(file)?.get(operationName(callable));
-    return argument !== undefined && call.arguments[argument] === node;
+    const inlineArgument = argument === undefined ? undefined : call.arguments[argument];
+    inlineArguments.set(call, inlineArgument);
+    return inlineArgument === node;
   };
   const registered = new Map<Symbol, BoundaryOperation>();
   const declarations = new Map<ts.Node, BoundaryOperation>();

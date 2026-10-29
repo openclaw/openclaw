@@ -292,7 +292,9 @@ continue into the Control UI when reopening, reloading, or following a chat link
 The browser uses its session token or paired-device credential; passwords remain
 in memory only. This also works on loopback HTTP, which permits public readers. Chat links remain
 reloadable during Gateway updates; the temporary recovery marker is removed when
-the app starts.
+the app starts. In-app session-key, preferred-face, and composer-focus hints also
+survive reload. The pathname still determines the conversation and its access
+checks; a hint cannot select another conversation or grant access.
 With Tailscale Serve identity authentication enabled, the same-origin handoff
 verifies the viewer through Tailscale and checks access to the requested conversation.
 No saved browser token or extra **Log in** click is needed.

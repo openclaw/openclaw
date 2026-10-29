@@ -47,6 +47,7 @@ For the full key index and the other top-level config domains, see [Configuratio
           sessions: { others: "write" }, // none | view | suggest | write
           agents: ["roboclaw"],
           scopes: ["operator.read", "operator.write", "operator.approvals"],
+          workerProfiles: ["development"], // optional: explicit dispatch of own sessions only
         },
         guest: {
           sessions: { others: "view" },

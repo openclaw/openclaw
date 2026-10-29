@@ -412,6 +412,27 @@
 /* The transcript, excluding reserved Details space, owns spare width.
    Only top-level assistant tables borrow it; prose and nested tables stay put. */
 @container chat-transcript (min-width: 900px) {
+  .chat-group.assistant:has(> :is(.chat-avatar, .chat-avatar-slot)) {
+    --chat-leading-table-clearance: var(--chat-avatar-column);
+  }
+
+  /* A leading breakout table shares the avatar's row. Clear that identity
+     before borrowing its gutter. Reply attribution moves the avatar with the
+     content; it is not clearance. Later content blocks keep their own spacing. */
+  .chat-group.assistant
+    > .chat-group-messages
+    > :is(.chat-bubble:first-child, .chat-reply-attribution + .chat-bubble)
+    > .chat-text:first-child
+    > .markdown-table:first-child,
+  .chat-group.assistant
+    > .chat-group-messages
+    > :is(.chat-agent-run-body:first-child, .chat-reply-attribution + .chat-agent-run-body)
+    > .chat-bubble:first-child
+    > .chat-text:first-child
+    > .markdown-table:first-child {
+    margin-block-start: var(--chat-leading-table-clearance, 0px);
+  }
+
   .chat-virtual-row {
     --chat-table-outset: max(
       0px,
@@ -420,8 +441,7 @@
         calc(
           (
               100cqw - var(--chat-table-reserved-space, 0px) -
-                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-gutter) - 2 *
-                var(--chat-thread-side-inset)
+                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-inline-inset)
             ) /
             2
         )

@@ -116,7 +116,7 @@ describe
           });
           expect(read(legacyScope)).toMatchObject({
             sessionId: "retained-running-session",
-            status: "interrupted",
+            status: "killed",
             abortedLastRun: true,
           });
           admitted(() => {

@@ -20,10 +20,8 @@ import {
 import { readVerifiedSessionColdChunks } from "./session-cold-storage-chunks.js";
 import { decodeSessionColdRecords } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
-import {
-  readSessionColdTranscript,
-  SessionTranscriptColdError,
-} from "./session-cold-storage-state.js";
+import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { findTranscriptEventMatchingInDatabase } from "./session-transcript-match-read.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type { SessionTranscriptEventMatchRequest } from "./session-transcript-worker-read.types.js";

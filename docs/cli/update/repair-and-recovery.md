@@ -960,6 +960,16 @@ a `skipped` migration receipt with a warning. Other repairs continue, and update
 finalization can complete with warnings. An unsafe recovery failure, such as an
 interrupted archive that cannot be restored, still stops Doctor.
 
+A checkpointed raw archive whose sanitized companion is missing also produces a
+warning-bearing skip when its raw prefix still matches the checkpoint and it has
+no records, or every record is already in SQLite. Doctor preserves the raw file
+and checkpoint, records the skip, and continues later repairs and update
+finalization. If any record is still unimported, Doctor preserves the archive and
+refuses recovery. Restore the named sanitized companion from a verified backup,
+then rerun `openclaw doctor --fix` against the same state directory. A truncated
+or modified companion still requires reconciliation; Doctor does not recreate
+missing historical bytes from checkpoint hashes.
+
 Preserve the reported source, its sanitized companion (for example,
 `logs/config-audit.jsonl.migrated` beside `logs/config-audit.jsonl.migrated.raw`),
 and any recovery journals or backups. Follow [backup guidance](/install/backups)

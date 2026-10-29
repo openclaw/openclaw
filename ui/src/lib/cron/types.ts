@@ -89,6 +89,7 @@ export type CronFieldKey =
   | "scheduleAt"
   | "everyAmount"
   | "cronExpr"
+  | "cronTz"
   | "staggerAmount"
   | "activeHoursStart"
   | "activeHoursEnd"

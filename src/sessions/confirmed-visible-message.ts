@@ -120,6 +120,7 @@ export async function commitConfirmedVisibleMessage(
     });
   }
   const entry = await readSessionEntryInWorker({
+    agentId,
     sessionKey: destinationKey,
     storePath,
     readConsistency: "latest",

@@ -333,8 +333,8 @@ describe("Gateway GitHub publication", () => {
 
   it("rejects an effective clean filter before snapshotting workspace content", async () => {
     overrideCommands((_command, argv) => {
-      if (argv.includes("ls-tree")) {
-        return commandResult(`100644 blob ${"f".repeat(40)}\t.GITATTRIBUTES\0`);
+      if (argv.includes("ls-files")) {
+        return commandResult(`${"f".repeat(40)}\n`);
       }
       if (argv.includes("cat-file") && argv.includes("blob")) {
         return commandResult("*.bin filter=lfs\n");
@@ -565,16 +565,28 @@ describe("Gateway GitHub publication", () => {
       await closeStateDatabaseForTest();
 
       let remotePublished = remoteInitiallyPublished;
+      const message =
+        "Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\n" +
+        (bodyOnlyCredit ? "\nThe line above is quoted attribution.\n\n" : "") +
+        `OpenClaw-Publication: ${requestId}\n`;
       overrideCommands((command, argv) => {
         if (command === "git rev-parse --verify HEAD^{commit}") {
           return commandResult(`${NEW_HEAD}\n`);
         }
         if (command === SHOW_HEAD) {
+          return commandResult(`${NEW_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\n${message}`);
+        }
+        if (argv.includes(`repos/openclaw/openclaw/git/commits/${NEW_HEAD}`)) {
+          if (!remotePublished) {
+            return commandResult("", 1);
+          }
           return commandResult(
-            `${NEW_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nResume the publication\n\n` +
-              "Co-authored-by: alice <7+alice@users.noreply.github.com>\n" +
-              (bodyOnlyCredit ? "\nThe line above is quoted attribution.\n\n" : "") +
-              `OpenClaw-Publication: ${requestId}\n`,
+            JSON.stringify({
+              sha: NEW_HEAD,
+              tree: { sha: WORKSPACE_TREE },
+              parents: [{ sha: OLD_HEAD }],
+              message,
+            }),
           );
         }
 

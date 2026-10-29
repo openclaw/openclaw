@@ -57,7 +57,8 @@ export function prepareOpenClawStateReadSource(input: { path: string; env?: Node
       next.admission.identity.key !== source.key ||
       next.admission.identity.birthtime !== source.birthtime ||
       next.maintenanceScope !== original.maintenanceScope ||
-      next.existingSchemaPath !== original.existingSchemaPath
+      next.existingSchemaPath !== original.existingSchemaPath ||
+      next.gatewayServiceInstallation !== original.gatewayServiceInstallation
     ) {
       throw new Error("Prepared state read source changed before read admission");
     }

@@ -30,7 +30,6 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
-import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../src/config/validation-core.js";
 import { isMainModule } from "../src/infra/is-main.js";
@@ -102,13 +101,8 @@ type GatewaySample = {
     calls: { endpoint: string; startedAtMs: number; releasedAtMs: number }[];
     receipts: { request_id: string; status: string; pull_request_url: string | null }[];
   };
+  /** Successful ordinary per-agent chat.history completion, measured from spawn. */
   agentRecoveryMs?: Record<string, number>;
-  registryRecovery?: {
-    events: Record<string, number>;
-    retainedRuns: number;
-    recoveredRuns: number;
-    preservedTerminalRuns: number;
-  };
   integrityGateMs?: Record<string, number>;
   agentDatabaseAdmissionErrors?: number;
   completionMs: number | null;
@@ -259,18 +253,6 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
       },
       cron: { enabled: false },
     },
-  },
-  {
-    id: "interruptedRegistry",
-    name: "gateway, 86 retained runs and eight interrupted executions after SIGKILL",
-    runByDefault: false,
-    completionTracePhase: "sidecars.subagent-recovery",
-    config: {
-      ...BASE_CONFIG,
-      plugins: { enabled: false },
-      cron: { enabled: false },
-    },
-    env: { OPENCLAW_SKIP_CHANNELS: "1" },
   },
   {
     id: "slowAgentDatabase",
@@ -601,7 +583,7 @@ Options:
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
-  --fixture-root <path> Prepared teamBoot, slowAgentDatabase or interruptedRegistry fixture (requires --runs 1 --warmup 0)
+  --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
   --seed-only         Create a new --fixture-root without launching a Gateway
   --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
   --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
@@ -700,24 +682,10 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
         if (
           SLOW_DATABASE_AGENT_IDS.some((agentId) => sample.agentRecoveryMs?.[agentId] === undefined)
         ) {
-          missing.push("per-agent recovery");
+          missing.push("per-agent database admission");
         }
         if (sample.integrityGateMs?.["gate-passed"] === undefined) {
           missing.push("full integrity scan");
-        }
-      }
-      if (result.id === "interruptedRegistry") {
-        const recovery = sample.registryRecovery;
-        if (
-          !recovery ||
-          recovery.retainedRuns !== INTERRUPTED_REGISTRY_RUNS ||
-          recovery.recoveredRuns !== INTERRUPTED_REGISTRY_ACTIVE ||
-          recovery.preservedTerminalRuns !==
-            INTERRUPTED_REGISTRY_RUNS - INTERRUPTED_REGISTRY_ACTIVE ||
-          Object.keys(recovery.events).length !== INTERRUPTED_REGISTRY_ACTIVE ||
-          Object.values(recovery.events).some((count) => count !== 1)
-        ) {
-          missing.push("exactly one recovery per active run and preserved terminal outcomes");
         }
       }
       if (missing.length > 0) {
@@ -749,12 +717,12 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
       if (result.id === "slowAgentDatabase") {
         const gatePassed = sample.integrityGateMs!["gate-passed"]!;
         for (const agentId of SLOW_DATABASE_AGENT_IDS) {
-          const recovered = sample.agentRecoveryMs![agentId]!;
+          const admitted = sample.agentRecoveryMs![agentId]!;
           const slow = agentId === "bench-slow";
-          if (slow ? recovered <= gatePassed : recovered >= gatePassed) {
+          if (slow ? admitted <= gatePassed : admitted >= gatePassed) {
             failures.push({
               id: result.id,
-              reason: `${agentId} recovered at ${recovered.toFixed(1)}ms; must recover ${slow ? "after" : "before"} integrity gate passed at ${gatePassed.toFixed(1)}ms`,
+              reason: `${agentId} database read completed at ${admitted.toFixed(1)}ms; must complete ${slow ? "after" : "before"} integrity gate passed at ${gatePassed.toFixed(1)}ms`,
               sampleIndex: index + 1,
             });
           }
@@ -1066,12 +1034,7 @@ function writeConfig(root: string, benchCase: GatewayBenchCase): string {
   const agentList =
     benchCase.id === "slowAgentDatabase"
       ? SLOW_DATABASE_AGENT_IDS.map((id) => ({ id, workspace: path.join(root, "workspace", id) }))
-      : benchCase.id === "interruptedRegistry"
-        ? INTERRUPTED_REGISTRY_AGENT_IDS.map((id) => ({
-            id,
-            workspace: path.join(root, "workspace", id),
-          }))
-        : buildBenchAgentList(root, benchCase.agentTopology);
+      : buildBenchAgentList(root, benchCase.agentTopology);
   const plugins = benchCase.config.plugins as OpenClawConfig["plugins"];
   const config = fixture
     ? {
@@ -1103,244 +1066,6 @@ const SLOW_DATABASE_AGENT_IDS = [
   "bench-fast-04",
   "bench-slow",
 ] as const;
-
-const INTERRUPTED_REGISTRY_RUNS = 86;
-const INTERRUPTED_REGISTRY_ACTIVE = 8;
-const INTERRUPTED_REGISTRY_AGENT_IDS = Array.from(
-  { length: INTERRUPTED_REGISTRY_ACTIVE },
-  (_, index) => `bench-registry-${index}`,
-);
-
-async function seedInterruptedRegistryFixture(root: string): Promise<void> {
-  if (process.env.OPENCLAW_BENCHMARK_FIXTURE_WRITER !== "1") {
-    const child = spawn(
-      process.execPath,
-      [
-        ...process.execArgv,
-        fileURLToPath(import.meta.url),
-        "--case",
-        "interruptedRegistry",
-        "--fixture-root",
-        root,
-        "--seed-only",
-      ],
-      {
-        env: { ...process.env, OPENCLAW_BENCHMARK_FIXTURE_WRITER: "1" },
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
-    let output = "";
-    let committed = false;
-    child.stdout.on("data", (chunk: Buffer) => {
-      output = (output + chunk.toString()).slice(-16_384);
-      if (!committed && output.includes("interrupted-registry-fixture-ready")) {
-        committed = true;
-        child.kill("SIGKILL");
-      }
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      output = (output + chunk.toString()).slice(-16_384);
-    });
-    const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
-    try {
-      const [, signal] = await once(child, "exit");
-      if (!committed || signal !== "SIGKILL") {
-        throw new Error(
-          `Interrupted registry fixture writer did not finish before SIGKILL: ${output}`,
-        );
-      }
-    } finally {
-      clearTimeout(timer);
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-    }
-    return;
-  }
-  mkdirSync(root);
-  const benchCase = GATEWAY_CASES.find((entry) => entry.id === "interruptedRegistry")!;
-  const configPath = writeConfig(root, benchCase);
-  const env = createGatewayBenchEnv(root, configPath, { caseEnv: benchCase.env });
-  process.env = { ...env };
-  const [agentDb, stateDb, { writeSessionEntry }, { bindSubagentRunRecord }, registry] =
-    await Promise.all([
-      import("../src/state/openclaw-agent-db.js"),
-      import("../src/state/openclaw-state-db.js"),
-      import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
-      import("../src/agents/subagents/registry/subagent-registry.store.codec.js"),
-      import("../src/agents/subagents/registry/subagent-registry.store.kernel.js"),
-    ]);
-  const now = Date.now() - 60_000;
-  const databasePaths = new Set<string>();
-  const terminalExecutions: Record<string, string> = {};
-  const requesterAgentId = INTERRUPTED_REGISTRY_AGENT_IDS[0]!;
-  const requesterStorePath = agentDb.openOpenClawAgentDatabase({
-    agentId: requesterAgentId,
-    env,
-  }).path;
-  for (let index = 0; index < INTERRUPTED_REGISTRY_ACTIVE; index++) {
-    agentDb.runOpenClawAgentWriteTransaction(
-      (database) => {
-        writeSessionEntry(database, `agent:${requesterAgentId}:requester:${index}`, {
-          sessionId: `requester-${index}`,
-          lifecycleRevision: `requester-${index}`,
-          lifecycleRunId: `requester-turn-${index}`,
-          updatedAt: now,
-        });
-      },
-      { agentId: requesterAgentId, env },
-    );
-  }
-  const values = Array.from({ length: INTERRUPTED_REGISTRY_RUNS }, (_, index) => {
-    const agentId = INTERRUPTED_REGISTRY_AGENT_IDS[index % INTERRUPTED_REGISTRY_ACTIVE]!;
-    const runId = `interrupted-registry-${index}`;
-    const childSessionKey = `agent:${agentId}:subagent:${runId}`;
-    const active = index < INTERRUPTED_REGISTRY_ACTIVE;
-    const requester = active ? index % 2 : index % INTERRUPTED_REGISTRY_ACTIVE;
-    const requesterSessionKey = `agent:${requesterAgentId}:requester:${requester}`;
-    const interrupted = active && index >= INTERRUPTED_REGISTRY_ACTIVE / 2;
-    databasePaths.add(agentDb.openOpenClawAgentDatabase({ agentId, env }).path);
-    agentDb.runOpenClawAgentWriteTransaction(
-      (database) => {
-        writeSessionEntry(database, childSessionKey, {
-          sessionId: runId,
-          lifecycleRevision: runId,
-          lifecycleRunId: runId,
-          startedAt: now,
-          updatedAt: now,
-          ...(interrupted ? { abortedLastRun: true } : {}),
-        });
-      },
-      { agentId, env },
-    );
-    const entry: SubagentRunRecord = {
-      runId,
-      childSessionKey,
-      childAgentId: agentId,
-      childSessionIdentity: { sessionId: runId, lifecycleRevision: runId },
-      requesterSessionKey,
-      requesterAgentId,
-      requesterStorePath,
-      requesterDisplayKey: requesterSessionKey,
-      requesterTurnRunId: `requester-turn-${requester}`,
-      completionRequesterSessionId: `requester-${requester}`,
-      completionRequesterLifecycleRevision: `requester-${requester}`,
-      task: "Synthetic interrupted startup recovery",
-      cleanup: "keep",
-      createdAt: now,
-      execution: active
-        ? {
-            status: interrupted ? "interrupted" : "running",
-            startedAt: now,
-            lifecycleGeneration: "synthetic-killed-fixture-writer",
-            ...(interrupted
-              ? ({ interruptedAt: now + 1, interruptionReason: "gateway-restart" } as const)
-              : {}),
-          }
-        : { status: "terminal", startedAt: now, endedAt: now + 1, outcome: { status: "ok" } },
-      ...(!active ? { cleanupCompletedAt: now + 2 } : {}),
-      completion: {
-        required: true,
-        ...(!active ? { resultText: "Completed synthetic work" } : {}),
-      },
-      delivery: active
-        ? { status: "pending" }
-        : { status: "delivered", deliveredAt: now + 2, announcedAt: now + 2 },
-      expectsCompletionMessage: true,
-    };
-    if (!active) {
-      terminalExecutions[runId] = JSON.stringify(entry.execution);
-    }
-    return bindSubagentRunRecord(entry);
-  });
-  stateDb.runOpenClawStateWriteTransaction(
-    (database) => {
-      registry.writeSubagentRunValuesInDatabase(database, values, []);
-    },
-    { env },
-  );
-  const statePath = stateDb.openOpenClawStateDatabase({ env }).path;
-  databasePaths.add(statePath);
-  writeFileSync(
-    path.join(root, "interrupted-registry-fixture.json"),
-    JSON.stringify(
-      {
-        retainedRuns: INTERRUPTED_REGISTRY_RUNS,
-        activeRuns: INTERRUPTED_REGISTRY_ACTIVE,
-        runningRuns: 4,
-        interruptedRuns: 4,
-        predecessor:
-          "SIGKILL of fixture writer after committed writes; no predecessor Gateway or model turns",
-        statePath,
-        terminalExecutions,
-        requesterCohorts: INTERRUPTED_REGISTRY_ACTIVE,
-        activeRequesterCohorts: 2,
-        operatorSource:
-          "Absent synthetic source; exercises missing-source settlement, not successful authority restoration",
-        databaseBytes: [...databasePaths].reduce(
-          (bytes, databasePath) =>
-            bytes +
-            statSync(databasePath).size +
-            (existsSync(`${databasePath}-wal`) ? statSync(`${databasePath}-wal`).size : 0),
-          0,
-        ),
-      },
-      null,
-      2,
-    ),
-  );
-  writeFileSync(
-    path.join(root, "interrupted-registry-preload.mjs"),
-    `
-import { isMainThread } from 'node:worker_threads';
-if (isMainThread) {
-  const listeners = globalThis[Symbol.for('openclaw.sessionLifecycleEventListeners')] ??= new Set();
-  listeners.add((event) => {
-    if (event.reason === 'subagent-status' && /:subagent:interrupted-registry-/.test(event.sessionKey)) {
-      console.log('[interrupted-registry-bench] recovered ' + event.sessionKey.split(':').at(-1));
-    }
-  });
-}
-`,
-  );
-  // The parent kills this writer with open SQLite handles, preserving real WAL/crash residue.
-  setInterval(() => {}, 1000);
-  console.log("interrupted-registry-fixture-ready");
-  await new Promise<never>(() => {});
-}
-
-async function inspectInterruptedRegistryRecovery(root: string, events: Record<string, number>) {
-  const fixture = JSON.parse(
-    readFileSync(path.join(root, "interrupted-registry-fixture.json"), "utf8"),
-  ) as {
-    statePath: string;
-    terminalExecutions: Record<string, string>;
-  };
-  const { DatabaseSync } = await import("node:sqlite");
-  const database = new DatabaseSync(fixture.statePath, { readOnly: true });
-  try {
-    const rows = database.prepare("SELECT run_id, payload_json FROM subagent_runs").all();
-    return {
-      events,
-      retainedRuns: rows.length,
-      recoveredRuns: rows.filter((row) => {
-        const record = JSON.parse(String(row.payload_json)) as SubagentRunRecord;
-        return (
-          !(String(row.run_id) in fixture.terminalExecutions) &&
-          record.execution.status === "terminal" &&
-          record.execution.outcome?.status === "error"
-        );
-      }).length,
-      preservedTerminalRuns: rows.filter(
-        (row) =>
-          fixture.terminalExecutions[String(row.run_id)] ===
-          JSON.stringify((JSON.parse(String(row.payload_json)) as SubagentRunRecord).execution),
-      ).length,
-    };
-  } finally {
-    database.close();
-  }
-}
 
 async function seedTeamBootPublication(
   root: string,
@@ -1726,75 +1451,25 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
   const previousEnv = process.env;
   process.env = { ...env };
   try {
-    const [agentDb, stateDb, { writeSessionEntry }, { bindSubagentRunRecord }, registry] =
-      await Promise.all([
-        import("../src/state/openclaw-agent-db.js"),
-        import("../src/state/openclaw-state-db.js"),
-        import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
-        import("../src/agents/subagents/registry/subagent-registry.store.codec.js"),
-        import("../src/agents/subagents/registry/subagent-registry.store.kernel.js"),
-      ]);
+    const [agentDb, { writeSessionEntry }] = await Promise.all([
+      import("../src/state/openclaw-agent-db.js"),
+      import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
+    ]);
     const now = Date.now() - 60_000;
-    const requesterAgentId = SLOW_DATABASE_AGENT_IDS[0];
     const databases: Array<{ agentId: string; path: string }> = [];
     let slowPath = "";
     try {
       for (const agentId of SLOW_DATABASE_AGENT_IDS) {
         const database = agentDb.openOpenClawAgentDatabase({ agentId, env });
-        const runId = `slow-db-bench-${agentId}`;
-        const childSessionKey = `agent:${agentId}:subagent:${runId}`;
-        const requesterSessionKey = `agent:${requesterAgentId}:requester:${agentId}`;
         agentDb.runOpenClawAgentWriteTransaction(
           (writable) => {
-            writeSessionEntry(writable, requesterSessionKey, {
-              sessionId: `requester-${agentId}`,
-              updatedAt: now,
-            });
-          },
-          { agentId: requesterAgentId, env },
-        );
-        agentDb.runOpenClawAgentWriteTransaction(
-          (writable) => {
-            writeSessionEntry(writable, childSessionKey, {
-              sessionId: runId,
-              lifecycleRevision: runId,
-              lifecycleRunId: runId,
-              startedAt: now,
+            writeSessionEntry(writable, `agent:${agentId}:bench-0`, {
+              sessionId: `slow-db-bench-${agentId}`,
+              label: "Synthetic startup session 0",
               updatedAt: now,
             });
           },
           { agentId, env },
-        );
-        stateDb.runOpenClawStateWriteTransaction(
-          (state) => {
-            registry.writeSubagentRunValuesInDatabase(
-              state,
-              [
-                bindSubagentRunRecord({
-                  runId,
-                  childSessionKey,
-                  childAgentId: agentId,
-                  childSessionIdentity: { sessionId: runId, lifecycleRevision: runId },
-                  requesterSessionKey,
-                  requesterAgentId,
-                  requesterDisplayKey: requesterSessionKey,
-                  task: "Synthetic interrupted startup recovery",
-                  cleanup: "keep",
-                  createdAt: now,
-                  execution: {
-                    status: "running",
-                    startedAt: now,
-                    lifecycleGeneration: "synthetic-previous-gateway",
-                  },
-                  completion: { required: false },
-                  delivery: { status: "not_required" },
-                  expectsCompletionMessage: false,
-                }),
-              ],
-              [],
-            );
-          },
-          { env },
         );
         if (agentId === "bench-slow") {
           slowPath = database.path;
@@ -1817,7 +1492,6 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
       }
     } finally {
       await agentDb.closeOpenClawAgentDatabasesAsync();
-      await stateDb.closeOpenClawStateDatabaseAsync();
     }
     // Exclusive offline fixture custody: the next owner must perform its real full scan.
     for (const database of databases) {
@@ -1842,7 +1516,6 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
       path.join(root, "slow-agent-preload.mjs"),
       `
 import { DatabaseSync } from 'node:sqlite';
-import { isMainThread } from 'node:worker_threads';
 const slowPath = ${JSON.stringify(slowPath)};
 const databasePaths = new Set(${JSON.stringify(databases.map((database) => database.path))});
 const original = DatabaseSync.prototype.prepare;
@@ -1864,15 +1537,6 @@ DatabaseSync.prototype.prepare = function(sql) {
   }
   return original.call(this, sql);
 };
-if (isMainThread) {
-  const key = Symbol.for('openclaw.sessionLifecycleEventListeners');
-  const listeners = globalThis[key] ??= new Set();
-  listeners.add((event) => {
-    if (event.reason === 'subagent-status' && /:subagent:slow-db-bench-/.test(event.sessionKey)) {
-      console.log('[slow-agent-bench] recovered ' + event.sessionKey.split(':')[1]);
-    }
-  });
-}
 `,
     );
   } finally {
@@ -1887,11 +1551,14 @@ async function waitForFirstSessionRpc(params: {
   isDone: () => boolean;
   requireSeededSession: boolean;
   readyAgentId?: string;
+  agentId?: string;
   authToken?: string;
 }): Promise<GatewaySample["firstSessionRpc"]> {
   let attempts = 0;
   let lastError: string | null = null;
   let connectMs: number | null = null;
+  const method = params.agentId ? "chat.history" : "sessions.list";
+  const sessionKey = `agent:${params.agentId ?? "incident-agent-01"}:bench-0`;
   while (performance.now() < params.deadlineAt && !params.isDone()) {
     attempts++;
     const remaining = () => Math.max(1, params.deadlineAt - performance.now());
@@ -1926,48 +1593,62 @@ async function waitForFirstSessionRpc(params: {
       }
       connectMs ??= performance.now() - params.startAt;
       const response = await client.request(
-        "sessions.list",
-        {
-          limit: params.readyAgentId ? 100 : 1,
-          ...(params.requireSeededSession
-            ? { agentId: "incident-agent-01", label: "Synthetic startup session 0" }
-            : {}),
-        },
+        method,
+        params.agentId
+          ? { sessionKey, agentId: params.agentId, limit: 1 }
+          : {
+              limit: params.readyAgentId ? 100 : 1,
+              ...(params.requireSeededSession
+                ? { agentId: "incident-agent-01", label: "Synthetic startup session 0" }
+                : {}),
+            },
         remaining(),
       );
       if (!response.ok) {
-        throw new Error(`sessions.list: ${JSON.stringify(response.error)}`);
+        throw new Error(`${method}: ${JSON.stringify(response.error)}`);
       }
-      if (
-        !response.payload ||
-        typeof response.payload !== "object" ||
-        !("sessions" in response.payload) ||
-        !Array.isArray(response.payload.sessions)
-      ) {
-        throw new Error("sessions.list returned no sessions array");
-      }
-      if (
-        params.requireSeededSession &&
-        !response.payload.sessions.some(
-          (session: unknown) =>
-            session !== null &&
-            typeof session === "object" &&
-            "key" in session &&
-            session.key === "agent:incident-agent-01:bench-0",
-        )
-      ) {
-        throw new Error("sessions.list has not returned the seeded session");
-      }
-      if (
-        params.readyAgentId &&
-        !response.payload.sessions.some(
-          (session: unknown) =>
-            isRecord(session) &&
-            typeof session.key === "string" &&
-            session.key.startsWith(`agent:${params.readyAgentId}:`),
-        )
-      ) {
-        throw new Error("sessions.list has not returned a ready agent's session");
+      if (params.agentId) {
+        // Keyed history reads use the selected agent's DB worker, unlike the shared list projection.
+        if (
+          !isRecord(response.payload) ||
+          response.payload.sessionKey !== sessionKey ||
+          response.payload.sessionId !== `slow-db-bench-${params.agentId}` ||
+          !Array.isArray(response.payload.messages)
+        ) {
+          throw new Error("chat.history has not returned the seeded session");
+        }
+      } else {
+        if (
+          !response.payload ||
+          typeof response.payload !== "object" ||
+          !("sessions" in response.payload) ||
+          !Array.isArray(response.payload.sessions)
+        ) {
+          throw new Error("sessions.list returned no sessions array");
+        }
+        if (
+          params.requireSeededSession &&
+          !response.payload.sessions.some(
+            (session: unknown) =>
+              session !== null &&
+              typeof session === "object" &&
+              "key" in session &&
+              session.key === sessionKey,
+          )
+        ) {
+          throw new Error("sessions.list has not returned the seeded session");
+        }
+        if (
+          params.readyAgentId &&
+          !response.payload.sessions.some(
+            (session: unknown) =>
+              isRecord(session) &&
+              typeof session.key === "string" &&
+              session.key.startsWith(`agent:${params.readyAgentId}:`),
+          )
+        ) {
+          throw new Error("sessions.list has not returned a ready agent's session");
+        }
       }
       return { ms: performance.now() - params.startAt, connectMs, attempts, lastError };
     } catch (error) {
@@ -2052,12 +1733,7 @@ async function runGatewaySample(
     : withGatewayBenchRoot;
   return await withRoot(async (root) => {
     const slowAgent = options.benchCase.id === "slowAgentDatabase";
-    const interruptedRegistry = options.benchCase.id === "interruptedRegistry";
-    const preload = slowAgent
-      ? path.join(root, "slow-agent-preload.mjs")
-      : interruptedRegistry
-        ? path.join(root, "interrupted-registry-preload.mjs")
-        : undefined;
+    const preload = slowAgent ? path.join(root, "slow-agent-preload.mjs") : undefined;
     let port = 0;
     for (let attempt = 0; port < 40000 && attempt < 32; attempt++) {
       port = await getFreePort();
@@ -2099,7 +1775,6 @@ async function runGatewaySample(
       env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${preload}`.trim();
     }
     const agentRecoveryMs: Record<string, number> = {};
-    const registryRecoveryEvents: Record<string, number> = {};
     const integrityGateMs: Record<string, number> = {};
     let agentDatabaseAdmissionErrors = 0;
     if (options.benchCase.incidentFixture) {
@@ -2178,15 +1853,6 @@ async function runGatewaySample(
         if (line.includes("AgentDatabaseAdmissionError")) {
           agentDatabaseAdmissionErrors++;
         }
-        const recoveredAgent = /\[slow-agent-bench\] recovered (\S+)/u.exec(line)?.[1];
-        if (recoveredAgent && SLOW_DATABASE_AGENT_IDS.some((id) => id === recoveredAgent)) {
-          agentRecoveryMs[recoveredAgent] ??= nowMs;
-        }
-        const recoveredRun = /\[interrupted-registry-bench\] recovered (\S+)/u.exec(line)?.[1];
-        if (recoveredRun) {
-          agentRecoveryMs[recoveredRun] ??= nowMs;
-          registryRecoveryEvents[recoveredRun] = (registryRecoveryEvents[recoveredRun] ?? 0) + 1;
-        }
         const gate = /\[slow-agent-bench\] (gate-start|gate-passed)/u.exec(line);
         if (gate) {
           integrityGateMs[gate[1]!] ??= nowMs;
@@ -2259,18 +1925,28 @@ async function runGatewaySample(
               })
             : { ms: null, connectMs: null, attempts: 0, lastError: "Gateway never became healthy" },
         ),
+        healthzProbe.then(async (health) => {
+          if (!slowAgent || health.status !== 200) {
+            return;
+          }
+          await Promise.all(
+            SLOW_DATABASE_AGENT_IDS.map(async (agentId) => {
+              const observation = await waitForFirstSessionRpc({
+                port,
+                startAt,
+                deadlineAt,
+                isDone: () => childExited,
+                requireSeededSession: true,
+                agentId,
+                authToken: TEAM_BOOT_AUTH_TOKEN,
+              });
+              if (observation.ms !== null) {
+                agentRecoveryMs[agentId] = observation.ms;
+              }
+            }),
+          );
+        }),
       ]);
-      if (slowAgent || interruptedRegistry) {
-        while (
-          Object.keys(agentRecoveryMs).length <
-            (slowAgent ? SLOW_DATABASE_AGENT_IDS.length : INTERRUPTED_REGISTRY_ACTIVE) &&
-          startedChild.exitCode === null &&
-          startedChild.signalCode === null &&
-          performance.now() < deadlineAt
-        ) {
-          await delay(25);
-        }
-      }
       // Keep the recovered request alive through its real subprocess boundary even
       // when readyz and the first RPC complete before this optional work finishes.
       if (publicationMarker) {
@@ -2344,15 +2020,6 @@ async function runGatewaySample(
           ? { publicationApi: await inspectPublicationApiFixture(root) }
           : {}),
         ...(slowAgent ? { agentRecoveryMs, integrityGateMs, agentDatabaseAdmissionErrors } : {}),
-        ...(interruptedRegistry
-          ? {
-              agentRecoveryMs,
-              registryRecovery: await inspectInterruptedRegistryRecovery(
-                root,
-                registryRecoveryEvents,
-              ),
-            }
-          : {}),
         completionMs,
         cpuCoreRatio,
         cpuMs,
@@ -2474,31 +2141,21 @@ async function main() {
   const options = parseOptions(argv);
   const slowAgent = options.cases.length === 1 && options.cases[0]?.id === "slowAgentDatabase";
   const teamBoot = options.cases.length === 1 && options.cases[0]?.id === "teamBoot";
-  const interruptedRegistry =
-    options.cases.length === 1 && options.cases[0]?.id === "interruptedRegistry";
-  const fixtureFile = teamBoot
-    ? "team-boot-fixture.json"
-    : interruptedRegistry
-      ? "interrupted-registry-fixture.json"
-      : "slow-agent-fixture.json";
+  const fixtureFile = teamBoot ? "team-boot-fixture.json" : "slow-agent-fixture.json";
   const needsPreparedFixture = options.cases.some(
-    ({ id }) => id === "slowAgentDatabase" || id === "teamBoot" || id === "interruptedRegistry",
+    ({ id }) => id === "slowAgentDatabase" || id === "teamBoot",
   );
   if (options.fixtureRoot || options.seedOnly || needsPreparedFixture) {
     if (
-      (!slowAgent && !teamBoot && !interruptedRegistry) ||
+      (!slowAgent && !teamBoot) ||
       !options.fixtureRoot ||
       (!options.seedOnly && (options.runs !== 1 || options.warmup !== 0))
     ) {
       throw new CliArgumentError(
-        "teamBoot, slowAgentDatabase and interruptedRegistry require --fixture-root and either --seed-only or --runs 1 --warmup 0",
+        "teamBoot and slowAgentDatabase require --fixture-root and either --seed-only or --runs 1 --warmup 0",
       );
     }
     if (options.seedOnly) {
-      if (interruptedRegistry) {
-        await seedInterruptedRegistryFixture(path.resolve(options.fixtureRoot));
-        return;
-      }
       if (teamBoot) {
         await seedTeamBootFixture(path.resolve(options.fixtureRoot), options.cases[0]!);
         return;
@@ -2568,7 +2225,7 @@ async function main() {
     gatewayRuntime: options.gatewayRuntime,
     gatewayCpus: options.gatewayCpus,
     generatedAt: new Date().toISOString(),
-    ...(teamBoot || interruptedRegistry
+    ...(teamBoot
       ? {
           fixture: JSON.parse(readFileSync(path.join(options.fixtureRoot!, fixtureFile), "utf8")),
         }

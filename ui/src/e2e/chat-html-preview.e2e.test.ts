@@ -199,7 +199,7 @@ suite.define(() => {
             const originalFrame = await outer.elementHandle();
             if (mode === "scripts") {
               expect(await gateway.getRequests("sessions.files.assets")).toMatchObject([
-                { params: { path: "page.html", refs: Object.keys(scripts) } },
+                { params: { path: "/workspace/page.html", refs: Object.keys(scripts) } },
               ]);
               expect(await document.locator("html").getAttribute("data-blocking-saw-app")).toBe(
                 "false",

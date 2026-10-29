@@ -9,6 +9,7 @@ import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
   collectSqliteSchemaIssues,
+  createSqliteTableContractReader,
   getCanonicalSqliteNamedIndexContracts,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
@@ -63,7 +64,10 @@ import {
   migrateStateWriteIndexesV27,
   withLegacyStateWriteIndexes,
 } from "./openclaw-state-db-schema-v27-indexes.js";
-import { statePublicationDraftMigration } from "./openclaw-state-db-schema-v28-publication.js";
+import {
+  needsPublicationDraftMigration,
+  statePublicationDraftMigration,
+} from "./openclaw-state-db-schema-v28-publication.js";
 import {
   stateLocalWorkspaceManifestMigration,
   withLegacyLocalWorkspaceManifests,
@@ -85,6 +89,7 @@ import {
 import type { DB } from "./openclaw-state-db.generated.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
+  findMissingLazyStateStartupColumn,
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
   STATE_RUNTIME_SCHEMA_COMPATIBILITY,
@@ -595,6 +600,8 @@ export function migrateBoundedStateSchema(
   if (
     !options.versionMigrationOnly &&
     (tableExists(db, "cron_run_logs") ||
+      (!pending.includes(statePublicationDraftMigration) && needsPublicationDraftMigration(db)) ||
+      findMissingLazyStateStartupColumn(createSqliteTableContractReader(db)) !== undefined ||
       collectSqliteSchemaIssues(db, sourceSchema, {
         ...withLegacyTemplateStateCompatibility(STATE_RUNTIME_SCHEMA_COMPATIBILITY),
         allowedMissingColumns: [

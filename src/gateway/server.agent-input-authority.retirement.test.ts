@@ -12,12 +12,13 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { createSessionsCreateTool } from "../agents/tools/sessions-create-tool.js";
+import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import { readReplySourceInput } from "../auto-reply/reply/reply-source-binding.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
-import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
@@ -143,11 +144,9 @@ it("rejects retained agent and independent-creation input after acceptance", asy
       creationCaller,
       captureAgentToolSourceExecutionGuard,
     );
-    const createdInputEntered = createDeferred<UserTurnTranscriptRecorder>();
+    const createdInputEntered = createDeferred<Parameters<typeof dispatchInboundMessage>[0]>();
     dispatchInboundMessageMock.mockReset().mockImplementation((args) => {
-      createdInputEntered.resolve(
-        expectDefined(args.replyOptions?.userTurnTranscriptRecorder, "created input recorder"),
-      );
+      createdInputEntered.resolve(args);
       return releaseExecution.promise.then(() => ({
         queuedFinal: false,
         counts: { tool: 0, block: 0, final: 0 },
@@ -167,21 +166,39 @@ it("rejects retained agent and independent-creation input after acceptance", asy
       sessionKey: expect.any(String),
       sessionId: expect.any(String),
     });
-    const createdReceipt = created.details as { sessionKey: string; sessionId: string };
+    const createdReceipt = created.details as {
+      sessionKey: string;
+      sessionId: string;
+      runId?: string;
+    };
     const createdScope = await sessionScope(createdReceipt.sessionKey, createdReceipt.sessionId);
-    const createdRecorder = await withinTest(createdInputEntered.promise, signal);
+    const createdInput = await withinTest(createdInputEntered.promise, signal);
+    const createdRecorder = expectDefined(
+      createdInput.replyOptions?.userTurnTranscriptRecorder,
+      "created input recorder",
+    );
+    const createdSource = expectDefined(
+      readReplySourceInput(createdInput.replyOptions),
+      "created physical source",
+    );
     createdWorkReleased = captureSessionControllerSettlement({
       scope: createdScope.storePath,
       identities: [createdReceipt.sessionKey, createdReceipt.sessionId],
     });
     const createdPending = await listSessionPendingInputs(createdScope);
-    expect(createdPending).toMatchObject({ total: 1, items: [{ state: "queued" }] });
-    const createdRunId = expectDefined(createdPending.items[0], "created pending input").runId;
+    expect(createdPending).toEqual({ total: 0, items: [] });
+    const createdRunId = expectDefined(createdReceipt.runId, "created run");
     const createdAbortEntry = expectDefined(
       rpcSourceTesting.get(createdRunId),
       "created input target",
     );
     const createdTranscript = sessionAccessor.loadTranscriptEventsSync(createdScope);
+    const createdAdmission = createdRecorder.getAdmissionReceipt();
+    expect(createdAdmission).toBeDefined();
+    expect(createdRecorder.getPersistedMessage?.()).toMatchObject({
+      content: "Continue independently",
+      provenance: { kind: "inter_session", sourceTool: "sessions_create" },
+    });
     expect(createdAbortEntry.input.abortSignal.aborted).toBe(false);
     expect(() => creationGuard()).not.toThrow();
 
@@ -196,14 +213,15 @@ it("rejects retained agent and independent-creation input after acceptance", asy
     expect(rpcSourceTesting.get(createdRunId)).toBe(createdAbortEntry);
     expect(createdAbortEntry.input.abortSignal.aborted).toBe(false);
     await expect(
-      Promise.resolve().then(() =>
+      Promise.resolve().then(() => {
+        createdSource.abortSignal.throwIfAborted();
         expectDefined(
-          createdRecorder.withPendingInput,
-          "accepted creation input",
-        )(() => createdRecorder.persistApproved()),
-      ),
+          createdSource.sourceAdapter?.authority,
+          "accepted creation authority",
+        ).assertCurrent();
+      }),
     ).rejects.toThrow();
-    expect(createdRecorder.getAdmissionReceipt?.()).toBeUndefined();
+    expect(createdRecorder.getAdmissionReceipt()).toEqual(createdAdmission);
     release();
     await Promise.all([held.resume(), createdWorkReleased]);
     // The service owns source release after the intercepted execution returns.
@@ -222,16 +240,13 @@ it("rejects retained agent and independent-creation input after acceptance", asy
         message: "Gateway instance dispatch unavailable for agent turn",
       },
     });
-    for (const [target, before, beforeTranscript] of [
-      [scope, pending, transcript],
-      [createdScope, createdPending, createdTranscript],
-    ] as const) {
-      expect(await listSessionPendingInputs(target)).toEqual({
-        total: 1,
-        items: [{ ...before.items[0], state: "interrupted" }],
-      });
-      expect(sessionAccessor.loadTranscriptEventsSync(target)).toEqual(beforeTranscript);
-    }
+    expect(await listSessionPendingInputs(scope)).toEqual({
+      total: 1,
+      items: [{ ...pending.items[0], state: "cancelled" }],
+    });
+    expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(transcript);
+    expect(await listSessionPendingInputs(createdScope)).toEqual(createdPending);
+    expect(sessionAccessor.loadTranscriptEventsSync(createdScope)).toEqual(createdTranscript);
     expect(userTurn.recorder?.getAdmissionReceipt()).toBeUndefined();
     expect(createdAbortEntry.input.abortSignal.aborted).toBe(false);
     expect(agentCommandMock).not.toHaveBeenCalled();

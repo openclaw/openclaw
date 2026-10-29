@@ -729,7 +729,7 @@ describe("CI changed Node test plan", () => {
     // Child-process E2Es: the import graph reaches only the test-instance helper.
     {
       changedPath: "src/gateway/server-startup-observers.ts",
-      expected: ["test/gateway-background-process-restart.e2e.test.ts"],
+      expected: ["test/gateway-restart-resume.e2e.test.ts"],
     },
     {
       changedPath: "src/process/command-queue.capacity-groups.ts",
@@ -738,7 +738,7 @@ describe("CI changed Node test plan", () => {
     {
       changedPath: "src/sessions/session-controller.steer.ts",
       expected: [
-        "test/gateway-background-process-restart.e2e.test.ts",
+        "test/gateway-restart-resume.e2e.test.ts",
         "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
       ],
     },

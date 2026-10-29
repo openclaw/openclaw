@@ -88,6 +88,7 @@ const counter = vi.hoisted(() => ({
   path: "",
   checks: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2),
   gate: undefined as SharedArrayBuffer | undefined,
+  workers: new Set<Worker>(),
 }));
 vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-cpu.js")>();
@@ -123,7 +124,7 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
       filename: string | URL,
       options: ConstructorParameters<typeof Worker>[1],
     ) {
-      return actual.createCpuTrackedWorker(filename, {
+      const worker = actual.createCpuTrackedWorker(filename, {
         ...options,
         execArgv: [
           ...(options?.execArgv ?? []),
@@ -137,6 +138,11 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
           testIntegrityGate: counter.gate,
         },
       });
+      if (String(filename).includes("sqlite-store.worker")) {
+        counter.workers.add(worker);
+        worker.once("exit", () => counter.workers.delete(worker));
+      }
+      return worker;
     },
   };
 });
@@ -157,6 +163,12 @@ const makeEnv = (prefix: string) => ({
   OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make(prefix)),
 });
 const checks = () => Array.from(new Int32Array(counter.checks));
+const openPlugin = (env: NodeJS.ProcessEnv, index: number) =>
+  sqliteWorkerStore.openSqliteWorkerStore<FixtureOperations>({
+    moduleUrl: new URL("../infra/sqlite-worker-store.test-support.ts", import.meta.url),
+    databasePath: `${env.OPENCLAW_STATE_DIR}/plugin-${index}.sqlite`,
+    input: undefined,
+  });
 const initialized = (scope: AgentDatabaseExecutionScope, sessionId: string, agentId = "main") =>
   scope.execute({
     type: "session.transcript.initialize",
@@ -212,7 +224,11 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
       const assertWrite = captureAgentDatabaseAdmission("main", { env });
       let publicationWrite = assertWrite;
       const phases: string[] = [];
+      const plugins: sqliteWorkerStore.SqliteWorkerStore<FixtureOperations>[] = [];
       try {
+        for (const index of contents === "valid" ? [0, 1] : []) {
+          plugins.push(await openPlugin(env, index));
+        }
         admission.activate({
           isCurrent: () => current,
           preparationReady: Promise.resolve(),
@@ -241,6 +257,14 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
           },
         });
         await withinTest(integrity.entered(), signal);
+        if (contents === "failed") {
+          plugins.push(await withinTest(openPlugin(env, 0), signal));
+        }
+        for (const plugin of plugins) {
+          expect(
+            await withinTest(plugin.execute({ type: "read", input: undefined }), signal),
+          ).toEqual([]);
+        }
         using projection =
           contents === "failed"
             ? await createTestProjection({ cfg: config, modelCatalog: [] })
@@ -318,9 +342,11 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
               ? ["publication", "open"]
               : ["publication", "open", "migration"],
         );
+        expect(counter.workers.size).toBe(plugins.length);
       } finally {
         integrity.release();
         await owner.stop();
+        await Promise.all(plugins.map((plugin) => plugin.close()));
       }
     });
   },
@@ -435,7 +461,7 @@ it.for(["before-promotion", "revoked", "aborted"] as const)(
   },
 );
 
-it.for(["warm", "cold", "peer", "plugin-warm", "plugin-cold"] as const)(
+it.for(["warm", "cold", "peer"] as const)(
   "serves independent stores and prepares peers while agent integrity is held (%s)",
   { timeout: 30_000 },
   async (workload, { signal }) => {
@@ -453,21 +479,7 @@ it.for(["warm", "cold", "peer", "plugin-warm", "plugin-cold"] as const)(
     });
     const pending: Promise<void>[] = [];
     let slowPrepared = false;
-    const plugins: Promise<sqliteWorkerStore.SqliteWorkerStore<FixtureOperations>>[] = [];
-    const openPlugin = () => {
-      const opening = sqliteWorkerStore.openSqliteWorkerStore<FixtureOperations>({
-        moduleUrl: new URL("../infra/sqlite-worker-store.test-support.ts", import.meta.url),
-        databasePath: `${env.OPENCLAW_STATE_DIR}/plugin-${plugins.length}.sqlite`,
-        input: undefined,
-      });
-      plugins.push(opening);
-      return opening;
-    };
     try {
-      if (workload === "plugin-warm") {
-        await openPlugin();
-        await openPlugin();
-      }
       if (workload === "warm") {
         await queue.enqueue("before", { text: "before preparation" });
       }
@@ -480,20 +492,7 @@ it.for(["warm", "cold", "peer", "plugin-warm", "plugin-cold"] as const)(
       pending.push(preparing);
       void preparing.catch(() => {});
       await withinTest(integrity.entered(), signal);
-      if (workload.startsWith("plugin-")) {
-        if (workload === "plugin-cold") {
-          void openPlugin();
-        }
-        await withinTest(
-          Promise.all(
-            plugins.map(async (opening) => {
-              const store = await opening;
-              expect(await store.execute({ type: "read", input: undefined })).toEqual([]);
-            }),
-          ),
-          signal,
-        );
-      } else if (workload === "peer") {
+      if (workload === "peer") {
         for (const execution of executions.slice(1)) {
           const preparingPeer = execution.prepare(source);
           pending.push(preparingPeer);
@@ -509,7 +508,6 @@ it.for(["warm", "cold", "peer", "plugin-warm", "plugin-cold"] as const)(
     } finally {
       integrity.release();
       await Promise.allSettled(pending);
-      await Promise.all(plugins.map(async (opening) => (await opening).close()));
       await Promise.all(executions.map((execution) => execution.release()));
     }
     expect(slowPrepared).toBe(true);

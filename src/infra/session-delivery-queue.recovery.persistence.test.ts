@@ -21,7 +21,12 @@ it.each([
   await withSessionDeliveryQueue(async (tempDir, queueContext) => {
     const terminal = phase === "settlement";
     const id = await enqueueSessionDelivery(
-      { kind: "systemEvent", sessionKey: "agent:main:main", text: "pending delivery" },
+      {
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        messageId: "produced-media-delivery",
+        expectedMediaUrls: ["https://example.invalid/produced-image.png"],
+      },
       queueContext,
     );
     const { db } = openOpenClawStateDatabase({

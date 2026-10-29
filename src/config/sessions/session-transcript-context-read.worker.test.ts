@@ -34,14 +34,18 @@ import { readSessionTranscriptWatermarkAsync } from "./session-transcript-waterm
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
+function createTranscriptTarget(sessionId: string, storePath: string) {
+  return {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath,
+  };
+}
+
 it("captures a caller's transcript anchor before asynchronous reading", async () => {
   await withOpenClawTestState({ label: "context-anchor-snapshot" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "snapshot",
-      sessionKey: "agent:main:snapshot",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const target = createTranscriptTarget("snapshot", state.statePath("transcript.sqlite"));
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target);
     const { anchor } = await manager.appendMessageWithTranscriptAnchorAsync({
@@ -78,12 +82,7 @@ it("reads a prepared transcript snapshot while another writer owns the FIFO", as
   signal,
 }) => {
   await withOpenClawTestState({ label: "prepared-read-writer-fifo" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "prepared-read",
-      sessionKey: "agent:main:prepared-read",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const target = createTranscriptTarget("prepared-read", state.statePath("transcript.sqlite"));
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync({ role: "user", content: "committed", timestamp: 1 });
@@ -117,12 +116,10 @@ it("reads a prepared transcript snapshot while another writer owns the FIFO", as
 
 it("keeps admitted delta reads with their writer when independent history cannot settle", async () => {
   await withOpenClawTestState({ label: "locked-admitted-delta" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "locked-admitted-delta",
-      sessionKey: "agent:main:locked-admitted-delta",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const target = createTranscriptTarget(
+      "locked-admitted-delta",
+      state.statePath("transcript.sqlite"),
+    );
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync({ role: "user", content: "earlier", timestamp: 1 });
@@ -194,12 +191,7 @@ it("validates context projection inside a transcript lock and append preparation
   signal,
 }) => {
   await withOpenClawTestState({ label: "locked-context-projection" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "locked-context",
-      sessionKey: "agent:main:locked-context",
-      storePath: state.statePath("sessions.json"),
-    };
+    const target = createTranscriptTarget("locked-context", state.statePath("sessions.json"));
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync({ role: "user", content: "earlier", timestamp: 1 });
@@ -263,12 +255,10 @@ it.each([
   ["full context", "append"],
 ] as const)("validates a fenced %s after an owned %s", async (route, change) => {
   await withOpenClawTestState({ label: `context-${change}` }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "projection-admission",
-      sessionKey: "agent:main:projection-admission",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const target = createTranscriptTarget(
+      "projection-admission",
+      state.statePath("transcript.sqlite"),
+    );
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync({ role: "user", content: "earlier", timestamp: 1 });
@@ -323,12 +313,7 @@ it.each([false, true])(
   "reads context, watermarks and message presence without caller SQL (warm=%s)",
   async (warm) => {
     await withOpenClawTestState({ label: "transcript-context-reader" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "context-reader",
-        sessionKey: "agent:main:context-reader",
-        storePath: state.statePath("transcript.sqlite"),
-      };
+      const scope = createTranscriptTarget("context-reader", state.statePath("transcript.sqlite"));
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const source = await SessionManager.openAsync(scope);
       const user = await source.appendMessageAsync({
@@ -380,12 +365,7 @@ it.each([false, true])(
 
 it("refuses a rewrite after final worker validation but before host consumption", async () => {
   await withOpenClawTestState({ label: "context-validation-reply" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "delayed-context",
-      sessionKey: "agent:main:delayed-context",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const scope = createTranscriptTarget("delayed-context", state.statePath("transcript.sqlite"));
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const source = SessionManager.open(scope);
     source.appendMessage({ role: "user", content: "original", timestamp: 1 });
@@ -425,12 +405,7 @@ it.each(["projection", "full context"] as const)(
   "accepts a fenced %s through a store alias but rejects a copied store",
   async (route) => {
     await withOpenClawTestState({ label: "context-input-store-alias" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "alias-input",
-        sessionKey: "agent:main:alias-input",
-        storePath: state.statePath("transcript.sqlite"),
-      };
+      const target = createTranscriptTarget("alias-input", state.statePath("transcript.sqlite"));
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const manager = await SessionManager.openAsync(target);
       await manager.appendMessageAsync({ role: "user", content: "earlier", timestamp: 1 });
@@ -484,12 +459,7 @@ it.each(["projection", "full context"] as const)(
 
 it("rejects a read owner closed after scanning instead of accepting the detached context", async () => {
   await withOpenClawTestState({ label: "context-reader-close" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "context-close",
-      sessionKey: "agent:main:context-close",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const scope = createTranscriptTarget("context-close", state.statePath("transcript.sqlite"));
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const source = await SessionManager.openAsync(scope);
     await source.appendMessageAsync({ role: "user", content: "original", timestamp: 1 });
@@ -527,12 +497,10 @@ it.each(["worker", "native"] as const)(
       );
       const aliasPath = path.join(aliasDirectory, path.basename(originalPath));
       for (const writeAlias of [false, true]) {
-        const target = {
-          agentId: "main",
-          sessionId: `anchor-locator-${writeAlias}`,
-          sessionKey: `agent:main:anchor-locator-${writeAlias}`,
-          storePath: writeAlias ? aliasPath : originalPath,
-        };
+        const target = createTranscriptTarget(
+          `anchor-locator-${writeAlias}`,
+          writeAlias ? aliasPath : originalPath,
+        );
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
         const manager =
           mode === "worker" ? await SessionManager.openAsync(target) : SessionManager.open(target);

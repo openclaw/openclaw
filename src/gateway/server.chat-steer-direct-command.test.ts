@@ -148,7 +148,6 @@ it.for([
           updatedAt: Date.now(),
           agentHarnessId: "openclaw",
           permissionMode: "full",
-          restartRecoveryTerminalRunIds: ["unrelated-completed-source"],
         },
       },
     });

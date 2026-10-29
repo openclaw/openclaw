@@ -197,6 +197,13 @@ it.each([false, true])(
   },
 );
 
+it("recovers an aggregate payload of individually valid artifacts without losing edits", async () => {
+  await archiveFixture();
+  const { proveAggregateWorkspaceRecovery } =
+    await import("./local-workspace-recovery.test-support.js");
+  await proveAggregateWorkspaceRecovery({ owner, canonical, stateRoot });
+});
+
 it.each([false, true])(
   "settles old runtime-file results (source already copied: %s)",
   async (copied) => {
@@ -335,6 +342,15 @@ it("seeds independent source-only Git and reconciles edits without host metadata
   await expectText(repo, "source.txt", "original\n");
   expect(await git(projection, "status", "--porcelain")).toContain("source.txt");
 });
+
+it.each([false, true])(
+  "recovers accepted unindexed inventory (retained membership: %s)",
+  async (retainedMembership) => {
+    const { proveAcceptedInventoryRecovery } =
+      await import("./local-workspace-recovery.test-support.js");
+    await proveAcceptedInventoryRecovery(owner, retainedMembership);
+  },
+);
 
 it("never admits nested host secrets after guest de-ignore", async () => {
   const prefix = "nested/";

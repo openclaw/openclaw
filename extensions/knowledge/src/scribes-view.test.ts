@@ -11,6 +11,7 @@ const reviewJob = {
   declarationKey: "knowledge:scribe:claim-consolidation",
   enabled: true,
   configRevision: "rev-7",
+  sessionTarget: "session:s-review",
   schedule: { kind: "cron", expr: "45 3 * * 0" },
   failureAlert: { after: 2 },
   state: { lastRunStatus: "ok", lastRunAtMs: 1_793_000_000_000, nextRunAtMs: 1_793_090_000_000 },
@@ -49,6 +50,11 @@ function fixture(world: {
         }
         return { sessions: [], count: 1, totalCount: params?.archived ? 1204 : 148 };
       }
+      case "sessions.describe":
+        return {
+          session:
+            Object.values(world.sessions ?? {}).find((row) => row.key === params?.key) ?? null,
+        };
       case "chat.history":
         return {
           messages:
@@ -388,7 +394,7 @@ it("reports a skipped run that could not complete as failed", async () => {
   expect(view.querySelector(".scribe-run .scribe-chip-warn")?.textContent).toBe("Failing");
 });
 
-it("repairs a scribe whose conversation was archived, keeping its run message", async () => {
+it("repairs an archived scribe by restoring its conversation and turning it on, without a turn", async () => {
   const { render, ui, calls } = fixture({
     sessions: {
       "Scribe · Knowledge Consolidation": {
@@ -398,26 +404,26 @@ it("repairs a scribe whose conversation was archived, keeping its run message", 
         archived: true,
       },
     },
-    jobs: [{ ...reviewJob, payload: { kind: "agentTurn", message: "Edited run message" } }],
+    // Archiving the conversation turned its automation off.
+    jobs: [{ ...reviewJob, enabled: false }],
   });
   ui.s.scribe = "claim-consolidation";
   const view = await render();
-  expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Needs reauthorization");
+  expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Conversation not found");
   expect(buttonNamed(view, "Run now")).toBeUndefined();
   buttonNamed(view, "Repair").click();
-  await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("chat.send"));
-  expect(calls.at(-2)).toEqual([
-    "sessions.patch",
-    { key: "s-review", agentId: "main", archived: false, expectedSessionId: "sid-review" },
+  await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("cron.update"));
+  expect(calls.slice(-2)).toEqual([
+    [
+      "sessions.patch",
+      { key: "s-review", agentId: "main", archived: false, expectedSessionId: "sid-review" },
+    ],
+    [
+      "cron.update",
+      { id: "job-review", patch: { enabled: true }, expectedConfigRevision: "rev-7" },
+    ],
   ]);
-  const send = calls.at(-1)![1]!;
-  expect(send.message).toBe(
-    repairPrompt("claim-consolidation", {
-      schedule: reviewJob.schedule,
-      runMessage: "Edited run message",
-    }),
-  );
-  expect(String(send.idempotencyKey)).toMatch(/^knowledge:scribe:claim-consolidation:repair:/);
+  expect(calls.some(([method]) => method === "chat.send")).toBe(false);
 });
 
 const userText = (content: string) => ({ role: "user", content });
@@ -438,6 +444,7 @@ it("forces an ongoing scribe's first run once after its setup turn reports on", 
     id: "job-first",
     declarationKey: "knowledge:scribe:conversations",
     enabled: true,
+    sessionTarget: "session:s-conv",
     schedule: { kind: "cron", expr: "0 4 * * *" },
     state: { nextRunAtMs: 1_793_090_000_000 },
   };

@@ -75,8 +75,6 @@ export function createDispatchReplyOperationCoordinator(
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
   let dispatchResetTriggered = false;
-  let allowRestartTombstoneParentFork = false;
-  let allowRestartTombstoneReset = false;
   const dispatchLifecycleWork = {
     owner: new Set<Promise<void>>(),
     delivery: new Set<Promise<void>>(),
@@ -255,18 +253,13 @@ export function createDispatchReplyOperationCoordinator(
         sessionKey: params.dispatchOperationSessionKey,
         storePath: params.operationSessionStoreEntry.storePath,
       });
-      ({
-        resetTriggered: dispatchResetTriggered,
-        allowRestartTombstoneParentFork,
-        allowRestartTombstoneReset,
-      } = await resolveDispatchResetAdmission({
+      ({ resetTriggered: dispatchResetTriggered } = await resolveDispatchResetAdmission({
         agentId: params.agentId,
         cfg: params.cfg,
         ctx: params.ctx,
         entry: params.operationSessionStoreEntry.entry,
         hasPluginOwnedBinding,
         sessionKey: params.dispatchOperationSessionKey,
-        storePath: params.operationSessionStoreEntry.storePath,
       }));
     }
     if (phase !== "pre_dispatch" && preDispatchLifecycleInterrupted) {
@@ -451,8 +444,6 @@ export function createDispatchReplyOperationCoordinator(
         expectedDatabaseIncarnation: admittedDatabaseIncarnation,
         kind: replyTurnKind,
         resetTriggered: dispatchResetTriggered,
-        allowRestartTombstoneParentFork,
-        allowRestartTombstoneReset,
         routeThreadId: params.routeThreadId,
         originatingLeafEntryId: params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
         upstreamAbortSignal: input?.abortSignal ?? params.replyOptions?.abortSignal,

@@ -352,13 +352,13 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       this.sessionPendingTargets.set(memorySessionSyncTargetKey(target), target);
       this.reindexProgress?.changedSessionTargets.set(memorySessionSyncTargetKey(target), target);
     }
-    this.sessionPendingSince ??= Date.now();
+    this.sessionPendingSince ??= performance.now();
     this.noteSessionIndexActivity();
     this.scheduleSessionIndexPass();
   }
 
   private noteSessionIndexActivity(): void {
-    this.sessionLastActivity = Date.now();
+    this.sessionLastActivity = performance.now();
     if (this.sessionRetryAt === Infinity) {
       this.sessionRetryAttempt = 0;
       this.sessionRetryAt = 0;
@@ -383,7 +383,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (this.reindexProgress?.yielded) {
       // The shadow owns unfinished groups; only new source facts need queue entries.
       this.sessionFullSyncPending = true;
-      this.sessionPendingSince ??= Date.now();
+      this.sessionPendingSince ??= performance.now();
       return;
     }
     const entriesByFile = new Map(corpusEntries.map((entry) => [entry.sessionFile, entry]));
@@ -400,8 +400,8 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         this.sessionPendingFiles.add(file);
       }
     }
-    this.sessionPendingSince ??= Date.now();
-    this.sessionLastActivity = Date.now();
+    this.sessionPendingSince ??= performance.now();
+    this.sessionLastActivity = performance.now();
     this.scheduleSessionIndexPass();
   }
 
@@ -444,7 +444,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
           failed(err);
         }
       },
-      Math.max(0, deadline - Date.now()),
+      Math.max(0, deadline - performance.now()),
     );
     this.sessionWatchTimer.unref();
   }
@@ -505,11 +505,11 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
             ),
             ...this.sessionPendingTargets,
           ]);
-          this.sessionPendingSince = pendingSince ?? this.sessionPendingSince ?? Date.now();
+          this.sessionPendingSince = pendingSince ?? this.sessionPendingSince ?? performance.now();
           if (!interrupted) {
             const delay = SESSION_RETRY_DELAYS_MS[this.sessionRetryAttempt++];
             // After three automatic retries, fresh activity can start another bounded series.
-            this.sessionRetryAt = delay === undefined ? Infinity : Date.now() + delay;
+            this.sessionRetryAt = delay === undefined ? Infinity : performance.now() + delay;
             if (this.sessionRetryAttempt === SESSION_RETRY_DELAYS_MS.length) {
               // Keep the last retry until a full rebuild is allowed to run.
               this.sessionRetryAt = Math.max(

@@ -181,7 +181,7 @@ it("reports standalone Doctor captures as manual evidence", async () => {
   expect(output).not.toContain("no matching update run");
   expect(output).not.toContain("unresolved after a failed update");
   expect(await text(c.manifestPath)).toBe(c.raw);
-  expect(await fs.readdir(c.directory)).toEqual([markerFile, "manifest.json"]);
+  expect(new Set(await fs.readdir(c.directory))).toEqual(new Set([markerFile, "manifest.json"]));
 });
 it.each([
   ["partial", false],
@@ -413,7 +413,7 @@ it("validates forward resolution against retained generations without writing", 
   };
   mocks.readRun.mockResolvedValue(row);
   expect((await inspect()).recoverySets[0]).toMatchObject({ status: "forward-resolved" });
-  expect(await fs.readdir(c.directory)).toEqual([markerFile, "manifest.json"]);
+  expect(new Set(await fs.readdir(c.directory))).toEqual(new Set([markerFile, "manifest.json"]));
   const candidate = {
     ...c.manifest,
     generation: { kind: "candidate", baselineSha256: c.manifestSha256 },

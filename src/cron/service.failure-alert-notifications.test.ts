@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { withinTest } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { admitModelTurn, completionConfig } from "../agents/bash-tools.lifecycle.test-support.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
@@ -15,10 +15,10 @@ import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
-import type { CronServiceDeps } from "./service/state.js";
 
 // mock-isolation: Only model output is synthetic; fallback admission and session execution are real.
-vi.mock("../agents/embedded-agent-runner/run.js", () => ({
+vi.mock("../agents/embedded-agent-runner/run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent-runner/run.js")>()),
   runEmbeddedAgent: vi.fn(),
 }));
 const runEmbeddedAgentMock = vi.mocked(runEmbeddedAgent);
@@ -61,12 +61,14 @@ it.for([
           },
         );
         const receipts: SessionEventReceipt[] = [];
+        const notification = createDeferred();
         const enqueue = sessionEvents.enqueueSessionEventForHost;
         const observer = vi
           .spyOn(sessionEvents, "enqueueSessionEventForHost")
           .mockImplementation((...args) => {
             const receipt = enqueue(...args);
             receipts.push(receipt);
+            notification.resolve();
             return receipt;
           });
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
@@ -75,16 +77,6 @@ it.for([
         });
         const logger = createNoopLogger();
         const adapter = createGatewayCronTargetResolver(state.env, logger);
-        const sendCronFailureAlert: NonNullable<CronServiceDeps["sendCronFailureAlert"]> = async (
-          params,
-        ) => {
-          await params.onDeliverySettled({
-            delivered: false,
-            status: "not-delivered",
-            error: "failure alert channel unavailable",
-          });
-          throw new Error("failure alert channel unavailable");
-        };
         const failRun = async () => ({
           status: "error" as const,
           error: "temporary upstream error",
@@ -97,7 +89,14 @@ it.for([
           log: logger,
           resolveOriginDeliveryContext: async () => deliveryContext,
           enqueueSessionEvent: adapter.enqueueSessionEvent,
-          sendCronFailureAlert,
+          sendCronFailureAlert: async (params) => {
+            await params.onDeliverySettled({
+              delivered: false,
+              status: "not-delivered",
+              error: "failure alert channel unavailable",
+            });
+            throw new Error("failure alert channel unavailable");
+          },
           runIsolatedAgentJob: failRun,
           runSessionEvent: failRun,
         });
@@ -113,6 +112,7 @@ it.for([
           });
 
           await cron.run(job.id, "force");
+          await withinTest(notification.promise, signal);
           expect(receipts).toHaveLength(1);
           await expect(withinTest(receipts[0]!.accepted, signal)).resolves.toEqual({ ok: true });
           await expect(withinTest(receipts[0]!.settled, signal)).resolves.toMatchObject({

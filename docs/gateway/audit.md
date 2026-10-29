@@ -95,14 +95,11 @@ operational warning and never abort the run. Normal Gateway and direct-local
 CLI shutdown flushes accepted work when the writer lifecycle permits, but
 abrupt termination can still lose queued evidence.
 
-When identity collection is enabled, restart recovery stores only the safe
-execution/context/run ids and timestamp with its existing private recovery
-owner. A later ambiguous retry references that token instead of rebuilding
-identity from the new process. When collection or the audit ledger is disabled,
-recovery creates, stores, and propagates no new identity token. If the original
-queued context was lost, exact inspection stays explicitly unavailable; the
-retry never manufactures replacement evidence. Raw identity references are not
-stored in the recovery token.
+A restart resume is a new admitted input and receives ordinary current-turn audit
+facts when identity collection is enabled. The Gateway does not retain or restore
+an execution-identity token for an interrupted turn. Existing evidence remains
+inspectable under its original identity; the new turn does not manufacture missing
+evidence for the old one.
 
 Each admitted outer turn receives a new opaque `executionId`; `contextId`
 identifies its immutable evidence record, while the existing `runId` remains a
@@ -194,9 +191,8 @@ do not authenticate a person, service, or invoker. Shared hook authentication
 and direct `/hooks/agent` requests therefore remain unattributed unless another
 authoritative principal producer exists. A mapping transform that suppresses a
 request before admission returns its normal HTTP response but creates no run,
-execution identity, task, or decision receipt. Restart recovery records system
-attribution only after the current durable recovery owner admits the exact
-attempt.
+execution identity, task, or decision receipt. A post-restart system input records
+its attribution only after ordinary current-authority admission.
 
 Authenticated Gateway attach records immutable audit facts once. Session
 creation separately reads the current primary profile ID so a profile

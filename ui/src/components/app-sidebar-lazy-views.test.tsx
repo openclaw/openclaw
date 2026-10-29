@@ -37,7 +37,7 @@ it("loads optional sidebar views on selection without replacing the shell or ret
     );
     const regions = [".sidebar-shell", ".sidebar-rail", ".sidebar-shell__body"];
     const originalRegions = regions.map((selector) => sidebar.querySelector(selector));
-    originalRegions.forEach((region) => expect(region).not.toBeNull());
+    originalRegions.forEach((region, index) => expect(region, regions[index]).not.toBeNull());
     const expectRegions = () =>
       regions.forEach((selector, index) =>
         expect(sidebar.querySelector(selector)).toBe(originalRegions[index]),
@@ -47,13 +47,18 @@ it("loads optional sidebar views on selection without replacing the shell or ret
     const loading = async (module: (typeof modules)[keyof typeof modules]) => {
       await vi.waitFor(() => {
         expect(module.started).toBe(true);
-        expect(body?.querySelector('[role="status"][aria-busy="true"]')).not.toBeNull();
+        expect(
+          body?.querySelector('[role="status"][aria-busy="true"]'),
+          "selected lazy view loading status",
+        ).not.toBeNull();
       });
       expectRegions();
       module.resolve();
+      // The released mock still has to evaluate importOriginal before the view can render.
+      await vi.dynamicImportSettled();
     };
     const retainLink = async (selector: string) => {
-      await vi.waitFor(() => expect(sidebar.querySelector(selector)).not.toBeNull());
+      await vi.waitFor(() => expect(sidebar.querySelector(selector), selector).not.toBeNull());
       const link = sidebar.querySelector<HTMLAnchorElement>(selector)!;
       link.focus();
       sidebar.invalidate();
@@ -73,7 +78,9 @@ it("loads optional sidebar views on selection without replacing the shell or ret
     await retainLink('.sidebar-pages [data-sidebar-entry="route:usage"] a');
     await selectSidebarView(sidebar, "online");
     await loading(modules.online);
-    await vi.waitFor(() => expect(body?.querySelector(".sidebar-online")).not.toBeNull());
+    await vi.waitFor(() =>
+      expect(body?.querySelector(".sidebar-online"), "loaded online view").not.toBeNull(),
+    );
   } finally {
     modules.roster.resolve();
     modules.pages.resolve();

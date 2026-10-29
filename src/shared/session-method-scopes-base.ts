@@ -76,7 +76,6 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "sessions.patch",
   "sessions.patchMany",
   "sessions.fork",
-  "sessions.recover",
   "sessions.send",
   "sessions.steer",
   "sessions.processes.stop",
@@ -154,9 +153,6 @@ export function resolveBaseSessionMutationRequiredScope(
   method: string,
   params?: unknown,
 ): SessionMutationOperatorScope | undefined {
-  if (method === "sessions.recover") {
-    return "operator.write";
-  }
   if (method === "sessions.create") {
     if (!isRecord(params)) {
       return "operator.write";

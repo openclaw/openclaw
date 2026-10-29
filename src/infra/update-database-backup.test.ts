@@ -215,11 +215,13 @@ it.each(["auto", "off"] as const)(
     const previous = getFsSafeNativeConfig();
     const audit = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
     const generations = vi.spyOn(generationReads, "readUpdateDatabaseGenerations");
+    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     try {
       configureFsSafeNative({ mode });
       const backup = await f.capture({ stopped: true });
       expect(audit).not.toHaveBeenCalled();
       expect(generations).not.toHaveBeenCalled();
+      expect(engineImages).not.toHaveBeenCalled();
       expect(backup.databases).toHaveLength(3);
       for (const entry of backup.databases) {
         const bytes = await fs.readFile(entry.snapshotPath);
@@ -269,6 +271,7 @@ it.each([
       }
     }
     const reader = activity.startsWith("reader");
+    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     const capture = f.capture({
       stopped: true,
       onProgress: ({ phase, path: source }) => {
@@ -302,6 +305,7 @@ it.each([
       return;
     }
     const backup = await capture;
+    expect(engineImages).toHaveBeenCalledTimes(activity === "reader-empty-wal" ? 0 : 1);
     expect(await Promise.all(files.slice(0, 2).map((file) => fs.readFile(file)))).toEqual(
       before.slice(0, 2),
     );
