@@ -304,6 +304,10 @@ suite.define(() => {
         await page.reload();
         await page.getByText(prompt, { exact: true }).waitFor();
         await waitForReply(page, marker);
+        await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+          state: "hidden",
+        });
+        await page.getByText(prompt, { exact: true }).scrollIntoViewIfNeeded();
         await screenshot(page, "resume-created-disabled-automation");
       });
     }),
