@@ -78,6 +78,29 @@ describe("createEmbeddedLobsterRunner", () => {
     },
   );
 
+  it("resolves literal workflow file paths without trimming whitespace", async () => {
+    runRequest.mockResolvedValue({ ...success });
+    const relativeDir = path.join(
+      "node_modules",
+      ".cache",
+      `openclaw-lobster-literal-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    const absoluteDir = path.resolve(relativeDir);
+    await fs.mkdir(absoluteDir, { recursive: true });
+    try {
+      await fs.writeFile(path.join(absoluteDir, " wf.lobster"), "steps: []\n", "utf8");
+      await fs.writeFile(path.join(absoluteDir, "wf.lobster"), "steps: []\n", "utf8");
+
+      await run({ pipeline: " wf.lobster", cwd: relativeDir });
+
+      expect(runRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ filePath: path.join(absoluteDir, " wf.lobster") }),
+      );
+    } finally {
+      await fs.rm(absoluteDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects an input request without a resumable checkpoint", async () => {
     runRequest.mockResolvedValue({ ...success, status: "needs_input" });
     await expect(run()).rejects.toThrow("Lobster input request is missing its resume token");
