@@ -1259,6 +1259,38 @@ describe("combined security review entry point", () => {
       },
       "failure",
     ),
+    ...["queued", "in_progress", "waiting", "requested", "pending"].map((status) =>
+      ciCase(
+        `${status} gate`,
+        {
+          [jobsPath]: {
+            ...jobs,
+            jobs: [{ ...jobs.jobs[0], status, conclusion: null }],
+          },
+        },
+        "pending",
+      ),
+    ),
+    ...[
+      {
+        name: "unfinished gate with a contradictory conclusion",
+        gateJobs: [{ ...jobs.jobs[0], status: "in_progress", conclusion: "failure" }],
+      },
+      {
+        name: "unknown gate status",
+        gateJobs: [{ ...jobs.jobs[0], status: "unknown", conclusion: null }],
+      },
+      { name: "missing gate", gateJobs: [] },
+      { name: "duplicate gate", gateJobs: [jobs.jobs[0], jobs.jobs[0]] },
+    ].map(({ name, gateJobs }) =>
+      ciCase(
+        name,
+        {
+          [jobsPath]: { total_count: gateJobs.length, jobs: gateJobs },
+        },
+        "failure",
+      ),
+    ),
     ...[
       { name: "missing CI", runs: [] },
       {
@@ -1279,7 +1311,7 @@ describe("combined security review entry point", () => {
         ...(current ? { [`GET ${actions}/runs/${current.id}`]: current } : {}),
       }),
     ),
-    ...["failure", "skipped"].map((conclusion) =>
+    ...["failure", "skipped", "cancelled"].map((conclusion) =>
       ciCase(
         `${conclusion} gate`,
         {

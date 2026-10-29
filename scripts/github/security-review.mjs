@@ -21,6 +21,8 @@ import {
 import { securityReviewRollout } from "./security-review-rollout.mjs";
 import { reviewSecuritySensitiveChanges } from "./security-sensitive-guard.mjs";
 
+const pendingCiStatuses = new Set(["queued", "in_progress", "waiting", "requested", "pending"]);
+
 function ciRunState(run) {
   if (
     !Number.isSafeInteger(run.id) ||
@@ -30,18 +32,13 @@ function ciRunState(run) {
   ) {
     throw new Error("CI returned an invalid run identity.");
   }
-  switch (run.status) {
-    case "completed":
-      return "completed";
-    case "queued":
-    case "in_progress":
-    case "waiting":
-    case "requested":
-    case "pending":
-      return "pending";
-    default:
-      throw new Error("CI returned an invalid run status.");
+  if (run.status === "completed") {
+    return "completed";
   }
+  if (pendingCiStatuses.has(run.status)) {
+    return "pending";
+  }
+  throw new Error("CI returned an invalid run status.");
 }
 
 function assertCiRunIdentity(current, expected) {
@@ -180,9 +177,14 @@ async function ciState(review) {
     throw new Error("The completed CI attempt changed during security review; rerun this review.");
   }
   const gates = jobs.filter((job) => job.name === "openclaw/ci-gate");
-  return gates.length === 1 && gates[0].status === "completed" && gates[0].conclusion === "success"
-    ? "success"
-    : "failure";
+  if (gates.length !== 1) {
+    return "failure";
+  }
+  const [gate] = gates;
+  if (gate.status === "completed") {
+    return gate.conclusion === "success" ? "success" : "failure";
+  }
+  return pendingCiStatuses.has(gate.status) && gate.conclusion === null ? "pending" : "failure";
 }
 
 let recoveryReview;
