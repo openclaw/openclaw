@@ -88,7 +88,8 @@ export function buildDiscordCommandOptions(params: {
             return;
           }
           const focused = interaction.options.getFocused();
-          const focusValue = normalizeLowercaseStringOrEmpty(focused?.value);
+          // Canonical forms compare equal here; typed fragments and labels keep their spelling.
+          const focusValue = normalizeLowercaseStringOrEmpty(focused?.value).normalize("NFC");
           const context =
             typeof arg.choices === "function" && resolveChoiceContext
               ? await resolveChoiceContext(interaction)
@@ -117,7 +118,7 @@ export function buildDiscordCommandOptions(params: {
           });
           const filtered = focusValue
             ? choices.filter((choice) =>
-                normalizeLowercaseStringOrEmpty(choice.label).includes(focusValue),
+                normalizeLowercaseStringOrEmpty(choice.label).normalize("NFC").includes(focusValue),
               )
             : choices;
           await interaction.respond(buildDiscordChoiceOptions(filtered));
