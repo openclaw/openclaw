@@ -38,7 +38,7 @@ import type { OperatorScope } from "./operator-scopes.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 
 const describeLive =
-  isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS)
+  isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_PERSONAL_STOP)
     ? describe
     : describe.skip;
 const WAIT_MS = 180_000;
