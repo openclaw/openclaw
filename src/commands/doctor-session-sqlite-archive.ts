@@ -1,4 +1,5 @@
 /** Plans Doctor archive paths; publication and receipts remain with the migration owner. */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -65,6 +66,26 @@ export function planImportedTranscriptArtifactsToArchive(
   return moves;
 }
 
+/** Keeps one generated archive name within the filesystem component limit. */
+const ARCHIVE_NAME_MAX_BYTES = 240;
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value) <= maxBytes) {
+    return value;
+  }
+  let out = "";
+  let used = 0;
+  for (const char of value) {
+    const size = Buffer.byteLength(char);
+    if (used + size > maxBytes) {
+      break;
+    }
+    out += char;
+    used += size;
+  }
+  return out || "x";
+}
+
 export function planSessionJsonlArchiveMove(params: {
   archiveKey: string;
   kind: SessionSqliteMigrationMoveKind;
@@ -91,14 +112,36 @@ export function planSessionJsonlArchiveMove(params: {
   assertSafeSessionSqliteMigrationDirectory(archiveDir);
   const slug = (value: string, limit: number, fallback: string) =>
     value.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, limit) || fallback;
-  const baseName = slug(path.basename(params.sourcePathRaw), 160, "artifact");
+  const rawBaseName = path.basename(params.sourcePathRaw);
+  // Keep the artifact extension even when the stem must be truncated.
+  const baseExtension = (/\.[A-Za-z0-9]+$/.exec(rawBaseName)?.[0] ?? "").slice(0, 20);
+  const baseStem = slug(
+    rawBaseName.slice(0, rawBaseName.length - baseExtension.length),
+    160,
+    "artifact",
+  );
   const keySlug = slug(params.archiveKey, 120, "session");
+  // A session key can exceed what fits in one filesystem name component: Matrix
+  // thread keys already reach 262 bytes, past Linux's 255-byte NAME_MAX, and
+  // lstat then aborts the whole migration. Bound the generated name and keep it
+  // collision-resistant with a digest of the untruncated identity; the original
+  // key stays in move metadata.
+  const nameDigest = createHash("sha256")
+    .update(`${params.archiveKey}\u0000${path.basename(params.sourcePathRaw)}`)
+    .digest("hex")
+    .slice(0, 12);
+  const budgetFor = (suffix: string) =>
+    ARCHIVE_NAME_MAX_BYTES -
+    Buffer.byteLength(`.${nameDigest}.imported-${Date.now()}${suffix}`) -
+    1;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const suffix = attempt === 0 ? "" : `.${attempt}`;
-    const archivePath = path.join(
-      archiveDir,
-      `${keySlug}.${baseName}.imported-${Date.now()}${suffix}`,
-    );
+    const budget = Math.max(48, budgetFor(suffix));
+    const keyBudget = Math.max(16, Math.floor(budget / 3));
+    const baseBudget = Math.max(24, budget - keyBudget);
+    const stemBudget = Math.max(8, baseBudget - Buffer.byteLength(baseExtension));
+    const name = `${truncateUtf8(keySlug, keyBudget)}.${truncateUtf8(baseStem, stemBudget)}${baseExtension}.${nameDigest}.imported-${Date.now()}${suffix}`;
+    const archivePath = path.join(archiveDir, name);
     if (fs.existsSync(archivePath) || params.reservedArchivePaths?.has(archivePath)) {
       continue;
     }
