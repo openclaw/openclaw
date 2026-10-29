@@ -196,6 +196,21 @@ describe("remote sandbox fs bridge", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "reads literal file paths without trimming whitespace",
+    async () => {
+      const fixture = await createFixture();
+      await fixture.put(" x.txt", "literal-data");
+      await fixture.put("x.txt", "decoy-data");
+      await expect(fixture.bridge.readFile({ filePath: " x.txt" })).resolves.toEqual(
+        Buffer.from("literal-data"),
+      );
+      await expect(fixture.bridge.readFile({ filePath: "x.txt" })).resolves.toEqual(
+        Buffer.from("decoy-data"),
+      );
+    },
+  );
+
   it.each([false, true])("resolves equal-root ownership (protected=%s)", (protectedRoot) => {
     const workspaceDir = path.resolve("mapping-workspace");
     const agentWorkspaceDir = path.resolve("mapping-agent");
