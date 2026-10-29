@@ -130,7 +130,11 @@ async function proveRuntimeCache(native: boolean) {
     : testRuntime.resolveVitestTestCommand([...flags, ...operands], env);
   expect(expectedCommand).toEqual({
     command: process.execPath,
-    envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1", PATH: nodePath.dirname(process.execPath) },
+    envOverrides: {
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      PATH: nodePath.dirname(process.execPath),
+      OPENCLAW_BUN_PATH: process.execPath,
+    },
     args: native
       ? [
           "test",
@@ -154,6 +158,9 @@ async function proveRuntimeCache(native: boolean) {
         'assert.equal(process.env.NODE_DISABLE_COMPILE_CACHE, "1");',
         `assert.equal(process.env.NODE_COMPILE_CACHE, ${JSON.stringify(env.NODE_COMPILE_CACHE)});`,
         'assert.equal(process.env.NODE_COMPILE_CACHE_PORTABLE, "1");',
+        `assert.equal(process.env.OPENCLAW_BUN_PATH, ${JSON.stringify(process.execPath)});`,
+        'assert.equal(process.env.HOME, require("node:path").join(process.env.TMPDIR, "home"));',
+        "assert.equal(process.env.USERPROFILE, process.env.HOME);",
         "process.exitCode = 7;",
       ].join("\n"),
     ],

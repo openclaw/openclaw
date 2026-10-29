@@ -79,6 +79,23 @@ it.each([undefined, "false"])("stages and silently reuses cache with CI=%s", (CI
   expect(resolve({ CI })).toEqual({ command });
   expect(stage).toHaveBeenCalledOnce();
   expect(stderr).toHaveBeenCalledOnce();
+  const parentEnv = Object.freeze({ PATH: "/usr/bin" });
+  const provision = pinnedBunEnv(command, parentEnv);
+  const isolatedHome = path.join(path.dirname(path.dirname(command)), "isolated-home");
+  const isolatedCache = path.join(isolatedHome, ".cache");
+  expect(
+    resolve({
+      CI,
+      HOME: isolatedHome,
+      USERPROFILE: isolatedHome,
+      XDG_CACHE_HOME: isolatedCache,
+      ...provision,
+    }),
+  ).toEqual({ command });
+  expect(stage).toHaveBeenCalledOnce();
+  expect(stderr).toHaveBeenCalledOnce();
+  expect(fs.existsSync(isolatedCache)).toBe(false);
+  expect(parentEnv).toEqual({ PATH: "/usr/bin" });
 });
 
 it.each(["missing", "mtime", "hash"])("rehashes a %s stamp before reusing the cache", (kind) => {
