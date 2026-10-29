@@ -16,6 +16,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  process.exitCode = undefined;
   resetDatabaseEngineSelectionForTest();
   vi.restoreAllMocks();
 });
@@ -205,6 +206,18 @@ describe("one-shot CLI engine selection", () => {
     },
   );
 
+  it.each([
+    [["--fix", "--non-interactive"], 1],
+    [["--non-interactive"], undefined],
+  ])("fails Doctor %j only when requested repairs stay blocked", async (flags, exitCode) => {
+    await withState(async (state) => {
+      await fs.writeFile(state.configPath, "{broken json");
+      expect(await prepare("doctor", ...flags)).toBe(true);
+      expect(process.exitCode).toBe(exitCode);
+      await expectUnselected(state);
+    });
+  });
+
   it("keeps updater-owned Doctor selection with its result receipt", async () => {
     await withState(
       async (state) => {
@@ -245,6 +258,7 @@ describe("one-shot CLI engine selection", () => {
       expect(getDatabaseEngineSelection()).toBeUndefined();
       expect(sqliteOpen).not.toHaveBeenCalled();
       expect(postgresOpen).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
       expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(config);
     });
   });

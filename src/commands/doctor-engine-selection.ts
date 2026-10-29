@@ -12,6 +12,9 @@ import { prepareDoctorConfigRecovery } from "./doctor-config-preflight-legacy-co
 import { formatDoctorLintFailure } from "./doctor-lint-output.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 
+const isDoctorRepairRequested = (argv: string[]) =>
+  ["--fix", "--repair", "--yes"].some((flag) => hasFlag(argv, flag));
+
 /** Recovery may repair file bytes; an unresolved target must never reach stateful Doctor. */
 export async function prepareDoctorEngineSelection(params: {
   argv: string[];
@@ -21,7 +24,7 @@ export async function prepareDoctorEngineSelection(params: {
   const enabled =
     !hasFlag(params.argv, "--lint") &&
     !hasFlag(params.argv, "--json") &&
-    ["--fix", "--repair", "--yes"].some((flag) => hasFlag(params.argv, flag));
+    isDoctorRepairRequested(params.argv);
   if (!enabled) {
     return params.snapshot;
   }
@@ -73,6 +76,10 @@ export function reportDoctorUnresolvedEngine(
     ? "Run `openclaw config validate` to inspect the parse error."
     : "Fix database settings or supply the referenced credentials, then rerun `openclaw doctor`.";
   const lint = hasFlag(argv, "--lint");
+  if (isDoctorRepairRequested(argv)) {
+    // Requested repairs were skipped; automation must not read this run as a success.
+    process.exitCode = 1;
+  }
   const machineOutput = isDoctorMachineOutput({ argv, stdoutIsTTY: process.stdout.isTTY });
   if (lint || machineOutput) {
     const failure = new Error([message, details, nextStep].filter(Boolean).join("\n"));
@@ -101,5 +108,9 @@ export function reportDoctorUnresolvedEngine(
   for (const section of sections) {
     note(message, section);
   }
-  showDoctorOutro("Doctor complete. Database checks remain unknown.");
+  showDoctorOutro(
+    isDoctorRepairRequested(argv)
+      ? "Doctor stopped. Requested repairs were not applied."
+      : "Doctor complete. Database checks remain unknown.",
+  );
 }
