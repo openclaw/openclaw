@@ -257,6 +257,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             }),
       );
       authority = await captureOperatorToolGatewayContinuationContext();
+      // Collectors record the original source for recovery, but their completion
+      // stays with the swarm collector, so they never take operator custody.
+      const completionAuthority = registerParams.collect ? undefined : authority?.operatorAuthority;
       const originalSource = await captureSubagentRequesterSource({
         authority: authority?.operatorAuthority,
         requesterAgentId,
@@ -356,7 +359,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 : undefined,
           });
           entry.operatorRecoverySource = originalSource;
-          entry.completionAuthorityRequired = authority?.operatorAuthority ? true : undefined;
+          entry.completionAuthorityRequired = completionAuthority ? true : undefined;
           entry.requesterStorePath =
             previous?.requesterStorePath ??
             resolvePhysicalSessionStorePath(
@@ -403,7 +406,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   requesterAgentId,
                 ),
               });
-              if (authority?.operatorAuthority) {
+              if (authority && completionAuthority) {
                 subagentRuns.bindCompletionAuthority(entry, authority);
                 custodyTransferred = true;
               }
