@@ -94,6 +94,7 @@ it("shows activation Doctor progress before child completion while JSON and ledg
   const runUtf8 = processRunner.runUtf8CommandWithTimeout;
   const executorModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
   const resultModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.doctorResult);
+  const sealedModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.sealedRuntime);
   const ready = createDeferred();
   const cleanup = new AbortController();
   const steps: UpdateStepResult[] = [];
@@ -126,8 +127,11 @@ it("shows activation Doctor progress before child completion while JSON and ledg
           "-e",
           `
       import { readFileSync } from 'node:fs';
-      import { withDelegatedUpdateCommandExecutor } from ${JSON.stringify(executorModule.href)};
-      import { writeUpdatePostInstallDoctorResult } from ${JSON.stringify(resultModule.href)};
+      import * as json5 from ${JSON.stringify(import.meta.resolve("json5"))};
+      import { registerSealedRuntime } from ${JSON.stringify(sealedModule.href)};
+      registerSealedRuntime({ json5, resolveSecureTempRoot: () => ${JSON.stringify(path.join(root, "tmp"))} });
+      const { withDelegatedUpdateCommandExecutor } = await import(${JSON.stringify(executorModule.href)});
+      const { writeUpdatePostInstallDoctorResult } = await import(${JSON.stringify(resultModule.href)});
       ${fixtureReceiptClientSource(channel.endpoint)}
       const doctor = JSON.parse(readFileSync(0, 'utf8'));
       await withDelegatedUpdateCommandExecutor(doctor.executor, doctor.runId, doctor.root, async () => {
@@ -179,7 +183,7 @@ it("shows activation Doctor progress before child completion while JSON and ledg
       results: steps,
     });
     assert(step);
-    expect(step.exitCode).toBe(0);
+    expect(step.exitCode, doctorResult?.stderr || step.stderrTail).toBe(0);
     fence.assertCurrent();
   });
   try {
