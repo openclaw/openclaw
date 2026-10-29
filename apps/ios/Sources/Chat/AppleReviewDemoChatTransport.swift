@@ -106,7 +106,18 @@ struct LocalChatFixture {
         responsePrefix: "OpenClaw is connected to your gateway.",
         seedMessages: ProcessInfo.processInfo.arguments.contains("--openclaw-empty-chat-fixture")
             ? []
-            : ["Ready when you are. I can check a project, coordinate an agent, or prepare the next step."],
+            : [
+                "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
+                """
+                A small release workflow:
+
+                ```mermaid
+                flowchart TD
+                  Draft --> Review
+                  Review --> Ship
+                ```
+                """,
+            ],
         agents: [
             AgentSummary(
                 id: "main",
@@ -1081,6 +1092,62 @@ private actor LocalFixtureChatStore {
                     transcriptMessageID: "fixture-voice-prompt-2"),
                 row("CONSULT_FIRST: The previous build went on yesterday.", at: 4, spoken: false),
                 row("VOICE_SPOKEN_AFTER: The one before went on yesterday.", at: 5, spoken: true),
+            ]
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-anthropic-work-chunks-fixture") {
+            // Synthetic Anthropic-style envelopes: narration and tool_use share each
+            // assistant message; tool results separate the two narration boundaries.
+            return [
+                self.message(
+                    role: "user",
+                    text: "Check the sample project.",
+                    timestamp: now,
+                    transcriptMessageID: "work-chunks-user"),
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [
+                        .init(type: "text", text: "I will read the sample file."),
+                        .init(
+                            type: "tool_use",
+                            id: "work-chunks-read",
+                            name: "read",
+                            arguments: AnyCodable(["path": "sample.txt"])),
+                    ],
+                    timestamp: now + 1,
+                    transcriptMessageID: "work-chunks-first",
+                    stopReason: "tool_use"),
+                OpenClawChatMessage(
+                    role: "toolResult",
+                    content: [.init(type: "text", text: "Sample configuration is valid.")],
+                    timestamp: now + 2,
+                    transcriptMessageID: "work-chunks-read-result",
+                    toolCallId: "work-chunks-read",
+                    toolName: "read"),
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [
+                        .init(type: "text", text: "The file looks good. I will run the check."),
+                        .init(
+                            type: "tool_use",
+                            id: "work-chunks-exec",
+                            name: "exec",
+                            arguments: AnyCodable(["command": "printf checked"])),
+                    ],
+                    timestamp: now + 3,
+                    transcriptMessageID: "work-chunks-second",
+                    stopReason: "tool_use"),
+                OpenClawChatMessage(
+                    role: "toolResult",
+                    content: [.init(type: "text", text: "checked")],
+                    timestamp: now + 4,
+                    transcriptMessageID: "work-chunks-exec-result",
+                    toolCallId: "work-chunks-exec",
+                    toolName: "exec"),
+                self.message(
+                    role: "assistant",
+                    text: "All checks passed.",
+                    timestamp: now + 5,
+                    transcriptMessageID: "work-chunks-final"),
             ]
         }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {

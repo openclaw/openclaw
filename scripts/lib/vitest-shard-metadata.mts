@@ -238,7 +238,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/cli/mcp-cli.import-boundary.test.ts", 4],
   ["src/cli/plugins-authoring.process.test.ts", 10],
   // Body sums from run 33492093127, rounded up with startup/import allowance.
-  ["src/cli/claws-authoring-state.process.test.ts", 6],
+  ["src/cli/templates-authoring-state.process.test.ts", 6],
   ["src/cli/cold-command-plugin-imports.process.test.ts", 20],
   ["src/cli/doctor-output.process.test.ts", 90],
   ["src/cli/mcp-cli.probe-exit.process.test.ts", 7],
@@ -296,7 +296,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/cli-runner/prepare.test.ts", 42],
   ["src/agents/command/attempt-execution.cli.test.ts", 14],
   ["src/agents/harness/selection.test.ts", 10],
-  ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", 17],
   ["src/agents/runtime-plan/prepare-auth.test.ts", 11],
   ["src/agents/subagents/registry/subagent-control.retirement.test.ts", 10],
   ["src/agents/subagents/spawn/subagent-spawn.authority.test.ts", 10],

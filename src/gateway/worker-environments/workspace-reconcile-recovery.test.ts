@@ -516,7 +516,7 @@ describe("worker workspace manifest validation and transfer", () => {
     ]);
     extra.entries[entries.length] = { path: "link", type: "symlink", mode: 0o777, target: "é" };
     expect(() => workerWorkspaceTransferPaths(extra, empty)).toThrow(
-      "staged result exceeds its byte limit",
+      "805306369 bytes across 13 changed files/symlinks; 805306368 byte limit",
     );
     expect(workerWorkspaceTransferPaths(extra, current)).toEqual([lastFile.path, "link"]);
   });

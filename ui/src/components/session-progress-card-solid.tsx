@@ -1,9 +1,15 @@
 import type { ProgressCard, SessionRunStatus } from "@openclaw/gateway-protocol";
 import { createMemo, createUniqueId, onSettled, Show } from "solid-js";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
+import type { SessionProgressCardRuntime } from "../lib/session-progress-runtime.ts";
 import { animateDetailsSection, DETAILS_SECTION_MOTION } from "./details-section-motion.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
-import { CardActivity, StepMarker, Steps } from "./session-progress-card-content.tsx";
+import {
+  CardActivity,
+  ProgressRuntime,
+  StepMarker,
+  Steps,
+} from "./session-progress-card-content.tsx";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import {
   progressCardNoteSummary,
@@ -32,9 +38,11 @@ export type SessionProgressCardProps = {
   startedAt?: number;
   endedAt?: number;
   hasActiveRun?: boolean;
+  runtime?: SessionProgressCardRuntime;
   collapseComposerByDefault?: boolean;
   composerDisclosureContext?: ComposerProgressDisclosureContext;
   refreshAction?: SessionProgressCardRefreshAction;
+  reserveRefresh?: boolean;
   onClearSaved?: (card: ProgressCard) => void;
   menuOptions?: Pick<MenuProps, "items" | "onSelect" | "disabled" | "class">;
   menuRef?: (menu: MenuHandle) => void;
@@ -242,20 +250,31 @@ function cardPresentation(props: ProgressDetailsContentProps) {
       props.startedAt,
       props.endedAt,
       props.hasActiveRun ?? true,
+      props.runtime,
     );
   });
 }
 
 export type ProgressDetailsContentProps = Pick<
   CardProps,
-  "card" | "sessionStatus" | "startedAt" | "endedAt" | "hasActiveRun"
+  "card" | "sessionStatus" | "startedAt" | "endedAt" | "hasActiveRun" | "runtime"
 >;
 
 /** The same saved plan and native step states, without composer or board chrome. */
-export function ProgressDetailsContent(props: ProgressDetailsContentProps) {
+export function ProgressDetailsContent(
+  props: ProgressDetailsContentProps & { hideRuntime?: boolean },
+) {
   const view = cardPresentation(props);
   return (
     <div class="task-progress-details__plan" data-has-steps={Boolean(props.card.steps?.length)}>
+      <Show when={!props.hideRuntime}>
+        <ProgressRuntime
+          runtime={props.runtime}
+          hasActiveRun={props.hasActiveRun}
+          sessionStatus={props.sessionStatus}
+          terminalOutcome={view().runOutcome}
+        />
+      </Show>
       <ProgressCardMarkdown markdown={props.card.markdown} />
       <Steps
         card={props.card}
@@ -272,10 +291,11 @@ export function ProgressDetailsRefresh(props: {
   disabled?: boolean;
   desktopDetails?: boolean;
   hideTooltip?: boolean;
+  reserved?: boolean;
 }) {
   const pending = () => props.action?.state === "pending";
   return (
-    <Show when={props.action}>
+    <Show when={props.action || props.reserved}>
       <openclaw-tooltip
         prop:placement="top"
         prop:disabled={props.disabled || props.hideTooltip || false}
@@ -287,6 +307,8 @@ export function ProgressDetailsRefresh(props: {
             pending() ? "sessionProgressCard.refresh.pending" : "sessionProgressCard.refresh.label",
           )}
           aria-busy={pending() ? "true" : "false"}
+          aria-disabled={!props.action ? "true" : undefined}
+          aria-description={!props.action ? t("sessionProgressCard.widgetLoading") : undefined}
           disabled={props.disabled || pending()}
           data-pending={pending() ? "true" : "false"}
           onClick={(event) => {
@@ -499,12 +521,19 @@ function DetailsCard(props: CardProps) {
             <ProgressDetailsRefresh
               card={props.card}
               action={props.refreshAction}
+              reserved={props.reserveRefresh}
               disabled={props.menuOptions?.disabled}
               desktopDetails={props.desktopDetails}
             />
           </span>
           <CardMenu {...props} />
         </span>
+        <ProgressRuntime
+          runtime={props.runtime}
+          hasActiveRun={props.hasActiveRun}
+          sessionStatus={props.sessionStatus}
+          terminalOutcome={view().runOutcome}
+        />
         <ProgressDetailsRefreshStatus
           card={props.card}
           action={props.refreshAction}
@@ -520,7 +549,7 @@ function DetailsCard(props: CardProps) {
         onFocusIn={finishMotion}
       >
         <div ref={(value) => (content = value)} class="task-progress-details__content">
-          <ProgressDetailsContent {...props} />
+          <ProgressDetailsContent {...props} hideRuntime />
         </div>
       </div>
     </details>
@@ -561,12 +590,11 @@ function ComposerCard(props: CardProps) {
           class={[
             "session-progress-card__summary-indicator session-progress-card__current-marker",
             {
-              "session-progress-card__summary-indicator--complete":
-                view().complete || view().effectiveSessionStatus === "done",
+              "session-progress-card__summary-indicator--complete": view().complete,
             },
           ]}
           data-status={view().presentedCurrentStatus ?? "pending"}
-          data-outcome={view().effectiveSessionStatus}
+          data-outcome={view().terminalOutcome ? view().effectiveSessionStatus : undefined}
           aria-hidden="true"
         >
           <StepMarker
@@ -586,7 +614,7 @@ function ComposerCard(props: CardProps) {
         <Show when={view().counts}>
           <span
             class="session-progress-card__summary-count session-progress-card__summary-count--collapsed"
-            data-outcome={view().effectiveSessionStatus}
+            data-outcome={view().terminalOutcome ? view().effectiveSessionStatus : undefined}
           >
             {view().outcomeLabel ?? `${view().currentPosition}/${view().counts?.total}`}
           </span>
@@ -608,6 +636,12 @@ function ComposerCard(props: CardProps) {
             <Icon name="chevronDown" />
           </span>
         </span>
+        <ProgressRuntime
+          runtime={props.runtime}
+          hasActiveRun={props.hasActiveRun}
+          sessionStatus={props.sessionStatus}
+          terminalOutcome={view().runOutcome}
+        />
         <Show when={props.refreshAction?.state}>
           {(state) => (
             <span class="session-progress-card__refresh-status" data-state={state()} role="status">
@@ -648,6 +682,12 @@ function BoardCard(props: CardProps) {
           <CardAction card={props.card} onAction={props.onDismiss} />
         </span>
       </div>
+      <ProgressRuntime
+        runtime={props.runtime}
+        hasActiveRun={props.hasActiveRun}
+        sessionStatus={props.sessionStatus}
+        terminalOutcome={view().runOutcome}
+      />
       <div class="session-progress-card__body">
         <ProgressCardMarkdown markdown={props.card.markdown} />
         <Steps

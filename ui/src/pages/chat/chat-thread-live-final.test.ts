@@ -107,7 +107,7 @@ describe("live terminal continuity with pending collaborators", () => {
     "keeps the live reply and terminal before queued custody (system=%s)",
     (system) => {
       const provenance = system
-        ? { kind: "internal_system", sourceTool: "main_session_restart_recovery" }
+        ? { kind: "internal_system", sourceTool: "system-event" }
         : undefined;
       const pendingInputs = [{ ...pending, message: { ...pending.message, provenance } }];
       const frames = [
@@ -179,7 +179,7 @@ describe("live terminal continuity with pending collaborators", () => {
       }
     },
   );
-  it.each(["interrupted", "cancelled"] as const)(
+  it.each(["cancelled"] as const)(
     "keeps earlier %s automation before a newly submitted message and its canonical receipt",
     (state) => {
       const automation = pendingText("Earlier scheduled maintenance", 30, {
@@ -199,10 +199,7 @@ describe("live terminal continuity with pending collaborators", () => {
         sendRunId: "New follow-up",
         sendSubmittedAtMs: 40,
       });
-      const disposition =
-        state === "interrupted"
-          ? "Delivery interrupted. This saved agent update is not scheduled to retry."
-          : "This agent update was cancelled before delivery.";
+      const disposition = "This agent update was cancelled before delivery.";
       const originalRows = ["earlier", "active", "Earlier scheduled maintenance", disposition];
       const check = (overrides: Partial<BuildChatItemsProps>, expected = originalRows) =>
         expect(

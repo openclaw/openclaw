@@ -11,6 +11,7 @@ import {
   type Transport,
   type JSONRPCMessage,
 } from "@modelcontextprotocol/client";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 
 const STREAM_RETRY_EXHAUSTED_RE = /^Maximum reconnection attempts \(\d+\) exceeded\.$/;
 const SESSION_TERMINATION_TIMEOUT_MS = 5_000;
@@ -364,6 +365,7 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
     this.sessionReplacedError = new McpSseSessionExpiredError(
       `MCP SSE server reconnected onto a replacement session endpoint: ${endpoint}`,
     );
+    materializeErrorStack(this.sessionReplacedError);
     this.emitError(this.sessionReplacedError);
     void this.close();
     // EventSource can arm its reconnect timer after this callback returns.

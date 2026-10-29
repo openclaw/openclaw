@@ -122,12 +122,11 @@ the page topbar while the drawer is closed. Opening the drawer moves that action
 back to the rail, without a second header button. In team mode, creation opens the
 same agent picker as the rail. Native apps keep their native creation controls.
 
-When an owner filter already identifies a row's owner, standalone activity and
-unread indicators stay at the far-right edge in grouped, ungrouped, pinned, and
-child rows, including when hover or keyboard focus reveals pin and archive
-actions. Other rows keep their leading indicator slot. Owner avatars, session
-artwork, and their activity rings keep their leading attribution slot; team mode
-keeps its compact status layout.
+Session activity and unread indicators stay in the leading column across owner
+filters, grouping modes, pinned sessions, and child rows. Idle rows reserve the
+same column so titles stay aligned when status changes or hover and keyboard
+focus reveal row actions. Shared-owner activity traces around the avatar pair;
+team mode keeps its compact status layout.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
@@ -519,6 +518,8 @@ After token or device-token authentication, the sidebar can show its cached sess
 
 Switching agents refreshes the session list even while other conversations are active. A session action finishing for another agent keeps the selected agent’s filtered sidebar and pagination active. Confirmed permission changes remain visible if their follow-up list refresh fails. Read acknowledgments for known sessions update unread and attention state from their committed receipt without reloading the roster. Older responses cannot undo confirmed read state; newer activity or a later manual unread mark still takes effect.
 
+Reading a parent acknowledges its hidden subagent runs in sequential batches of up to 100. Each run keeps its conditional unread guard, so a manual reminder added during acknowledgement survives. Pending reads clear optimistically and settle from acknowledgement outcomes and admitted Gateway row events. Failed implicit hidden-run reads stay silent; an explicit **Mark as read** action reports its hidden-run failures together.
+
 **Load more sessions** stays disabled while the sidebar list is refreshing or loading another page. It becomes available again when the read finishes and more sessions remain.
 
 An older list response preserves newer session names and run status already loaded in another open session list.
@@ -853,6 +854,8 @@ Model and **Effort** are separate adjacent composer controls in chat and New ses
 The model picker initially opens with the selected model’s provider section expanded and other provider sections collapsed. Closing and reopening the same picker preserves your provider expansion choices and clears the search. Reloading the page initializes provider sections from the selected model again. Search the model picker by model name, model ID, provider, or provider/model reference. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
 
 When you switch sessions, the composer keeps the session's known model name visible while refreshing the model options available for that session. If the model is not yet known, the control shows a loading placeholder. Locked chats also show the selected model, or **Session model** when it is not known. The lock prevents model selection changes; it does not indicate that a native runtime owns the model.
+
+If you select **Draft** and an administrator disables new Draft creation while the form is open, your selection, message, and attachments stay in place. The form explains that Draft creation is disabled. Turn off **Draft** only if you want to create a Shared session, or ask an administrator to enable Draft creation. Existing Draft conversations remain usable.
 
 Once the session is created, chat opens immediately. Remote startup uses the same transcript progress indicator and elapsed timer as GitHub workspace preparation, showing provisioning, workspace preparation, startup, and first-message delivery as they happen. The composer remains editable, and ordinary follow-up messages can enter the local queue while the first message is unresolved. Their delivery waits until the initial message is resolved. Normal startup is not an error. Startup failures remain visible in the session, with **Retry** when recovery is available.
 

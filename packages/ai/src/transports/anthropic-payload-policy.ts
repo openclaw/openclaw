@@ -291,9 +291,15 @@ export function applyAnthropicRequestCacheControl(
         blockRecord.type === "tool_result"
       ) {
         // Keep a prior write reachable beyond the 20-block lookback, before transient context.
-        blockRecord.cache_control = cacheControl;
-        if (typeof content === "string") {
-          record.content = blocks;
+        if (Object.isFrozen(record) || Object.isFrozen(blocks) || Object.isFrozen(blockRecord)) {
+          const markedBlocks = blocks.slice();
+          markedBlocks[j] = { ...blockRecord, cache_control: cacheControl };
+          messages[i] = { ...record, content: markedBlocks };
+        } else {
+          blockRecord.cache_control = cacheControl;
+          if (typeof content === "string") {
+            record.content = blocks;
+          }
         }
         marked++;
         break;

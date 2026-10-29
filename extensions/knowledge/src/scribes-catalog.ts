@@ -1,7 +1,7 @@
 /** The scribes Knowledge can start, their options, and the readable prompts that start, run and repair them. */
 import type { IconName } from "./ui-icons.js";
 
-export type ScribeId = "unlinked-review" | "conversations" | "memory";
+export type ScribeId = "claim-consolidation" | "conversations" | "memory";
 export type ScribeMode = "once" | "ongoing";
 export type ConversationScope = "active" | "all";
 export type ConversationSince = "30d" | "90d" | "all" | "today";
@@ -10,7 +10,7 @@ export type ReviewSchedule = typeof REVIEW_WEEKLY_SCHEDULE | typeof REVIEW_NIGHT
 
 /** Dialog choices for each scribe; the prompts spell them out as settings. */
 export type ScribeOptions = {
-  "unlinked-review": { schedule: ReviewSchedule };
+  "claim-consolidation": { schedule: ReviewSchedule };
   conversations: { scope: ConversationScope; since: ConversationSince; schedule?: string };
   memory: { sources: MemorySource[] };
 };
@@ -28,7 +28,7 @@ export type ScribeDefinition = {
   id: ScribeId;
   title: string;
   blurb: string;
-  skill: "knowledge-unlinked-claims" | "knowledge-ingest";
+  skill: "knowledge-claim-consolidation" | "knowledge-ingest";
   icon: IconName;
   tone: "blue" | "teal" | "amber";
   modes: readonly ScribeMode[];
@@ -49,17 +49,17 @@ export const REVIEW_NIGHTLY_SCHEDULE = "45 3 * * *";
 
 export const SCRIBES: readonly ScribeDefinition[] = [
   {
-    id: "unlinked-review",
-    title: "Review unlinked claims",
+    id: "claim-consolidation",
+    title: "Knowledge Consolidation",
     blurb:
-      "Weekly or nightly, files claims that name no page, creates pages for subjects that deserve one, and folds outcomes into page State.",
-    skill: "knowledge-unlinked-claims",
+      "Weekly or nightly, reviews the claims that name no page: files each on its subject page, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds outcomes into page State.",
+    skill: "knowledge-claim-consolidation",
     icon: "link",
     tone: "blue",
     modes: ["ongoing"],
     cadence: "Ongoing",
     startLabel: "Turn on…",
-    dialogTitle: "Review unlinked claims",
+    dialogTitle: "Knowledge Consolidation",
     submitLabel: "Turn on",
   },
   {
@@ -109,7 +109,7 @@ export const setupIdempotencyKey = (id: ScribeId, sessionKey: string, attempt: s
 /** Default dialog choices: conservative (weekly review; active conversations, last 30 days). */
 export function defaultOptions<Id extends ScribeId>(id: Id): ScribeOptions[Id] {
   const defaults: ScribeOptions = {
-    "unlinked-review": { schedule: REVIEW_WEEKLY_SCHEDULE },
+    "claim-consolidation": { schedule: REVIEW_WEEKLY_SCHEDULE },
     conversations: { scope: "active", since: "30d", schedule: CONVERSATIONS_SCHEDULE },
     memory: { sources: ["memory-md", "daily-notes"] },
   };
@@ -148,7 +148,7 @@ const MEMORY_WORDS: Record<MemorySource, string> = {
 };
 
 /** "Runs weekly, Sundays at 3:45 AM UTC (cron `45 3 * * 0`)." for a cron schedule. */
-export function scheduleLine(expr: string, timezone: string) {
+function scheduleLine(expr: string, timezone: string) {
   const words = SCHEDULE_WORDS[expr];
   return words
     ? `Runs ${words} ${timezone} (cron \`${expr}\`).`
@@ -174,8 +174,8 @@ function workSettings(setup: ScribeSetup) {
 
 // What the scribe does, and the skill that does the work.
 const PURPOSE: Record<ScribeId, string> = {
-  "unlinked-review":
-    "This scribe reviews Knowledge claims that name no page: it files each one on the right page, creates pages for subjects that deserve one, and folds the outcomes into page State.",
+  "claim-consolidation":
+    "This scribe consolidates Knowledge claims that name no page: it files each one on the right page, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds the outcomes into page State.",
   conversations:
     "This scribe reads the owner's conversations and saves the decisions, preferences, commitments and lessons in them to Knowledge.",
   memory:
@@ -184,8 +184,8 @@ const PURPOSE: Record<ScribeId, string> = {
 
 // The work step: the skill section that does it, applied to the settings.
 const WORK: Record<ScribeId, string> = {
-  "unlinked-review":
-    'Follow the "Scribe runs" section of the knowledge-unlinked-claims skill: review every claim that names no page until none is left to decide.',
+  "claim-consolidation":
+    'Follow the "Scribe runs" section of the knowledge-claim-consolidation skill: consolidate every claim that names no page until none is left to decide.',
   conversations:
     'Follow "Learn from conversations" in the "Scribe runs" section of the knowledge-ingest skill, for the conversations in the settings.',
   memory:
@@ -194,7 +194,7 @@ const WORK: Record<ScribeId, string> = {
 
 // What the closing sentence counts after the work.
 const COUNTS: Record<ScribeId, string> = {
-  "unlinked-review": "claims examined, linked, withdrawn and left",
+  "claim-consolidation": "claims examined, linked, superseded, withdrawn and left",
   conversations: "conversations learned and skipped, claims and pages written",
   memory: "files read, items saved, already known and skipped",
 };
@@ -221,7 +221,8 @@ const numbered = (steps: string[]) =>
  * jobs of other conversations (carrying a pause over), add, then check the target. `keep` is a
  * repair's condition for leaving a healthy automation alone.
  */
-function automationSteps(scribe: ScribeDefinition, schedule: string, keep = "") {
+// `enabled` is how the added automation's enabled flag is set: setup keeps a pause, repair turns it on.
+function automationSteps(scribe: ScribeDefinition, schedule: string, enabled: string, keep = "") {
   const key = scribeDeclarationKey(scribe.id);
   return [
     `With the automations tool, list automations including disabled ones and take those with declaration key \`${key}\`.${keep} Remove each one owned by another conversation, noting whether it was paused. If this conversation owns one that targets another session, update its session target to this conversation.`,
@@ -233,7 +234,7 @@ function automationSteps(scribe: ScribeDefinition, schedule: string, keep = "") 
       "- session target: `session:` followed by this conversation's session key (from Runtime)",
       "- payload: an agent turn whose message is the run message below, exactly as written inside the fence",
       "- delivery: none; failure alert after 2 failed runs",
-      "Adding with an existing declaration key updates this conversation's automation in place. Pass `enabled: false` only when a removed automation was paused and this conversation had none, so the pause carries over. Otherwise leave `enabled` out: never turn on a paused automation.",
+      `Adding with an existing declaration key updates this conversation's automation in place. ${enabled}`,
     ].join("\n"),
     "Get the automation and check that it targets this conversation.",
   ];
@@ -246,7 +247,7 @@ const runMessageBlock = (message: string) => ["Run message:", "", "```text", mes
  * The message an ongoing scribe's automation sends each run: the work settings, the work step
  * and the closing line. Editing it on the automation changes what later runs do.
  */
-export function runPrompt(setup: ScribeSetup) {
+function runPrompt(setup: ScribeSetup) {
   const scribe = scribeById(setup.scribe)!;
   const settings = workSettings(setup);
   return [
@@ -310,7 +311,11 @@ export function setupPrompt(setup: ScribeSetup) {
     "Steps:",
     ...numbered([
       access,
-      ...automationSteps(scribe, "the cron expression and time zone in the settings"),
+      ...automationSteps(
+        scribe,
+        "the cron expression and time zone in the settings",
+        "Pass `enabled: false` only when a removed automation was paused and this conversation had none, so the pause carries over. Otherwise leave `enabled` out: never turn on a paused automation.",
+      ),
       "Don't start a run from this turn: a run started here is skipped when the turn ends. The Scribes page starts the first run.",
       `Report the automation's ID and next run time. ${endStep("on", "one sentence: the automation and its next run")}`,
     ]),
@@ -357,9 +362,10 @@ export function repairPrompt(id: ScribeId, current: RepairSource) {
       ...automationSteps(
         scribe,
         "the schedule in the settings",
-        " If exactly one exists, this conversation owns it and it targets this conversation, leave it as it is and go to the last step.",
+        "Pass `enabled: true`: a repair turns the scribe back on, even when the scheduler paused it after failed runs.",
+        " If exactly one exists, this conversation owns it, it targets this conversation and it is enabled, leave it as it is and go to the last step.",
       ),
-      `Report whether the automation is enabled; never turn on a paused one. ${endStep("on", "one sentence: whether the automation is enabled")}`,
+      endStep("on", "one sentence: what the repair changed"),
     ]),
     "",
     FAILED,

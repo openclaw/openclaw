@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   loadExactSessionEntry,
   upsertSessionEntryCore,
@@ -60,10 +60,10 @@ function withStaleReceipt(
   );
 }
 
-it.each([2, 32])(
-  "bounds manifest reads for a stale receipt with %i archived transcripts",
-  async (count) => {
-    await withOpenClawTestState({ label: "stale-receipt-manifest-reads" }, async (state) => {
+it.each([2, 32].flatMap((count) => ["stale", "rebuild"].map((phase) => ({ count, phase }))))(
+  "bounds manifest parses for $phase with $count archived transcripts",
+  ({ count, phase }) =>
+    withOpenClawTestState({ label: "receipt-manifest-parses" }, async (state) => {
       const { cfg, storePath } = await seedDeferredPluginSessionSource(state);
       addDeferredPluginSessions(storePath, count);
       const options = { cfg, env: state.env, allAgents: true };
@@ -75,35 +75,35 @@ it.each([2, 32])(
       });
       const archived = await doctor({ ...options, mode: "import" });
       expect(archived.totals.archivedTranscriptFiles).toBe(count);
-      expect(fs.existsSync(storePath)).toBe(false);
-      const indexMove = migrationManifest(archived)
-        .targets.flatMap((target) => target.plannedMoves)
-        .find((move) => move.sourcePath === storePath)!;
-      // Interrupted archival can leave the index present while its transcripts are already archived.
-      fs.renameSync(indexMove.archivePath, storePath);
-      writeState(state.env, [
-        "UPDATE migration_sources SET removed_source = 0, report_json = json_set(report_json, '$.databaseIdentity', '123:456') WHERE migration_kind = 'deferred-plugin-session-import'",
-      ]);
-      const manifests = migrationRun.listSessionSqliteMigrationManifestPaths(state.env);
-      expect(manifests.length).toBeGreaterThan(0);
-      const reads = vi.spyOn(fs, "readFileSync");
-      try {
-        for (let pass = 0; pass < 2; pass++) {
-          reads.mockClear();
-          const report = await doctor({ ...options, mode: "validate" });
-          expectIssue(report, { code: "retained_plugin_receipt_superseded" });
-          expectNoIssue(report, "historical_transcript_deferred");
-          expect(report.totals.importedEntries).toBe(0);
-          for (const manifestPath of manifests) {
-            // History discovery and stale-source verification each own one synchronous phase.
-            expect(reads.mock.calls.filter(([file]) => file === manifestPath)).toHaveLength(2);
-          }
+      const moves = migrationManifest(archived).targets.flatMap((target) => target.plannedMoves);
+      if (phase === "stale") {
+        fs.renameSync(moves.find((move) => move.sourcePath === storePath)!.archivePath, storePath);
+      } else {
+        for (const move of moves.filter((candidate) => candidate.kind === "transcript")) {
+          fs.writeFileSync(move.sourcePath, fs.readFileSync(move.archivePath, "utf8") + "\n");
         }
-      } finally {
-        reads.mockRestore();
       }
-    });
-  },
+      writeState(state.env, [
+        `UPDATE migration_sources SET removed_source = 0${phase === "stale" ? ", report_json = json_set(report_json, '$.databaseIdentity', '123:456')" : ""} WHERE migration_kind = 'deferred-plugin-session-import'`,
+      ]);
+      const manifestCount = migrationRun.listSessionSqliteMigrationManifestPaths(state.env).length;
+      const parses = vi.spyOn(migrationRun, "readSessionSqliteMigrationManifest");
+      onTestFinished(() => parses.mockRestore());
+      if (phase === "stale") {
+        const report = await doctor({ ...options, mode: "validate" });
+        expectIssue(report, { code: "retained_plugin_receipt_superseded" });
+        expectNoIssue(report, "historical_transcript_deferred");
+      } else {
+        const target = archived.targets[0]!;
+        const rebuilt = await rebuildDeferredPluginSessionSourceIndex({
+          ...options,
+          target,
+          sqlitePath: target.sqlitePath,
+        });
+        expect(rebuilt).toBe(true);
+      }
+      expect(parses).toHaveBeenCalledTimes(manifestCount * (phase === "stale" ? 2 : 1));
+    }),
 );
 
 it.each([

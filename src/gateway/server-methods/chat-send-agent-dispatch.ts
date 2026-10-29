@@ -80,7 +80,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     injection,
     request,
     session,
-    terminalizeRestartSafeAdmission,
     turn,
     userTurn,
   } = params;
@@ -93,7 +92,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     gatewayWorkAdmission,
     messageInjectionTarget,
     retainGatewayWorkAdmission,
-    restartSafeAdmission,
   } = admission;
   const { agentId, cfg, clientRunId, expectedLeafEntryId, storePath, selectedAgent, sessionKey } =
     session;
@@ -168,12 +166,15 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     armOperatorRunCancellation: admission.armOperatorRunCancellation,
     retireOperatorRunCancellation: admission.retireOperatorRunCancellation,
   });
-  const injectionDisposition = createChatSendInjectionDisposition({
-    controllerInput: admission.sourceRef.input,
-    operatorAuthority: admission.operatorAuthority,
-    turnAdoptionLifecycle: queuedFollowup.lifecycle,
-    userTurnTranscriptRecorder: userTurnRecorder,
-  });
+  const injectionDisposition = createChatSendInjectionDisposition(
+    {
+      controllerInput: admission.sourceRef.input,
+      operatorAuthority: admission.operatorAuthority,
+      turnAdoptionLifecycle: queuedFollowup.lifecycle,
+      userTurnTranscriptRecorder: userTurnRecorder,
+    },
+    cfg.messages?.queue,
+  );
   let acceptedMessageInjection = false;
   const dispatchDisposition = {
     isSteered: () => acceptedMessageInjection || queuedFollowup.isSteered(),
@@ -192,7 +193,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     isQueuedFollowupEnqueued: () => queuedFollowup.isEnqueued() || queuedFollowup.isTerminal(),
     persistUserTurnTranscript: persistGatewayUserTurnTranscript,
     session,
-    terminalizeRestartSafeAdmission,
     userTurnRecorder,
     isReplyDispatchRun: () => replyDispatchRun !== undefined,
   });
@@ -366,8 +366,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   runId: clientRunId,
                   operatorAuthority: admission.operatorAuthority,
                   providerReviewAcknowledgment: request.providerReviewAcknowledgment,
-                  forceRestartSafeTools: request.restartResume?.forceRestartSafeTools,
-                  forceCodeModeTools: request.restartResume?.forceCodeModeTools,
                   dashboardReadAdmission,
                   skillLibraryAuthoring,
                   ...(cronCreatorAuthority
@@ -407,12 +405,11 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   fastModeOverride: p.fastMode,
                   queueModeOverride: p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...(injectionDisposition.isRefused()
+                  ...(injectionDisposition.isCollaborationBlocked()
                     ? { messageInjectionDisposition: "collaborative-steering-disabled" as const }
                     : p.queueMode === "steer" && messageInjectionTarget
                       ? { messageInjectionDisposition: "rejected" as const }
                       : {}),
-                  ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                   fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                   onAgentRunStart,
                   onPreparedAgentRunStart: ({
@@ -499,7 +496,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     )
     .then(async (dispatchResult) => {
       diagnostics.finish(dispatchDisposition);
-      await dispatchErrorLifecycle.settleRefusal(dispatchResult.collaborativeSteeringRefused);
       if (dispatchResult.deferredToActiveRun === "followup" && queuedFollowup.isEnqueued()) {
         const notices = replyDispatch.deliveredReplies
           .map(({ input }) => readChatSendReplyPayload(input))

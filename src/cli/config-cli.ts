@@ -236,7 +236,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
         writeRuntimeJson(runtime, formatCliJsonFailure(message));
         exitCliAfterOutput(runtime, 1);
       }
-      runtime.error(danger(message));
+      runtime.error(danger(terminalText`${message}`));
       exitCliAfterOutput(runtime, 1);
     }
     if (

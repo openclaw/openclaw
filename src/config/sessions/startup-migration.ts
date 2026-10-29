@@ -444,7 +444,7 @@ export async function runSessionStartupMigration(params: {
   }
   throwSqliteLifecycleErrors([...errors], "Session startup migration and cleanup failed");
   if (interruptedSessions > 0) {
-    params.log.info(`session: normalized ${interruptedSessions} legacy run(s) to interrupted`);
+    params.log.info(`session: normalized ${interruptedSessions} legacy run(s) to killed`);
   }
   params.assertCurrent?.();
 }

@@ -230,50 +230,48 @@ describe("gateway-status command", () => {
     vi.useRealTimers();
   });
 
-  it("checks known targets during discovery and cancels unfinished checks at the overall deadline", async () => {
+  it.each([1000, 2 ** 31 + 5000])("keeps probes active for the %s ms budget", async (timeoutMs) => {
     vi.useFakeTimers();
     readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());
-    discoverGatewayBeacons.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          setTimeout(() => resolve([]), 1000);
-        }),
-    );
+    discoverGatewayBeacons.mockImplementationOnce(() => {
+      const { promise, resolve } = Promise.withResolvers<GatewayBonjourBeacon[]>();
+      setTimeout(() => resolve([]), 1000);
+      return promise;
+    });
     probeGateway.mockImplementation(async (opts) => {
       if (opts.url.includes("127.0.0.1")) {
         return mocks.successfulProbe(opts.url);
       }
-      return await new Promise<GatewayProbeResult>((resolve) => {
-        const timer = setTimeout(
-          () => resolve(createUnreachableGatewayProbe(opts.url, "late timeout")),
-          2000,
-        );
-        opts.signal?.addEventListener("abort", () => {
-          clearTimeout(timer);
-          resolve(createUnreachableGatewayProbe(opts.url, "aborted"));
-        });
-      });
+      const { promise, resolve } = Promise.withResolvers<GatewayProbeResult>();
+      opts.signal?.addEventListener("abort", () =>
+        resolve(createUnreachableGatewayProbe(opts.url, "aborted")),
+      );
+      return await promise;
     });
-
     const command = run({
       url: "wss://slow.example:18789",
       token: "explicit-token",
+      timeout: String(timeoutMs),
     });
     await vi.advanceTimersByTimeAsync(500);
-    const startedDuringDiscovery = readProbeCalls().map((call) => call.url);
-    await vi.advanceTimersByTimeAsync(2500);
+    expect(readProbeCalls().map((call) => call.url)).toEqual([
+      "wss://slow.example:18789",
+      "ws://127.0.0.1:18789",
+    ]);
+    await vi.advanceTimersByTimeAsync(timeoutMs - 501);
+    expect(requireProbeCall("wss://slow.example:18789").signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     await command;
-
-    expect(startedDuringDiscovery).toEqual(["wss://slow.example:18789", "ws://127.0.0.1:18789"]);
     expect(output()).toMatchObject({
       ok: true,
-      durationMs: 1000,
+      durationMs: timeoutMs,
       primaryTargetId: "localLoopback",
       targets: [
         { id: "explicit", connect: { ok: false, error: "timeout" } },
         { id: "localLoopback", connect: { ok: true } },
       ],
     });
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("prints human output by default", async () => {

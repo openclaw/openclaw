@@ -11,7 +11,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import * as snapshotStaging from "../infra/sqlite-snapshot-staging-owner.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
@@ -384,11 +384,11 @@ describe("observation scope", () => {
     const { configPath, capture, setSignature } = fixture();
     await closeDatabase();
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    const stagingOwner = vi.spyOn(snapshotStaging, "captureSqliteSnapshotStagingOwner");
+    const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationAwaited");
     const observe = () => withArtifactPreservingStateReads(() => capture().read());
     const before = await observe();
     expect(before.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("before");
-    expect(stagingOwner).not.toHaveBeenCalled();
+    expect(copies).not.toHaveBeenCalled();
     expect(await observe()).toEqual(before);
     expect(reads).toHaveBeenCalledTimes(1);
 

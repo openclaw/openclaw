@@ -18,7 +18,7 @@ function method(text, name) {
 
 function withoutOtherPlatformReadiness(text) {
   return text.replace(
-    /#\[cfg\(not\(any\(target_os = "linux", target_os = "windows"\)\)\)\]\s*let \w+ = gateway::ensure_ready\([^;]+;/g,
+    /#\[cfg\(not\(any\(target_os = "linux", target_os = "windows", target_os = "macos"\)\)\)\]\s*let \w+ = gateway::ensure_ready\([^;]+;/g,
     "",
   );
 }
@@ -28,7 +28,7 @@ function withoutOtherPlatformReadiness(text) {
 const serviceMutation =
   /runtime_migration|runtime_action::(?:fresh|activate)|gateway::(?:ensure_ready|act|run_service_command)|\.(?:connect_explicit_local|install_cli|runtime_action|submit_runtime|submit_action)\s*\(|GatewayOperation::(?:Install|Runtime|Action)\b|["']gateway["']\s*,\s*["'](?:install|start|stop|restart)["']/;
 
-test("existing Linux and Windows connections and reconnects never invoke Gateway service mutations", () => {
+test("existing Linux, Windows, and macOS connections and reconnects never invoke Gateway service mutations", () => {
   for (const name of [
     "connect_selected",
     "resolve_cli",
@@ -40,12 +40,12 @@ test("existing Linux and Windows connections and reconnects never invoke Gateway
   }
   assert.match(method(main, "connect"), /\.connect_selected\(/);
   assert.match(method(main, "connect_selected"), /gateway::status\(&cli\)/);
-  assert.match(gateway, /#\[cfg\(not\(any\(target_os = "linux", target_os = "windows"\)\)\)\]\s*pub fn ensure_ready\b/);
+  assert.match(gateway, /#\[cfg\(not\(any\(target_os = "linux", target_os = "windows", target_os = "macos"\)\)\)\]\s*pub fn ensure_ready\b/);
 });
 
-test("explicit Linux and Windows first-run setup installs only when no service is installed or reachable", () => {
+test("explicit Linux, Windows, and macOS first-run setup installs only when no service is installed or reachable", () => {
   const explicit = method(main, "connect_explicit_local");
-  assert.match(explicit, /#\[cfg\(any\(target_os = "linux", target_os = "windows"\)\)\]\s*if let Ok\(cli\) = self\.resolve_cli\(\)/);
+  assert.match(explicit, /#\[cfg\(any\(target_os = "linux", target_os = "windows", target_os = "macos"\)\)\]\s*if let Ok\(cli\) = self\.resolve_cli\(\)/);
   assert.match(explicit, /let snapshot = gateway::status\(&cli\)\?/);
   const absent = explicit.match(
     /if !snapshot\.installed && !snapshot\.reachable \{[^]*?^ {12}\}/m,
@@ -72,12 +72,12 @@ test("bundled-runtime mutations belong only to local setup and confirmed runtime
   );
 });
 
-test("bundled runtime supports Linux and Windows while confirmation stays Linux-only", () => {
+test("bundled runtime confirmation supports Linux, Windows, and macOS", () => {
   for (const module of ["bundled_runtime", "runtime_action"]) {
-    assert.match(main, new RegExp(`#\\[cfg\\(any\\(target_os = "linux", target_os = "windows", test\\)\\)\\]\\s*mod ${module};`));
+    assert.match(main, new RegExp(`^mod ${module};`, "m"));
   }
   assert.match(
     source("tray"),
-    /#\[cfg\(target_os = "linux"\)\]\s*fn confirm_runtime_action\b/,
+    /#\[cfg\(any\(target_os = "linux", target_os = "windows", target_os = "macos"\)\)\]\s*fn confirm_runtime_action\b/,
   );
 });

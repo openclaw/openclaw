@@ -19,6 +19,7 @@ import { integrateManagedWorkspaceSource } from "./github-publication-base-refre
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import { prepareManagedWorkspaceReviewBase } from "./github-publication-workspace-review.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { isSessionOwnRequester } from "./session-sharing-policy.js";
@@ -282,7 +283,9 @@ export async function performSessionGitHubPreparation(
     if (
       previous &&
       previous.preparedHeadCommit === previous.head.commit &&
-      previous.preparedHeadCommit === pullRequest.head.commit
+      previous.preparedHeadCommit === pullRequest.head.commit &&
+      previous.base.branch === pullRequest.base.branch &&
+      previous.base.commit === pullRequest.base.commit
     ) {
       const reviewBase = await withWorktreeGitConfig(
         owner.worktree.path,
@@ -295,6 +298,17 @@ export async function performSessionGitHubPreparation(
             { beforeRun: assertCurrent },
           ),
       );
+      // A failed destination adoption may have prepared its review ref before the
+      // binding write. Repair that projection without restaging any guest work.
+      const review = await prepareManagedWorkspaceReviewBase({
+        owner,
+        sandbox: publicationSandbox,
+        reviewCommit: reviewBase,
+        signal,
+        assertCurrent,
+        stageChanges: false,
+        reviewPreparationError: "The PR review base could not be prepared; retry prepare_pr.",
+      });
       initial.readCurrent();
       return {
         status: "prepared" as const,
@@ -303,19 +317,20 @@ export async function performSessionGitHubPreparation(
         headChanged: false,
         changedPaths: [],
         conflictPaths: [],
-        review: { mode: "local" as const, base: reviewBase },
+        review,
       };
     }
     // Finish the accepted source before admitting another head, including after a restart.
     const binding: SessionGitHubPullRequestBinding =
       previous && previous.preparedHeadCommit !== previous.head.commit
-        ? previous
+        ? { ...previous, base: structuredClone(pullRequest.base) }
         : {
             ...structuredClone(pullRequest),
             ...(previous?.preparedHeadCommit
               ? { preparedHeadCommit: previous.preparedHeadCommit }
               : {}),
           };
+    const reviewOnly = previous?.preparedHeadCommit === binding.head.commit;
     using sourceResources = new DisposableStack();
     let reserved: Awaited<ReturnType<typeof prepareGitHubPublicationSession>> | undefined;
     const assertReserved = () => {
@@ -379,13 +394,14 @@ export async function performSessionGitHubPreparation(
         githubHost: binding.host,
         review: { repository: binding.base.repository, commit: binding.base.commit },
         initial: binding.preparedHeadCommit === undefined,
+        reviewOnly,
         emptySource,
         resuming: previous !== undefined && previous.preparedHeadCommit !== previous.head.commit,
         accept,
       },
     });
     assertReserved();
-    if (integration.status !== "conflicts") {
+    if (integration.status !== "conflicts" && !reviewOnly) {
       await patchSessionEntryCore(
         scope,
         (entry) => {

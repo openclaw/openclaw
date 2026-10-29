@@ -1,5 +1,6 @@
 import type { ReasoningStreamPayload } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
+import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
@@ -105,10 +106,6 @@ export type RunEmbeddedAgentParams = Pick<
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
-  /** Restrict this reconstructed run to restart-safe tools. */
-  forceRestartSafeTools?: boolean;
-  /** Preserve Code Mode controls for a replay-safe restart recovery turn. */
-  forceCodeModeTools?: boolean;
   /** Invocation-owned Code Mode activation; limits still come from config. */
   codeModeOverride?: boolean | "auto";
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
@@ -180,6 +177,8 @@ export type RunEmbeddedAgentParams = Pick<
   cronCreatorAuthorityUnavailableReason?: "queued-local-operator";
   /** Canonical persisted exec policy for this session. */
   execSession?: ExecSessionDefaults;
+  /** Session-owned presentation facts; never current-turn delivery or tool authority. */
+  sessionPromptDelivery?: SessionDeliveryState;
   execOverrides?: Pick<
     ExecToolDefaults,
     | "host"
@@ -295,6 +294,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
   | "extraSystemPromptTurnContext"
+  | "sessionPromptDelivery"
   | "gitCoauthorPrompt"
   | "silentReplyPromptMode"
   | "ownerNumbers"

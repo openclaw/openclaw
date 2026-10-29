@@ -56,7 +56,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.operation == 'release'))))
     permissions:
       contents: write
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 120
     environment: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'internal') && 'android-internal' || 'android-store-release' }}
     steps:
@@ -64,7 +64,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Verify release source
@@ -72,6 +72,14 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Fetch release source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Fetch ancestry now; release-note reads hydrate historical file contents on demand.
+          # Retain this main commit as a negotiation tip for the release owner's later main fetch.
+          git fetch --no-tags --filter=blob:none --unshallow origin "+$GITHUB_SHA:refs/remotes/origin/main"
 
       - name: Prepare trusted Linux Android tooling
         if: >-
@@ -175,6 +183,7 @@ jobs:
           GOOGLE_PLAY_RELEASE_STATUS: completed
           GOOGLE_PLAY_TRACK: internal
           GOOGLE_PLAY_VALIDATE_ONLY: "0"
+          ANDROID_SCREENSHOT_DIAGNOSTICS: "1"
           SIPS: ${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh
         run: |
           set -euo pipefail
@@ -210,6 +219,7 @@ jobs:
         with:
           name: android-release-emulator-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/diagnostics/**
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator.log
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator-args.txt
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/process-status.txt

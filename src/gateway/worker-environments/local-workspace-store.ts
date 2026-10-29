@@ -173,10 +173,12 @@ export function withLocalWorkspaceStore<T>(
                   } while (more);
                 };
                 await pruneLegacy();
+                // Observations may commit while a scan still owns unaccepted packs.
+                let preparationEpoch: number | undefined;
                 const prepare = async (preparations: readonly Uint8Array[]) => {
                   for (const preparation of preparations) {
                     assertCurrent();
-                    await runOpenClawStateWorkerOperation(
+                    const epoch = await runOpenClawStateWorkerOperation(
                       context,
                       (scope) =>
                         scope.execute({
@@ -185,6 +187,7 @@ export function withLocalWorkspaceStore<T>(
                         }),
                       { assertCurrent },
                     );
+                    preparationEpoch = Math.min(preparationEpoch ?? epoch, epoch);
                   }
                   assertCurrent();
                 };
@@ -193,6 +196,20 @@ export function withLocalWorkspaceStore<T>(
                   guard: WorktreeWorkerAuthority = params.workerAuthority ?? {},
                 ) => {
                   assertCurrent();
+                  if (mutation.kind === "update" && mutation.manifest) {
+                    // Checkpoints also carry recovery documents; the writer only publishes roots.
+                    const { previousRoot, resultingRoot, treeRoot, fingerprints } =
+                      mutation.manifest;
+                    mutation.manifest = {
+                      previousRoot,
+                      resultingRoot,
+                      treeRoot,
+                      fingerprints,
+                      records: [],
+                      removed: [],
+                    };
+                  }
+                  let wireMutation: LocalWorkspaceMutation | Uint8Array | undefined = mutation;
                   const source =
                     mutation.kind === "create"
                       ? mutation.row
@@ -203,6 +220,18 @@ export function withLocalWorkspaceStore<T>(
                     const paths = prepareLocalWorkspaceSourcePathSet(source.source_paths_json);
                     await prepare([deflateRawSync(serialize({ paths }))]);
                     source.source_paths_digest = localWorkspaceDigestBytes(paths.digest);
+                    // The writer stores this placeholder; host publication keeps the admitted JSON.
+                    if (mutation.kind === "create") {
+                      wireMutation = {
+                        ...mutation,
+                        row: { ...mutation.row, source_paths_json: "[]" },
+                      };
+                    } else if (mutation.kind === "update") {
+                      wireMutation = {
+                        ...mutation,
+                        patch: { ...mutation.patch, source_paths_json: "[]" },
+                      };
+                    }
                   }
                   let pending:
                     | {
@@ -213,15 +242,14 @@ export function withLocalWorkspaceStore<T>(
                   // Projection owns mutation bytes through settlement; authority is captured separately.
                   const predicates = structuredClone(guard.predicates);
                   // Compress large inventories to fit the broker's existing queue budget.
-                  const serialized = serialize(mutation);
+                  const serialized = serialize(wireMutation);
                   const compressed =
-                    serialized && serialized.byteLength > 32 * 1024 * 1024
+                    serialized.byteLength > 32 * 1024 * 1024
                       ? await compressMutation(serialized)
                       : undefined;
-                  let wireMutation: LocalWorkspaceMutation | Uint8Array | undefined =
-                    compressed && serialized && compressed.byteLength < serialized.byteLength
-                      ? compressed
-                      : mutation;
+                  if (compressed && compressed.byteLength < serialized.byteLength) {
+                    wireMutation = compressed;
+                  }
                   let admission: SqliteWorkerOperationAdmission | undefined;
                   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
                   const assertWrite = () => {
@@ -245,6 +273,7 @@ export function withLocalWorkspaceStore<T>(
                               input: {
                                 id: params.worktreeId,
                                 mutation: wireMutation!,
+                                preparationEpoch,
                                 predicates,
                                 leases: write.identities,
                               },

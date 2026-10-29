@@ -349,8 +349,8 @@ export function createCollectorLaunchCallbacks(params: {
             }
             throw new Error("Collector source revocation cleanup is incomplete");
           }
-        } else if (reason === "shutdown" || canCleanupCreatedSession?.() === false) {
-          // Restart replays queuedLaunch without repeating its durable context preparation.
+        } else if (canCleanupCreatedSession?.() === false) {
+          // A replacement owns the session; cleanup must not roll it back.
           await preparation?.dispose();
         } else {
           await preparation?.rollback();

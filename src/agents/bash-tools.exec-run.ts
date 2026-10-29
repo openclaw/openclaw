@@ -673,16 +673,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         yielded = true;
         run.disableUpdates();
         markBackgrounded(run.session);
-        void Promise.resolve(run.session.exitNotificationPersistence).then(
-          () => backgrounded.resolve({ status: "backgrounded" }),
-          (error: unknown) =>
-            backgrounded.reject(
-              new Error(
-                `Process ${run.session.id} started, but its restart notification could not be saved. Use process poll before retrying.`,
-                { cause: error },
-              ),
-            ),
-        );
+        backgrounded.resolve({ status: "backgrounded" });
       };
 
       try {

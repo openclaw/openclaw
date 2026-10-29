@@ -221,7 +221,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(changed[0]!.identity).toBe(secondSnapshot.identity);
     expect(changed[0]!.facts.get(key.name)?.value).toBe(42);
     expect([...changed[0]!.facts.keys()]).toEqual([key.name]);
-    expect(changed[0]!.writeScopes.size).toBe(0);
+    expect(changed[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0)).toBe(0);
     expect(changed[0]!.references.size).toBe(0);
     expect(getSqliteDatabaseAdmission(second, key)).toBe(42);
     expect(secondSnapshot.facts.has(key.name)).toBe(false);
@@ -234,13 +234,15 @@ describe("native SQLite schema snapshots and callbacks", () => {
 
     readSqliteDatabaseScopedWriteToken(second, "new");
     const [scopes] = captureSqliteDatabaseAdmissions(cursor);
-    expect([...scopes!.writeScopes.keys()]).toEqual(['["key","new"]']);
+    expect(scopes!.writeScopes.flatMap((bucket) => Array.from(bucket.keys()))).toEqual([
+      '["key","new"]',
+    ]);
     expect(scopes!.facts.size).toBe(0);
     expect(scopes!.references.size).toBe(0);
     const fresh = captureSqliteDatabaseAdmissions(createSqliteDatabaseAdmissionCursor()).find(
       (record) => record.identity === secondSnapshot.identity,
     )!;
-    expect(fresh.writeScopes.size).toBe(2);
+    expect(fresh.writeScopes.reduce((size, bucket) => size + bucket.size, 0)).toBe(2);
     expect(fresh.facts.get(key.name)?.value).toBe(42);
 
     revokeSqliteDatabaseAdmissions(second);
@@ -269,18 +271,29 @@ describe("native SQLite schema snapshots and callbacks", () => {
 
     readSqliteDatabaseScopedWriteToken(database, "second");
     const [delta] = captureSqliteDatabaseAdmissions(cursor, { location });
-    expect([...delta!.writeScopes.keys()]).toEqual(['["key","second"]']);
+    expect(delta!.writeScopes.flatMap((bucket) => Array.from(bucket.keys()))).toEqual([
+      '["key","second"]',
+    ]);
     // The old snapshot has not read its scope map, including through structured clone.
-    const cloned = structuredClone(before!);
-    expect([...cloned.writeScopes.keys()]).toEqual(['["key","first"]']);
+    let cloned: typeof before;
+    {
+      using writes = vi.spyOn(Map.prototype, "set");
+      cloned = structuredClone(before!);
+      expect(writes).not.toHaveBeenCalled();
+    }
+    expect(cloned.writeScopes.flatMap((bucket) => Array.from(bucket.keys()))).toEqual([
+      '["key","first"]',
+    ]);
     expect(readSqliteDatabaseScopedWriteToken(database, "first")).toBe(firstToken);
 
     const receiver = new SqliteDatabaseAdmissionRegistry();
     receiver.install([before!]);
     receiver.install([delta!]);
-    expect([...before!.writeScopes.keys()]).toEqual(['["key","first"]']);
+    expect(before!.writeScopes.flatMap((bucket) => Array.from(bucket.keys()))).toEqual([
+      '["key","first"]',
+    ]);
     const received = receiver.capture()[0]!;
-    expect([...received.writeScopes.keys()].toSorted()).toEqual([
+    expect(received.writeScopes.flatMap((bucket) => Array.from(bucket.keys())).toSorted()).toEqual([
       '["key","first"]',
       '["key","second"]',
     ]);
@@ -329,6 +342,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
       readRevision: () => 0,
       writer: () => sender.records.get(snapshot!.identity),
       suspended: () => false,
+      hasPendingSchemaMutation: () => false,
       publish: (record) => sender.publish(record),
     });
     try {

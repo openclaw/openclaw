@@ -614,7 +614,7 @@ export function projectSessionPatchResult(params: {
     model: resolved.model,
   });
   const modelCatalog = params.modelCatalog;
-  const thinking = resolveGatewaySessionThinkingProjectionInternal({
+  const projection = {
     cfg: params.cfg,
     agentId,
     provider: resolved.provider,
@@ -624,11 +624,18 @@ export function projectSessionPatchResult(params: {
     preparedAcpMeta: params.preparedAcpMeta,
     modelCatalog,
     modelCatalogRouteVariants: params.modelCatalogRouteVariants,
-  });
-  const contextWindow = resolveModelContextWindowProfile({
-    catalogEntry: thinking.catalogEntry,
-    selected: params.entry.contextWindow,
-  });
+  };
+  // Metadata-only receipts omit thinking/context fields; resolve only their runtime facts.
+  const thinking = modelCatalog
+    ? resolveGatewaySessionThinkingProjectionInternal(projection)
+    : undefined;
+  const runtime = thinking ?? resolveGatewaySessionRuntimeProjection(projection);
+  const contextWindow = thinking
+    ? resolveModelContextWindowProfile({
+        catalogEntry: thinking.catalogEntry,
+        selected: params.entry.contextWindow,
+      })
+    : undefined;
   const entry = projectPublicSessionEntry(params.entry);
   delete entry.skillsSnapshot;
   delete entry.systemPromptReport;
@@ -642,9 +649,9 @@ export function projectSessionPatchResult(params: {
     resolved: {
       modelProvider: displayModel.provider,
       model: displayModel.model,
-      agentRuntime: thinking.agentRuntime,
-      runtimeSelectionLocked: thinking.runtimeSelectionLocked,
-      ...(modelCatalog
+      agentRuntime: runtime.agentRuntime,
+      runtimeSelectionLocked: runtime.runtimeSelectionLocked,
+      ...(thinking && contextWindow
         ? {
             contextWindow: contextWindow.contextWindow,
             contextWindows: contextWindow.contextWindows,

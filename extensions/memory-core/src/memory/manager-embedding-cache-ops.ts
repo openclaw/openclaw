@@ -81,34 +81,29 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
           identity.model === meta.model &&
           identity.providerKey === meta.providerKey),
     );
-    const cached = this.cache.enabled
-      ? await generation.database.read(
-          {
-            type: "cache.read",
-            input: {
-              providerIdentities,
-              hashes,
-              ...(this.reindexProgress
-                ? {
-                    rebuild: {
-                      chunks: candidates.map(({ source, entry, chunk }) => ({
-                        source,
-                        path: entry.path,
-                        hash: chunk.hash,
-                      })),
-                      dimensions: generation.embeddingDimensions,
-                    },
-                  }
-                : {}),
-            },
+    const cached = await generation.database.read(
+      {
+        type: "cache.read",
+        input: {
+          providerIdentities,
+          hashes,
+          cacheEnabled: this.cache.enabled,
+          published: {
+            chunks: candidates.map(({ source, entry, chunk }) => ({
+              source,
+              path: entry.path,
+              hash: chunk.hash,
+            })),
+            dimensions: generation.embeddingDimensions,
           },
-          () => {
-            if (!generation.database.isOpen) {
-              throw new Error("Memory database owner is closed");
-            }
-          },
-        )
-      : new Map<string, number[]>();
+        },
+      },
+      () => {
+        if (!generation.database.isOpen) {
+          throw new Error("Memory database owner is closed");
+        }
+      },
+    );
     // Cache hits and new batches must inhabit the same vector space during a sync.
     for (const [hash, embedding] of cached) {
       if (!isValidMemoryEmbedding(embedding, generation.embeddingDimensions)) {

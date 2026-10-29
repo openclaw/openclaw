@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
-import { AGENT_ID, STORE_KEY } from "./stores-contract.js";
+import { DEFAULT_HUB_PERCENTILE } from "./page-budget.js";
+import { AGENT_ID, STORE_KEY, type GrantAccess } from "./stores-contract.js";
 export const agentIdPattern = new RegExp(AGENT_ID);
 const storeKeyPattern = new RegExp(STORE_KEY);
 
@@ -25,6 +26,21 @@ export const PluginConfig = Type.Object(
     operatorRead: Type.Optional(Type.Boolean()),
     writesEnabled: Type.Optional(Type.Boolean()),
     stores: Type.Optional(StoresSection),
+    pageBudgets: Type.Optional(
+      Type.Object(
+        {
+          hubPercentile: Type.Optional(
+            Type.Number({
+              minimum: 50,
+              maximum: 99.9,
+              description:
+                "Authored-link degree percentile, within each store partition, at which a page counts as a hub and gets the smaller body budget. Default 90.",
+            }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     maintenance: Type.Optional(
       Type.Object(
         {
@@ -67,6 +83,7 @@ type MaintenanceSettings = {
 export type Policy = {
   operatorRead: boolean;
   writesEnabled: boolean;
+  hubPercentile: number;
   maintenance: MaintenanceSettings;
 };
 const DEFAULT_MAINTENANCE_SCHEDULE = "30 3 * * *";
@@ -84,6 +101,7 @@ export function parsePolicy(config: Record<string, unknown> | undefined): Policy
   return {
     operatorRead: value.operatorRead ?? true,
     writesEnabled: value.writesEnabled ?? true,
+    hubPercentile: value.pageBudgets?.hubPercentile ?? DEFAULT_HUB_PERCENTILE,
     maintenance: {
       enabled: maintenance.enabled ?? true,
       schedule: maintenance.schedule ?? DEFAULT_MAINTENANCE_SCHEDULE,
@@ -191,4 +209,30 @@ export function effectiveBinding(membership: Membership, agentId: string): Bindi
   }
   const key = membership.assigned.get(agentId);
   return key === undefined ? `agent:${agentId}` : `named:${key}`;
+}
+
+/** Owner grants keyed by a conversation's stable session key. */
+export type ConversationGrants = Record<string, GrantAccess>;
+/** Revision operators edit grants against: a hash of the grants only. */
+export const grantsRevision = (grants: ConversationGrants) => storesRevision(grants);
+
+/** The grant covering a conversation: its own key's, else the nearest
+ * `:`-delimited ancestor's. Thread, topic and other key-denoted child sessions
+ * extend their conversation's key, so they inherit its grant; a more specific
+ * grant wins. Session keys are read as structure only, never as authority: the
+ * key comes from the host-minted audience. */
+export function coveringGrant(
+  grants: ConversationGrants,
+  sessionKey: string,
+): GrantAccess | undefined {
+  for (let key = sessionKey; ;) {
+    if (Object.hasOwn(grants, key)) {
+      return grants[key];
+    }
+    const at = key.lastIndexOf(":");
+    if (at <= 0) {
+      return undefined;
+    }
+    key = key.slice(0, at);
+  }
 }

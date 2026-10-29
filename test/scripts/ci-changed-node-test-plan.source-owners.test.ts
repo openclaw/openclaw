@@ -528,6 +528,12 @@ describe("CI changed Node test plan", () => {
     );
   });
 
+  it("keeps the extracted session database collection proof protected", () => {
+    expect(PR_PROTECTED_RUNTIME_TEST_FILES).toContain(
+      "src/gateway/session-database-retention.test.ts",
+    );
+  });
+
   it("keeps policy scanners beside ordinary importers without claiming complete source ownership", () => {
     const source = "src/test-utils/runtime.ts";
     const consumer = "src/example/runtime.test.ts";
@@ -723,7 +729,7 @@ describe("CI changed Node test plan", () => {
     // Child-process E2Es: the import graph reaches only the test-instance helper.
     {
       changedPath: "src/gateway/server-startup-observers.ts",
-      expected: ["test/gateway-background-process-restart.e2e.test.ts"],
+      expected: ["test/gateway-restart-resume.e2e.test.ts"],
     },
     {
       changedPath: "src/process/command-queue.capacity-groups.ts",
@@ -732,7 +738,7 @@ describe("CI changed Node test plan", () => {
     {
       changedPath: "src/sessions/session-controller.steer.ts",
       expected: [
-        "test/gateway-background-process-restart.e2e.test.ts",
+        "test/gateway-restart-resume.e2e.test.ts",
         "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
       ],
     },

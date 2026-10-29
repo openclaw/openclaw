@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { runWithTimeout } from "./embeddings.js";
 import { startMemoryRecall } from "./recall-service.js";
@@ -11,18 +12,15 @@ describe("memory-lancedb recall deadline", () => {
   test("rejects task success after the recall deadline", async () => {
     vi.useFakeTimers();
     const nowSpy = vi.spyOn(performance, "now").mockReturnValue(0);
-    let resolveTask: ((value: string) => void) | undefined;
+    const pending = createDeferred<string>();
     const result = runWithTimeout({
       timeoutMs: 15_000,
-      task: async () =>
-        await new Promise<string>((resolve) => {
-          resolveTask = resolve;
-        }),
+      task: () => pending.promise,
     });
     await Promise.resolve();
 
     nowSpy.mockReturnValue(15_000);
-    resolveTask?.("late success");
+    pending.resolve("late success");
 
     await expect(result).resolves.toEqual({ status: "timeout" });
     expect(vi.getTimerCount()).toBe(0);
@@ -58,7 +56,5 @@ describe("memory-lancedb recall deadline", () => {
     // change them; a wall-clock read would have inflated them to 69998.5.
     expect(embedBudget).toBe(59_998);
     expect(searchBudget).toBe(59_998);
-    nowSpy.mockRestore();
-    dateNowSpy.mockRestore();
   });
 });

@@ -50,8 +50,7 @@ function prepareTreePacks(
 
 it.each([2, 64])("loads %i directories with reads bounded by tree depth", (count) => {
   using cleanup = new DisposableStack();
-  const db = new DatabaseSync(":memory:");
-  cleanup.defer(() => db.close());
+  using db = new DatabaseSync(":memory:");
   const records = createLocalWorkspaceManifestTree(
     Array.from({ length: count }, (_, index) => [
       { path: `dir-${index}`, type: "directory" as const },
@@ -83,12 +82,19 @@ it.each([2, 64])("loads %i directories with reads bounded by tree depth", (count
     localWorkspaceDigestBytes(childRoot.treeRef),
   );
   expect(() => readLocalWorkspaceTree(db, root)).toThrow("baseline nodes are missing");
+  const surviving = readLocalWorkspaceTree(db, root, { allowMissing: true });
+  expect(surviving.has("dir-0")).toBe(true);
+  expect(surviving.has("dir-0/first.txt")).toBe(false);
+  expect(surviving.has("dir-1/first.txt")).toBe(true);
+  db.prepare("UPDATE local_workspace_tree_packs SET records_json = ? WHERE tree_digest = ?").run(
+    "{",
+    root,
+  );
+  expect(() => readLocalWorkspaceTree(db, root, { allowMissing: true })).toThrow(SyntaxError);
 });
 
 it("shares an unchanged subdirectory pack across different projection roots", () => {
-  using cleanup = new DisposableStack();
-  const db = new DatabaseSync(":memory:");
-  cleanup.defer(() => db.close());
+  using db = new DatabaseSync(":memory:");
   const inventory = (character: string) =>
     createLocalWorkspaceManifestTree([
       { path: "shared", type: "directory" },
@@ -131,8 +137,7 @@ it("shares an unchanged subdirectory pack across different projection roots", ()
 
 it("accepts a prepared tree with only the projection root flip inside the writer transaction", () => {
   using cleanup = new DisposableStack();
-  const db = new DatabaseSync(":memory:");
-  cleanup.defer(() => db.close());
+  using db = new DatabaseSync(":memory:");
   const id = randomUUID();
   mutateLocalWorkspaceProjection(db, id, {
     kind: "create",
@@ -175,9 +180,7 @@ it("accepts a prepared tree with only the projection root flip inside the writer
 });
 
 it("sweeps unreachable content while retaining baseline, previous and pending roots and newly reused content", () => {
-  using cleanup = new DisposableStack();
-  const db = new DatabaseSync(":memory:");
-  cleanup.defer(() => db.close());
+  using db = new DatabaseSync(":memory:");
   db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
   const id = randomUUID();
   const baseline = tree("a");

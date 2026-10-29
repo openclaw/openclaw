@@ -475,6 +475,8 @@ async function runEmbeddedAttemptOwned(
         ...executionResult,
         codeModeEngaged: codeModeControlsEnabledForRun,
         providerRetryMaxRetries: providerRetry.maxRetries,
+        providerRequestTimeoutExplicit:
+          providerRetry.timeoutMs !== undefined || params.model.requestTimeoutMs !== undefined,
         providerRetryMaxDelayMs: providerRetry.maxRetryDelayMs,
         ...(catalogSession
           ? {
@@ -518,6 +520,10 @@ async function runEmbeddedAttemptOwned(
       externalAbortController.throwIfFired();
     } catch (abortError) {
       error = abortError;
+    }
+    // Preparation can fail before execution records a terminal outcome.
+    if (executionState.terminal.kind === "ok") {
+      executionState.terminal = { kind: "failed", source: "precheck", error };
     }
     const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
       terminal: executionState.terminal,

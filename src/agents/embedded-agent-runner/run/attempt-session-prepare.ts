@@ -6,7 +6,6 @@ import type { ContextEngine } from "../../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
-  isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../../sessions/input-provenance.js";
@@ -83,11 +82,6 @@ import {
 } from "./tool-loop-recovery.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type ClientToolPreparation = Omit<
-  Parameters<typeof prepareEmbeddedAttemptClientTools>[0],
-  "attempt"
->;
-
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 
 export async function prepareEmbeddedAttemptAgentSession(input: {
@@ -95,7 +89,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   activeContextEngineInfo?: ContextEngine["info"];
   agentCoreThinkingLevel: CreateAgentSessionOptions["thinkingLevel"];
   agentDir: string;
-  clientToolPreparation: ClientToolPreparation;
+  clientToolPreparation: Omit<Parameters<typeof prepareEmbeddedAttemptClientTools>[0], "attempt">;
   effectiveCwd: string;
   effectiveWorkspace: string;
   getCurrentAttemptPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
@@ -119,8 +113,10 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     pluginMetadataSnapshot: input.getCurrentAttemptPluginMetadataSnapshot(),
     contextTokenBudget: attempt.contextTokenBudget,
   });
-  // Preserve the actual user setting before the SDK guard transfers ownership.
-  const compactionEnabled = settingsManager.getCompactionEnabled();
+  const compactionForbidden =
+    attempt.compactionForbidden || attempt.operation === "settled-tool-finalization";
+  // Native request compaction and the SDK guard share the checkpoint prohibition.
+  const compactionEnabled = !compactionForbidden && settingsManager.getCompactionEnabled();
   applyAgentAutoCompactionGuard({
     settingsManager,
     contextEngineInfo: input.activeContextEngineInfo,
@@ -130,25 +126,23 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       modelId: attempt.modelId,
       baseUrl: attempt.model.baseUrl,
     }),
-    // The finalizer's result gate rejects any compaction, so never start one.
-    compactionForbidden: attempt.operation === "settled-tool-finalization",
+    compactionForbidden,
   });
 
   // These factories carry compaction/pruning runtime state into the resource loader.
-  const extensionFactories = buildEmbeddedExtensionFactories({
-    cfg: attempt.config,
-    sessionManager: input.sessionManager,
-    workspaceDir: input.effectiveWorkspace,
-    model: attempt.model,
-    agentId: input.sessionAgentId,
-    sessionId: attempt.sessionId,
-    sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,
-    runId: attempt.runId,
-  });
   const resourceLoader = new DefaultResourceLoader({
     cwd: input.effectiveCwd,
     agentDir: input.agentDir,
-    extensionFactories,
+    extensionFactories: buildEmbeddedExtensionFactories({
+      cfg: attempt.config,
+      sessionManager: input.sessionManager,
+      workspaceDir: input.effectiveWorkspace,
+      model: attempt.model,
+      agentId: input.sessionAgentId,
+      sessionId: attempt.sessionId,
+      sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,
+      runId: attempt.runId,
+    }),
   });
   await resourceLoader.reload();
   input.markStage("session-resource-loader");
@@ -364,9 +358,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         const candidate = resolveOrphanRepairPlan({
           sessionManager,
           prompt: attempt.prompt,
-          preserveLeaf:
-            attempt.skipPreparedUserTurnMessage === true ||
-            isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
+          preserveLeaf: attempt.skipPreparedUserTurnMessage === true,
         });
         const reconciledCurrentUser = reconcilePrePersistedCurrentUserTurn({
           activeSession,

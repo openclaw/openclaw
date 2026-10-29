@@ -195,7 +195,7 @@ const blocked = (id = "main") => isAgentDeletionBlocked(id, options);
 const setProvenance = (
   nowMs?: number,
   agentId = "main",
-  createdVia: "operator" | "claw" = "operator",
+  createdVia: "operator" | "template" = "operator",
 ) => recordAgentProvenance(agentId, { createdVia }, { ...options, nowMs });
 
 beforeEach(() => {
@@ -650,7 +650,7 @@ describe("agent lifecycle registry", () => {
     "fences stale deletion owners and preserves provenance through recovery %s",
     async (action) => {
       const config = { agents: { entries: { main: {}, kept: {} } } };
-      await setProvenance(1, "main", "claw");
+      await setProvenance(1, "main", "template");
       await setProvenance(undefined, "kept");
       const before = readProvenance();
       const binding = await captureAgentLifecycleBinding(() => config, "main", options);

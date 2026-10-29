@@ -84,7 +84,7 @@ wait for it to exit, and rerun the same command.
 #### Role templates
 
 `--role` works in interactive and non-interactive creation, including `--json`.
-Bundled roles are [Claw sources](/cli/claws): each role directory contains a
+Bundled roles are [Template sources](/cli/templates): each role directory contains a
 `CLAW.md` manifest with identity and `SOUL.md` content, plus its operating
 program in `workspace/AGENTS.md`. Available roles:
 
@@ -111,9 +111,9 @@ unfinished bootstrap cannot adopt a role. OpenClaw checks completion before
 adding role files; rejected adoption leaves workspace files and agent config
 unchanged. Complete its bootstrap or choose a new workspace.
 
-With Claws enabled, the equivalent source path is
-`openclaw claws add docs/reference/templates/roles/<role>` from a source
-checkout. Follow the [Claw preview and consent flow](/cli/claws#inspect-and-preview)
+With Templates enabled, the equivalent source path is
+`openclaw templates add docs/reference/templates/roles/<role>` from a source
+checkout. Follow the [Template preview and consent flow](/cli/templates#inspect-and-preview)
 to add it. Use `agents team create` to wire the agents into a team.
 
 ### `agents team create`
@@ -145,8 +145,8 @@ The coordinator's `subagents.allowAgents` names the three specialist ids and
 `delegationMode` is `"prefer"`. Specialists receive `subagents.allowAgents: []`
 and instructions to return results without further delegation. This does not
 change global delegation defaults or tool policy. See [Team preset](/concepts/multi-agent#team-preset).
-Delegation remains team wiring in config; the role Claws will carry these
-settings once the separate Claw profile support lands.
+Delegation remains team wiring in config; the role Templates will carry these
+settings once the separate Template profile support lands.
 
 The coordinator is an explicit chat target. If
 `agents.defaults.systemAgent.agentId` is unset, team creation sets it to the
@@ -286,6 +286,7 @@ Avatar paths resolve relative to the workspace root and cannot escape it, even t
 - `--agent` or `--workspace` selects the target agent. If `--workspace` matches more than one agent, the command fails and asks you to pass `--agent`.
 - `--workspace` and `--identity-file` only select the agent or identity file. They do not change `agents.entries.*.workspace`.
   Explicitly empty or whitespace-only values are rejected; omit the flag to use the default identity location.
+  Nonblank source paths preserve leading and trailing whitespace; quote them in your shell to select the exact file or directory.
   For `--json`, `workspace` is the resolved identity directory: the `--workspace` locator, the parent of `--identity-file`, or the agent's workspace when identity is read from there. It is `null` only when identity is supplied through flags with no identity directory. `storedWorkspace` reports the agent's persisted workspace.
 - Relocate an existing agent with `openclaw config set agents.entries.<id>.workspace <dir>`, then follow the CLI restart hint and confirm with `openclaw agents list`.
 - Local workspace-relative avatar image files are limited to 2 MB. HTTP(S) URLs and `data:` URIs are not checked against the local file-size limit.

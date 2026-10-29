@@ -35,6 +35,7 @@ import {
   type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
 import {
+  assertSessionEventOccurrenceInput,
   buildSessionEventContext,
   prepareSessionEventInput,
   resolveSessionEventExecRequestOwners,
@@ -67,7 +68,15 @@ const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
 /** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
 export function enqueueSessionEventForHost(
   text: string,
+  options: SessionEventOptions,
+): SessionEventReceipt {
+  return enqueueSessionEventAttempt(text, options, 0);
+}
+
+function enqueueSessionEventAttempt(
+  text: string,
   { assertAcceptanceCurrent, ...options }: SessionEventOptions,
+  readmissionAttempt: number,
 ): SessionEventReceipt {
   let acceptanceAssertion = assertAcceptanceCurrent;
   acceptanceAssertion?.();
@@ -79,15 +88,6 @@ export function enqueueSessionEventForHost(
   let target = options.expectedTarget;
   let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;
   let preparedBinding: { sessionId: string; lifecycleRevision?: string } | undefined;
-  if (
-    options.expectedTarget &&
-    ((options.expectedTarget.agentId && options.expectedTarget.agentId !== agentId) ||
-      (options.expectedTarget.sessionKey && options.expectedTarget.sessionKey !== sessionKey))
-  ) {
-    throw new Error(
-      "Session event destination was reset or replaced while its producer was running",
-    );
-  }
   let route = structuredClone(options.deliveryContext ?? options.expectedTarget?.deliveryContext);
   const controller = new AbortController();
   const execRequestOwners = resolveSessionEventExecRequestOwners(options);
@@ -98,15 +98,7 @@ export function enqueueSessionEventForHost(
     ),
   );
   signal.throwIfAborted();
-  if (options.preserveOccurrenceOnRejection && !options.occurrences?.length) {
-    throw new Error("Preserving a rejected event requires its original queued occurrence");
-  }
-  if (
-    options.occurrences &&
-    options.occurrences.map((event) => event.text).join("\n") !== text.trim()
-  ) {
-    throw new Error("Session event occurrence text changed before admission");
-  }
+  assertSessionEventOccurrenceInput(text, options);
   const freshOccurrence = options.occurrences
     ? undefined
     : enqueueRequiredSystemEventEntry(
@@ -309,7 +301,7 @@ export function enqueueSessionEventForHost(
     settlement = "settling";
     const complete = async () => {
       try {
-        inputRecorder?.finishPendingInput?.(signal.aborted ? "cancelled" : "interrupted");
+        inputRecorder?.finishPendingInput?.("cancelled");
         await inputRecorder?.waitForPendingInputSettlement?.();
       } catch (error) {
         failure ??= error instanceof Error ? error : String(error);
@@ -324,7 +316,7 @@ export function enqueueSessionEventForHost(
       // Stop, abort and abandonment still settle terminally.
       const configChangeRetention =
         configPublicationChanged && !started && !deliveryAttempted && !signal.aborted && !abandoned;
-      const attempt = options.readmissionAttempt ?? 0;
+      const attempt = readmissionAttempt;
       const canReadmit = configChangeRetention && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
       const status = signal.aborted ? "cancelled" : failure ? "failed" : "completed";
       if (status === "failed" && !canReadmit) {
@@ -346,15 +338,18 @@ export function enqueueSessionEventForHost(
         try {
           // Re-admit under current policy with original target, producer checks, cancellation
           // and delivery opt-out; only previously passive notices keep custody on rejection.
-          readmittedReceipt = enqueueSessionEventForHost(eventText, {
-            ...options,
-            agentId,
-            sessionKey,
-            assertAcceptanceCurrent: pendingAcceptanceAssertion,
-            occurrences,
-            preserveOccurrenceOnRejection: preservePassive,
-            readmissionAttempt: attempt + 1,
-          });
+          readmittedReceipt = enqueueSessionEventAttempt(
+            eventText,
+            {
+              ...options,
+              agentId,
+              sessionKey,
+              assertAcceptanceCurrent: pendingAcceptanceAssertion,
+              occurrences,
+              preserveOccurrenceOnRejection: preservePassive,
+            },
+            attempt + 1,
+          );
         } catch (error) {
           if (!preservePassive) {
             // The released occurrence carries no producer contract; consume it.
@@ -518,6 +513,7 @@ export function enqueueSessionEventForHost(
         sessionKey,
         text: promptText,
         options,
+        readmissionAttempt,
         occurrenceId,
         deliveryContext: route,
         target,
@@ -565,7 +561,12 @@ export function enqueueSessionEventForHost(
               inputRecorder = recorder;
               if (
                 !recorder.stageApproved ||
-                !(await recorder.stageApproved({ runId: occurrenceId, assertCurrent }))
+                !(await recorder.stageApproved({
+                  runId: occurrenceId,
+                  assertCurrent,
+                  // Only this live policy retry can reclaim its cancelled attempt.
+                  retryCancelled: readmissionAttempt > 0,
+                }))
               ) {
                 throw new Error("Session event input was not durably admitted");
               }

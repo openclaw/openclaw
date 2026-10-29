@@ -47,7 +47,7 @@ import {
   GuardedTranscriptItem,
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
-  transcriptReplyDependencies,
+  transcriptContextDependencies,
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
@@ -71,12 +71,7 @@ export function projectChatTranscript(
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   const { showReasoning, reasoning } = projectChatReasoning(props);
   const assistantAgentId = props.currentAgentId ?? props.fullMessageAgentId;
-  const assistantAvatar = resolveAssistantDisplayAvatar({
-    currentAgentId: assistantAgentId,
-    agents: props.agents,
-    assistantAvatar: props.assistantAvatar,
-    assistantAvatarUrl: props.assistantAvatarUrl,
-  });
+  const assistantAvatar = resolveAssistantDisplayAvatar(props, assistantAgentId);
   const assistantIdentity = {
     agentId: assistantAgentId,
     name: props.assistantName,
@@ -91,7 +86,7 @@ export function projectChatTranscript(
   const chatItemsInput = {
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    archiveNotice: buildChatArchiveNotice(activeSession),
+    archiveNotice: buildChatArchiveNotice(props.transcriptMetadata ?? activeSession),
     runId: props.runId ?? null,
     compactionStatus: props.compactionStatus,
     locale,
@@ -165,7 +160,6 @@ export function projectChatTranscript(
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
     bubbleMode: props.chatBubbleMode === true,
-    session: props.transcriptMetadata ?? activeSession,
   });
   const { collapsedItems, transcriptItems, continuations } = transcriptChain;
   const replyNavigationId = props.replyMessageAccess?.navigationId;
@@ -221,22 +215,6 @@ export function projectChatTranscript(
     activeSession?.contextTokens ??
     props.sessions?.defaults?.contextTokens ??
     null;
-  const resolvedRecap = resolveTurnRecap(state, {
-    sessionKey: props.sessionKey,
-    agentId: props.currentAgentId,
-    gatewayClient: props.gatewayClient,
-    indicator: workingIndicator,
-    startingNewTurn: props.queue.some(
-      (item) =>
-        (item.sendState === "submitting" ||
-          item.sendState === "sending" ||
-          item.sendState === "waiting-model") &&
-        shouldRenderQueuedSendInThread(item),
-    ),
-    activeRunId: props.runActive ? props.runId : undefined,
-    row: activeSession,
-    usageByRun: props.runUsageById,
-  });
   // Default disclosure belongs only to a settled assistant at the transcript
   // tail; any newer visible row returns the prior answer to hover/tap behavior.
   const lastTranscriptItem =
@@ -252,6 +230,23 @@ export function projectChatTranscript(
           assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
         ? lastTranscriptItem
         : null;
+  const resolvedRecap = resolveTurnRecap(state, {
+    sessionKey: props.sessionKey,
+    agentId: props.currentAgentId,
+    gatewayClient: props.gatewayClient,
+    indicator: workingIndicator,
+    startingNewTurn: props.queue.some(
+      (item) =>
+        (item.sendState === "submitting" ||
+          item.sendState === "sending" ||
+          item.sendState === "waiting-model") &&
+        shouldRenderQueuedSendInThread(item),
+    ),
+    activeRunId: props.runActive ? props.runId : undefined,
+    row: props.transcriptMetadata ?? activeSession,
+    completedRunId: tailStatusOwner?.runId,
+    usageByRun: props.runUsageById,
+  });
   // An unwatched background run must not inherit the visible turn's recap.
   const turnRecap =
     resolvedRecap && (!tailStatusOwner?.runId || tailStatusOwner.runId === resolvedRecap.runId)
@@ -284,6 +279,7 @@ export function projectChatTranscript(
     handoffSessionLinks: subagents.links,
     boardProvider: props.boardProvider,
     widgetLayout: props.widgetLayout,
+    displayFacts: props.displayFacts,
     agentId: assistantAgentId,
     runActive: props.runActive,
     asyncQuestions,
@@ -536,15 +532,13 @@ export function projectChatTranscript(
       return [
         liveStatusSignature(item),
         item.key === liveItem?.key ? resolveLiveStream : undefined,
-        ...transcriptReplyDependencies(item, loadedReplySources),
+        ...transcriptContextDependencies(item, loadedReplySources, props),
         // Durable drafts can restore the same map under a new callback generation.
         hasQuestions ? asyncQuestions.drafts : undefined,
         hasQuestions ? asyncQuestionGeneration : undefined,
         // Tool plugins own foreground activity.
         hasTools ? presented : undefined,
         readsRoster ? subagents.rowsKey : undefined,
-        item.kind === "notice" ? props.onRetryRun : undefined,
-        item.kind === "notice" ? props.failureActionsRunId : undefined,
       ];
     },
     (item) => {
@@ -609,6 +603,7 @@ export function projectChatTranscript(
         return {
           kind: "notice",
           item,
+          modelCatalog: props.modelCatalog,
           onPermissionRetry: props.onPermissionRetry,
           recovery: props,
         };
@@ -669,7 +664,6 @@ export function projectChatTranscript(
             runWorking: Boolean(props.runWorking),
             searchActive: false,
             bubbleMode: props.chatBubbleMode === true,
-            session: activeSession,
           },
         )
       : transcriptChain;

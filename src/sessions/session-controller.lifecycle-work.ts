@@ -226,7 +226,6 @@ export function startSessionControllerInterruption(
   interruptedRunIds: ReadonlySet<string>;
 } {
   const target = targetFrom(params);
-  // Only an explicit restart reason may create restart-recovery custody.
   const reason = params.reason ?? new Error("Session effect interrupted");
   const { effects, operations, claims, sources } = selectSessionControllerInterruptionOwners(
     target,

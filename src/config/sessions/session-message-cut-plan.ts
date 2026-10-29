@@ -149,8 +149,7 @@ export function planSessionMessageCut(
     modelSelectionLocked: undefined,
     skillsSnapshot: undefined,
     systemPromptReport: undefined,
-    restartRecoveryRuns: undefined,
-    restartRecoveryForceSafeTools: undefined,
+    resumeAfterRestart: undefined,
     abortCutoffMessageSid: undefined,
     abortCutoffTimestamp: undefined,
     usageFamilyKey: forked ? undefined : currentEntry.usageFamilyKey,
@@ -164,6 +163,7 @@ export function planSessionMessageCut(
             entryId: params.entryId,
           },
           parentSessionKey: params.canonicalSourceKey,
+          ...(currentEntry.visibility === "draft" ? { visibility: "draft" as const } : {}),
         }
       : {}),
     ...(params.mode === "fork" ? params.forkWorkspace : {}),

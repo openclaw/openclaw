@@ -39,7 +39,6 @@ export function prepareTerminatedCollectorLaunch(
 ): void {
   entry.swarmLaunchPending = false;
   entry.collectorLaunchCleanupPending = true;
-  entry.queuedLaunch = undefined;
   entry.execution = { ...entry.execution, status: "terminal", endedAt };
   entry.completion = {
     required: false,

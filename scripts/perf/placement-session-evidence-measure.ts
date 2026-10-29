@@ -74,15 +74,20 @@ const records = Array.from({ length: 10_000 }, (_, i) => ({
   sessionKey: `agent:agent-${i % 40}:${i % 5 ? "subagent" : "dashboard"}:session-${i}`,
 }));
 const byId = new Map(records.map((record) => [record.sessionId, record]));
+const identities = records.map(({ sessionId, agentId, sessionKey }) => ({
+  sessionId,
+  agentId,
+  sessionKey,
+}));
 let passes = 0;
 let subjects = 0;
 let fullReads = 0;
 const createRetirement = () =>
   createPlacementSessionRetirement({
     placements: {
-      listAsync: async () => {
+      listSessionIdentitiesAsync: async () => {
         fullReads++;
-        return records;
+        return identities;
       },
       getAsync: async (id) => byId.get(id),
       getManyAsync: async (ids) => {

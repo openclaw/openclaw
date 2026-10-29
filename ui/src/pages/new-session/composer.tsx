@@ -54,7 +54,7 @@ import { EmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu-state.ts";
 import { HumanMentionMenuView } from "../chat/components/chat-composer-mention-menu.tsx";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
-import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.types.ts";
+import type { ChatComposerCapabilityMenuSource } from "../chat/components/chat-composer-plus-menu.types.ts";
 import { SelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.tsx";
 import type { SkillMenuHost } from "../chat/components/chat-composer-skill-menu-state.ts";
 import { SkillMenu } from "../chat/components/chat-composer-skill-menu.tsx";
@@ -106,7 +106,7 @@ export type NewSessionComposerOptions = {
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
-  capabilityMenu?: ChatComposerCapabilityMenuProps;
+  capabilityMenu?: ChatComposerCapabilityMenuSource;
   toolOverrides?: SessionToolOverrides | null;
   onInput: (message: string, mentions?: readonly HumanMention[]) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
@@ -643,7 +643,12 @@ export function NewSessionComposer(props: {
               />
             </Show>
             {options().permissionControl}
-            <Show when={!options().nativeTerminal && options().draftAvailable}>
+            <Show
+              when={
+                !options().nativeTerminal &&
+                (options().draftAvailable || options().visibility === "draft")
+              }
+            >
               <NewSessionDraftVisibility options={options()} />
             </Show>
             <Show when={!options().nativeTerminal}>

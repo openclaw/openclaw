@@ -87,9 +87,10 @@ export async function withCliCommandCleanup<T>(
     pluginResources,
   };
   const finished = createDeferredCore();
-  const releaseExitGate = registerSignalExitGate(finished.promise, (signal) => {
+  const releaseExitGate = registerSignalExitGate(finished.promise, (signal, reason) => {
+    const cause = signal ?? reason;
     pluginResources.beginClose(
-      new DOMException(`CLI stopping${signal ? ` (${signal})` : ""}`, "AbortError"),
+      new DOMException(`CLI stopping${cause ? ` (${cause})` : ""}`, "AbortError"),
     );
     void scheduler.stop();
   });

@@ -164,6 +164,7 @@ export function createGatewayStartupOperations() {
   };
   return {
     run,
+    signal: scope.signal,
     getStopCompletion: () => stopCompletion,
     retainStopCompletion: (completion: Promise<void>) => {
       stopCompletion = completion;

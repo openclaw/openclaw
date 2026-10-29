@@ -4,6 +4,7 @@ import { personActivityLink } from "../../../components/person-activity-link.ts"
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import { participantPalette } from "../../../lib/reactive/participant-palette.ts";
 import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
 import { readHandoffDisplay } from "../chat-sessions-yield.ts";
@@ -136,6 +137,7 @@ function PreparedMessage(props: {
           ? props.options.firstBubbleKey
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
+      ownsTerminalStatus: props.item.presentationOwnsTerminalStatus,
       entryId,
       // Tool-row file links carry their message like rendered markdown links, so earlier
       // messages keep reading their original source; sender-owned links stay session-scoped.
@@ -147,7 +149,6 @@ function PreparedMessage(props: {
             },
           }
         : {}),
-      duplicateCount: props.item.duplicateCount ?? 1,
       showToolCalls: props.options.showToolCalls ?? true,
       assistantMessageDisclosure,
       messageActions: actionDetails,
@@ -488,7 +489,11 @@ function FramedMessageGroup(props: {
     <div
       ref={(element) => (replyElements.group = element)}
       class={frame().className}
-      style={frame().style}
+      style={
+        frame().normalizedRole === "user" || frame().isForwarded
+          ? participantPalette.read()?.style(frame().senderHue)
+          : undefined
+      }
       data-chat-row-key={props.group.key}
       data-chat-streaming={props.group.isStreaming ? "true" : undefined}
       data-file-session-key={frame().sessionKey}
@@ -523,11 +528,7 @@ function FramedMessageGroup(props: {
           when={Boolean(options().activeContinuation)}
           fallback={
             options().turnRecap ? (
-              <TurnRecapRow
-                recap={options().turnRecap!}
-                presentation="continuation"
-                hideDuration={options().hideTurnRecapDuration}
-              />
+              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
             ) : undefined
           }
         >
@@ -574,15 +575,11 @@ function FramedMessageGroup(props: {
                 {frame().normalizedRole === "user" &&
                 frame().showAvatar &&
                 frame().avatarPlacement === "footer" ? (
-                  <Show
-                    when={options().mediaReadAllowed !== false}
-                    fallback={<span class="chat-author-avatar" aria-hidden="true" />}
-                  >
-                    <ChatAuthorAvatar
-                      sender={props.group.sender}
-                      channelAvatar={options().channelAvatar}
-                    />
-                  </Show>
+                  <ChatAuthorAvatar
+                    sender={props.group.sender}
+                    channelAvatar={options().channelAvatar}
+                    mediaReadAllowed={options().mediaReadAllowed}
+                  />
                 ) : undefined}
                 <SenderIdentity frame={frame()} />
                 {/* Keep delivery status and timestamp in one slot to avoid wrapping them together. */}

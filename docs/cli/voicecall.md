@@ -140,6 +140,10 @@ Alias for `call` with a different default flag shape.
 
 Speak a message and wait for a response.
 
+When waiting for a Gateway response, Ctrl-C or SIGTERM stops local polling and
+exits with status 130 or 143. It does not end the call or cancel the Gateway's
+speech operation. A request already starting that operation settles before exit.
+
 | Flag               | Required | Description       |
 | ------------------ | -------- | ----------------- |
 | `--call-id <id>`   | yes      | Call ID.          |
@@ -211,6 +215,8 @@ whose basename is not `calls.jsonl`, prints the last `--since` nonempty complete
 lines on start, then streams new complete lines. Partial lines wait for a newline;
 file replacement or observed truncation starts a fresh stream. Slow output pipes
 pause reading instead of accumulating the rest of the log in memory.
+SIGINT or SIGTERM stops either tail source, settles any active history read,
+and exits with status 130 or 143 without printing later records.
 
 | Flag            | Default                    | Description                    |
 | --------------- | -------------------------- | ------------------------------ |

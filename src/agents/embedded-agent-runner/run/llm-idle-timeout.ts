@@ -118,16 +118,6 @@ function hasLocalProviderAuthMarker(apiKey: unknown): boolean {
   return typeof apiKey === "string" && LOCAL_PROVIDER_AUTH_MARKERS.has(apiKey.trim().toLowerCase());
 }
 
-function hasConfiguredLocalProviderSignal(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string | undefined;
-}): boolean {
-  const providerConfig = findConfiguredProviderConfig(params.cfg, params.provider);
-  return Boolean(
-    providerConfig?.localService || hasLocalProviderAuthMarker(providerConfig?.apiKey),
-  );
-}
-
 type LlmTimeoutParams = {
   cfg?: OpenClawConfig;
   runTimeoutMs?: number;
@@ -137,9 +127,14 @@ type LlmTimeoutParams = {
 
 /**
  * Classifies the model endpoint locality shared by the idle and first-event
- * watchdogs. Ollama `*:cloud` models stay "cloud" even behind a local proxy.
+ * watchdogs. Explicit remote providers and Ollama `*:cloud` models retain
+ * hosted timing behind local relays, including those managed by localService.
  */
 function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
+  const providerConfig = findConfiguredProviderConfig(params?.cfg, params?.model?.provider);
+  if (providerConfig?.remote === true) {
+    return { isLocalRuntimeModel: false, isSelfHostedRuntimeModel: false };
+  }
   const baseUrl = params?.model?.baseUrl;
   const hostname =
     typeof baseUrl === "string" ? URL.parse(baseUrl)?.hostname.toLowerCase() : undefined;
@@ -153,10 +148,8 @@ function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
           hostname &&
           (EXPLICIT_LOCAL_HOSTNAMES.has(hostname) ||
             (isBareProviderHostname(hostname) &&
-              hasConfiguredLocalProviderSignal({
-                cfg: params?.cfg,
-                provider: params?.model?.provider,
-              }))),
+              (providerConfig?.localService ||
+                hasLocalProviderAuthMarker(providerConfig?.apiKey)))),
         )),
   };
 }
@@ -404,7 +397,8 @@ export function streamWithIdleTimeout(
         let progressTimer: NodeJS.Timeout | undefined;
         let progressTimerDelay = 0;
         let progressTimerBudget = 0;
-        let lastProgressAt = Date.now();
+        let lastProgressAt = performance.now();
+        let watchdogLastProgressAt = Date.now();
         let rejectIdleTimeout: ((error: Error) => void) | undefined;
         const pendingAborts = new Set<(error: Error) => void>();
         const abortIteration = () => {
@@ -436,7 +430,7 @@ export function streamWithIdleTimeout(
             clearTimers();
             return;
           }
-          const now = Date.now();
+          const now = performance.now();
           let effectiveTimeout = timeoutMs;
           if (!streamFirstArmDone) {
             const activeToolMs = runId ? getLastToolActivityMs(runId) : 0;
@@ -458,10 +452,12 @@ export function streamWithIdleTimeout(
           }
           if (progress) {
             lastProgressAt = now;
+            watchdogLastProgressAt = Date.now();
           }
+          // Session-watchdog deadlines stay in the wall-clock domain.
           watchdogDeadlineAtMs = Math.min(
-            now + effectiveTimeout,
-            lastProgressAt + progressTimeoutMs,
+            Date.now() + effectiveTimeout,
+            watchdogLastProgressAt + progressTimeoutMs,
           );
           // Heartbeats preserve the progress deadline; only real progress resets it.
           if (

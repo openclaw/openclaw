@@ -38,6 +38,7 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../state/openclaw-agent-db-resources.js";
+import { getPendingOpenClawAgentDatabasePreparation } from "../state/openclaw-agent-execution.js";
 import { readSessionSharingFactsInWorker } from "./session-sharing-facts-read.js";
 import { SessionMutationFactsUnavailableError } from "./session-sharing-incognito.js";
 import { prepareMemorySessionMutationFacts } from "./session-sharing-memory-facts.js";
@@ -78,6 +79,7 @@ export async function prepareSessionMutationFacts(
     return memory;
   }
   const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
+  const readScope = params.sessionAccessOnly ? "session-access" : "sharing";
   const releases: Array<() => void> = [];
   let active = true;
   let beforeDiscovery = params.storageReady !== undefined;
@@ -108,6 +110,7 @@ export async function prepareSessionMutationFacts(
           databaseIdentity: identity.key,
           sessionKey,
           followLifecycle: params.followLifecycle,
+          followTranscript: params.followTranscript,
           acquiring: true,
         });
         acquiringReads.set(key, retained);
@@ -249,10 +252,13 @@ export async function prepareSessionMutationFacts(
         change.agentId === agentId &&
         change.previous.sessionKeys.some((key) => initialStoreKeys.includes(key)) &&
         !(
-          params.followLifecycle &&
-          change.kind === "reset" &&
+          ((params.followTranscript &&
+            change.kind === "replace" &&
+            readPreparedSessionSharingChange(change) !== undefined) ||
+            (params.followLifecycle &&
+              change.kind === "reset" &&
+              change.previous.sessionId === change.current.sessionId)) &&
           change.previous.sessionId !== undefined &&
-          change.previous.sessionId === change.current.sessionId &&
           change.current.sessionKeys.some((key) => initialStoreKeys.includes(key))
         )
       ) {
@@ -281,11 +287,25 @@ export async function prepareSessionMutationFacts(
         acquireSource(candidate.path, initialStoreKeys);
       }
     }
-    if (params.storageReady) {
+    const preparations = params.storageReady ? [params.storageReady] : [];
+    for (const { candidate } of candidateIdentities) {
+      const pending = getPendingOpenClawAgentDatabasePreparation(candidate.physicalPath, "read");
+      if (pending) {
+        preparations.push(pending);
+      }
+    }
+    if (preparations.length > 0) {
+      // Discovery already joins native preparation; capture its registry witness afterward.
+      beforeDiscovery = true;
       waitingForStorage = true;
-      await params.storageReady;
+      await Promise.all(preparations);
       waitingForStorage = false;
       beforeDiscovery = false;
+      for (const { candidate, identity } of candidateIdentities) {
+        if (identity.birthtime !== undefined) {
+          assertExistingDatabaseIdentity(candidate.physicalPath, identity.key, identity.birthtime);
+        }
+      }
       for (const captured of missingCandidates) {
         captured.identity = readDatabasePathIdentitySync(captured.candidate.path);
       }
@@ -421,7 +441,7 @@ export async function prepareSessionMutationFacts(
                   await pending;
                   assertActive();
                 }
-                const current = retained.readCurrent();
+                const current = retained.readCurrent(readScope);
                 if (!current) {
                   throw new SessionMutationFactsUnavailableError();
                 }
@@ -478,7 +498,7 @@ export async function prepareSessionMutationFacts(
         readSource,
       };
       const retained = sharing && retainedReads.get(`${sharing.databaseIdentity}\0${canonicalKey}`);
-      expectedPlaceholder = retained?.readCurrent()?.placeholder;
+      expectedPlaceholder = retained?.readCurrent(readScope)?.placeholder;
       adoptCreatedEntry = (entry) => {
         retained?.adoptCreatedEntry(entry);
         facts = {
@@ -495,7 +515,7 @@ export async function prepareSessionMutationFacts(
         };
       };
       readFacts = () => {
-        const current = retained?.readCurrent();
+        const current = retained?.readCurrent(readScope);
         if (facts!.target && current?.entry) {
           return {
             ...facts!,
@@ -539,7 +559,7 @@ export async function prepareSessionMutationFacts(
         throw new SessionMutationFactsUnavailableError();
       }
       readFacts = () => {
-        const current = retained.readCurrent();
+        const current = retained.readCurrent(readScope);
         if (!current?.entry) {
           throw new SessionMutationFactsUnavailableError();
         }

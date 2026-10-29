@@ -9,11 +9,13 @@ import {
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages, openSidebarPinMenu } from "./sidebar-customization.test-support.ts";
+import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
@@ -56,10 +58,11 @@ suite.define(() => {
           const body = page.locator(".sidebar-shell__body");
           const nav = page.locator(".shell-nav");
           const resizer = page.getByRole("separator", { name: "Resize sidebar" });
-          for (let batch = 0; batch < 3; batch++) {
-            const more = body.getByRole("button", { name: "Show more", exact: true }).first();
-            await more.click();
-          }
+          await expandSidebarSessions(body, 40);
+          await revealSidebarTarget(
+            body,
+            body.locator('[data-session-key="agent:main:divider-session-39"]'),
+          );
           await expect
             .poll(() => body.evaluate((element) => element.scrollHeight > element.clientHeight))
             .toBe(true);

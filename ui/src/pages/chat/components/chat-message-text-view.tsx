@@ -31,10 +31,10 @@ import { hydrateLinkFavicons, releaseLinkFavicons } from "../link-favicon-loader
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
-  type DuplicateSuffix,
   type MessageTextOptions,
   prepareMessageMarkdown,
 } from "./chat-message-text-preparation.ts";
+import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
 
 export type { AssistantMessageDisclosure } from "./chat-message-text-preparation.ts";
 
@@ -74,7 +74,6 @@ export type MessageMarkdownProps = {
   messageKey: string;
   options: MessageTextOptions;
   markdownOptions: MarkdownRenderOptions;
-  duplicateSuffix?: DuplicateSuffix;
   media?: MarkdownMedia;
 };
 
@@ -92,7 +91,6 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
       props.messageKey,
       props.options,
       props.markdownOptions,
-      props.duplicateSuffix,
       latest(streaming)?.toStreamingMarkdownDomParts,
       props.options.isStreaming && !latest(streaming),
     ),
@@ -242,6 +240,7 @@ export function MarkdownContent(props: MarkdownContentProps) {
   // Its callbacks mount media with this context; the reconciler retires each root.
   const solidOwner = getOwner();
   const presented = useContext(ContentPresentation);
+  const display = useContext(ChatRowDisplayContext);
   const fragment = document.createDocumentFragment();
   const roots = new Map<
     HTMLElement,
@@ -295,7 +294,7 @@ export function MarkdownContent(props: MarkdownContentProps) {
       connected,
       onUpdate: props.onUpdate,
     };
-  });
+  }, display);
   markdown(fragment);
   return Array.from(fragment.childNodes);
 }

@@ -293,10 +293,10 @@ function Test-NodeVersionSupported {
         return $false
     }
     if ($major -eq 24) {
-        return ($minor -gt 22 -or ($minor -eq 22 -and $patch -ge 1))
+        return ($minor -ge 16)
     }
     if ($major -eq 26) {
-        return ($minor -gt 12 -or ($minor -eq 12 -and $patch -ge 1))
+        return ($minor -ge 1)
     }
     return ($major -gt 26)
 }
@@ -393,7 +393,7 @@ process.stdout.write(JSON.stringify(result));
                 Write-Host "[!] Node.js $nodeVersion uses SQLite $sqliteVersionLabel; SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x is required" -ForegroundColor Yellow
                 return $false
             } else {
-                Write-Host "[!] Node.js $nodeVersion found, but Node 24.22.1+ or Node 26.12.1+ is required" -ForegroundColor Yellow
+                Write-Host "[!] Node.js $nodeVersion found, but Node 24.16.0+ or Node 26.1.0+ is required" -ForegroundColor Yellow
                 return $false
             }
         }
@@ -1118,6 +1118,32 @@ function Invoke-OpenClawCommand {
     }
 }
 
+function Get-TrustedWindowsCmdExe {
+    if ([string]::IsNullOrWhiteSpace($env:SystemRoot)) {
+        return $null
+    }
+
+    $candidate = Join-Path (Join-Path $env:SystemRoot "System32") "cmd.exe"
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return $candidate
+    }
+    return $null
+}
+
+function Write-OpenClawSetupRecovery {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CommandPath,
+        [string[]]$Arguments
+    )
+
+    $shownArgs = (@($Arguments) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join " "
+    $quotedPath = "'" + ($CommandPath.Replace("'", "''")) + "'"
+    $shown = if ([string]::IsNullOrWhiteSpace($shownArgs)) { "& $quotedPath" } else { "& $quotedPath $shownArgs" }
+    Write-Host "Setup did not start. Run:" -ForegroundColor Yellow
+    Write-Host "  $shown" -ForegroundColor Cyan
+}
+
 function Invoke-InteractiveOpenClawCommand {
     param(
         [Parameter(ValueFromRemainingArguments = $true)]
@@ -1129,7 +1155,30 @@ function Invoke-InteractiveOpenClawCommand {
         throw "openclaw command not found on PATH."
     }
 
-    $process = Start-Process -FilePath $commandPath -ArgumentList $Arguments -NoNewWindow -Wait -PassThru
+    $isBatch = [System.IO.Path]::GetExtension($commandPath) -match '^\.(cmd|bat)$'
+    $previousShimPath = $env:OPENCLAW_INSTALLER_SETUP_SHIM
+    try {
+        $launchPath = $commandPath
+        $launchArguments = $Arguments
+        if ($isBatch) {
+            $launchPath = Get-TrustedWindowsCmdExe
+            if (-not $launchPath) {
+                throw "openclaw $($Arguments -join ' ') could not start because cmd.exe was not found."
+            }
+            # Expand the path once inside quotes, preserving literal %, &, and !.
+            # The only caller supplies the fixed onboard command.
+            $env:OPENCLAW_INSTALLER_SETUP_SHIM = $commandPath
+            $launchArguments = '/d /v:off /s /c ""%OPENCLAW_INSTALLER_SETUP_SHIM%" ' + ($Arguments -join ' ') + '"'
+        }
+        $process = Start-Process -FilePath $launchPath -ArgumentList $launchArguments -NoNewWindow -Wait -PassThru
+    } catch {
+        Write-OpenClawSetupRecovery -CommandPath $commandPath -Arguments $Arguments
+        throw
+    } finally {
+        if ($isBatch) {
+            $env:OPENCLAW_INSTALLER_SETUP_SHIM = $previousShimPath
+        }
+    }
     if ($process.ExitCode -ne 0) {
         throw "openclaw $($Arguments -join ' ') failed with exit code $($process.ExitCode)."
     }

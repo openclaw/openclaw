@@ -97,7 +97,7 @@ export function registerSubagentRegistrationOwnershipTests({
     });
   });
 
-  for (const phase of ["ordinary intent", "queued intent", "queued descriptor"] as const) {
+  for (const phase of ["ordinary intent", "queued intent"] as const) {
     it.each([
       "persisted owner",
       "persisted unknown owner",
@@ -153,10 +153,7 @@ export function registerSubagentRegistrationOwnershipTests({
           const before = loadSubagentRegistryFromSqlite().get(retained.runId);
           let writes = 0;
           const refusal = probe.command(stateWorker, async (command, options, scope) => {
-            if (
-              command.type === "subagents.persistChanges" &&
-              ++writes === (phase === "queued descriptor" ? 2 : 1)
-            ) {
+            if (command.type === "subagents.persistChanges" && ++writes === 1) {
               throw new Error("registration write refused");
             }
             return scope.execute(command, options);
@@ -169,13 +166,6 @@ export function registerSubagentRegistrationOwnershipTests({
                   sessionEntry,
                   collect: true,
                   queued: phase !== "ordinary intent",
-                  queuedLaunch: {
-                    requesterRecovery: {},
-                    request: { sessionKey: session.sessionKey },
-                    timeoutMs: 100,
-                    schedulerGroupKey: "retained-group",
-                    maxConcurrent: 1,
-                  },
                 }),
                 { retainOwnership },
               ),

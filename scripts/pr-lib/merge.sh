@@ -1392,7 +1392,7 @@ merge_run() {
       "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" ":refs/heads/$MERGE_HEAD_REF" 2>&1); then
       # GitHub may already have deleted the branch, or the delete response was
       # lost. Only a successful advertisement with no exact ref proves absence.
-      pr_git ls-remote --exit-code --refs "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" "refs/heads/$MERGE_HEAD_REF" >/dev/null || ref_status=$?
+      pr_remote_branch_sha "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" "$MERGE_HEAD_REF" >/dev/null || ref_status=$?
       if [ "$ref_status" -ne 2 ]; then
         cleanup_complete=false
         echo "Warning: remote cleanup pending; branch changed or inaccessible. Inspect $MERGE_HEAD_REPO:$MERGE_HEAD_REF; never delete it by name without verifying ownership."

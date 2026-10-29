@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Session scheduling ownership, input custody, and retained settlement"
 read_when:
   - Changing turn admission, queueing, stopping, or session mutations
@@ -126,7 +127,7 @@ even after the turn slot becomes available.
 ## Inputs and custody
 
 Inputs include channel messages, Gateway user turns, agent RPC turns, scheduled
-wakes, heartbeats, subagent completion handoffs, and restart-recovery resends. Adapters retain each input
+wakes, heartbeats, subagent completion handoffs, and post-restart resume inputs. Adapters retain each input
 owner's authentication, visibility, routing, idempotency, and acknowledgment
 contract; a common scheduling interface does not make those inputs equivalent.
 
@@ -160,13 +161,13 @@ attempt, and generation. Live permission checks run again at the final effect.
 Queue settings retain the existing debounce, cap, drop, and route-isolation
 contracts in [Command queue](/concepts/queue#queue-options).
 
-| Policy      | Contract                                                                                                                                                                                                                          |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `steer`     | Attempt injection into the captured active owner. A definite capability rejection leaves the input queued. Disabled cross-human collaboration refuses the input without queueing. An uncertain commitment does not permit replay. |
-| `followup`  | Keep FIFO order among waiting inputs and start a later turn after admission barriers permit it.                                                                                                                                   |
-| `collect`   | Combine compatible waiting inputs after the quiet window; preserve individual custody and routing.                                                                                                                                |
-| `interrupt` | Cancel the captured active turn, prioritize the interrupting input next, and preserve older waiting inputs in relative order after it.                                                                                            |
-| heartbeat   | Drop a heartbeat while competing session work owns admission; do not create a duplicate turn.                                                                                                                                     |
+| Policy      | Contract                                                                                                                                                                                                                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `steer`     | Attempt injection into the captured active owner. A definite capability rejection leaves the input queued. Disabled cross-human collaboration queues a separate requester-owned turn by default; strict opt-in refusal does not queue. An uncertain commitment does not permit replay. |
+| `followup`  | Keep FIFO order among waiting inputs and start a later turn after admission barriers permit it.                                                                                                                                                                                        |
+| `collect`   | Combine compatible waiting inputs after the quiet window; preserve individual custody and routing.                                                                                                                                                                                     |
+| `interrupt` | Cancel the captured active turn, prioritize the interrupting input next, and preserve older waiting inputs in relative order after it.                                                                                                                                                 |
+| heartbeat   | Drop a heartbeat while competing session work owns admission; do not create a duplicate turn.                                                                                                                                                                                          |
 
 An interrupt reserves its priority synchronously before cancellation or any
 settlement wait can wake an older drain. Priority belongs to that exact input;
@@ -191,15 +192,20 @@ A refusal retires the reservation and leaves the caller's own fallback in charge
 A detached attempt has no turn, so nothing can steer it.
 
 Collecting requires compatible sender authority, tool permissions, visibility,
-and delivery contracts. Same-requester steering retains its compatibility checks.
+and delivery contracts. Ordinary guidance from the same authenticated requester
+in the same conversation retains the selected execution’s prepared permissions;
+incoming caller differences neither replace nor expand them. Current caller and
+incumbent execution authority remain live-checked.
 With `messages.queue.allowCollaborativeSteering: true`, human input from the same
 conversation may steer another person's turn under that turn's unchanged identity
 and prepared permissions. The message retains its author's identity; it does not
 change the execution's requester or imply that the requester approved its content.
-This opt-in tradeoff does not broaden cross-session `sessions_send(mode="steer")`.
+This same-conversation default does not broaden cross-session `sessions_send(mode="steer")`.
 
-With collaboration disabled, a cross-human steering attempt receives a runtime
-refusal and cannot later execute through queue draining, retry, or recovery.
+With collaboration disabled, cross-human input queues quietly for a separate
+execution by default. With `messages.queue.collaborativeSteeringFallback: "reject"`,
+it instead receives a runtime refusal and cannot later execute through queue
+draining, retry, or recovery.
 `/followup <message>` explicitly requests a separate execution under its submitter's
 identity and policy resolved at admission. Neither option bypasses conversation
 access, backend compatibility, cancellation, or current-owner checks.
@@ -222,7 +228,8 @@ table:
 | `talk` (key-only Talk voice cancel)                            | Abort                              | Keep                             | Stop that turn's subagents                   | Skip                                    | Fire once           |
 | `mutation`                                                     | Per mutation                       | Per mutation                     | Per mutation                                 | Skip                                    | No                  |
 | `interrupt`                                                    | Abort                              | Keep                             | Keep                                         | Skip                                    | No                  |
-| `restart`, `operator-revocation`                               | Abort                              | Cancel selected pending inputs   | Keep                                         | Skip                                    | No                  |
+| `restart`                                                      | Abort after root marker            | Retain accepted user inputs      | Stop quietly                                 | Skip                                    | No                  |
+| `operator-revocation`                                          | Abort                              | Cancel selected pending inputs   | Keep                                         | Skip                                    | No                  |
 | `watchdog`, `supersede`                                        | Abort                              | Keep                             | Keep                                         | Skip                                    | No                  |
 
 A Stop that targets a subagent session with no running turn, but with a paused
@@ -283,10 +290,10 @@ custody ends after persistence and publication.
 A mutation closes competing admission, targets exact current owners, waits for
 real settlement, and then acquires its mutation boundary. In-band commands must
 not wait for their own admitted stack, and a mailbox clear they request does not
-select their own claimed input. Restart drain cancels waiting inputs while claimed
-inputs and in-flight steering remain with their active producers. Shutdown waits
-for those producers or aborts them with the typed restart reason used by recovery,
-including the turn that requested the restart. A mutation body that owns no turn
+select their own claimed input. Committed shutdown records running root sessions
+and their accepted queued input IDs for resume, then aborts active producers, including the turn that
+requested the restart. In-flight persistence keeps a short bounded settlement
+grace. A mutation body that owns no turn
 and requests one for its own session, such as
 `sessions.compact` or a native `/compact`, receives that turn under its own fence,
 ahead of the inputs it keeps waiting. Mutations queued behind it do not block that
@@ -312,6 +319,11 @@ progress. Watchdogs consume owner-held progress and deadlines, preserve healthy
 waits, and target the exact operation observed. Incoming user messages alone must
 not perpetually renew a stuck run's progress clock.
 
+Embedded-attempt watchdog bookkeeping checks the captured run lifecycle and
+controller ownership without re-entering person-access plugins on each progress
+event. Admission, tool execution, and effect commits still check the current
+access policy, so a revoked grant cannot authorize the next effect.
+
 A bounded recovery claim assumes the scheduler and clock can run. The watchdog
 requests Stop for stalled execution through the captured cancellation kernel.
 Frozen finalization instead has a distinct cleanup transition that preserves
@@ -324,19 +336,14 @@ reports the session as blocked; the user can continue in a separate session, and
 the operator can restart the Gateway to terminate the process-local writer. No
 in-process statechart can guarantee recovery from a blocked process by itself.
 
-The controller mailbox is process-local; it does not introduce a new replay or
-storage contract. Existing durable recovery owners retain interrupted work,
-input identity, delivery receipts, and retry decisions. Eligible unfinished tasks
-resume through the same mailbox after restart with fresh execution authority.
-Explicit Stop remains terminal, and an unknown side-effect outcome is reported
-for inspection rather than mechanically replayed. Durable channel ingress keeps
-its own recovery contract. See [Restart recovery](/gateway/restart-recovery).
-
-If durable recovery already holds a preclaim, active claim, or terminal result
-for the same requester-completion input, restoration reuses that custody instead
-of reserving a second mailbox input. The completion owner keeps the durable
-obligation until it reconciles the final delivery result. Unrelated inputs
-retain their FIFO order and current-authority checks.
+The controller mailbox is process-local. Graceful shutdown writes one resume marker
+per running root session before aborting work, including the IDs of accepted
+queued user messages. Startup clears that marker and admits one ordinary system
+input; only its captured messages follow in FIFO order under each sender’s current
+authority. A crash does not reconstruct execution or queued work, and a later
+graceful marker does not adopt older crash-left rows. Explicit Stop remains terminal. Durable
+channel ingress, produced-message delivery, and file integrity keep their own
+contracts. See [Restart recovery](/gateway/restart-recovery).
 
 A later durable mailbox must reconcile these existing custody owners, specify
 retention and upgrade/rollback behavior, and distinguish queued from possibly

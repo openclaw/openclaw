@@ -19,6 +19,8 @@ Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or 
 
 When `--session-id` finds an existing session in an agent's storage partition, it retains that agent even if `session.store` uses one fixed JSON locator and the stored key is `global` or `unknown`.
 
+For a new `--session-id`, the generated session key is normalized while the transcript ID retains its original spelling. Mixed-case IDs can be resumed with the same `--session-id`, including through `--local`.
+
 Configured idle and daily resets append a reset boundary while preserving the durable transcript ID, including through the Gateway `agent` method and `--local`. Earlier messages remain available for transcript recall and session-memory indexing. Local `--local --session-id` resume bypasses automatic expiry. The Gateway still applies its configured reset policy when an explicit matching ID is supplied.
 
 For Gateway-backed turns, the Gateway resolves `--session-id`, including when it runs on the same machine as the CLI. The CLI does not read session metadata before sending the request. If the ID does not exist, the Gateway creates a resumable session under the selected agent. This requires a Gateway advertising named-session creation support; update and restart an older Gateway before using this CLI's `--session-id`. The CLI checks support before sending the turn.
@@ -250,6 +252,21 @@ and complete measurements; observed error counts include intentional checks and
 are not repair-turn counts. Task latency excludes startup and interviews.
 Auto comparisons retain the `auto` label rather than reporting forced Code Mode.
 
+Gateway cells also retain `model-timeline.jsonl` and `gateway.modelAccounting`.
+This separate projection counts observed logical model calls across the isolated
+Gateway lifetime, including auxiliary work that settles during shutdown. Exact
+task, interview, and owned child run IDs identify `foreground`; other calls stay
+in `other`, without inferring their purpose or attributing them to the task.
+`complete` requires continuous capture, matching call terminals, successful
+producer cleanup, and a cleanly joined Gateway. Missing or damaged evidence is
+incomplete, not zero. Token buckets remain null when any selected call lacks
+that usage observation, even when the logical-call count is complete.
+
+`model.usage` observations are reconciliation evidence and are never added to
+call-terminal usage. Neither this projection nor transcript accounting measures
+physical HTTP attempts, internal retries, opaque external runtimes, or the full
+provider bill. A logical call can include more than one transport request.
+
 Automated completion means artifact/effect checks passed. Final-response
 accuracy and execution integrity need separate adjudication against retained
 transcripts, commands, receipts, and files. A correct artifact can accompany
@@ -362,7 +379,7 @@ These are observations, not statistical speed guarantees.
 ## Options
 
 - `-m, --message <text>`: message body
-- `--message-file <path>`: read the message body from a UTF-8 file
+- `--message-file <path>`: read the message body from a UTF-8 file; `-` reads stdin
 - `-t, --to <dest>`: recipient used to derive the session key
 - `--session-key <key>`: explicit session key to use for routing
 - `--session-id <id>`: explicit session id
@@ -401,6 +418,7 @@ restart, and session ownership changes continue to fence active writers.
 openclaw agent --to +15555550123 --message "status update" --deliver
 openclaw agent --agent ops --message "Summarize logs"
 openclaw agent --agent ops --message-file ./task.md
+cat task.md | openclaw agent --agent ops --message-file -
 openclaw agent --agent ops --model openai/gpt-5.4 --message "Summarize logs"
 openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
 openclaw agent --agent ops --session-key incident-42 --message "Summarize status"
@@ -412,11 +430,10 @@ openclaw agent --agent ops --message "Run locally" --local
 
 ## Notes
 
-- Pass exactly one of `--message` or `--message-file`. `--message-file` strips a leading UTF-8 BOM and preserves multiline content; it rejects files that are not valid UTF-8. Files larger than 4 MiB are rejected before dispatch. Nonblank file paths are used exactly as supplied, including leading or trailing spaces.
+- Pass exactly one of `--message` or `--message-file`. With `--message-file`, exact `-` reads stdin; use `./-` or an absolute path for a file named `-`. Both inputs strip a leading UTF-8 BOM, preserve multiline content, and reject invalid UTF-8, empty prompts, or input larger than 4 MiB before dispatch. Other nonblank file paths are used exactly as supplied, including leading or trailing spaces.
 - `--message` does not run the channel slash-command dispatcher. Recognized `$skill-name` references and leading `/skill-name [input]` are the scoped exception: OpenClaw expands them into model instructions to read the skill before acting. Other slash-prefixed messages keep normal agent-turn behavior; `/compact` is rejected with a pointer to `openclaw sessions compact <key>`.
 - `--local` runs are one-shot: cached provider connections, bundled MCP loopback resources, and warm Claude stdio sessions opened for the run are retired after the reply, so scripted invocations do not leave sockets or local child processes running. Gateway-backed runs keep Gateway-owned resources under the running Gateway process instead.
 - `--local` requires exclusive ownership of the configured state directory. It refuses to start while a Gateway or another `agent --local` run owns that directory, then holds the same state lock for the full embedded turn. Run without `--local` to use the active Gateway, or stop it first with `openclaw gateway stop`.
-- Standalone embedded execution with `--local` refuses to reuse an existing main session while restart recovery is pending. Run the turn through a healthy Gateway, or reset it there with `/new` or `/reset`; an independent embedded process cannot safely coordinate that recovery owner with the Gateway scanner.
 - With `--agent`, `--channel` and `--to` together, session routing follows the channel's resolved recipient and `session.dmScope`. Channels with a stable outbound-only recipient identity use a provider-owned session isolated from the agent's main session. `--reply-channel` and `--reply-account` affect delivery only.
 - `--session-key` selects an explicit session key. Agent-prefixed keys must use `agent:<agent-id>:<session-key>`, and `--agent` must match the key's agent id when both are given. Bare non-sentinel keys scope to `--agent` when supplied, or to the configured default agent otherwise; for example `--agent ops --session-key incident-42` routes to `agent:ops:incident-42`. The literal keys `global` and `unknown` stay unscoped only when no `--agent` is supplied.
 - `--json` reserves stdout for the JSON response; Gateway, plugin, and `--local` diagnostics go to stderr so scripts can parse stdout directly.

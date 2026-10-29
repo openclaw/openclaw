@@ -95,6 +95,7 @@ class OnboardingResourcesTests(unittest.TestCase):
                     files["package/old.js"] = "old-hash"
                 (runtime / "manifest.json").write_text(json.dumps({
                     "revision": "pinned", "files": files,
+                    "runtime": {"flavor": "jit", "executable": "bin/bun"},
                 }))
                 stage_onboarding_runtime(runtime)
                 manifest = json.loads((runtime / "manifest.json").read_text())
@@ -102,10 +103,21 @@ class OnboardingResourcesTests(unittest.TestCase):
                 content = (Path(__file__).parent / "fixtures/onboarding-cli.mjs").read_bytes()
                 self.assertEqual(manifest, {"revision": "pinned", "files": {
                     "bin/bun": "runtime-hash", entry: hashlib.sha256(content).hexdigest(),
-                }})
+                }, "runtime": {"flavor": "jit", "executable": "bin/bun", "entry": entry}})
                 self.assertEqual((runtime / entry).read_bytes(), b"OPENCLAW-BUN-RUNTIME-V1\n" + content)
                 self.assertFalse((package / "old.js").exists())
                 self.assertFalse(copied.exists())
+
+    def test_aot_fixture_is_rejected_without_mutating_resources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary) / "desktop-runtime"
+            runtime.mkdir()
+            original = json.dumps({"runtime": {"flavor": "aot"}, "files": {}})
+            (runtime / "manifest.json").write_text(original)
+            with self.assertRaisesRegex(ValueError, "requires the JIT runtime"):
+                stage_onboarding_runtime(runtime)
+            self.assertEqual((runtime / "manifest.json").read_text(), original)
+            self.assertFalse((runtime / "package").exists())
 
     def test_missing_runtime_resources_fail_before_launch(self):
         with tempfile.TemporaryDirectory() as temporary:

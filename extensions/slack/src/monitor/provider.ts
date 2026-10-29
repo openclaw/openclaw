@@ -643,6 +643,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
 
     if (socketClient) {
       let reconnectAttempts = 0;
+      let disconnectedAt: number | undefined;
       const authState = { consecutiveInvalidAuth: 0 };
       const logError = (message: string) => runtime.error?.(message);
       let hasLoggedSocketConnected = false;
@@ -655,6 +656,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
             abortSignal: opts.abortSignal,
             onStarted: async () => {
               reconnectAttempts = 0;
+              disconnectedAt = undefined;
               authState.consecutiveInvalidAuth = 0;
               await recoverSlackIdentity();
               publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
@@ -674,7 +676,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
           if (opts.abortSignal?.aborted) {
             break;
           }
-          publishSlackDisconnectedStatus(opts.setStatus, disconnect.error);
+          publishSlackDisconnectedStatus(
+            opts.setStatus,
+            disconnect.error,
+            (disconnectedAt ??= Date.now()),
+          );
 
           trackSlackAuthFailure(
             disconnect.error,
@@ -703,7 +709,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
             logError,
             authState,
           );
-          publishSlackDisconnectedStatus(opts.setStatus, err);
+          publishSlackDisconnectedStatus(opts.setStatus, err, (disconnectedAt ??= Date.now()));
           reconnectAttempts += 1;
           delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
           if (runtime.error) {

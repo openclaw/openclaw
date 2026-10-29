@@ -279,10 +279,7 @@ describe("worker environment runtime upgrades", () => {
     installWorkerPlacementReconcileGuard({
       placements: h.placements,
       environments: h.service,
-      dispatch: {
-        resumeProvisioning: unsupported("Attached runtime refresh does not provision"),
-        hasPendingPlacementLifecycleOperation: () => false,
-      },
+      dispatch: { isPlacementOperationInFlight: () => false },
       isStopping: h.service.isStopping,
     });
     const reconciling = h.service.reconcileOnce();

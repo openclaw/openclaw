@@ -647,7 +647,10 @@ export async function swapStagedPackageInstall(
       }
       rollback.push(restorePackage);
       await replayLocalOverrides?.();
-      await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot);
+      await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot, undefined, {
+        assertCaller: params.assertCurrent,
+        warnings,
+      });
       activePackageRoot = targetPackageRoot;
       projectActivated = true;
       for (const shim of shims) {

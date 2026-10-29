@@ -168,12 +168,12 @@ export function subscribeBootRecordPersistence(
   { gateway, agents, sessions }: Pick<ApplicationContext, "gateway" | "agents" | "sessions">,
   initialRecord: BootRecord | null,
 ) {
+  const connectionRevision = gateway.connectionRevision;
   let routingDefaults = initialRecord
     ? {
         gatewayScope: initialRecord.scope,
         recoveryScope: initialRecord.recoveryScope,
-        mainKey: initialRecord.agents.mainKey,
-        scope: initialRecord.agents.scope,
+        agents: initialRecord.agents,
       }
     : null;
   const persistLiveBootRecord = () => {
@@ -187,13 +187,12 @@ export function subscribeBootRecordPersistence(
     }
     const agentsList = agents.state.agentsList;
     if (agentsList) {
-      // Refresh this narrow projection as soon as discovery lands, independently
-      // of group persistence. A later disconnect must not revive startup defaults.
+      // Refresh display and routing facts independently of group persistence.
+      // A later disconnect must not revive startup names or defaults.
       routingDefaults = {
         gatewayScope: scope,
         recoveryScope: gateway.snapshot.hello?.auth?.recoveryScope,
-        mainKey: agentsList.mainKey,
-        scope: agentsList.scope,
+        agents: agentsList,
       };
     }
     // Unknown identity must not replace a peer's resolved sidebar cache key.
@@ -221,14 +220,25 @@ export function subscribeBootRecordPersistence(
   const stops = [gateway, agents, sessions].map((capability) =>
     capability.subscribe(persistLiveBootRecord),
   );
+  const readOfflineAgents = () => {
+    const account = readOfflineStorageScope({ client: gateway.snapshot.client });
+    return gateway.connectionRevision === connectionRevision &&
+      gateway.snapshot.phase !== "connected" &&
+      account &&
+      routingDefaults?.recoveryScope === account &&
+      routingDefaults.gatewayScope === gatewayCredentialScope(gateway.connection.gatewayUrl)
+      ? routingDefaults.agents
+      : null;
+  };
   return {
     readSessionDefaults: () => {
-      const account = readOfflineStorageScope({ client: gateway.snapshot.client });
-      return gateway.snapshot.phase !== "connected" &&
-        account &&
-        routingDefaults?.recoveryScope === account &&
-        routingDefaults.gatewayScope === gatewayCredentialScope(gateway.connection.gatewayUrl)
-        ? { mainKey: routingDefaults.mainKey, scope: routingDefaults.scope }
+      const roster = readOfflineAgents();
+      return roster ? { mainKey: roster.mainKey, scope: roster.scope } : null;
+    },
+    readAgentIdentity: (agentId: string) => {
+      const agent = readOfflineAgents()?.agents.find((entry) => entry.id === agentId);
+      return agent
+        ? { agentId, name: agent.identity?.name || agent.name, emoji: agent.identity?.emoji }
         : null;
     },
     dispose: () => stops.forEach((stop) => stop()),

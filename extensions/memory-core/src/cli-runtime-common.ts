@@ -18,6 +18,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import {
   formatMemoryCoreSidecarNotice,
   loadMemoryCommandConfig,
@@ -68,19 +69,23 @@ export async function syncMemoryWithProgress(params: {
           force: Boolean(params.options.force),
           progress: (syncUpdate) => {
             if (syncUpdate.label) {
-              lastLabel = syncUpdate.label;
+              lastLabel = terminalText`${syncUpdate.label}`;
             }
             lastCompleted = syncUpdate.completed;
             lastTotal = syncUpdate.total;
             update({
               completed: syncUpdate.completed,
               total: syncUpdate.total,
-              label: params.elapsed ? buildLabel() : syncUpdate.label,
+              label: params.elapsed
+                ? buildLabel()
+                : syncUpdate.label === undefined
+                  ? undefined
+                  : terminalText`${syncUpdate.label}`,
             });
             if (params.elapsed) {
               progress.setLabel(buildLabel());
             } else if (syncUpdate.label) {
-              progress.setLabel(syncUpdate.label);
+              progress.setLabel(terminalText`${syncUpdate.label}`);
             }
           },
         });
@@ -100,7 +105,7 @@ export async function syncMemoryWithProgress(params: {
 
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
 function emitMemoryCommandWarning(message: string, toStderr: boolean): void {
-  defaultRuntime[toStderr ? "error" : "log"](warn(message));
+  defaultRuntime[toStderr ? "error" : "log"](warn(terminalText`${message}`));
 }
 /** Tells the operator that a Memory Core command acts on its sidecar index only. */
 export function emitMemoryCoreSidecarNotice(owner: string, params?: { json?: boolean }): void {
@@ -171,7 +176,7 @@ export async function withMemoryCommand(params: {
   const slotOwner = resolveForeignMemorySlotOwner(cfg);
   if (slotOwner && params.requiresMemorySlot) {
     const message = `${params.commandName} reads only Memory Core's sidecar index, but plugins.slots.memory selects "${slotOwner}". Search the selected memory through the agent's memory tools or the ${slotOwner} plugin's own commands.`;
-    defaultRuntime.error(message);
+    defaultRuntime.error(terminalText`${message}`);
     process.exitCode = 1;
     onUnavailable?.({
       ...formatCliJsonFailure(message),
@@ -203,12 +208,12 @@ export async function withMemoryCommand(params: {
           return;
         }
         const message = `${params.commandName} failed (${agentId}): ${error}`;
-        defaultRuntime.error(message);
+        defaultRuntime.error(terminalText`${message}`);
         process.exitCode = 1;
         onUnavailable?.({ ...formatCliJsonFailure(message), agentId });
       },
       onCloseError: (err) =>
-        defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
+        defaultRuntime.error(terminalText`Memory manager close failed: ${formatErrorMessage(err)}`),
       close: async (manager) => {
         await manager.close?.();
       },

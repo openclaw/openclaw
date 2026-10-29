@@ -44,21 +44,11 @@ function runWithPluginGatewayScope<T>(
   const current = getPluginExecutionFrame();
   const call = invocation ?? current?.invocation;
   const runtime = getPluginRuntimeExecutionFrame(current);
-  if (
-    runtime?.gatewayScope === gatewayScope &&
-    runtime.invocation === call &&
-    runtime.inputRecoveryContext === gatewayScope
-  ) {
+  if (runtime?.gatewayScope === gatewayScope && runtime.invocation === call) {
     return run();
   }
   return runWithPluginExecutionFrame(
-    new PluginRuntimeExecutionFrame(
-      current ?? {},
-      gatewayScope,
-      runtime?.generationRegistry,
-      call,
-      gatewayScope,
-    ),
+    new PluginRuntimeExecutionFrame(current ?? {}, gatewayScope, runtime?.generationRegistry, call),
     run,
   );
 }
@@ -90,6 +80,9 @@ export const ExpiredPluginRegistryScopeError = resolveGlobalSingleton(
     },
 );
 
+// Each binding retains its own closures; the host-owned scope is defined synchronously.
+const borrowedRegistryProperty: PropertyDescriptor = { enumerable: true, configurable: true };
+
 // Native resources inherit these views; the registry's lifecycle owner keeps the graph alive.
 function bindBorrowedRegistry(
   scope: PluginRuntimeGatewayRequestScope,
@@ -98,21 +91,18 @@ function bindBorrowedRegistry(
 ): void {
   let expired = initiallyExpired;
   let reference = registry && new WeakRef(registry);
-  Object.defineProperty(scope, "pluginRegistry", {
-    enumerable: true,
-    configurable: true,
-    get() {
-      const current = reference?.deref();
-      if (expired || (reference && !current)) {
-        throw new ExpiredPluginRegistryScopeError();
-      }
-      return current;
-    },
-    set(next: PluginRegistry | undefined) {
-      reference = next && new WeakRef(next);
-      expired = false;
-    },
-  });
+  borrowedRegistryProperty.get = () => {
+    const current = reference?.deref();
+    if (expired || (reference && !current)) {
+      throw new ExpiredPluginRegistryScopeError();
+    }
+    return current;
+  };
+  borrowedRegistryProperty.set = (next: PluginRegistry | undefined) => {
+    reference = next && new WeakRef(next);
+    expired = false;
+  };
+  Object.defineProperty(scope, "pluginRegistry", borrowedRegistryProperty);
 }
 
 function copyGatewayScope(

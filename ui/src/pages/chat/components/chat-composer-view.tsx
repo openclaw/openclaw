@@ -9,28 +9,30 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
+import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
-import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
 import "../../../styles/chat/composer-context-strip.css";
+import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
+import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
 import { ComposerContent } from "./chat-composer-content.tsx";
 import { ContextNotice } from "./chat-composer-context.tsx";
+import "../../../styles/chat/emoji-menu.css";
+import "../../../styles/chat/mention-menu.css";
 import {
   renderChatAbortActionSolid,
   renderChatPrimaryActionsSolid as ChatPrimaryActions,
 } from "./chat-composer-controls.tsx";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
-import "../../../styles/chat/emoji-menu.css";
-import "../../../styles/chat/mention-menu.css";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import type { ChatComposerPlusMenuView } from "./chat-composer-plus-menu.types.ts";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
@@ -50,6 +52,7 @@ const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx
   export: "HumanMentionMenuView",
 });
 const EmojiMenu = lazy(() => import("./chat-composer-emoji.tsx"), { export: "EmojiMenu" });
+warmWhenIdle(SlashMenu.preload, SkillMenu.preload, HumanMentionMenuView.preload, EmojiMenu.preload);
 const ChatGoal = lazy(() => import("./chat-composer-goal.tsx"), { export: "ChatGoal" });
 const ChatGoalRecoveryNotice = lazy(() => import("./chat-composer-goal.tsx"), {
   export: "ChatGoalRecoveryNotice",
@@ -160,10 +163,18 @@ export function renderChatComposerView(
               <button
                 type="button"
                 class={["btn btn--sm", banner().actionStyle]}
-                disabled={Boolean(banner().disabledReason) || banner().busy}
+                disabled={
+                  !banner().actionPending && (Boolean(banner().disabledReason) || banner().busy)
+                }
+                aria-disabled={banner().actionPending ? "true" : undefined}
+                data-authority-pending={banner().actionPending ? "" : undefined}
                 aria-busy={banner().busy ? "true" : "false"}
                 title={banner().disabledReason ?? undefined}
-                onClick={() => onAction()()}
+                onClick={() => {
+                  if (!banner().actionPending && !banner().disabledReason && !banner().busy) {
+                    onAction()();
+                  }
+                }}
               >
                 {banner().busy ? (
                   <>
@@ -595,7 +606,9 @@ export function renderChatComposerView(
                       aria-keyshortcuts="Tab"
                       onClick={() => context().acceptPrediction()}
                     >
-                      <kbd>{t("chat.composer.predictionShortcut")}</kbd>{" "}
+                      <Show when={keyboardHintsVisible()}>
+                        <kbd>{t("chat.composer.predictionShortcut")}</kbd>{" "}
+                      </Show>
                       {t("chat.composer.usePrediction")}
                     </button>
                     <button

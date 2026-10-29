@@ -13,8 +13,8 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js"
 import {
   assertSessionTranscriptHot,
   readHotSessionTranscriptSnapshot,
-  SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];

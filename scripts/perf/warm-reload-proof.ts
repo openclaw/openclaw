@@ -3,7 +3,6 @@ import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_pro
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { access, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -18,7 +17,7 @@ import {
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
-import { startWarmReloadAdmission } from "./warm-reload-admission.ts";
+import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
 import { installWarmReloadBrowserProbe, proofRegions } from "./warm-reload-browser-probe.ts";
 import { launchWarmReloadBrowser, calibrateWarmReloadPaintHolding } from "./warm-reload-browser.ts";
 import { prepareWarmReloadBuild, createWarmReloadComparison } from "./warm-reload-compare.ts";
@@ -103,41 +102,6 @@ const directory = createControlUiE2eArtifactDir("warm-reload", values.output);
 const stateDir = path.join(directory, "state");
 const viewport = { width: 1720, height: 1180 };
 const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-
-async function freePort(excluded: number[] = [], gateway = false) {
-  for (let port = 19600; port <= 19699; port++) {
-    const ports = gateway ? [port, resolveSandboxHostPort(port)] : [port];
-    if (ports.some((candidate) => candidate > 19699 || excluded.includes(candidate))) {
-      continue;
-    }
-    const servers = ports.map(() => createServer());
-    try {
-      for (const [index, server] of servers.entries()) {
-        await new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(ports[index], "127.0.0.1", resolve);
-        });
-      }
-      return port;
-    } catch (error) {
-      if (!(error instanceof Error) || !("code" in error) || error.code !== "EADDRINUSE") {
-        throw error;
-      }
-    } finally {
-      await Promise.all(
-        servers
-          .filter((server) => server.listening)
-          .map(
-            (server) =>
-              new Promise<void>((resolve) => {
-                server.close(() => resolve());
-              }),
-          ),
-      );
-    }
-  }
-  throw new Error("No free loopback port in 19600–19699");
-}
 
 async function waitForGateway(url: string, child: ChildProcess) {
   const deadline = Date.now() + 180000;
@@ -230,13 +194,35 @@ async function readWarmCache(page: Page, sessionKey: string) {
         });
       const snapshots = await readKeys("snapshots");
       const sidebar = await readKeys("sidebarSnapshots");
-      return {
-        targetSnapshots: snapshots.filter(
+      const targetKeys = snapshots.filter(
+        (value) =>
+          typeof value === "string" &&
+          value.startsWith("scope:[") &&
+          value.endsWith(`\u0000${key}`),
+      );
+      const targetRecords = await Promise.all(
+        targetKeys.map(
           (value) =>
-            typeof value === "string" &&
-            value.startsWith("scope:[") &&
-            value.endsWith(`\u0000${key}`),
-        ).length,
+            new Promise<unknown>((resolve, reject) => {
+              const request = database
+                .transaction("snapshots", "readonly")
+                .objectStore("snapshots")
+                .get(value);
+              request.addEventListener("success", () => resolve(request.result), { once: true });
+              request.addEventListener(
+                "error",
+                () => reject(new Error("Unable to read warm snapshot", { cause: request.error })),
+                { once: true },
+              );
+            }),
+        ),
+      );
+      return {
+        targetSnapshots: targetKeys.length,
+        targetSnapshotBytes: targetRecords.reduce<number>(
+          (bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length,
+          0,
+        ),
         snapshots: snapshots.length,
         sidebarSnapshots: sidebar.length,
       };
@@ -588,7 +574,7 @@ const interrupt = () => {
 };
 process.once("SIGINT", interrupt);
 process.once("SIGTERM", interrupt);
-const port = await freePort([], true);
+const port = await freeProofPort([], true);
 // HTML boards bind this second native listener lazily after the Gateway starts.
 const gatewayPorts = [port, resolveSandboxHostPort(port)];
 let baseUrl = `http://127.0.0.1:${port}`;
@@ -625,7 +611,7 @@ try {
   if (values.admission === "signed-in") {
     admission = await startWarmReloadAdmission({
       gatewayPort: port,
-      port: await freePort(gatewayPorts),
+      port: await freeProofPort(gatewayPorts),
     });
     baseUrl = admission.origin;
   }
@@ -641,6 +627,7 @@ try {
             origin: admission.origin,
             gatewayAuth: admission.gatewayAuth,
             viewerEmail: admission.viewerEmail,
+            peerSessions: admission.peerSessions,
           },
         }
       : {}),
@@ -715,8 +702,26 @@ try {
   const launched = await launchWarmReloadBrowser();
   browser = launched.browser;
   browserConfiguration = launched.configuration;
+  if (admission) {
+    // Pause peer JavaScript without hiding the pages, which would clear their viewer declarations.
+    for (const peer of admission.peerSessions) {
+      for (const routePath of [fixture.chatPath, fixture.dashboardPath]) {
+        const context = await browser.newContext({ viewport, colorScheme: "dark" });
+        await context.addCookies([peer.cookie]);
+        const page = await context.newPage();
+        await page.goto(baseUrl);
+        await waitForControlUiGatewayReady(page, 60000);
+        await page.goto(`${baseUrl}${routePath}`);
+        await waitForControlUiGatewayReady(page, 60000);
+        await page.locator(".chat-pane__header").first().waitFor({ state: "visible" });
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Debugger.enable");
+        await cdp.send("Debugger.pause");
+      }
+    }
+  }
   paintHoldingCalibration = await calibrateWarmReloadPaintHolding(browser, {
-    port: await freePort(gatewayPorts),
+    port: await freeProofPort(gatewayPorts),
     directory: path.join(directory, "paint-holding-calibration"),
   });
   const cpuBefore = os.cpus().map((cpu) => cpu.times);
@@ -855,6 +860,12 @@ try {
               }),
           );
           await delay(2000);
+          if (admission) {
+            await page
+              .locator('.chat-pane__presence .viewer-facepile[data-viewer-count="3"]')
+              .first()
+              .waitFor({ state: "visible" });
+          }
           const target = fixture.fixtureSummary.targets[route === "chat" ? 0 : 1]!;
           const cache = await readWarmCache(page, target.key);
           results.at(-1)!.warmCache = cache;

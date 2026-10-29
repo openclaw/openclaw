@@ -252,7 +252,7 @@ rewriting their paths or completion state. Older readers continue treating every
 journal row as a deletion fence and may require an explicit cleanup retry. The
 numeric schema version, journal retention, and rollback backup policy are unchanged.
 Retirement-only callers leave the phase null. Automatic Gateway recovery leaves
-those journals with retained Claw ownership to the existing Claw removal owner;
+those journals with retained Template ownership to the existing Template removal owner;
 its selective package and workspace cleanup still requires a removal-plan retry.
 
 Linux Node worker cleanup uses the additive `node_worker_launch_process_scopes`

@@ -21,7 +21,7 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import { projectionOperations } from "./local-workspace-state.js";
 import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
-import { OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX } from "./workspace-manifest-comparison.js";
+import { workspaceSizeRecoveryPaths } from "./workspace-manifest-comparison.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 
 type LocalWorkspaceCustody = {
@@ -247,6 +247,17 @@ export async function checkpointLocalWorkspacePath(params: {
   const worktree = await readLiveRegistryWorktreeByPath(context, params.cwd);
   params.assertCurrent?.();
   if (worktree) {
+    const projection = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env },
+      { type: "localWorkspace.exists", input: { id: worktree.id } },
+      { context, current: true, live: true },
+    );
+    context.admission.assertCurrent();
+    params.assertCurrent?.();
+    // An absent projection has no checkpoint; custody callbacks still own absent rows.
+    if (projection?.exists === false) {
+      return;
+    }
     const checkpoint = { worktree, env, assertCurrent: params.assertCurrent };
     await joinLocalWorkspaceCheckpoint(checkpoint, undefined, (beginCapture) =>
       settleLocalWorkspace(checkpoint, async () => {}, beginCapture),
@@ -334,7 +345,7 @@ async function runLocalWorkspaceProjection<T>(
   try {
     return await run(operations, quiescence);
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX)) {
+    if (error instanceof Error && workspaceSizeRecoveryPaths(error).length > 0) {
       const { describeLocalWorkspaceRecovery } = await import("./local-workspace-recovery.js");
       throw await describeLocalWorkspaceRecovery(error, owner, operations);
     }

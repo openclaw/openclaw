@@ -39,12 +39,9 @@ beforeEach(() => {
   root = fs.realpathSync(tempDirs.make("openclaw-mount-plan-"));
   for (const subdir of [
     "empty",
-    "private/skills/nested",
-    "private/data/nested",
-    "agent/skills/nested",
-    "agent/data/nested",
     "agent/.agents/skills",
-    "materialized/skills/nested",
+    ...["private", "agent", "materialized"].map((dir) => `${dir}/skills/nested`),
+    ...["private", "agent"].map((dir) => `${dir}/data/nested`),
   ]) {
     fs.mkdirSync(path.join(root, subdir), { recursive: true });
   }
@@ -80,9 +77,8 @@ async function expectMounts(
     stderr: "",
     code: 0,
   });
-  expect(
-    (await compareSandboxMountPlan({ engine, containerName: "retained", plan })) === "match",
-  ).toBe(matches);
+  const result = await compareSandboxMountPlan({ engine, containerName: "retained", plan });
+  expect(result === "match").toBe(matches);
 }
 
 describe("managed mount plan", () => {
@@ -106,6 +102,29 @@ describe("managed mount plan", () => {
     expect(plan.binds).toContain(skillsBind);
   });
 
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "explains how to repair an inaccessible existing skills mountpoint",
+    async () => {
+      const blocked = path.join(root, "agent/.openclaw");
+      fs.mkdirSync(blocked, { mode: 0o700 });
+      fs.chmodSync(blocked, 0o000);
+      try {
+        const error = await prepare("rw", { workspaceSource: "managed-worktree" }).catch(
+          (failure: unknown) => failure,
+        );
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain(
+          `Cannot prepare sandbox skills mountpoint "${path.join(blocked, "sandbox-skills/skills")}"`,
+        );
+        expect((error as Error).message).toMatch(/ownership.*search.*write/);
+        expect((error as Error).cause).toBeInstanceOf(Error);
+        expect(fs.statSync(blocked).mode & 0o777).toBe(0);
+      } finally {
+        fs.chmodSync(blocked, 0o700);
+      }
+      expect(fs.readdirSync(blocked)).toEqual([]);
+    },
+  );
   it("rechecks the workspace owner after namespace lookup before creating scaffold directories", async () => {
     const authority = new AbortController();
     vi.mocked(resolveDockerSourceNamespace).mockImplementationOnce(async () => {
@@ -121,17 +140,20 @@ describe("managed mount plan", () => {
     expect(fs.existsSync(path.join(root, "agent/.openclaw"))).toBe(false);
   });
 
-  it("refuses an aliased managed mount target without creating outside the workspace", async () => {
-    const outside = path.join(root, "outside");
-    fs.mkdirSync(outside);
-    fs.symlinkSync(
-      outside,
-      path.join(root, "agent/.openclaw"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    await expect(prepare("rw", { workspaceSource: "managed-worktree" })).rejects.toThrow();
-    expect(fs.readdirSync(outside)).toEqual([]);
-  });
+  it.each([{}, { workspaceSource: "managed-worktree" }] as const)(
+    "refuses a symlinked mount ancestor without creating outside the workspace (%j)",
+    async (overrides) => {
+      const outside = path.join(root, "outside");
+      fs.mkdirSync(outside);
+      fs.symlinkSync(
+        outside,
+        path.join(root, "agent/.openclaw"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      await expect(prepare("rw", overrides)).rejects.toThrow();
+      expect(fs.readdirSync(outside)).toEqual([]);
+    },
+  );
 
   it("pins writable ancestors of nested protected skill mounts so they cannot be renamed", async () => {
     const workspace = path.join(root, "agent");
@@ -160,30 +182,27 @@ describe("managed mount plan", () => {
     expect(plan.binds.filter((spec) => spec.endsWith(":/srv/work:z"))).toHaveLength(1);
   });
 
-  it("keeps a read-only Gateway ancestor bind read-only instead of failing startup", async () => {
-    const namespace = await resolveDockerSourceNamespace(engine);
-    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
-      ...namespace!,
-      namespaceBind("/host/agents-ro", path.join(root, "agent/.agents"), false),
-    ]);
-    const plan = await prepare("rw");
-    expect(plan.binds).toContain("/host/agents-ro:/workspace/.agents:ro,z");
-    expect(plan.binds).toContain("/host/agents-ro/skills:/workspace/.agents/skills:ro,z");
-  });
-
-  it("keeps a writable Gateway child under a read-only Gateway ancestor writable", async () => {
-    fs.mkdirSync(path.join(root, "agent/.agents/output"));
-    const namespace = await resolveDockerSourceNamespace(engine);
-    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
-      ...namespace!,
-      namespaceBind("/host/agents-ro", path.join(root, "agent/.agents"), false),
-      namespaceBind("/host/agents-output", path.join(root, "agent/.agents/output")),
-    ]);
-    const plan = await prepare("rw");
-    expect(plan.binds).toContain("/host/agents-ro:/workspace/.agents:ro,z");
-    expect(plan.binds).toContain("/host/agents-output:/workspace/.agents/output:z");
-    expect(plan.binds).toContain("/host/agents-ro/skills:/workspace/.agents/skills:ro,z");
-  });
+  it.each([false, true])(
+    "preserves Gateway ancestor access with writable child=%s",
+    async (child) => {
+      const output = path.join(root, "agent/.agents/output");
+      if (child) {
+        fs.mkdirSync(output);
+      }
+      const namespace = await resolveDockerSourceNamespace(engine);
+      vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
+        ...namespace!,
+        namespaceBind("/host/agents-ro", path.join(root, "agent/.agents"), false),
+        ...(child ? [namespaceBind("/host/agents-output", output)] : []),
+      ]);
+      const plan = await prepare("rw");
+      expect(plan.binds).toContain("/host/agents-ro:/workspace/.agents:ro,z");
+      expect(plan.binds).toContain("/host/agents-ro/skills:/workspace/.agents/skills:ro,z");
+      if (child) {
+        expect(plan.binds).toContain("/host/agents-output:/workspace/.agents/output:z");
+      }
+    },
+  );
 
   it("detects a retained container created before ancestor pinning as a mount change", async () => {
     const plan = await prepare("rw");
@@ -198,18 +217,6 @@ describe("managed mount plan", () => {
       null,
       false,
     );
-  });
-
-  it("refuses a symlinked protected-mount ancestor without creating outside the workspace", async () => {
-    const outside = path.join(root, "outside-ancestor");
-    fs.mkdirSync(outside);
-    fs.symlinkSync(
-      outside,
-      path.join(root, "agent/.openclaw"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    await expect(prepare("rw")).rejects.toThrow();
-    expect(fs.readdirSync(outside)).toEqual([]);
   });
 
   it("does not pin ancestors below a read-only workspace", async () => {
