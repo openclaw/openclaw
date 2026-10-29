@@ -90,6 +90,7 @@ Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit 
 ## What it is
 
 - Replies always go back to Signal.
+- Native HTTP event streams resume from the last accepted event ID after a disconnect, when the daemon retains buffered events. The cursor lasts only for the running channel loop, not across a Gateway restart; Unix and container transports are unchanged.
 - DMs share the agent's main session; with default `session.groupScope: "per-group"`, groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
 - By default, Signal may write config updates triggered by `/config set|unset` (requires `commands.config: true`). Disable with `channels.signal.configWrites: false`.
 

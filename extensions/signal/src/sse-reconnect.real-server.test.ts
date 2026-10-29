@@ -44,17 +44,46 @@ afterEach(async () => {
 });
 
 describe("runSignalSseLoop native HTTP boundary", () => {
-  it("publishes one terminal status and stops after a permanent rejection", async () => {
+  it.each([
+    ["empty ID", "id: \n\n", undefined],
+    ["NUL ID", "id: bad\0id\ndata: notification\n\n", "1"],
+    ["no ID", "data: notification\n\n", "1"],
+    ["incomplete frame", "id: 2\ndata: incomplete\n", "1"],
+  ])("preserves accepted cursor semantics across %s", async (_name, frame, expectedCursor) => {
+    const headers: Array<string | string[] | undefined> = [];
     const abort = new AbortController();
-    const endpoint = await startRejectingSignalServer(
-      400,
-      "Account Selection Required",
-      (requestCount) => {
-        if (requestCount === 2) {
+    const server = createServer((request, response) => {
+      headers.push(request.headers["last-event-id"]);
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.end(headers.length === 1 ? "id: 1\ndata: first\n\n" : frame);
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address() as AddressInfo;
+    await runSignalSseLoop({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      abortSignal: abort.signal,
+      runtime: createRuntimeSpies(),
+      onEvent: () => {},
+      policy: { initialMs: 0, maxMs: 0, jitter: 0 },
+      statusSink: (patch) => {
+        if (headers.length === 3 && patch.lifecycle === "recovering") {
           abort.abort();
         }
       },
-    );
+    });
+    expect(headers).toEqual([undefined, "1", expectedCursor]);
+  });
+
+  it("publishes one terminal status and stops after a permanent rejection", async () => {
+    const abort = new AbortController();
+    const endpoint = await startRejectingSignalServer(400, "Bad Request", (requestCount) => {
+      if (requestCount === 2) {
+        abort.abort();
+      }
+    });
     const statusSink = vi.fn<SignalStatusSink>();
 
     await runSignalSseLoop({
@@ -73,7 +102,7 @@ describe("runSignalSseLoop native HTTP boundary", () => {
       terminalDisconnect: true,
       connected: false,
       lastError:
-        "Signal daemon rejected the event stream: Signal SSE failed (400 Account Selection Required). Check the configured account and daemon URL, fix the daemon or proxy response, then restart the channel.",
+        "Signal daemon rejected the event stream: Signal SSE failed (400 Bad Request). Check the configured account and daemon URL, fix the daemon or proxy response, then restart the channel.",
     });
   });
 

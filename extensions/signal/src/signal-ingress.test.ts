@@ -1,5 +1,7 @@
 // Signal durable ingress tests cover append, recovery, and tombstone dedupe.
+import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -9,6 +11,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SignalSseEvent } from "./client-adapter.js";
 import { startSignalIngressMonitor } from "./signal-ingress.js";
+import { runSignalSseLoop, type SignalStatusSink } from "./sse-reconnect.js";
 
 type SignalIngressQueue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
 type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
@@ -76,6 +79,91 @@ afterEach(() => {
 });
 
 describe("Signal durable ingress", () => {
+  it("resumes accepted HTTP ingress without advancing on failed admission or replaying delivery", async () => {
+    await withQueue(async (queue) => {
+      const abort = new AbortController();
+      const headers: Array<string | string[] | undefined> = [];
+      const received: Array<string | undefined> = [];
+      const statusSink = vi.fn<SignalStatusSink>();
+      const frame = (id: string) =>
+        `id: ${id}\nevent: receive\ndata: ${signalEvent({ timestamp: Number(id) }).data}\n\n`;
+      const server = createServer((req, res) => {
+        headers.push(req.headers["last-event-id"]);
+        res.writeHead(headers.length === 1 ? 503 : 200, { "Content-Type": "text/event-stream" });
+        res.end(
+          headers.length === 1
+            ? ""
+            : headers.length === 2
+              ? frame("1")
+              : headers.length === 3
+                ? frame("2")
+                : (req.headers["last-event-id"] === "1" ? ["1", "2", "3"] : ["3"])
+                    .map(frame)
+                    .join(""),
+        );
+      });
+      const enqueue = queue.enqueue.bind(queue);
+      const admissionFailures: string[] = [];
+      const failingQueue = {
+        ...queue,
+        enqueue: ((...args: Parameters<typeof enqueue>) => {
+          if (headers.length === 3) {
+            admissionFailures.push("sqlite unavailable");
+            return Promise.reject(new Error("sqlite unavailable"));
+          }
+          return enqueue(...args);
+        }) satisfies typeof enqueue,
+      } satisfies SignalIngressQueue;
+      const { monitor } = await startMonitor(failingQueue, (event) => {
+        received.push(event.id);
+      });
+      try {
+        server.listen(0, "127.0.0.1");
+        await once(server, "listening");
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("missing server address");
+        }
+        await runSignalSseLoop({
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          account: "+15555550100",
+          abortSignal: abort.signal,
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          policy: { initialMs: 0, maxMs: 0, jitter: 0 },
+          statusSink,
+          onEvent: async (event) => {
+            await monitor.receive(event);
+            if (event.id === "3") {
+              abort.abort();
+            }
+          },
+        });
+        await monitor.waitForIdle();
+      } finally {
+        abort.abort();
+        await monitor.stop();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+      expect(headers).toEqual([undefined, undefined, "1", "1"]);
+      expect(admissionFailures.length).toBeGreaterThan(0);
+      expect(received).toEqual(["1", "2", "3"]);
+      expect(statusSink).toHaveBeenCalledWith(
+        expect.objectContaining({ lifecycle: "ready", connected: true }),
+      );
+      expect(statusSink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lifecycle: "recovering",
+          lastError: expect.stringContaining("503"),
+        }),
+      );
+      expect(statusSink).toHaveBeenCalledWith(
+        expect.objectContaining({ lastError: expect.stringContaining("sqlite unavailable") }),
+      );
+    });
+  });
+
   it("propagates durable append failure before dispatch scheduling", async () => {
     await withQueue(async (queue) => {
       const appendError = new Error("sqlite unavailable");

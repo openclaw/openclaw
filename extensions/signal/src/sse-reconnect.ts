@@ -70,6 +70,7 @@ export async function runSignalSseLoop({
     ...policy,
   };
   let reconnectAttempts = 0;
+  let lastEventId: string | undefined;
 
   for (;;) {
     if (abortSignal?.aborted) {
@@ -83,12 +84,17 @@ export async function runSignalSseLoop({
         abortSignal,
         timeoutMs,
         transportKind,
+        ...(lastEventId ? { lastEventId } : {}),
         onStreamOpen: () => {
           statusSink?.(channelReadyPatch());
         },
         onEvent: async (event: SignalSseEvent) => {
           reconnectAttempts = 0;
           await onEvent(event);
+          // Resume only after receive accepted the event, including durable ingress.
+          if (event.id !== undefined) {
+            lastEventId = event.id || undefined;
+          }
         },
         logger: {
           log: runtime.log,

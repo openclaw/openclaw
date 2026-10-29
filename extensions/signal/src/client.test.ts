@@ -252,6 +252,23 @@ describe("signalCheck", () => {
 });
 
 describe("streamSignalEvents", () => {
+  it.each([
+    ["empty cursor reset", "id: \n\n", [{ id: "", event: undefined, data: undefined }]],
+    [
+      "NUL cursor ignored",
+      "id: bad\0id\ndata: ok\n\n",
+      [{ id: undefined, event: undefined, data: "ok" }],
+    ],
+    ["unterminated event discarded", "id: 2\ndata: incomplete\n", []],
+  ])("handles %s", async (_name, frame, expected) => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end(frame);
+    });
+    const events: unknown[] = [];
+    await streamSignalEvents({ baseUrl, onEvent: (event) => events.push(event) });
+    expect(events).toEqual(expected);
+  });
   it("preserves path-prefixed base URLs for event streams", async () => {
     type StreamEvent = Parameters<Parameters<typeof streamSignalEvents>[0]["onEvent"]>[0];
     const events: StreamEvent[] = [];
@@ -293,7 +310,7 @@ describe("streamSignalEvents", () => {
 
   it("reports HTTP status failures from the event stream", async () => {
     const baseUrl = await withSignalServer((_req, res) => {
-      res.writeHead(503, "Unavailable");
+      res.writeHead(503);
       res.end("down");
     });
 
@@ -303,7 +320,7 @@ describe("streamSignalEvents", () => {
         onEvent: () => {},
       }),
     ).rejects.toMatchObject({
-      message: "Signal SSE failed (503 Unavailable)",
+      message: "Signal SSE failed (503 Service Unavailable)",
       status: 503,
     });
   });
@@ -413,7 +430,7 @@ it("keeps an idle HTTP stream quiet through intentional shutdown", async () => {
   });
   const baseUrl = await withSignalServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/event-stream" });
-    response.flushHeaders();
+    response.write(": keepalive\n\n");
   });
   await runSignalSseLoop({
     baseUrl,
