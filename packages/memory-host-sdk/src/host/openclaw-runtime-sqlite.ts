@@ -27,3 +27,7 @@ export {
   sqlPublicationAnchor,
   type PostgresSqlConnection,
 } from "../../../../src/infra/sql-connection.js";
+export {
+  buildSqliteMemoryBodyFtsSchema,
+  buildSqliteMemoryPathFtsSchema,
+} from "../../../../src/infra/database-engine/sqlite-memory-search-fragments.js";

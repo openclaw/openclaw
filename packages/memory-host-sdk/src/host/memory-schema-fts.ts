@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   buildSqliteMemoryBodyFtsSchema,
   buildSqliteMemoryPathFtsSchema,
-} from "../../../../src/infra/database-engine/sqlite-memory-search-fragments.js";
+} from "./openclaw-runtime-sqlite.js";
 
 export const MEMORY_INDEX_SOURCES_TABLE = "memory_index_sources";
 export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
