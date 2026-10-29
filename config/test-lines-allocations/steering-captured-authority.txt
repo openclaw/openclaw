@@ -1,2 +1,2 @@
-48
-# Authenticated sandbox-writer steering regression and captured-grant boundary checks.
+77
+# Authenticated sandbox-writer steering, requester isolation, post-acceptance revocation, and captured-grant boundary checks.

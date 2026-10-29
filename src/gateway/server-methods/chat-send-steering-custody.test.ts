@@ -142,6 +142,11 @@ describe("steering input custody", () => {
     { scenario: "same requester protocol metadata drift", allowCollaborativeSteering: true },
     { scenario: "same requester binding drift", allowCollaborativeSteering: true },
     { scenario: "same requester sandboxed session writer", allowCollaborativeSteering: false },
+    {
+      scenario: "same requester sandboxed revoked after acceptance",
+      allowCollaborativeSteering: false,
+    },
+    { scenario: "sandboxed same permissions across profiles", allowCollaborativeSteering: false },
     { scenario: "different scopes across profiles", allowCollaborativeSteering: undefined },
     { scenario: "different role session caps across profiles", allowCollaborativeSteering: true },
   ])(
@@ -149,7 +154,9 @@ describe("steering input custody", () => {
     async ({ scenario, allowCollaborativeSteering }, { signal }) => {
       const startOwnerTurn = scenario === "same permissions across profiles";
       const continuation = scenario.startsWith("same requester ");
-      const sandboxedSessionWriter = scenario === "same requester sandboxed session writer";
+      const sandboxedSessionWriter = scenario.includes("sandboxed");
+      const revokeAfterAcceptance =
+        scenario === "same requester sandboxed revoked after acceptance";
       const sharedSecretOwner = scenario === "shared-secret owner";
       const profile = sharedSecretOwner
         ? ensureGatewayOwnerProfile("Gateway Owner")
@@ -426,16 +433,19 @@ describe("steering input custody", () => {
           );
         const providerStarted = createDeferred();
         const provider = holdAssistantResponse("Original work");
+        const providerInputs: string[] = [];
         streamMocks.streamSimple
-          .mockImplementationOnce(() => {
+          .mockImplementationOnce((_model, context) => {
+            providerInputs.push(JSON.stringify(context.messages));
             providerStarted.resolve();
             return provider.response;
           })
-          .mockImplementation((model) =>
-            createAssistantResultStream(
+          .mockImplementation((model, context) => {
+            providerInputs.push(JSON.stringify(context.messages));
+            return createAssistantResultStream(
               createAssistant(model, [{ type: "text", text: "Steering consumed" }]),
-            ),
-          );
+            );
+          });
         releaseProvider = provider.release;
         cleanupOwnerContext = installRuntimeContextMessageForPrompt({
           session,
@@ -597,6 +607,11 @@ describe("steering input custody", () => {
           expect(() => participants?.resolve()).toThrow("Several people have steered this turn");
           expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBe(false);
         }
+        if (revokeAfterAcceptance) {
+          // Native custody is already accepted, but the held provider has not
+          // completed and the next user input has not reached model I/O.
+          incomingGrant.abort(new Error("Access grant ended after steering acceptance"));
+        }
         releaseProvider();
         await backingRun;
         if (ownerClaim) {
@@ -610,7 +625,21 @@ describe("steering input custody", () => {
             isRecord(event.message) &&
             event.message.idempotencyKey === `${fixture.params.idempotencyKey}:user`,
         );
-        if (accepted) {
+        const consumed = accepted && !revokeAfterAcceptance;
+        expect(providerInputs.some((messages) => messages.includes(fixture.params.message))).toBe(
+          consumed,
+        );
+        if (revokeAfterAcceptance) {
+          expect(input).toBeUndefined();
+          expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+          expect(session.messages.at(-1)).toMatchObject({
+            role: "assistant",
+            stopReason: "error",
+          });
+          expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
+            items: [{ runId: fixture.params.idempotencyKey, state: "cancelled" }],
+          });
+        } else if (accepted) {
           expect(input).toMatchObject({
             message: {
               content: fixture.params.message,
