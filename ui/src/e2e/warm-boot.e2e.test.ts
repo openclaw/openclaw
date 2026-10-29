@@ -581,19 +581,37 @@ suite.define(() => {
             },
           ];
           const pageSize = imported ? 50 : 1_000;
-          const firstPage = messages.slice(-pageSize);
+          const heldStart = messages.length - 80;
+          const firstStart = Math.max(0, heldStart - pageSize);
+          const firstPage = messages.slice(firstStart, heldStart);
           await gateway.setMethodResponse("chat.history", {
-            // Every long-history fixture spans two pages: 1,100/1,000 or 120/50.
-            cases: [firstPage, messages.slice(0, -pageSize)].map((pageMessages, index) => ({
-              match: { offset: index * pageSize },
-              response: {
-                messages: pageMessages,
-                sessionId: currentRow.sessionId,
-                totalMessages: messages.length,
-                hasMore: index === 0,
-                ...(index === 0 ? { nextOffset: pageSize } : {}),
+            // Disk trimming retains 80 groups but no certified page edge. Reopen
+            // that held source, then fetch strictly before it without replacing rows.
+            cases: [
+              {
+                match: { messageId: `older-${heldStart + 1}`, limit: 1 },
+                response: {
+                  messages: [messages[heldStart]],
+                  sessionId: currentRow.sessionId,
+                  olderCursor: "warm-before-held",
+                },
               },
-            })),
+              {
+                match: { cursor: "warm-before-held" },
+                response: {
+                  messages: firstPage,
+                  sessionId: currentRow.sessionId,
+                  ...(firstStart ? { olderCursor: "warm-before-first" } : {}),
+                },
+              },
+              {
+                match: { cursor: "warm-before-first" },
+                response: {
+                  messages: messages.slice(0, firstStart),
+                  sessionId: currentRow.sessionId,
+                },
+              },
+            ],
           });
           const messageCount = () =>
             page
@@ -602,28 +620,31 @@ suite.define(() => {
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
           await thread.hover();
           await page.mouse.wheel(0, -100_000);
-          const history = await gateway.waitForRequest("chat.history", { match: { offset: 0 } });
-          expect(history.params).toMatchObject({ offset: 0 });
-          await expect.poll(messageCount).toBe(firstPage.length);
+          const history = await gateway.waitForRequest("chat.history", {
+            match: { messageId: `older-${heldStart + 1}` },
+          });
+          expect(history.params).toMatchObject({ messageId: `older-${heldStart + 1}`, limit: 1 });
+          expect(history.params).not.toHaveProperty("offset");
+          await gateway.waitForRequest("chat.history", { match: { cursor: "warm-before-held" } });
+          await expect.poll(messageCount).toBe(firstPage.length + 80);
           await page
-            .getByText(
-              `Older history ${Math.max(messages.length - pageSize + 1, olderMessages.length - 79)}`,
-              { exact: true },
-            )
+            .getByText(`Older history ${heldStart}`, { exact: true })
             .waitFor({ state: "attached" });
           await waitForChatScrollIdle(page);
           await page.mouse.wheel(0, -1_000_000);
-          const older = await gateway.waitForRequest("chat.history", {
-            match: { offset: pageSize },
-          });
-          expect(older.params).toMatchObject({ offset: pageSize });
+          if (firstStart) {
+            const older = await gateway.waitForRequest("chat.history", {
+              match: { cursor: "warm-before-first" },
+            });
+            expect(older.params).not.toHaveProperty("offset");
+          }
           await expect.poll(messageCount).toBe(messages.length);
+          // The second prepend preserves its own boundary, not the original disk-cache edge.
+          const finalBoundary = firstStart || heldStart;
           await page
-            .getByText(`Older history ${messages.length - pageSize}`, { exact: true })
+            .getByText(`Older history ${finalBoundary}`, { exact: true })
             .waitFor({ state: "attached" });
-          await page
-            .getByText(`Older history ${messages.length - pageSize + 1}`, { exact: true })
-            .waitFor();
+          await page.getByText(`Older history ${finalBoundary + 1}`, { exact: true }).waitFor();
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);

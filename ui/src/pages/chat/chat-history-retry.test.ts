@@ -113,7 +113,7 @@ describe("shared chat history transient recovery", () => {
     const isCurrent = () => state.sessionKey !== "agent:main:replacement";
     const reads =
       kind === "older"
-        ? [loadOlderChatHistoryPage(state, 80)]
+        ? [loadOlderChatHistoryPage(state, { cursor: "older-80" })]
         : [
             readHistory(state.client!, "shared", isCurrent),
             readHistory(state.client!, "shared", isCurrent),

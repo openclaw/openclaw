@@ -17,7 +17,7 @@ type Selector = { cursor?: string; offset?: number; messageId?: string; limit?: 
 
 function sourceMessage(seq: number) {
   const message = nativeHistoryMessage(seq);
-  return { ...message, __openclaw: { ...message.__openclaw, id: `source-${seq}` } };
+  return { ...message, __openclaw: { ...message["__openclaw"], id: `source-${seq}` } };
 }
 
 function page(seqs: number[], olderCursor?: string) {
