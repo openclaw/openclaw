@@ -1,4 +1,4 @@
-import type { HumanMention } from "@openclaw/gateway-protocol";
+import type { HumanMention, SessionPermissionMode } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type { NodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
@@ -95,6 +95,7 @@ export type DurableComposerDraft = {
   goalMode?: ChatGoalDraftMode;
   replyTarget?: ChatReplyTarget;
   modelSelection?: DurableDraftModelSelection;
+  permissionMode?: SessionPermissionMode;
   attachments: DurableComposerDraftAttachment[];
   questionDrafts?: DurableQuestionDraft[];
   /** Context-only comments have no uploaded file payload. */

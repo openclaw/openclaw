@@ -6471,10 +6471,25 @@ it("pins generated publisher and maturity owners before credentials and selected
     "Create generated PR tokens",
     "Publish generated pull request",
   ]);
-  expect(action.runs.steps[0]).toEqual(PINNED_GIT_OWNER);
+  expect(action.runs.steps[0]).toEqual({
+    ...PINNED_GIT_OWNER,
+    uses: "openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae",
+  });
+  const sanitySteps: WorkflowStep[] = readWorkflowSanityWorkflow().jobs.actionlint.steps;
+  const audit = sanitySteps.findIndex(
+    ({ name }) => name === "Prepare trusted workflow audit configs",
+  );
+  expect(sanitySteps[audit - 1]).toEqual({
+    ...PINNED_GIT_OWNER,
+    if: "steps.scope.outputs.changed == 'true'",
+    uses: "openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae",
+  });
   const steps: WorkflowStep[] = readMaturityScorecardWorkflow().jobs.validate_selected_ref.steps;
   const checkout = steps.findIndex(({ name }) => name === "Checkout selected ref");
-  expect(steps[checkout - 1]).toEqual(PINNED_GIT_OWNER);
+  expect(steps[checkout - 1]).toEqual({
+    ...PINNED_GIT_OWNER,
+    uses: "openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae",
+  });
   expect(steps[checkout + 1]?.name).toBe("Validate selected ref");
   const policy = expectDefined(steps[checkout + 1]?.run, "validation body");
   expect(policy).toContain('exec python3 -I -S "$CI_GIT_OWNER" --policy -');

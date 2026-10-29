@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
@@ -177,7 +177,60 @@ function admitCurrent(setup: ReturnType<typeof firstAdmission>) {
   );
 }
 
+function historicalSuccessor(f: ReturnType<typeof fixture>, source: string) {
+  // Storage fixture for the later merge owner: the prepare command's authority
+  // and interruption behavior are exercised by pr-workflow-successor.test.ts.
+  const record = {
+    version: 1,
+    repository: realpathSync(f.remote),
+    owner: realpathSync(join(f.repo, ".git")),
+    pr: "123",
+    source: f.base,
+  };
+  const commit = (value: object, parents: string[], extra = "") => {
+    const blob = f.git(["hash-object", "-w", "--stdin"], JSON.stringify(value));
+    const tree = f.git(["mktree"], `100644 blob ${blob}\tbinding.json\n${extra}`);
+    return f.commit(tree, parents, "Retained workflow fixture\n");
+  };
+  const previous = commit(record, [f.base]);
+  const review = f.git(["hash-object", "-w", "--stdin"], "retained review\n");
+  const snapshot = f.git(
+    ["hash-object", "-w", "--stdin"],
+    `.local/correction-review.json ${review}`,
+  );
+  const binding = commit(
+    {
+      ...record,
+      version: 2,
+      source,
+      predecessor: previous,
+      continuation: {
+        head: f.head,
+        hostedHead: f.head,
+        tree: f.git(["rev-parse", `${f.head}^{tree}`]),
+        review,
+        snapshot,
+      },
+    },
+    [previous, source, f.head],
+    `100644 blob ${snapshot}\treview-snapshot\n`,
+  );
+  f.git(["update-ref", bindingRef, binding]);
+  return binding;
+}
+
 describePosix("current-main first admission with a retained workflow", () => {
+  it("reconciles admission provenance that references a historical successor binding", () => {
+    const setup = firstAdmission();
+    const { f, source, current } = setup;
+    const binding = historicalSuccessor(f, source);
+    expectExit(admitCurrent(setup), 1);
+    expect(f.record()).toMatchObject({ workflowAdmission: { binding, from: source, to: current } });
+    f.recover();
+    expectExit(f.run(), 0);
+    expectAncestors(f, [binding, source, current], outcomeRef);
+    expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
+  });
   it("native entrypoint accepts only the explicit first-admission shape and fences an existing outcome", () => {
     const { f, source } = firstAdmission();
     const bind = join(f.root, "bind.sh");
@@ -333,6 +386,18 @@ function recoverAdmin(setup: ReturnType<typeof rejectedAdmin>) {
 }
 
 describePosix("current-main recovery of a retained workflow", () => {
+  it("reconciles recovery provenance that references a historical successor binding", () => {
+    const setup = rejectedAdmin();
+    const { f, source, current } = setup;
+    const binding = historicalSuccessor(f, source);
+    expectExit(recoverAdmin(setup), 1);
+    expect(f.record()).toMatchObject({ workflowRecovery: { binding, from: source, to: current } });
+    f.recover();
+    expectExit(f.run(), 0);
+    expectAncestors(f, [binding, source, current], outcomeRef);
+    expect(f.state()).toMatchObject({ mutations: 2, posts: 1 });
+  });
+
   it("native entrypoint admits only the explicit admin shape and refuses a stale outcome before execution", () => {
     const { f, outcome, binding } = rejectedAdmin();
     mkdirSync(join(f.repo, "scripts"), { recursive: true });

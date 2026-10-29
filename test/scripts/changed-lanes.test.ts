@@ -36,6 +36,7 @@ import {
 } from "../../scripts/check-changed.mts";
 import { findTypecheckInertPaths } from "../../scripts/lib/typecheck-inert.mts";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
+import { captureEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
@@ -591,7 +592,7 @@ describe("scripts/changed-lanes", () => {
     mkdirSync(path.join(dir, "src"), { recursive: true });
     writeFileSync(path.join(dir, "src", "feature.ts"), "export const value = 1;\n", "utf8");
 
-    const previousRawSync = process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC;
+    const environment = captureEnv(["OPENCLAW_CHANGED_LANES_RAW_SYNC"]);
     delete process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC;
     try {
       const normalPaths = listChangedPathsFromGit({ base: "origin/main", cwd: dir });
@@ -604,11 +605,7 @@ describe("scripts/changed-lanes", () => {
         "src/feature.ts",
       ]);
     } finally {
-      if (previousRawSync === undefined) {
-        delete process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC;
-      } else {
-        process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC = previousRawSync;
-      }
+      environment.restore();
     }
   });
 

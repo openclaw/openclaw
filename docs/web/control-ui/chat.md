@@ -276,6 +276,8 @@ and **Download image** inside its lower-right corner. Devices without hover keep
 these controls visible. Selecting the image itself still opens the viewer.
 **Download image** fetches the original only when selected. A failed preview can
 still have an accessible original, so its action menu retains copy and download.
+For an SVG attachment, the viewer saves the original SVG bytes and filename.
+The download remains a file; it does not open the SVG as an active document.
 When the Gateway confirms that the source is unavailable, the card omits these
 file actions and keeps its applicable recovery action, such as **Retry**.
 Third-party image URLs retain a secondary browser link because their servers
@@ -1050,6 +1052,12 @@ page by default. **Source** and **Preview** share the same filename tab and slim
 toolbar. Same-origin HTML attachment previews accept UTF-8 content up to 2 MiB;
 other text attachment previews remain limited to 256 KiB. Unsupported, external,
 oversized, or unavailable attachments keep their original **Download** action. Cross-origin HTML attachments are download-only.
+
+Relative file links in a chat attachment offer **Browse files** so you can explicitly
+choose an accessible file from **Files**. The conversation and attachment tab stay
+open. Attachment links do not identify an original folder or automatically select
+a matching file; current workspace contents may differ from the delivered attachment.
+**Cancel** keeps you in the attachment.
 
 Self-contained HTML can use inline CSS and JavaScript under the default
 `scripts` sandbox setting. The page runs on the existing separate-origin sandbox

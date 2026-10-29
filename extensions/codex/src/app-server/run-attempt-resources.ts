@@ -323,6 +323,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           requesterStorePath: parent?.entryCurrent?.source.path ?? storePath,
           requesterTurnRunId: params.runId,
           requestCustody,
+          nativeProcessAuthority,
           completionScope: params.agentHarnessCompletionScope,
           historyOwner,
           submissionStore,

@@ -27,7 +27,7 @@ function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): 
     case "published":
       return `Published ${result.repository} branch ${result.branch}: ${result.url}${acting}`;
     case "failed":
-      return `GitHub publication failed: ${result.message} ${result.nextAction}${acting}`;
+      return `${result.message} ${result.nextAction}${acting}`;
     case "publishing":
     case "requested":
     case "needs_confirmation":

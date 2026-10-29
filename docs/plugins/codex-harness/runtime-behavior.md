@@ -54,9 +54,14 @@ enabled and no managed provider is selected. Native hosted search and
 OpenClaw's managed `web_search` dynamic tool are mutually exclusive so
 managed search cannot bypass native domain restrictions. OpenClaw uses the
 managed tool when hosted search is unavailable, explicitly disabled, or
-replaced by a selected managed provider. OpenClaw keeps Codex's standalone
-`web.run` extension disabled because production app-server traffic rejects
-its user-defined `web` namespace. `tools.web.search.enabled: false`
+replaced by a selected managed provider. A custom provider can use Codex's
+standalone `web.run` extension when it is the app-server's configured provider,
+its native `model_providers.<id>.supports_standalone_web_search` setting is
+`true`, and the capability RPC permits search. OpenClaw enables standalone
+search only for that verified provider; ordinary OpenAI traffic keeps hosted
+search. The provider must implement the standalone search endpoint as well as
+inference; Responses compatibility alone does not establish support.
+`tools.web.search.enabled: false`
 disables both paths, as do tool-disabled LLM-only runs. Codex treats
 `"cached"` as a preference and resolves it to live external access for
 unrestricted app-server turns. Automatic managed fallback is blocked when
@@ -167,7 +172,10 @@ native tool surface is disabled, OpenClaw supplies `view_image` with its
 advertised for the active run.
 
 When OpenClaw restores conversation history into a Codex thread, saved images
-stay beside their original messages inside the quoted history. The current
+stay beside their original messages inside the quoted history. This includes
+managed images saved with assistant answers when the selected model accepts
+image input. Restoration verifies the owning agent, physical session, and
+assistant source before reading the saved original. The current
 request and its attachments follow that history, so a later text or voice turn
 does not present old screenshots as newly attached images. If context limits
 remove an image's original message, its image input is omitted too; the saved

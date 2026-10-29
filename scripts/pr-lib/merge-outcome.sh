@@ -255,28 +255,22 @@ merge_outcome_load_local() {
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("workflowAdmission")' >/dev/null; then
       # Older bound writers preserve the record and predecessor, but do not add
       # these new fields as direct parents. Their ancestry still retains the proof.
-      local admission_binding admission_from admission_to admission_record
+      local admission_binding admission_from admission_to
       IFS=$'\t' read -r admission_binding admission_from admission_to < <(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.workflowAdmission | [.binding,.from,.to] | @tsv')
       for retained in "$admission_binding" "$admission_from" "$admission_to"; do
         GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" || {
           merge_outcome_stop "unretained workflow admission provenance"; return 1;
         }
       done
-      admission_record=$(GIT_NO_LAZY_FETCH=1 pr_git show "$admission_binding:binding.json") || return 1
-      printf '%s\n' "$admission_record" | jq -e --arg from "$admission_from" --arg pr "$pr" \
-        '.version == 1 and .source == $from and .pr == $pr' >/dev/null &&
-        [ "$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse "$admission_binding^@")" = "$admission_from" ] &&
+      pr_batch_wrapper_git workflow-history "$canonical_repo_root" "$pr" "$admission_binding" "$admission_from" >/dev/null &&
         GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$admission_from" "$admission_to" || {
         merge_outcome_stop "invalid retained workflow admission provenance"; return 1;
       }
     fi
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("workflowRecovery")' >/dev/null; then
-      local workflow_binding workflow_from workflow_to workflow_record
+      local workflow_binding workflow_from workflow_to
       IFS=$'\t' read -r workflow_binding workflow_from workflow_to < <(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.workflowRecovery | [.binding,.from,.to] | @tsv')
-      workflow_record=$(GIT_NO_LAZY_FETCH=1 pr_git show "$workflow_binding:binding.json") || return 1
-      printf '%s\n' "$workflow_record" | jq -e --arg from "$workflow_from" --arg pr "$pr" \
-        '.version == 1 and .source == $from and .pr == $pr' >/dev/null &&
-        [ "$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse "$workflow_binding^@")" = "$workflow_from" ] &&
+      pr_batch_wrapper_git workflow-history "$canonical_repo_root" "$pr" "$workflow_binding" "$workflow_from" >/dev/null &&
         GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$workflow_from" "$workflow_to" || {
         merge_outcome_stop "invalid retained workflow recovery provenance"; return 1;
       }

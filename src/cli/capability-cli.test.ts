@@ -16,6 +16,7 @@ import {
   runCapabilityWithParentAgent,
   runModelAuthWithAgent,
 } from "./capability-cli.test-harness.js";
+import { registerVideoOutputCapabilityCliTests } from "./capability-cli.video-output.test-support.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
@@ -1376,21 +1377,14 @@ describe("capability cli", () => {
     },
   );
 
-  it("preserves an existing --output and removes its temp when a video stream fails", async () => {
-    primeGeneratedVideoUrl("https://example.com/broken-video.mp4");
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("partial-video"));
-        controller.error(new Error("video stream exploded"));
-      },
-    });
-    mockVideoFetch(stream);
-    const fixture = await outputFixture(".mp4", "keep-existing-video");
-    const { outputBase } = fixture;
-    await expect(generateVideo("--output", outputBase)).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("video stream exploded");
-    await expectOutputFile(fixture, "keep-existing-video");
+  registerVideoOutputCapabilityCliTests({
+    mocks,
+    generateVideo,
+    primeGeneratedVideoUrl,
+    mockVideoFetch,
+    outputFixture,
+    expectOutputFile,
+    expectRuntimeErrorContains,
   });
 
   it("preserves buffered image output when publication fails", async () => {

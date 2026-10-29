@@ -115,7 +115,6 @@ export {
   startSessionControllerInterruption,
   interruptSessionControllerEffects,
   captureSessionWorkRunInterruptions,
-  getCompetingSessionWorkAdmissionRelease,
   getTerminalSessionWorkAdmissionRelease,
 } from "./session-controller.lifecycle-work.js";
 export { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "./session-controller.contracts.js";
