@@ -50,7 +50,7 @@ Own plugin discovery, manifest validation, loading, registry assembly, contract 
 - New model in a known family: a manifest row with its thinking data and `input`, not new entries in ID lists.
 - Admission is one core rule, `buildLiveModelProviderConfig` in `src/plugin-sdk/provider-catalog-live-runtime.ts`: every listed chat model, non-chat filtered once. Plugins narrow it only through its documented gates (`readModelId`, `acceptUnknownModel`, capability-aware projections that drop rows whose request shape they cannot build). Fix listing gaps there, not per provider.
 - Catalog data is live behavior: manifest rows reach every released install through the hosted catalog (`openclaw/catalog`, every 4 h) with no release, and released readers act on `thinkingLevelMap`, `compat` and `input`. Before changing them on a shipped row, compare offered levels and request bodies on the latest stable, extended-stable and beta readers, state the result in the PR, and change only what a dated live probe of that route supports.
-- Hosted rows parse strictly; released readers drop a row with an unknown field. New facts go inside `compat` or `thinkingLevelMap`; any other field needs a schema decision first.
+- Hosted rows parse strictly. One unknown row field makes released readers (2026.10.8 and earlier) reject the whole refresh and keep their last catalog; current main skips only that row. New facts go inside `compat` or `thinkingLevelMap`; any other field needs a schema decision first.
 
 ## Verification
 
