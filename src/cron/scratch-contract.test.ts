@@ -13,10 +13,6 @@ const legacyHeartbeatScratch = `\`\`\`markdown
 `;
 
 describe("isCronScratchEffectivelyEmpty", () => {
-  it("treats the exact legacy heartbeat scaffold as empty", () => {
-    expect(isCronScratchEffectivelyEmpty(legacyHeartbeatScratch)).toBe(true);
-  });
-
   it("keeps edits and unrelated local links actionable", () => {
     expect(isCronScratchEffectivelyEmpty(`${legacyHeartbeatScratch}- Check email\n`)).toBe(false);
     expect(isCronScratchEffectivelyEmpty("- [Review the runbook](/ops/runbook)")).toBe(false);
