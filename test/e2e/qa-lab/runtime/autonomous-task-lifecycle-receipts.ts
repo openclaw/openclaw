@@ -28,27 +28,12 @@ import {
   type ExactOwnerRow,
 } from "./autonomous-task-lifecycle-receipts.fixtures.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaProducerOptions, type QaProducerOptions } from "./script-options.js";
 import { produceQaScriptProof } from "./script-proof.js";
 
 const SCENARIO_ID = "autonomous-task-lifecycle-receipts";
 const SNAPSHOT_FILE = `${SCENARIO_ID}-summary.json`;
 const HOOK_TOKEN = "qa-autonomous-hook-token";
-
-type ProducerOptions = { artifactBase: string; repoRoot: string };
-function parseOptions(argv: readonly string[]): ProducerOptions {
-  const readValue = (name: string) => {
-    const index = argv.indexOf(name);
-    return index >= 0 ? argv[index + 1] : undefined;
-  };
-  const artifactBase = readValue("--artifact-base");
-  if (!artifactBase) {
-    throw new Error("--artifact-base is required");
-  }
-  return {
-    artifactBase: path.resolve(artifactBase),
-    repoRoot: path.resolve(readValue("--repo-root") ?? process.cwd()),
-  };
-}
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -135,7 +120,7 @@ function requireExecutionIdentity(
   }
 }
 
-async function runProof(options: ProducerOptions): Promise<string> {
+async function runProof(options: QaProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
   const gatewayOwner = createQaGatewayChild();
   let gateway: QaGatewayChild | undefined;
@@ -375,7 +360,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
   }
 }
 
-async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJson> {
+async function runProducer(options: QaProducerOptions): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${SCENARIO_ID}.log`,
@@ -400,7 +385,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
 }
 
 async function main(argv: readonly string[]) {
-  const evidence = await runProducer(parseOptions(argv));
+  const evidence = await runProducer(parseQaProducerOptions(argv));
   const status = evidence.entries[0]?.result.status;
   console.log(`Autonomous task lifecycle evidence: ${QA_EVIDENCE_FILENAME}`);
   console.log(`Autonomous task lifecycle status: ${status}`);
