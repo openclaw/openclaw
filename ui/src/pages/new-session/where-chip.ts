@@ -29,7 +29,7 @@ registerNewSessionSetupEnglish();
 export function draftWhereChipParams(
   place: DraftPlaceState,
   gateway: DraftGatewayState,
-  cloudProfiles = place.isAdmin() ? gateway.cloudProfiles : [],
+  cloudProfiles = gateway.cloudProfiles,
 ) {
   return {
     hostedEnvironment: place.hostedEnvironment

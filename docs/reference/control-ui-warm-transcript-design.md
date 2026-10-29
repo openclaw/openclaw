@@ -56,7 +56,11 @@ authentication avoids displaying that copy, but loses network-independent reload
 **Forget this browser** and credential replacement must retire admission before
 asynchronous deletion and notify other tabs. Do not claim secure disk erasure.
 Keep Incognito excluded, pairing/provider-replay redaction, and no added tokens,
-tickets, attachment bytes, or HTML snapshots.
+tickets, or HTML snapshots. The original earlier-display change added no
+attachment retention. The current [warm reload contract](/web/control-ui/offline-and-reconnect#warm-reload)
+also permits bounded, previously displayed inline thumbnail bytes under the same
+transcript scope and invalidation owner; full-size and animated originals remain
+excluded. Cached pixels authorize no network read or action.
 
 Keep current bounds: roughly 80 rows plus complete history-entry groups,
 20 conversations, and 24 Mi total character weight—not disk bytes. Boot/roster

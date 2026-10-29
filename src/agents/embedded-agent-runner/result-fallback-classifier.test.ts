@@ -23,6 +23,14 @@ function classifyErrorPayload(provider: string, model: string, text: string) {
   });
 }
 
+function classifyResult(
+  provider: string,
+  model: string,
+  result: Parameters<typeof classifyEmbeddedAgentRunResultForModelFallback>[0]["result"],
+) {
+  return classifyEmbeddedAgentRunResultForModelFallback({ provider, model, result });
+}
+
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   it.each([false, true])(
     "retains retry exhaustion across fallback aggregation (billing=%s)",
@@ -369,21 +377,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     },
   );
 
-  it("does not classify normal visible assistant output as fallback-worthy", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [{ text: "Here is the requested answer." }],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toBeNull();
-  });
-
   it.each([
     {
       name: "non-text visible content",
@@ -412,29 +405,21 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
   it("does not retry generic external runner failure text after committed delivery", () => {
     expect(
-      classifyEmbeddedAgentRunResultForModelFallback({
-        provider: "external",
-        model: "primary",
-        result: {
-          payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-          messagingToolSentTexts: ["already delivered"],
-          meta: { durationMs: 42 },
-        },
+      classifyResult("external", "primary", {
+        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+        messagingToolSentTexts: ["already delivered"],
+        meta: { durationMs: 42 },
       }),
     ).toBeNull();
   });
 
   it("preserves hook blocks with generic external runner failure text", () => {
     expect(
-      classifyEmbeddedAgentRunResultForModelFallback({
-        provider: "external",
-        model: "primary",
-        result: {
-          payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-          meta: {
-            durationMs: 42,
-            error: { kind: "hook_block", message: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
-          },
+      classifyResult("external", "primary", {
+        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+        meta: {
+          durationMs: 42,
+          error: { kind: "hook_block", message: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
         },
       }),
     ).toBeNull();
@@ -459,24 +444,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
             kind: "hook_block",
             message: "Access denied by policy",
           },
-        },
-      },
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("does not fallback on deliberate silent terminal replies after payload filtering", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "openai",
-      model: "gpt-5.5",
-      result: {
-        payloads: [],
-        meta: {
-          durationMs: 42,
-          terminalReply: { disposition: "silent" },
-          finalAssistantRawText: "NO_REPLY",
-          finalAssistantVisibleText: "NO_REPLY",
         },
       },
     });
@@ -540,8 +507,14 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
   it.each([
     {
-      label: "a yielded empty result records potential side effects",
-      meta: { replayInvalid: true, yielded: true, stopReason: "end_turn" },
+      label: "normal visible assistant output",
+      payloads: [{ text: "Here is the requested answer." }],
+      meta: {},
+    },
+    {
+      label: "a yielded reasoning-only result retains its continuation",
+      payloads: [{ isReasoning: true, text: "Checking the result" }],
+      meta: { yielded: true },
     },
     {
       label: "an exact terminal tool batch intentionally completes the turn",
@@ -554,12 +527,21 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         terminalReplyExpectation: "optional" as const,
       },
     },
-  ])("does not fallback after $label", ({ meta }) => {
+    {
+      label: "a deliberate silent terminal reply after payload filtering",
+      payloads: [],
+      meta: {
+        terminalReply: { disposition: "silent" },
+        finalAssistantRawText: "NO_REPLY",
+        finalAssistantVisibleText: "NO_REPLY",
+      },
+    },
+  ])("does not fallback after $label", ({ meta, payloads }) => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",
       model: "gpt-5.5",
       result: {
-        payloads: [],
+        payloads,
         meta: { durationMs: 42, ...meta },
       },
     });

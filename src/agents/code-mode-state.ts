@@ -58,8 +58,6 @@ type CodeModeRunState = {
   continuation: CodeModeExecutorContinuation;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
-  // True only when every future bridge call is enforced read-only before execution.
-  replaySafe: boolean;
   output: CodeModeOutputState;
   expiresAt: number;
   agentWaitRetainUntil?: number;
@@ -476,50 +474,6 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   };
 }
 
-export function pendingBridgeRequestsReplaySafe(
-  pending: readonly PendingBridgeRequest[],
-  runtime: ToolSearchRuntime,
-  catalogProjection: CodeModeCatalogProjection,
-): boolean {
-  return pending.every((request) =>
-    isPendingBridgeRequestReplaySafe(request, runtime, catalogProjection),
-  );
-}
-
-function isPendingBridgeRequestReplaySafe(
-  request: PendingBridgeRequest,
-  runtime: ToolSearchRuntime,
-  catalogProjection: CodeModeCatalogProjection,
-): boolean {
-  if (
-    request.method === "search" ||
-    request.method === "describe" ||
-    request.method === "yield" ||
-    request.method === "agentSpawn" ||
-    request.method === "agentWait" ||
-    request.method === "skillsList" ||
-    request.method === "skillsSearch" ||
-    request.method === "skillsRead" ||
-    request.method === "sleep"
-  ) {
-    return true;
-  }
-  if (request.method === "nodes") {
-    return request.args[0] === "list" || request.args[0] === "get";
-  }
-  // Saved references are transient, and deletion cannot be replayed safely.
-  // Result operations intentionally stay outside restart-safe execution.
-  if (request.method !== "callValue") {
-    return false;
-  }
-  const callableName = Array.isArray(request.args) ? request.args[0] : undefined;
-  if (typeof callableName !== "string") {
-    return false;
-  }
-  const binding = catalogProjection.byCallableName.get(callableName);
-  return binding ? runtime.isReplaySafeExactId(binding.id) : false;
-}
-
 export function createPendingBridgeStates(
   pendingRequests: PendingBridgeRequest[],
   params: Omit<Parameters<typeof runBridgeRequest>[0], "request" | "reply" | "signal"> & {
@@ -639,7 +593,6 @@ export function storeSuspendedRun(
       runId,
       reason: codeModeWaitingReason(params.pending),
       pendingToolCalls: pendingToolCalls(params.pending),
-      replaySafe: params.replaySafe,
       telemetry: telemetry(params.runtime),
     },
     {},
@@ -658,7 +611,6 @@ export function storeSuspendedRun(
 export function codeModeAbortedResult(params: {
   bridgeDispatch: CodeModeBridgeDispatchState;
   output: CodeModeOutputState;
-  replaySafe: boolean;
   runtime: ToolSearchRuntime;
 }) {
   return params.output.takeResult(
@@ -667,7 +619,6 @@ export function codeModeAbortedResult(params: {
       code: "aborted" as const,
       failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
       bridgeDispatchStarted: params.bridgeDispatch.started,
-      replaySafe: params.replaySafe,
       telemetry: telemetry(params.runtime),
     },
     { error: "code mode execution aborted" },

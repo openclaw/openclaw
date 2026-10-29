@@ -7,7 +7,6 @@ import {
 } from "../../agents/reply-completion.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createRestartRecoveryTombstoneFixture } from "../../config/sessions/main-session-recovery-fixtures.test-support.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
@@ -92,15 +91,6 @@ function createArchivedDiscordContext(to: string, sessionKey: string) {
     InboundEventKind: "user_request",
     InputProvenance: { kind: "external_user", sourceChannel: "discord" },
   });
-}
-
-function exhaustedRecoveryState() {
-  return {
-    cycleId: "cycle-1",
-    revision: 4,
-    chargedAttempts: 3,
-    tombstone: { reason: "automatic recovery exhausted" },
-  };
 }
 
 function groupSilenceConfig(group: "allow" | "disallow"): OpenClawConfig {
@@ -1673,54 +1663,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
   );
 
-  it("keeps an archived restart tombstone closed while sending recovery guidance", async () => {
-    setNoAbort();
-    const sessionId = "restart-tombstone-session";
-    const sessionKey = "agent:main:matrix:channel:room-a";
-    const archivedAt = Date.now() - 1_000;
-    sessionStoreMocks.currentEntry = {
-      sessionId,
-      updatedAt: Date.now(),
-      archivedAt,
-      status: "failed",
-      mainRestartRecovery: exhaustedRecoveryState(),
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      Provider: "matrix",
-      Surface: "matrix",
-      OriginatingChannel: "matrix",
-      OriginatingTo: "!room-a:example.test",
-      ChatType: "channel",
-      From: "@owner:example.test",
-      To: "!room-a:example.test",
-      AccountId: "default",
-      SessionKey: sessionKey,
-      Body: "continue",
-      CommandBody: "continue",
-      RawBody: "continue",
-      CommandSource: undefined,
-      InboundAccessAuthorized: true,
-      InboundEventKind: "user_request",
-      InputProvenance: { kind: "external_user", sourceChannel: "matrix" },
-    });
-
-    await expect(
-      dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver }),
-    ).rejects.toThrow();
-
-    expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
-    expect(sessionStoreMocks.currentEntry).toMatchObject({
-      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
-    });
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: "My session in this room ended during restart recovery. Use Resume in WebChat, or /reset or /new to start a replacement session.",
-      isError: true,
-    });
-  });
-
   it("does not add a lifecycle parent lookup for an ordinary healthy threaded turn", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -1745,165 +1687,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(parentLookups).toHaveLength(1);
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
-
-  it("admits a human parent-fork replacement without reopening its restart tombstone", async () => {
-    setNoAbort();
-    const archivedAt = Date.now() - 1_000;
-    sessionStoreMocks.currentEntry = {
-      sessionId: "preseed-thread-session",
-      updatedAt: Date.now(),
-      archivedAt,
-      mainRestartRecovery: exhaustedRecoveryState(),
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => {
-      expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
-      return { text: "fork handled" } satisfies ReplyPayload;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: createThreadedSlackContext("agent:main:slack:channel:c1:thread:123", "thread reply"),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(result.queuedFinal).toBe(true);
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "fork handled" });
-  });
-
-  it.each([
-    {
-      label: "room event",
-      context: { InboundEventKind: "room_event" as const },
-    },
-    {
-      label: "system event",
-      context: {
-        InputProvenance: { kind: "internal_system" as const, sourceTool: "heartbeat" },
-      },
-    },
-  ])("keeps a restart tombstone terminal for a $label parent-fork turn", async ({ context }) => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "preseed-thread-session",
-      updatedAt: Date.now(),
-      mainRestartRecovery: exhaustedRecoveryState(),
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
-
-    await expect(
-      dispatchReplyFromConfig({
-        ctx: createThreadedSlackContext(
-          "agent:main:slack:channel:c1:thread:123",
-          "thread event",
-          context,
-        ),
-        cfg: emptyConfig,
-        dispatcher,
-        replyResolver,
-      }),
-    ).rejects.toThrow(/ended during restart recovery/i);
-
-    expect(sessionStoreMocks.currentEntry).toMatchObject({
-      sessionId: "preseed-thread-session",
-      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
-    });
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it.each<{
-    name: string;
-    commands?: OpenClawConfig["commands"];
-    command?: "/new" | "/reset";
-    tombstoneDuringDispatch?: boolean;
-  }>([
-    { name: "ordinary channel-authorized reset" },
-    {
-      name: "channel-admitted non-owner reset",
-      commands: { ownerAllowFrom: ["owner"] },
-    },
-    ...(["/new", "/reset"] as const).map((command) => ({
-      name: `authorized ${command} after recovery commits`,
-      command,
-      tombstoneDuringDispatch: true,
-    })),
-  ])(
-    "hands hard reset to the command owner without pre-unarchiving the tombstone: $name",
-    async ({ commands, command = "/new", tombstoneDuringDispatch }) => {
-      setNoAbort();
-      const sessionId = "restart-tombstone-session";
-      const sessionKey = "agent:main:matrix:channel:room-a";
-      const archivedAt = Date.now() - 1_000;
-      sessionStoreMocks.currentEntry = {
-        sessionId,
-        updatedAt: Date.now(),
-        archivedAt,
-        status: "failed",
-        mainRestartRecovery: createRestartRecoveryTombstoneFixture(),
-      };
-      const dispatcher = createDispatcher();
-      const replyResolver = vi.fn(async () => {
-        expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
-        expect(sessionStoreMocks.currentEntry).toMatchObject({
-          mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
-        });
-        return { text: "reset handled" } satisfies ReplyPayload;
-      });
-      const ctx = buildTestCtx({
-        Provider: "matrix",
-        Surface: "matrix",
-        OriginatingChannel: "matrix",
-        OriginatingTo: "!room-a:example.test",
-        ChatType: "channel",
-        SenderId: "guest",
-        From: "@guest:example.test",
-        To: "!room-a:example.test",
-        AccountId: "default",
-        SessionKey: sessionKey,
-        Body: command,
-        CommandBody: command,
-        RawBody: command,
-        CommandSource: "text",
-        CommandAuthorized: true,
-        InboundAccessAuthorized: true,
-        InboundEventKind: "user_request",
-        InputProvenance: { kind: "external_user", sourceChannel: "matrix" },
-      });
-
-      const tombstoneBefore = structuredClone(sessionStoreMocks.currentEntry);
-      if (tombstoneDuringDispatch) {
-        sessionStoreMocks.currentEntry = {
-          sessionId,
-          updatedAt: Date.now(),
-          mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 3 },
-        };
-      }
-      const dispatch = dispatchReplyFromConfig({
-        ctx,
-        cfg: { ...emptyConfig, commands },
-        dispatcher,
-        replyResolver,
-        ...(tombstoneDuringDispatch
-          ? {
-              fastAbortResolver: async () => {
-                sessionStoreMocks.currentEntry = structuredClone(tombstoneBefore);
-                return { handled: false, aborted: false };
-              },
-              formatAbortReplyTextResolver: () => "aborted",
-            }
-          : {}),
-      });
-      const result = await dispatch;
-
-      expect(result.queuedFinal).toBe(true);
-      expect(replyResolver).toHaveBeenCalledTimes(1);
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "reset handled" });
-    },
-  );
 
   it("skips plugin-bound claim hook under deny and falls through to suppressed agent dispatch", async () => {
     // Plugin-bound inbound handlers can emit outbound replies we cannot

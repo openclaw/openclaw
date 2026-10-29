@@ -295,6 +295,11 @@ const enChatSession = {
       loading: "Loading chat",
       showEarlier: "Show earlier",
       loadingEarlier: "Loading earlier…",
+      retryEarlier: "Retry earlier messages",
+      earlierUnavailable: "Couldn’t load earlier messages",
+      earlierInterrupted: "History refreshed before this page loaded. Try again.",
+      earlierConnecting: "Waiting for connection…",
+      earlierHint: "Scroll up for earlier messages",
       noMatches: "No matching messages",
       positionRail: "Conversation position",
       positionMarker: "{label}, marker {position} of {count}",
@@ -327,21 +332,15 @@ const enChatSession = {
     pendingInputs: {
       agentUpdate: {
         cancelled: "This agent update was cancelled before delivery.",
-        interrupted: "Delivery interrupted. This saved agent update is not scheduled to retry.",
       },
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
-      interrupted:
-        "Interrupted before the agent started it. If it does not resume, copy it and send again.",
       earlier: "Show earlier unsent messages",
       latest: "Show latest unsent messages",
       dismiss: "Dismiss",
-      dismissInterrupted: "Dismiss interrupted message: {preview}",
-      dismissCancelled: "Dismiss cancelled message: {preview}",
-      dismissAll: "Dismiss all",
-      dismissAllLabel: "Dismiss all interrupted and cancelled messages shown",
+      dismissCancelled: "Dismiss unsent message: {preview}",
       untitledInput: "message without text",
     },
     sessionSuggestions: {

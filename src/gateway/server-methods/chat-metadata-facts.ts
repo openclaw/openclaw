@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { readAgentDatabaseReadAdmissionRefusal } from "../../state/agent-database-admission.js";
 import type { ChatMetadataProjectionFacts } from "./chat-metadata-session-projection.js";
 
 type PreparedAgentFacts = ChatMetadataProjectionFacts & {
@@ -66,7 +66,7 @@ export function captureGenerationFacts(config: OpenClawConfig): PreparedGenerati
   const agents = withPreparedModelRuntimeReadBatch(() =>
     withAgentRosterFactsBatch(config, () =>
       listAgentIds(config)
-        .filter((agentId) => !readAgentDatabaseAdmissionRefusal(agentId))
+        .filter((agentId) => !readAgentDatabaseReadAdmissionRefusal(agentId))
         .flatMap((rawAgentId): PreparedAgentFacts[] => {
           const agentId = normalizeAgentId(rawAgentId);
           // Metadata follows the published lifecycle owner while its replacement gate owns turnover;

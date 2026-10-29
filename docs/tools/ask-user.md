@@ -17,7 +17,7 @@ question input: Discord, Slack, Telegram, and WebChat (including the Control UI
 and native OpenClaw clients). Subagents and other non-primary runs do not
 receive it, and an explicit tool denial still takes precedence.
 
-On iMessage, Mattermost, Signal, WhatsApp, and other channels without declared
+On the ACP bridge, iMessage, Mattermost, Signal, WhatsApp, and other surfaces without
 question input, the agent asks in ordinary plain text instead of calling
 `ask_user`. Approval reactions are separate and remain available. Native agent
 runtimes can have their own question tools; this availability rule applies to
@@ -111,8 +111,8 @@ and the current question visible. New messages, the question's own completed
 turn, and collapsed work history do not dismiss the question or reopen a minimized
 panel. When a later run completes successfully, older reminders leave the dock.
 Overlapping runs, commentary, interruptions, and failed runs do not retire a
-question. Successful restart recovery also moves older reminders into history;
-restarting alone does not.
+question. A later successful turn can move older reminders into history; restarting alone
+does not.
 The transcript keeps the question with **No longer pending** and an **Answer**
 button to reopen it. Reopening preserves the draft until you submit, skip, or a
 later run completes. Moving a reminder into history never answers it, grants

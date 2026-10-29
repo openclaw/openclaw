@@ -27,6 +27,30 @@ function memorySample(
   return { type: "diagnostic.memory.sample" as const, memory: { ...memoryDefaults, ...memory } };
 }
 
+it("keeps the latest major-GC heap and observation time through scavenges", () => {
+  using metrics = createMetricsHarness();
+  expect(metrics.render()).not.toContain("openclaw_heap_used_after_major_gc");
+  for (const thread of ["main", "sqlite-store.worker.js"]) {
+    const sample = {
+      type: "diagnostic.gc" as const,
+      thread,
+      durationMs: 1,
+      heapUsedAfterMajorGcBytes: 1024,
+      heapUsedAfterMajorGcTimestampSeconds: 1700000000,
+    };
+    metrics.record({ ...sample, kind: "mark_sweep_compact" });
+    metrics.record({ ...sample, kind: "mark_sweep_compact", heapUsedAfterMajorGcBytes: 512 });
+    metrics.record({
+      ...sample,
+      kind: "scavenge",
+      heapUsedAfterMajorGcBytes: 9999,
+      heapUsedAfterMajorGcTimestampSeconds: 1700000010,
+    });
+    expectMetrics(metrics.render())(`openclaw_heap_used_after_major_gc_bytes{thread="${thread}"} 512
+openclaw_heap_used_after_major_gc_timestamp_seconds{thread="${thread}"} 1700000000`);
+  }
+});
+
 it("exports worst-isolate headroom and retires missing baselines", () => {
   using metrics = createMetricsHarness();
   const memory = { heapSizeLimitBytes: 1000, oldGenerationAfterGcBytes: 200 };

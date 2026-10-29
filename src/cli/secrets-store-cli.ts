@@ -5,6 +5,7 @@ import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { Utf8InputError } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
 import { isSensitiveEnvName } from "../secrets/secret-env-name.js";
 import type { SecretStoreValidationError } from "../secrets/store/secret-store.js";
@@ -71,6 +72,9 @@ function assertOutputMode(options: OutputOptions): void {
 function mapStoreError(error: unknown): SecretStoreCliFailure {
   if (error instanceof SecretStoreCliFailure) {
     return error;
+  }
+  if (error instanceof Utf8InputError) {
+    return new SecretStoreCliFailure(2, error.message);
   }
   const validation = error as Partial<SecretStoreValidationError>;
   if (

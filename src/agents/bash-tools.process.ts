@@ -648,7 +648,6 @@ export function createProcessTool(
                   `Unable to ${removing ? "remove" : "terminate"} session ${sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
                 );
               }
-              await scopedSession.clearExitNotification?.();
               assertSelectedCurrent(scopedSession);
               if (removing) {
                 // Hide the record now; the supervisor still owns process settlement.
@@ -684,7 +683,6 @@ export function createProcessTool(
             }
             if (scopedFinished) {
               resetPollRetrySuggestion(sessionId);
-              await scopedFinished.clearExitNotification?.();
               assertSelectedCurrent(scopedFinished);
               deleteSession(sessionId);
               return textResult(

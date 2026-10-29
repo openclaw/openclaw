@@ -31,8 +31,7 @@ it.each([
 });
 
 it("drops serialized image parts and decodes serialized text parts", async () => {
-  const text =
-    'A serialized text part with "quoted text" that is long enough to be read from its JSON.';
+  const text = '```python\nif ready:\n    print("a  b")\n```\n\n- café\n- 日本語';
   const page = await importConversation(
     JSON.stringify({
       content_type: "image_asset_pointer",

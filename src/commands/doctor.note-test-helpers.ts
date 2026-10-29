@@ -18,6 +18,13 @@ export async function loadDoctorCommandForTest(params?: { unmockModules?: string
   for (const modulePath of params?.unmockModules ?? []) {
     vi.doUnmock(modulePath);
   }
+  // Prepare lazy owners before the command deadline; checks and repairs still execute in the test.
+  await import("./doctor-maintenance.js");
+  await import("./doctor-config-flow.js");
+  await import("../flows/doctor-health.js");
+  const { resolveDoctorContributionHealthChecks } =
+    await import("../flows/doctor-health-contributions.js");
+  await resolveDoctorContributionHealthChecks();
   const { doctorCommand } = await import("./doctor.js");
   terminalNoteMock.mockClear();
   return doctorCommand;

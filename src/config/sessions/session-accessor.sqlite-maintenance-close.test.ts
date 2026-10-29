@@ -59,20 +59,21 @@ it.for([false, true])(
       const releaseStarted = createDeferredCore<{ completion: Promise<void> }>();
       const closeEntered = createDeferredCore<{ completion: Promise<void> }>();
       let insideKick = false;
-      let insideExecutorCapture = false;
+      let maintenanceExecutionCaptured = false;
       const captureExecution = databaseExecution.captureOpenClawAgentDatabaseExecution;
       vi.spyOn(databaseExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
         (...args) => {
-          if (!insideKick) {
+          const [executionOptions, constraints] = args;
+          if (
+            maintenanceExecutionCaptured ||
+            executionOptions.agentId !== scope.databaseAgentId ||
+            executionOptions.path !== requestedPath ||
+            constraints?.expectedIdentity?.nativeLocation !== canonicalPath
+          ) {
             return captureExecution(...args);
           }
-          insideExecutorCapture = true;
-          let execution: ReturnType<typeof captureExecution>;
-          try {
-            execution = captureExecution(...args);
-          } finally {
-            insideExecutorCapture = false;
-          }
+          maintenanceExecutionCaptured = true;
+          const execution = captureExecution(...args);
           const release = execution.release.bind(execution);
           vi.spyOn(execution, "release").mockImplementation(() => {
             releaseStarted.resolve({ completion: release() });
@@ -84,7 +85,7 @@ it.for([false, true])(
       const register = databaseResources.registerOpenClawAgentDatabaseAsyncResource;
       vi.spyOn(databaseResources, "registerOpenClawAgentDatabaseAsyncResource").mockImplementation(
         (resource) => {
-          if (!insideKick || insideExecutorCapture || resource.path !== canonicalPath) {
+          if (!insideKick || resource.path !== canonicalPath) {
             return register(resource);
           }
           return register({

@@ -48,9 +48,8 @@ JavaScript syntax errors are rejected during source preparation, before any
 nested tool dispatch. The bounded diagnostic includes a one-based source line
 and column. Malformed JavaScript reports its syntax error before module-access
 checks. Correct the source and submit a new `exec`; OpenClaw does not repair
-or replay it automatically. This no-dispatch outcome does not enable
-`restartSafe` or change the result's `replaySafe` flag. Exceptions thrown by valid
-guest code, including `SyntaxError`, remain runtime failures.
+or replay it automatically. Exceptions thrown by valid guest code, including
+`SyntaxError`, remain runtime failures.
 
 The current parser has a known limitation with division immediately after an
 optional keyword-named property, such as `value?.return / 2 / 3`. This is valid
@@ -69,9 +68,8 @@ error keeps `"bridge"`, including after `wait`. Bridge failure origin and code
 come only from host replies. Guest code cannot settle its own pending tool calls
 or forge bridge provenance.
 
-Failure origin is separate from replay safety. When `bridgeDispatchStarted` is
-`true` and `replaySafe` is `false`, check the destination before repeating a send
-or another action that changes state—even for a guest error. A failed `exec`
+When `bridgeDispatchStarted` is `true`, check the destination before repeating a
+send or another action that changes state, even for a guest error. A failed `exec`
 does not by itself prove that a message was not delivered.
 
 ## Telemetry

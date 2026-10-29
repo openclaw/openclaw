@@ -14,10 +14,8 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
-import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeNpmLifecycleFixture } from "./install-npm-fixtures.js";
 import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
@@ -528,26 +526,6 @@ fi
     expect(result.stdout).toContain("wget-status=4");
   });
 
-  it("matches the canonical release-label contract for installed Node runtimes", () => {
-    const result = runShell(
-      [
-        "set -euo pipefail",
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        "set +e",
-        ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
-          `node_release_version_is_supported ${JSON.stringify(version)}`,
-          `printf '${index}=%s\\n' "$?"`,
-        ]),
-      ].join("\n"),
-    );
-
-    expect(result.status).toBe(0);
-    for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
-      const expectedStatus = isSupportedOpenClawNodeVersion(version) ? 0 : 1;
-      expect(result.stdout, version).toContain(`${index}=${expectedStatus}`);
-    }
-  });
-
   it.each(["npm", "git"])("rejects incompatible %s before replacing the managed CLI", (method) => {
     const f = makeFixture("compatible");
     const candidate = "2026.7.1-2";
@@ -1042,7 +1020,7 @@ fi
     const failed = install();
     expect(failed.status).toBe(1);
     expect(failed.stdout).toContain(
-      "Installed Node 24.22.1 must provide Node >= 24.22.1 with WAL-reset-safe SQLite",
+      "Installed Node 24.22.1 must provide Node >= 24.16.0 with WAL-reset-safe SQLite",
     );
     expect(failed.stdout).toContain("found Node unknown, SQLite unavailable");
     expectActive(oldRuntime, "v22.23.2");
@@ -1083,7 +1061,7 @@ fi
     [
       "vulnerable Node",
       "NODE_VERSION=24.14.1; install_node linux x64",
-      "Node 24.14.1 is unsupported; use Node 24.22.1+ or Node 26.12.1+.",
+      "Node 24.14.1 is unsupported; use Node 24.16.0+ or Node 26.1.0+.",
       "Installing Node 24.14.1",
     ],
     [

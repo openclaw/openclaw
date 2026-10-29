@@ -6,6 +6,7 @@ import { createCronExecutionId } from "../../cron/run-id.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { readExecRequestOwners } from "../../infra/exec-request-context.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -15,6 +16,7 @@ import type { MsgContext } from "../templating.js";
 import type { SessionEventOptions, SessionEventTarget } from "./session-event-contract.js";
 import {
   getSessionEventRuntimeConfig,
+  readSessionEventTargetCommandOwner,
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
   readSessionEventTargetOwnerContinuation,
@@ -43,7 +45,32 @@ export function prepareSessionEventInput(text: string, options: SessionEventOpti
   const storePath =
     options.expectedTarget?.storePath ??
     resolveSessionStorePathCore(cfg.session?.store, { agentId, env });
+  if (
+    options.expectedTarget &&
+    ((options.expectedTarget.agentId && options.expectedTarget.agentId !== agentId) ||
+      (options.expectedTarget.sessionKey && options.expectedTarget.sessionKey !== sessionKey))
+  ) {
+    throw new Error(
+      "Session event destination was reset or replaced while its producer was running",
+    );
+  }
   return { cfg, configPublication, agentId, sessionKey, env, storePath, operatorAuthority };
+}
+
+/** Validate existing occurrence custody after the caller checks its current abort signal. */
+export function assertSessionEventOccurrenceInput(
+  text: string,
+  options: SessionEventOptions,
+): void {
+  if (options.preserveOccurrenceOnRejection && !options.occurrences?.length) {
+    throw new Error("Preserving a rejected event requires its original queued occurrence");
+  }
+  if (
+    options.occurrences &&
+    options.occurrences.map((event) => event.text).join("\n") !== text.trim()
+  ) {
+    throw new Error("Session event occurrence text changed before admission");
+  }
 }
 
 export function resolveSessionEventExecRequestOwners(
@@ -68,8 +95,9 @@ export function buildSessionEventContext(params: {
   text: string;
   options: Pick<
     SessionEventOptions,
-    "source" | "sourceTurnId" | "sourceRunId" | "readmissionAttempt" | "scheduledAutomation"
+    "source" | "sourceTurnId" | "sourceRunId" | "scheduledAutomation"
   >;
+  readmissionAttempt?: number;
   occurrenceId: string;
   deliveryContext?: DeliveryContext;
   target: SessionEventTarget;
@@ -113,8 +141,8 @@ export function buildSessionEventContext(params: {
     AccountId: deliveryContext?.accountId,
     MessageThreadId: deliveryContext?.threadId,
     // Inbound dedupe retains an adopted attempt's id; a policy re-admission is a new dispatch.
-    MessageSid: options.readmissionAttempt
-      ? `${occurrenceId}:readmission-${options.readmissionAttempt}`
+    MessageSid: params.readmissionAttempt
+      ? `${occurrenceId}:readmission-${params.readmissionAttempt}`
       : occurrenceId,
   };
   if (automation && !target.sessionId) {
@@ -128,12 +156,17 @@ export function buildSessionEventContext(params: {
   }
   const operatorAuthority = automation?.controlUiAdmin
     ? automation.operatorAuthority
-    : options.source === "plugin" || options.source === "tool_handoff"
+    : options.source === "plugin" ||
+        options.source === "tool_handoff" ||
+        options.source === "restart"
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
   if (
     operatorAuthority &&
-    (automation?.controlUiAdmin || readSessionEventTargetOwnerContinuation(target))
+    (automation?.controlUiAdmin ||
+      (options.source === "restart"
+        ? operatorAuthority.scopes.includes("operator.admin")
+        : readSessionEventTargetOwnerContinuation(target)))
   ) {
     // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
     // under the same live operator source, retaining internal provenance and the event
@@ -145,6 +178,30 @@ export function buildSessionEventContext(params: {
         return true;
       },
     });
+  } else {
+    const commandOwner = readSessionEventTargetCommandOwner(target);
+    if (commandOwner) {
+      const { authority, requester } = commandOwner;
+      // A continuation of the requester's own work keeps their owner tools only while
+      // they are still an owner under the current config.
+      bindCommandOwnerAuthority(ctx, {
+        recoveryReference: authority.recoveryReference,
+        isCurrent: () => {
+          params.assertCurrent();
+          return authority.isCurrent(getSessionEventRuntimeConfig());
+        },
+      });
+      // Owner-checked effects (for example Gateway maintenance) recheck this sender at
+      // use. Project it only on the requester's own channel account, never across
+      // channels where the same raw ID can name someone else.
+      if (
+        deliveryContext?.channel === requester.channel &&
+        normalizeAccountId(deliveryContext.accountId) === normalizeAccountId(requester.accountId)
+      ) {
+        ctx.SenderId = requester.senderId;
+        ctx.SenderE164 = requester.senderE164;
+      }
+    }
   }
   setChannelSourceTurnId(ctx, options.sourceTurnId);
   return ctx;

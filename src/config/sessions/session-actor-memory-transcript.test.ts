@@ -7,7 +7,7 @@ import type {
 } from "./session-actor-contract.js";
 import { authority, memoryOwnerFixture } from "./session-actor-memory-family.test-support.js";
 import type { SessionPendingInputWorkerFacts } from "./session-pending-input.types.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -105,7 +105,10 @@ async function fixture(
       {
         commandId: "initialize",
         phaseId: "turn",
-        expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
+        expectedState: buildSessionTranscriptTurnExpectedState({
+          sessionId: "session-1",
+          updatedAt: 1,
+        }),
         lifecycle: {},
         turn: {
           ...turn(
@@ -152,7 +155,7 @@ async function fixture(
         {
           commandId,
           phaseId: "turn",
-          expectedState: buildRestartRecoveryExpectedState({ sessionId, updatedAt: 1 }),
+          expectedState: buildSessionTranscriptTurnExpectedState({ sessionId, updatedAt: 1 }),
           lifecycle: {},
           pending: {
             kind: "stage",

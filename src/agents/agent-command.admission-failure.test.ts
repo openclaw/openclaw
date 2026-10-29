@@ -78,15 +78,6 @@ async function fixture() {
     agentHarnessId: "openclaw",
     contextTokens: 64000,
     contextTokensSource: "runtime",
-    restartRecoveryDeliveryRunId: runId,
-    restartRecoveryDeliverySourceRunId: "yielded-parent",
-    restartRecoverySourceIngress: "channel",
-    restartRecoveryDeliveryContext: {
-      channel: "discord",
-      to: "channel:123",
-      accountId: "main",
-      threadId: "456",
-    },
   });
   const opts = {
     sessionKey,
@@ -108,12 +99,11 @@ async function fixture() {
 it.each(["sent", "failed"] as const)(
   "settles a refused continuation using the actual %s delivery outcome",
   async (status) => {
-    const { target, opts, runId } = await fixture();
+    const { target, opts } = await fixture();
     state.runAgentAttemptMock.mockRejectedValueOnce(initialRefusal());
     state.deliverAgentCommandResultMock.mockImplementationOnce(
       async (params: Parameters<typeof deliverAgentCommandResult>[0]) => {
         const entry = await params.resolveFreshSessionEntryForDelivery?.();
-        expect(entry?.restartRecoveryDeliveryRunId).toBe(runId);
         expect(entry?.pendingFinalDelivery).toBeDefined();
         expect(params.opts).toMatchObject({
           replyChannel: "discord",
@@ -168,20 +158,6 @@ it.each(["sent", "failed"] as const)(
     } else {
       expect(settled?.pendingFinalDelivery).toBeDefined();
     }
-    expect(settled?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(settled?.restartRecoveryTerminalDeliveryEvidence).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          runId: "yielded-parent",
-          transcriptRunId: runId,
-          captured: true,
-          deliveryStatus: expect.objectContaining({
-            status,
-            ...(status === "sent" ? { resultCount: 1 } : {}),
-          }),
-        }),
-      ]),
-    );
     const terminalEvents = state.emitAgentEventMock.mock.calls
       .map(([event]) => event)
       .filter(

@@ -18,6 +18,7 @@ import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
+  captureUiProof,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -48,6 +49,7 @@ async function withDraft(
   operatorScopes: string[],
   run: (draft: Draft) => Promise<void>,
   featureMethods = [...chatMethods, "projects.list", "sessions.create", "sessions.dispatch"],
+  dispatchableProfileIds?: string[],
 ) {
   return suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
     const gateway = await installMockGateway(page, {
@@ -65,11 +67,21 @@ async function withDraft(
               workerSlots: { total: 1, available: 1 },
             },
           ],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
+          profiles: [
+            { id: "aws", providerId: "crabbox" },
+            { id: "restricted", providerId: "crabbox" },
+          ],
+          dispatchableProfileIds:
+            dispatchableProfileIds ??
+            (operatorScopes.includes("operator.admin") ? ["aws", "restricted"] : []),
         },
         "projects.list": { projects: [] },
         "worktrees.branches": { branches: [], repositoryStatus: "git" },
-        "sessions.create": { key: "agent:main:operator-scope-proof", runStarted: true },
+        "sessions.create": {
+          key: "agent:main:operator-scope-proof",
+          ...(dispatchableProfileIds === undefined ? { runStarted: true } : {}),
+        },
+        "sessions.dispatch": { ok: true },
       },
     });
     await page.goto(`${suite.server.baseUrl}new`);
@@ -188,6 +200,34 @@ suite.define(() => {
       await submit.click();
       await expectCreated(gateway, { agentId: "main", fastMode: true, message: "scope proof" });
     });
+  });
+
+  it("lets a write-scoped creator select a granted cloud profile without setup authority", async () => {
+    await withDraft(
+      writeScopes,
+      async ({ gateway, page }) => {
+        await gateway.waitForRequest("environments.list");
+        await page.locator("#new-session-where-trigger").click();
+        const where = page.locator(".oc-popover.new-session-page__where-popover");
+        await where.getByRole("button", { name: /Writer runner/u }).waitFor();
+        await captureUiProof(suite, page, "granted-cloud-picker.png");
+        expect(await where.locator('[data-value="cloud:aws"]').count()).toBe(1);
+        expect(await where.locator('[data-value="cloud:restricted"]').count()).toBe(0);
+        expect(await where.locator('[data-action="manage-cloud-workers"]').count()).toBe(0);
+        expect(await where.locator('[data-action="connect-machine"]').count()).toBe(0);
+        await where.locator('[data-value="cloud:aws"]').click();
+        await pollAttribute(page.locator("#new-session-where-trigger"), "data-cloud-profile").toBe(
+          "aws",
+        );
+        await page.keyboard.press("Escape");
+        await page.getByRole("button", { name: "Start session" }).click();
+        await expect(gateway.waitForRequest("sessions.dispatch")).resolves.toMatchObject({
+          params: { key: "agent:main:operator-scope-proof", agentId: "main", profileId: "aws" },
+        });
+      },
+      undefined,
+      ["aws"],
+    );
   });
 
   it.each(["full", "incognito"] as const)("allows admin-scoped %s creation", async (mode) => {

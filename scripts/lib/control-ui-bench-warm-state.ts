@@ -1,8 +1,17 @@
 import type { Page } from "playwright";
 // Only these structural ports cross Playwright's serialized browser boundary.
-type ChatSessionSnapshot = { messages: unknown[] };
+type ChatSessionSnapshot = {
+  messages: unknown[];
+  rowDisplay?: Record<
+    string,
+    {
+      links?: Record<string, unknown>;
+      images?: Record<string, { width: number; height: number; thumbnail?: Blob }>;
+    }
+  >;
+};
 type SessionSnapshotStore = {
-  write(key: string, snapshot: ChatSessionSnapshot): void;
+  write(key: string, snapshot: ChatSessionSnapshot, weight: number): void;
   flush(): Promise<void>;
 };
 
@@ -18,25 +27,33 @@ type StoredTranscript = {
   snapshot: ChatSessionSnapshot;
 };
 type StoredSidebar = { sessionKey: string; model: SidebarSnapshotModel };
+type WarmThumbnail = {
+  sessionKey: string;
+  messageId: string;
+  imageKey: string;
+  mime: string;
+  base64: string;
+};
 
 export async function persistColdLoadWarmState(input: {
   sessionKey: string;
   sidebarView: "sessions" | "online";
   offRosterSession?: boolean;
   rowFacts?: boolean;
+  lateRowFacts?: boolean;
 }) {
   const pane = document.querySelector(".chat-pane-cache__pane--active");
   const store: SessionSnapshotStore | undefined = pane
     ? Reflect.get(pane, "sessionSnapshotStore")
     : undefined;
-  const cache: Map<string, { snapshot: ChatSessionSnapshot }> | undefined = pane
+  const cache: Map<string, { snapshot: ChatSessionSnapshot; weight: number }> | undefined = pane
     ? Reflect.get(pane, "chatMessagesBySession")
     : undefined;
   const entry = cache && [...cache].find(([key]) => key.endsWith(`\u0000${input.sessionKey}`));
   if (!store || !entry) {
     throw new Error("Warm reload requires the active transcript cache owner");
   }
-  store.write(entry[0], { ...entry[1].snapshot });
+  store.write(entry[0], { ...entry[1].snapshot }, entry[1].weight);
   await store.flush();
   const result = <T>(request: IDBRequest<T>) =>
     new Promise<T>((resolve, reject) => {
@@ -68,16 +85,70 @@ export async function persistColdLoadWarmState(input: {
     if (input.offRosterSession && rosterContainsSession) {
       throw new Error("Off-roster measurement found the selected session in the persisted roster");
     }
+    const snapshotBytes = new TextEncoder().encode(
+      JSON.stringify(record, (_key, value) => (value instanceof Blob ? undefined : value)),
+    ).byteLength;
+    const thumbnailWeight = { count: 0, bytes: 0, selectedCount: 0, selectedBytes: 0 };
+    const thumbnails: WarmThumbnail[] = [];
+    for (const saved of snapshots) {
+      for (const [messageId, facts] of Object.entries(saved.snapshot.rowDisplay ?? {})) {
+        for (const [imageKey, image] of Object.entries(facts.images ?? {})) {
+          const blob = image.thumbnail;
+          if (!(blob instanceof Blob)) {
+            continue;
+          }
+          thumbnailWeight.count++;
+          thumbnailWeight.bytes += blob.size;
+          if (saved === record) {
+            thumbnailWeight.selectedCount++;
+            thumbnailWeight.selectedBytes += blob.size;
+          }
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          let binary = "";
+          for (let offset = 0; offset < bytes.length; offset += 8192) {
+            binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+          }
+          thumbnails.push({
+            sessionKey: saved.sessionKey,
+            messageId,
+            imageKey,
+            mime: blob.type,
+            base64: btoa(binary),
+          });
+          // Playwright's value boundary does not carry native Blob contents.
+          delete image.thumbnail;
+        }
+      }
+    }
+    const displayFacts = Object.values(record.snapshot.rowDisplay ?? {});
     return {
       rosterContainsSession,
       storage: {
         records: { snapshots, sidebarSnapshots: sidebars, snapshotMetadata: metadata },
+        thumbnails,
         local: Object.entries(localStorage),
         session: Object.entries(sessionStorage),
       },
       messages: record.snapshot.messages.length,
-      ...(input.rowFacts
-        ? { snapshotBytes: new TextEncoder().encode(JSON.stringify(record)).byteLength }
+      ...(input.rowFacts ? { snapshotBytes } : {}),
+      ...(input.lateRowFacts
+        ? {
+            displayFacts: {
+              rows: displayFacts.length,
+              links: displayFacts.reduce(
+                (count, facts) => count + Object.keys(facts.links ?? {}).length,
+                0,
+              ),
+              imageDimensions: displayFacts.reduce(
+                (count, facts) => count + Object.keys(facts.images ?? {}).length,
+                0,
+              ),
+              thumbnails: thumbnailWeight.selectedCount,
+              thumbnailBytes: thumbnailWeight.selectedBytes,
+              cachedThumbnails: thumbnailWeight.count,
+              cachedThumbnailBytes: thumbnailWeight.bytes,
+            },
+          }
         : {}),
       databaseVersion: database.version,
       projectionVersion: record.projectionVersion,
@@ -112,8 +183,23 @@ export async function restoreColdLoadWarmState(
   }
   await page.evaluate(
     async ({ storage: saved, url: deepLink }) => {
+      const savedRecords: typeof storage.records = JSON.parse(saved.records);
+      for (const thumbnail of saved.thumbnails) {
+        const record = savedRecords.snapshots.find(
+          (row) => row.sessionKey === thumbnail.sessionKey,
+        );
+        const image =
+          record?.snapshot.rowDisplay?.[thumbnail.messageId]?.images?.[thumbnail.imageKey];
+        if (!image) {
+          throw new Error("Warm thumbnail lost its owning snapshot row");
+        }
+        const bytes = Uint8Array.from(atob(thumbnail.base64), (character) =>
+          character.charCodeAt(0),
+        );
+        image.thumbnail = new Blob([bytes], { type: thumbnail.mime });
+      }
       const databases: Record<string, Record<string, unknown[]>> = {
-        "openclaw-chat-snapshots": saved.records,
+        "openclaw-chat-snapshots": savedRecords,
       };
       if ((await indexedDB.databases()).some(({ name }) => name === "openclaw-control-ui")) {
         databases["openclaw-control-ui"] = { composerDrafts: [] };
@@ -157,6 +243,6 @@ export async function restoreColdLoadWarmState(
       }
       history.replaceState(null, "", deepLink);
     },
-    { storage, url },
+    { storage: { ...storage, records: JSON.stringify(storage.records) }, url },
   );
 }

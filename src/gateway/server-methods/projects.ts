@@ -171,6 +171,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
         do {
           await projection.prepareSelection({ metadataOnly: true });
         } while (projection.needsSelectionPreparation({ metadataOnly: true }));
+        await projection.prepareMembership();
         if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
           throw new Error(
             "Session projection changed while preparing the listing. Retry the request.",
@@ -180,7 +181,13 @@ export const projectsHandlers: GatewayRequestHandlers = {
         store = sessions.store;
       }
       if (params.includeObserved && canWrite()) {
-        observedProjects = await listObservedProjects(context, client, store, diagnostics);
+        observedProjects = await listObservedProjects(
+          context,
+          client,
+          store,
+          diagnostics,
+          sessions?.readMembership,
+        );
       }
       diagnostics?.mark("recents");
       const profileId = client?.authenticatedUserProfile?.profileId;

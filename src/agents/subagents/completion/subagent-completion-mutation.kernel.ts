@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { loadDeliveryQueueEntryInDatabase } from "../../../infra/delivery-queue-sqlite-bound.js";
 import {
+  isProducedSessionDelivery,
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
 } from "../../../infra/session-delivery-queue.records.js";
@@ -87,8 +88,6 @@ export function retiredCancellationEndedAt(
     subagent.cleanupCompletedAt < endedAt ||
     subagent.pauseReason ||
     subagent.killIntent ||
-    subagent.terminalOwner ||
-    subagent.execution.restartRecovery ||
     subagent.suppressAnnounceReason === "steer-restart" ||
     subagent.expectsCompletionMessage !== true ||
     subagent.completion?.required !== true ||
@@ -472,14 +471,17 @@ export function mutateSubagentCompletionInDatabase(
       const owner = queued?.kind === "agentTurn" ? queued.owner : undefined;
       const row = readSubagentRunRow(database, mutation.expected.runId);
       const current = row && rowToSubagentRunRecord(row);
+      const delivery = current?.delivery;
       if (
         !current ||
+        !delivery ||
         !queued ||
+        !isProducedSessionDelivery(queued) ||
         !owner ||
         owner.kind !== "subagent_completion" ||
         owner.runId !== current.runId ||
-        owner.generation !== current.delivery?.generation ||
-        owner.deadlineAt !== current.delivery.deadlineAt ||
+        owner.generation !== delivery.generation ||
+        owner.deadlineAt !== delivery.deadlineAt ||
         (queued.settlementOutcome ??
           (queued.acknowledgedAt !== undefined ? "recovered" : undefined)) !== "recovered" ||
         compareSubagentRunGeneration(current, mutation.expected) !== 0 ||
@@ -487,9 +489,11 @@ export function mutateSubagentCompletionInDatabase(
         current.requesterSessionKey !== mutation.expected.requesterSessionKey ||
         current.requesterStorePath !== mutation.expected.requesterStorePath
       ) {
-        throw new Error("Subagent completion recovery lost its queue or native owner");
+        throw new Error(
+          "Subagent completion settlement lost its produced delivery or native owner",
+        );
       }
-      if (current.delivery.status === "delivered" && current.delivery.queueId === undefined) {
+      if (delivery.status === "delivered" && delivery.queueId === undefined) {
         // A marked queue retains producer cleanup after a committed write. Reconcile
         // the current native row without replaying its write or terminal timestamps.
         return {
@@ -498,7 +502,7 @@ export function mutateSubagentCompletionInDatabase(
           retiredRunIds: [],
         };
       }
-      if (current.delivery.queueId !== mutation.queueId) {
+      if (delivery.queueId !== mutation.queueId) {
         throw new Error("Subagent completion owner changed before settlement");
       }
       return commitCompletionMutations(database, [{ subagent: mutation.subagent }]);

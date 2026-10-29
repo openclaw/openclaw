@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
@@ -83,16 +84,17 @@ function logPluginUpdateOutcomes(
 ): 0 | 1 {
   let exitCode: 0 | 1 = 0;
   for (const outcome of outcomes) {
+    const message = terminalText`${outcome.message}`;
     if (outcome.status === "error") {
       exitCode = 1;
-      defaultRuntime.error(theme.error(outcome.message));
+      defaultRuntime.error(theme.error(message));
     } else if (outcome.status === "skipped") {
       if (isClawHubTrustSkippedOutcome(outcome)) {
         exitCode = 1;
       }
-      defaultRuntime.log(theme.warn(outcome.message));
+      defaultRuntime.log(theme.warn(message));
     } else {
-      defaultRuntime.log(outcome.message);
+      defaultRuntime.log(message);
     }
   }
   return exitCode;
@@ -104,12 +106,16 @@ async function confirmUpdateIntegrityDrift(
 ): Promise<boolean> {
   defaultRuntime.log(
     theme.warn(
-      `Integrity drift detected for ${item} (${drift.resolvedSpec ?? drift.spec})` +
-        `\nExpected: ${drift.expectedIntegrity}` +
-        `\nActual:   ${drift.actualIntegrity}`,
+      [
+        terminalText`Integrity drift detected for ${item} (${drift.resolvedSpec ?? drift.spec})`,
+        terminalText`Expected: ${drift.expectedIntegrity}`,
+        terminalText`Actual:   ${drift.actualIntegrity}`,
+      ].join("\n"),
     ),
   );
-  return drift.dryRun || (await promptYesNo(`Continue updating ${item} with this artifact?`));
+  return (
+    drift.dryRun || (await promptYesNo(terminalText`Continue updating ${item} with this artifact?`))
+  );
 }
 
 function mayMutatePluginInstallRecord(
@@ -318,7 +324,7 @@ async function runPluginUpdateCommandUnlocked(
     all: params.opts.all,
   });
   if (pluginSelection.error) {
-    defaultRuntime.error(pluginSelection.error);
+    defaultRuntime.error(terminalText`${pluginSelection.error}`);
     return 1;
   }
   const skippedOutcomes = new Map<string, PluginUpdateOutcome>();
@@ -335,7 +341,7 @@ async function runPluginUpdateCommandUnlocked(
     all: params.opts.all,
   });
   if (hookSelection.error) {
-    defaultRuntime.error(hookSelection.error);
+    defaultRuntime.error(terminalText`${hookSelection.error}`);
     return 1;
   }
   const unmatchedId = pluginSelection.unmatchedIds?.find((id) =>
@@ -343,7 +349,7 @@ async function runPluginUpdateCommandUnlocked(
   );
   if (unmatchedId !== undefined) {
     defaultRuntime.error(
-      `No tracked plugin or hook pack found for "${unmatchedId}". Run "${formatCliCommand("openclaw plugins list")}" or "${formatCliCommand("openclaw hooks list")}" to inspect installed packages.`,
+      `No tracked plugin or hook pack found for "${terminalText`${unmatchedId}`}". Run "${formatCliCommand("openclaw plugins list")}" or "${formatCliCommand("openclaw hooks list")}" to inspect installed packages.`,
     );
     return 1;
   }
@@ -354,7 +360,7 @@ async function runPluginUpdateCommandUnlocked(
     installOwners: packageUpdateIds,
   });
   if (!packageUpdateSnapshotResult.ok) {
-    defaultRuntime.error(packageUpdateSnapshotResult.error);
+    defaultRuntime.error(terminalText`${packageUpdateSnapshotResult.error}`);
     return 1;
   }
   const packageUpdateSnapshot = packageUpdateSnapshotResult.value;
@@ -467,7 +473,7 @@ async function runPluginUpdateCommandUnlocked(
       }
     }
     if (blockedReasons.size > 0) {
-      defaultRuntime.error(Array.from(blockedReasons).join(" "));
+      defaultRuntime.error(terminalText`${Array.from(blockedReasons).join(" ")}`);
       return 1;
     }
   }
@@ -532,7 +538,7 @@ async function runPluginUpdateCommandUnlocked(
         installOwnerMigrations: resolvePluginInstallOwnerMigrations(pluginResult),
       });
       if (!reconciled.ok) {
-        defaultRuntime.error(reconciled.error);
+        defaultRuntime.error(terminalText`${reconciled.error}`);
         return 1;
       }
       pluginResult = { ...pluginResult, config: reconciled.config };
@@ -573,9 +579,11 @@ async function runPluginUpdateCommandUnlocked(
           !isDeepStrictEqual([...currentSnapshot.value], [...packageUpdateSnapshot])
         ) {
           defaultRuntime.error(
-            currentSnapshot.ok
-              ? "Plugin package ownership changed during update; no config or index changes were committed. Refresh the plugin registry and retry."
-              : currentSnapshot.error,
+            terminalText`${
+              currentSnapshot.ok
+                ? "Plugin package ownership changed during update; no config or index changes were committed. Refresh the plugin registry and retry."
+                : currentSnapshot.error
+            }`,
           );
           return 1;
         }

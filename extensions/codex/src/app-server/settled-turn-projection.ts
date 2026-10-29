@@ -1,6 +1,9 @@
 import { Buffer } from "node:buffer";
 import { convertToLlm } from "openclaw/plugin-sdk/agent-core";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  isTranscriptOnlyOpenClawAssistantMessage,
+  type AgentMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexDurableCustomMessage } from "./context-engine-projection.js";
 import { CodexHistoryRejection } from "./history-rejection.js";
@@ -245,6 +248,10 @@ class HistoryProjection {
   }
 
   append(message: AgentMessage): void {
+    // Verify every raw row first; transcript bookkeeping never becomes model history.
+    if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
+      return;
+    }
     if (message.role === "user") {
       this.projectUserMessage(message);
     } else if (message.role === "assistant") {

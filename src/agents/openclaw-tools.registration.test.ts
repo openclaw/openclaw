@@ -197,28 +197,20 @@ describe("openclaw-tools progress_card gating", () => {
     ).toBe(false);
     // ask_user must not depend on the TUI embedded-host flag; normal gateway
     // runs are the primary consumer.
-    expect(
-      createFastToolNames({
-        runSessionKey: "agent:main:non-embedded",
-        questionInputMode: "native",
-      }),
-    ).toEqual(expect.arrayContaining(["ask_user", "secrets"]));
-    setEmbeddedMode(true);
-
-    expect(
-      await withPreparedSessionCapabilityRead(() =>
-        createFastToolNames({
-          agentSessionKey: "agent:main:subagent:worker",
-          questionInputMode: "native",
-        }),
-      ),
-    ).not.toContain("ask_user");
-    expect(
-      createFastToolNames({
-        runSessionKey: "agent:main:run",
-        questionInputMode: "native",
-      }),
-    ).toContain("ask_user");
+    for (const [embedded, sessionOptions, available] of [
+      [false, { runSessionKey: "agent:main:non-embedded" }, true],
+      [true, { agentSessionKey: "agent:main:subagent:worker" }, false],
+      [true, { runSessionKey: "agent:main:run" }, true],
+    ] as const) {
+      setEmbeddedMode(embedded);
+      const names = await withPreparedSessionCapabilityRead(() =>
+        createFastToolNames({ ...sessionOptions, questionInputMode: "native" }),
+      );
+      expect(names.includes("ask_user")).toBe(available);
+      if (!embedded) {
+        expect(names).toContain("secrets");
+      }
+    }
   });
 
   it("keeps message tool in embedded message-tool-only completions", () => {

@@ -468,8 +468,8 @@ export function listChangedPathsFromGit(params: {
     return rangePaths;
   }
   const worktreePaths = [
-    ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd),
-    ...runGitNameOnlyDiff(["--diff-filter=ACMRD"], cwd),
+    ...runGitNameOnlyDiff(["--cached"], cwd),
+    ...runGitNameOnlyDiff([], cwd),
     ...runGitLsFiles(["--others", "--exclude-standard"], cwd),
   ];
   // Raw Crabbox syncs can have unrelated synthetic refs; prefer the synced
@@ -489,6 +489,7 @@ export function listChangedPathsFromGit(params: {
 
 function runGitNameOnlyDiff(extraArgs: string[], cwd = process.cwd()): string[] {
   // Keep rename sources so checks still cover the removed path's consumers.
+  // Keep every status too: file/symlink type changes still need their owner's checks.
   const output = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
@@ -529,7 +530,7 @@ function runGitLsFiles(extraArgs: string[], cwd = process.cwd()): string[] {
  * Lists staged changed paths for pre-commit checks.
  */
 export function listStagedChangedPaths(cwd = process.cwd(), base?: string) {
-  return runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD", ...(base ? [base] : [])], cwd);
+  return runGitNameOnlyDiff(["--cached", ...(base ? [base] : [])], cwd);
 }
 
 /**

@@ -181,15 +181,15 @@ function getDarwinProcessStartTime(
   }
 }
 
-/** Read the Linux procfs start identity used by Linux-owned runtime state. */
-export function getProcessStartTime(pid: number): number | null {
+/** Kernel parent and birth ticks share one procfs snapshot, independent of native addons. */
+export function readLinuxProcessStat(pid: number): { parentPid: number; startedAt: number } | null {
   if (!isValidPid(pid) || !hasLinuxProcfs()) {
     return null;
   }
   try {
     const stat = fsSync.readFileSync(`/proc/${pid}/stat`, "utf8");
     const commEndIndex = stat.lastIndexOf(")");
-    if (commEndIndex < 0) {
+    if (commEndIndex < 0 || !stat.startsWith(`${pid} (`)) {
       return null;
     }
     // The comm field (field 2) is wrapped in parens and can contain spaces,
@@ -198,10 +198,21 @@ export function getProcessStartTime(pid: number): number | null {
     const fields = afterComm.split(/\s+/);
     // field 22 (starttime) = index 19 after the comm-split (field 3 is index 0).
     const starttime = Number(fields[19]);
-    return Number.isInteger(starttime) && starttime >= 0 ? starttime : null;
+    const parentPid = Number(fields[1]);
+    return Number.isSafeInteger(starttime) &&
+      starttime >= 0 &&
+      Number.isSafeInteger(parentPid) &&
+      parentPid >= 0
+      ? { parentPid, startedAt: starttime }
+      : null;
   } catch {
     return null;
   }
+}
+
+/** Read the Linux procfs start identity used by Linux-owned runtime state. */
+export function getProcessStartTime(pid: number): number | null {
+  return readLinuxProcessStat(pid)?.startedAt ?? null;
 }
 
 /** Custody recovery needs native birth precision rather than the shipped lease timestamp format. */

@@ -36,6 +36,7 @@ import { canPreserveTransactionSnapshot } from "./sqlite-schema-mutation.js";
 import {
   finishSqliteReadScope,
   observeSqliteTransactionState as observeTransactionState,
+  sqliteSchemaOwners as owners,
   type SqliteSchemaOwner as SchemaOwner,
   type SchemaMutationListener,
   type SqliteReadOperationRevision,
@@ -52,11 +53,6 @@ export type {
   SqliteReadOperationRevision,
   SqliteReadScopeRevision,
 } from "./sqlite-schema-scope.js";
-
-const owners = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteSchemaFacts"),
-  () => new WeakMap<DatabaseSync, SchemaOwner>(),
-);
 
 const postgresReadSnapshots = resolveGlobalSingleton(
   Symbol.for("openclaw.postgresReadSnapshots"),
