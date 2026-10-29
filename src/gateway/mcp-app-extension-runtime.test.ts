@@ -142,7 +142,7 @@ describe("cold App request admission", () => {
       tools: [tool],
     });
     mocks.project.mockReturnValue([{ name: "demo_show" }]);
-    mocks.metadata.mockReturnValue({ mcp: { operation: "tool", ...tool } });
+    mocks.metadata.mockReturnValue({ mcp: { operation: "tool", ...tool }, pluginId: "bundle-mcp" });
     mocks.requiresApproval.mockReturnValue(true);
     const active = await prepareMcpAppExtensionRuntime(options());
     accessController = new AbortController();
@@ -164,7 +164,10 @@ describe("cold App request admission", () => {
     expect(mocks.toolPolicy).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "demo_show",
-        toolMeta: expect.objectContaining({ mcp: expect.objectContaining({ toolName: "show" }) }),
+        toolMeta: expect.objectContaining({
+          pluginId: "bundle-mcp",
+          mcp: expect.objectContaining({ toolName: "show" }),
+        }),
       }),
     );
     expect(assertion).toBeTypeOf("function");
