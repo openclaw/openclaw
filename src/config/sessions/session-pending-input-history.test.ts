@@ -20,7 +20,6 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import {
   captureSessionQueuedInputsForRestart,
-  readSessionPendingInputContext,
   readSessionQueuedInputPage,
 } from "./session-pending-input-history.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
@@ -158,10 +157,6 @@ it("bounds materialized pending pages by bytes without truncating input or skipp
       expect(page.items[0]?.message.content === content).toBe(true);
       expect(page.total).toBe(2);
       expect(page.nextBefore).toBeDefined();
-      expect(await readSessionPendingInputContext(scope)).toEqual({
-        items: page.items,
-        nextBefore: page.nextBefore,
-      });
       const older = await listSessionPendingInputs(scope, { before: page.nextBefore });
       expect(older.items.map((input) => input.id)).toEqual([receipts[0]?.inputId]);
       expect(older.items[0]?.message.content === content).toBe(true);
@@ -215,7 +210,8 @@ it.each(["context", "id"] as const)(
         receipt.finish("interrupted");
         await receipt.settled?.();
         expect(read().rows).toEqual([]);
-        expect(await readSessionPendingInputContext(scope)).toEqual({ items: [] });
+        expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+        expect(await readSessionPendingInput(scope, inputId)).toBeUndefined();
       } finally {
         receipt.finish("interrupted");
         await receipt.settled?.();
