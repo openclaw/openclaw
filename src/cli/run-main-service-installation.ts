@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import {
   inspectGatewayServiceInstallationDrift,
   resolveServiceEntrypointIndex,
@@ -102,15 +103,18 @@ export async function inspectCliGatewayServiceInstallation(
     // A positively identified running Gateway uses its own live process environment.
     const serviceEnv = ownCommand
       ? env
-      : {
-          ...env,
-          OPENCLAW_HOME: undefined,
-          OPENCLAW_STATE_DIR: undefined,
-          OPENCLAW_PROFILE: undefined,
-          OPENCLAW_CONFIG_PATH: undefined,
-          ...command?.environment,
-        };
-    if (!ownCommand && command) {
+      : mergeGatewayServiceEnv(
+          {
+            ...env,
+            OPENCLAW_HOME: undefined,
+            OPENCLAW_STATE_DIR: undefined,
+            OPENCLAW_PROFILE: undefined,
+            OPENCLAW_CONFIG_PATH: undefined,
+          },
+          command,
+        );
+    // The Windows service projection already applies command-line profiles.
+    if (!ownCommand && command && process.platform !== "win32") {
       const entrypoint = resolveServiceEntrypointIndex(command.programArguments);
       if (entrypoint !== undefined) {
         const profile = parseCliProfileArgs([

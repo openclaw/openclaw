@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildLaunchAgentPlist } from "../daemon/launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-support.js";
 import { resolveLaunchAgentPlistPath } from "../daemon/launchd-service-files.js";
+import { buildTaskScript } from "../daemon/schtasks-layout.js";
 import { withGatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
 import * as exec from "../process/exec.js";
 import { assertGatewayServiceSchemaMigrationAllowed } from "../state/openclaw-state-service-installation.js";
@@ -26,10 +27,11 @@ beforeEach(() => {
   }
 });
 
-it.each(["default", "home", "profile", "state", "argv"] as const)(
+it.each(["default", "home", "profile", "state", "argv", "windows", "windows-lowercase"] as const)(
   "uses installed service %s state instead of the inspecting CLI's selectors",
   async (selector) => {
-    await withMockedPlatform("darwin", async () => {
+    const windows = selector === "windows" || selector === "windows-lowercase";
+    await withMockedPlatform(windows ? "win32" : "darwin", async () => {
       const home = dirs.make("service-installation-");
       const callerState = path.join(home, selector === "argv" ? ".openclaw-service" : "lab-state");
       const env = {
@@ -38,6 +40,7 @@ it.each(["default", "home", "profile", "state", "argv"] as const)(
         OPENCLAW_STATE_DIR: callerState,
         OPENCLAW_PROFILE: "lab",
         OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.scope-test",
+        OPENCLAW_TASK_SCRIPT: path.join(home, "gateway.cmd"),
       };
       const root = path.join(home, "older-package");
       const entry = path.join(root, "openclaw.mjs");
@@ -52,27 +55,37 @@ it.each(["default", "home", "profile", "state", "argv"] as const)(
         HOME: home,
         ...(selector === "home" ? { OPENCLAW_HOME: serviceHome } : {}),
         ...(selector === "profile" ? { OPENCLAW_PROFILE: "service" } : {}),
-        ...(selector === "state" ? { OPENCLAW_STATE_DIR: callerState } : {}),
+        ...(selector === "state" || selector === "windows"
+          ? { OPENCLAW_STATE_DIR: callerState }
+          : {}),
+        ...(selector === "windows-lowercase" ? { openclaw_state_dir: callerState } : {}),
       };
-      const plist = resolveLaunchAgentPlistPath(env);
-      await fs.mkdir(path.dirname(plist), { recursive: true });
-      await fs.writeFile(
-        plist,
-        buildLaunchAgentPlist({
-          label: env.OPENCLAW_LAUNCHD_LABEL,
-          programArguments: [
-            process.execPath,
-            entry,
-            ...(selector === "argv" ? ["--profile=service"] : []),
-            "gateway",
-          ],
-          stdoutPath: path.join(home, "stdout.log"),
-          stderrPath: path.join(home, "stderr.log"),
-          environment,
-        }),
-      );
+      const service = {
+        programArguments: [
+          process.execPath,
+          entry,
+          ...(selector === "argv" ? ["--profile=service"] : []),
+          "gateway",
+        ],
+        environment,
+      };
+      if (windows) {
+        await fs.writeFile(env.OPENCLAW_TASK_SCRIPT, buildTaskScript(service));
+      } else {
+        const plist = resolveLaunchAgentPlistPath(env);
+        await fs.mkdir(path.dirname(plist), { recursive: true });
+        await fs.writeFile(
+          plist,
+          buildLaunchAgentPlist({
+            ...service,
+            label: env.OPENCLAW_LAUNCHD_LABEL,
+            stdoutPath: path.join(home, "stdout.log"),
+            stderrPath: path.join(home, "stderr.log"),
+          }),
+        );
+      }
       const stateDir =
-        selector === "state"
+        selector === "state" || windows
           ? callerState
           : selector === "home"
             ? path.join(serviceHome, ".openclaw")
@@ -93,7 +106,7 @@ it.each(["default", "home", "profile", "state", "argv"] as const)(
             1,
             2,
           );
-        if (selector === "state" || selector === "argv") {
+        if (selector === "state" || selector === "argv" || windows) {
           expect(migrate).toThrow("Refusing a forward database schema migration");
         } else {
           expect(migrate).not.toThrow();
