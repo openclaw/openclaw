@@ -637,3 +637,17 @@ it("drains admitted observer writes and quarantines updates arriving during rese
     gate.resolve();
   }
 });
+
+it("keeps the inbound reply target when a native edit omits it", async () => {
+  const onUpdate = observe();
+  mocks.userbotSend.mockResolvedValueOnce({ messageId: 10, senderId: 100, chatId: -100123 });
+  const state = createQaBusState();
+  await using adapter = await createAdapter(state);
+  const readMessages = await prepareMessageReader(adapter);
+  const sent = await adapter.sendInbound(inbound("recovery-room", "attempt"));
+  const reply = nativeMessage({ replyToMessageId: 10, text: "partial" });
+  await onUpdate(reply);
+  const { replyToMessageId: _omitted, ...edit } = { ...reply, kind: "edit", text: "recovered" };
+  await onUpdate(edit);
+  expect(readMessages(sent.id)).toEqual([{ ...edit, replyToMessageId: 10 }]);
+});
