@@ -155,7 +155,10 @@ export function resolveWebFetchDefinition(
   }
   const definition = provider.createTool({
     config: options?.config,
-    fetchConfig: fetch as Record<string, unknown> | undefined,
+    // Per-call selection is effective only for this definition; never persist it.
+    fetchConfig: options?.providerId
+      ? { ...fetch, provider: provider.id }
+      : (fetch as Record<string, unknown> | undefined),
     runtimeMetadata: runtimeWebFetch,
   });
   return definition ? { provider, definition } : null;

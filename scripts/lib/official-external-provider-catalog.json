@@ -705,6 +705,9 @@
         "contracts": {
           "webSearchProviders": [
             "deepseek"
+          ],
+          "webFetchProviders": [
+            "deepseek"
           ]
         },
         "webSearchProviders": [

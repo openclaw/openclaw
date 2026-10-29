@@ -121,6 +121,30 @@ describe("web fetch runtime", () => {
     expectProvider({ ...runtimeOptions(config), sandboxed: false }, expected);
   });
 
+  it.each([undefined, "thirdparty"])(
+    "passes an explicit per-call provider to the adapter without changing saved selection %s",
+    (savedProvider) => {
+      const config: OpenClawConfig = {
+        tools: { web: { fetch: { provider: savedProvider, timeoutSeconds: 12 } } },
+      };
+      const original = structuredClone(config);
+      const defaultCreateTool = createFirecrawlProvider().createTool;
+      const createTool = vi.fn<PluginWebFetchProviderEntry["createTool"]>((ctx) =>
+        ctx.fetchConfig?.provider === "firecrawl" ? defaultCreateTool(ctx) : null,
+      );
+      useFirecrawl({ ...firecrawlCredential, createTool });
+
+      expect(resolveProvider({ config, providerId: "firecrawl" }).id).toBe("firecrawl");
+      expect(createTool).toHaveBeenCalledWith(
+        expect.objectContaining({ fetchConfig: { provider: "firecrawl", timeoutSeconds: 12 } }),
+      );
+      expect(config).toEqual(original);
+      if (savedProvider === undefined) {
+        expect(resolveWebFetchDefinition({ config })).toBeNull();
+      }
+    },
+  );
+
   it("auto-detects providers from provider-declared env vars", () => {
     useFirecrawl();
     withEnv({ FIRECRAWL_API_KEY: "firecrawl-env-key" }, () => {
