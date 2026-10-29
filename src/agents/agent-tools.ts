@@ -331,7 +331,6 @@ function* assembleOpenClawCodingTools(
     sandboxed: Boolean(sandbox),
     runId: options?.runId,
     cronSelfRemoveOnlyJobId,
-    automationReadOnly: options?.forceRestartSafeTools === true,
   });
   const { sessionPortalTarget, cronCreatorAuthorityResolver } = sessionToolAccess;
   // An ingress turn without a self scope gets no automations tool.
@@ -438,7 +437,6 @@ function* assembleOpenClawCodingTools(
           ringZeroTools,
           yield {
             ...pluginToolOptions,
-            forceRestartSafeTools: options?.forceRestartSafeTools,
             cronSandboxContext: sandbox,
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,

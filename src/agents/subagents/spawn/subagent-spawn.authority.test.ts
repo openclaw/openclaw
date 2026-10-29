@@ -338,7 +338,7 @@ describe("pending spawn invocation authority", () => {
       if (
         !registrationAbortRequested &&
         [...subagentRuns.values()].some(
-          (run) => run.requesterTurnRunId === parentRunId && run.queuedLaunch !== undefined,
+          (run) => run.requesterTurnRunId === parentRunId && run.execution.status === "queued",
         )
       ) {
         registrationAbortRequested = true;

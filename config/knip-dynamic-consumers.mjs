@@ -120,7 +120,7 @@ function lazyRuntimeModuleMemberEdges(source, consumerFile, targetSpecifier) {
         /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*createLazyRuntimeModule\(\s*\(\s*\)\s*=>\s*import\(\s*["']([^"'\r\n]+)["']\s*\)\s*,?\s*\)\s*;/gu,
       ),
     ]
-      .filter(([, , specifier]) => specifier === targetSpecifier)
+      .filter((match) => match[2] === targetSpecifier)
       .map(([, loader, specifier]) => [loader, specifier]),
   );
   const edges = new Map();
@@ -155,10 +155,7 @@ function computedCheckoutNamespaceMemberEdges(source) {
         /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*join\(\s*source\s*,\s*["']([^"'\r\n]+)["']\s*\)\s*;/gu,
       ),
     ]
-      .filter(
-        ([, , directory]) =>
-          !path.isAbsolute(directory) && !directory.split(/[\\/]/u).includes(".."),
-      )
+      .filter((match) => !path.isAbsolute(match[2]) && !match[2].split(/[\\/]/u).includes(".."))
       .map(([, binding, directory]) => [binding, directory]),
   );
   const edges = new Map();
@@ -431,7 +428,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   const archiveChurnSource = fs.readFileSync(archiveChurnPath, "utf8");
   const archiveChurnLaunch =
     archiveChurnSource.match(
-      /^if \(values\.allocations\) \{([\s\S]*?)^\}\nconst inspector = new Session\(\);/mu,
+      /^if \(values\.allocations(?: \|\| values\.entry)?\) \{([\s\S]*?)^\}\nconst inspector = new Session\(\);/mu,
     )?.[1] ?? "";
   if (
     /^\s*const\s+preload\s*=\s*pathToFileURL\(\s*path\.join\(\s*path\.dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*["']archive-worker-churn-preload\.mjs["']\s*\)\s*,\s*\)\.href\s*;/mu.test(

@@ -66,8 +66,6 @@ export async function runReplyQuestionInput(
     operatorAuthority: followupRun.operatorAuthority,
     toolsAllow: followupRun.toolsAllow,
     disableTools: followupRun.disableTools === true,
-    forceRestartSafeTools: followupRun.forceRestartSafeTools,
-    forceCodeModeTools: followupRun.forceCodeModeTools,
   });
   const sourceAbort = opts?.abortSignal;
   const queuedAbort = resolveFollowupAbortSignal(followupRun);

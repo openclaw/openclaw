@@ -6,6 +6,7 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { readPendingInputSource } from "../config/sessions/session-pending-input-source.js";
 import type { SqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
@@ -186,11 +187,7 @@ it.for(
     const saveObserver = vi.spyOn(mediaStore, "saveMediaBuffer");
     const deleteObserver = vi.spyOn(mediaStore, "deleteMediaBuffer");
     const deletions = () => returned(deleteObserver.mock.results);
-    const staging = observeInputAdmission(
-      outcome,
-      f.sessionKey,
-      goal ? "turn" : chat ? "pending" : "legacy",
-    );
+    const staging = observeInputAdmission(outcome, f.sessionKey, chat ? "turn" : "legacy");
     const chatSettled = createDeferred();
     const emitChange = sessionChangeEvent.emitSessionsChanged;
     const settlementObserver = vi
@@ -252,11 +249,11 @@ it.for(
       const media = expectDefined(saved[0], "real inbound file");
       const pending = await sessionAccessor.listSessionPendingInputs(f.scope);
       const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
-      expect(pending.total).toBe(!goal && outcome === "unknown" ? 1 : 0);
+      expect(pending.total).toBe(0);
       if (goal && outcome !== "refused") {
         expect(sessionAccessor.loadSessionEntry(f.scope)?.goal?.objective).toBe(request.message);
       }
-      if (outcome === "refused" || (!goal && outcome === "unknown")) {
+      if (outcome === "refused" || (!chat && outcome === "unknown")) {
         expect(transcript).toEqual(f.before);
       }
       if (!accepted) {
@@ -275,9 +272,9 @@ it.for(
           });
         }
       }
-      if (goal && outcome === "unknown") {
+      if (chat && outcome === "unknown") {
         expect(transcript.slice(0, f.before.length)).toEqual(f.before);
-        // Allow a goal lifecycle notice, but retain exactly one user input.
+        // The turn committed before its result was lost; retain exactly one user input.
         const inputs = transcript
           .slice(f.before.length)
           .filter(
@@ -285,6 +282,7 @@ it.for(
           );
         expect(inputs).toHaveLength(1);
         expect(JSON.stringify(inputs[0])).toContain(media.id);
+        expect(JSON.stringify(inputs[0])).toContain(request.message);
       }
       if (outcome === "refused") {
         if (goal) {
@@ -293,13 +291,14 @@ it.for(
         await expect(fs.stat(media.path)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
         expect(await fs.readFile(media.path)).toEqual(bytes);
-        if (outcome === "unknown" && !goal) {
-          // History reconciles the committed, ownerless row to interrupted.
-          expect(pending).toMatchObject({
-            total: 1,
-            items: [{ runId: f.runId, state: "interrupted" }],
+        if (outcome === "unknown" && !chat) {
+          const source = await readPendingInputSource(f.scope, `${f.runId}:user`, true);
+          expect(source?.snapshot).toMatchObject({
+            current: true,
+            pending: { run_id: f.runId, state: "queued" },
           });
-          expect(JSON.stringify(pending.items[0]?.message)).toContain(media.id);
+          expect(source?.snapshot.pending?.message_json).toContain(media.id);
+          expect(source?.snapshot.pending?.message_json).toContain(request.message);
         } else if (accepted) {
           expect(response.ok).toBe(true);
           expect(transcript).toHaveLength(f.before.length + 1);

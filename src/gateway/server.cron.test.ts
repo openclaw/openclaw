@@ -742,8 +742,8 @@ describe("gateway server cron", () => {
     const { request, add, waitForJob } = await startCronClient();
 
     // Minimal Gateway startup skips cron recovery; finish it before the timed requests.
-    const { getGatewayRecoveryRuntime } = await import("./server-recovery-runtime-context.js");
-    const runtime = expectDefined(getGatewayRecoveryRuntime(), "Gateway runtime");
+    const { getGatewayLifecycleRuntime } = await import("./server-lifecycle-runtime-context.js");
+    const runtime = expectDefined(getGatewayLifecycleRuntime(), "Gateway runtime");
     const resolveContext = expectDefined(getGatewayContextResolver(runtime), "Gateway context");
     await expectDefined(resolveContext(), "Gateway context").cron.start();
 

@@ -114,17 +114,14 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     return tool;
   }
 
-  it.each(["memory flush", "disabled tools", "raw", "restart", "model"])(
+  it.each(["memory flush", "disabled tools", "raw", "model"])(
     "does not widen %s with auxiliary tools",
     async (mode) => {
       const input = createInput([], [createStubTool("read"), createStubTool("write")]);
       input.attempt.config = { mcp: { servers: { chrome: { command: "unused" } } } };
-      input.attempt.toolsAllow = ["raw", "restart", "model"].includes(mode)
-        ? ["chrome*"]
-        : undefined;
+      input.attempt.toolsAllow = ["raw", "model"].includes(mode) ? ["chrome*"] : undefined;
       input.attempt.disableTools = mode === "disabled tools";
       input.isRawModelRun = mode === "raw";
-      input.attempt.forceRestartSafeTools = mode === "restart";
       input.preparedToolBase.toolsEnabled = mode !== "model";
       if (mode === "memory flush") {
         input.attempt.trigger = "memory";

@@ -107,7 +107,7 @@ export async function startRestartStressProvider(options: {
             key,
             "exec",
             {
-              command: `printf 'EFFECT_${id}\\n' >> '${effect}'; sleep 12`,
+              command: `if ! grep -Fxq -- 'EFFECT_${id}' '${effect}' 2>/dev/null; then printf '%s\\n' 'EFFECT_${id}' >> '${effect}'; fi; sleep 12`,
               yieldMs: 1000,
             },
             counters.requests,

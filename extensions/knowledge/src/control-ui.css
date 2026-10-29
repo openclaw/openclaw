@@ -3235,20 +3235,49 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   margin: 6px 0 0;
 }
 
-/* Loading is static and pane-local: stable geometry, no shimmer or full-view fade. */
+/* Loading is static and pane-local: no shimmer or full-view fade. The status
+   floats over the top of the pane's data: its negative margin cancels its own
+   height, so showing or clearing it never moves the content below. */
 .knowledge-pane-status {
-  min-height: 30px;
-  padding: 5px 12px;
-  border-bottom: 1px solid var(--knowledge-hairline);
+  position: relative;
+  top: 6px;
+  right: 8px;
+  z-index: 2;
+  width: fit-content;
+  max-width: calc(100% - 16px);
+  height: 26px;
+  margin: 0 0 -26px auto;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
   color: var(--muted);
   font-size: 12px;
+  line-height: 24px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Transparent rather than hidden, so the live region stays in the accessibility tree. */
+.knowledge-pane-status:empty {
+  opacity: 0;
+  pointer-events: none;
+}
+/* A terminal error with Retry needs attention and room, so it joins the flow. */
+.knowledge-pane-status:has(.knowledge-error) {
+  inset: auto;
+  max-width: 100%;
+  height: auto;
+  margin: 0 0 8px;
+  padding: 8px 12px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-}
-.knowledge-pane-status:empty::after {
-  content: "\00a0";
+  line-height: normal;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
 }
 .knowledge-browse-data {
   min-height: 390px;

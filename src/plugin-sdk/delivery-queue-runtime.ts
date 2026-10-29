@@ -1,6 +1,5 @@
 // Delivery queue runtime helpers persist and replay outbound plugin delivery work.
 import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-sqlite.js";
-import type { InternalDeliverOutboundPayloadsParams } from "../infra/outbound/deliver-contracts.js";
 import {
   drainPendingDeliveriesCore,
   type DeliverFn,
@@ -29,14 +28,8 @@ export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions
   const capturedState = captureDeliveryQueueStateContext(opts.stateDir);
   await runWithGatewayIndependentRootWorkAdmission(async () => {
     // Keep lazy resolution and draining in one lease so suspension cannot split the handoff.
-    // Captured history custody stays in core; plugin callbacks receive only public send facts.
-    const customDeliver = opts.deliver;
-    const deliver = customDeliver
-      ? ({
-          transcriptGeneration: _transcriptGeneration,
-          ...params
-        }: InternalDeliverOutboundPayloadsParams) => customDeliver(params)
-      : (await loadOutboundDeliverRuntime()).deliverOutboundPayloadsInternal;
+    const deliver =
+      opts.deliver ?? (await loadOutboundDeliverRuntime()).deliverOutboundPayloadsInternal;
     await drainPendingDeliveriesCore(
       {
         ...opts,

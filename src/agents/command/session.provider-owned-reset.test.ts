@@ -83,13 +83,6 @@ it("carries preferences across a daily reset", async () => {
     verboseLevel: "full",
     pendingTranscriptRepair: [{ id: "old-repair", text: "old reply", createdAt: startedAt }],
     lastRunId: "settled-old-run",
-    restartRecoveryRequesterSource: {
-      agentId: "main",
-      sessionKey,
-      sessionId: "daily-expired-session-id",
-      sourceRunId: "settled-old-run",
-      requesterOrigin: { sessionKey, operatorProfileId: "original-requester" },
-    },
   });
   const result = await resolve({ reset: { mode: "daily" } });
   expect(result).toMatchObject({
@@ -101,5 +94,4 @@ it("carries preferences across a daily reset", async () => {
   });
   expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
   expect(result.sessionEntry?.lastRunId).toBeUndefined();
-  expect(result.sessionEntry?.restartRecoveryRequesterSource).toBeUndefined();
 });

@@ -127,9 +127,6 @@ vi.mock("./server/ws-connection/message-handler.js", () => ({
 vi.mock("./server-startup-handler-prewarm.js", () => ({
   scheduleGatewayPrewarm: () => [{ stop() {} }],
 }));
-vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
-  scheduleRestartAbortedMainSessionRecovery: () => undefined,
-}));
 
 const cleanups: Array<() => Promise<void>> = [];
 const tempDirs: string[] = [];

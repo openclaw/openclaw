@@ -168,9 +168,7 @@ export async function completeCleanupBookkeeping(
       if (!retireImmediately) {
         draft.cleanupCompletedAt = cleanupParams.completedAt;
         if (suppressSessionEffects) {
-          draft.execution.restartRecovery = undefined;
           draft.execution.suppressSessionEffects = true;
-          draft.terminalOwner = undefined;
         }
         if (draft.collect) {
           draft.requesterSettleWake = undefined;

@@ -1,16 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { GatewayClientInfo } from "../../packages/gateway-protocol/src/client-info.js";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
-import { createRestartRecoveryOperatorSource } from "../agents/operator-run-recovery-source.js";
-import type { RequesterOrigin } from "../agents/requester-origin.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-  type SessionTranscriptRuntimeTarget,
-} from "../config/sessions/session-accessor.js";
-import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthenticatedDeviceTokenIdentity } from "../infra/device-pairing-identity.js";
@@ -18,22 +9,15 @@ import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pair
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { restoreGatewayRunRecovery } from "./operator-run-recovery.js";
+import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import {
-  captureOperatorToolGatewayContinuationContext,
-  withOperatorToolGatewayAuthority,
-} from "./server-plugin-in-process-authority.js";
 import {
   createContext,
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
-import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 export function recoveryFixture(
   stateDir: string,
@@ -49,17 +33,15 @@ export function recoveryFixture(
   });
 }
 
-export function pairedOperator(
-  overrides: { deviceId?: string; token?: string } = {},
-): PairedDevice {
+export function pairedOperator(): PairedDevice {
   return {
-    deviceId: overrides.deviceId ?? "recovery-device",
+    deviceId: "recovery-device",
     publicKey: "fixture-public-key",
     roles: ["operator"],
     approvedScopes: ["operator.admin"],
     tokens: {
       operator: {
-        token: overrides.token ?? "fixture-device-token",
+        token: "fixture-device-token",
         role: "operator",
         scopes: ["operator.admin"],
         createdAtMs: 1,
@@ -86,7 +68,6 @@ export async function createOperatorRecoveryFixture(params: {
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
-  storePath?: string;
   parentSessionKey?: string | null;
   scopes?: string[];
   device?: PairedDevice;
@@ -96,9 +77,6 @@ export async function createOperatorRecoveryFixture(params: {
   clientInfo?: Pick<GatewayClientInfo, "id" | "mode">;
   localOperator?: boolean;
   sourceIngress?: "control-ui" | "internal";
-  sourceRunId?: string;
-  inputProvenance?: InputProvenance;
-  requesterOrigin?: RequesterOrigin;
 }) {
   let config = params.config;
   const context = params.context;
@@ -171,11 +149,7 @@ export async function createOperatorRecoveryFixture(params: {
     agentId,
     sessionKey: params.sessionKey ?? `agent:${agentId}:recovery-authority`,
     sessionId: params.sessionId ?? "recovery-authority-session",
-    storePath:
-      params.storePath ??
-      path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json"),
-    sourceRunId: params.sourceRunId ?? "original-operator-turn",
-    recoveryRunId: "recovered-operator-turn",
+    storePath: path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json"),
   };
   const entry: InternalSessionEntry = {
     sessionId: target.sessionId,
@@ -187,24 +161,9 @@ export async function createOperatorRecoveryFixture(params: {
         ? undefined
         : (params.parentSessionKey ?? `agent:${agentId}:main`),
     spawnDepth: 0,
-    restartRecoveryDeliveryRunId: target.recoveryRunId,
-    restartRecoveryDeliverySourceRunId: target.sourceRunId,
-    restartRecoverySourceIngress: params.sourceIngress ?? "control-ui",
     createdActor: { type: "human", source: "profile", id: params.profileId },
   };
-  entry.restartRecoveryOperatorSource = expectDefined(
-    createRestartRecoveryOperatorSource({
-      authority: captured.authority,
-      entry,
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      sourceRunId: target.sourceRunId,
-      inputProvenance: params.inputProvenance,
-      requesterOrigin: params.requesterOrigin,
-    }),
-    "host-captured recovery source",
-  );
-  entry.restartRecoverySourceIngress = entry.restartRecoveryOperatorSource.snapshot.sourceIngress;
+  const snapshot = expectDefined(captured.authority.recoverySnapshot, "scheduled operator source");
   await replaceSessionEntry(target, entry);
   const sourceAuthority = captured.authority;
   captured.release();
@@ -220,87 +179,13 @@ export async function createOperatorRecoveryFixture(params: {
     target,
     entry,
     sourceAuthority,
+    snapshot,
     setConfig: (next: OpenClawConfig) => {
       config = next;
     },
     retire: () => {
       current = false;
     },
-    restore: async () =>
-      (
-        await restoreGatewayRunRecovery({
-          target,
-          context,
-          assertCurrent,
-          restoreOperator: true,
-          restoreRequester: false,
-        })
-      ).operator,
+    restore: () => restoreGatewayOperatorSource({ snapshot, target, context, assertCurrent }),
   };
-}
-
-export function compactRecoverySession(
-  target: SessionTranscriptRuntimeTarget,
-  assertActive: SessionSourceAssertion,
-  sessionId: string,
-) {
-  const entry = expectDefined(loadSessionEntry(target), "compacting session");
-  return acceptCompactionSuccessor({
-    currentTarget: target,
-    expectedEntry: { lifecycleRevision: undefined, activeWriterRunId: undefined, ...entry },
-    assertActive,
-    result: {
-      ok: true,
-      compacted: true,
-      result: { sessionId, tokensBefore: 120, tokensAfter: 42 },
-    },
-  });
-}
-
-/** Use the actual accepted-child capture and writer-owned compaction boundary. */
-export async function compactRecoveryChild(
-  fixture: { context: GatewayRequestContext; target: SessionTranscriptRuntimeTarget },
-  authority: AdmittedRunOperatorAuthority,
-  beforeCompaction: () => void = () => {},
-) {
-  const source = { operatorRunAuthority: authority, scopes: ["operator.write"] };
-  const client = createSyntheticPluginRuntimeClient({
-    operatorRoleActor: { kind: "operator", profileId: authority.profileId },
-    ...source,
-  });
-  const child = expectDefined(
-    await withPluginRuntimeGatewayRequestScope(
-      { client, context: fixture.context, isWebchatConnect: () => false },
-      () =>
-        withOperatorToolGatewayAuthority(
-          source,
-          async () => await captureOperatorToolGatewayContinuationContext(),
-        ),
-    ),
-    "accepted child authority",
-  );
-  try {
-    beforeCompaction();
-    const target = {
-      ...fixture.target,
-      sessionKey: "agent:main:subagent:recovered-child",
-      sessionId: "child-before-compaction",
-    };
-    await replaceSessionEntry(target, {
-      sessionId: target.sessionId,
-      lifecycleRevision: "child-lifecycle",
-      updatedAt: 1,
-    });
-    const operatorAuthority = expectDefined(child.operatorAuthority, "child policy");
-    const compacted = await compactRecoverySession(
-      target,
-      operatorAuthority.assertCurrent,
-      "child-after-compaction",
-    );
-    target.sessionId = compacted.entry.sessionId;
-    return { ...child, operatorAuthority, target };
-  } catch (error) {
-    child.release();
-    throw error;
-  }
 }

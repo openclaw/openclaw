@@ -27,7 +27,7 @@ import { buildTranscriptFollowupRun } from "./transcript-followup-run.js";
 export type { GoalContinuation } from "./goal-continuation.types.js";
 
 /** Selects supported Codex placement facts; execution still acquires a fresh turn claim. */
-export async function resolveCodexGoalPlacement(params: {
+async function resolveCodexGoalPlacement(params: {
   agentId?: string;
   sessionKey: string;
   sessionId: string;
