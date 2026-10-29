@@ -50,15 +50,18 @@ There are no restart checkpoints written per turn or tool call, startup orphan
 scans, or crash-time execution reconstruction.
 
 Startup recovers ready session stores immediately. If a store is still undergoing
-startup inspection and preparation, recovery observes that owner's completion
-and discovers the store again once it is admitted. Other ready stores can resume
-while that preparation continues. A failed or refused database keeps its normal
-admission safeguards. Shutdown cancels a pending store's wait without consuming
-its markers.
+inspection and preparation, its existing startup owner discovers retained work
+before admitting fresh inputs. Recovery runs after database preparation ends,
+under the session's current authority. An unrelated store's inspection does not
+hold up ready agents. Refused databases keep their normal admission safeguards,
+and shutdown cancels pending recovery without consuming its markers.
 
-Fresh external inputs remain behind the existing startup fence until retained
-inputs have acquired their queue slots. Already-admitted recovery turns and their
-tools can proceed during that wait.
+The initial recovery pass keeps the existing external-input fence until its
+retained inputs own their ordinary queue slots. A store prepared later keeps its
+own input readiness pending until its retained inputs are admitted. This also
+applies when several logical agents share the same physical store. Database
+reads and writes retain their normal admission rules; recovery does not borrow
+startup's temporary database access or wait for model executions to finish.
 
 <a id="graceful-restarts-drain-first" />
 

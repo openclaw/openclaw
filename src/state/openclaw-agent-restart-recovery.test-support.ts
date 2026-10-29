@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { addSession } from "../agents/bash-process-registry.js";
@@ -7,14 +8,15 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
 import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
 import {
   persistRunningSessionsForRestart,
   resumeMarkedSessions,
 } from "../gateway/session-restart-resume.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   readAgentDatabaseAdmissionRefusal,
@@ -27,7 +29,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase as openAgent,
 } from "./openclaw-agent-db.js";
-import { prepareOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "./openclaw-state-db-readonly.js";
 import { setUserProfileRole } from "./user-profile-writes.worker.js";
@@ -45,13 +46,16 @@ export function registerRestartRecoveryAdmissionTests({
   makeEnv,
   holdIntegrity,
 }: NativeIntegrityFixture): void {
-  it.for(["ready", "refused", "aborted"] as const)(
-    "recovers ready restart stores while native writable admission is pending (%s)",
+  it.for(["ready", "read-pending", "shared", "refused", "aborted"] as const)(
+    "recovers retained inputs without holding unrelated ready stores (%s)",
     async (outcome, { signal }) => {
       const env = makeEnv("restart-admission-");
       vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+      const sharedStore =
+        outcome === "shared" ? path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite") : undefined;
       const config: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { main: {}, ready: {} } },
+        ...(sharedStore ? { session: { store: sharedStore } } : {}),
         gateway: {
           roles: {
             default: "writer",
@@ -67,6 +71,7 @@ export function registerRestartRecoveryAdmissionTests({
       const scope = {
         agentId: "main",
         env,
+        ...(sharedStore ? { storePath: sharedStore } : {}),
         sessionKey: "agent:main:restart-admission",
         sessionId: "main-restart-admission",
       };
@@ -104,7 +109,7 @@ export function registerRestartRecoveryAdmissionTests({
         );
       }
       setUserProfileRole(profile.id, "reader");
-      const pathname = openAgent(scope).path;
+      const pathname = openAgent({ ...scope, ...(sharedStore ? { path: sharedStore } : {}) }).path;
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       {
@@ -130,38 +135,61 @@ export function registerRestartRecoveryAdmissionTests({
           }
         });
         const context = createContext([], () => config);
-        context.agentDatabaseStartup = {
-          get hasPendingAgents() {
-            return admission.hasPendingAgents;
-          },
-          waitForAgentPreparation: admission.waitForAgentPreparation.bind(admission),
-        };
+        context.agentDatabaseStartup = admission.observation;
+        const preparationReady = createDeferredCore();
+        const inputRecoveryReady = createDeferredCore();
+        const inputRecoveryEntered = createDeferredCore();
+        if (outcome !== "read-pending") {
+          preparationReady.resolve();
+        }
         let resuming: Promise<void> | undefined;
         try {
-          admission.activate({
+          const activate = admission.activate.bind(admission);
+          // Keep native opening and the production migration/recovery adapter. This fixture
+          // reaches a revoked principal before inference; model publication is independent.
+          vi.spyOn(admission, "activate").mockImplementation((activation) =>
+            activate({
+              ...activation,
+              publishAgent: async () => {},
+              migrateAgent: async (input) => {
+                if (input.agentId === "main" && outcome === "refused") {
+                  throw new Error("fixture startup preparation failed");
+                }
+                const migrated = await activation.migrateAgent(input);
+                const recoverInputs = migrated ? migrated.recoverInputs : undefined;
+                return {
+                  // Advisory transcript maintenance is not part of recovery admission.
+                  recoverInputs:
+                    recoverInputs &&
+                    (async () => {
+                      inputRecoveryEntered.resolve();
+                      await inputRecoveryReady.promise;
+                      await recoverInputs();
+                    }),
+                };
+              },
+            }),
+          );
+          const registry = createEmptyPluginRegistry();
+          const startup = {
+            admission,
+            context,
+            preparationReady: preparationReady.promise,
+            waitForPostReadyWork: async () => {},
+            getConfig: () => config,
+            getPluginRegistry: () => registry,
+            getPluginMetadataSnapshot: () => undefined,
             isCurrent: () => !signal.aborted,
-            preparationReady: Promise.resolve(),
-            captureReadAdmission: ({ assertCurrent }) => assertCurrent,
-            openAgent: ({ agentId, assertCurrent, signal: openingSignal }) =>
-              prepareOpenClawAgentDatabaseExecution({ agentId, env }, assertCurrent, openingSignal),
-            migrateAgent: async ({ agentId, assertCurrent }) => {
-              if (agentId === "main" && outcome === "refused") {
-                throw new Error("fixture startup preparation failed");
-              }
-              await prepareGatewayStartupSessions({
-                cfg: config,
-                env,
-                agentIds: new Set([agentId]),
-                assertCurrent,
-                log: { info() {}, warn() {} },
-              });
-            },
-            // Storage recovery reaches the real principal refusal before any model is needed.
-            publishAgent: async () => {},
-          });
-          await withinTest(integrity.entered(), signal);
+            log: { info() {}, warn },
+          };
+          activateGatewayAgentDatabaseStartup(startup);
+          if (outcome === "read-pending") {
+            expect(readAgentDatabaseReadAdmissionRefusal("main", { env })).toBeDefined();
+          } else {
+            await withinTest(integrity.entered(), signal);
+            expect(readAgentDatabaseReadAdmissionRefusal("main", { env })).toBeUndefined();
+          }
           await admission.waitForAgentPreparation("ready", { signal });
-          expect(readAgentDatabaseReadAdmissionRefusal("main", { env })).toBeUndefined();
           expect(readAgentDatabaseAdmissionRefusal("main", { env })).toMatchObject({
             code: "agent-database-inspection-pending",
           });
@@ -169,38 +197,78 @@ export function registerRestartRecoveryAdmissionTests({
 
           resuming = resumeMarkedSessions({ context, signal: recoverySignal, log: { warn } });
           void resuming.catch(() => {});
-          await withinTest(
-            awaitGateBeforeSettlement(
-              readyRecovered.promise,
-              resuming,
-              "Ready store did not recover",
-            ),
-            signal,
-          );
-          expect(
-            (await readSessionEntryReadOnlyInWorker(readyScope))?.resumeAfterRestart,
-          ).toBeUndefined();
-          expect((await readSessionEntryReadOnlyInWorker(scope))?.resumeAfterRestart).toEqual(
-            marker,
-          );
-          expect(warn).toHaveBeenCalledTimes(1);
-
-          if (outcome === "aborted") {
-            recovery.abort(new Error("fixture recovery stopped"));
-            await expect(resuming).rejects.toThrow("fixture recovery stopped");
+          // Initial discovery must finish even while another store is unreadable or write-pending.
+          await withinTest(resuming, signal);
+          if (!sharedStore) {
+            await withinTest(readyRecovered.promise, signal);
+            expect(
+              (await readSessionEntryReadOnlyInWorker(readyScope))?.resumeAfterRestart,
+            ).toBeUndefined();
+          }
+          if (outcome !== "read-pending") {
             expect((await readSessionEntryReadOnlyInWorker(scope))?.resumeAfterRestart).toEqual(
               marker,
             );
-            return;
           }
+          expect(warn).toHaveBeenCalledTimes(sharedStore ? 0 : 1);
+          const pendingPreparation = admission.pendingPreparation;
+          expect(pendingPreparation).toBeDefined();
+          preparationReady.resolve();
           integrity.release();
-          await withinTest(Promise.all([resuming, admission.pendingPreparation]), signal);
+          if (outcome !== "refused") {
+            await withinTest(
+              awaitGateBeforeSettlement(
+                inputRecoveryEntered.promise,
+                pendingPreparation!,
+                "Prepared marked store did not enter restart recovery",
+              ),
+              signal,
+            );
+            expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
+            // Physical reads/writes are ready, but a fresh input cannot overtake retained work.
+            const { waitForAgentInputAdmission } =
+              await import("./agent-database-preparation-context.js");
+            const input = waitForAgentInputAdmission(sharedStore ? "ready" : "main", {
+              ...(sharedStore ? { storePath: sharedStore } : { cfg: config }),
+              owner: admission.observation,
+              signal,
+            });
+            expect(input).toBeDefined();
+            await withinTest(
+              awaitGateBeforeSettlement(
+                readSessionEntryReadOnlyInWorker(readyScope),
+                input!,
+                "Fresh input overtook restart recovery",
+              ),
+              signal,
+            );
+            if (outcome === "aborted") {
+              const stopping = owner.stop();
+              const cancelled = expect(input).rejects.toMatchObject({
+                name: "AbortError",
+                cause: admission.signal.reason,
+              });
+              inputRecoveryReady.resolve();
+              await withinTest(Promise.all([cancelled, stopping]), signal);
+            } else {
+              inputRecoveryReady.resolve();
+              await withinTest(input!, signal);
+            }
+          }
+          await withinTest(Promise.all([resuming, pendingPreparation]), signal);
           if (outcome === "refused") {
             expect(readAgentDatabaseAdmissionRefusal("main", { env })).toMatchObject({
               code: "agent-database-inspection-failed",
             });
             expect(() => openAgent(scope)).toThrow("fixture startup preparation failed");
             expect(warn).toHaveBeenCalledTimes(1);
+          } else if (outcome === "aborted") {
+            expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
+            expect((await readSessionEntryReadOnlyInWorker(scope))?.resumeAfterRestart).toEqual(
+              marker,
+            );
+            expect(warn).toHaveBeenCalledTimes(1);
+            return;
           } else {
             expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
             expect(
@@ -212,9 +280,11 @@ export function registerRestartRecoveryAdmissionTests({
             );
           }
           await withinTest(resumeMarkedSessions({ context, signal, log: { warn } }), signal);
-          expect(warn).toHaveBeenCalledTimes(outcome === "ready" ? 2 : 1);
+          expect(warn).toHaveBeenCalledTimes(outcome === "refused" ? 1 : 2);
         } finally {
           recovery.abort();
+          preparationReady.resolve();
+          inputRecoveryReady.resolve();
           integrity.release();
           await owner.stop();
           await Promise.allSettled([resuming]);
