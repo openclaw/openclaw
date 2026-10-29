@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { API, EmitOutputFile } from "typescript/unstable/async";
 import { createDeclarationInputBoundary, resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import { createDeclarationFileSystem } from "./native-declaration-filesystem.mts";
@@ -29,14 +28,17 @@ type NativeCompilationOptions = {
   emit?: boolean;
 };
 
-type NativeApiModule = typeof import("typescript/async");
-type NativeFsModule = typeof import("typescript/fs");
+type NativeApiModule = typeof import("typescript/unstable/async");
 type NativeCompiler = {
   executable: string;
   packageJson: string;
   module: NativeApiModule;
-  fakeStat: NativeFsModule["serverFS"]["fakeStat"] | undefined;
+  fakeStat: unknown;
 };
+
+function resolveFakeStat(module: unknown): unknown {
+  return isRecord(module) && isRecord(module.serverFS) ? module.serverFS.fakeStat : undefined;
+}
 
 function resolveTypeScriptPackage(compilerRoot: string) {
   try {
@@ -60,29 +62,23 @@ async function resolveNativeCompiler(compilerRoot: string | undefined): Promise<
   if (compilerRoot && packageJson) {
     const manifest: unknown = JSON.parse(fs.readFileSync(packageJson, "utf8"));
     const exports = isRecord(manifest) && isRecord(manifest.exports) ? manifest.exports : {};
-    // Resolve like Node's ESM loader so a linked package keeps one module instance;
-    // filesystem sentinels are identity-checked by the client that loaded them.
-    const load = (entry: unknown) => {
-      if (typeof entry !== "string") {
-        return undefined;
-      }
-      const compilerModuleUrl = pathToFileURL(
-        fs.realpathSync(path.join(path.dirname(packageJson), entry)),
-      ).href;
-      return import(compilerModuleUrl);
-    };
+    // Node shares one cache for require(esm) and import(), so linked packages keep
+    // the client and filesystem sentinels from the same module instance.
+    const requireCompiler = createRequire(packageJson);
+    const load = (entry: unknown) =>
+      typeof entry === "string"
+        ? requireCompiler(fs.realpathSync(path.join(path.dirname(packageJson), entry)))
+        : undefined;
     // TypeScript 7 previews before 2026-10 published the API under unstable/.
     const entry = exports["./async"] ?? exports["./unstable/async"];
     if (typeof entry === "string") {
       const module: NativeApiModule = await load(entry);
-      const fsModule: Partial<NativeFsModule> | undefined = await load(
-        exports["./fs"] ?? exports["./unstable/fs"],
-      );
+      const fsModule: unknown = await load(exports["./fs"] ?? exports["./unstable/fs"]);
       return {
         executable: resolveRepoToolBinPath("tsgo", { cwd: compilerRoot }),
         packageJson,
         module,
-        fakeStat: fsModule?.serverFS?.fakeStat,
+        fakeStat: resolveFakeStat(fsModule),
       };
     }
     if (entry !== undefined) {
@@ -92,13 +88,13 @@ async function resolveNativeCompiler(compilerRoot: string | undefined): Promise<
   // Roots without TypeScript or with TypeScript 6 predate the native API; they keep
   // the installed compiler.
   const [module, fsModule] = await Promise.all([
-    import("typescript/async"),
-    import("typescript/fs"),
+    import("typescript/unstable/async"),
+    import("typescript/unstable/fs"),
   ]);
   return {
     ...resolveInstalledNativeTypeScriptCompiler(),
     module,
-    fakeStat: fsModule.serverFS.fakeStat,
+    fakeStat: resolveFakeStat(fsModule),
   };
 }
 
@@ -153,14 +149,15 @@ export async function compileNativeProject({
         throw new Error(`Invalid declaration package manifest: ${manifestFile}`);
       }
     }
+    // Earlier clients forward only the callbacks they know and ignore stat.
+    const compilerFileSystem =
+      compiler.fakeStat === undefined
+        ? view.filesystem
+        : { ...view.filesystem, stat: compiler.fakeStat };
     api = new compiler.module.API({
       cwd: root,
       tsserverPath: binary,
-      // Earlier clients forward only the callbacks they know and ignore stat.
-      fs:
-        compiler.fakeStat === undefined
-          ? view.filesystem
-          : { ...view.filesystem, stat: compiler.fakeStat },
+      fs: compilerFileSystem,
     });
     const configured = await api.parseConfigFile(config);
     view.assertValid();

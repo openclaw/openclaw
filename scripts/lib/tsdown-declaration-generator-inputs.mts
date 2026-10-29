@@ -61,8 +61,8 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     throw new Error(`Missing native TypeScript export: ${names.join(" or ")}`);
   };
   const installedPackageImports = new Map([
-    ["typescript/async", nativeExport("./async", "./unstable/async")],
-    ["typescript/fs", nativeExport("./fs", "./unstable/fs")],
+    ["typescript/unstable/async", nativeExport("./async", "./unstable/async")],
+    ["typescript/unstable/fs", nativeExport("./fs", "./unstable/fs")],
   ]);
   // Producers traverse only their own reachable owners. Every reached computed
   // import must still match its exact expression and declared targets.
@@ -78,8 +78,9 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     [
       "scripts/lib/native-declaration-emitter.mts",
       {
-        // Compiler roots load their own API client; the producer's root is the installed one.
-        expressions: ["compilerModuleUrl"],
+        // Compiler roots load their own API client through createRequire; the producer's
+        // closure still owns the installed package bytes used by its fallback.
+        expressions: [],
         targets: [
           nativeManifest,
           nativeExport("./async", "./unstable/async"),
