@@ -308,7 +308,7 @@ describe("Gateway GitHub publication", () => {
               status: "failed",
               code: "github_rejected",
               nextAction:
-                "Reopen the closed pull request or retry to create a new publication request.",
+                "GitHub pull request was closed before publication completed. Reopen the closed pull request or retry to create a new publication request.",
             }
           : { status: "published", repository: "openclaw/openclaw", url: resultUrl },
       );
@@ -544,7 +544,7 @@ describe("Gateway GitHub publication", () => {
           code: "workspace_changed",
           message: "GitHub publication failed.",
           nextAction:
-            "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
+            "GitHub publication worktree authority changed. Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
         });
         expect(commandMatchesAny("commit-tree", "push", "POST")).toEqual([]);
       });

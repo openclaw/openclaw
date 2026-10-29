@@ -674,14 +674,8 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
     const args: string[] = [];
     if (!recoveryOnly) {
       if (options.candidateOwned) {
-        args.push(
-          "--admission-workflow-sha",
-          workflowSha,
-          "-f",
-          "provider=openai",
-          "-f",
-          "release_profile=stable",
-        );
+        args.push("--admission-workflow-sha", workflowSha);
+        args.push("-f", "provider=openai", "-f", "release_profile=stable");
       } else if (!extraArgs.includes("--trusted-workflow-ref")) {
         args.push("--trusted-workflow-ref", "main", "--workflow-sha", workflowSha);
       }

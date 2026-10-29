@@ -141,14 +141,12 @@ async function runGoogleVertexStreamResult(params: {
   fetch: typeof guardedFetchMock;
 }) {
   const streamFn = createGoogleVertexTransportStreamFn();
-  const stream = await Promise.resolve(
-    streamFn(
-      params.model ?? buildGoogleVertexModel(),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
-        typeof streamFn
-      >[1],
-      { apiKey: "gcp-vertex-credentials", fetch: params.fetch } as Parameters<typeof streamFn>[2],
-    ),
+  const stream = await streamFn(
+    params.model ?? buildGoogleVertexModel(),
+    { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
+      typeof streamFn
+    >[1],
+    { apiKey: "gcp-vertex-credentials", fetch: params.fetch } as Parameters<typeof streamFn>[2],
   );
   return stream.result();
 }
@@ -1854,26 +1852,28 @@ describe("google transport stream", () => {
   });
 
   it.each([
-    ["eu", "https://aiplatform.eu.rep.googleapis.com"],
-    ["us", "https://aiplatform.us.rep.googleapis.com"],
-  ])(
-    "routes the %s Vertex multi-region through the production stream",
-    async (location, origin) => {
-      const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-region-"));
-      vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
-      vi.stubEnv("HOME", path.join(tempDir, "home"));
-      vi.stubEnv("APPDATA", "");
+    ["aiplatform.eu.rep", "us-central1", "eu", false],
+    ["aiplatform.us.rep", "us-central1", "us", false],
+    ["aiplatform.eu.rep", "eu", "eu", true],
+    ["aiplatform.us.rep", "us", "us", true],
+    ["aiplatform", "us-central1", "global", false],
+    ["us-east5-aiplatform", "global", "us-east5", false],
+    ["custom", "us-central1", "us-central1", false],
+  ] as const)(
+    "routes %s through the Vertex stream",
+    async (host, environment, location, template) => {
+      await useGoogleAuthLibraryCredentials("endpoint-location", "fixture-token");
       vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
-      vi.stubEnv("GOOGLE_CLOUD_LOCATION", location);
-      googleAuthGetAccessTokenMock.mockResolvedValueOnce("oauth-token");
-      guardedFetchMock.mockResolvedValueOnce(
-        buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
-      );
-      await runGoogleVertexStreamResult({ fetch: vi.fn() });
-
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", environment);
+      mockGoogleTextResponse();
+      const baseUrl = `https://${host}.googleapis.com`;
+      await runGoogleVertexStreamResult({
+        model: buildGoogleVertexModel(template ? {} : { baseUrl }),
+        fetch: vi.fn(),
+      });
       const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
       expect(String(url)).toBe(
-        `${origin}/v1/projects/demo/locations/${location}/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse`,
+        `${baseUrl}/v1/projects/demo/locations/${location}/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse`,
       );
     },
   );

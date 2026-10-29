@@ -174,5 +174,8 @@ function resolveGatewayServiceOperationLockPath(env: GatewayServiceEnv): string 
       : process.platform === "win32"
         ? `schtasks:${resolveTaskName(env).toLowerCase()}`
         : `systemd:${resolveSystemdServiceName(env)}`;
-  return path.join(resolvePreferredOpenClawTmpDir(), `service-lifecycle-${sha256Hex(identity)}`);
+  return path.join(
+    resolvePreferredOpenClawTmpDir({ purpose: "coordination" }),
+    `service-lifecycle-${sha256Hex(identity)}`,
+  );
 }

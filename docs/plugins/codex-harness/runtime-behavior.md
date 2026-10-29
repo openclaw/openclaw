@@ -172,7 +172,10 @@ native tool surface is disabled, OpenClaw supplies `view_image` with its
 advertised for the active run.
 
 When OpenClaw restores conversation history into a Codex thread, saved images
-stay beside their original messages inside the quoted history. The current
+stay beside their original messages inside the quoted history. This includes
+managed images saved with assistant answers when the selected model accepts
+image input. Restoration verifies the owning agent, physical session, and
+assistant source before reading the saved original. The current
 request and its attachments follow that history, so a later text or voice turn
 does not present old screenshots as newly attached images. If context limits
 remove an image's original message, its image input is omitted too; the saved

@@ -190,6 +190,46 @@ Only verified native merge completion retires the exact workflow binding.
 Failures and pending completion preserve it. Repeating completion reconciles
 the merge outcome without repeating publication, comments, or cleanup.
 
+### Continue a correction with repaired workflow code
+
+An unfinished correction can need a landed tooling repair before its retained
+workflow can finish preparation. Use the explicit successor command from the
+current qualified canonical wrapper:
+
+```bash
+scripts/pr prepare-workflow-successor <PR> \
+  --expected-binding <binding-OID> --from-workflow <old-SHA> --to-workflow <current-main-SHA> \
+  --expected-head <local-head> --expected-tree <tree-OID> \
+  --expected-review <correction-review-blob-OID> --expected-hosted-head <hosted-head>
+```
+
+First establish that every tool from an interrupted operation has finished and
+use its reported exact-OID `lock-recover` command. Succession does not recover
+locks or infer quiescence. It requires the existing registered correction
+checkout, unchanged clean source, approved correction review, exact hosted
+publication authority, and no merge outcome, unresolved capture, or pending
+dispatch. The destination must be the authenticated current official main;
+unlanded code, arbitrary revisions, and admin admission flags are not accepted.
+
+The normal supervisor and PR operation lock protect this transition. It retains
+and verifies preparation evidence, preserves `prep.env` and all review/source
+facts, then removes only `gates.env`. A single Git transaction verifies the
+operation owner and advances the exact predecessor binding. The new binding
+retains the old binding, both source identities, local/hosted commits, and the
+review snapshot. Existing version-1 bindings remain valid historical authority.
+
+An interruption before the binding transaction preserves the old binding; one
+after it can leave the new binding even without a successful return. Inspect
+the exact retained binding and evidence before continuing; do not blindly repeat
+the transition or restore an archived gate stamp. Both states require fresh
+ordinary `prepare-gates` before qualified correction publication or merge.
+For an explicitly authorized pending-proof correction, `--for-proof` instead
+validates the typed [proof-publication review](/reference/scripts/pr-preparation#publish-a-candidate-for-required-proof).
+It admits only exact-commit proof publication while NEEDS WORK and unresolved
+findings continue to block ordinary qualification and merge. This command
+does not change the candidate, publish it, waive CI/security/review requirements,
+or authorize a merge.
+
 ## Reconcile a completed CI review
 
 If native landing rejects an older Security Review publisher because its sources

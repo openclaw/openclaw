@@ -78,7 +78,7 @@ export function resolveManagedUpdateLeaseDatabasePath(): string {
   // Other users may own /tmp/openclaw after a reboot; lease placement must not follow it.
   const preferredDir = path.join(base, uid === undefined ? "openclaw" : `openclaw-${uid}`);
   return path.join(
-    resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir: () => base }),
+    resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir: () => base, purpose: "coordination" }),
     "managed-update-handoffs.sqlite",
   );
 }

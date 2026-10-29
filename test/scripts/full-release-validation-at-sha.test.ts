@@ -412,6 +412,9 @@ describe("full-release-validation-at-sha", () => {
         `release-publish/${"a".repeat(12)}-123`,
         "--target-ref",
         "release/2026.7.1",
+        "--admission-workflow-sha",
+        "b".repeat(40),
+        "--pin-admission-workflow",
         "--keep-branch",
         "--dry-run",
         "-f",
@@ -422,6 +425,7 @@ describe("full-release-validation-at-sha", () => {
     ).toMatchObject({
       dryRun: true,
       keepBranch: true,
+      pinAdmissionWorkflow: true,
       inputs: {
         mode: "linux",
         provider: "anthropic",
@@ -444,6 +448,14 @@ describe("full-release-validation-at-sha", () => {
       release_profile: "full",
     });
     rejectArgs(["--", "-f"], "-f requires a value");
+  });
+
+  it("requires an exact admission SHA when main is explicitly pinned", () => {
+    rejectArgs(["--pin-admission-workflow"], "requires a full --admission-workflow-sha");
+    expect(
+      parseArgs(["--admission-workflow-sha", "b".repeat(40), "--pin-admission-workflow"])
+        .pinAdmissionWorkflow,
+    ).toBe(true);
   });
 
   it("requires an exact Tooling SHA for protected workflow tags", () => {

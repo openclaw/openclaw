@@ -126,7 +126,30 @@ it.each(["dispatch-revoked", "post-dispatch", "prepared-current", "prepared-revo
       await grantReached.promise;
       expect(released).toBe(false);
       if (rejected) {
+        // A refusal before launch cancels the waiting anchor, which owns no command and
+        // retires through its pre-spawn startup-error receipt rather than losing identity.
+        await vi.waitFor(() =>
+          expect(
+            writes.mock.calls.some(([chunk]) => String(chunk).includes('"type":"cancel"')),
+          ).toBe(true),
+        );
+        vi.spyOn(process, "kill").mockImplementation(() => {
+          throw Object.assign(new Error("process group is gone"), { code: "ESRCH" });
+        });
+        emit({
+          type: "startup-error",
+          anchorPid: 1235,
+          error: "command startup cancelled before spawn",
+        });
+        emit({ type: "closing", reason: "lineage-lost" });
+        stub.control.push(null);
+        stub.stdout.end();
+        stub.stderr.end();
+        stub.lineage.end();
+        stub.disconnectMock();
+        stub.emitExit(0);
         await rejected;
+        await expect(starting).rejects.toThrow(/^launch authority revoked$/);
       }
       expect(writes.mock.calls.some(([chunk]) => String(chunk).includes('"type":"launch"'))).toBe(
         !revoked,
@@ -149,6 +172,25 @@ it.each(["dispatch-revoked", "post-dispatch", "prepared-current", "prepared-revo
     }
   },
 );
+
+it("bounds a refused launch when the waiting anchor never answers its cancel", async () => {
+  clock();
+  const stub = mockWritableRelay();
+  const outcome = startRelay({
+    initiateSpawn: () => {
+      throw new Error("launch authority revoked");
+    },
+  }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await nextTurn();
+  relayPeer(stub).emit({ type: "prepared" });
+  await nextTurn();
+  await vi.advanceTimersByTimeAsync(GRACEFUL_CANCEL_TIMEOUT_MS * 2);
+  // Without the anchor's receipt the refusal cannot prove extinction, so cleanup stays fenced.
+  expect(await outcome).toMatchObject({ message: expect.stringContaining("hard deadline") });
+});
 
 it("checks input authority after readiness before writing private stdin", async () => {
   const stub = mockWritableRelay();

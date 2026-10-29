@@ -706,7 +706,9 @@ Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastes
 Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
 
 For ordinary embedding requests, a recognized error with one explicit item cap
-sizes the retry batches directly. Unusable or conflicting caps, and aggregate
+sizes the retry batches directly, including caps preserved in a bounded provider
+error body when a gateway wrapper pushes them beyond the displayed preview.
+Unusable or conflicting caps, and aggregate
 limits reported without a count (Mistral's "Too many tokens overall, split into
 more batches."), fall back to halving the rejected batch. Successful slices
 retain their input order and cache entries. A single input that still exceeds a

@@ -32,6 +32,7 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { createDeferred, withinTest } from "../helpers/promise.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { isProcessPresent } from "./run-process.test-support.js";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
 const UPDATE_SCRIPTS_PATH = "scripts/e2e/parallels/npm-update-scripts.ts";
@@ -72,20 +73,11 @@ function smokeOptions(
   };
 }
 
-function pidIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // The command owner joins its leader but only bounds its process-group observation.
 // Foreign descendants have no ChildProcess handle; keep extinction tied to the test signal.
 async function waitForDead(pid: number, signal: AbortSignal): Promise<void> {
   try {
-    while (pidIsAlive(pid)) {
+    while (isProcessPresent(pid)) {
       await waitForProcessTick(5, undefined, { signal });
     }
   } catch (cause) {
@@ -717,7 +709,7 @@ it.runIf(process.platform !== "win32")(
     try {
       await waitForDead(descendantPid, signal);
     } finally {
-      if (pidIsAlive(descendantPid)) {
+      if (isProcessPresent(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }
     }

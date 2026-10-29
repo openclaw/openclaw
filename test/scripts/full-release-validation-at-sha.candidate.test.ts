@@ -104,6 +104,32 @@ describe("candidate-owned full release dispatch entry point", () => {
     });
   });
 
+  it("refuses to override an explicitly pinned admission workflow SHA", () => {
+    const f = createDispatchFixture({ candidateOwned: true, advanceMainBeforeAdmission: 1 });
+    const result = f.run(["--pin-admission-workflow"]);
+    expectDispatchFailure(result, "Admission tooling ref moved before dispatch");
+    expect(result.stdout).not.toContain("Admission P advanced with main");
+    expect(dispatches(f)).toEqual([]);
+    expect(f.record().admission.workflowShaPolicy).toBe("pinned");
+    const retained = readFileSync(f.requestPath(), "utf8");
+    const resumed = f.run(["--resume-request", f.requestPath()], true);
+    expectDispatchFailure(resumed, "Admission tooling ref moved before dispatch");
+    expect(readFileSync(f.requestPath(), "utf8")).toBe(retained);
+    expect(dispatches(f)).toEqual([]);
+  });
+
+  it("resumes a legacy retained admission record without a workflow SHA policy", () => {
+    const f = createDispatchFixture({ candidateOwned: true, stopAfterAccepted: "admission" });
+    expect(f.run().status).toBe(78);
+    const legacy = f.record();
+    delete legacy.admission.workflowShaPolicy;
+    writeFileSync(f.requestPath(), `${JSON.stringify(legacy)}\n`);
+
+    const resumed = f.run(["--resume-request", f.requestPath()], true);
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(dispatches(f)).toEqual([P, Q]);
+  });
+
   it("refuses main that keeps moving past the admission advance bound", () => {
     const f = createDispatchFixture({ candidateOwned: true, advanceMainBeforeAdmission: 4 });
     const result = f.run();

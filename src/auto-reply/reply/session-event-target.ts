@@ -6,6 +6,10 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
+import {
+  resolveRequesterPrincipalKey,
+  requesterCreatorProfileId,
+} from "../../agents/requester-origin.js";
 import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
@@ -44,6 +48,7 @@ const targetScopes = resolveGlobalSingleton(
         env?: NodeJS.ProcessEnv;
         operatorAuthority?: AdmittedRunOperatorAuthority;
         ownerContinuation?: true;
+        hasOriginatingCaller?: true;
         /** The captured requester keys the authority, whose source label is shared by owners. */
         commandOwner?: {
           authority: PreparedCommandOwnerAuthority;
@@ -227,6 +232,10 @@ export async function captureSessionEventTargetForHost(
     targetScopes.set(target, {
       env,
       operatorAuthority,
+      ...(callerAgentMatches &&
+      (resolveRequesterPrincipalKey(caller) || requesterCreatorProfileId(caller?.requesterOrigin))
+        ? { hasOriginatingCaller: true as const }
+        : {}),
       ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
       ...(requester?.messageProvider &&
       requester.senderId &&
@@ -383,6 +392,14 @@ export function readSessionEventTargetOperatorAuthority(
   return targetScopes.get(target)?.operatorAuthority;
 }
 
+/** A captured channel guest still has a caller even without a profile grant. */
+export function hasSessionEventOriginatingCaller(target: SessionEventTarget): boolean {
+  return Boolean(
+    targetScopes.get(target)?.hasOriginatingCaller ||
+    readSessionEventTargetOperatorAuthority(target),
+  );
+}
+
 /** Whether the producing turn was an owner under the target's captured operator source. */
 export function readSessionEventTargetOwnerContinuation(target: SessionEventTarget): boolean {
   return targetScopes.get(target)?.ownerContinuation === true;
@@ -436,6 +453,7 @@ export function combineSessionEventTargetsForHost(
         readSessionEventTargetOperatorAuthority(first) ||
       readSessionEventTargetOwnerContinuation(target) !==
         readSessionEventTargetOwnerContinuation(first) ||
+      hasSessionEventOriginatingCaller(target) !== hasSessionEventOriginatingCaller(first) ||
       commandOwnerRequesterKey(target) !== commandOwnerRequesterKey(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {

@@ -99,7 +99,7 @@ Per-session `/queue` options apply to queued delivery. The `debounce` option als
 
 - `debounce`: quiet window before draining queued followups or collect batches; in Codex `steer` mode, quiet window before sending batched `turn/steer`. Bare numbers are milliseconds; units `ms`, `s`, `m`, `h`, and `d` are accepted.
 - `cap`: max queued messages per session. Values below `1` are ignored.
-- `drop: "summarize"` (default): drop the oldest queued entries as needed, keep compact summaries, and inject them as a synthetic followup prompt.
+- `drop: "summarize"` (default): drop the oldest queued entries as needed, keep compact summaries, and inject them as a synthetic followup prompt. Each summarized entry keeps its own sender and conversation context, and summarized room events keep their room-event instructions.
 - `drop: "old"`: drop the oldest queued entries as needed, without preserving summaries.
 - `drop: "new"`: reject the newest message when the queue is already full.
 
@@ -165,6 +165,11 @@ steering the active run.
 - `/queue default` or `/queue reset` clears the session override.
 
 ## Queued-turn cancellation
+
+Accepted personal browser input keeps its initiating identity while queued. The
+same signed-in person can stop it from another device if they still have access
+to control the conversation. Another person's queued input keeps its own
+cancellation authority, even when the conversation's assigned owner changes.
 
 While a prompt sits in the followup/collect queue (for example a TUI or
 webchat `chat.send` arriving while another turn is active), Gateway keeps a

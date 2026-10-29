@@ -263,6 +263,77 @@ async function installStatelessFixture(
 }
 
 describe("configured plugin migration deferral", () => {
+  it("gates a settled inactive owner until Doctor migrates it after installation and enablement", () =>
+    withFixture(async (f) => {
+      await fs.writeFile(f.source, binding);
+      await f.write({ gateway: { mode: "local" }, plugins: { enabled: false } });
+      await recordDeferredPluginMigrations({
+        pending: [
+          {
+            pluginId: f.pluginId,
+            requiresStateMigration: true,
+            reason: "Update retained an unavailable migration owner",
+            command: "openclaw doctor --fix",
+          },
+        ],
+      });
+      for (let run = 0; run < 2; run++) {
+        const settled = await doctor();
+        expect(settled.deferredPluginMigrations).toBeUndefined();
+        expect(readDeferredPluginMigrations()).toEqual([]);
+        expect(
+          (settled.warnings ?? []).some((warning) => warning.includes("upgrade is unfinished")),
+        ).toBe(false);
+      }
+      await expectBinding(f.source);
+      await inspectDatabase(f.databasePath, (database) => {
+        expect(
+          database
+            .prepare("SELECT status FROM migration_runs WHERE id = ?")
+            .get(`deferred-plugin-migration:${f.pluginId}`)?.status,
+        ).toBe("deferred");
+      });
+      await f.install();
+      const registered = path.join(f.home, "runtime-registered");
+      await fs.writeFile(
+        path.join(f.root, "index.cjs"),
+        `module.exports = {
+        id: "fixture", register() { require("node:fs").writeFileSync(${JSON.stringify(registered)}, "read state"); }
+      };`,
+      );
+      const config = f.config(undefined, [f.root]);
+      await f.write(config);
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      for (const ready of [false, true]) {
+        if (ready) {
+          await doctor();
+          await expectBinding(f.migrated);
+          await expectMissing(f.source);
+        }
+        const loaded = await loadGatewayStartupPluginRuntime({
+          cfg: config,
+          log,
+          baseMethods: [],
+          startupPluginIds: [f.pluginId],
+        });
+        try {
+          const plugin = loaded.pluginRegistry.plugins.find(({ id }) => id === f.pluginId);
+          expect(plugin?.status).toBe(ready ? "loaded" : "error");
+          if (ready) {
+            expect(await fs.readFile(registered, "utf8")).toBe("read state");
+          } else {
+            expect(plugin?.error).toContain("upgrade is unfinished");
+            await expectMissing(registered);
+            await expectBinding(f.source);
+          }
+        } finally {
+          loaded.retireGatewayRuntimeBindings();
+          await disposePluginRegistryInstances(loaded.pluginRegistry);
+        }
+      }
+      expect(readDeferredPluginMigrations()).toEqual([]);
+    }));
+
   it.each([
     ["ready", true, ""],
     ["stateless", true, ""],
