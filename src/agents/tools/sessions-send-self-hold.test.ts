@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -12,13 +13,14 @@ import {
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  createAgentPreacceptRefusal,
   readAgentSelfHeldRefusal,
-  recordAgentAdmissionRefusal,
 } from "../../gateway/agent-turn/agent-admission-refusal.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "../../gateway/device-revocation.js";
+import { errorShapeFromError } from "../../gateway/error-shape.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import {
   createContext,
@@ -57,6 +59,52 @@ import { createSelfHeldSendRetainer } from "./sessions-send-self-hold.js";
 import * as delivery from "./sessions-send-tool.delivery.js";
 import * as input from "./sessions-send-tool.input.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
+
+async function refuseSelfHeldAdmission(cause: unknown) {
+  const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
+  expect(Object.getOwnPropertyDescriptor(error, "cause")).toMatchObject({
+    value: cause,
+    enumerable: false,
+  });
+  const cleanupGate = createDeferred();
+  const order: string[] = [];
+  const cleanup = vi.fn(async () => {
+    await cleanupGate.promise;
+    order.push("cleanup");
+  });
+  // Receiver reservation only; the sender still owns its plugin hold until its turn ends.
+  const releaseUnacceptedReservation = vi.fn(() => {
+    order.push("release");
+    return true;
+  });
+  const emitAcceptance = vi.fn<
+    Parameters<typeof createAgentPreacceptRefusal>[0]["io"]["emitAcceptance"]
+  >((frame) => {
+    order.push("emission");
+    expect(frame[2]).toBe(error);
+    expect(readAgentSelfHeldRefusal(error)?.cause).toBe(cause);
+    expect(readAgentSelfHeldRefusal(cause)?.admission).toEqual({
+      acceptance: "not_accepted",
+      stage: "runtime-preparation",
+    });
+  });
+  const reject = createAgentPreacceptRefusal(
+    { releaseUnacceptedReservation, io: { emitAcceptance } },
+    cleanup,
+  );
+  const rejection = reject(error);
+  try {
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(false, error.message);
+    expect(releaseUnacceptedReservation).not.toHaveBeenCalled();
+    expect(emitAcceptance).not.toHaveBeenCalled();
+    expect(readAgentSelfHeldRefusal(cause)?.admission.acceptance).toBe("uncertain");
+  } finally {
+    cleanupGate.resolve();
+    await rejection;
+  }
+  expect(order).toEqual(["cleanup", "release", "emission"]);
+  expect(emitAcceptance).toHaveBeenCalledExactlyOnceWith([false, undefined, error]);
+}
 
 it.each([
   [true, false, false],
@@ -142,7 +190,7 @@ it.each([
         });
       const effect = vi.fn();
       // Real factory, store, communication gate and guard; transport/handoff are fixtures.
-      // This fixture chooses the preaccept stamp, not a Gateway admission observation.
+      // Refusal runs the real factory with receiver cleanup/reservation fixture ports.
       const dispatch = vi
         .spyOn(delivery, "callSessionsSendGateway")
         .mockImplementation(async () => {
@@ -151,7 +199,7 @@ it.each([
             effect();
             return { status: "accepted", runId: "resumed", taskRunId: "paused-resume" };
           } catch (error) {
-            recordAgentAdmissionRefusal(error, "runtime-preparation", true);
+            await refuseSelfHeldAdmission(error);
             throw error;
           }
         });
@@ -398,7 +446,7 @@ it.each([
       });
       assert(caught);
       if (boundary !== "uncertain") {
-        recordAgentAdmissionRefusal(caught, "runtime-preparation", true);
+        await refuseSelfHeldAdmission(caught);
       }
       const proof = readAgentSelfHeldRefusal(caught);
       assert(proof);
@@ -651,7 +699,7 @@ it.each([false, true])(
             cause = error;
           }
         });
-        recordAgentAdmissionRefusal(cause, "runtime-preparation", true);
+        await refuseSelfHeldAdmission(cause);
         const proof = readAgentSelfHeldRefusal(cause);
         assert(proof);
         const retain = createSelfHeldSendRetainer(
