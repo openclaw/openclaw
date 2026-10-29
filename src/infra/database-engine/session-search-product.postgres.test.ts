@@ -138,6 +138,12 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     expect(capped.truncated).toBe(true);
     expect(capped.hits.every((hit) => hit.sessionKey.startsWith("agent:main:"))).toBe(true);
 
+    await append("underscore", "underscore-hit", "quay signal", "user", "dev_ops");
+    await append("lookalike", "lookalike-hit", "quay signal", "user", "devxops");
+    expect(
+      (await search("quay signal", { agentId: "dev_ops" })).hits.map((hit) => hit.messageId),
+    ).toEqual(["underscore-hit"]);
+
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const config = {
       agents: { entries: { main: {} } },
@@ -184,19 +190,6 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
         },
       ],
     });
-  });
-
-  it("matches the agent key prefix literally, not as a pattern", async () => {
-    await append("underscore", "underscore-hit", "quay signal", "user", "dev_ops");
-    await append("lookalike", "lookalike-hit", "quay signal", "user", "devxops");
-    const { env, storePath } = scope("underscore", "dev_ops");
-    const result = await searchSessionTranscripts({
-      agentId: "dev_ops",
-      env,
-      storePath,
-      query: "quay signal",
-    });
-    expect(result.hits.map((hit) => hit.messageId)).toEqual(["underscore-hit"]);
   });
 
   it("folds diacritics, completes prefixes, ranks proximity and treats operators literally", async () => {
