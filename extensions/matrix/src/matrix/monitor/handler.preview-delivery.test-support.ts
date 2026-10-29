@@ -1,3 +1,4 @@
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { LivePreviewDeliveryResult } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -41,12 +42,17 @@ type PreviewDeliveryHarness = {
   sendMessageMatrixMock: Mock<typeof import("../send.js").sendMessageMatrix>;
   waitForMatrixState: (assertion: () => void) => Promise<void>;
   mockCalls: (mock: unknown, label: string) => unknown[][];
-  toolStarted: (
-    opts: Pick<GetReplyOptions, "onItemEvent" | "onToolStart">,
-    toolCallId: string,
-    name: string,
-  ) => Promise<void>;
 };
+
+export async function toolStarted(
+  opts: Pick<GetReplyOptions, "onItemEvent" | "onToolStart">,
+  toolCallId: string,
+  name: string,
+) {
+  const activity = { toolCallId, name, phase: "start" as const };
+  await opts.onItemEvent?.(projectAgentToolActivity(activity));
+  await opts.onToolStart?.(activity);
+}
 
 export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarness) {
   const {
@@ -58,7 +64,6 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
     acceptMatrixReply,
     waitForMatrixState,
     mockCalls,
-    toolStarted,
   } = harness;
   it("retires a preview after source delivery and ignores late progress", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({

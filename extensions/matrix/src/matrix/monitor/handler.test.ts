@@ -1,6 +1,5 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -19,7 +18,10 @@ import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixStreamingConfig } from "../../types.js";
 import type { MatrixReplyDispatchInfo } from "./handler-draft-controller.js";
 import { registerMatrixLiveAllowlistTests } from "./handler.live-allowlist.test-support.js";
-import { registerMatrixPreviewDeliveryTests } from "./handler.preview-delivery.test-support.js";
+import {
+  registerMatrixPreviewDeliveryTests,
+  toolStarted,
+} from "./handler.preview-delivery.test-support.js";
 import {
   createMatrixHandlerTestHarness as createHarness,
   createMatrixReactionEvent,
@@ -751,16 +753,6 @@ describe("matrix monitor handler draft streaming", () => {
     sendDraftMock.mockResolvedValueOnce({ messageId, roomId: "!room" });
   }
 
-  async function toolStarted(
-    opts: Pick<GetReplyOptions, "onItemEvent" | "onToolStart">,
-    toolCallId: string,
-    name: string,
-  ) {
-    const activity = { toolCallId, name, phase: "start" as const };
-    await opts.onItemEvent?.(projectAgentToolActivity(activity));
-    await opts.onToolStart?.(activity);
-  }
-
   async function sendPreview(opts: GetReplyOptions, text: string, expectedSends = 1) {
     await opts.onPartialReply?.({ text });
     await waitForDrafts(expectedSends);
@@ -1038,7 +1030,6 @@ describe("matrix monitor handler draft streaming", () => {
     sendMessageMatrixMock: sendMock,
     waitForMatrixState: waitForState,
     mockCalls,
-    toolStarted,
   });
 
   it("keeps delayed same-message block boundaries at the emitted block length", async () => {
