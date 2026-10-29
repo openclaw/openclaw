@@ -1,15 +1,16 @@
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { LivePreviewDeliveryResult } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import type { MatrixReplyDispatchInfo } from "./handler-draft-controller.js";
 
 type PreviewDeliveryHarness = {
   createStreamingHarness: (options: {
-    streaming: "partial" | "quiet";
+    streaming: "partial" | "quiet" | "progress";
     previewToolProgressEnabled?: boolean;
     blockStreamingEnabled?: boolean;
+    accountConfig?: import("../../types.js").MatrixConfig;
   }) => {
     dispatch: () => Promise<{
       deliver: (payload: ReplyPayload, info: MatrixReplyDispatchInfo) => Promise<unknown>;
@@ -21,6 +22,7 @@ type PreviewDeliveryHarness = {
         | "onObservedReplyDelivery"
         | "onQueuedFollowupAdmitted"
         | "onAssistantMessageStart"
+        | "onToolStart"
       >;
       finish: () => Promise<void>;
     }>;
@@ -39,6 +41,11 @@ type PreviewDeliveryHarness = {
   sendMessageMatrixMock: Mock<typeof import("../send.js").sendMessageMatrix>;
   waitForMatrixState: (assertion: () => void) => Promise<void>;
   mockCalls: (mock: unknown, label: string) => unknown[][];
+  toolStarted: (
+    opts: Pick<GetReplyOptions, "onItemEvent" | "onToolStart">,
+    toolCallId: string,
+    name: string,
+  ) => Promise<void>;
 };
 
 export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarness) {
@@ -51,6 +58,7 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
     acceptMatrixReply,
     waitForMatrixState,
     mockCalls,
+    toolStarted,
   } = harness;
   it("retires a preview after source delivery and ignores late progress", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({
@@ -340,4 +348,36 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
       }
     },
   );
+
+  it("sends a progress final with media as one captioned media event", async () => {
+    vi.useFakeTimers();
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      accountConfig: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: false } },
+      },
+    });
+    const { deliver, opts, finish } = await dispatch();
+    try {
+      await toolStarted(opts, "call-1", "image_generate");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      sendMessageMatrixMock.mockClear();
+      await deliver(
+        { text: "Here is the image", mediaUrl: "https://example.com/image.png" },
+        { kind: "final" },
+      );
+      const draftEdits = mockCalls(editMessageMatrixMock, "draft edits");
+      expect(draftEdits.some((call) => call[2] === "Here is the image")).toBe(false);
+      const sends = mockCalls(sendMessageMatrixMock, "sends");
+      expect(sends).toHaveLength(1);
+      expect(sends[0]?.[1]).toBe("Here is the image");
+      expect(sends[0]?.[2]).toMatchObject({ mediaUrl: "https://example.com/image.png" });
+      expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+    } finally {
+      await finish();
+      vi.useRealTimers();
+    }
+  });
 }
