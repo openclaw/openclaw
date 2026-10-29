@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { pinRuntimePaths } from "../../config/paths.js";
@@ -255,6 +256,47 @@ describe("sendPoll channel normalization", () => {
       expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
     },
   );
+
+  it("reattaches a send whose Gateway request timed out after dispatch", async () => {
+    setDemoPollRegistry({ deliveryMode: "gateway" });
+    const gateway: OutboundMessageGatewayOptionsInput = {
+      request: async () => {
+        throw new Error("unexpected unconfigured Gateway request");
+      },
+    };
+    const request = vi
+      .spyOn(gateway, "request")
+      // The upload outlives the caller's timer, but the Gateway keeps sending.
+      .mockRejectedValueOnce(
+        new GatewayProtocolRequestTimeoutError({
+          method: "send",
+          timeoutMs: 30_000,
+          requestSent: true,
+        }),
+      )
+      .mockResolvedValueOnce({ messageId: "late-media" });
+
+    const result = await sendMessage({
+      cfg: {},
+      to: "conversation:demo-target",
+      channel: "workspace-chat",
+      content: "photo",
+      idempotencyKey: "slow-upload",
+      gateway,
+    });
+
+    expect(result.result).toMatchObject({ messageId: "late-media" });
+    expect(request).toHaveBeenCalledTimes(2);
+    for (const attempt of [1, 2]) {
+      expect(request).toHaveBeenNthCalledWith(
+        attempt,
+        expect.objectContaining({
+          method: "send",
+          params: expect.objectContaining({ idempotencyKey: "slow-upload" }),
+        }),
+      );
+    }
+  });
 
   it("normalizes plugin aliases for gateway polls", async () => {
     callGatewayMock.mockResolvedValueOnce({ messageId: "p1", channelId: "channel-1" });
