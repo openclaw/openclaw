@@ -49,6 +49,17 @@ no schema migration.
 There are no restart checkpoints written per turn or tool call, startup orphan
 scans, or crash-time execution reconstruction.
 
+Startup recovers ready session stores immediately. If a store is still undergoing
+startup inspection and preparation, recovery observes that owner's completion
+and discovers the store again once it is admitted. Other ready stores can resume
+while that preparation continues. A failed or refused database keeps its normal
+admission safeguards. Shutdown cancels a pending store's wait without consuming
+its markers.
+
+Fresh external inputs remain behind the existing startup fence until retained
+inputs have acquired their queue slots. Already-admitted recovery turns and their
+tools can proceed during that wait.
+
 <a id="graceful-restarts-drain-first" />
 
 ## Graceful shutdown

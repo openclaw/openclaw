@@ -256,37 +256,85 @@ export async function persistRunningSessionsForRestart(params: {
   }
 }
 
-/** Admit one ordinary input per marker; startup does not wait for the agent to finish. */
-export async function resumeMarkedSessions(params: {
+type RestartResumeParams = {
   context: GatewayRequestContext;
   signal: AbortSignal;
   log: { warn: (message: string) => void };
-}): Promise<void> {
-  const { context, signal, log } = params;
-  const cfg = context.getRuntimeConfig();
-  const inventory = prepareSessionStoreTargetInventoryRead(
-    prepareSessionStoreTargetInventory(
-      cfg,
-      listConfiguredSessionStoreAgentIds(cfg),
-      undefined,
-      "configured",
-    ),
-  );
-  const targets = await inventory.withRead(
-    async (snapshot) =>
-      snapshot.agents.flatMap(({ reads }) =>
-        reads.map(({ target, database }) => ({ ...target, storePath: database.path })),
-      ),
-    () => signal.throwIfAborted(),
-    signal,
-  );
+};
+
+async function* discoverRestartSessionStores({
+  context,
+  signal: lifetime,
+  log,
+}: RestartResumeParams) {
+  const controller = new AbortController();
+  const signal = AbortSignal.any([lifetime, controller.signal]);
+  const pending = new Set<Promise<void>>();
   const visited = new Set<string>();
-  for (const target of targets) {
-    const targetKey = target.storePath;
-    if (visited.has(targetKey)) {
-      continue;
+  let needsDiscovery = true;
+  try {
+    for (const agentId of listConfiguredSessionStoreAgentIds(context.getRuntimeConfig())) {
+      // Observe startup's completion, not a request timeout or its temporary write borrow.
+      // Advisory maintenance follows this completion and must not delay retained inputs.
+      const preparation = context.agentDatabaseStartup?.waitForAgentPreparation(agentId, {
+        signal,
+      });
+      if (!preparation) {
+        continue;
+      }
+      const waiting = preparation
+        .catch((error: unknown) => {
+          if (!signal.aborted) {
+            log.warn(`Skipped restart resume for agent ${agentId}: ${String(error)}`);
+          }
+        })
+        .finally(() => {
+          pending.delete(waiting);
+          needsDiscovery = true;
+        });
+      pending.add(waiting);
     }
-    visited.add(targetKey);
+    while (needsDiscovery || pending.size > 0) {
+      signal.throwIfAborted();
+      needsDiscovery = false;
+      const cfg = context.getRuntimeConfig();
+      const inventory = prepareSessionStoreTargetInventoryRead(
+        prepareSessionStoreTargetInventory(
+          cfg,
+          listConfiguredSessionStoreAgentIds(cfg),
+          undefined,
+          "configured",
+        ),
+      );
+      const targets = await inventory.withRead(
+        async (snapshot) =>
+          snapshot.agents.flatMap(({ reads }) =>
+            reads.map(({ target, database }) => ({ ...target, storePath: database.path })),
+          ),
+        () => signal.throwIfAborted(),
+        signal,
+      );
+      // Ready stores progress immediately; readiness changes during this scan schedule another.
+      for (const target of targets) {
+        if (!visited.has(target.storePath)) {
+          visited.add(target.storePath);
+          yield target;
+        }
+      }
+      if (!needsDiscovery && pending.size > 0) {
+        await Promise.race(pending);
+      }
+    }
+  } finally {
+    controller.abort();
+    await Promise.all(pending);
+  }
+}
+
+/** Admit one ordinary input per marker; startup does not wait for the agent to finish. */
+export async function resumeMarkedSessions(params: RestartResumeParams): Promise<void> {
+  const { context, signal, log } = params;
+  for await (const target of discoverRestartSessionStores(params)) {
     signal.throwIfAborted();
     let entries: Awaited<ReturnType<typeof readSessionEntrySummariesInWorker>>;
     try {
