@@ -326,7 +326,7 @@ function isMoonshotLiveTest(file: string) {
 // Release-lead waiver for 2026.9.7 (Peter, 2026-09-29 00:40 PT), carried through
 // 2026.9.9 by the release owner: these files' only live case is
 // skipped on the release branch, so selecting them would leave no passing assertion.
-// Scoped to the exact candidate versions; restore after #161083/#161084 and the
+// Scoped to those candidate versions and the extended-stable line cut from 2026.9.9 below; restore after #161083/#161084 and the
 // subagent cold-restart follow-up land.
 const RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES = new Set([
   "src/gateway/gateway-progress-refresh.live.test.ts",
@@ -345,17 +345,25 @@ const RELEASE_WAIVED_LIVE_FILES = new Map<string, ReadonlySet<string>>([
       "src/agents/google-gemini-switch.live.test.ts",
     ]),
   ],
-  // Extended-stable 2026.9.33 through 2026.9.35 are cut from the 2026.9.9 line with the same skips.
-  ["2026.9.33", RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES],
-  ["2026.9.34", RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES],
-  ["2026.9.35", RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES],
 ]);
+// Every extended-stable 2026.9.33+ patch is cut from the 2026.9.9 line with the same skips, so the
+// waiver follows the maintenance line instead of each patch version.
+const EXTENDED_STABLE_2026_9_LINE = /^2026\.9\.(?:3[3-9]|[4-9]\d)$/u;
+
+function releaseWaivedLiveFiles(candidateVersion: string) {
+  return (
+    RELEASE_WAIVED_LIVE_FILES.get(candidateVersion) ??
+    (EXTENDED_STABLE_2026_9_LINE.test(candidateVersion)
+      ? RELEASE_2026_9_7_TO_9_WAIVED_LIVE_FILES
+      : undefined)
+  );
+}
 
 export function withoutReleaseWaivedLiveFiles(
   files: string[],
   candidateVersion: string | undefined,
 ) {
-  const waived = candidateVersion ? RELEASE_WAIVED_LIVE_FILES.get(candidateVersion) : undefined;
+  const waived = candidateVersion ? releaseWaivedLiveFiles(candidateVersion) : undefined;
   return waived ? files.filter((file) => !waived.has(file)) : files;
 }
 

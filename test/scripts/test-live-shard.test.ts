@@ -51,12 +51,16 @@ describe("scripts/test-live-shard", () => {
       "2026.9.33",
       "2026.9.34",
       "2026.9.35",
+      "2026.9.36",
+      "2026.9.41",
     ]) {
       expect(withoutReleaseWaivedLiveFiles(files, version)).toEqual([
         "src/gateway/gateway-codex-harness.live.test.ts",
       ]);
     }
     expect(withoutReleaseWaivedLiveFiles(files, "2026.9.10")).toEqual(files);
+    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.32")).toEqual(files);
+    expect(withoutReleaseWaivedLiveFiles(files, "2026.10.33")).toEqual(files);
     expect(withoutReleaseWaivedLiveFiles(files, undefined)).toEqual(files);
   });
 
