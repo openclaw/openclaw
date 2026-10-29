@@ -15,12 +15,11 @@ import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/
 import { connectedElementRef, elementRef } from "../../lib/reactive/element-ref.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import { orderSessionPullRequests } from "../../lib/session-pull-request-presentation.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { listDismissablePendingInputIds, loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import { listSubagents, projectProgressCardRuntime } from "./chat-subagent-wait.ts";
@@ -140,36 +139,12 @@ function ChatFooterContent(
     activities?: ChatActivityPillsProps;
   },
 ) {
-  const search = createMemo(() =>
-    projectOwner(
-      getTranscriptState(input.props.paneId).search,
-      (owner) => owner.snapshot,
-      Object.is,
-    ),
-  );
-  const dismissableInputIds = createMemo(() => {
-    const view = input.frame.pendingInputs;
-    return input.frame.dismissPendingInputs && view
-      ? listDismissablePendingInputIds(view, input.frame.threadProps.messages, search().read())
-      : [];
-  });
+  const pendingInputs = () => input.frame.pendingInputs;
   return (
     <>
-      <Show when={input.frame.pendingInputs?.error || dismissableInputIds().length}>
+      <Show when={pendingInputs()?.error}>
         <div class="chat-pending-inputs" role="status">
-          <Show when={input.frame.pendingInputs?.error}>
-            <span>{input.frame.pendingInputs?.error}</span>
-          </Show>
-          <Show when={dismissableInputIds().length}>
-            <button
-              class="btn btn--sm"
-              type="button"
-              aria-label={t("chat.pendingInputs.dismissAllLabel")}
-              onClick={() => input.frame.dismissPendingInputs?.(dismissableInputIds())}
-            >
-              {t("chat.pendingInputs.dismissAll")}
-            </button>
-          </Show>
+          <span>{pendingInputs()?.error}</span>
         </div>
       </Show>
       <Show

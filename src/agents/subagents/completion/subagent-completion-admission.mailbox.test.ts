@@ -8,11 +8,8 @@ import {
   type SessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { reserveRestoredSubagentControllerSources } from "../announce/subagent-announce-controller-source.js";
-import * as requesterLookup from "../announce/subagent-announce-delivery.runtime.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { blockSubagentCompletionDelivery } from "./subagent-completion-admission.store.js";
@@ -21,27 +18,6 @@ import {
   seedSubagentCompletionOwner,
   withSubagentCompletionWorkerState,
 } from "./subagent-completion-admission.test-helpers.js";
-
-function requesterSession(entry: SubagentRunRecord) {
-  return {
-    cfg: {},
-    entry: { sessionId: "requester-session", updatedAt: 1 },
-    canonicalKey: entry.requesterSessionKey,
-    agentId: entry.requesterAgentId,
-    storePath: entry.requesterStorePath,
-  };
-}
-
-function pauseRequesterLookup(entry: SubagentRunRecord, hold: boolean) {
-  const requester = requesterSession(entry);
-  const entered = createDeferredCore();
-  const lookup = createDeferredCore<typeof requester>();
-  vi.spyOn(requesterLookup, "loadRequesterSessionEntry").mockImplementation(async () => {
-    entered.resolve();
-    return hold ? await lookup.promise : requester;
-  });
-  return { entered: entered.promise, release: () => lookup.resolve(requester) };
-}
 
 function reservationState(
   database: OpenClawStateDatabase,
@@ -155,139 +131,3 @@ it.each([false, true])(
       },
     ),
 );
-it("does not resurrect a suspended reservation after the requester lookup finishes", () =>
-  withMailbox(async ({ entry, inputs, block }) => {
-    const entered = createDeferredCore();
-    const lookup =
-      createDeferredCore<Awaited<ReturnType<typeof requesterLookup.loadRequesterSessionEntry>>>();
-    vi.spyOn(requesterLookup, "loadRequesterSessionEntry").mockImplementationOnce(() => {
-      entered.resolve();
-      return lookup.promise;
-    });
-    const restoration = reserveRestoredSubagentControllerSources([entry]);
-    try {
-      await entered.promise;
-      await expect(block("expiry")).resolves.toBe(true);
-    } finally {
-      lookup.resolve(requesterSession(entry));
-      inputs.push(...(await restoration));
-    }
-    expect(await restoration).toEqual([]);
-  }));
-
-// A yielded cohort reports retired members; superseded work must never block human input.
-it.each([
-  ["owed", true],
-  ["killed", true],
-  ["suppressed", true],
-  ["killed during lookup", true],
-  ["superseded", true],
-  ["superseded during lookup", true],
-  ["killed", false],
-  ["suppressed", false],
-  ["killed during lookup", false],
-  ["superseded", false],
-  ["superseded during lookup", false],
-  ["mixed leader retired", true],
-  ["mixed leader retires during lookup", true],
-  ["mixed batch retires during lookup", true],
-  ["mixed sibling replaced during lookup", true],
-] as const)("restores only owed mailbox custody (%s, yielded: %s)", async (scenario, yielded) => {
-  const mixed = scenario.startsWith("mixed");
-  const replaced = scenario === "mixed sibling replaced during lookup";
-  const superseded = scenario.startsWith("superseded");
-  const duringLookup = scenario.endsWith("during lookup");
-  const batchRunIds = ["completion-run", mixed ? "surviving-sibling" : "already-retired-sibling"];
-  await withMailbox(
-    async ({ entry, inputs, reserve, database }) => {
-      // Cohort custody is restored after child delivery has settled.
-      entry.delivery = { status: "delivered" };
-      entry.cleanupCompletedAt = entry.execution.endedAt;
-      seedSubagentCompletionOwner({ subagent: entry, databaseOptions: { database } });
-      const sibling = {
-        ...structuredClone(entry),
-        runId: "surviving-sibling",
-        taskRunId: "sibling-task",
-        childSessionKey: "agent:main:subagent:sibling",
-      };
-      if (mixed) {
-        seedSubagentCompletionOwner({ subagent: sibling, databaseOptions: { database } });
-      }
-      const retire = (runId: string) => {
-        const current = subagentRuns.get(runId)!;
-        subagentRuns.set(runId, {
-          ...current,
-          suppressCompletionDelivery: true,
-          ...(!mixed && scenario !== "suppressed"
-            ? {
-                suppressAnnounceReason: "killed" as const,
-                endedReason: "subagent-killed" as const,
-                killReconciliation: {
-                  killedAt: 3_000,
-                  ...(superseded ? { supersededAt: 4_000 } : {}),
-                },
-              }
-            : {}),
-        });
-      };
-      const changeOwner = () => {
-        retire(entry.runId);
-        if (scenario === "mixed batch retires during lookup") {
-          retire(sibling.runId);
-        } else if (replaced) {
-          subagentRuns.set(sibling.runId, { ...sibling, generation: sibling.generation! + 1 });
-        }
-      };
-      if (scenario !== "owed" && !duringLookup) {
-        changeOwner();
-      }
-      const lookup = pauseRequesterLookup(entry, duringLookup);
-      const restoration = reserveRestoredSubagentControllerSources([...subagentRuns.values()]);
-      if (duringLookup) {
-        try {
-          await lookup.entered;
-          changeOwner();
-        } finally {
-          lookup.release();
-        }
-      }
-      const restored = await restoration;
-      inputs.push(...restored);
-      const human = reserve("new-human-input");
-      const claim = tryClaimSessionControllerTask(human, "visible");
-      if (superseded || replaced || (!mixed && !yielded)) {
-        expect(restored).toEqual([]);
-        expect(claim).toBeDefined();
-        return;
-      }
-      expect(restored).toHaveLength(1);
-      expect(claim).toBeUndefined();
-      if (mixed) {
-        // Retirement changes the representative, not the frozen reservation identity.
-        expect(restored[0]?.sourceTurnId).toBe(
-          "requester-settle:main:agent:main:main:completion-run,surviving-sibling:yield-3",
-        );
-        const owner = tryClaimSessionControllerTask(restored[0]!);
-        expect(owner).toBeDefined();
-        if (owner) {
-          releaseSessionControllerClaim(owner);
-          await owner.settlement.promise;
-        }
-      } else {
-        expect(restored[0]?.phase).toBe("preparing");
-        for (const input of restored) {
-          retireSessionControllerInput(input);
-        }
-        await Promise.all(restored.map((input) => input.settlement.promise));
-      }
-      expect(tryClaimSessionControllerTask(human, "visible")).toBeDefined();
-    },
-    {
-      status: "dispatching",
-      attemptCount: 1,
-      rearmGeneration: mixed ? 3 : 1,
-      ...(yielded ? { requesterYieldBatch: true, yieldedFinalDeliverable: true } : {}),
-      batchRunIds,
-    },
-  );
-});

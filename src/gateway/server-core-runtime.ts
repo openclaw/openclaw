@@ -81,7 +81,6 @@ export async function startGatewayCoreRuntime(input: {
     nodeSendToAllSubscribed,
     refreshGatewayHealthSnapshotWithRuntime,
     dedupe,
-    restartRecoveryCandidates,
     chatRunState,
     removeChatRun,
     agentRunSeq,
@@ -110,6 +109,7 @@ export async function startGatewayCoreRuntime(input: {
     activateRuntimeSecrets,
   } = runtime;
   runtime.registerGatewayLifetimeSidecars({
+    name: "computer-and-desktop-sessions",
     preparePluginReload: gatewayComputerService.preparePluginReload,
     stop: async () => {
       await gatewayComputerService.close();
@@ -130,7 +130,7 @@ export async function startGatewayCoreRuntime(input: {
         )
       : undefined;
   if (secretEgressProxy) {
-    runtime.registerGatewayLifetimeSidecars(secretEgressProxy);
+    runtime.registerGatewayLifetimeSidecars({ name: "secret-egress-proxy", ...secretEgressProxy });
   }
   const sendNodeSessionEvent: (...args: Parameters<typeof nodeSendToSession>) => void = (
     sessionKey,
@@ -173,7 +173,6 @@ export async function startGatewayCoreRuntime(input: {
               logHealth,
               clients,
               dedupe,
-              restartRecoveryCandidates,
               chatRunState,
               removeChatRun,
               agentRunSeq,
@@ -218,7 +217,6 @@ export async function startGatewayCoreRuntime(input: {
       toolEventRecipients,
       sessionEventSubscribers,
       sessionMessageSubscribers,
-      restartRecoveryCandidates,
       refreshConnectedUserProfiles: () =>
         runtime.resolvePluginGatewayContext()?.refreshConnectedUserProfile?.(),
     }),
@@ -320,6 +318,7 @@ export async function startGatewayCoreRuntime(input: {
     beginCloseApprovalObservers();
   }
   runtime.registerGatewayLifetimeSidecars({
+    name: "operator-interactions",
     stop: async () => {
       requestLifetime.removeEventListener("abort", beginCloseApprovalObservers);
       await stopOperatorInteractions();

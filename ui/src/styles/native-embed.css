@@ -5,8 +5,8 @@ html.openclaw-native-embed .shell--embed {
   --shell-chrome-safe-area-left: 0px;
 
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-  grid-template-areas: "content";
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "notice" "content";
 }
 
 .shell--embed.shell--chat openclaw-chat-page[data-native-conversation] {

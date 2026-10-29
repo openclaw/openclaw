@@ -13,7 +13,7 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
-Recovered operator runs retain validated profile facts until the bound catalog's
+Admitted operator runs retain validated profile facts until the bound catalog's
 profile row changes. Each policy check still verifies the original catalog's
 lifetime, mutation settlement, canonical identity, and required email bindings,
 including after access-policy callbacks. An unchanged row avoids rebuilding the
@@ -2499,14 +2499,12 @@ are unchanged; existing published updaters need no actor migration.
 Chat input recorders retain the admitted actor through accepted-work settlement.
 Pending-input acceptance and transcript-only acceptance use `acceptInput` before
 the started acknowledgement; adopting staged input combines its transcript and
-recovery claim in `adoptRun`. Ordinary recovery checks consume the MAIN replica,
-while each effect still checks its live source, run, lifecycle, and permission
-authority. Pre- and post-hook checkpoints remain separate when the hook is an
-external effect. Actor-bound acceptance does not hold a legacy writer reservation
+lifecycle admission in `adoptRun`. Each effect still checks its live source, run,
+lifecycle, and permission authority. Actor-bound acceptance does not hold a legacy writer reservation
 around its commands. Unbound native and SDK callers retain their compatibility
 adapters, whose committed writes invalidate actor facts.
 
-Restart-safe chat transcript acceptance also records user interaction activity
+Chat transcript acceptance also records user interaction activity
 before ACK. Reply initialization reuses that committed activity for the same
 existing session instead of refreshing its timestamps again. Initialization still
 persists changed routing or metadata, retains newer in-process activity, and gives
@@ -2672,7 +2670,7 @@ or update-format change.
 Qualified Gateway entry reads request lifecycle timestamps only when a consumer
 needs reset freshness. Metadata, observer, and native model ownership reads use
 the existing single-statement entry facts without a deferred transaction.
-Restart-safe chat admission still requests lifecycle timestamps. Current entry
+Chat admission still requests lifecycle timestamps. Current entry
 timestamps and runtime targets reuse receipt-backed actor facts; cold exact
 entry facts need only their single-statement snapshot. Legacy timestamp fallback
 reads the header for the captured session ID through the transcript owner's
@@ -3258,13 +3256,6 @@ FIFO and settlement owner. Maintenance retains its native adapter, which
 first-party SQLite test helpers also reuse. Incognito uses the memory actor. Schemas, stored bytes,
 retention, and update behavior are unchanged.
 
-Explicit restart-tombstone recovery clones the transcript and changes both session
-identities atomically in the agent writer worker. Source preparation uses worker
-reads, while the Gateway retains current caller authority and invalidates prepared
-facts when the source changes. Transaction and commit admission recheck those
-guards; accepted writes retain settlement and committed identity publication.
-These cutovers change no schema, stored bytes, retention, or update behavior.
-
 Strict harness transcript appends prepare messages outside the existing agent
 writer transaction. The writer rechecks duplicate-submission records and pending-input custody
 before checking fresh-message source predicates. A message committed by another
@@ -3668,7 +3659,7 @@ contract. Incognito input retains its memory actor and live permission checks
 through staging, dispatch, and transcript writes. No schema,
 permission, retention, or update migration is required.
 
-Restart-safe chat admission consumes lifecycle timestamps from its retained session
+Chat admission consumes lifecycle timestamps from its retained session
 reader, including transcript-header fallback, instead of rereading SQLite on the
 Gateway thread. Reply claim adoption, hook checkpoints, retirement, and cleanup
 reuse the physical identity and resolved key from their existing logical reader.
@@ -3676,8 +3667,7 @@ Failure settlement retains the original chat target, including the acknowledged
 writer identity when a new Goal creates its store. These transitions use the
 existing agent entry-patch worker, whose synchronous transaction compares
 authoritative claim rows before committing. Accepted
-settlement remains joined during shutdown after caller cancellation. Input and
-recovery claims still commit before acknowledgment.
+settlement remains joined during shutdown after caller cancellation. Input custody and lifecycle admission still commit before acknowledgment.
 Acknowledged entry publications carry complete membership and participant facts
 from the worker's existing metadata read. Newer writer receipts, native
 publications, and uncertain outcomes invalidate retained row facts.
@@ -3947,15 +3937,7 @@ Writes, schema transitions, lease grants, and all generic SQLite broker jobs
 retain immediate fresh ownership verification, including their transaction and
 commit grants. Schemas, retained data, and update behavior are unchanged.
 
-Restart-tombstone recovery clones the source transcript and records its archived
-successor in one transaction through the shared agent writer. Transcript reads,
-decoding, inserts, and metadata changes stay in the worker even for large histories.
-The host retains FIFO admission, rechecks live recovery authority before native
-transaction and commit grants, and installs committed sharing and identity facts
-before releasing the writer. Incognito uses the memory actor; maintenance
-scopes retain their native owner. Schemas, recovery atomicity, durability, and update behavior are unchanged.
-
-Full-transcript recovery checkpoints, usage aggregation, and MCP App reconstruction
+Usage aggregation and MCP App reconstruction
 use the admitted history worker. Selectors return compact facts and retain one
 snapshot, including both MCP reconstruction passes. Incognito reads committed
 transcript facts from the memory actor. There is no synchronous fallback when the
@@ -5649,9 +5631,12 @@ unchanged.
 
 Lifecycle projections without removals skip deletion-plan preparation. Empty
 automatic maintenance plans use their verified age receipt to schedule the next
-pass without an empty finalization yield or a second deadline request. Changed
-plans retain finalization and its fresh deadline read; cadence and retention
-policy are unchanged.
+pass without an empty finalization yield or a second deadline request. Activity
+acknowledged during result delivery also reuses that deadline when the current
+entry count remains below the capacity trigger; it does not force another empty
+planning pass. Policy changes, invalidated facts, capacity pressure, and due age
+deadlines still resume planning. Changed plans retain finalization and its fresh
+deadline read; cadence and retention policy are unchanged.
 
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each
@@ -5978,6 +5963,8 @@ workers still require native exit before replacement. Schema and update behavior
 Cold-storage maintenance preparation uses this same idle worker, including empty
 sweeps. Each preparation closes its scoped read-only handles before replying;
 selection, configuration checks, and commit authority remain per request.
+Maintenance finalization also materializes archive batches through this carrier,
+so subsequent batches and file publication reuse execution after native handles close.
 Preparation loads its read-only selection and archive encoding helpers without
 initializing the writable database lifecycle or transcript restoration machinery.
 Canonical validation and reclamation load cold-restoration source guards only
@@ -7032,6 +7019,11 @@ correlated placements through the same read worker. The Gateway publishes keyed
 session invalidations after the read and drains pending reporting on shutdown.
 Each batch reads current placement and environment facts; it retains no placement
 cache and does not scan the placement inventory on the main thread.
+
+Placement retirement discovers only session identities through its ordered worker
+read, adding local-only identities from the existing replica. It reads the complete
+current placement only when session evidence is absent, before retirement or
+environment teardown. Discovery carries no claim, recovery, or workspace payload.
 
 This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the

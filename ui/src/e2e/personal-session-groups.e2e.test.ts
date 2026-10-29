@@ -550,18 +550,31 @@ suite.define(() => {
       const members = ["first", "middle", "last"].map((id) =>
         createControlUiSessionRow("agent:main:" + id, id + " project", Date.now()),
       );
+      const secondPin = createControlUiSessionRow(releaseKey, "second pin", Date.now());
+      const archived = createControlUiSessionRow(
+        "agent:main:archived",
+        "archived project",
+        Date.now(),
+        {
+          archived: true,
+        },
+      );
       const gateway = await installMockGateway(page, {
         sessionKey: key,
         operatorScopes: ["operator.admin"],
-        sessions: [selected, ...members],
+        sessions: [selected, secondPin, archived, ...members],
         methodResponses: { "sessions.list": sessionsListResponse([selected]) },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       await evaluateControlUiContext(page, ({ navigation }) =>
         navigation.update({
-          sidebarEntries: ["session:agent:main:first"],
+          sidebarEntries: ["session:agent:main:first", "session:agent:main:release"],
           personalSessionGroups: [
-            { id: "first", label: "First", sessionKeys: ["agent:main:first"] },
+            {
+              id: "first",
+              label: "First",
+              sessionKeys: ["agent:main:first", "agent:main:archived"],
+            },
             { id: "middle", label: "Middle", sessionKeys: ["agent:main:middle"] },
             { id: "last", label: "Last", sessionKeys: ["agent:main:last", "agent:main:first"] },
           ],
@@ -573,6 +586,36 @@ suite.define(() => {
       for (const id of ["first", "middle", "last"]) {
         await row(id).waitFor();
       }
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const canonicalPin = sidebar
+        .locator('[data-session-section="pinned"]')
+        .getByRole("link", { name: "first project", exact: true });
+      const ordinary = sidebar.getByRole("link", { name: /Reliability Tracker/ });
+      const selectedKeys = () =>
+        sidebar
+          .locator(".sidebar-recent-session--selected")
+          .evaluateAll((rows) =>
+            [
+              ...new Set(rows.map((element) => element.getAttribute("data-session-key") ?? "")),
+            ].toSorted(),
+          );
+      const crossBoundaryKeys = [members[0]!.key, secondPin.key, members[1]!.key].toSorted();
+      // Pinned appears above sections: ranges include the second pin, not the later section.
+      await canonicalPin.click({ modifiers: ["Alt"] });
+      await row("middle").click({ modifiers: ["Shift"] });
+      const stage = process.env.OPENCLAW_SECTIONS_STAGE;
+      if (stage) {
+        const artifacts = createControlUiE2eArtifactDir("sections-selection-" + stage);
+        await captureFrame(artifacts, "selection.png", page.locator(".shell"), [
+          sidebar.locator(".sidebar-sessions"),
+        ]);
+      }
+      await expect.poll(selectedKeys).toEqual(crossBoundaryKeys);
+      await ordinary.click();
+      await row("middle").click({ modifiers: ["Alt"] });
+      await canonicalPin.click({ modifiers: ["Shift"] });
+      await expect.poll(selectedKeys).toEqual(crossBoundaryKeys);
+      await ordinary.click();
       await row("first").click({ modifiers: ["Alt"] });
       await row("last").click({ modifiers: ["Alt"] });
       await row("last").click({ button: "right" });
@@ -641,15 +684,12 @@ suite.define(() => {
       await row("first").click({ modifiers: ["Alt"] });
 
       // A canonical pin must not inherit the first active personal-group appearance.
-      const canonicalPin = page
-        .locator('[data-session-section="pinned"]')
-        .getByRole("link", { name: "first project", exact: true });
-      const ordinary = page
-        .locator("openclaw-app-sidebar")
-        .getByRole("link", { name: /Reliability Tracker/ });
       await canonicalPin.click();
       await expect.poll(() => canonicalPin.getAttribute("aria-current")).toBe("page");
       await ordinary.click({ modifiers: ["Shift"] });
+      await expect
+        .poll(selectedKeys)
+        .toEqual([selected, secondPin, ...members].map((member) => member.key).toSorted());
       await ordinary.click({ button: "right" });
       await expect
         .poll(() =>
@@ -657,7 +697,7 @@ suite.define(() => {
             .getByRole("menuitem", { name: /^Archive [0-9]+$/, exact: true })
             .getAttribute("aria-label"),
         )
-        .toBe("Archive 2");
+        .toBe("Archive 5");
       await page.keyboard.press("Escape");
       await ordinary.click();
       await row("first").click({ modifiers: ["Alt"] });
@@ -665,13 +705,19 @@ suite.define(() => {
       // A collapsed group is not a batch target, and duplicate placements never duplicate writes.
       await group("middle").getByRole("button", { name: "Middle", exact: true }).click();
       await row("middle").waitFor({ state: "hidden" });
-      await row("last").click({ modifiers: ["Shift"] });
-      await row("last").click({ button: "right" });
-      await menu.getByRole("menuitem", { name: "Archive 2", exact: true }).click();
+      await canonicalPin.click();
+      await ordinary.click({ modifiers: ["Shift"] });
+      await expect
+        .poll(selectedKeys)
+        .toEqual(
+          [selected, secondPin, members[0]!, members[2]!].map((member) => member.key).toSorted(),
+        );
+      await ordinary.click({ button: "right" });
+      await menu.getByRole("menuitem", { name: "Archive 4", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.patchMany");
       expect(request.params).toMatchObject({
         patch: { archived: true },
-        targets: [members[0], members[2]].map((member) => ({
+        targets: [members[0], secondPin, members[2], selected].map((member) => ({
           key: member!.key,
           agentId: "main",
           expectedSessionId: member!.sessionId,

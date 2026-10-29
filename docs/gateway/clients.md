@@ -125,7 +125,7 @@ handshake does not report an error.
 
 Capability-gated agent tools are a separate use of the same declaration. If an
 agent tool requires a client capability, the Gateway lists it using the operator
-capabilities recorded for that session. Internal wakes and restart recovery retain
+capabilities recorded for that session. Internal wakes, including a post-restart resume input, retain
 that declaration. Current client capabilities still gate calls, and tools that
 act on a browser require their bound, connected recipient at execution.
 

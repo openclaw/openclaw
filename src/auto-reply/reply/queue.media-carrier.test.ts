@@ -102,7 +102,7 @@ it("drains the complete parked image turn after active steering rejects it", asy
     await expect(
       runActiveReplySteer(
         createSteerParams(key, run, operation, {
-          restartRecoverySourceTurnId: run.messageId,
+          sourceTurnId: run.messageId,
           runFollowup: q.runFollowup,
         }),
       ),

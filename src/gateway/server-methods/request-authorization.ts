@@ -10,6 +10,7 @@ import {
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { captureGatewayToolCallerAssertion } from "../../agents/tools/gateway-caller-context.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
@@ -27,9 +28,9 @@ import {
   readAgentDatabaseAdmissionRefusal,
   readAgentDatabaseReadAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import type { InternalAgentTurnDispatchOptions } from "../agent-turn/internal-facade.types.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import {
   prepareGatewaySessionAccessAuthority,
   type GatewaySessionAccessAuthority,
@@ -59,7 +60,6 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { gatewayRouterUploadPolicyError } from "./core-handlers.js";
 import { authorizeAuthenticatedProfileForMethod } from "./gateway-client-identity.js";
 import { authorizeGatewayMethod } from "./method-authorization.js";
-import { isGatewayRecoveryInput } from "./request-recovery-admission.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,
@@ -202,7 +202,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   signal?: AbortSignal;
   assertInvocationCurrent?: () => void;
   assertPreparationCurrent?: () => void;
-  recoveryInput?: InternalAgentTurnDispatchOptions["recoveryInput"];
   controllerInput?: SessionControllerInput;
   markSessionSubscribePhase?: (phase: SessionSubscribePhase) => void;
   consumeSessionTurn?: {
@@ -247,14 +246,29 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
       details: { ...gatewayStartupUnavailableDetails(), method: params.method },
     });
-  const startupError = () =>
-    params.context.unavailableGatewayMethods?.has(params.method) &&
-    !(
+  const startupError = () => {
+    if (!params.context.unavailableGatewayMethods?.has(params.method)) {
+      return null;
+    }
+    // Admitted runs can use their tools while startup retains external input admission.
+    try {
+      const assertCallerCurrent = captureGatewayToolCallerAssertion(params.method);
+      if (assertCallerCurrent) {
+        assertCallerCurrent();
+        return null;
+      }
+    } catch {
+      return errorShape(ErrorCodes.FORBIDDEN, "agent tool caller authority is no longer active");
+    }
+    return !(
       params.method === "chat.send" &&
-      isGatewayRecoveryInput(params, params.context.getRuntimeConfig())
+      readQueuedChatInputAdmission(
+        readSessionSharingStringParam(params.requestParams, "idempotencyKey") ?? "",
+      )
     )
       ? unavailableDuringStartup()
       : null;
+  };
   let assertChatRoutingCurrent: (() => void) | undefined;
   while (true) {
     signal?.throwIfAborted();
@@ -347,17 +361,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         }
         return { error };
       }
-    }
-    // Database refusals keep precedence, including the pending agent's retry contract.
-    if (
-      (params.method === "chat.send" || params.method === "agent") &&
-      params.context.inputRecovery &&
-      startupWriteAgents(params, params.context.getRuntimeConfig()).some((agentId) =>
-        params.context.inputRecovery!.isPending(agentId),
-      ) &&
-      !isGatewayRecoveryInput(params, params.context.getRuntimeConfig())
-    ) {
-      return { error: unavailableDuringStartup() };
     }
     const startup =
       startupReadMethods.has(params.method) &&

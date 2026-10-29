@@ -33,8 +33,13 @@ it.each([false, true])(
     }
     const completed = await Promise.all(Array.from({ length: 20 }, completeInvocation));
     const control = new WeakRef({});
-    await nextTurn();
-    queryObjects(WeakRef);
+    // JSC can conservatively retain the last rejected frame on a resumed microtask stack.
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        queryObjects(WeakRef);
+        resolve();
+      }, 0);
+    });
     expect(control.deref()).toBeUndefined();
     expect(completed.filter(({ reference }) => reference.deref())).toHaveLength(0);
     // Retiring the closure must not turn an inherited validation scope into a bypass.

@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
-import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import { clearRotatedSessionMetadata } from "../../agents/session-reset-metadata.js";
 import { evaluateSessionFreshness, type SessionFreshness } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
 import { resolveTerminalMainSessionTranscriptRegistryCheck } from "../../config/sessions/lifecycle.js";
-import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
@@ -228,12 +226,8 @@ export async function buildAgentSessionPatch(params: {
   const shouldClearTerminalState =
     canReuseSession &&
     recoverableTerminalSession &&
-    !hasMainSessionRecoveryClaim(params.freshEntry) &&
     !freshSessionRotatedSinceLoad &&
     patchSessionId === params.freshEntry?.sessionId;
-  const automaticRecoveryClearPatch = shouldClearRotatedState
-    ? buildMainSessionRecoveryClearPatch(params.freshEntry)
-    : {};
   const patch: Partial<SessionEntry> = {
     ...(automaticResetReason && params.freshEntry
       ? { ...clearRotatedSessionMetadata(params.freshEntry), agentHarnessId: undefined }
@@ -255,7 +249,7 @@ export async function buildAgentSessionPatch(params: {
           agentStatus: undefined,
         }
       : {}),
-    ...automaticRecoveryClearPatch,
+    ...(shouldClearRotatedState ? { resumeAfterRestart: undefined } : {}),
     delivery,
     ...(labelValue ? { label: labelValue } : {}),
     // An operator-supplied key is an explicit name: keep it instead of generating

@@ -330,6 +330,7 @@ export async function preflightUpdateCommandSchemas(params: {
       const admission = await inspectUpdateDatabaseContexts({
         roots: switchToGit ? [root, resolveGitInstallDir()] : [root],
         updateInstallKind,
+        packageAlreadyCurrent: params.packageAlreadyCurrent,
         shouldRestart,
         jsonMode: Boolean(opts.json),
         timeoutMs: updateStepTimeoutMs,
@@ -365,7 +366,12 @@ export async function preflightUpdateCommandSchemas(params: {
               channel,
               devTarget,
             })
-          : { schemaVersions: packageTargetSchemaVersions };
+          : {
+              // A no-op keeps the installed runtime, even if registry metadata describes an older build.
+              schemaVersions: params.packageAlreadyCurrent
+                ? undefined
+                : packageTargetSchemaVersions,
+            };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {
         preflightNotes.push(
           "Node compatibility was not checked because the Git target metadata is unavailable.",

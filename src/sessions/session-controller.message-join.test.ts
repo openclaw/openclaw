@@ -17,9 +17,7 @@ import {
 } from "../auto-reply/reply/reply-tool-authority.test-support.js";
 import { prepareSteeringDelivery } from "../auto-reply/reply/steering-delivery-preparation.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { resolveRestartRecoveryTerminalDeliveryDisposition } from "../config/sessions/restart-recovery-receipt-state.js";
 import {
-  loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -78,9 +76,6 @@ it("copies private turn participants and freezes only their shared command targe
 
 type JoinCase = {
   differentConversation?: true;
-  predecessor?: boolean | "pending";
-  claim?: "before" | "after" | "added";
-  source?: false;
   legacy?: true;
   profile?: "pin" | "auto" | "legacy-pin" | "legacy-auto";
   headless?: true;
@@ -91,31 +86,10 @@ type JoinCase = {
   sessionOnly?: true;
 };
 type Outcome = "accepted" | "deferred" | "rejected" | "revoked";
-const recoveryClaim = (id: string) => ({
-  restartRecoveryDeliveryRunId: id,
-  restartRecoveryDeliverySourceRunId: id,
-});
 const uiTarget = (connId: string, profileId = "join-owner") => ({ connId, profileId });
 
 it.each<[string, Outcome, JoinCase?]>([
   ["resolved defaults", "accepted"],
-  ["retained predecessor", "accepted", { predecessor: true }],
-  ["retained predecessor pending", "deferred", { predecessor: "pending" }],
-  ["retained predecessor without source", "accepted", { predecessor: true, source: false }],
-  ["retained predecessor without observation", "rejected", { predecessor: true, legacy: true }],
-  ["claim added after empty observation", "deferred", { claim: "added" }],
-  ["claim replaced before preparation", "deferred", { predecessor: true, claim: "before" }],
-  [
-    "claim replaced before preparation without source",
-    "deferred",
-    { predecessor: true, claim: "before", source: false },
-  ],
-  ["claim replaced after preparation", "rejected", { predecessor: true, claim: "after" }],
-  [
-    "claim replaced after preparation without source",
-    "rejected",
-    { predecessor: true, claim: "after", source: false },
-  ],
   ["unqualified profile pin", "deferred", { profile: "pin" }],
   ["legacy profile pin", "deferred", { profile: "legacy-pin" }],
   ["legacy automatic profile", "accepted", { profile: "legacy-auto" }],
@@ -160,10 +134,6 @@ it.each<[string, Outcome, JoinCase?]>([
         lifecycleRevision: "join-revision",
         updatedAt: 1,
         permissionMode: "full",
-        ...(c.predecessor ? recoveryClaim("unresolved-predecessor") : {}),
-        ...(c.predecessor === "pending"
-          ? { restartRecoveryDeliveryReceiptState: "terminal-pending" as const }
-          : {}),
       };
       const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
       const address = { agentId: "main", sessionKey: key, storePath };
@@ -315,10 +285,6 @@ it.each<[string, Outcome, JoinCase?]>([
         if (c.mismatch === "cwd") {
           currentEntry = { ...entry, spawnedCwd: `${state.workspaceDir}/other` };
         }
-        if (c.claim === "before" || c.claim === "added") {
-          currentEntry = { ...entry, ...recoveryClaim("later-source") };
-          await upsertSessionEntryCore(address, currentEntry);
-        }
         const incomingShape = structuredClone([
           incoming.run.clientCaps,
           incoming.run.gatewayUiCommandTarget,
@@ -341,8 +307,6 @@ it.each<[string, Outcome, JoinCase?]>([
         } = toolAuthorityOverlay(incoming);
         const delivery = prepareSteeringDelivery({
           ...address,
-          sessionId: entry.sessionId,
-          sourceTurnId: c.source === false ? undefined : "current-execution",
           entry: currentEntry,
           assertCurrent: assertSource,
         });
@@ -368,9 +332,6 @@ it.each<[string, Outcome, JoinCase?]>([
           },
         });
         expect(joined.kind).toBe(outcome === "deferred" ? "deferred" : "prepared");
-        if (c.claim === "added") {
-          expect(joined).toMatchObject({ kind: "deferred", reason: "reply-owner-ended" });
-        }
         assertFrozen();
         if (joined.kind !== "prepared") {
           expect(delivered).not.toHaveBeenCalled();
@@ -392,9 +353,6 @@ it.each<[string, Outcome, JoinCase?]>([
           if (!settings) {
             expect(updated?.updatedAt).toBeGreaterThan(entry.updatedAt);
           }
-        }
-        if (c.claim === "after") {
-          await patchSessionEntryCore(address, () => recoveryClaim("later-source"));
         }
         if (c.after === "backend") {
           operation.attachBackend({ ...backend, queueMessage: replacement });
@@ -424,7 +382,6 @@ it.each<[string, Outcome, JoinCase?]>([
           }
           const readAuthority = joined.toolAuthority.read;
           const closed = c.after === "delivery";
-          const unobserved = c.predecessor && c.legacy;
           const attempt = await beginReplyMessageInjectionTarget(target, incoming.prompt, {
             assertCurrent: assertSource,
             isInboundUserMessage: true,
@@ -435,19 +392,18 @@ it.each<[string, Outcome, JoinCase?]>([
                 authorityKind: "source-bound" as const,
                 assertCurrent: closed ? assertSource : readAuthority,
                 compatAssertCurrent: readAuthority,
-                prepareCurrent:
-                  closed || unobserved
-                    ? async () => {
-                        await joined.prepareCurrent();
-                        if (closed) {
-                          if (isToolAuthorityReadCaptureActive()) {
-                            delivery.release();
-                          }
-                        } else {
-                          await delivery.prepareCurrent();
+                prepareCurrent: closed
+                  ? async () => {
+                      await joined.prepareCurrent();
+                      if (closed) {
+                        if (isToolAuthorityReadCaptureActive()) {
+                          delivery.release();
                         }
+                      } else {
+                        await delivery.prepareCurrent();
                       }
-                    : joined.prepareCurrent,
+                    }
+                  : joined.prepareCurrent,
               }),
             ),
           });
@@ -459,16 +415,6 @@ it.each<[string, Outcome, JoinCase?]>([
           joined.toolAuthority.release();
         }
       });
-      if (name === "retained predecessor") {
-        const retained = loadSessionEntry(address);
-        expect(
-          resolveRestartRecoveryTerminalDeliveryDisposition(retained, {
-            sessionId: entry.sessionId,
-            sourceTurnId: "current-execution",
-          }),
-        ).toBe("stale");
-        expect(retained).toMatchObject(recoveryClaim("unresolved-predecessor"));
-      }
     });
   },
 );

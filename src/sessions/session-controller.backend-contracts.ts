@@ -121,8 +121,6 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   toolsAllow?: string[];
   disableTools: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   traceAuthorized: boolean;
   approvalReviewerDeviceId?: string;
   clientCaps?: string[];

@@ -44,11 +44,7 @@ export async function prepareReplySourceAdmission(params: {
   const release = ownsCustody
     ? async () => {
         try {
-          recorder.finishPendingInput?.(
-            operation.result?.kind === "aborted" && operation.result.code === "aborted_by_user"
-              ? "cancelled"
-              : "interrupted",
-          );
+          recorder.finishPendingInput?.("cancelled");
         } finally {
           await recorder.waitForPendingInputSettlement?.();
         }
@@ -56,7 +52,7 @@ export async function prepareReplySourceAdmission(params: {
     : undefined;
   try {
     if (ownsCustody && getReplyOperationSessionTarget(operation)) {
-      // First-turn staging precedes recovery admission; use this operation's initialized
+      // First-turn staging precedes dispatch; use this operation's initialized
       // physical actor instead of the recorder's pre-initialization Gateway locator.
       bindUserTurnInputActor(recorder, {
         phase: "acceptInput",

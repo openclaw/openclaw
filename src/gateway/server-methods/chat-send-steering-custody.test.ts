@@ -38,6 +38,7 @@ import {
   listSessionPendingInputs,
   loadSessionEntry,
   loadTranscriptEventsSync,
+  patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
@@ -165,6 +166,8 @@ describe("steering input custody", () => {
           ? { createdActor: { type: "human", source: "profile", id: incomingProfile.id } as const }
           : {}),
       });
+      // Naming has separate coverage; this fixture owns only steering and its backing turn.
+      await patchSessionEntryCore(fixture.scope, () => ({ displayName: "Steering custody" }));
       const initialConfig = fixture.context.getRuntimeConfig();
       const initialQueue = { ...initialConfig.messages?.queue };
       delete initialQueue.allowCollaborativeSteering;

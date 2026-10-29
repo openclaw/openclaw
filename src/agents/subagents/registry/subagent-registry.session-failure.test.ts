@@ -17,13 +17,9 @@ import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 afterEach(runtimeConfig.clearRuntimeConfigSnapshot);
-it.each([
-  ["error", false],
-  ["timeout", false],
-  ["error", true],
-] as const)(
-  "persists a bounded %s reason and child notice (interrupted=%s)",
-  (outcomeStatus, interrupted) =>
+it.each(["error", "timeout"] as const)(
+  "persists a bounded %s reason and child notice",
+  (outcomeStatus) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       runtimeConfig.setRuntimeConfigSnapshot({});
       const target = {
@@ -48,17 +44,13 @@ it.each([
           error: `[tool calls omitted]\n<final>${reason}</final>`,
         },
       });
-      record.execution.interruptionReason = interrupted ? "gateway-restart" : undefined;
       const persist = (overrides: Partial<SubagentRunRecord> = {}) =>
         persistSubagentSessionTiming({ ...record, ...overrides });
       const read = () => sessions.loadSessionEntry(target);
       await persist();
       expect(read()).toMatchObject({
-        status: interrupted ? "interrupted" : outcomeStatus === "error" ? "failed" : "timeout",
-        lastRunError: interrupted
-          ? "Run interrupted by a Gateway restart."
-          : expect.stringContaining("Repository base ref is missing."),
-        ...(interrupted ? { abortedLastRun: true } : {}),
+        status: outcomeStatus === "error" ? "failed" : "timeout",
+        lastRunError: expect.stringContaining("Repository base ref is missing."),
       });
       const lastRunError = read()?.lastRunError;
       expect(lastRunError?.length).toBeLessThanOrEqual(160);
@@ -85,7 +77,7 @@ it.each([
         display: true,
         details: { runId: record.runId, error: reason.slice(0, 512) },
       };
-      expect(notices).toMatchObject(interrupted ? [] : [notice]);
+      expect(notices).toMatchObject([notice]);
       for (const status of ["running", "queued"] as const) {
         await persist({ execution: { status } });
         expectRecordFields(read(), { lastRunError, status: undefined });

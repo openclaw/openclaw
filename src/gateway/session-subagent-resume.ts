@@ -63,7 +63,6 @@ function requirePausedChild(cfg: OpenClawConfig, caller: TrustedAgentToolCaller,
     typeof entry.execution.endedAt !== "number" ||
     entry.killIntent ||
     entry.killReconciliation ||
-    entry.terminalOwner ||
     entry.suppressAnnounceReason ||
     entry.cleanupCompletedAt !== undefined ||
     (entry.execution.suppressSessionEffects && authority?.status !== "legacy-unverified")

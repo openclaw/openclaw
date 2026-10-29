@@ -116,8 +116,8 @@ function gatewaySource(fixture) {
 const args=process.argv.slice(2);
 const activeLease=()=>{
   const lease=present("active-lease")?JSON.parse(read("active-lease")):null;
-  if(lease&&lease.expiry<=Date.now()) {
-    for(const name of ["active-lease","armed-handoff","request-id"])remove(name);
+  if(lease&&lease.expiry<=Date.now()&&!present("committed-handoff")) {
+    for(const name of ["active-lease","request-id"])remove(name);
     event("suspension.expired");return null;
   }
   return lease;
@@ -388,14 +388,14 @@ if(args[0]==="update") {
       ...(draining?{retryAfterMs:1000}:{})});
   } else if(method==="gateway.suspend.handoff") {
     const lease=activeLease();
-    if(Object.keys(params).sort().join(",")!=="suspensionId,target"||!lease||lease.expiry<=Date.now()||
+    if(Object.keys(params).sort().join(",")!=="commit,suspensionId,target"||params.commit!==true||!lease||lease.expiry<=Date.now()||
       params.suspensionId!==lease.id||Object.keys(params.target??{}).sort().join(",")!=="pid,processInstanceId"||
       params.target.pid!==Number(read("pid"))||params.target.processInstanceId!=="fixture-instance-"+read("pid"))
       reject("synthetic handoff target or live lease mismatch");
     if(scenario==="handoff-refused") {event("handoff.refused");reject("synthetic handoff refused");}
-    put("armed-handoff",JSON.stringify({id:lease.id,expiry:lease.expiry,pid:params.target.pid,instance:params.target.processInstanceId}));
-    event("handoff.armed");
-    emit({status:"armed",suspensionId:lease.id,expiresAtMs:lease.expiry+(scenario==="handoff-uncertain"?1:0)});
+    put("committed-handoff",JSON.stringify({id:lease.id,expiry:lease.expiry,pid:params.target.pid,instance:params.target.processInstanceId}));
+    event("handoff.committed");
+    emit({status:"committed",suspensionId:lease.id,expiresAtMs:lease.expiry+(scenario==="handoff-uncertain"?1:0)});
   } else {
     const lease=activeLease();
     if(method==="gateway.suspend.status") {
@@ -409,9 +409,10 @@ if(args[0]==="update") {
         emit({status:"draining",expiresAtMs:lease.expiry,activeCount:1,
           blockers:[{kind:"terminal-session",count:1,message:"synthetic active terminal"}],retryAfterMs:1000});
       } else emit({status:"ready",expiresAtMs:lease.expiry});
-    } else if(!lease||lease.expiry<=Date.now()) emit({ok:true,status:"running",resumed:false});
+    } else if(present("committed-handoff")) emit({ok:false,reason:"gateway-restarting"});
+    else if(!lease||lease.expiry<=Date.now()) emit({ok:true,status:"running",resumed:false});
     else if(params.suspensionId!==lease.id) emit({ok:false,reason:"suspension-mismatch"});
-    else {remove("active-lease");remove("armed-handoff");remove("request-id");emit({ok:true,status:"running",resumed:true});}
+    else {remove("active-lease");remove("request-id");emit({ok:true,status:"running",resumed:true});}
   }
 } else if(args[0]==="agent") {
   event("gateway agent");
@@ -581,11 +582,11 @@ if(command==="busctl") {
     }
     if(operation!=="start") {
       let intent="stop";
-      if(scope==="system"&&present("armed-handoff")) {
-        const arm=JSON.parse(read("armed-handoff")),lease=present("active-lease")?JSON.parse(read("active-lease")):null;
-        if(!lease||arm.id!==lease.id||arm.expiry!==lease.expiry||arm.expiry<=Date.now()||
+      if(scope==="system"&&present("committed-handoff")) {
+        const arm=JSON.parse(read("committed-handoff")),lease=present("active-lease")?JSON.parse(read("active-lease")):null;
+        if(!lease||arm.id!==lease.id||arm.expiry!==lease.expiry||
           arm.pid!==Number(pid)||arm.instance!=="fixture-instance-"+pid) reject("synthetic stop cannot consume a foreign handoff");
-        event("handoff.consumed");intent="external-restart";remove("armed-handoff");
+        intent="external-restart";remove("committed-handoff");
       }
       if(scope==="system") put("shutdown-kind",intent);
       fs.rmSync(path.join(fixture.root,"proc",pid),{recursive:true,force:true});
