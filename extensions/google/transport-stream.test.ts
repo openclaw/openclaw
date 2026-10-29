@@ -141,14 +141,12 @@ async function runGoogleVertexStreamResult(params: {
   fetch: typeof guardedFetchMock;
 }) {
   const streamFn = createGoogleVertexTransportStreamFn();
-  const stream = await Promise.resolve(
-    streamFn(
-      params.model ?? buildGoogleVertexModel(),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
-        typeof streamFn
-      >[1],
-      { apiKey: "gcp-vertex-credentials", fetch: params.fetch } as Parameters<typeof streamFn>[2],
-    ),
+  const stream = await streamFn(
+    params.model ?? buildGoogleVertexModel(),
+    { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
+      typeof streamFn
+    >[1],
+    { apiKey: "gcp-vertex-credentials", fetch: params.fetch } as Parameters<typeof streamFn>[2],
   );
   return stream.result();
 }
