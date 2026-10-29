@@ -2887,6 +2887,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server.sessions.worker-placement-order.test.ts",
   "src/gateway/server.spawn-broker.test.ts",
   "src/gateway/server.startup-defaults-reload.test.ts",
+  "src/gateway/server.subagent-prompt-recent.gateway.test.ts",
   "src/gateway/server.talk-config.test.ts",
   "src/gateway/server.talk-consult-history.test.ts",
   "src/gateway/server.usage-cost-agent-scope.test.ts",

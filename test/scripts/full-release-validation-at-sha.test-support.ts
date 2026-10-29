@@ -103,6 +103,11 @@ export function createDispatchFixture(
     activeConcurrencyRun?: boolean;
     completedConcurrencyHistory?: number;
     releaseNotes?: string;
+    candidateOpenPrHead?: boolean;
+    candidateWebFlowMerge?: boolean;
+    candidateSignature?: "valid" | "missing" | "invalid";
+    candidateAuthorityActor?: string;
+    candidateAuthorityRevoked?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-"));
@@ -406,9 +411,42 @@ if (args[0] === "api" && method === "GET" && !hasNoCache) {
 const admissionEndpoint = endpoint.includes("/actions/workflows/openclaw-release-prepare.yml") ||
   endpoint.endsWith("/actions/workflows/18/runs") || endpoint.includes("/actions/runs/321/") ||
   endpoint.includes("/actions/artifacts/9002") || endpoint.includes("/contents/") ||
-  endpoint.includes("/compare/") || endpoint.includes("/git/ref/") ||
-  endpoint === "repos/openclaw/openclaw/collaborators/release-operator/permission";
-if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && admissionEndpoint) {
+  endpoint.includes("/compare/") || endpoint.includes("/branches-where-head") ||
+  endpoint.includes("/git/ref/") ||
+  (endpoint.startsWith("repos/openclaw/openclaw/collaborators/") &&
+    endpoint.endsWith("/permission"));
+if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
+  const signature = ${JSON.stringify(options.candidateSignature ?? "valid")};
+  console.log(JSON.stringify({ data: { repository: { object: {
+    oid: fields.get("oid"),
+    signature: signature === "missing" ? null : {
+      isValid: signature === "valid",
+      state: signature === "valid" ? "VALID" : "INVALID",
+      signer: { login: ${JSON.stringify(options.candidateAuthorityActor ?? "release-operator")} },
+    },
+    associatedPullRequests: { nodes: ${JSON.stringify([
+      ...(options.candidateOpenPrHead
+        ? [
+            {
+              state: "OPEN",
+              headRefOid: targetSha,
+              headRepository: { nameWithOwner: "openclaw/openclaw" },
+            },
+          ]
+        : []),
+      ...(options.candidateWebFlowMerge
+        ? [
+            {
+              state: "MERGED",
+              baseRefName: "release/2026.8.1",
+              baseRepository: { nameWithOwner: "openclaw/openclaw" },
+              mergeCommit: { oid: targetSha },
+            },
+          ]
+        : []),
+    ])} },
+  } } } }));
+} else if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && admissionEndpoint) {
   import(${JSON.stringify(admissionFixturePath)}).then(({ respond }) => respond(args,
     ${JSON.stringify({ origin, checkout, publisherSha: workflowSha, targetSha, admissionCapturePath, admissionReceiptPath, options })})).catch((error) => {
       console.error(error.stack); process.exitCode = 1;

@@ -330,7 +330,7 @@ describe("configured transcript cleanup custody", () => {
   ])(
     "retains and drains $fault cleanup after $phase (occupied=$whenOccupied)",
     async ({ phase, fault, whenOccupied }) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
       const adoption = phase === "adoption";
       const check = adoption ? expect.soft : expect;
       const text = adoption ? "Admitted note" : "Before shutdown";

@@ -118,6 +118,13 @@ const nodeRequiredFiles = new Set([
   "ui/src/pages/chat/session-snapshot-store.test.ts",
   "ui/src/pages/usage/usage-page-retention.test.ts",
 ]);
+// Real Code Mode workers exercise both host runtimes independently of their
+// Node/QuickJS guest choice. Keep Bun coverage while qualifying Node workers.
+const bothHostFiles = new Set([
+  "src/agents/code-mode.bridge.lifecycle.test.ts",
+  "src/agents/code-mode-engine-parity.test.ts",
+  "src/agents/code-mode.failure-phase.test.ts",
+]);
 const knownConfigs = new Set([
   "ui/vitest.config.ts",
   ...fullSuiteVitestShards.flatMap(({ config, projects }) => [config, ...(projects ?? [])]),
@@ -322,9 +329,12 @@ function resolveAllRuntimeSelections(
         .split("/")
         .some((_, index, parts) => matchesVitestGlob(parts.slice(index).join("/"), relative));
     });
-  const files = exactTargets ? targets! : [...nodeRequiredFiles];
-  const exceptions = files.filter((file) => {
-    if (!nodeRequiredFiles.has(file) || (postIncludes && !matches(file, postIncludes))) {
+  const files = exactTargets ? targets! : [...nodeRequiredFiles, ...bothHostFiles];
+  const nodeFiles = files.filter((file) => {
+    if (
+      (!nodeRequiredFiles.has(file) && !bothHostFiles.has(file)) ||
+      (postIncludes && !matches(file, postIncludes))
+    ) {
       return false;
     }
     if (includes && !matches(file, includes)) {
@@ -357,6 +367,7 @@ function resolveAllRuntimeSelections(
         buildVitestRunPlans([file], cwd).some((plan) => unresolvedConfigs.includes(plan.config)))
     );
   });
+  const exceptions = nodeFiles.filter((file) => nodeRequiredFiles.has(file));
   if (
     (exactTargets && exceptions.length === files.length) ||
     (includes?.length && includes.every((file) => nodeRequiredFiles.has(relativePath(file))))
@@ -435,13 +446,13 @@ function resolveAllRuntimeSelections(
   return [
     ...(policy === "dual-all"
       ? [node]
-      : exceptions.length
+      : nodeFiles.length
         ? [
             {
               runtime: "node" as const,
               ...(selection.targets?.length
-                ? { targets: exceptions }
-                : { vitestArgs: exceptions.map((file) => path.resolve(cwd, file)) }),
+                ? { targets: nodeFiles }
+                : { vitestArgs: nodeFiles.map((file) => path.resolve(cwd, file)) }),
             },
           ]
         : []),

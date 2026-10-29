@@ -334,6 +334,7 @@ function createSharedStateWorkerOwner() {
         if (
           stores.has(candidate) &&
           (candidate.context.existingSchemaPath !== context.existingSchemaPath ||
+            candidate.context.gatewayServiceInstallation !== context.gatewayServiceInstallation ||
             candidate.source.moduleUrl.href !== source.moduleUrl.href)
         ) {
           await wait(retire(candidate));
@@ -371,7 +372,8 @@ function createSharedStateWorkerOwner() {
         (candidate) =>
           matches(candidate, admission.identity) &&
           candidate.context.maintenanceScope === context.maintenanceScope &&
-          candidate.context.existingSchemaPath === context.existingSchemaPath,
+          candidate.context.existingSchemaPath === context.existingSchemaPath &&
+          candidate.context.gatewayServiceInstallation === context.gatewayServiceInstallation,
       );
       const ownsOpening = !entry;
       if (!entry) {
