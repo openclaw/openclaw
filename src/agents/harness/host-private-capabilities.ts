@@ -32,7 +32,7 @@ const replyInputChannel = resolveGlobalSingleton(Symbol.for("openclaw.replyInput
   Symbol("replyInputChannel"),
 );
 
-/** Retain actual ingress separately from the turn's potentially redirected reply route. */
+/** Retain human ingress separately from the turn's potentially redirected reply route. */
 export function bindReplyInputChannel(input: object, channel: string | undefined): void {
   Object.assign(input, { [replyInputChannel]: channel });
 }

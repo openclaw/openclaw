@@ -379,7 +379,7 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     toolBindings: ctx.GatewayRunToolBindings,
   };
   transferRequesterProfile(ctx, overlay);
-  bindReplyInputChannel(overlay, ctx.Provider ?? ctx.Surface);
+  bindReplyInputChannel(overlay, ctx.SenderIsBot ? undefined : (ctx.Provider ?? ctx.Surface));
   const ownerAuthority = getCommandOwnerAuthority(ctx);
   if (ownerAuthority) {
     bindCommandOwnerAuthority(overlay, ownerAuthority);

@@ -390,13 +390,11 @@ async function resolveChannelMessageIngressForOwner(
       verifiedPrincipal && participantGatewayContext
         ? await prepareUserChannelIdentityAuthority(verifiedPrincipal)
         : undefined;
-    // WhatsApp's admitted phone sender can match an explicit configured owner
-    // without upgrading its asserted identifier into an attested personal link.
+    // An admitted sender can match an explicit configured owner without
+    // upgrading its asserted channel identifier into an attested personal link.
     const commandOwnerPrincipal =
       verifiedPrincipal ??
-      (channelId === "whatsapp" &&
-      subject.identifiers[0]?.kind === "phone" &&
-      subject.identifiers[0]?.authentication === "asserted" &&
+      (subject.identifiers[0]?.authentication === "asserted" &&
       senderId &&
       participantGatewayContext &&
       isConfiguredCommandOwner(participantGatewayContext.getRuntimeConfig(), {

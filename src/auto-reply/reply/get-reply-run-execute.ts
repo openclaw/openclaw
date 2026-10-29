@@ -654,7 +654,10 @@ export async function executePreparedReplyRun(
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
   if (!inputProvenance || inputProvenance.kind === "external_user") {
     transferRequesterProfile(ctx, followupRun);
-    bindReplyInputChannel(followupRun.run, ctx.Provider ?? ctx.Surface);
+    bindReplyInputChannel(
+      followupRun.run,
+      ctx.SenderIsBot ? undefined : (ctx.Provider ?? ctx.Surface),
+    );
   }
   copyChildSessionPublication(sessionCtx, followupRun.run);
   if (command.senderIsOwner && channelOwnerAuthority) {

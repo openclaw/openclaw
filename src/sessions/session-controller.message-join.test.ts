@@ -8,7 +8,9 @@ import {
 import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-preparation.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { bindCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { withMessageInjectionAdmission } from "../auto-reply/reply/message-injection-authority.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-tool-authority-inbound.js";
 import {
   prepareReplyRunToolAuthority,
   prepareReplyToolAuthority,
@@ -114,6 +116,7 @@ type JoinCase = {
     webAdmin?: false;
     routedBrowser?: true;
     differentSession?: true;
+    bot?: true;
   };
   sessionOnly?: true;
 };
@@ -182,6 +185,11 @@ it.each<[string, Outcome, JoinCase?]>([
   ],
   ["channel owner guides shared WebUI", "accepted", { sharedOwner: { direction: "incoming" } }],
   ["shared WebUI guides channel owner", "accepted", { sharedOwner: { direction: "outgoing" } }],
+  [
+    "bot owner cannot use human Shared Owner continuation",
+    "deferred",
+    { sharedOwner: { direction: "incoming", bot: true } },
+  ],
   [
     "claimed channel ownership is not authority",
     "deferred",
@@ -561,12 +569,29 @@ it.each<[string, Outcome, JoinCase?]>([
           Object.assign(caller, incomingContext);
         }
         if (c.sharedOwner) {
-          bindReplyInputChannel(
-            caller,
-            c.sharedOwner.routedBrowser || c.sharedOwner.direction === "outgoing"
-              ? "webchat"
-              : "telegram",
-          );
+          if (c.sharedOwner.bot) {
+            Object.assign(
+              caller,
+              resolveInboundReplyToolAuthorityOverlay({
+                ctx: finalizeInboundContext({
+                  Provider: "telegram",
+                  OriginatingChannel: "telegram",
+                  SenderIsBot: true,
+                  SenderId: incoming.run.senderId,
+                  SessionKey: key,
+                }),
+                senderIsOwner: true,
+                disableTools: false,
+              }),
+            );
+          } else {
+            bindReplyInputChannel(
+              caller,
+              c.sharedOwner.routedBrowser || c.sharedOwner.direction === "outgoing"
+                ? "webchat"
+                : "telegram",
+            );
+          }
           if (c.sharedOwner.direction === "incoming" && c.sharedOwner.channelOwner !== false) {
             bindCommandOwnerAuthority(caller, { isCurrent: () => channelOwnerCurrent });
           }
@@ -598,7 +623,7 @@ it.each<[string, Outcome, JoinCase?]>([
           },
         });
         expect(joined.kind).toBe(outcome === "deferred" ? "deferred" : "prepared");
-        if (c.crossSurface === "different" && c.mismatch === "model") {
+        if ((c.crossSurface === "different" && c.mismatch === "model") || c.sharedOwner?.bot) {
           expect(joined).toMatchObject({ kind: "deferred", reason: "requester-mismatch" });
         }
         if (c.crossSurface === "incoming" && c.mismatch === "model") {
