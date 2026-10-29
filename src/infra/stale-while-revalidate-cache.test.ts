@@ -11,9 +11,41 @@ const stale = <T>(value: T) => ({ value, stale: true });
 let now = 1_000;
 beforeEach(() => {
   now = 1_000;
-  vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.spyOn(performance, "now").mockImplementation(() => now);
 });
 afterEach(() => vi.restoreAllMocks());
+
+it.each([
+  ["value", 60_000],
+  ["value", -60_000],
+  ["error", 60_000],
+  ["error", -60_000],
+] as const)("keeps %s TTL elapsed across a %ims wall clock step", async (kind, wallStep) => {
+  let wall = 10_000;
+  vi.spyOn(Date, "now").mockImplementation(() => wall);
+  const ttl = kind === "value" ? 100 : 50;
+  const cache = cacheFor<string>({ errorTtlMs: () => ttl });
+  const error = new Error("offline");
+  const load = vi.fn(async () => {
+    if (kind === "error") {
+      throw error;
+    }
+    return "cached";
+  });
+  const read = () =>
+    cache.read("item", load, { allowStale: false }).catch((caught: unknown) => caught);
+  const expected = kind === "value" ? fresh("cached") : error;
+  expect(await read()).toEqual(expected);
+  wall += wallStep;
+  expect(await read()).toEqual(expected);
+  expect(load).toHaveBeenCalledOnce();
+  now += ttl - 1;
+  expect(await read()).toEqual(expected);
+  expect(load).toHaveBeenCalledOnce();
+  now += 1;
+  expect(await read()).toEqual(expected);
+  expect(load).toHaveBeenCalledTimes(2);
+});
 
 it.each([true, false])("coalesces stale refreshes (cacheable=%s)", async (cacheable) => {
   const cache = cacheFor<string>({ cacheable: (value) => value !== "uncacheable" });
