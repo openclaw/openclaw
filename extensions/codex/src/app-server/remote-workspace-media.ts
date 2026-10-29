@@ -1,5 +1,9 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
-import { mapAgentHarnessMessagingMediaValues } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import {
+  collectAgentHarnessMessagingMediaUrls,
+  mapAgentHarnessMessagingMediaValues,
+} from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import {
   createBoundedRemoteFileReader,
   isPathStrictlyInside,
@@ -87,8 +91,26 @@ export function createCodexRemoteWorkspaceFileReader(
   };
 }
 
+/**
+ * Prepares message attachments: stages remote bytes, then records the content
+ * of attachments in the agent workspace or Gateway media as they are about to
+ * be sent. Paths elsewhere are never read here; the message tool's own media
+ * policy decides whether they can be sent.
+ */
+export async function prepareCodexRemoteWorkspaceMessageMedia(
+  params: Parameters<typeof stageCodexRemoteWorkspaceMessageMedia>[0],
+) {
+  const staged = await stageCodexRemoteWorkspaceMessageMedia(params);
+  const contentKeysByPath = await readCodexMediaContentKeys(
+    collectAgentHarnessMessagingMediaUrls(staged.args),
+    params.maxBytes ?? REMOTE_WORKSPACE_MEDIA_MAX_BYTES,
+    [params.localWorkspaceRoot, getMediaDir()],
+  );
+  return { ...staged, contentKeysByPath };
+}
+
 /** Stages authoritative bounded remote bytes into immutable Gateway-owned media. */
-export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
+async function stageCodexRemoteWorkspaceMessageMedia(params: {
   args: Record<string, unknown>;
   localWorkspaceRoot?: string;
   remoteWorkspaceRoot?: string;
@@ -196,18 +218,70 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
   };
 }
 
+/** Every reference a confirmed send may match: its path, staged sources and content. */
 export function resolveCodexMediaSourceUrls(
   mediaUrls: readonly string[],
-  sourcePathsByStagedPath: ReadonlyMap<string, readonly string[]> | undefined,
+  prepared:
+    | {
+        sourcePathsByStagedPath: ReadonlyMap<string, readonly string[]>;
+        contentKeysByPath: ReadonlyMap<string, string>;
+      }
+    | undefined,
 ): string[] {
   return [
     ...new Set(
-      mediaUrls.flatMap((url) => [
-        url,
-        ...(sourcePathsByStagedPath?.get(normalizeMediaReferenceForComparison(url)) ?? []),
-      ]),
+      mediaUrls.flatMap((url) => {
+        const key = normalizeMediaReferenceForComparison(url);
+        const contentKey = prepared?.contentKeysByPath.get(key);
+        return [
+          url,
+          ...(prepared?.sourcePathsByStagedPath.get(key) ?? []),
+          ...(contentKey ? [contentKey] : []),
+        ];
+      }),
     ),
   ];
+}
+
+/** Content identity, so a confirmed send of a copy still matches the image it copied. */
+export function codexMediaContentKey(bytes: Uint8Array): string {
+  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+}
+
+/**
+ * Keys files under one of `roots`, opened without following symlinks.
+ * Delivery evidence keeps these keys, so later edits to the same path cannot
+ * change what a confirmed send is taken to have delivered. Other, unreadable
+ * or oversized files keep path-only matching.
+ */
+export async function readCodexMediaContentKeys(
+  mediaUrls: readonly string[],
+  maxBytes: number,
+  roots: readonly (string | undefined)[],
+): Promise<Map<string, string>> {
+  const contentKeys = new Map<string, string>();
+  for (const url of mediaUrls) {
+    const file = normalizeMediaReferenceForComparison(url);
+    const rootDir = roots.find((dir) => dir && isPathStrictlyInside(dir, file));
+    if (!rootDir || contentKeys.has(file)) {
+      continue;
+    }
+    try {
+      const media = await root(rootDir, { symlinks: "reject" });
+      const opened = await media.open(path.relative(rootDir, file), { symlinks: "reject" });
+      try {
+        const stat = await opened.handle.stat();
+        if (stat.isFile() && stat.size <= maxBytes) {
+          contentKeys.set(file, codexMediaContentKey(await opened.handle.readFile()));
+        }
+      } finally {
+        await opened[Symbol.asyncDispose]();
+      }
+    } catch {
+      // The send itself reports unreadable attachments.
+    }
+  }
+  return contentKeys;
 }
 
 async function assertGatewayManagedMediaPath(value: string, mediaRoot: string): Promise<void> {

@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -14,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/media-store";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
+import { codexMediaContentKey, readCodexMediaContentKeys } from "./remote-workspace-media.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 
@@ -26,7 +28,10 @@ type GeneratedImageResult = {
 
 export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
-  private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
+  private readonly mediaByItemId = new Map<
+    string,
+    { mediaUrl?: string; savedPath?: string; contentKey?: string }
+  >();
   private readonly gatewayMaterializedItemIds = new Set<string>();
   private readonly pendingMaterializationsByItemId = new Map<string, Promise<void>>();
 
@@ -100,9 +105,22 @@ export class CodexGeneratedMediaProjection {
         }
         return;
       }
+      if (this.mediaByItemId.get(item.id)?.mediaUrl) {
+        return;
+      }
+      const contentKeys = await readCodexMediaContentKeys(
+        [savedPath],
+        resolveGeneratedMediaMaxBytes(this.config, "image"),
+        [path.dirname(savedPath)],
+      );
+      // A sibling event may have materialized this item while the file was read.
       const existing = this.mediaByItemId.get(item.id);
       if (!existing?.mediaUrl) {
-        this.mediaByItemId.set(item.id, { ...existing, mediaUrl: savedPath });
+        this.mediaByItemId.set(item.id, {
+          ...existing,
+          mediaUrl: savedPath,
+          contentKey: [...contentKeys.values()][0],
+        });
       }
     }
   }
@@ -187,6 +205,7 @@ export class CodexGeneratedMediaProjection {
       this.mediaByItemId.set(params.itemId, {
         ...this.mediaByItemId.get(params.itemId),
         mediaUrl: saved.path,
+        contentKey: codexMediaContentKey(asset.buffer),
       });
     } catch (error) {
       embeddedAgentLog.warn(
@@ -209,7 +228,7 @@ export class CodexGeneratedMediaProjection {
   }) {
     const generatedUrls = new Set<string>();
     const generatedUrlBySource = new Map<string, string>();
-    for (const { mediaUrl, savedPath } of this.mediaByItemId.values()) {
+    for (const { mediaUrl, savedPath, contentKey } of this.mediaByItemId.values()) {
       if (!mediaUrl) {
         continue;
       }
@@ -217,6 +236,10 @@ export class CodexGeneratedMediaProjection {
       generatedUrlBySource.set(normalizeMediaReferenceForComparison(mediaUrl), mediaUrl);
       if (savedPath) {
         generatedUrlBySource.set(normalizeMediaReferenceForComparison(savedPath), mediaUrl);
+      }
+      if (contentKey) {
+        // A confirmed send of a same-bytes copy at another path is this image.
+        generatedUrlBySource.set(contentKey, mediaUrl);
       }
     }
     const sentMediaUrls = new Set(params.messagingToolSentMediaUrls);
