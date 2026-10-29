@@ -21,6 +21,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { captureEnv } from "../test-utils/env.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 import {
   assistantMessage,
@@ -959,7 +960,7 @@ describe("exportTrajectoryBundle", () => {
     const { tmpDir, sessionTarget } = exportPaths();
     const homeDir = makeTempDir();
     const outputDir = path.join(tmpDir, "bundle");
-    const previousHome = process.env.HOME;
+    const env = captureEnv(["HOME"]);
     await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
     appendSqliteTrajectoryRuntimeEvents(sessionTarget, [
       createRuntimeEvent("mixed-paths", {
@@ -980,11 +981,7 @@ describe("exportTrajectoryBundle", () => {
       expect(bundle.manifest.sourceFiles.runtime).toBeUndefined();
       expect(eventTypes(bundle.events)).toContain("mixed-paths");
     } finally {
-      if (previousHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = previousHome;
-      }
+      env.restore();
     }
 
     const events = fs.readFileSync(path.join(outputDir, "events.jsonl"), "utf8");

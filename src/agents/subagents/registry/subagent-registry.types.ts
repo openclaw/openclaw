@@ -6,6 +6,7 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentEndReason } from "../../../context-engine/types.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
+import type { OperationalRunInstanceRef } from "../../operational-run-instance.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
@@ -260,6 +261,8 @@ export type SubagentRegistrationScope = {
 };
 
 export type RegisterSubagentRunOptions = {
+  /** In-process receipt owner, never persisted or recovered from a run ID. */
+  requesterRunInstance?: OperationalRunInstanceRef;
   /** An accepted dispatch replay retains its original completion owner and waiter. */
   acceptedRunReplay?: true;
   assertCurrent?: () => void;

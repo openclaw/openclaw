@@ -304,7 +304,8 @@ export async function prepareReplyAgentTurn<TConfigured>(
         origin?.messageProvider &&
         !origin.operatorProfileId &&
         origin.messageProvider !== INTERNAL_MESSAGE_CHANNEL &&
-        !run.internalEventExecution
+        !run.internalEventExecution &&
+        !run.sessionEventOrigin
       ) {
         const owner = await prepareCommandOwnerAuthority(config, {
           channel: origin.messageProvider,

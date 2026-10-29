@@ -718,14 +718,13 @@ const reviewedOperations = new Map([
       {
         tier: "T3",
         operations: [
-          "everySessionTranscriptUserInputFrom.read",
           "readSessionTranscriptVisibleMessageDeltaCore",
           "resolveVisibleDeltaRange",
           "readVisibleDeltaMetadata",
           "readVisibleDeltaPayload",
         ],
         evidence:
-          "Harness completion reaches the predicate only through session-history-read-operation.worker.ts or openclaw-agent-execution.worker.ts -> session-actor.worker.ts -> session-actor-phase.worker.ts. Visible delta has only session-history-read-operation.worker.ts and the registered execution-worker visibleDelta operation as callers; the accessor reexport adds no native value caller. Its private range, metadata, and payload helpers are called only by the visible delta core.",
+          "Visible delta has only session-history-read-operation.worker.ts and the registered execution-worker visibleDelta operation as callers; the accessor reexport adds no native value caller. Its private range, metadata, and payload helpers are called only by the visible delta core.",
       },
     ],
   ],

@@ -11,6 +11,10 @@ import {
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  resolveMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../gateway/message-action-turn-capability.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import { localPlacement } from "../../gateway/worker-environments/placement-suite.test-support.js";
@@ -26,6 +30,7 @@ import {
   stopSession,
 } from "../../sessions/session-controller.stop.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import { mintReplyMessageActionTurnCapability } from "./agent-runner-utils.js";
 import {
   bindGoalContinuationExecution,
   promoteGoalContinuationYield,
@@ -430,6 +435,47 @@ describe("Goal queue custody", () => {
     ]);
     f.operation.complete();
     expect(queued.abortSignal?.aborted).toBe(false);
+  });
+  it.each([
+    { source: "a user turn", event: undefined },
+    { source: "a background completion", event: {} },
+    { source: "a silent completion", event: { deliver: false } },
+  ] as const)("binds channel-turn authority only for successors of $source", async ({ event }) => {
+    const f = fixture();
+    const { base } = f.params;
+    Object.assign(base.run, { messageProvider: "discord", agentAccountId: "default" });
+    Object.assign(base, { originatingChannel: "discord", originatingTo: "channel:123" });
+    if (event) {
+      base.run.internalEventExecution = { ...event, onStarted: vi.fn(), onTerminal: vi.fn() };
+    }
+    expect(await enqueueGoalContinuation(f.params)).toBe(true);
+    const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];
+    const runId = "goal-successor";
+    const sessionCtx = { Provider: "discord", To: "channel:123", AccountId: "default" };
+    const token = mintReplyMessageActionTurnCapability(
+      { followupRun: queued, sessionCtx, opts: { runId } },
+      runId,
+    );
+    try {
+      const lookup = { token, agentId: "main", runId, sessionKey: "agent:main:goal" };
+      Object.assign(lookup, { sessionId: identity.sessionId });
+      if (event) {
+        // The event's captured route never becomes current-conversation authority.
+        expect(token).toBeUndefined();
+        expect(queued.run.internalEventExecution).toBeUndefined();
+        expect(queued.run.sessionEventOrigin).toEqual(event);
+      } else {
+        expect(resolveMessageActionTurnCapability(lookup)).toMatchObject({
+          toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
+        });
+        const otherSession = { ...lookup, sessionKey: "agent:main:other" };
+        expect(resolveMessageActionTurnCapability(otherSession)).toBeUndefined();
+        revokeMessageActionTurnCapability(token);
+        expect(resolveMessageActionTurnCapability(lookup)).toBeUndefined();
+      }
+    } finally {
+      revokeMessageActionTurnCapability(token);
+    }
   });
   it("leaves announcing children from earlier turns with their continuation owner", async () => {
     const f = fixture();

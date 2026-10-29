@@ -586,7 +586,24 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             if (refreshCompletionAuthority && authority) {
               // The newly admitted caller replaces predecessor custody, including
               // a retired legacy source; persisted rows alone never grant it.
-              subagentRuns.bindCompletionAuthority(next, authority);
+              const sameRequesterTask =
+                !preserveCompletedRun &&
+                (next.taskRunId ?? next.runId) === (value.source.taskRunId ?? value.source.runId) &&
+                next.requesterSessionKey === value.source.requesterSessionKey &&
+                next.requesterAgentId === value.source.requesterAgentId &&
+                next.requesterStorePath === value.source.requesterStorePath &&
+                next.requesterTurnRunId === value.source.requesterTurnRunId;
+              // Transfer keeps accounting metadata for this task, never its predecessor's permission.
+              const requesterRunInstance = sameRequesterTask
+                ? subagentRuns.getRequesterRunInstance(next)
+                : undefined;
+              subagentRuns.bindCompletionAuthority(
+                next,
+                authority,
+                requesterRunInstance?.runId === next.requesterTurnRunId
+                  ? requesterRunInstance
+                  : undefined,
+              );
               custodyTransferred = true;
             }
             subagentRuns.commitOwnership(next);

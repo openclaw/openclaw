@@ -177,6 +177,14 @@ export function buildSessionEventContext(params: {
         params.assertCurrent();
         return true;
       },
+      // Work that outlives this occurrence keeps only the live operator source.
+      successor: {
+        operatorAuthority,
+        isCurrent: () => {
+          operatorAuthority.assertCurrent();
+          return true;
+        },
+      },
     });
   } else {
     const commandOwner = readSessionEventTargetCommandOwner(target);
@@ -189,6 +197,11 @@ export function buildSessionEventContext(params: {
         isCurrent: () => {
           params.assertCurrent();
           return authority.isCurrent(getSessionEventRuntimeConfig());
+        },
+        // Work that outlives this occurrence keeps only the requester's live owner check.
+        successor: {
+          recoveryReference: authority.recoveryReference,
+          isCurrent: () => authority.isCurrent(getSessionEventRuntimeConfig()),
         },
       });
       // Owner-checked effects (for example Gateway maintenance) recheck this sender at

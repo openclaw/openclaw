@@ -2,7 +2,8 @@ import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 
 export async function withUpdateDatabaseEngine<T>(
   env: NodeJS.ProcessEnv,
-  run: () => Promise<T>,
+  run: (configReadable: boolean) => Promise<T>,
+  opts?: { dryRun?: boolean },
 ): Promise<T> {
   const [
     { cloneEnvWithPlatformSemantics },
@@ -30,6 +31,10 @@ export async function withUpdateDatabaseEngine<T>(
     isConfigReadFailure(snapshot) ||
     snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
   ) {
+    // Preview preflight reports the refusal without inferring an engine from unreadable config.
+    if (opts?.dryRun) {
+      return await run(false);
+    }
     throw createUpdateConfigFailure(snapshot);
   }
   // Candidate Doctor owns config recovery; admission only needs the authored engine choice.
@@ -37,6 +42,6 @@ export async function withUpdateDatabaseEngine<T>(
   return await withDatabaseEngineSelection(selection, async () => {
     const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
     await preparePostgresPoolForUpdate("openclaw update repair");
-    return await run();
+    return await run(true);
   });
 }

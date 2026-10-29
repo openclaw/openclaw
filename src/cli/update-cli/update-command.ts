@@ -113,55 +113,61 @@ async function updateCommandWithRuntime(
       expectedForeground:
         prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     });
-    return await withUpdateDatabaseEngine(env, async () => {
-      if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
-        defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
-      }
-      const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
-      assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
-      const needsInitialization = await updateStateNeedsInitialization(env);
-      const captureOriginal =
-        !inputOpts.dryRun &&
-        !inputOpts.run &&
-        !inputOpts.recovery &&
-        !executorOptions &&
-        !env[UPDATE_RUN_ID_ENV]?.trim() &&
-        env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
-      const execute = (initialization?: InitializedUpdate) =>
-        runAdmittedUpdate(
-          inputOpts,
-          prepared,
-          recoveryState,
-          invocationCwd,
-          (opts, presentation, executor) =>
-            updateCommandInternal(
-              opts,
-              recoveryState,
-              invocationCwd,
-              prepared,
-              presentation,
-              executor,
-              retainRuntime,
-              initialization,
-            ),
-          initialization,
-          executorOptions,
-        );
-      if (needsInitialization || captureOriginal) {
-        const { initializeAndRunUpdate } = await import("./update-command-initialization-run.js");
-        return await initializeAndRunUpdate(
-          inputOpts,
-          prepared,
-          recoveryState,
-          invocationCwd,
-          env,
-          execute,
-          { needsInitialization, captureOriginal },
-          executorOptions,
-        );
-      }
-      return await execute();
-    });
+    return await withUpdateDatabaseEngine(
+      env,
+      async (configReadable) => {
+        if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
+          defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
+        }
+        const { updateStateNeedsInitialization } =
+          await import("./update-command-initialization.js");
+        assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
+        // Unreadable previews reach diagnostics before any writable state inspection.
+        const needsInitialization = !configReadable || (await updateStateNeedsInitialization(env));
+        const captureOriginal =
+          !inputOpts.dryRun &&
+          !inputOpts.run &&
+          !inputOpts.recovery &&
+          !executorOptions &&
+          !env[UPDATE_RUN_ID_ENV]?.trim() &&
+          env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
+        const execute = (initialization?: InitializedUpdate) =>
+          runAdmittedUpdate(
+            inputOpts,
+            prepared,
+            recoveryState,
+            invocationCwd,
+            (opts, presentation, executor) =>
+              updateCommandInternal(
+                opts,
+                recoveryState,
+                invocationCwd,
+                prepared,
+                presentation,
+                executor,
+                retainRuntime,
+                initialization,
+              ),
+            initialization,
+            executorOptions,
+          );
+        if (needsInitialization || captureOriginal) {
+          const { initializeAndRunUpdate } = await import("./update-command-initialization-run.js");
+          return await initializeAndRunUpdate(
+            inputOpts,
+            prepared,
+            recoveryState,
+            invocationCwd,
+            env,
+            execute,
+            { needsInitialization, captureOriginal },
+            executorOptions,
+          );
+        }
+        return await execute();
+      },
+      inputOpts,
+    );
   });
 }
 

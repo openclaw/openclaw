@@ -184,6 +184,28 @@ async function githubAttemptJobs(runId, runAttempt, signal) {
     .map((line) => JSON.parse(line));
 }
 
+const EFFECTIVE_PARENT_GATE_ENV = new Map([
+  ["Prepare release npm artifacts", "NPM_PREPARATION_RESULT"],
+  ["Qualify release npm artifacts", "NPM_QUALIFICATION_RESULT"],
+  ["Prepare exact plugin npm artifacts", "PLUGIN_NPM_PREPARATION_RESULT"],
+  ["Prepare release Docker artifacts", "DOCKER_PREPARATION_RESULT"],
+]);
+const EFFECTIVE_PARENT_GATE_RESULTS = new Set(["success", "failure", "cancelled", "skipped"]);
+
+export function effectiveReleasePlanGates(gates, env = process.env) {
+  return gates.map((gate) => {
+    const envName = EFFECTIVE_PARENT_GATE_ENV.get(gate.name);
+    if (!envName || !env[envName]) {
+      return gate;
+    }
+    const result = env[envName];
+    if (!EFFECTIVE_PARENT_GATE_RESULTS.has(result)) {
+      throw new Error(`Invalid effective release gate result: ${gate.name}`);
+    }
+    return { ...gate, result };
+  });
+}
+
 function issue(kind, child, message, extra = {}) {
   return {
     child: child.key,
@@ -698,14 +720,15 @@ function stateArtifactExpected(attemptLabel = "parent run attempt") {
 
 function verifyMode() {
   const expected = stateArtifactExpected();
+  const executionPlan = readArtifact(
+    requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),
+    "execution plan",
+  );
   const verified = verifyReleaseStateArtifacts(
-    readArtifact(
-      requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),
-      "execution plan",
-    ),
+    executionPlan,
     readArtifact(requiredString(process.env.RELEASE_DECISION_PATH, "decision path"), "decision"),
     readArtifact(requiredString(process.env.DIAGNOSTIC_DRAIN_PATH, "drain path"), "drain"),
-    expected,
+    { ...expected, effectiveGates: effectiveReleasePlanGates(executionPlan.gates) },
   );
   appendSummary("decision", verified.decision);
   appendSummary("drain", verified.drain);
@@ -1349,7 +1372,10 @@ async function collectMode(mode) {
     },
   );
   const plan = executionPlan.children;
-  const gateFailures = releasePlanGateFailures(executionPlan.gates);
+  // The plan freezes which parent gates are required. Their effective result is
+  // supplied by this same parent attempt so failed-job recovery can clear a
+  // retryable qualification failure without changing the admitted gate set.
+  const gateFailures = releasePlanGateFailures(effectiveReleasePlanGates(executionPlan.gates));
   const failFast = mode === "decision" && process.env.FAIL_FAST === "true";
   const pollIntervalMs =
     Number(process.env.FULL_RELEASE_POLL_INTERVAL_MS) || DEFAULT_POLL_INTERVAL_MS;
@@ -1577,7 +1603,7 @@ async function validateManifestMode() {
             requiredString(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain path"),
             "diagnostic drain",
           ),
-          expected,
+          { ...expected, effectiveGates: effectiveReleasePlanGates(executionPlan.gates) },
         )
       : undefined;
   const drain = verified?.drain;
@@ -1661,11 +1687,12 @@ async function validateManifestMode() {
 
 function selectMode() {
   const expected = stateArtifactExpected("current parent run attempt");
+  const executionPlan = readArtifact(
+    requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),
+    "execution plan",
+  );
   const selected = selectReleaseStateArtifacts(
-    readArtifact(
-      requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),
-      "execution plan",
-    ),
+    executionPlan,
     readStateCandidates(
       requiredString(process.env.RELEASE_DECISION_ATTEMPTS_PATH, "decision attempts path"),
       "full-release-decision",
@@ -1680,7 +1707,7 @@ function selectMode() {
       expected.maxParentRunAttempt,
       "full-release-diagnostic-manifest.json",
     ),
-    expected,
+    { ...expected, effectiveGates: effectiveReleasePlanGates(executionPlan.gates) },
   );
   writeArtifact(
     requiredString(process.env.RELEASE_DECISION_PATH, "selected decision path"),

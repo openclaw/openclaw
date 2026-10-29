@@ -30,9 +30,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
       "namespace": "<namespace>",
       "nextSteps": [
         "Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor.",
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
         "Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
       ],
       "observed": "postgres",
@@ -72,9 +70,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
       "namespace": "<namespace>",
       "nextSteps": [
         "Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor.",
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
         "Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
       ],
       "observed": "postgres",
@@ -151,9 +147,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
       "namespace": "<namespace>",
       "nextSteps": [
         "Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor.",
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
         "Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
       ],
       "observed": "postgres",
@@ -193,9 +187,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
       "namespace": "<namespace>",
       "nextSteps": [
         "Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor.",
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
         "Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
       ],
       "observed": "postgres",
@@ -235,9 +227,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
       "namespace": "<namespace>",
       "nextSteps": [
         "Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor.",
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
         "Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
       ],
       "observed": "postgres",
@@ -277,9 +267,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
       "namespace": "<namespace>",
       "nextSteps": [
         "Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor.",
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
         "Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
       ],
       "observed": "postgres",
@@ -319,9 +307,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
       "namespace": "<namespace>",
       "nextSteps": [
         "Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor.",
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
         "Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
       ],
       "observed": "postgres",
@@ -507,7 +493,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -545,7 +531,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -583,7 +569,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -621,7 +607,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -659,7 +645,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -697,7 +683,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -735,7 +721,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -773,7 +759,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -811,7 +797,7 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -828,51 +814,51 @@ exports[`Doctor physical PostgreSQL output > preserves physical identity but rep
     "text": [
       {
         "Item": "Database state",
-        "Value": "state; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "state; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database agent",
-        "Value": "agent; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "agent; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database workboard",
-        "Value": "workboard; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "workboard; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database logbook",
-        "Value": "logbook; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "logbook; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database team-reports",
-        "Value": "team-reports; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "team-reports; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database quarantine",
-        "Value": "quarantine; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "quarantine; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database managed-update",
-        "Value": "managed-update; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "managed-update; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database package-activation",
-        "Value": "package-activation; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "package-activation; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database credentials",
-        "Value": "credentials; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "credentials; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
     ],
   },
   "text": [
-    "state (<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=<current-state-schema>, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=none, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
-    "state (<state>/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=<current-state-schema>, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=none, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
+    "state (<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=<current-state-schema>, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=none, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
+    "state (<state>/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=<current-state-schema>, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=none, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
     "state (<state>/voice-calls/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=<current-state-schema>, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
-    "agent (<state>/agents/main/agent/openclaw-agent.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=<current-agent-schema>, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
-    "agent (<state>/agents/retained/agent/openclaw-agent.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=<current-agent-schema>, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
-    "workboard (<state>/plugins/workboard/workboard.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=4, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
-    "logbook (<state>/logbook/logbook.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=3, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
-    "team-reports (<state>/plugins/team-reports/team-reports.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=2, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
+    "agent (<state>/agents/main/agent/openclaw-agent.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=<current-agent-schema>, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
+    "agent (<state>/agents/retained/agent/openclaw-agent.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=<current-agent-schema>, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
+    "workboard (<state>/plugins/workboard/workboard.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=4, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
+    "logbook (<state>/logbook/logbook.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=3, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
+    "team-reports (<state>/plugins/team-reports/team-reports.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=unknown, expected=2, pending=unknown; connectivity=unreachable; namespace=<namespace>; storeId=<store-id>; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; PostgreSQL is unreachable; schema, extensions, and ownership are unknown.; Next: Check PostgreSQL service/port, network access, and database.postgres.connection or its SecretRef, then rerun openclaw doctor. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
     "quarantine (<state>/state/openclaw-quarantine.sqlite); default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=2, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
     "managed-update (<temporary>/openclaw-<uid>/managed-update-handoffs.sqlite); default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unversioned, expected=not applicable, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
     "package-activation (<package-activation-journal>); default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unversioned, expected=not applicable, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
@@ -914,7 +900,6 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
       "namespace": "<namespace>",
       "nextSteps": [
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
       ],
       "observed": "postgres",
       "path": "<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite",
@@ -956,7 +941,6 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
       "namespace": "<namespace>",
       "nextSteps": [
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
       ],
       "observed": "postgres",
       "path": "<state>/state/openclaw.sqlite",
@@ -1033,9 +1017,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
       "mismatch": false,
       "namespace": "<namespace>",
       "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
       ],
       "observed": "postgres",
       "path": "<state>/agents/main/agent/openclaw-agent.sqlite",
@@ -1076,9 +1058,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
       "mismatch": false,
       "namespace": "<namespace>",
       "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
       ],
       "observed": "postgres",
       "path": "<state>/agents/retained/agent/openclaw-agent.sqlite",
@@ -1119,9 +1099,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
       "mismatch": false,
       "namespace": "<namespace>",
       "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
       ],
       "observed": "postgres",
       "path": "<state>/plugins/workboard/workboard.sqlite",
@@ -1162,9 +1140,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
       "mismatch": false,
       "namespace": "<namespace>",
       "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
       ],
       "observed": "postgres",
       "path": "<state>/logbook/logbook.sqlite",
@@ -1205,9 +1181,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
       "mismatch": false,
       "namespace": "<namespace>",
       "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
       ],
       "observed": "postgres",
       "path": "<state>/plugins/team-reports/team-reports.sqlite",
@@ -1392,7 +1366,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1430,7 +1404,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1468,7 +1442,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1506,7 +1480,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1544,7 +1518,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1582,7 +1556,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1620,7 +1594,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1658,7 +1632,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1696,7 +1670,7 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1713,51 +1687,51 @@ exports[`Doctor physical PostgreSQL output > reports each PostgreSQL family and 
     "text": [
       {
         "Item": "Database state",
-        "Value": "state; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "state; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database agent",
-        "Value": "agent; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "agent; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database workboard",
-        "Value": "workboard; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "workboard; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database logbook",
-        "Value": "logbook; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "logbook; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database team-reports",
-        "Value": "team-reports; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "team-reports; default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database quarantine",
-        "Value": "quarantine; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "quarantine; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database managed-update",
-        "Value": "managed-update; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "managed-update; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database package-activation",
-        "Value": "package-activation; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "package-activation; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database credentials",
-        "Value": "credentials; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "credentials; default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
     ],
   },
   "text": [
-    "state (<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "state (<state>/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result.",
+    "state (<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
+    "state (<state>/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
     "state (<state>/voice-calls/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=<current-state-schema>, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
-    "agent (<state>/agents/main/agent/openclaw-agent.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "agent (<state>/agents/retained/agent/openclaw-agent.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "workboard (<state>/plugins/workboard/workboard.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=4, expected=4, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "logbook (<state>/logbook/logbook.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=3, expected=3, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "team-reports (<state>/plugins/team-reports/team-reports.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=2, expected=2, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result.",
+    "agent (<state>/agents/main/agent/openclaw-agent.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
+    "agent (<state>/agents/retained/agent/openclaw-agent.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
+    "workboard (<state>/plugins/workboard/workboard.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=4, expected=4, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
+    "logbook (<state>/logbook/logbook.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=3, expected=3, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
+    "team-reports (<state>/plugins/team-reports/team-reports.sqlite); default=postgres, override=inherit, effective=postgres; observed=postgres; schema=2, expected=2, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
     "quarantine (<state>/state/openclaw-quarantine.sqlite); default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=2, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
     "managed-update (<temporary>/openclaw-<uid>/managed-update-handoffs.sqlite); default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unversioned, expected=not applicable, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
     "package-activation (<package-activation-journal>); default=postgres, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unversioned, expected=not applicable, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
@@ -1799,8 +1773,6 @@ exports[`Doctor physical PostgreSQL output > reports keyword-only capability and
     "namespace": "<namespace>",
     "nextSteps": [
       "Ask the database administrator to run CREATE EXTENSION vector; grant USAGE on its schema to the OpenClaw role.",
-      "Inspect the store owner's custody and lease before offline maintenance.",
-      "No matching backup outcome was observed; run openclaw backup create and verify its result.",
     ],
     "observed": "postgres",
     "path": "<state>/agents/main/agent/openclaw-agent.sqlite",
@@ -1840,7 +1812,7 @@ exports[`Doctor physical PostgreSQL output > reports keyword-only capability and
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1878,7 +1850,7 @@ exports[`Doctor physical PostgreSQL output > reports keyword-only capability and
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1916,7 +1888,7 @@ exports[`Doctor physical PostgreSQL output > reports keyword-only capability and
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1954,7 +1926,7 @@ exports[`Doctor physical PostgreSQL output > reports keyword-only capability and
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -1992,7 +1964,7 @@ exports[`Doctor physical PostgreSQL output > reports keyword-only capability and
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2030,7 +2002,7 @@ exports[`Doctor physical PostgreSQL output > reports keyword-only capability and
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2068,7 +2040,7 @@ exports[`Doctor physical PostgreSQL output > reports keyword-only capability and
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2106,7 +2078,7 @@ exports[`Doctor physical PostgreSQL output > reports keyword-only capability and
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2144,7 +2116,7 @@ exports[`Doctor physical PostgreSQL output > reports keyword-only capability and
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2161,43 +2133,43 @@ exports[`Doctor physical PostgreSQL output > reports keyword-only capability and
     "text": [
       {
         "Item": "Database state",
-        "Value": "state; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "state; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database agent",
-        "Value": "agent; default=sqlite, override=postgres, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "agent; default=sqlite, override=postgres, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database workboard",
-        "Value": "workboard; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "workboard; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database logbook",
-        "Value": "logbook; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "logbook; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database team-reports",
-        "Value": "team-reports; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "team-reports; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database quarantine",
-        "Value": "quarantine; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "quarantine; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database managed-update",
-        "Value": "managed-update; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "managed-update; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database package-activation",
-        "Value": "package-activation; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "package-activation; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database credentials",
-        "Value": "credentials; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "credentials; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
     ],
   },
-  "text": "agent (<state>/agents/main/agent/openclaw-agent.sqlite); default=sqlite, override=postgres, effective=postgres; observed=postgres; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent; admittedExtensions=none; degraded=vector search unavailable: pgvector is not installed; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Ask the database administrator to run CREATE EXTENSION vector; grant USAGE on its schema to the OpenClaw role. Inspect the store owner's custody and lease before offline maintenance. No matching backup outcome was observed; run openclaw backup create and verify its result.",
+  "text": "agent (<state>/agents/main/agent/openclaw-agent.sqlite); default=sqlite, override=postgres, effective=postgres; observed=postgres; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent; admittedExtensions=none; degraded=vector search unavailable: pgvector is not installed; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Ask the database administrator to run CREATE EXTENSION vector; grant USAGE on its schema to the OpenClaw role.",
 }
 `;
 
@@ -2227,9 +2199,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
       },
       "mismatch": false,
       "namespace": null,
-      "nextSteps": [
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
-      ],
+      "nextSteps": [],
       "observed": "sqlite",
       "path": "<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite",
       "schema": {
@@ -2263,9 +2233,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
       },
       "mismatch": false,
       "namespace": null,
-      "nextSteps": [
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
-      ],
+      "nextSteps": [],
       "observed": "sqlite",
       "path": "<state>/state/openclaw.sqlite",
       "schema": {
@@ -2341,9 +2309,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
       "mismatch": false,
       "namespace": "<namespace>",
       "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
       ],
       "observed": "postgres",
       "path": "<state>/agents/main/agent/openclaw-agent.sqlite",
@@ -2384,9 +2350,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
       "mismatch": false,
       "namespace": "<namespace>",
       "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
       ],
       "observed": "postgres",
       "path": "<state>/agents/retained/agent/openclaw-agent.sqlite",
@@ -2421,10 +2385,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
       },
       "mismatch": false,
       "namespace": null,
-      "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
-      ],
+      "nextSteps": [],
       "observed": "sqlite",
       "path": "<state>/plugins/workboard/workboard.sqlite",
       "schema": {
@@ -2458,10 +2419,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
       },
       "mismatch": false,
       "namespace": null,
-      "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
-      ],
+      "nextSteps": [],
       "observed": "sqlite",
       "path": "<state>/logbook/logbook.sqlite",
       "schema": {
@@ -2495,10 +2453,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
       },
       "mismatch": false,
       "namespace": null,
-      "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
-      ],
+      "nextSteps": [],
       "observed": "sqlite",
       "path": "<state>/plugins/team-reports/team-reports.sqlite",
       "schema": {
@@ -2682,7 +2637,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2720,7 +2675,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2758,7 +2713,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2796,7 +2751,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2834,7 +2789,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2872,7 +2827,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2910,7 +2865,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2948,7 +2903,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -2986,7 +2941,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -3003,51 +2958,51 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only agent 
     "text": [
       {
         "Item": "Database state",
-        "Value": "state; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "state; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database agent",
-        "Value": "agent; default=sqlite, override=postgres, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "agent; default=sqlite, override=postgres, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database workboard",
-        "Value": "workboard; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "workboard; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database logbook",
-        "Value": "logbook; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "logbook; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database team-reports",
-        "Value": "team-reports; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "team-reports; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database quarantine",
-        "Value": "quarantine; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "quarantine; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database managed-update",
-        "Value": "managed-update; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "managed-update; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database package-activation",
-        "Value": "package-activation; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "package-activation; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database credentials",
-        "Value": "credentials; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "credentials; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
     ],
   },
   "text": [
-    "state (<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none; Next: No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "state (<state>/state/openclaw.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none; Next: No matching backup outcome was observed; run openclaw backup create and verify its result.",
+    "state (<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none",
+    "state (<state>/state/openclaw.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none",
     "state (<state>/voice-calls/state/openclaw.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=<current-state-schema>, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
-    "agent (<state>/agents/main/agent/openclaw-agent.sqlite); default=sqlite, override=postgres, effective=postgres; observed=postgres; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "agent (<state>/agents/retained/agent/openclaw-agent.sqlite); default=sqlite, override=postgres, effective=postgres; observed=postgres; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "workboard (<state>/plugins/workboard/workboard.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=4, expected=4, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "logbook (<state>/logbook/logbook.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=3, expected=3, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "team-reports (<state>/plugins/team-reports/team-reports.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=2, expected=2, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. No matching backup outcome was observed; run openclaw backup create and verify its result.",
+    "agent (<state>/agents/main/agent/openclaw-agent.sqlite); default=sqlite, override=postgres, effective=postgres; observed=postgres; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
+    "agent (<state>/agents/retained/agent/openclaw-agent.sqlite); default=sqlite, override=postgres, effective=postgres; observed=postgres; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
+    "workboard (<state>/plugins/workboard/workboard.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=4, expected=4, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none",
+    "logbook (<state>/logbook/logbook.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=3, expected=3, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none",
+    "team-reports (<state>/plugins/team-reports/team-reports.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=2, expected=2, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none",
     "quarantine (<state>/state/openclaw-quarantine.sqlite); default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=2, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
     "managed-update (<temporary>/openclaw-<uid>/managed-update-handoffs.sqlite); default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unversioned, expected=not applicable, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
     "package-activation (<package-activation-journal>); default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unversioned, expected=not applicable, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
@@ -3089,7 +3044,6 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
       "namespace": "<namespace>",
       "nextSteps": [
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
       ],
       "observed": "postgres",
       "path": "<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite",
@@ -3131,7 +3085,6 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
       "namespace": "<namespace>",
       "nextSteps": [
         "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
       ],
       "observed": "postgres",
       "path": "<state>/state/openclaw.sqlite",
@@ -3202,10 +3155,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
       },
       "mismatch": false,
       "namespace": null,
-      "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
-      ],
+      "nextSteps": [],
       "observed": "sqlite",
       "path": "<state>/agents/main/agent/openclaw-agent.sqlite",
       "schema": {
@@ -3239,10 +3189,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
       },
       "mismatch": false,
       "namespace": null,
-      "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
-      ],
+      "nextSteps": [],
       "observed": "sqlite",
       "path": "<state>/agents/retained/agent/openclaw-agent.sqlite",
       "schema": {
@@ -3276,10 +3223,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
       },
       "mismatch": false,
       "namespace": null,
-      "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
-      ],
+      "nextSteps": [],
       "observed": "sqlite",
       "path": "<state>/plugins/workboard/workboard.sqlite",
       "schema": {
@@ -3313,10 +3257,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
       },
       "mismatch": false,
       "namespace": null,
-      "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
-      ],
+      "nextSteps": [],
       "observed": "sqlite",
       "path": "<state>/logbook/logbook.sqlite",
       "schema": {
@@ -3350,10 +3291,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
       },
       "mismatch": false,
       "namespace": null,
-      "nextSteps": [
-        "Inspect the store owner's custody and lease before offline maintenance.",
-        "No matching backup outcome was observed; run openclaw backup create and verify its result.",
-      ],
+      "nextSteps": [],
       "observed": "sqlite",
       "path": "<state>/plugins/team-reports/team-reports.sqlite",
       "schema": {
@@ -3537,7 +3475,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -3575,7 +3513,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -3613,7 +3551,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -3651,7 +3589,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -3689,7 +3627,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -3727,7 +3665,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -3765,7 +3703,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -3803,7 +3741,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -3841,7 +3779,7 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
         "mismatch": null,
         "namespace": null,
         "nextSteps": [
-          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+          "Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
         ],
         "observed": "unknown",
         "path": null,
@@ -3858,51 +3796,51 @@ exports[`Doctor physical PostgreSQL output > reports mixed mode with only state 
     "text": [
       {
         "Item": "Database state",
-        "Value": "state; default=sqlite, override=postgres, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "state; default=sqlite, override=postgres, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database agent",
-        "Value": "agent; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "agent; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database workboard",
-        "Value": "workboard; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "workboard; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database logbook",
-        "Value": "logbook; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "logbook; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database team-reports",
-        "Value": "team-reports; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "team-reports; default=sqlite, override=inherit, effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database quarantine",
-        "Value": "quarantine; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "quarantine; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database managed-update",
-        "Value": "managed-update; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "managed-update; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database package-activation",
-        "Value": "package-activation; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "package-activation; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
       {
         "Item": "Database credentials",
-        "Value": "credentials; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, ownership, and backup diagnostics.",
+        "Value": "credentials; default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=unknown, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=unknown; Status reports admitted facts; unobserved facts remain unknown.; Next: Run openclaw doctor on the Gateway host for physical connectivity, schema migrations, and ownership diagnostics.",
       },
     ],
   },
   "text": [
-    "state (<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite); default=sqlite, override=postgres, effective=postgres; observed=postgres; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "state (<state>/state/openclaw.sqlite); default=sqlite, override=postgres, effective=postgres; observed=postgres; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities. No matching backup outcome was observed; run openclaw backup create and verify its result.",
+    "state (<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite); default=sqlite, override=postgres, effective=postgres; observed=postgres; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
+    "state (<state>/state/openclaw.sqlite); default=sqlite, override=postgres, effective=postgres; observed=postgres; schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=reachable; namespace=<namespace>; storeId=<store-id>; database=<database>; extensions=pg_trgm, plpgsql, unaccent, vector; admittedExtensions=none; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=none; Next: Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
     "state (<state>/voice-calls/state/openclaw.sqlite); default=sqlite, override=postgres, effective=postgres; observed=unknown (mismatch unknown); schema=unknown, expected=<current-state-schema>, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
-    "agent (<state>/agents/main/agent/openclaw-agent.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "agent (<state>/agents/retained/agent/openclaw-agent.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "workboard (<state>/plugins/workboard/workboard.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=4, expected=4, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "logbook (<state>/logbook/logbook.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=3, expected=3, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. No matching backup outcome was observed; run openclaw backup create and verify its result.",
-    "team-reports (<state>/plugins/team-reports/team-reports.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=2, expected=2, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Inspect the store owner's custody and lease before offline maintenance. No matching backup outcome was observed; run openclaw backup create and verify its result.",
+    "agent (<state>/agents/main/agent/openclaw-agent.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none",
+    "agent (<state>/agents/retained/agent/openclaw-agent.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=<current-agent-schema>, expected=<current-agent-schema>, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none",
+    "workboard (<state>/plugins/workboard/workboard.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=4, expected=4, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none",
+    "logbook (<state>/logbook/logbook.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=3, expected=3, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none",
+    "team-reports (<state>/plugins/team-reports/team-reports.sqlite); default=sqlite, override=inherit, effective=sqlite; observed=sqlite; schema=2, expected=2, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none",
     "quarantine (<state>/state/openclaw-quarantine.sqlite); default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unknown, expected=2, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
     "managed-update (<temporary>/openclaw-<uid>/managed-update-handoffs.sqlite); default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unversioned, expected=not applicable, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
     "package-activation (<package-activation-journal>); default=sqlite, override=fixed local (local by design), effective=sqlite; observed=unknown (mismatch unknown); schema=unversioned, expected=not applicable, pending=unknown; connectivity=unknown; namespace=unknown; storeId=unknown; database=unknown; extensions=unknown; admittedExtensions=unknown; degraded=unknown; custody=unverifiable, lease=unverifiable; backup=unknown; legacy=none; Next: Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",

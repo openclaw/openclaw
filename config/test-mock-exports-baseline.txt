@@ -5367,7 +5367,6 @@
 ["src/infra/net/undici-global-dispatcher.test.ts","./undici-runtime.js","1c9fc0f781c25435c5bcc153ad654b646ed2abef8429fc8dc732ead7bc54c6b7",1]
 ["src/infra/net/undici-runtime.test.ts","../../logger.js","e0ac6463cde20b6a6a4b3d43432610c56bda7d98c791925bf913dcdf9e266c5f",1]
 ["src/infra/openclaw-process-census.test.ts","../process/supervisor/darwin-process-command.js","a311794cbd43511e76b1e69ced09c183a7b0fee8cd0a63684e0a227fb4d0d012",1]
-["src/infra/openclaw-process-census.test.ts","../shared/pid-alive.js","225da4abc47c2bce9b876b30d253114333947a03995ef3e0232dd1a9f83551d9",1]
 ["src/infra/openclaw-process-census.test.ts","./container-environment.js","5e1233aab83322f180234d8baef98b11bb95ef25674219acf9fba7d210d5ef9e",1]
 ["src/infra/openclaw-root.test.ts","./openclaw-root.fs.runtime.js","57d05dc2560fb67bc75df8c36eca8981853c2f75bd5332c7404e2a3309df672b",1]
 ["src/infra/outbound/agent-delivery.binding-selection.test.ts","../../utils/message-channel.js","0d1b7428337a3805afa58db848ec4e6ed0b9792c552cc0feea2c0a0ee96c005e",1]

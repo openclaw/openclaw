@@ -3264,9 +3264,10 @@ function failedJobEvent(owner, job, attempt, runId) {
       : `attempt ${jobAttempt}`;
   const labels = Array.isArray(job.labels) && job.labels.length > 0 ? job.labels.join(",") : "none";
   const runner = job.runner_name ? ` / ${job.runner_name}` : "";
+  const blocker = owner.startsWith("artifact:") ? " blocker:" : "";
   return [
     `job:${runId ?? job.run_id ?? owner}:${jobAttempt}:${job.name}`,
-    `${owner} job "${job.name}" ${job.conclusion} (${attemptLabel}; runner ${labels}${runner})`,
+    `${owner}${blocker} job "${job.name}" ${job.conclusion} (${attemptLabel}; runner ${labels}${runner})`,
     job.html_url,
   ];
 }

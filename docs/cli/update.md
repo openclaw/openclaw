@@ -153,7 +153,9 @@ For supported package targets, the candidate makes that
 decision after private staging; see [Candidate-owned admission](#candidate-owned-admission).
 The local diagnostic identifies invalid fields and recommends
 `openclaw doctor --fix`, followed by correcting any remaining errors. A dry run
-keeps this guidance in its JSON `notes` without changing the configuration.
+keeps this guidance in its JSON `notes` without changing the configuration, even
+when the authored file cannot be parsed. In that case, preview leaves the database
+engine unresolved instead of assuming a backend; actual updates still refuse admission.
 Public failure reports retain the rejected schema area, such as `gateway.*`,
 while hiding operator-defined keys and rejected values. Admission still runs
 when the selected package version matches the installed version; the no-op
