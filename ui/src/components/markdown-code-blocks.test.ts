@@ -131,6 +131,40 @@ it.each(["visible", "hidden"] as const)(
   },
 );
 
+it("follows the rendering tab when a template reader is adopted after activation", async () => {
+  const show = mockDocumentVisibility("visible");
+  const observed = new Set<Element>();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe = (target: Element) => observed.add(target);
+      unobserve = (target: Element) => observed.delete(target);
+      disconnect = () => observed.clear();
+    },
+  );
+  const template = document.createElement("template");
+  template.innerHTML =
+    '<article><div class="code-block-wrapper"><pre class="code-block-viewport"><code>const answer = 42;</code></pre></div></article>';
+  const root = template.content.firstElementChild as HTMLElement;
+  expect(root.ownerDocument).not.toBe(document);
+  expect(root.ownerDocument.defaultView).toBeNull();
+  const blocks = ownBlocks(root);
+  blocks.update(true);
+  document.body.append(root);
+  await Promise.resolve();
+  const code = root.querySelector("code")!;
+  expect(observed).toContain(code);
+
+  show("hidden");
+  expect(observed.size).toBe(0);
+  show("visible");
+  await Promise.resolve();
+  expect(observed).toContain(code);
+  expect(root.querySelector("code")).toBe(code);
+  blocks.dispose();
+  expect(observed.size).toBe(0);
+});
+
 it("reobserves retained Markdown DOM while fencing scans queued before hide or disposal", async () => {
   const observed = new Set<Element>();
   vi.stubGlobal(

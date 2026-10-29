@@ -21,7 +21,9 @@ export class MarkdownBlocks {
   private readonly stopVisibility: () => void;
 
   constructor(private readonly root: HTMLElement) {
-    this.stopVisibility = subscribeDocumentVisibility(root.ownerDocument, () => {
+    // Solid refs can still belong to an inert template document before adoption.
+    // Observe the rendering document so replacement readers follow the real tab.
+    this.stopVisibility = subscribeDocumentVisibility(document, () => {
       this.update(this.presented);
     });
   }
@@ -79,7 +81,7 @@ export class MarkdownBlocks {
     // Every caller, including attachment previews, shares this gate. Keep pane
     // intent separate so revealing the browser tab cannot reactivate a hidden pane.
     this.presented = presented;
-    this.active = presented && this.root.ownerDocument.visibilityState !== "hidden";
+    this.active = presented && document.visibilityState !== "hidden";
     if (this.active) {
       this.codeHighlights?.resume();
       this.scheduleScan();
