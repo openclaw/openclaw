@@ -313,13 +313,12 @@ describe("candidate-owned full release dispatch entry point", () => {
     {
       name: "release tag reassigned",
       releaseRef: "v2026.8.1",
-      prepareContext: (fixture: ReturnType<typeof createDispatchFixture>) => {
+      prepareContext: (fixture: ReturnType<typeof createDispatchFixture>) =>
         runGit(fixture.origin, [
           "update-ref",
           `refs/tags/${fixture.releaseRef}`,
           fixture.targetSha,
-        ]);
-      },
+        ]),
       moveContext: (fixture: ReturnType<typeof createDispatchFixture>) => {
         runGit(fixture.origin, [
           "update-ref",
