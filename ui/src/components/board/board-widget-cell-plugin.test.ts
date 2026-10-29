@@ -5,6 +5,7 @@ import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { createSessionOwnerMenuHarness } from "../../test-helpers/session-owner-menu.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { callbacks, cleanupCells, mountCell } from "./board-widget-cell.test-support.ts";
@@ -26,6 +27,28 @@ vi.mock("../../lib/board/widgets/report.tsx", async (importOriginal) => {
         throw new Error("Report temporarily unavailable");
       }
       return actual.ReportWidget(props);
+    },
+  };
+});
+
+const resourceAcquisitions = vi.hoisted(() => ({ frame: vi.fn(), mcp: vi.fn() }));
+vi.mock("./board-widget-frame.tsx", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./board-widget-frame.tsx")>();
+  return {
+    ...actual,
+    createBoardWidgetFrame: (...args: Parameters<typeof actual.createBoardWidgetFrame>) => {
+      resourceAcquisitions.frame();
+      return actual.createBoardWidgetFrame(...args);
+    },
+  };
+});
+vi.mock("./board-mcp-app-lifecycle.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./board-mcp-app-lifecycle.ts")>();
+  return {
+    ...actual,
+    createBoardMcpAppLifecycle: (...args: Parameters<typeof actual.createBoardMcpAppLifecycle>) => {
+      resourceAcquisitions.mcp();
+      return actual.createBoardMcpAppLifecycle(...args);
     },
   };
 });
@@ -52,18 +75,10 @@ async function waitForText(cell: Cell, selector: string, text: string) {
 
 function progressContext(
   request: object,
-  overrides: { sessions?: object; gateway?: object; methods?: string[] } = {},
+  overrides: { gateway?: object; methods?: string[] } = {},
 ): ApplicationContext {
-  return {
+  const context = {
     agentSelection: { state: { scopeId: null }, subscribe: () => () => undefined },
-    sessions: {
-      state: { result: null },
-      subscribe: () => () => undefined,
-      subscribeList: () => () => undefined,
-      listSnapshot: () => ({ result: null, agentId: null, loading: false, error: null }),
-      refreshList: async () => undefined,
-      ...overrides.sessions,
-    },
     gateway: {
       snapshot: {
         phase: "connected",
@@ -80,6 +95,9 @@ function progressContext(
       ...overrides.gateway,
     },
   } as unknown as ApplicationContext;
+  const sessions = createTestSessionCapability(context.gateway);
+  onTestFinished(() => sessions.dispose());
+  return { ...context, sessions };
 }
 
 function progressWidget(name: string, props?: BoardWidget["props"], position = 0): BoardWidget {
@@ -111,6 +129,81 @@ function progressResponse(
 }
 
 describe("plugin board widget cells", () => {
+  it("refreshes a ticket added to a native widget in place on a board revision", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    resourceAcquisitions.frame.mockClear();
+    resourceAcquisitions.mcp.mockClear();
+    const native = createBoardWidget({
+      contentKind: "plugin",
+      pluginKind: "fixture:native",
+    });
+    const refreshFrame = vi.fn(async () => undefined);
+    const cell = mountCell(native, {
+      boardRevision: 1,
+      callbacks: callbacks({ frameLoadFailed: refreshFrame }),
+    });
+    await cell.updateComplete;
+    expect(resourceAcquisitions.frame).not.toHaveBeenCalled();
+    expect(resourceAcquisitions.mcp).not.toHaveBeenCalled();
+
+    native.viewTicket = "native-ticket";
+    native.viewTicketTtlMs = 16_000;
+    cell.boardRevision = 2;
+    await cell.updateComplete;
+    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
+    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+
+    native.title = "Updated native widget";
+    cell.boardRevision = 3;
+    await cell.updateComplete;
+    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
+    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(refreshFrame).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshFrame).toHaveBeenCalledExactlyOnceWith(native.name);
+  });
+
+  it("acquires the external owner pair only once after a native cell needs a frame", async () => {
+    resourceAcquisitions.frame.mockClear();
+    resourceAcquisitions.mcp.mockClear();
+    const native = createBoardWidget({
+      contentKind: "plugin",
+      pluginKind: "fixture:native",
+    });
+    const cell = mountCell(native, {
+      active: false,
+      widgetFrameUrl: () => "/synthetic-frame",
+    });
+    await cell.updateComplete;
+    expect(resourceAcquisitions.frame).not.toHaveBeenCalled();
+    expect(resourceAcquisitions.mcp).not.toHaveBeenCalled();
+
+    cell.widget = { ...native, contentKind: "html", revision: 2 };
+    await cell.updateComplete;
+    await waitForSolid(() => expect(cell.querySelector("iframe")).not.toBeNull());
+    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
+    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+    const frame = cell.querySelector("iframe");
+
+    cell.active = true;
+    await cell.updateComplete;
+    cell.active = false;
+    await cell.updateComplete;
+    expect(cell.querySelector("iframe")).toBe(frame);
+    cell.widget = { ...native, revision: 3 };
+    await cell.updateComplete;
+    expect(cell.querySelector("iframe")).toBeNull();
+    cell.widget = { ...native, contentKind: "html", revision: 4 };
+    await cell.updateComplete;
+    await waitForSolid(() => expect(cell.querySelector("iframe")).not.toBeNull());
+    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
+    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+  });
+
   it("shares rendering subscriptions across native and inactive frame cells with independent lifetimes", async () => {
     function application() {
       const { context, publish } = createSessionOwnerMenuHarness();
@@ -223,8 +316,8 @@ describe("plugin board widget cells", () => {
   });
 
   it.each([false, true])(
-    "preserves a removable unavailable widget (Labs disabled: %s)",
-    async (labsDisabled) => {
+    "preserves a removable unavailable widget (configuration disabled: %s)",
+    async (configDisabled) => {
       const widget: BoardWidget = createBoardWidget({
         name: "work-item",
         title: "Work item",
@@ -239,7 +332,7 @@ describe("plugin board widget cells", () => {
         navigate,
         gateway: { snapshot: { phase: "connected" }, subscribe: () => () => undefined },
         plugins: {
-          errors: labsDisabled
+          errors: configDisabled
             ? [
                 {
                   pluginId: "custom-review",
@@ -262,21 +355,15 @@ describe("plugin board widget cells", () => {
 
       const placeholder = cell.querySelector('[data-test-id="board-disabled-plugin"]');
       expect(placeholder?.textContent).toContain(
-        labsDisabled ? "Custom plugin UI is off" : "Widget from disabled plugin custom-review",
+        configDisabled ? "Custom plugin UI is off" : "Widget from disabled plugin custom-review",
       );
       expect(cell.widget).toBe(widget);
       expect(cellCallbacks.remove).not.toHaveBeenCalled();
-      const labsLink = placeholder?.querySelector<HTMLAnchorElement>(
-        'a[href="/console/settings/labs"]',
-      );
-      if (labsDisabled) {
-        expect(labsLink?.textContent?.trim()).toBe("Open Labs");
-        labsLink?.click();
-        expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
-        expect(cellCallbacks.remove).not.toHaveBeenCalled();
-      } else {
-        expect(labsLink).toBeNull();
+      expect(placeholder?.querySelector('a[href="/console/settings/labs"]')).toBeNull();
+      if (configDisabled) {
+        expect(placeholder?.textContent).toContain("Disabled by the Gateway configuration");
       }
+      expect(navigate).not.toHaveBeenCalled();
       const removeButton = placeholder?.querySelector("button");
       expect(removeButton).not.toBeNull();
       removeButton?.click();
@@ -382,7 +469,20 @@ describe("plugin board widget cells", () => {
         index === 1
           ? { card: null }
           : progressResponse(resolvedKey, index === 0 ? "Run focused checks" : "Owned work");
-      const request = vi.fn(async () => response);
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "sessions.describe") {
+          return {
+            session:
+              result.sessions.find(
+                (row) => row.key === params?.key && row.agentId === params?.agentId,
+              ) ?? null,
+          };
+        }
+        if (method === "progressCard.get") {
+          return response;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
       if (index === 0 && response.card) {
         response.card.markdown = "**Release** validation is active.";
       }
@@ -391,23 +491,15 @@ describe("plugin board widget cells", () => {
           ["main", "research"].map((agentId) => ({
             key: name === "global" ? name : `agent:${agentId}:${name}`,
             agentId,
+            sessionId: `${agentId}:${name}`,
+            updatedAt: 2,
             status: agentId === "main" ? "failed" : "done",
             startedAt: 0,
             endedAt: 2,
           })),
         ),
       };
-      const context = progressContext(request, {
-        sessions: {
-          state: { result },
-          listSnapshot: () => ({
-            result,
-            agentId: null,
-            loading: false,
-            error: null,
-          }),
-        },
-      });
+      const context = progressContext(request);
       const widget = progressWidget(
         `session-progress-${index}`,
         override ? { sessionKey: override } : undefined,
@@ -454,7 +546,7 @@ describe("plugin board widget cells", () => {
             status: t(
               requestedAgentId === "main"
                 ? "sessionProgressCard.status.failed"
-                : "sessionProgressCard.status.completed",
+                : "sessionProgressCard.status.paused",
             ),
             step: "Owned work",
           }),
@@ -469,7 +561,10 @@ describe("plugin board widget cells", () => {
     let attempts = 0;
     let onEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
     const deniedSessionKey = "agent:main:private";
-    const request = vi.fn(async (_method: string, params: { sessionKey: string }) => {
+    const request = vi.fn(async (method: string, params: { sessionKey: string }) => {
+      if (method === "sessions.describe") {
+        return { session: null };
+      }
       if (params.sessionKey === deniedSessionKey) {
         throw new GatewayRequestError({
           code: "INVALID_REQUEST",
@@ -483,6 +578,8 @@ describe("plugin board widget cells", () => {
       }
       return progressResponse(sessionKey, "Recovered progress", 1, false);
     });
+    const progressReads = () =>
+      request.mock.calls.filter(([method]) => method === "progressCard.get").length;
     const context = progressContext(request, {
       methods: [],
       gateway: {
@@ -509,7 +606,7 @@ describe("plugin board widget cells", () => {
     retryProgress(cell);
 
     await waitForText(cell, progressTag, "Recovered progress");
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(progressReads()).toBe(2);
 
     const emitChange = () =>
       onEvent?.({
@@ -521,7 +618,7 @@ describe("plugin board widget cells", () => {
     emitChange();
     await vi.waitFor(() => expect(progressError(cell)).not.toBeNull());
     expect(progressCard(cell)?.textContent).toContain("Recovered progress");
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(progressReads()).toBe(3);
     cell.session = { ...cell.session! };
     for (const listener of gatewayListeners) {
       listener(context.gateway.snapshot);
@@ -529,12 +626,12 @@ describe("plugin board widget cells", () => {
     await cell.updateComplete;
     await waitForSolid(() => {
       expect(progressError(cell)).not.toBeNull();
-      expect(request).toHaveBeenCalledTimes(3);
+      expect(progressReads()).toBe(3);
     });
     retryProgress(cell);
     await vi.waitFor(() => expect(progressError(cell)).toBeNull());
     expect(progressCard(cell)?.textContent).toContain("Recovered progress");
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(progressReads()).toBe(4);
 
     request.mockRejectedValueOnce(
       new GatewayRequestError({
@@ -547,7 +644,7 @@ describe("plugin board widget cells", () => {
     await vi.waitFor(() => expect(progressError(cell)?.textContent).toContain(accessDenied));
     expect(progressCard(cell)).toBeNull();
     expect(progressError(cell)?.querySelector("button")).toBeNull();
-    expect(request).toHaveBeenCalledTimes(5);
+    expect(progressReads()).toBe(5);
 
     cell.widget = { ...widget, props: { sessionKey: deniedSessionKey } };
     await vi.waitFor(() =>
@@ -560,7 +657,7 @@ describe("plugin board widget cells", () => {
       CHUNK_LOAD_WAIT,
     );
     expect(progressError(cell)?.querySelector("button")).toBeNull();
-    expect(request).toHaveBeenCalledTimes(6);
+    expect(progressReads()).toBe(6);
   });
 
   it("keeps a board-less running target live on another session's dashboard", async () => {
@@ -569,34 +666,23 @@ describe("plugin board widget cells", () => {
     const now = Date.now();
     const targetRow = {
       key: boardlessTargetKey,
+      sessionId: "boardless-session",
       agentId: "main",
+      updatedAt: now,
       status: "running",
       hasActiveRun: true,
       startedAt: now - 60_000,
     };
-    const rosterQueries: Array<{ hasBoard?: boolean }> = [];
-    const request = vi.fn(async () => progressResponse(boardlessTargetKey, "Owned work", now));
-    const context = progressContext(request, {
-      sessions: {
-        subscribeList: (query: { hasBoard?: boolean }) => {
-          rosterQueries.push(query);
-          return () => undefined;
-        },
-        listSnapshot: (query: { hasBoard?: boolean }) => ({
-          // The Gateway filters hasBoard against each session's own board
-          // inventory, so the board-less target only exists in the shared roster.
-          result: {
-            sessions: [
-              { key: boardOwnerKey, agentId: "main", status: "done", startedAt: 0, endedAt: 2 },
-              ...(query.hasBoard ? [] : [targetRow]),
-            ],
-          },
-          agentId: null,
-          loading: false,
-          error: null,
-        }),
-      },
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.describe") {
+        return { session: targetRow };
+      }
+      if (method === "progressCard.get") {
+        return progressResponse(boardlessTargetKey, "Owned work", now);
+      }
+      throw new Error(`Unexpected request: ${method}`);
     });
+    const context = progressContext(request);
     const widget = progressWidget("cross-session-progress", { sessionKey: boardlessTargetKey });
     const cell = mountCell(widget, {
       context,
@@ -619,7 +705,10 @@ describe("plugin board widget cells", () => {
     );
     expect(element?.querySelector(".session-progress-card__step--paused")).toBeNull();
     // Liveness must not depend on dashboard gallery membership.
-    expect(rosterQueries.length).toBeGreaterThan(0);
-    expect(rosterQueries.every((query) => query.hasBoard === undefined)).toBe(true);
+    expect(request).toHaveBeenCalledWith("sessions.describe", {
+      key: boardlessTargetKey,
+      agentId: "main",
+    });
+    expect(request.mock.calls.some(([method]) => method === "sessions.list")).toBe(false);
   });
 });

@@ -17,6 +17,7 @@ import {
   readActiveOpenClawAgentDatabaseLeasesReadOnly,
 } from "../../state/openclaw-agent-db-lease.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
+import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -165,7 +166,10 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
       await upsertSessionEntryCore(scope, { sessionId: "retirement-before", updatedAt: 1 });
       const database = inAdmission(() => openOpenClawAgentDatabase(options));
       const shared = inAdmission(() => openOpenClawStateDatabase(options));
-      inAdmission(() => closeOpenClawAgentDatabaseByPath(database.path));
+      // Synchronous close revokes workers but does not join their native lease release.
+      await drainAgentDatabaseResources({ path: database.path }, async () =>
+        inAdmission(() => closeOpenClawAgentDatabaseByPath(database.path)),
+      );
       const target = { agentId: options.agentId, path: database.path };
       const cfg = {
         agents: { entries: { retiring: {}, kept: {} } },

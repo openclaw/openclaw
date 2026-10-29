@@ -11,6 +11,7 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import {
+  createGuestSandboxSessionConfig,
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
@@ -31,24 +32,7 @@ const { createSessionStoreDir } = setupSessionCreateTestHarness();
 test("required operator sandbox follows new session ownership across create, patch, and patchMany", async () => {
   const { storePath } = await createSessionStoreDir();
 
-  const cfg = {
-    ...getRuntimeConfig(),
-    session: { ...getRuntimeConfig().session, store: storePath },
-    gateway: {
-      ...getRuntimeConfig().gateway,
-      roles: {
-        default: "guest",
-        definitions: {
-          guest: {
-            sessions: { others: "view" as const },
-            agents: ["main"],
-            scopes: ["operator.read" as const, "operator.write" as const],
-            sandbox: "required" as const,
-          },
-        },
-      },
-    },
-  };
+  const cfg = createGuestSandboxSessionConfig(storePath, "view");
   const context = { getRuntimeConfig: () => cfg };
 
   for (const [method, suffix, systemActor] of [

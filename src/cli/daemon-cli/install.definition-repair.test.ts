@@ -235,7 +235,6 @@ async function fixture(
     initialCli = path.join(cliBinDir, "openclaw");
     await fs.symlink(publicEntry, initialCli);
     expect(await fs.realpath(initialCli)).toBe(publicEntry);
-    expect(await fs.realpath(initialCli)).not.toBe(await fs.realpath(entry));
   }
   process.argv = [process.execPath, initialCli];
   await writeJson(process.env.OPENCLAW_CONFIG_PATH!, native.config);

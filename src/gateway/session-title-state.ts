@@ -47,13 +47,3 @@ export function resolveExplicitSessionName(entry: SessionEntry | undefined): str
 export function hasExplicitSessionName(entry: SessionEntry | undefined): boolean {
   return Boolean(resolveExplicitSessionName(entry));
 }
-
-/** Manual names and other title owners never participate in automatic refinement. */
-export function matchesGeneratedSessionTitle(entry: SessionEntry, name: string): boolean {
-  return (
-    entry.titleRefinement?.sessionId === entry.sessionId &&
-    entry.titleRefinement.generatedName === name &&
-    entry.displayName === name &&
-    ![entry.label, entry.subject, entry.groupChannel, entry.space].some((value) => value?.trim())
-  );
-}

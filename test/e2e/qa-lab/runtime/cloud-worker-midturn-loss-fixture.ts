@@ -346,17 +346,18 @@ export async function startMidturnProvider(
           });
           await delay(50);
         }
+        // Finish the text item to flush the coalesced preview, but keep the response uncommitted.
+        writeSseEvent(response, {
+          type: "response.output_text.done",
+          item_id: item.id,
+          output_index: 0,
+          content_index: 0,
+          text: VOLATILE_TEXT,
+        });
+        writeSseEvent(response, { type: "response.output_item.done", output_index: 0, item });
         partialStarted.resolve();
         await releasePartial.promise;
         if (!response.destroyed) {
-          writeSseEvent(response, {
-            type: "response.output_text.done",
-            item_id: item.id,
-            output_index: 0,
-            content_index: 0,
-            text: VOLATILE_TEXT,
-          });
-          writeSseEvent(response, { type: "response.output_item.done", output_index: 0, item });
           writeSseEvent(response, {
             type: "response.completed",
             response: {

@@ -1135,7 +1135,12 @@ export async function runVitest(
         (canonicalSelection &&
           (relativeConfig === "test/vitest/vitest.ui-e2e.config.ts" ||
             relativeConfig === "test/vitest/vitest.extension-browser.config.ts" ||
-            shouldUseRuntimeOnlyVitestWorkers(relativeConfig, vitestArgs, invocationEnv))) ||
+            shouldUseRuntimeOnlyVitestWorkers(
+              relativeConfig,
+              vitestArgs,
+              invocationEnv,
+              execution?.options.testNamePattern,
+            ))) ||
           (canonicalRootRun && relativeConfig === "test/vitest/vitest.ui-e2e-prebuilt.config.ts")
           ? "runtime"
           : "full",

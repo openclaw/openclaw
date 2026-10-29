@@ -2,6 +2,7 @@
 
 import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { focusChatComposerFromKeydown } from "../chat-pane-shared.ts";
@@ -68,6 +69,65 @@ it("includes the documentation link in keyboard menu navigation", async () => {
   await waitForSolid(() => expect(document.activeElement).toBe(link));
 });
 
+it.each(["saved", "failed"])(
+  "keeps the pending choice visible until %s, with dismissal",
+  async (outcome) => {
+    const completion = createDeferred();
+    const [state, setState] = createSignal<Pick<ChatPermissionPickerProps, "mode" | "pending">>({});
+    const onSelect = vi.fn<ChatPermissionPickerProps["onSelect"]>((mode) => {
+      setState({ mode: mode ?? undefined, pending: true });
+      return completion.promise;
+    });
+    const { container } = mountSolid(() => (
+      <ChatPermissionPicker canSelectFull defaultMode="guarded" {...state()} onSelect={onSelect} />
+    ));
+    flush();
+    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    trigger.click();
+    const menu = container.querySelector<HTMLElement>('[role="menu"]')!;
+    await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
+    expect(
+      container
+        .querySelector('[data-chat-permission-option="default"]')
+        ?.getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      container
+        .querySelector('[data-chat-permission-option="default"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Default (Guarded)");
+    menu.dispatchEvent(new KeyboardEvent("keydown", { key: "4", bubbles: true, cancelable: true }));
+    await waitForSolid(() => expect(trigger.getAttribute("aria-busy")).toBe("true"));
+    expect(trigger.disabled).toBe(false);
+    expect(menu.matches(":popover-open")).toBe(true);
+    expect(
+      container
+        .querySelector('[data-chat-permission-option="workspace"]')
+        ?.getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>("[data-chat-permission-option]")].every(
+        (row) => row.disabled,
+      ),
+    ).toBe(true);
+    menu.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true, cancelable: true }));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("workspace");
+    if (outcome === "failed") {
+      menu.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
+      setState({ mode: undefined, pending: false });
+      completion.reject(new Error("Owner-reported failure"));
+    } else {
+      setState({ mode: "workspace", pending: false });
+      completion.resolve();
+    }
+    await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
+    expect(trigger.getAttribute("aria-busy")).toBeNull();
+  },
+);
+
 it("keeps declared shortcuts in the menu and forwards ordinary typing to the composer", async () => {
   const onSelect = vi.fn();
   const { container } = mountSolid(() => (
@@ -133,7 +193,12 @@ it("preserves option content on unrelated refreshes while admitting permission c
   setProps({ ...options });
   flush();
   expect(container.querySelector('[data-chat-permission-option="default"]')).toBe(row);
-  expect(row.textContent).toContain("Default (Guarded)");
+  expect(row.textContent).toContain("The agent's configured permissions.");
+  expect(row.getAttribute("aria-checked")).toBe("false");
+  expect(row.getAttribute("aria-label")).toBe("Default (Guarded)");
+  expect(container.querySelector('[data-chat-permission-option="guarded"]')?.textContent).toContain(
+    "Default",
+  );
   expect(
     container
       .querySelector('[data-chat-permission-option="workspace"]')

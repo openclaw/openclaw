@@ -9,9 +9,9 @@ import {
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
 } from "../../../../src/config/sessions/session-accessor.js";
 import type { SessionTranscriptReadScope } from "../../../../src/config/sessions/session-accessor.types.js";
+import { withSessionActorStorage } from "../../../../src/config/sessions/session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
-  withSessionActorStorage,
   type SelectedSessionActorStorageBinding,
 } from "../../../../src/config/sessions/session-actor-storage-binding.js";
 import { warnPluginSdkDeprecation } from "../../../../src/plugins/sdk-deprecation.js";
@@ -25,7 +25,7 @@ export { warnPluginSdkDeprecation };
 export { readTranscriptExportSnapshotReadOnlySync };
 export { readRestoredSessionTranscript } from "../../../../src/config/sessions/session-cold-storage-read.js";
 export { readTranscriptStatsBatchReadOnlyAsync } from "../../../../src/config/sessions/session-transcript-stats-batch.js";
-export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-cold-storage-state.js";
+export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-transcript-cold-error.js";
 export { cloneEnvWithPlatformSemantics };
 
 /** Synchronous SDK calls cannot open memory-only session storage. */

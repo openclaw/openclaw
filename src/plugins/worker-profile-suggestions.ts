@@ -9,7 +9,7 @@ import {
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
-import { resolvePluginRootPublicSurfacePath } from "./public-surface-runtime.js";
+import { resolvePluginRootPublicSurfaceLocation } from "./public-surface-runtime.js";
 import type {
   SuggestedWorkerProfile,
   WorkerProfileSuggestionDiscovery,
@@ -34,25 +34,24 @@ export async function resolveSuggestedWorkerProfile(params: {
   }).filter((plugin) => passesManifestOwnerBasePolicy({ plugin, normalizedConfig }));
   for (const owner of owners) {
     try {
-      const modulePath = resolvePluginRootPublicSurfacePath({
+      const location = resolvePluginRootPublicSurfaceLocation({
         pluginRoot: owner.rootDir,
         pluginId: owner.id,
         entrySource: owner.source,
         artifactBasename: "worker-profile-api.js",
       });
-      if (!modulePath) {
+      if (!location) {
         throw new Error("missing worker-profile-api discovery artifact");
       }
       const source = preparePluginModule({
-        modulePath,
-        boundaryRoot: owner.rootDir,
+        ...location,
         boundaryLabel: "plugin root",
         surfaceLabel: "worker profile discovery",
         origin: owner.origin,
         pluginId: owner.id,
         rejectHardlinks: shouldRejectHardlinkedPluginFiles(owner),
       }).modulePath;
-      const loader = getPluginSetupModuleLoader(owner, source, owner.rootDir);
+      const loader = getPluginSetupModuleLoader(owner, source, location.boundaryRoot);
       const discover = loader.initialize(() => {
         const module = loader(source);
         if (

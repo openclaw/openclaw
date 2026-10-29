@@ -459,17 +459,10 @@ function isClosedFencedCodeRegion(text: string, region: CodeRegion): boolean {
 
 type OutboundFormattingRange = { start: number; length: number };
 
-type ProtectedOutboundText = {
-  text: string;
-  verifyProtectedRoles: (visible: string) => void;
-  sanitizeFormatted: <T extends OutboundFormattingRange>(formatted: {
-    text: string;
-    ranges: T[];
-  }) => { text: string; ranges: T[] };
-};
+type ProtectedOutboundText = ReturnType<typeof protectIMessageFencedRoleMarkers>;
 
 /** Preserve authenticated fenced role mappings through the final native-render scrub. */
-export function protectIMessageFencedRoleMarkers(text: string): ProtectedOutboundText {
+export function protectIMessageFencedRoleMarkers(text: string) {
   const source = stripIMessagePrivateRuntimeScaffolding(text);
   const closedFencedRegions = findCodeRegions(source).filter((region) =>
     isClosedFencedCodeRegion(source, region),

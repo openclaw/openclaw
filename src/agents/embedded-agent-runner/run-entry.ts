@@ -7,6 +7,7 @@ import {
 } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import { modelKey } from "../../shared/model-key.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import { readPreparedRunOperatorAuthority } from "../admitted-run-context.js";
 import { createAssistantErrorTranscript } from "../assistant-error-transcript.js";
@@ -23,6 +24,7 @@ import { selectAgentHarness } from "../harness/selection.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
+import { isOperatorAccessProgramAllowed } from "../operator-access-program.js";
 import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
@@ -233,6 +235,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         }
       : undefined;
   const hasCommittedSideEffect = canFallback ? () => !canFallback() : undefined;
+  const recordedFallbackTargets = new Set<string>();
   try {
     let capturedCyberRefusal:
       | { provider: string; model: string; authProfileId?: string }
@@ -310,7 +313,22 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           try {
             await params.onFallbackStep?.(step);
           } finally {
-            await persistModelFallbackTranscriptNotice(params, step, assertCurrent);
+            // An unavailable primary can be skipped before admission. Once a backup
+            // succeeds, the same writer can record its transition with admitted authority.
+            if (
+              step.fallbackStepFinalOutcome !== "succeeded" ||
+              !step.fallbackStepToModel ||
+              !recordedFallbackTargets.has(step.fallbackStepToModel)
+            ) {
+              const recorded = await persistModelFallbackTranscriptNotice(
+                params,
+                step,
+                assertCurrent,
+              );
+              if (recorded && step.fallbackStepToModel) {
+                recordedFallbackTargets.add(step.fallbackStepToModel);
+              }
+            }
           }
         },
         ...(params.behavior.kind === "maintenance"
@@ -482,7 +500,9 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     if (
       capturedCyberRefusal &&
       target &&
+      params.selection.cyberAccessProgram === undefined &&
       (!operatorAuthority?.modelPolicy || operatorAuthority.modelPolicy.allows(target)) &&
+      isOperatorAccessProgramAllowed(operatorAuthority?.rolePolicy, "daybreak_blue") &&
       !isFallbackCandidateSkipped({
         sessionId: params.identity.sessionId,
         provider: target.provider,
@@ -589,6 +609,10 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
             },
           } as T)
         : fallbackResult.result.result;
+    const winnerRef = modelKey(fallbackResult.provider, fallbackResult.model);
+    candidateResult.meta.modelFallbackTranscriptToModel = recordedFallbackTargets.has(winnerRef)
+      ? winnerRef
+      : undefined;
     if (completedCandidates.length > 1 && candidateResult.meta.agentMeta) {
       const usage = createUsageAccumulator();
       const diagnosticUsage = createUsageAccumulator();

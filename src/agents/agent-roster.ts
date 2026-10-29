@@ -3,7 +3,6 @@ import type { LegacyAgentListEntry } from "../config/legacy.roster.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getMainThreadTaskName, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
@@ -50,20 +49,14 @@ const agentRosterFacts = new WeakMap<
 
 /** Share roster reads synchronously; unbound mutable configs expire when the callback returns. */
 export function withAgentRosterFactsBatch<T>(config: AgentRosterConfig, callback: () => T): T {
-  return runWithMainThreadTask(
-    getMainThreadTaskName() ?? "gateway",
-    () => {
-      const parent = activeAgentRosterFactsBatch;
-      activeAgentRosterFactsBatch =
-        parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
-      try {
-        return callback();
-      } finally {
-        activeAgentRosterFactsBatch = parent;
-      }
-    },
-    "agent-roster",
-  );
+  const parent = activeAgentRosterFactsBatch;
+  activeAgentRosterFactsBatch =
+    parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
+  try {
+    return callback();
+  } finally {
+    activeAgentRosterFactsBatch = parent;
+  }
 }
 
 export function readAgentRosterFacts(cfg: AgentRosterConfig): AgentRosterFacts | undefined {

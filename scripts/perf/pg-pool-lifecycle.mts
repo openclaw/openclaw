@@ -28,8 +28,8 @@ import type { StoreSchema } from "../../src/infra/database-engine/contract.js";
 import type { DatabaseEngineSelection } from "../../src/infra/database-engine/types.js";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import { PostgresSyncConnection } from "../../src/infra/postgres-sync/connection.js";
+import { bindPostgresPool } from "../../src/infra/postgres-sync/pool-state.js";
 import {
-  bindPostgresPool,
   closePostgresPool,
   createPostgresPoolEndpoints,
   postgresPoolTransferList,
@@ -597,7 +597,7 @@ if (child?.kind === "transfer") {
             environment: { OPENCLAW_STATE_DIR: fixtureRoot },
           },
           undefined,
-          { sharedState: true },
+          { carrierClass: "shared-state" },
         );
       const store = await (selected
         ? withDatabaseEngineSelection(selected, openStore)

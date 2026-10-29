@@ -363,7 +363,7 @@ function captureValidationTransfer(
   const pathname = resolveDatabasePathKey(database.path);
   const existing = validatedPaths.get(pathname);
   const captured: ValidationEntry =
-    existing?.agentId === database.agentId
+    existing && (existing.agentId ?? existing.validation?.agentId) === database.agentId
       ? existing
       : {
           ...existing,
@@ -445,16 +445,18 @@ function captureValidationTransfer(
     const aliases =
       captured.validation?.identity === identity
         ? [...validatedPaths].flatMap(([candidate, entry]) =>
-            entry.validation?.agentId === database.agentId && entry.validation.identity === identity
+            candidate !== pathname &&
+            entry.validation?.agentId === database.agentId &&
+            entry.validation.identity === identity
               ? [candidate]
               : [],
           )
         : [];
     // Revocation before capture already fenced this receipt. Repeating it would
     // invalidate an alias's later capture or an acknowledged successor receipt.
-    if (wasValid !== 0) {
+    if (wasValid !== 0 && captured.integrityVerified) {
       invalidateOpenClawAgentDatabaseValidation(pathname);
-    } else {
+    } else if (wasValid === 0) {
       // Worker cleanup can revoke one borrowed receipt while independent aliases remain live.
       for (const alias of aliases) {
         const superseded = validatedPaths.get(alias)?.validation;
@@ -463,7 +465,9 @@ function captureValidationTransfer(
         }
       }
     }
-    validatedPaths.set(pathname, { validation: received, integrityVerified: true });
+    // Successful admission promotes this owner; only revocation retires pending handoffs.
+    Object.assign(captured, { validation: received, integrityVerified: true, revoked: undefined });
+    validatedPaths.set(pathname, captured);
     // A verified replacement is one physical receipt, including its already-admitted aliases.
     for (const alias of aliases) {
       validatedPaths.set(alias, { validation: received, integrityVerified: true });

@@ -49,7 +49,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
 import { createSourcePluginDependenciesFixture } from "./source-plugin-dependencies-fixture.js";
 
@@ -107,35 +107,6 @@ async function fixtureEventBeforeSettlement(
     ]),
     signal,
   );
-}
-
-function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
-  // The product owns these child handles, and deliberate parent death or rescue
-  // SIGKILL leaves no test-owned exit event. Only test cancellation bounds reaping.
-  return new Promise((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (error?: Error) => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const abort = () => finish(new Error(`process still alive: ${pid}`, { cause: signal.reason }));
-    const check = () => {
-      if (!isProcessAlive(pid)) {
-        finish();
-      } else if (signal.aborted) {
-        abort();
-      } else {
-        timer = setTimeout(check, 5);
-      }
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    check();
-  });
 }
 
 const MiB = 1024 ** 2;
@@ -1658,7 +1629,7 @@ describe("runTsdownBuildInvocation", () => {
               await completion;
               if (pid !== undefined && isProcessAlive(pid)) {
                 process.kill(pid, "SIGKILL");
-                await waitForForeignProcessExit(pid, signal);
+                await waitForDead(pid, signal, "reject");
               }
             } finally {
               signal.removeEventListener("abort", abort);
@@ -1818,7 +1789,7 @@ describe("runTsdownBuildInvocation", () => {
                 : undefined;
               if (childPid !== undefined && isProcessAlive(childPid)) {
                 process.kill(childPid, "SIGKILL");
-                await waitForForeignProcessExit(childPid, signal);
+                await waitForDead(childPid, signal, "reject");
               }
             }
           });
@@ -1938,7 +1909,7 @@ describe("runTsdownBuildInvocation", () => {
           supervisor.advance(250);
           await fixtureEventBeforeSettlement(termPath, "SIGTERM", supervisor.completion, signal);
           const parentPid = Number(fs.readFileSync(parentPidPath, "utf8"));
-          await waitForForeignProcessExit(parentPid, signal);
+          await waitForDead(parentPid, signal, "reject");
           supervisor.advance(249);
           expect(isProcessAlive(childPid)).toBe(true);
           expect(output.chunks.join("")).not.toContain("forcing SIGKILL");
@@ -2007,7 +1978,7 @@ describe("runTsdownBuildInvocation", () => {
           supervisor.advance(250);
           await fixtureEventBeforeSettlement(termPath, "SIGTERM", supervisor.completion, signal);
           const parentPid = Number(fs.readFileSync(parentPidPath, "utf8"));
-          await waitForForeignProcessExit(parentPid, signal);
+          await waitForDead(parentPid, signal, "reject");
           supervisor.advance(249);
           expect(isProcessAlive(childPid)).toBe(true);
           expect(fs.readFileSync(cleanupPath, "utf8")).toBe("");
@@ -2088,7 +2059,7 @@ describe("runTsdownBuildInvocation", () => {
             await runnerClosed;
             if (childPid && isProcessAlive(childPid)) {
               process.kill(childPid, "SIGKILL");
-              await waitForForeignProcessExit(childPid, signal);
+              await waitForDead(childPid, signal, "reject");
             }
           });
         }

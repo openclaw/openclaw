@@ -43,7 +43,7 @@ ui/src/pages/chat/components/chat-detail-panel.tsx	1
 ui/src/pages/chat/components/chat-diff-render.solid.tsx	1
 ui/src/pages/chat/durable-composer-persistence.ts	1
 ui/src/pages/chat/session-snapshot-invalidation.runtime.ts	1
-ui/src/pages/chat/session-snapshot-prewarm.ts	3
+ui/src/pages/chat/session-snapshot-prewarm.ts	2
 ui/src/pages/custodian/plugin-help.ts	1
 ui/src/pages/debug/debug-overlay-frame-view.tsx	1
 ui/src/pages/devices/devices-dialogs.ts	1

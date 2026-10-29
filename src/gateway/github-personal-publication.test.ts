@@ -13,6 +13,7 @@ import {
   createTestGitHubPublicationCoordinator,
   createRealPublicationWorkspace,
   githubPublicationTestMocks,
+  overrideCommands,
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
 } from "./github-publication.test-support.js";
@@ -340,13 +341,11 @@ describe("personal publication authority and recovery", () => {
     });
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const fallback = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+    overrideCommands(async (argv) => {
       if (argv.includes("push")) {
         entered.resolve();
         await release.promise;
       }
-      return await fallback(argv, options);
     });
     const pending = rpc(
       "sessions.github.confirm",

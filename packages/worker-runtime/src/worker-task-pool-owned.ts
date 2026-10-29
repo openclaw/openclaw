@@ -290,18 +290,24 @@ export function prepareWorkerTaskInput<Input, Output>(
 
 export function armWorkerTaskTimeout<Input, Output>(
   task: Task<Input, Output>,
-  timeoutMs: number,
-  onTimeout: () => void,
+  timeoutMs: number | undefined,
+  onTimeout: (task: Task<Input, Output>) => void,
+  from?: "enqueue" | "dispatch",
 ): void {
+  if (timeoutMs === undefined || (from && (task.options.timeoutFrom ?? "enqueue") !== from)) {
+    return;
+  }
   clearTimeout(task.timer);
   const now = performance.now();
   task.deadline = Math.min(
     task.options.hostTimeout !== "owner" && task.options.timeoutMs !== undefined
-      ? (task.deadline ?? task.enqueuedAt + resolveTimerTimeoutMs(task.options.timeoutMs, 60_000))
+      ? (task.deadline ??
+          (task.options.timeoutFrom === "dispatch" ? now : task.enqueuedAt) +
+            resolveTimerTimeoutMs(task.options.timeoutMs, 60_000))
       : Infinity,
     now + resolveTimerTimeoutMs(timeoutMs, 60_000),
   );
-  task.timer = setTimeout(onTimeout, Math.max(0, task.deadline - now));
+  task.timer = setTimeout(onTimeout, Math.max(0, task.deadline - now), task);
 }
 
 export function expireWorkerTasks<Input, Output>(

@@ -7,7 +7,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as config from "../../../config/config.js";
 import { callGateway } from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { GatewayLifecycleRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
@@ -314,14 +314,12 @@ export function installSpawnAuthorityFixture() {
       getRuntimeConfig: () => cfg,
       getSessionEventSubscriberConnIds: () => new Set(),
       broadcastToConnIds: vi.fn(),
-      recoveryRuntime: {
-        prepareRestartRecovery: () => undefined,
+      lifecycleRuntime: {
         waitForAgent: async () => await new Promise<never>(() => {}),
         dispatchAgent: unexpectedRecovery,
         dispatchSessionMethod: unexpectedRecovery,
-        sendRecoveryNotice: unexpectedRecovery,
-        resumeChatInput: unexpectedRecovery,
-      } satisfies GatewayRecoveryRuntime,
+        sendNotice: unexpectedRecovery,
+      } satisfies GatewayLifecycleRuntime,
     });
     const admission = runContext.prepareSystemAgentRunAdmission(
       cfg,

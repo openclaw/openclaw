@@ -2,6 +2,7 @@
  * Tests gateway chat sanitization helpers for model-visible payloads.
  */
 import { describe, expect, test } from "vitest";
+import { sparseAssistant } from "../agents/test-helpers/sparse-transcript.test-support.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 
 describe("stripEnvelopeFromMessages", () => {
@@ -37,15 +38,12 @@ describe("stripEnvelopeFromMessages", () => {
       },
     ])[0] as { content?: Array<{ text?: string }> };
     const assistant = stripEnvelopeFromMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "output_text",
-            text: 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"message_id":"123"}\n```\n\nAssistant body',
-          },
-        ],
-      },
+      sparseAssistant([
+        {
+          type: "output_text",
+          text: 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"message_id":"123"}\n```\n\nAssistant body',
+        },
+      ]),
     ])[0] as { content?: Array<{ text?: string }> };
 
     expect(user.content?.[0]?.text).toBe("hello");
@@ -54,15 +52,12 @@ describe("stripEnvelopeFromMessages", () => {
 
   test("strips internal metadata from assistant input_text blocks", () => {
     const assistant = stripEnvelopeFromMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "input_text",
-            text: 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"message_id":"123"}\n```\n\nAssistant body',
-          },
-        ],
-      },
+      sparseAssistant([
+        {
+          type: "input_text",
+          text: 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"message_id":"123"}\n```\n\nAssistant body',
+        },
+      ]),
     ])[0] as { content?: Array<{ text?: string }> };
 
     expect(assistant.content?.[0]?.text).toBe("Assistant body");

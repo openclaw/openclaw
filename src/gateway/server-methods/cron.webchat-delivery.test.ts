@@ -163,6 +163,64 @@ async function withWebchatTool(
 }
 
 describe("WebChat automation creation through the tool and Gateway", () => {
+  it("guides schema-eager reminder retries without silently discarding authored fields", async () => {
+    await withWebchatTool(async ({ tool, cron }) => {
+      const at = new Date(Date.now() + 3_600_000).toISOString();
+      const args = {
+        action: "add",
+        gatewayUrl: "",
+        gatewayToken: "",
+        job: {
+          name: "basketball-reminder",
+          enabled: false,
+          schedule: { kind: "at", at, everyMs: 1, anchorMs: 0, expr: "", tz: "", staggerMs: 0 },
+          trigger: { script: "return { fire: true };", once: true },
+          payload: {
+            kind: "systemEvent",
+            text: "Reminder: play basketball!",
+            message: "",
+            model: "",
+          },
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "synthetic-recipient",
+            threadId: "",
+            failureDestination: { channel: "", to: "", accountId: "", mode: "announce" },
+          },
+          deleteAfterRun: true,
+        },
+        patch: { name: "", schedule: { kind: "at", at: "" }, trigger: null },
+      };
+      await expect(tool.execute("blank-destination", args)).rejects.toThrow(
+        "omit delivery.failureDestination if unused, or supply a valid target. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.",
+      );
+      expect(await cron.list({ includeDisabled: true })).toEqual([]);
+
+      // This main-session reminder needs no separate delivery destination.
+      const retry = { ...args, job: { ...args.job, delivery: undefined } };
+      await expect(tool.execute("incompatible-trigger", retry)).rejects.toThrow(
+        'schedule.kind="at" cannot include trigger. Remove trigger for a one-time reminder, or use a recurring every/cron schedule. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds.',
+      );
+      expect(await cron.list({ includeDisabled: true })).toEqual([]);
+
+      await tool.execute("corrected-reminder", {
+        ...retry,
+        job: { ...retry.job, trigger: undefined },
+      });
+      expect(await cron.list({ includeDisabled: true })).toEqual([
+        expect.objectContaining({
+          name: "basketball-reminder",
+          enabled: false,
+          schedule: { kind: "at", at },
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "Reminder: play basketball!" },
+          deleteAfterRun: true,
+        }),
+      ]);
+    });
+  });
+
   it("previews the creating conversation on add, but not a name-only update", async () => {
     await withWebchatTool(
       async ({ add, cron, tool }) => {

@@ -94,7 +94,7 @@ it.each([
       expectsCompletionMessage: true,
     });
     const entry = structuredClone(subagentRuns.get(runId)!);
-    // Restored successful children can owe a wake without a parent turn binding.
+    // A live successful child can owe a wake before a parent turn accepts it.
     entry.execution = {
       ...entry.execution,
       status: "terminal",
@@ -240,10 +240,10 @@ it.each([
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   try {
-    // Restore resumes each durable wake; the sweeper never re-drives one.
+    // Explicit delivery resumes each durable wake; the sweeper never re-drives one.
     const resumeWakes = () => {
       for (const child of entries) {
-        resumeSubagentRun(child.runId, "restore");
+        resumeSubagentRun(child.runId);
       }
     };
     if (phase !== "pending") {

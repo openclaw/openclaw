@@ -21,6 +21,10 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
+import {
+  migrateCronDefaultStoreIdentity,
+  resolveCronIdentityMigrationDefaultStoreKey,
+} from "./openclaw-state-db-cron-identity-migration.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import {
   assertCurrentStateRuntimeSchema,
@@ -65,9 +69,11 @@ import { migrateSessionWatchCursorProvenance } from "./openclaw-state-db-session
 import { isUninitializedNativeStartupDatabase } from "./openclaw-state-db-startup-checkpoint.js";
 import * as retirements from "./openclaw-state-db-table-retirements.js";
 import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-state-db.paths.js";
+import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { assertGatewayServiceSchemaMigrationAllowed } from "./openclaw-state-service-installation.js";
 import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
@@ -80,6 +86,7 @@ export function ensureOpenClawStateRuntimeSchema(
   initialization: StateDatabaseInitialization,
   busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   initializeNativeOnly = false,
+  legacyCronDefaultStoreKey?: string,
 ): string[] {
   // Workers borrow host generation proof, never mint a competing receipt in their isolate.
   const integrity =
@@ -117,6 +124,15 @@ export function ensureOpenClawStateRuntimeSchema(
           return [];
         }
         const previousVersion = readStateSchemaContentVersion(db);
+        // Candidate/finalize Doctor and update repair already own offline schema
+        // maintenance. Preserve the migration owner's existing access/refusal order.
+        if (!getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance) {
+          assertGatewayServiceSchemaMigrationAllowed(
+            pathname,
+            previousVersion,
+            OPENCLAW_STATE_SCHEMA_VERSION,
+          );
+        }
         if (previousVersion === 0 && !isUninitializedNativeStartupDatabase(db)) {
           throw new Error(
             "Unrecognized native bootstrap database; preserve it and run openclaw doctor --fix.",
@@ -135,6 +151,13 @@ export function ensureOpenClawStateRuntimeSchema(
             includeVersionLazyAdditiveTables: true,
             includeAgentDeletionJournal:
               initialization.kind === "fresh" || initialization.nativeBootstrapEligible === true,
+          });
+          migrateCronDefaultStoreIdentity(db, {
+            previousVersion,
+            legacyDefaultStoreKey:
+              legacyCronDefaultStoreKey ?? resolveCronIdentityMigrationDefaultStoreKey(env),
+            fresh: true,
+            nowMs: now,
           });
           writeCurrentStateSchemaMetadata(db, now);
           runtimeReady = true;
@@ -172,7 +195,10 @@ export function ensureOpenClawStateRuntimeSchema(
         } else {
           assertStateDatabaseIntegrityOnce(db, pathname);
         }
-        const boundedChanges = migrateBoundedStateSchema(db, previousVersion);
+        const boundedChanges = migrateBoundedStateSchema(db, previousVersion, {
+          env,
+          legacyCronDefaultStoreKey,
+        });
         if (boundedChanges) {
           writeCurrentStateSchemaMetadata(db, now);
           assertCurrentStateRuntimeSchema(db, pathname);
@@ -207,7 +233,7 @@ export function ensureOpenClawStateRuntimeSchema(
         // v21 only derives predicates; don't replay legacy payload repair on v20 rows.
         ensureAdditiveStateColumns(db, previousVersion < 20 ? "repair" : "runtime");
         for (const migration of versionedStateMigrations) {
-          if (migration.migrate(db, previousVersion)) {
+          if (migration.migrate(db, previousVersion, { env, legacyCronDefaultStoreKey })) {
             changes.push(migration.applied);
           }
         }

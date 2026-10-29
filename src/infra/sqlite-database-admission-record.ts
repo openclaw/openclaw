@@ -147,7 +147,8 @@ export type Admission = {
   references: Map<number, SharedArrayBuffer>;
   facts: Map<string, AdmissionFact>;
 };
-export type SqliteDatabaseAdmissions = Admission[];
+type AdmissionSnapshot = Omit<Admission, "writeScopes"> & { writeScopes: WriteScopeBuckets };
+export type SqliteDatabaseAdmissions = AdmissionSnapshot[];
 type AdmissionPublications = Map<Admission, string[] | undefined>;
 export type SqliteDatabaseAdmissionKey<T> = {
   name: string;
@@ -173,12 +174,12 @@ export function readSqliteDatabaseAdmissions(value: unknown): SqliteDatabaseAdmi
   return Array.isArray(value) ? (value as SqliteDatabaseAdmissions) : undefined;
 }
 
-export function isSqliteDatabaseAdmissionRetired(record: Admission): boolean {
+export function isSqliteDatabaseAdmissionRetired(record: Pick<Admission, "generation">): boolean {
   return readSqliteDatabaseGeneration(record, "retired") !== 0;
 }
 
 export function isSqliteDatabaseAdmissionFactCurrent(
-  record: Admission,
+  record: Pick<Admission, "generation">,
   fact: AdmissionFact,
 ): boolean {
   return (
@@ -194,14 +195,14 @@ export function hasSqliteDatabaseSchemaAdmission(record: Admission | undefined):
 }
 
 export function readSqliteDatabaseFactRevision(
-  record: Admission,
+  record: Pick<Admission, "generation">,
   schemaDependent: boolean | undefined,
 ): number {
   return readSqliteDatabaseGeneration(record, schemaDependent ? "schemaRevision" : "factRevision");
 }
 
 export function readSqliteDatabaseGeneration(
-  record: Admission,
+  record: Pick<Admission, "generation">,
   slot: keyof typeof SqliteDatabaseGenerationSlot,
 ): number {
   return Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot[slot]);
@@ -268,7 +269,7 @@ type WriteScopeBuckets = typeof EMPTY_WRITE_SCOPE_BUCKETS;
 type PublishedAdmission = {
   metadata: Omit<Admission, "writeScopes">;
   writeScopes: WriteScopeBuckets;
-  snapshot: Admission;
+  snapshot: AdmissionSnapshot;
 };
 
 function snapshotWriteScopes(
@@ -569,7 +570,7 @@ export class SqliteDatabaseAdmissionRegistry {
       if (threadId === 0) {
         current.writeScopeRevision = readSqliteDatabaseGeneration(current, "writeScopeRevision");
       }
-      const { writeScopes: ownedScopes, ...fields } = current;
+      const { writeScopes: _ownedScopes, ...fields } = current;
       const metadata = {
         ...fields,
         facts: new Map(current.facts),
@@ -579,19 +580,10 @@ export class SqliteDatabaseAdmissionRegistry {
             ? readSqliteDatabaseGeneration(current, "hostRevision")
             : current.hostRevision,
       };
-      let materialized: typeof ownedScopes | undefined;
-      // Native worker cloning reads the getter. Ordinary deltas never materialize the full Map.
-      const snapshot: Admission = {
+      // Clone the immutable buckets directly; receivers install cells into their owned Map.
+      const snapshot: AdmissionSnapshot = {
         ...metadata,
-        get writeScopes() {
-          if (!materialized) {
-            materialized = new Map();
-            for (const bucket of writeScopes) {
-              bucket.forEach((value, key) => materialized!.set(key, value));
-            }
-          }
-          return materialized;
-        },
+        writeScopes: writeScopes.filter((bucket) => bucket.size > 0),
       };
       this.published.set(current.identity, { metadata, writeScopes, snapshot });
     }
@@ -604,7 +596,7 @@ export class SqliteDatabaseAdmissionRegistry {
 
   capture(
     cursor?: SqliteDatabaseAdmissionCursor,
-    scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
+    scope?: { location?: string; admissions?: readonly Pick<Admission, "identity">[] },
   ): SqliteDatabaseAdmissions {
     const identities = scope
       ? new Set([
@@ -646,7 +638,7 @@ export class SqliteDatabaseAdmissionRegistry {
           ? {
               ...record.metadata,
               facts: changedAdmissionEntries(record.metadata.facts, previous.metadata.facts),
-              writeScopes: changedWriteScopes(record.writeScopes, previous.writeScopes),
+              writeScopes: [changedWriteScopes(record.writeScopes, previous.writeScopes)],
               references: changedAdmissionEntries(
                 record.metadata.references,
                 previous.metadata.references,
@@ -658,11 +650,11 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   captureExchange(
-    scope?: { location?: string; admissions?: SqliteDatabaseAdmissions },
+    scope?: { location?: string; admissions?: readonly Pick<Admission, "identity">[] },
     target?: string | Admission,
   ) {
     return target && typeof target !== "string" && isSqliteDatabaseAdmissionRetired(target)
-      ? [{ ...target, facts: new Map(), writeScopes: new Map(), references: new Map() }]
+      ? [{ ...target, facts: new Map(), writeScopes: [], references: new Map() }]
       : this.capture(this.exchangeCursor, scope);
   }
 
@@ -713,28 +705,30 @@ export class SqliteDatabaseAdmissionRegistry {
         }
       }
       const scopeKeys = changedRecords.get(record) ?? [];
-      for (const [key, revision] of incoming.writeScopes) {
-        if (Atomics.load(revision.state, 1) !== 0) {
-          continue;
-        }
-        // The host selects one shared incarnation for concurrent discoveries of the same key.
-        const previous = record.writeScopes.get(key);
-        if (
-          previous?.identity === revision.identity ||
-          (threadId === 0 && previous && Atomics.load(previous.state, 1) === 0)
-        ) {
-          continue;
-        }
-        if (threadId === 0) {
-          const previousRevision = advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
-          // The keyed publication covers this addition, never an unseen peer's retirement.
-          if (this.scopeSweeps.get(record) === previousRevision) {
-            this.scopeSweeps.set(record, (previousRevision + 1) | 0);
+      for (const bucket of incoming.writeScopes) {
+        for (const [key, revision] of bucket) {
+          if (Atomics.load(revision.state, 1) !== 0) {
+            continue;
           }
+          // The host selects one shared incarnation for concurrent discoveries of the same key.
+          const previous = record.writeScopes.get(key);
+          if (
+            previous?.identity === revision.identity ||
+            (threadId === 0 && previous && Atomics.load(previous.state, 1) === 0)
+          ) {
+            continue;
+          }
+          if (threadId === 0) {
+            const previousRevision = advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
+            // The keyed publication covers this addition, never an unseen peer's retirement.
+            if (this.scopeSweeps.get(record) === previousRevision) {
+              this.scopeSweeps.set(record, (previousRevision + 1) | 0);
+            }
+          }
+          retainSqliteDatabaseWriteScope(record, key, revision);
+          scopeKeys.push(key);
+          changed = true;
         }
-        retainSqliteDatabaseWriteScope(record, key, revision);
-        scopeKeys.push(key);
-        changed = true;
       }
       const writeScopeRevision = readSqliteDatabaseGeneration(record, "writeScopeRevision");
       if (threadId === 0 || incoming.writeScopeRevision === writeScopeRevision) {

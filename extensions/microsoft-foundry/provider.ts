@@ -207,6 +207,6 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
       );
     },
     wrapStreamFn: wrapMicrosoftFoundryStreamFn,
-    prepareRuntimeAuth: prepareFoundryRuntimeAuth,
+    prepareRuntimeAuthV2: prepareFoundryRuntimeAuth,
   };
 }

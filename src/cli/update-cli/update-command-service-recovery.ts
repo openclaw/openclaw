@@ -43,6 +43,7 @@ import {
   verifyPreviousGatewayForUpdate,
 } from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { resolveGatewayRecoverySchemaPaths } from "./update-command-recovery-schema-paths.js";
 import {
   GatewayRestartHealthError,
   restartRetainedUpdateGatewayService,
@@ -249,6 +250,7 @@ export async function admitInstalledGatewayRecovery(
       params.opts.run?.env ??
       process.env;
     const sharedPath = resolveOpenClawStateSqlitePath(env);
+    const schemaPaths = resolveGatewayRecoverySchemaPaths(env);
     const inspect = async () => {
       const databases = await readUpdateStateSchemaVersions({
         stateDir: resolveStateDir(env),
@@ -257,9 +259,17 @@ export async function admitInstalledGatewayRecovery(
         root,
         nodeRunner: params.packageUpdateNodeRunner,
         timeoutMs: params.updateStepTimeoutMs,
+        onInventory: (files) => {
+          for (const pathname of resolveGatewayRecoverySchemaPaths(env, files)) {
+            schemaPaths.add(pathname);
+          }
+        },
       });
       assertCurrent();
       return databases.flatMap((database) => {
+        if (!schemaPaths.has(database.path)) {
+          return [];
+        }
         const observed = resolveUpdateStateContentVersion(database);
         const expected = resolveUpdateStateTargetVersion(database.path, {
           sharedPath,

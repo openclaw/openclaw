@@ -2,6 +2,12 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
+import {
+  normalizeAssistantIdentity,
+  type AssistantIdentity,
+} from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import { readMessageSenderSession, resolveMessageRole } from "../../lib/chat/message-normalizer.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
@@ -28,6 +34,7 @@ type ChatAvatarHost = {
   connectionEpoch?: number;
   hello: GatewayHelloOk | null;
   sessionKey: string;
+  cacheChatAvatarSource?: (agentId: string, source: string | null) => void;
 };
 
 const chatAvatarRequestVersions = new WeakMap<object, number>();
@@ -53,6 +60,26 @@ export function resolveAgentIdForSession(
     return resolveUiSelectedGlobalAgentId(host) || DEFAULT_AGENT_ID;
   }
   return readSessionDefaults(host)?.defaultAgentId?.trim() || DEFAULT_AGENT_ID;
+}
+
+export function cachedChatAssistantIdentity(
+  state: Pick<ChatAvatarHost, "sessionKey" | "assistantAgentId" | "agentsList" | "hello">,
+  context?: Pick<ApplicationContext, "agentIdentity" | "config" | "gateway">,
+): AssistantIdentity {
+  const agentId = resolveAgentIdForSession(state);
+  const bootstrap = context?.config.current.assistantIdentity;
+  if (
+    context &&
+    bootstrap?.agentId === agentId &&
+    hasSameOriginGatewayTransport(context.gateway.connection.gatewayUrl)
+  ) {
+    return bootstrap;
+  }
+  const cached = context?.agentIdentity.get(agentId);
+  if (cached) {
+    return normalizeAssistantIdentity({ ...cached, avatar: cached.avatar || cached.emoji });
+  }
+  return { name: bootstrap && !bootstrap.agentId ? bootstrap.name : "", avatar: null };
 }
 
 function beginChatAvatarRequest(host: ChatAvatarHost): number {
@@ -123,6 +150,7 @@ async function loadChatAvatarSnapshot(host: ChatAvatarHost, agentId: string) {
     }
     return {
       release,
+      source: hasImage ? avatar : null,
       status: identity.avatarStatus ?? null,
       reason: identity.avatarReason ?? null,
       url,
@@ -207,6 +235,7 @@ export async function refreshSenderAgentAvatars(
       const snapshot = snapshots[index];
       if (snapshot) {
         rememberChatAvatarReference(host, id, snapshot.release);
+        host.cacheChatAvatarSource?.(id, snapshot.source);
       }
       return [id, snapshot ? snapshot.url : (previousAvatars?.get(id) ?? null)];
     }),
@@ -249,6 +278,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
     host.chatAvatarReason = snapshot.reason;
     host.chatAvatarUrl = snapshot.url;
     chatAvatarDisplayedAgents.set(host, agentId);
+    host.cacheChatAvatarSource?.(agentId, snapshot.source);
   } else if (!showingSameAgent) {
     clearChatAvatarState(host);
   }

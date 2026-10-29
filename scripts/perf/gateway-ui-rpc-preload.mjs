@@ -1,9 +1,12 @@
-// Private benchmark instrumentation. No payload, config value, or credential is retained.
+import { createHash } from "node:crypto";
+// Private benchmark instrumentation; opt-in setup retains only synthetic Cron binding metadata.
 import { channel } from "node:diagnostics_channel";
 import { writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { Socket } from "node:net";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
 
 const channelName = "gateway-ui-rpc-measure";
@@ -146,7 +149,65 @@ function installObserver() {
     controls = controls
       .then(async () => {
         let result;
-        if (message.action === "begin") {
+        if (message.action === "cron-publication-setup") {
+          if (active || inspector) {
+            throw new Error("Cron fixture inspection must stay outside timing and profiles");
+          }
+          const checkout = path.dirname(path.dirname(process.env.OPENCLAW_BENCH_RPC_ENTRY));
+          const owner = (file) => import(pathToFileURL(path.join(checkout, "src", file)).href);
+          const [
+            { loadCronJobsStoreWithConfigJobsReadOnly },
+            { resolveCronJobBoundSessionKeys },
+            config,
+          ] = await Promise.all([
+            owner("cron/store/read-only.ts"),
+            owner("cron/job-session-bindings.ts"),
+            owner("config/config.ts"),
+          ]);
+          const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(message.storePath);
+          const jobs = loaded.store.jobs;
+          if (
+            loaded.invalidConfigRows.length ||
+            jobs.length !== 1000 ||
+            jobs.some(
+              (job) =>
+                job.enabled !== false || job.agentId !== "main" || job.state.nextRunAtMs != null,
+            )
+          ) {
+            throw new Error("Cron publication fixture requires 1,000 canonical disabled main jobs");
+          }
+          const cfg = config.getRuntimeConfig();
+          const bindings = jobs.map((job) => ({
+            id: job.id,
+            keys: [...resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId: "main" })],
+          }));
+          const common = bindings[0].keys.filter((key) =>
+            bindings.every((binding) => binding.keys.includes(key)),
+          );
+          if (common.length !== 1 || new Set(jobs.map((job) => job.id)).size !== jobs.length) {
+            throw new Error("Cron publication fixture needs one shared binding and unique job IDs");
+          }
+          const uniqueKey = (binding) => {
+            const keys = binding.keys.filter((key) => key !== common[0]);
+            if (
+              keys.length !== 1 ||
+              bindings.filter((other) => other.keys.includes(keys[0])).length !== 1
+            ) {
+              throw new Error("Cron publication endpoint needs a unique execution binding");
+            }
+            return keys[0];
+          };
+          result = {
+            jobIds: bindings.map((binding) => binding.id),
+            sortedJobIds: bindings
+              .map((binding) => binding.id)
+              .toSorted((a, b) => a.localeCompare(b)),
+            sharedKey: common[0],
+            earlyKey: uniqueKey(bindings[0]),
+            lateKey: uniqueKey(bindings.at(-1)),
+            contentSha256: createHash("sha256").update(stringify(jobs)).digest("hex"),
+          };
+        } else if (message.action === "begin") {
           if (active) {
             throw new Error("overlapping RPC measurement windows");
           }

@@ -1,5 +1,4 @@
 import { createMemo, lazy } from "solid-js";
-import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatDetailSlotProps } from "../chat-pane-embedded-types.ts";
@@ -13,6 +12,7 @@ import {
   openSessionWorkspaceFileView,
   revealSessionWorkspaceFile,
 } from "./chat-session-workspace.ts";
+import type { WorkspaceFileLinkTarget } from "./chat-sidebar-content-types.ts";
 
 // The output formatter belongs to the selected detail, not ordinary chat boot.
 const ChatToolOutput = lazy(() => import("./chat-tool-output-view.tsx"), {
@@ -121,7 +121,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
             canvasPluginSurfaceUrl={props.host.canvasPluginSurfaceUrl}
             embedSandboxMode={props.host.embedSandboxMode}
             allowExternalEmbedUrls={props.host.allowExternalEmbedUrls}
-            onOpenWorkspaceFile={(target: MarkdownFileLinkTarget) => {
+            onOpenWorkspaceFile={(target: WorkspaceFileLinkTarget) => {
               void openSessionWorkspaceFile(
                 props.host,
                 target,

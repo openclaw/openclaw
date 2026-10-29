@@ -127,8 +127,12 @@ describe("service PATH", () => {
 
 describe("service environment", () => {
   it("preserves config write protection without enabling Nix mode", () => {
-    const env = serviceEnv({ OPENCLAW_CONFIG_READONLY: "1" }, { platform: "linux" });
+    const env = serviceEnv(
+      { OPENCLAW_CONFIG_READONLY: "1", OPENCLAW_CONFIG_READONLY_NOTICE: "Edit the deployment." },
+      { platform: "linux" },
+    );
     expect([resolveIsConfigReadOnly(env), resolveIsNixMode(env)]).toEqual([true, false]);
+    expect(env.OPENCLAW_CONFIG_READONLY_NOTICE).toBe("Edit the deployment.");
   });
   it.each([
     ["TMPDIR", "/tmp/service/", "/tmp/service/"],

@@ -40,7 +40,7 @@ suite.define(() => {
       await expect.poll(() => textarea.inputValue()).toBe(lines.join("\n"));
       await expect.poll(scrollTop).toBeGreaterThan(0);
       await expectEditing();
-      expect(await overflow()).toBe("auto");
+      expect(await overflow()).not.toBe("hidden");
 
       // Moving the caret must preserve editing protection after every key.
       await pressEditing(

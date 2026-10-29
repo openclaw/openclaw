@@ -23,22 +23,7 @@ import type {
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createExternalRequesterSessionEntry } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
-
-export function pendingRequesterSettleWake(
-  runId: string,
-  batchRunIds = [runId],
-): NonNullable<SubagentRunRecord["requesterSettleWake"]> {
-  return {
-    status: "pending",
-    attemptCount: 0,
-    batchRunIds,
-    requesterYieldBatch: true,
-    rearmGeneration: 1,
-    progressOperationId: runId,
-  };
-}
 
 export function holdRequesterWakeResponses(
   gates: ReadonlyMap<string, Promise<void>>,
@@ -70,8 +55,7 @@ export function holdRequesterWakeResponses(
 }
 
 export function createGatewayContext() {
-  const recoveryRuntime: GatewayRequestContext["recoveryRuntime"] = {
-    prepareRestartRecovery: () => undefined,
+  const lifecycleRuntime: GatewayRequestContext["lifecycleRuntime"] = {
     dispatchAgent: (params, timeoutMs) => callGateway({ method: "agent", params, timeoutMs }),
     waitForAgent: (params, timeoutMs, signal) =>
       callGateway({ method: "agent.wait", params, timeoutMs, signal }),
@@ -83,11 +67,8 @@ export function createGatewayContext() {
         signal: options?.signal,
         assertDispatchCurrent: options?.assertCurrent,
       }),
-    sendRecoveryNotice: async () => {
-      throw new Error("Unexpected recovery notice");
-    },
-    resumeChatInput: async () => {
-      throw new Error("Unexpected chat input recovery");
+    sendNotice: async () => {
+      throw new Error("Unexpected lifecycle notice");
     },
   };
   const methodRegistry = createRequestGatewayMethodRegistry();
@@ -95,7 +76,7 @@ export function createGatewayContext() {
     createGatewayRequestContext(
       makeContextParams({ getAttachedGatewayMethodRegistry: () => methodRegistry }),
     ),
-    { recoveryRuntime, localEmbedded: true },
+    { lifecycleRuntime, localEmbedded: true },
   );
   context.resolveGatewayContext = () => context;
   return context;
@@ -232,7 +213,7 @@ export async function prepareLargeRequesterWakeFixture(
   );
   const context = createGatewayContext();
   await registry.initSubagentRegistry();
-  await registry.activateSubagentRegistry(() => context).settled;
+  await registry.activateSubagentRegistry(() => context);
   const fixture = createRequesterWakeSessionFixture({
     requesterSessionKey,
     getSessionStore: () => params.sessionStore,

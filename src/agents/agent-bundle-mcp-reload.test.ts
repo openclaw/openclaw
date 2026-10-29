@@ -149,22 +149,6 @@ async function fixture(
   };
 }
 
-it("keeps unchanged server transports and catalogs when another server changes", async () => {
-  const { config, get } = await fixture();
-  const original = await get();
-  const originalCatalog = await original.getCatalog();
-  const first = await probe(original, "healthy");
-  const old = await probe(original, "changed");
-  const refreshed = await get(config("new"));
-
-  expect(await probe(refreshed, "healthy")).toEqual(first);
-  expect(await probe(original, "healthy")).toEqual(first);
-  expect((await refreshed.getCatalog()).servers.healthy).toBe(originalCatalog.servers.healthy);
-  expect(await probe(refreshed, "changed")).toMatchObject({ label: "new" });
-  expect((await probe(refreshed, "changed")).pid).not.toBe(old.pid);
-  await expect(probe(original, "changed")).rejects.toThrow(/disposed|retir/);
-});
-
 it("revokes only the changed owner immediately on collision publication", async () => {
   const { manager, config, params, get, publish } = await fixture();
   const acquisition = await manager.acquire({ ...params, cfg: config() });
@@ -186,9 +170,12 @@ it("revokes only the changed owner immediately on collision publication", async 
   expect(catalog.servers.changed?.safeServerName).toBe("changed-2");
 });
 
-it("allows an unchanged server call to finish across config publication", async ({ signal }) => {
+it("retains unchanged transports and catalogs across publication, including active calls", async ({
+  signal,
+}) => {
   const { config, params, get, publish } = await fixture();
   const original = await get();
+  const originalCatalog = await original.getCatalog();
   const healthy = await probe(original, "healthy");
   const held = path.join(params.workspaceDir, "held-call");
   const result = probe(original, "healthy", { hold: held });
@@ -197,6 +184,8 @@ it("allows an unchanged server call to finish across config publication", async 
     await waitForCall(held, result, signal);
     await publish(config("new"));
     const refreshed = await get(config("new"));
+    expect((await refreshed.getCatalog()).servers.healthy).toBe(originalCatalog.servers.healthy);
+    await expect(probe(original, "changed")).rejects.toThrow(/disposed|retir/);
     await fs.writeFile(held, "release");
     expect(await result).toEqual(healthy);
     expect(await probe(refreshed, "healthy")).toEqual(healthy);

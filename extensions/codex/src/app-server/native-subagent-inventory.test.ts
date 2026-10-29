@@ -10,9 +10,9 @@ import {
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   collabItem,
+  agentMessage,
   createClient,
   createNativeModelSourceFixture,
-  directSpawnItem,
   notifyChildStarted,
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
@@ -21,12 +21,32 @@ import { bindingStoreKey } from "./session-binding-record.js";
 
 setupRunAttemptTestHooks();
 
-function finalHistory(turnId: string, result: string) {
-  return threadRead({ turnId, result, resultPhase: "final_answer" });
+type History = ReturnType<typeof threadRead>;
+type HistoryOptions = Parameters<typeof threadRead>[0];
+
+function finalHistory(turnId: string, result: string, options?: HistoryOptions) {
+  return threadRead({ turnId, result, resultPhase: "final_answer", ...options });
 }
 
 type Inventory = Awaited<ReturnType<typeof fixture>>;
 type Client = ReturnType<typeof createClient>;
+type Parent = Awaited<ReturnType<Inventory["register"]>>;
+
+async function closeAssignment(parent: Parent, client: Client) {
+  await parent.unregister();
+  client.close();
+}
+
+function changeOwner(owner: ReturnType<Inventory["historyOwner"]>, scenario: string) {
+  if (scenario === "connection") {
+    owner.connectionFingerprint = "f".repeat(64);
+  } else if (scenario === "lifecycle") {
+    owner.lifecycleRevision = "replacement";
+  } else if (scenario === "session") {
+    owner.sessionId = "replacement";
+  }
+  return owner;
+}
 
 function interceptMutation(
   f: Inventory,
@@ -41,10 +61,7 @@ function interceptMutation(
   );
 }
 
-function prependHistory(
-  history: ReturnType<typeof threadRead>,
-  prior: ReturnType<typeof threadRead>,
-) {
+function prependHistory(history: History, prior: History) {
   assert(history.thread.turns && prior.thread.turns);
   history.thread.turns.unshift(...prior.thread.turns);
   return history;
@@ -65,21 +82,28 @@ async function startAssignment(
 
 async function detachedAssignment(observeTurn = true) {
   const { f, client, parent } = await startAssignment(observeTurn);
-  await parent.unregister();
-  client.close();
+  await closeAssignment(parent, client);
   return f;
 }
 
-async function pauseRecovery(f: Inventory, client = createClient()) {
+function holdHistory(client: Client, fallback?: History) {
   const entered = createDeferred<void>();
-  const history = createDeferred<ReturnType<typeof threadRead>>();
-  client.setThreadReadFactory("child-thread", () => {
+  const history = createDeferred<History>();
+  client.setThreadReadFactory("child-thread", ({ includeTurns }) => {
+    if (fallback && includeTurns !== false) {
+      return fallback;
+    }
     entered.resolve();
     return history.promise;
   });
+  return { entered: entered.promise, history };
+}
+
+async function pauseRecovery(f: Inventory, client = createClient()) {
+  const { entered, history } = holdHistory(client);
   const parent = await f.register(client);
   await Promise.race([
-    entered.promise,
+    entered,
     parent.ready.then(() => {
       throw new Error("Recovery completed without reading pending history");
     }),
@@ -97,7 +121,7 @@ function completeChild(
     threadId,
     turnId,
     status: "completed",
-    items: [{ id: "final", type: "agentMessage", phase: "final_answer", text }],
+    items: [agentMessage("final", text, "final_answer")],
   });
 }
 
@@ -134,11 +158,7 @@ async function startNestedAssignment() {
     createNativeModelSourceFixture(["model-a"]),
   );
   await notifyChildStarted(client, "child-thread", "grandchild", "/root/child/grandchild");
-  await client.item(
-    directSpawnItem("v2", "child-thread", "grandchild"),
-    "child-turn",
-    "child-thread",
-  );
+  await client.spawn("grandchild", "child-turn", "v2", "child-thread");
   await client.startTurn("grandchild-turn", { threadId: "grandchild" });
   const capture = await captureSource(client, "grandchild", "child-thread");
   assert(capture);
@@ -164,37 +184,30 @@ describe("native pending assignment inventory through registered monitor admissi
     async (scenario) => {
       const { f, client, parent } = await startNestedAssignment();
       await completeInForeground(client);
-      await parent.unregister();
-      client.close();
+      await closeAssignment(parent, client);
       const saved = await f.assignments();
       expect(saved).toMatchObject([{ childThreadId: "grandchild" }]);
       const recoveredClient = createClient();
       recoveredClient.setThreadRead(
         "grandchild",
-        threadRead({
+        finalHistory("grandchild-turn", "Nested result", {
           childThreadId: "grandchild",
           parentThreadId: "child-thread",
-          turnId: "grandchild-turn",
-          result: "Nested result",
-          resultPhase: "final_answer",
         }),
       );
       const metadata = threadRead({ childThreadId: "child-thread", directParentField: false });
-      const entered = createDeferred<void>();
-      const release = createDeferred<typeof metadata>();
-      recoveredClient.setThreadReadFactory("child-thread", () => {
-        if (scenario === "unavailable") {
-          throw new Error("Native middle thread is temporarily unavailable");
-        }
-        if (scenario === "revoked") {
-          entered.resolve();
-          return release.promise;
-        }
-        return metadata;
-      });
+      const { entered, history: release } = holdHistory(recoveredClient);
+      if (scenario !== "revoked") {
+        recoveredClient.setThreadReadFactory("child-thread", () => {
+          if (scenario === "unavailable") {
+            throw new Error("Native middle thread is temporarily unavailable");
+          }
+          return metadata;
+        });
+      }
       const recovered = await f.register(recoveredClient);
       if (scenario === "revoked") {
-        await entered.promise;
+        await entered;
         recovered.closeGateway();
         release.resolve(metadata);
       }
@@ -254,11 +267,8 @@ describe("native pending assignment inventory through registered monitor admissi
     for (const assignment of assignments) {
       client.setThreadRead(
         assignment.childThreadId,
-        threadRead({
+        finalHistory(assignment.nativeTurnId, `Recovered ${assignment.childThreadId}`, {
           childThreadId: assignment.childThreadId,
-          turnId: assignment.nativeTurnId,
-          result: `Recovered ${assignment.childThreadId}`,
-          resultPhase: "final_answer",
         }),
       );
     }
@@ -279,8 +289,7 @@ describe("native pending assignment inventory through registered monitor admissi
       expect(await f.assignments()).toMatchObject(assignments);
     } finally {
       releaseWrite.resolve();
-      await parent.unregister();
-      client.close();
+      await closeAssignment(parent, client);
     }
   });
 
@@ -334,8 +343,7 @@ describe("native pending assignment inventory through registered monitor admissi
       } else {
         await expect(capture).rejects.toBeInstanceOf(Error);
       }
-      await parent.unregister();
-      client.close();
+      await closeAssignment(parent, client);
     },
   );
 
@@ -405,11 +413,11 @@ describe("native pending assignment inventory through registered monitor admissi
     async (observeTurn) => {
       const f = await detachedAssignment(observeTurn);
       const client = createClient();
-      const history = finalHistory("copied-parent-turn", "Parent final copied before rollback");
+      const history = prependHistory(
+        finalHistory("child-turn", "Actual child result"),
+        finalHistory("copied-parent-turn", "Parent final copied before rollback"),
+      );
       history.thread.forkedFromId = "parent-thread";
-      const childHistory = finalHistory("child-turn", "Actual child result");
-      assert(history.thread.turns && childHistory.thread.turns);
-      history.thread.turns.push(...childHistory.thread.turns);
       client.setThreadRead("child-thread", history);
       const parentHistory = threadRead({ childThreadId: "parent-thread" });
       parentHistory.thread.turns = [];
@@ -431,14 +439,7 @@ describe("native pending assignment inventory through registered monitor admissi
     "does not adopt pending native work under %s history ownership",
     async (scenario) => {
       const f = await detachedAssignment();
-      let owner = f.historyOwner();
-      if (scenario === "connection") {
-        owner = { ...owner, connectionFingerprint: "f".repeat(64) };
-      } else if (scenario === "lifecycle") {
-        owner = { ...owner, lifecycleRevision: "replacement" };
-      } else if (scenario === "session") {
-        owner = { ...owner, sessionId: "replacement" };
-      }
+      const owner = changeOwner(f.historyOwner(), scenario);
       const client = createClient();
       const history = threadRead({
         turnId: "child-turn",
@@ -484,7 +485,7 @@ describe("native pending assignment inventory through registered monitor admissi
       });
       f.deliver.mockImplementation(async ({ completionCustody }) => {
         assert(completionCustody?.isCurrent());
-        return { delivered: false, path: "direct", recoveryPending: true };
+        return { delivered: false, path: "direct" };
       });
       const history = threadRead({
         turnId: "child-turn",
@@ -494,22 +495,11 @@ describe("native pending assignment inventory through registered monitor admissi
       });
       history.thread.modelProvider = "provider-b";
       await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
-      await client.finishTurn("child-turn", {
-        type: "agentMessage",
-        id: "a-final",
-        text: "A result",
-      });
+      await client.finishTurn("child-turn", agentMessage("a-final", "A result"));
       await first.unregister();
       expect(f.deliver).toHaveBeenCalledOnce();
       await f.rotate("rotated-parent");
-      const owner = f.historyOwner("rotated-parent");
-      if (scenario === "session") {
-        owner.sessionId = "other-session";
-      } else if (scenario === "lifecycle") {
-        owner.lifecycleRevision = "other-lifecycle";
-      } else if (scenario === "connection") {
-        owner.connectionFingerprint = "f".repeat(64);
-      }
+      const owner = changeOwner(f.historyOwner("rotated-parent"), scenario);
       client.setThreadRead("child-thread", history);
       const source = createNativeModelSourceFixture(["model-b"]);
       const replacement = await f.register(client, owner, source, {
@@ -518,23 +508,14 @@ describe("native pending assignment inventory through registered monitor admissi
       });
       await replacement.ready;
       replacement.bindTurn("rotated-turn");
-      const entered = createDeferred<void>();
-      const read = createDeferred<typeof history>();
-      client.setThreadReadFactory("child-thread", ({ includeTurns }) => {
-        if (includeTurns === false) {
-          entered.resolve();
-          return read.promise;
-        }
-        return history;
-      });
+      const { entered, history: read } = holdHistory(client, history);
       const input = prepareInput(client, "rotated-parent", "rotated-turn", "child-thread");
       if (scenario === "session" || scenario === "lifecycle" || scenario === "connection") {
         await expect(input).rejects.toThrow("outside the sender's admitted tree");
-        await replacement.unregister();
-        client.close();
+        await closeAssignment(replacement, client);
         return;
       }
-      await entered.promise;
+      await entered;
       if (scenario === "revoked") {
         replacement.closeGateway();
       }
@@ -545,8 +526,7 @@ describe("native pending assignment inventory through registered monitor admissi
       read.resolve(metadata);
       if (scenario !== "current") {
         await expect(input).rejects.toThrow();
-        await replacement.unregister();
-        client.close();
+        await closeAssignment(replacement, client);
         return;
       }
       await input;
@@ -648,7 +628,7 @@ describe("native pending assignment inventory through registered monitor admissi
         return { delivered: true, path: "direct" };
       });
       const recoveredClient = createClient();
-      const history = threadRead({ turnId, result: "Pending result", resultPhase: "final_answer" });
+      const history = finalHistory(turnId, "Pending result");
       if (assignment === "followup") {
         prependHistory(history, threadRead({ turnId: "child-turn", result: "Native result" }));
       }
@@ -746,9 +726,14 @@ describe("native pending assignment inventory through registered monitor admissi
     },
   );
 
-  it.each(["observed turn", "canonical locator", "resumed turn", "different turn"])(
+  it.each([
+    ["observed turn", "child-turn", false],
+    ["canonical locator", "child-turn", true],
+    ["resumed turn", "resumed-turn", false],
+    ["different turn", "other-turn", true],
+  ] as const)(
     "reconciles a pending assignment's %s during its history read",
-    async (change) => {
+    async (change, nativeTurnId, canonical) => {
       const f = await fixture();
       const initial = {
         runId: "codex-thread:child-thread",
@@ -780,18 +765,8 @@ describe("native pending assignment inventory through registered monitor admissi
         }
         const surviving = {
           ...initial,
-          runId:
-            change === "canonical locator"
-              ? "codex-thread:child-thread:turn:child-turn"
-              : change === "different turn"
-                ? "codex-thread:child-thread:turn:other-turn"
-                : initial.runId,
-          nativeTurnId:
-            change === "resumed turn"
-              ? "resumed-turn"
-              : change === "different turn"
-                ? "other-turn"
-                : "child-turn",
+          runId: canonical ? `${initial.runId}:turn:${nativeTurnId}` : initial.runId,
+          nativeTurnId,
         };
         await f.record(surviving);
         history.resolve(recovered);
@@ -812,8 +787,7 @@ describe("native pending assignment inventory through registered monitor admissi
       } finally {
         history.resolve(recovered);
         await parent.ready;
-        await parent.unregister();
-        client.close();
+        await closeAssignment(parent, client);
       }
     },
   );
@@ -827,9 +801,7 @@ describe("native pending assignment inventory through registered monitor admissi
     await vi.advanceTimersByTimeAsync(600_000);
     expect(await f.assignments()).toEqual([]);
     const attempts = f.deliver.mock.calls.length;
-    history.resolve(
-      threadRead({ turnId: "child-turn", result: "Result", resultPhase: "final_answer" }),
-    );
+    history.resolve(finalHistory("child-turn", "Result"));
     await replacement.ready;
     await replacement.unregister();
     expect(f.deliver).toHaveBeenCalledTimes(attempts);

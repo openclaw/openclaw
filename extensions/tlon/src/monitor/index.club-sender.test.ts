@@ -184,11 +184,14 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
         chatEvent({ whom: CLUB_ID, author: "~bus", text: "hello from a club", id: "~bus/7" }),
       );
       expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
-      expect(pokedTexts().some((text) => text.includes("unverified; group DM"))).toBe(true);
+      const approvalRequest = pokedTexts().join("");
+      expect(approvalRequest).toContain("unverified; group DM");
+      const approvalId = approvalRequest.match(/dm-\d+-[a-f0-9]+/)?.[0];
+      expect(approvalId).toBeDefined();
 
       inboundRuntimeMock.shouldComputeCommandAuthorized.mockReturnValueOnce(true);
       await chatSubscription().event(
-        chatEvent({ whom: OWNER, author: OWNER, text: "approve", id: "~nec/8" }),
+        chatEvent({ whom: OWNER, author: OWNER, text: `approve ${approvalId}`, id: "~nec/8" }),
       );
 
       expect(inboundRuntimeMock.buildContext).toHaveBeenCalledOnce();

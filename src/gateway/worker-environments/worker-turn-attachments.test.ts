@@ -34,14 +34,16 @@ describe("cloud attachment transfer confinement", () => {
     });
   const prepare = (
     runWorkspaceCommand = execute,
-    overrides: Partial<Parameters<typeof prepareWorkerTurnAttachments>[0]> = {},
+    media: NonNullable<Parameters<typeof prepareWorkerTurnAttachments>[0]["turn"]["media"]> = [
+      { path: originalPath, contentType: "application/pdf" },
+    ],
+    assertCurrent = () => {},
   ) =>
     prepareWorkerTurnAttachments({
-      turn: { timeoutMs: 5_000, media: [{ path: originalPath, contentType: "application/pdf" }] },
+      turn: { timeoutMs: 5_000, media },
       remoteWorkspaceDir: remote,
       tunnel: { runWorkspaceCommand },
-      assertCurrent: () => {},
-      ...overrides,
+      assertCurrent,
     });
 
   it("removes incomplete files after a checksum failure without changing other workspace files", async () => {
@@ -86,12 +88,10 @@ describe("cloud attachment transfer confinement", () => {
       return result;
     });
     await expect(
-      prepare(runWorkspaceCommand, {
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("lost claim");
-          }
-        },
+      prepare(runWorkspaceCommand, undefined, () => {
+        if (!current) {
+          throw new Error("lost claim");
+        }
       }),
     ).rejects.toThrow("lost claim");
     expect(runWorkspaceCommand).toHaveBeenCalledOnce();
@@ -103,37 +103,26 @@ describe("cloud attachment transfer confinement", () => {
     const privatePath = path.join(root, "private.txt");
     await fs.writeFile(privatePath, "not an admitted attachment");
     const runWorkspaceCommand = vi.fn();
-    await expect(
-      prepare(runWorkspaceCommand, {
-        turn: { timeoutMs: 5_000, media: [{ [field]: privatePath }] },
-      }),
-    ).rejects.toThrow("attach the file again");
+    await expect(prepare(runWorkspaceCommand, [{ [field]: privatePath }])).rejects.toThrow(
+      "attach the file again",
+    );
     expect(runWorkspaceCommand).not.toHaveBeenCalled();
   });
 
-  it("uses a managed original URL when the runtime path was already staged on the Gateway", async () => {
-    const note = await prepare(undefined, {
-      turn: {
-        timeoutMs: 5_000,
-        media: [
-          {
-            path: path.join(root, "gateway-copy.pdf"),
-            url: originalPath,
-            fileName: "original.pdf",
-          },
-        ],
-      },
-    });
-    const [directory] = await fs.readdir(remote);
-    expect(note).toContain(directory);
-    expect(await fs.readFile(path.join(remote, directory!, "1-original.pdf"))).toEqual(bytes);
-  });
-
-  it("bounds transfer commands by the monotonic turn budget when the wall clock rewinds", async () => {
+  it("stages the managed original URL with a monotonic integer transfer budget", async () => {
     vi.spyOn(performance, "now").mockReturnValueOnce(500).mockReturnValue(500.25);
     vi.spyOn(Date, "now").mockReturnValueOnce(500).mockReturnValue(-89_500);
     const runWorkspaceCommand = vi.fn(execute);
-    await prepare(runWorkspaceCommand);
+    const note = await prepare(runWorkspaceCommand, [
+      {
+        path: path.join(root, "gateway-copy.pdf"),
+        url: originalPath,
+        fileName: "original.pdf",
+      },
+    ]);
+    const [directory] = await fs.readdir(remote);
+    expect(note).toContain(directory);
+    expect(await fs.readFile(path.join(remote, directory!, "1-original.pdf"))).toEqual(bytes);
     // Integral budget: the node protocol rejects fractional timeoutMs.
     expect(runWorkspaceCommand.mock.calls.map(([command]) => command.timeoutMs)).toEqual([
       4999, 4999,

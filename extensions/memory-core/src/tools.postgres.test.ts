@@ -206,8 +206,11 @@ describe.skipIf(!database.connection)("PostgreSQL memory_search product flows", 
       });
     });
 
-  const paths = async (query: string, options?: Parameters<typeof search>[1]) =>
-    (await search(query, options)).results.map((hit) => hit.path);
+  const paths = async (query: string, options?: Parameters<typeof search>[1]) => {
+    const result = await search(query, options);
+    expect(result).not.toMatchObject({ unavailable: true });
+    return result.results.map((hit) => hit.path);
+  };
   const semantic = async (corpus: "memory" | "sessions" = "memory") =>
     (await search("semantic-only", { agentId: "semantic", corpus, maxResults: 1 })).results;
 

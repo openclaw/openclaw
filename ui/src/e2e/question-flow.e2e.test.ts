@@ -398,7 +398,7 @@ suite.define(() => {
     questionSessionKey,
   });
 
-  it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
+  it("restores the composer without a resolution event and retains later pending-question drafts", async () => {
     const { gateway, page } = await openQuestionPage();
     const composer = page.locator(composerSelector);
     await composer.fill("Keep this release note draft");
@@ -469,13 +469,47 @@ suite.define(() => {
     expect(
       await summary.getByText(request.questions[0]!.question, { exact: true }).isVisible(),
     ).toBe(true);
+
+    const first = questionRecord("question-a-format", {
+      questionId: "format",
+      header: "Format",
+      question: "Which format should I use?",
+      options: [{ label: "Compact" }, { label: "Detailed" }],
+      isOther: true,
+    });
+
+    const second = questionRecord("question-b-audience", {
+      questionId: "audience",
+      header: "Audience",
+      question: "Who should read it?",
+      options: [{ label: "Engineers" }, { label: "Everyone" }],
+      isOther: true,
+    });
+
+    await gateway.emitGatewayEvent("question.requested", first);
+    await gateway.emitGatewayEvent("question.requested", second);
+    const pendingPanel = page.locator("openclaw-chat-question-panel");
+    await pendingPanel.getByRole("textbox", { name: "Your own answer for Format" }).fill("Compact");
+    await button(pendingPanel, "Next").click();
+    await pendingPanel.getByText("Who should read it?", { exact: true }).waitFor();
+    await button(pendingPanel, "Previous").click();
+    await pendingPanel.getByText("Which format should I use?", { exact: true }).waitFor();
+    expect(
+      await pendingPanel.getByRole("textbox", { name: "Your own answer for Format" }).inputValue(),
+    ).toBe("Compact");
+    expect(
+      await pendingPanel.getByRole("radio", { name: /Compact/ }).getAttribute("aria-checked"),
+    ).toBe("false");
   });
 
-  it("masks a store-bound secret and resolves it with edited hosts without echoing the value", async () => {
+  it("preserves secret keyboard custody and retries rejected hosts without echoing the value", async () => {
     const { gateway, page } = await openQuestionPage();
     const request = secretStoreQuestion("question-store-secret-success");
     const fakeSecret = "fake-secret-never-use-browser-proof-123";
-    await gateway.setMethodResponse("question.resolve", storedSecretAnswer());
+    const validationMessage = "Allowed hosts must be valid hostnames.";
+    await gateway.setMethodResponse("question.resolve", {
+      __mockError: { code: "INVALID_REQUEST", message: validationMessage },
+    });
     const panel = await showQuestion(page, gateway, request);
     await expectCount(panel.getByText("Requested by main", { exact: false }), 1);
     await expectCount(panel.getByText("Publish the release artifacts."), 1);
@@ -507,33 +541,6 @@ suite.define(() => {
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
 
     await button(panel, "Submit").click();
-    await expectResolution(gateway, {
-      id: request.id,
-      answers: { answers: { api_key: [fakeSecret] } },
-      secretStoreAllowedHosts: ["api.example.test", "uploads.example.test", "extra.example.test"],
-    });
-    await expectCount(panel, 0);
-    const summary = page.locator(".chat-question-summary").filter({ hasText: "API key:" });
-    await summary.waitFor();
-    await expectCount(summary.getByText("Answered", { exact: true }), 1);
-    expect(await summary.textContent()).not.toContain("stored");
-    await expectSecretNotEchoed(page, fakeSecret);
-  });
-
-  it("keeps a store-bound question interactive after Gateway validation rejects its hosts", async () => {
-    const { gateway, page } = await openQuestionPage();
-    const request = secretStoreQuestion("question-store-secret-validation");
-    const fakeSecret = "fake-secret-never-use-validation-proof-456";
-    const validationMessage = "Allowed hosts must be valid hostnames.";
-    await gateway.setMethodResponse("question.resolve", {
-      __mockError: { code: "INVALID_REQUEST", message: validationMessage },
-    });
-    const panel = await showQuestion(page, gateway, request);
-    const secretInput = panel.locator('input[type="password"]');
-    const hostsInput = panel.locator(".chat-question-panel__hosts");
-    await secretInput.fill(fakeSecret);
-    await hostsInput.fill("bad-host.example.test");
-    await button(panel, "Submit").click();
     await gateway.waitForRequest("question.resolve");
     await panel.getByText(validationMessage, { exact: false }).waitFor();
     await expect.poll(() => secretInput.isEnabled()).toBe(true);
@@ -541,7 +548,7 @@ suite.define(() => {
     await expectSecretNotEchoed(page, fakeSecret);
 
     await gateway.setMethodResponse("question.resolve", storedSecretAnswer());
-    await hostsInput.fill("corrected.example.test");
+    await hostsInput.fill("corrected.example.test, uploads.example.test extra.example.test");
     const previousRequestCount = (await gateway.getRequests("question.resolve")).length;
     await button(panel, "Submit").click();
     await expectResolution(
@@ -549,11 +556,19 @@ suite.define(() => {
       {
         id: request.id,
         answers: { answers: { api_key: [fakeSecret] } },
-        secretStoreAllowedHosts: ["corrected.example.test"],
+        secretStoreAllowedHosts: [
+          "corrected.example.test",
+          "uploads.example.test",
+          "extra.example.test",
+        ],
       },
       previousRequestCount,
     );
     await expectCount(panel, 0);
+    const summary = page.locator(".chat-question-summary").filter({ hasText: "API key:" });
+    await summary.waitFor();
+    await expectCount(summary.getByText("Answered", { exact: true }), 1);
+    expect(await summary.textContent()).not.toContain("stored");
     await expectSecretNotEchoed(page, fakeSecret);
   });
 
@@ -608,43 +623,8 @@ suite.define(() => {
     expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
   });
 
-  it("retains a typed answer when navigating between pending questions", async () => {
-    const { gateway, page } = await openQuestionPage();
-    const first = questionRecord("question-a-format", {
-      questionId: "format",
-      header: "Format",
-      question: "Which format should I use?",
-      options: [{ label: "Compact" }, { label: "Detailed" }],
-      isOther: true,
-    });
-
-    const second = questionRecord("question-b-audience", {
-      questionId: "audience",
-      header: "Audience",
-      question: "Who should read it?",
-      options: [{ label: "Engineers" }, { label: "Everyone" }],
-      isOther: true,
-    });
-
-    await gateway.emitGatewayEvent("question.requested", first);
-    await gateway.emitGatewayEvent("question.requested", second);
-    const panel = page.locator("openclaw-chat-question-panel");
-    await panel.getByRole("textbox", { name: "Your own answer for Format" }).fill("Compact");
-    await button(panel, "Next").click();
-    await panel.getByText("Who should read it?", { exact: true }).waitFor();
-    await button(panel, "Previous").click();
-    await panel.getByText("Which format should I use?", { exact: true }).waitFor();
-    expect(
-      await panel.getByRole("textbox", { name: "Your own answer for Format" }).inputValue(),
-    ).toBe("Compact");
-    expect(await panel.getByRole("radio", { name: /Compact/ }).getAttribute("aria-checked")).toBe(
-      "false",
-    );
-  });
-
   it.each([
     ["answered", false],
-    ["cancelled", false],
     ["answered", true],
     ["cancelled", true],
   ] as const)(

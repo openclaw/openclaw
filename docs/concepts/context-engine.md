@@ -381,9 +381,9 @@ inspection, and subagent lifecycle hooks. A queued subagent spawn keeps its
 instance until dispatch succeeds or preparation is rolled back; returning a
 queued acceptance does not end that lifetime. Timed-out compaction keeps its
 instance until the underlying plugin work settles.
-Gateway shutdown releases queued instances without rolling back their preparation,
-so persisted queued work can resume after restart. Explicit cancellation still
-rolls back the preparation.
+Gateway shutdown cancels queued child execution and releases its process-local
+instances. It does not adopt queued child tasks after restart. Preparation cleanup
+remains with its lifecycle owner; explicit cancellation rolls back preparation.
 
 Foreground engine disposal shares the agent cleanup deadline: 10 seconds by
 default, adjustable with `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`. A stalled cleanup

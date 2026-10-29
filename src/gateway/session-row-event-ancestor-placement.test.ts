@@ -1,16 +1,19 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createSessionLifecyclePublisher } from "./server-chat-lifecycle-publication.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import {
   emitSessionsChanged,
   flushPendingSessionsChangedEvents,
 } from "./server-methods/session-change-event.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
+import { drainSessionEventPublications } from "./session-event-prepared-row.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -34,6 +37,7 @@ it("publishes cold archived ancestor placement and moves only to authorized chil
       ensureProfileForEmail("viewer@ancestor-placement.test"),
     ];
     const cfg = { ...rolePolicyConfig(), agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const root = "agent:main:root";
     const gateway = "agent:main:gateway";
     const parent = "agent:main:parent";
@@ -190,6 +194,52 @@ it("publishes cold archived ancestor placement and moves only to authorized chil
         }
       }
       expect(materialized("agent:main:unused")).toBeUndefined();
+      const ancestors = vi.spyOn(projection, "ancestorRows");
+      for (const phase of ["start", "model", "end", "error"] as const) {
+        ancestors.mockClear();
+        for (const peer of peers) {
+          connection.forgetConnectionAncestors(peer.client.connId);
+          connection.sessionEventSubscribers.subscribe(peer.client.connId);
+        }
+        const persistence = Promise.resolve();
+        const publisher = createSessionLifecyclePublisher({
+          getSessionRowProjection: () => projection,
+          sessionEventSubscribers: connection.sessionEventSubscribers,
+          persistGatewaySessionLifecycleEventForEvent: async () => {},
+          loadGatewaySessionLifecycleSnapshotForEvent: (key, options) => {
+            const row = options?.sessionRows?.describe(query(key));
+            return { row: row ? options!.sessionRows!.present(row) : null };
+          },
+          broadcastToConnIds: connection.broadcastToConnIds,
+        });
+        const publication = {
+          sessionKey: child,
+          agentId: "main",
+          clientRunId: "ancestor-lifecycle",
+          event: {
+            runId: "ancestor-lifecycle",
+            stream: "lifecycle",
+            seq: 1,
+            ts: now,
+            data: { phase },
+          },
+        };
+        publisher.publish(
+          phase === "start" || phase === "model"
+            ? { ...publication, phase, runContext: undefined }
+            : { ...publication, phase, persistence, projection },
+        );
+        await persistence;
+        await drainSessionEventPublications(projection);
+        expect(ancestors, phase).toHaveBeenCalledOnce();
+        for (const [index, peer] of peers.entries()) {
+          const frame = JSON.parse(peer.send.mock.lastCall![0]);
+          expect(frame.payload.phase).toBe(phase);
+          expect(frame.payload.ancestorSessions.map((row: { key: string }) => row.key)).toEqual(
+            index === 0 ? [parent, root, gateway] : [root, gateway],
+          );
+        }
+      }
     } finally {
       await flushPendingSessionsChangedEvents(context);
       detach();

@@ -39,6 +39,7 @@ import {
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { createActivitySummaryAuthority } from "./session-activity-summary-authority.js";
 import {
   beginActivitySummaryCompletion,
   type PendingSessionActivitySummaryCompletion,
@@ -319,6 +320,7 @@ export function createSessionActivitySummaries(deps: {
     }
     const ref = modelRef(state);
     const priorBackoff = ref ? modelBackoffs.get(ref) : undefined;
+    let authority: ReturnType<typeof createActivitySummaryAuthority> | undefined;
     let partial = false;
     const ownedWork = new AsyncWorkScope();
     try {
@@ -326,11 +328,17 @@ export function createSessionActivitySummaries(deps: {
         publish(state, "unavailable");
         return;
       }
-      assertCurrentOwner(state, ref);
+      const recapAuthority = createActivitySummaryAuthority({
+        agentId: state.agentId,
+        getEntry: () => state.entry,
+        getConfig: deps.getConfig,
+        assertCurrent: () => assertCurrentOwner(state, ref),
+      });
+      authority = recapAuthority;
       const source = await readActivitySummarySource({
         scope: { ...scope(state), sessionId: state.sessionId },
         previous: readSessionActivitySummary(state.entry),
-        assertCurrent: () => assertCurrentOwner(state, ref),
+        assertCurrent: recapAuthority.assertCurrent,
       });
       if (!source) {
         state.dirty = true;
@@ -367,18 +375,21 @@ export function createSessionActivitySummaries(deps: {
             if (controller.signal.aborted || state.controller !== controller) {
               throw controller.signal.reason ?? new ActivitySummaryCancelledError();
             }
-            assertCurrentOwner(state, ref);
+            recapAuthority.assertCurrent();
             assertCurrentEntry(state, state.entry);
           };
           const execute = async () => {
+            const operatorAuthority = await recapAuthority.prepare();
             const { hasAvailableUtilityCompletionAuth } =
               await import("../agents/utility-completion.js");
+            assertRequestCurrent();
             const prepared = await defaultPrepareModel({
               cfg: deps.getConfig(),
               agentId: state.agentId,
               modelRef: ref,
               useUtilityModel: true,
             });
+            assertRequestCurrent();
             const available = await hasAvailableUtilityCompletionAuth(prepared);
             assertRequestCurrent();
             if (!available) {
@@ -390,11 +401,9 @@ export function createSessionActivitySummaries(deps: {
               return undefined;
             }
             state.calls += 1;
-            // Recaps are shared Gateway metadata under the agent's utility authority,
-            // not delegated operator work. Role model-policy revocation does not stop
-            // them; assertRequestCurrent guards their lifecycle and utility route.
             const result = await defaultCompleteModel({
               ...prepared,
+              operatorAuthority,
               purpose: "session-activity-summary",
               sessionId: state.sessionId,
               sessionKey: state.key,
@@ -411,6 +420,7 @@ export function createSessionActivitySummaries(deps: {
               answerTokenBudget: 240,
               streamParams: { temperature: 0.2 },
             });
+            assertRequestCurrent();
             return result.text;
           };
           const completed = await racePromiseWithAbortSignal(
@@ -454,7 +464,7 @@ export function createSessionActivitySummaries(deps: {
           {
             preserveActivity: true,
             workerGuard: {
-              assertCurrent: () => assertCurrentOwner(state, ref),
+              assertCurrent: recapAuthority.assertCurrent,
             },
           },
         ));
@@ -512,7 +522,7 @@ export function createSessionActivitySummaries(deps: {
         }
         state.retryAt = now() + delay;
         publish(state, state.retryPending ? "updating" : "unavailable");
-        log.debug("Activity recap deferred", {
+        log[authority?.operatorOwned ? "info" : "debug"]("Activity recap deferred", {
           agentId: state.agentId,
           error: formatErrorMessage(error),
           retryScheduled: state.retryPending,
@@ -525,6 +535,7 @@ export function createSessionActivitySummaries(deps: {
         () => [ownedWork],
         () => ownedWork.drain(),
       );
+      authority?.release();
       state.controller = undefined;
       state.inFlight = false;
       if (current(state) && (state.retryPending || (!state.retryAt && (partial || state.dirty)))) {
@@ -618,25 +629,30 @@ export function createSessionActivitySummaries(deps: {
     void work.finally(() => admissions.delete(work)).catch(() => {});
     return work;
   };
-  const requestInBackground = (target: ActivitySummaryTarget, runEnded = false) => {
-    if (!canTrack(target)) {
+  const logAdmissionFailure = (error: unknown) =>
+    log.debug("Activity recap admission failed", { error: formatErrorMessage(error) });
+  const requestInBackground = (target: ActivitySummaryTarget | undefined, runEnded = false) => {
+    if (!target || !canTrack(target)) {
       return;
     }
     const storePath = scope(target).storePath;
     const consume = (entry: SessionEntry | undefined) => {
-      const state = admit(target, entry, storePath);
-      if (state && (runEnded || !isActive(state))) {
-        schedule(state);
+      if (!runEnded) {
+        return trackAsyncWork(() => trackAdmission(ensure(target, entry))).catch(
+          logAdmissionFailure,
+        );
       }
+      const state = admit(target, entry, storePath);
+      return state ? schedule(state) : undefined;
     };
     const projection = deps.getSessionRowProjection?.();
     if (projection?.sharingRevision) {
-      consume(projection.sharingTarget(target)?.entry);
+      void consume(projection.sharingTarget(target)?.entry);
       return;
     }
     const retained = states.get(activitySummaryScope(target));
     if (retained?.storePath === storePath) {
-      consume(retained.entry);
+      void consume(retained.entry);
       return;
     }
     void runInDetachedAsyncContext(() =>
@@ -645,9 +661,7 @@ export function createSessionActivitySummaries(deps: {
           consume,
         ),
       ),
-    ).catch((error: unknown) => {
-      log.debug("Activity recap admission failed", { error: formatErrorMessage(error) });
-    });
+    ).catch(logAdmissionFailure);
   };
   return {
     beginCompletion(requested, entry) {
@@ -674,12 +688,8 @@ export function createSessionActivitySummaries(deps: {
       }
     },
     handleLifecycle(event) {
-      if (event.reason !== "archive" && event.reason !== "unarchive") {
-        return;
-      }
-      const target = eventTarget(event.sessionKey, event.agentId);
-      if (target) {
-        requestInBackground(target);
+      if (event.reason === "archive" || event.reason === "unarchive") {
+        requestInBackground(eventTarget(event.sessionKey, event.agentId));
       }
     },
     async dispose() {

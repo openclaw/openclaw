@@ -29,10 +29,16 @@ export async function installUsageOverviewGateway(
     return configured;
   }
   function project(value: unknown, params: SessionsUsageParams, browserTimeZone: string) {
-    if (!isRecord(value) || !Array.isArray(value.sessions) || params.projection !== "overview") {
+    if (!isRecord(value) || !Array.isArray(value.sessions)) {
       return value;
     }
     const response = value as SessionsUsageResult;
+    if (params.key) {
+      return { ...response, sessions: response.sessions.filter((row) => row.key === params.key) };
+    }
+    if (params.projection !== "overview") {
+      return value;
+    }
     const rows = response.sessions.map((session): SessionUsageEntry => {
       const usage = session.usage;
       const firstActivity =

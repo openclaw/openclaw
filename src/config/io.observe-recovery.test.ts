@@ -174,9 +174,9 @@ describe("config observe recovery", () => {
     };
   }
 
-  async function lastGoodCase() {
+  async function lastGoodCase(config: Record<string, unknown> = recoverableCoreConfig) {
     const fixture = makeDeps(home);
-    const snapshot = await makeSnapshot(fixture.configPath, recoverableCoreConfig);
+    const snapshot = await makeSnapshot(fixture.configPath, config);
     snapshot.raw = `// Preserve authored JSON5 during last-good recovery.
 ${snapshot.raw}`;
     await fsp.writeFile(fixture.configPath, snapshot.raw);
@@ -529,7 +529,10 @@ ${snapshot.raw}`;
   });
 
   it("last-known-good recovery defers while the forensic snapshot lock is held", async () => {
-    const { deps, configPath, auditPath, warn, snapshot, brokenRaw, input } = await lastGoodCase();
+    const { deps, configPath, auditPath, warn, snapshot, brokenRaw, input } = await lastGoodCase({
+      gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
+      channels: { discord: { enabled: true, dmPolicy: "pairing" } },
+    });
     const healthBefore = readConfigHealthStateFromStore(deps);
     const lockPath = `${configPath}.clobber.lock`;
     await fsp.mkdir(lockPath);
@@ -545,7 +548,12 @@ ${snapshot.raw}`;
 
     await expect(recoverConfigFromLastKnownGoodCore(input)).resolves.toBe(true);
     await expectRaw(configPath, snapshot.raw);
-    expect((await readObserveEvents(auditPath)).at(-1)?.restoredFromBackup).toBe(true);
+    expect((await readObserveEvents(auditPath)).at(-1)).toMatchObject({
+      restoredFromBackup: true,
+      restoredBackupPath: resolveLastKnownGoodConfigPath(configPath),
+    });
+    expectWarnContaining(warn, "Config auto-restored from last-known-good:");
+    expectWarnContaining(warn, "Rejected validation details: gateway.mode: Expected string.");
   });
 
   it.each([
@@ -753,38 +761,6 @@ ${snapshot.raw}`;
       await expect(listClobberFiles(configPath)).resolves.toHaveLength(0);
     },
   );
-
-  it("promotes a valid startup config and restores it after an invalid direct edit", async () => {
-    const { deps, configPath, auditPath, warn } = makeDeps(home);
-    const snapshot = await makeSnapshot(configPath, {
-      gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
-      channels: { discord: { enabled: true, dmPolicy: "pairing" } },
-    });
-
-    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(snapshot)).resolves.toBe(
-      true,
-    );
-    await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
-      snapshot.raw,
-    );
-
-    const brokenRaw = "{ gateway: { mode: 123 } }\n";
-    await fsp.writeFile(configPath, brokenRaw, "utf-8");
-    const restored = await recoverConfigFromLastKnownGoodCore({
-      deps,
-      snapshot: invalidSnapshot(snapshot, brokenRaw),
-      reason: "test-invalid-config",
-      prepareCandidate: approveRecoveryCandidate,
-    });
-
-    expect(restored).toBe(true);
-    await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
-    expectWarnContaining(warn, "Config auto-restored from last-known-good:");
-    expectWarnContaining(warn, "Rejected validation details: gateway.mode: Expected string.");
-    const observe = await readLastObserveEvent(auditPath);
-    expect(observe?.restoredFromBackup).toBe(true);
-    expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));
-  });
 
   it("leaves the active config untouched when its owner rejects last-known-good recovery", async () => {
     const { configPath, warn, brokenRaw, input } = await lastGoodCase();

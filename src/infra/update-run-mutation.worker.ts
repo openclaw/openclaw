@@ -11,6 +11,7 @@ import {
   SQLITE_WORKER_ADMISSION_DEADLINE_MS,
 } from "./sqlite-worker-admission-retry.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import { claimUpdateResultInTransaction } from "./update-result-claim.js";
 import { resolveUpdateRunCodecEnv, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { createUpdateRun } from "./update-run-ledger.js";
 import type {
@@ -128,8 +129,13 @@ export function recordUpdateRunMutationInWorker(
         },
         codecOptions,
       );
+      // The host owner dispatches a claimed outcome only after this commit.
+      const updateResult =
+        command.type === "updateRuns.finish"
+          ? claimUpdateResultInTransaction(db, record)
+          : undefined;
       assertCurrent("commit");
-      return { kind: "recorded", record };
+      return { kind: "recorded", record, ...(updateResult ? { updateResult } : {}) };
     }, options);
   } catch (cause) {
     if (entered || !isSqliteLockError(cause)) {

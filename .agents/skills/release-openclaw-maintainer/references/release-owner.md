@@ -84,7 +84,10 @@ or an approved backport. Route a confirmed missing fix to one main repair owner;
 track its resolution or explicit deferral without repeatedly sweeping the backlog.
 
 Record proposed, approved, included, deferred, not-affected, and blocked changes
-in the existing ledger. A hotfix opportunity is not inclusion approval. Follow
+in the [hotfix ledger](hotfix-ledger-management.md) when available, with
+assessments for this release and links to the existing selection/proof evidence.
+Use local evidence if access is unavailable; ledger synchronization does not
+hold up the release. A hotfix opportunity is not inclusion approval. Follow
 the approved selection scope; obtain the categorized-set approval required by
 backport discovery unless that decision was already explicitly delegated.
 Fix a shared defect once on main through the maintainer workflow, then backport

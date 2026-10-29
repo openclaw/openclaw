@@ -179,7 +179,7 @@ describe("Skills mutation presentation", () => {
           return pending.promise;
         }
         if (method === "skills.status") {
-          return refreshed.promise;
+          return refreshed.promise.then(() => report);
         }
         if (method === "skills.library.list") {
           return { ...personalLibrary, defaultTarget: "workspace" };
@@ -189,7 +189,7 @@ describe("Skills mutation presentation", () => {
         }
         throw new Error(`Unexpected method: ${method}`);
       });
-      const { page, publishRouteData } = mountSkills(request, "settings");
+      const { page, publishRouteData, connection } = mountSkills(request, "settings");
       publishRouteData({ report });
       await waitForFast(() =>
         expect(
@@ -217,19 +217,10 @@ describe("Skills mutation presentation", () => {
       });
       toggle.click();
       expect(request.mock.calls.filter(([method]) => method === "skills.update")).toHaveLength(1);
-      expect(page.querySelector(".skill-reader-dialog")).toBe(dialog);
 
       if (outcome === "success") {
         report = createReport([createSkill({ disabled: true })]);
         pending.resolve({});
-        await waitForFast(() =>
-          expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(
-            1,
-          ),
-        );
-        expect(toggle.disabled).toBe(false);
-        expect(toggle.getAttribute("aria-disabled")).toBe("true");
-        expect(document.activeElement).toBe(toggle);
         refreshed.resolve(report);
       } else {
         pending.reject(new Error("Synthetic rejected skill update"));
@@ -246,9 +237,14 @@ describe("Skills mutation presentation", () => {
       expect(dialog.textContent).toContain(
         outcome === "success" ? "Skill disabled" : "Synthetic rejected skill update",
       );
-      expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(
-        outcome === "success" ? 1 : 0,
-      );
+      if (outcome === "success") {
+        nativeDialog.close();
+        report = createReport([skill]);
+        connection.publishEvent({ type: "event", event: "skills.changed" });
+        await waitForFast(() =>
+          expect(page.querySelectorAll(".settings-count")[3]?.textContent).toBe("0"),
+        );
+      }
     },
   );
 

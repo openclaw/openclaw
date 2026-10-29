@@ -1,6 +1,25 @@
 import { expect, it } from "vitest";
 import { buildCronCommandBody } from "./run-prompt.js";
 
+it("keeps collection guidance in the automation message for an existing session", async () => {
+  const { commandBody } = await buildCronCommandBody({
+    job: {
+      id: "in-session",
+      name: "Synthetic job",
+      payload: { kind: "agentTurn", message: "Synthesize child results." },
+    },
+    cfg: {},
+    message: "Synthesize child results.",
+    baseSessionKey: "agent:main:main",
+    formattedTime: "2026-10-26T00:00:00Z",
+    timeLine: "Current time: 2026-10-26T00:00:00Z",
+  });
+
+  expect(commandBody).toContain("will not resume after `sessions_yield`");
+  expect(commandBody).toContain("Yield only when child output is the deliverable");
+  expect(commandBody).toContain("`collect=true` and `agents_wait` when available");
+});
+
 it("supplies the retained result as data without changing job instructions", async () => {
   const result = { outcome: "blocked" as const, summary: "Approval still pending.", atMs: 1234 };
   const { commandBody } = await buildCronCommandBody({

@@ -28,3 +28,23 @@ export function trimTextPreservingCode(
   }
   return trimmed;
 }
+
+/** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
+export function combineNonStreamingReplyParts(parts: readonly string[]): string {
+  let combined = "";
+  for (const part of parts) {
+    if (!part.trim()) {
+      continue;
+    }
+    // Outbound media normalization trims a chunk's trailing newline, so an
+    // indented following chunk still needs its original single-line boundary.
+    const separator =
+      !combined || /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
+        ? ""
+        : /^[\t ]+\S/.test(part)
+          ? "\n"
+          : "\n\n";
+    combined += separator + part;
+  }
+  return trimTextPreservingCode(combined);
+}

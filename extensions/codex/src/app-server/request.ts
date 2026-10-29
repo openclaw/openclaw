@@ -4,6 +4,7 @@ import {
   embeddedAgentLog,
 } from "openclaw/plugin-sdk/agent-harness-registration";
 import { areDiagnosticsEnabledForProcess } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import { isCodexAppServerStartupError, resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
@@ -27,6 +28,10 @@ import type { CodexAppServerClientOptions } from "./shared-client.js";
 import { withAbortableTimeout, withTimeout } from "./timeout.js";
 
 export { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
+
+const loadSandboxGuard = createLazyRuntimeModule(() => import("./sandbox-guard.js"));
+const loadSharedClient = createLazyRuntimeModule(() => import("./shared-client.js"));
+const loadSharedClientUsage = createLazyRuntimeModule(() => import("./shared-client-usage.js"));
 
 type CodexAppServerClientRequestParams = {
   client: CodexAppServerClient;
@@ -81,7 +86,7 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
   let phase: CodexControlRequestPhase = "prepare";
   observeControl(params.controlObservation, phase);
   try {
-    const { prepareCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
+    const { prepareCodexAppServerDirectSandboxBypassBlock } = await loadSandboxGuard();
     const sandboxGuard = await prepareCodexAppServerDirectSandboxBypassBlock(params);
     try {
       if (sandboxGuard.block) {
@@ -168,7 +173,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(
 ): Promise<T> {
   // Fail closed before spawning or leasing a client for a guard-blocked method.
   observeControl(params.controlObservation, "prepare");
-  const { prepareCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
+  const { prepareCodexAppServerDirectSandboxBypassBlock } = await loadSandboxGuard();
   const sandboxGuard = await prepareCodexAppServerDirectSandboxBypassBlock(params);
   try {
     if (sandboxGuard.block) {
@@ -243,7 +248,7 @@ export async function readCodexAppServerUsage(
   const deadline = performance.now() + options.timeoutMs;
   options.signal?.throwIfAborted();
   options.assertCurrent?.();
-  const { readSharedCodexAppServerUsage } = await import("./shared-client-usage.js");
+  const { readSharedCodexAppServerUsage } = await loadSharedClientUsage();
   const cached = await withAbortableTimeout({
     timeoutMs: options.timeoutMs,
     signal: options.signal,
@@ -372,13 +377,12 @@ export async function withCodexAppServerJsonClient<T>(
       timeoutMs: params.isolated ? timeoutMs : acquireTimeoutMs + timeoutMs,
       timeoutMessage,
       promise: (async () => {
-        const { prepareCodexAppServerDirectSandboxBypassBlock } =
-          await import("./sandbox-guard.js");
+        const { prepareCodexAppServerDirectSandboxBypassBlock } = await loadSandboxGuard();
         const {
           createIsolatedCodexAppServerClient,
           getLeasedSharedCodexAppServerClient,
           releaseLeasedSharedCodexAppServerClient,
-        } = await import("./shared-client.js");
+        } = await loadSharedClient();
         errorPhase = undefined;
         setPhase("prepare");
         throwIfAbandoned();

@@ -6,6 +6,7 @@ import { resolveStandaloneSidecarRoot } from "../../cli-invocation.mjs";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { probeSqliteNativeClose } from "./bun-sqlite-close-probe.js";
 import { probeBunSqliteLibrary } from "./bun-sqlite-library-probe.js";
+import { PROCESS_MACHINE_IDENTITY_KEY } from "./current-machine-identity.js";
 import { parseDiagnosticEnvFlags } from "./diagnostic-flags-env.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
@@ -290,6 +291,7 @@ export function captureSqliteWorkerEnvironmentData(
     // Opaque owner facts include absence, which clears a retained carrier's previous snapshot.
     [SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY)],
     [SQLITE_DATABASE_ADMISSIONS_KEY, databaseAdmissions],
+    [PROCESS_MACHINE_IDENTITY_KEY, getEnvironmentData(PROCESS_MACHINE_IDENTITY_KEY)],
   ];
 }
 

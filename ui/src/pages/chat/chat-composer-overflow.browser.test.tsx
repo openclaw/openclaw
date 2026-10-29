@@ -1,8 +1,9 @@
-import { createSignal } from "solid-js";
+import { createSignal, For } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
 import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import type { SessionGoal } from "../../api/types.ts";
+import { handleComposerMenuKeydown } from "../../components/composer-menu.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidProps } from "../../test-helpers/solid-render.tsx";
@@ -16,7 +17,10 @@ import type { ChatAttachmentControlsProps } from "./components/chat-attachment-c
 import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
 import { makeCapabilities } from "./components/chat-composer-menu.test-support.ts";
-import { ComposerMenu } from "./components/chat-composer-menu.tsx";
+import {
+  ComposerMenu,
+  renderComposerMenuOption as ComposerMenuOption,
+} from "./components/chat-composer-menu.tsx";
 import "../../styles/base.css";
 import "../../styles/components.css";
 import "../../styles/chat/composer.css";
@@ -113,13 +117,10 @@ it.each([390, 2048])("fits skill rows at %ipx", async (width) => {
   await afterLayout();
   const dropdown = query(".agent-chat__capability-menu");
   const menu = query(".oc-menu", dropdown);
-  expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
+  const scroll = query(".agent-chat__capability-menu-scroll", menu);
+  expect(scroll.scrollHeight).toBeGreaterThan(scroll.clientHeight);
   for (const row of dropdown.querySelectorAll<HTMLElement>('[data-value^="skill:"]')) {
-    expectInside(
-      rect(".agent-chat__capability-menu-label", row),
-      row.getBoundingClientRect(),
-      true,
-    );
+    expectInside(rect(".oc-menu-item__label", row), row.getBoundingClientRect(), true);
   }
   expect(menu.scrollWidth).toBeLessThanOrEqual(menu.clientWidth);
   expect(menu.getBoundingClientRect().right).toBeLessThanOrEqual(width);
@@ -333,6 +334,19 @@ it.each([
 
   const emptyHeight = textarea.clientHeight;
   await expectStableSize("A short editable draft.");
+  const textWidth = () => {
+    const style = getComputedStyle(textarea);
+    return (
+      textarea.clientWidth -
+      Number.parseFloat(style.paddingLeft) -
+      Number.parseFloat(style.paddingRight)
+    );
+  };
+  const shortTextWidth = textWidth();
+  const hasClassicScrollbar = CSS.supports("selector(::-webkit-scrollbar)");
+  if (hasClassicScrollbar) {
+    expect(getComputedStyle(textarea).scrollbarGutter).toBe("auto");
+  }
   const draft =
     "A typed line that wraps within the available composer width. ".repeat(12) +
     "\nA second editable line.";
@@ -347,6 +361,10 @@ it.each([
     0,
   );
   expect(textarea.scrollWidth).toBeLessThanOrEqual(textarea.clientWidth + 1);
+  expect(textWidth()).toBeCloseTo(shortTextWidth, 0);
+  if (hasClassicScrollbar) {
+    expect(getComputedStyle(textarea).scrollbarGutter).toBe("stable");
+  }
   await expectStableSize(`${draft}\nAnother line in the capped draft.`);
 
   await control.fill("");
@@ -354,7 +372,80 @@ it.each([
   expect(document.activeElement).toBe(textarea);
   expect(placeholder.checkVisibility()).toBe(true);
   expect(textarea.clientHeight).toBe(emptyHeight);
+  expect(textWidth()).toBeCloseTo(shortTextWidth, 0);
+  if (hasClassicScrollbar) {
+    expect(getComputedStyle(textarea).scrollbarGutter).toBe("auto");
+  }
 });
+
+// Chromium reserves a stable gutter without a scrollbar; only WebKit can regress classic bars.
+it.each(server.browser === "webkit" ? ["classic", "overlay"] : ["overlay"])(
+  "settles %s-scrollbar drafts crossing the height cap",
+  async (bar) => {
+    await page.viewport(390, 800);
+    container.classList.add("chat");
+    container.style.width = "342px";
+    if (bar === "overlay") {
+      // Overlay scrollbars (iOS, Android) take no width from the text.
+      const style = container.appendChild(document.createElement("style"));
+      style.textContent =
+        ".agent-chat__composer-combobox > textarea::-webkit-scrollbar { width: 0; }";
+    }
+    drawComposer(createComposerProps());
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__composer-combobox > textarea",
+    )!;
+    let toggles = 0;
+    const observer = new MutationObserver(() => toggles++);
+    observer.observe(textarea, { attributeFilter: ["data-composer-scrollable"] });
+    const type = async (draft: string) => {
+      textarea.value = draft;
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      await afterLayout();
+      toggles = 0;
+      await afterLayout();
+      return toggles;
+    };
+    const text =
+      "handover for plugin hot reload. To test it, make the knowledge fix and hit reload ";
+    const draft = text.repeat(6);
+    // Typing past the cap must not swap the end inset for a gutter that later
+    // disappears: each wrap change would undo the overflow that caused it.
+    const overflows = async (length: number) => {
+      // A late settle toggles once; an oscillating gutter toggles every frame.
+      expect(await type(draft.slice(0, length)), `toggles at ${length}`).toBeLessThan(2);
+      return textarea.scrollHeight > textarea.clientHeight + 1;
+    };
+    let [fits, length] = [0, draft.length];
+    expect(await overflows(length)).toBe(true);
+    while (length - fits > 1) {
+      const middle = Math.floor((fits + length) / 2);
+      [fits, length] = (await overflows(middle)) ? [fits, middle] : [middle, length];
+    }
+    expect(await overflows(fits)).toBe(false);
+    // Measure synchronously, without frames, which drafts overflow only until
+    // the text gains the 8px gutter swap. Those lengths are the unstable ones.
+    const inset = Number.parseFloat(getComputedStyle(textarea).paddingRight);
+    const fitsWithInset = (draftLength: number, endInset: number) => {
+      textarea.value = draft.slice(0, draftLength);
+      textarea.style.paddingInlineEnd = `${endInset}px`;
+      const result = textarea.scrollHeight <= textarea.clientHeight + 1;
+      textarea.style.paddingInlineEnd = "";
+      textarea.value = draft.slice(0, fits);
+      return result;
+    };
+    let last = length;
+    while (!fitsWithInset(last, inset) && fitsWithInset(last, inset - 8)) {
+      last++;
+    }
+    // Without such a draft this case no longer exercises the defect.
+    expect(last).toBeGreaterThan(length);
+    for (; length <= last; length++) {
+      await overflows(length);
+    }
+    observer.disconnect();
+  },
+);
 
 it.each([
   [320, "active"],
@@ -508,4 +599,94 @@ it.each(["attachments", "menu"] as const)("updates retained %s scroll edges", as
     expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth + 1);
     await expectEdges(element, false);
   }
+});
+
+it("keeps keyboard selection when scrolling replays a stationary pointer", async () => {
+  const entries = Array.from({ length: 16 }, (_, index) => `command-${index}`);
+  const [selected, setSelected] = createSignal(0);
+  container.className = "pointer-fixture";
+  const view = mountSolid(() => (
+    <div class="pointer-fixture">
+      <style>{`.pointer-fixture { position: fixed; top: 80px; left: 80px; width: 360px; }
+      .pointer-fixture .slash-menu { position: static; }
+      .pointer-fixture .slash-menu__scroll { height: 144px; overflow: auto; }
+      .pointer-fixture .slash-menu-item { height: 36px; box-sizing: border-box; }`}</style>
+      <textarea
+        onKeyDown={(event) =>
+          handleComposerMenuKeydown(event, {
+            count: entries.length,
+            index: selected(),
+            consumeEmpty: false,
+            close() {},
+            move(index) {
+              setSelected(index);
+              return entries[index]!;
+            },
+            select() {},
+          })
+        }
+      />
+      <ComposerMenu
+        id="pointer-options"
+        label="Commands"
+        activeId={entries[selected()]}
+        revision={entries}
+      >
+        <For each={entries}>
+          {(entry, index) => (
+            <ComposerMenuOption
+              id={entry}
+              active={index() === selected()}
+              select={() => {}}
+              hover={() => setSelected(index())}
+              icon={undefined}
+              name={entry}
+              description=""
+            />
+          )}
+        </For>
+      </ComposerMenu>
+    </div>
+  ));
+  const textarea = view.container.querySelector("textarea")!;
+  const options = [...view.container.querySelectorAll<HTMLElement>("[role=option]")];
+  const first = options[0]!;
+  const firstBounds = first.getBoundingClientRect();
+  const point = { clientX: firstBounds.left + 20, clientY: firstBounds.top + 18 };
+  first.dispatchEvent(
+    new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse", ...point }),
+  );
+  flush();
+  textarea.focus();
+  for (let index = 1; index <= 8; index++) {
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowDown" }),
+    );
+    flush();
+    await afterLayout();
+    expect(options[index]!.getAttribute("aria-selected")).toBe("true");
+  }
+  const scroll = view.container.querySelector<HTMLElement>(".slash-menu__scroll")!;
+  expect(scroll.scrollTop).toBeGreaterThan(0);
+  const underPointer = document
+    .elementFromPoint(point.clientX, point.clientY)
+    ?.closest<HTMLElement>("[role=option]");
+  expect(underPointer).toBeTruthy();
+  expect(underPointer).not.toBe(options[8]);
+  // Replay the stationary-pointer event browsers may send after content moves.
+  underPointer!.dispatchEvent(
+    new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse", ...point }),
+  );
+  flush();
+  expect(options[8]!.getAttribute("aria-selected")).toBe("true");
+  underPointer!.dispatchEvent(
+    new PointerEvent("pointermove", {
+      bubbles: true,
+      pointerType: "mouse",
+      ...point,
+      clientX: point.clientX + 1,
+    }),
+  );
+  flush();
+  expect(underPointer!.getAttribute("aria-selected")).toBe("true");
 });

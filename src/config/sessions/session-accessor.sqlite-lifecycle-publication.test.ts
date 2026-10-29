@@ -117,7 +117,9 @@ it("publishes history changes only after deletion while fresh reads observe sibl
       location: database.path,
     })[0];
     return pageScopes.map((key) =>
-      retained?.writeScopes.has(JSON.stringify(["session-id", key.sessionId, key.partition])),
+      retained?.writeScopes.some((bucket) =>
+        bucket.has(JSON.stringify(["session-id", key.sessionId, key.partition])),
+      ),
     );
   };
   expect(retainedPageScopes()).toEqual([true, true, true]);

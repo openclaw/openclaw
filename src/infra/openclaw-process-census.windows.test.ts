@@ -11,6 +11,8 @@ vi.mock("./windows-user-sid.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./windows-user-sid.js")>()),
   readWindowsUserSid: windowsSid,
 }));
+// mock-isolation: Native ancestry would otherwise read real host PIDs behind the synthetic table.
+vi.mock("@openclaw/proc-safe/identity", () => ({ readProcessAncestry: () => null }));
 vi.mock("../shared/pid-alive.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../shared/pid-alive.js")>()),
   isPidDefinitelyDead: () => false,

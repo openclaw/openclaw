@@ -1,9 +1,11 @@
 /**
  * Residual tool-schema filter probe. From an installed checkout:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/tool-schema-inspection-measure.ts
- * Options: --tools 100 --iterations 5000 --samples 5 --mode runtime|provider-normalizable
+ * Options: --tools 100 --fields 12 --iterations 5000 --samples 5
+ * --mode runtime|provider-normalizable|projection|publication
  * --mutable measures uncached input; default uses immutable owner publications.
  * --module <absolute file URL> selects a baseline owner with the same dependencies.
+ * --schema-module <absolute file URL> selects a baseline JSON projection/publication owner.
  * CPU is measured without tracing; allocation uses separate inspector sampling passes.
  * Compare counterbalanced base/candidate processes with identical options on the benchmark host.
  */
@@ -12,28 +14,38 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
-import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import * as currentSchema from "../../packages/ai/src/providers/tool-schema-json-projection.js";
 import * as current from "../../src/agents/tool-schema-projection.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
   options: {
     tools: { type: "string", default: "100" },
+    fields: { type: "string", default: "12" },
     iterations: { type: "string", default: "5000" },
     samples: { type: "string", default: "5" },
     mode: { type: "string", default: "runtime" },
     mutable: { type: "boolean", default: false },
     module: { type: "string" },
+    "schema-module": { type: "string" },
   },
 });
 const integer = (raw: string, label: string) =>
   parseStrictIntegerOption({ raw, label, min: 1, fallback: 1 });
 const toolCount = integer(values.tools, "tools");
+const fieldCount = integer(values.fields, "fields");
 const iterations = integer(values.iterations, "iterations");
 const samples = integer(values.samples, "samples");
-assert.ok(values.mode === "runtime" || values.mode === "provider-normalizable");
+assert.ok(["runtime", "provider-normalizable", "projection", "publication"].includes(values.mode));
 assert.ok(globalThis.gc, "Run with --expose-gc");
 const owner: typeof current = values.module ? await import(values.module) : current;
+const schemaOwner: typeof currentSchema = values["schema-module"]
+  ? await import(values["schema-module"])
+  : currentSchema;
+const project =
+  values.mode === "publication"
+    ? schemaOwner.publishRuntimeToolInputSchema
+    : schemaOwner.projectRuntimeToolInputSchema;
 const filter =
   values.mode === "runtime"
     ? owner.filterRuntimeCompatibleTools
@@ -42,6 +54,14 @@ const tools = Array.from({ length: toolCount }, (_, index) => {
   const parameters = {
     type: "object",
     properties: {
+      ...Object.fromEntries(
+        Array.from({ length: fieldCount }, (_field, field) => [
+          `field_${field}`,
+          field % 2 === 0
+            ? { type: "array", items: { type: "string", enum: ["read", "write"] } }
+            : { anyOf: [{ type: "string" }, { type: "integer", minimum: 0 }] },
+        ]),
+      ),
       query: { type: "string", description: "Synthetic search query" },
       options: {
         type: "object",
@@ -52,16 +72,26 @@ const tools = Array.from({ length: toolCount }, (_, index) => {
     required: ["query"],
     additionalProperties: false,
   };
-  const schema = values.mutable ? parameters : publishRuntimeToolInputSchema(parameters).schema;
+  const schema = values.mutable
+    ? parameters
+    : schemaOwner.publishRuntimeToolInputSchema(parameters).schema;
   assert.ok(schema !== null && typeof schema === "object");
   return { name: `synthetic_tool_${index}`, parameters: schema };
 });
 function run() {
   let accepted = 0;
   for (let attempt = 0; attempt < iterations; attempt++) {
-    const result = filter(tools);
-    accepted += result.tools.length;
-    assert.equal(result.diagnostics.length, 0);
+    if (values.mode === "projection" || values.mode === "publication") {
+      for (const tool of tools) {
+        const result = project(tool.parameters);
+        assert.equal(result.violations.length, 0);
+        accepted++;
+      }
+    } else {
+      const result = filter(tools);
+      accepted += result.tools.length;
+      assert.equal(result.diagnostics.length, 0);
+    }
   }
   assert.equal(accepted, toolCount * iterations);
 }
@@ -105,6 +135,7 @@ console.log(
     {
       node: process.version,
       toolCount,
+      fieldCount,
       iterations,
       samples,
       mode: values.mode,

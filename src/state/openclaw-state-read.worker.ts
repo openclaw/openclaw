@@ -1,3 +1,5 @@
+import { serialize } from "node:v8";
+import { zstdCompressSync } from "node:zlib";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { WorkerTaskHandler } from "@openclaw/worker-runtime/worker";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
@@ -10,6 +12,7 @@ import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
+import { ownedWorkerBytes } from "../infra/worker-transfer-bytes.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -141,11 +144,14 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
           },
           ...locationArgs,
         );
-        const value = await manifestReader.executeLocalWorkspaceManifestRead(
-          snapshot,
-          command.input.action,
-        );
-        return { ok: true, type: command.type, sourceAdmitted: true, value };
+        // Release the shared reader before filesystem discovery; forward encoded facts
+        // through the host without expanding the inventory on the Gateway thread.
+        return {
+          ok: true,
+          type: command.type,
+          sourceAdmitted: true,
+          snapshot: ownedWorkerBytes(zstdCompressSync(serialize([snapshot, command.input.action]))),
+        };
       }
       if (command.type === "plugins.metadata.read") {
         const result = withOpenClawStateReadOnlyLocation(
@@ -295,5 +301,9 @@ serveOwnedWorkerTasks(
     const run = () => read(message, channel, control);
     return await (bridge ? bridge.run(run) : run());
   },
-  { closeResource: closeRetainedOpenClawStateReadConnections },
+  {
+    closeResource: closeRetainedOpenClawStateReadConnections,
+    transferList: (reply) =>
+      reply.ok && reply.type === "localWorkspace.manifest" ? [reply.snapshot.buffer] : [],
+  },
 );

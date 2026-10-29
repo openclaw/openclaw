@@ -100,7 +100,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const label = createMemo(() => session().label);
   const subtitleInput = createMemo(
     () => {
-      const snapshot = host().sidebarSnapshot ? session().snapshotSubtitle : undefined;
+      const snapshot = session().snapshot ? session().snapshotSubtitle : undefined;
       const input = snapshot ? null : sidebarSessionRowSubtitleParams(host(), session(), display());
       return {
         input,
@@ -412,10 +412,10 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   );
   return row;
 }
-type PendingSessionCreate = NonNullable<ReturnType<SessionListHost["pendingSessionCreate"]>>;
+type PendingSessionCreate = NonNullable<ReturnType<SessionListHost["sessionCreateDisplay"]>>;
 
-/** The unadmitted create renders in the slot its admitted row will take: selected,
- *  actionless, and aligned with real rows. A create for a rendered custom group
+/** Local create facts occupy the future roster slot until canonical takeover:
+ *  selected, actionless, and aligned with real rows. A rendered custom group
  *  leads that group's list; any other create leads the session list. Only the
  *  native session list has that slot: the agent-only roster shows no row for a
  *  new session, so a handoff row there would flash under the agent and vanish on
@@ -429,7 +429,11 @@ export function renderPendingSessionCreateRow(
       {(value) => {
         const row = (
           <div class="sidebar-recent-session session-row-host sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating">
-            <div class="sidebar-recent-session__link" aria-current="page" aria-busy="true">
+            <div
+              class="sidebar-recent-session__link"
+              aria-current="page"
+              aria-busy={value().creation.admitted ? undefined : "true"}
+            >
               <span class="sidebar-session-indicator" aria-hidden="true" />
               <span class="sidebar-recent-session__text">
                 <span class="sidebar-recent-session__title-row">

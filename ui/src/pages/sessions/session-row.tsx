@@ -11,7 +11,7 @@ import {
 } from "../../../../src/shared/session-goal-display.js";
 import type { AgentIdentityResult, GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { sessionIconMask } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import {
   formatThinkingOverrideLabel,
@@ -203,7 +203,6 @@ function isRowControlTarget(target: EventTarget | null): boolean {
 
 export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
   let menuTrigger: HTMLButtonElement | null = null;
-  let sessionLink: HTMLAnchorElement | undefined;
   const row = createMemo(() => props.row);
   const updated = createMemo(() =>
     row().updatedAt ? formatRelativeTimestamp(row().updatedAt) : t("common.na"),
@@ -316,46 +315,43 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
           />
         </td>
         <td class="data-table-key-col">
-          <openclaw-tooltip
-            prop:content={keyCellTitle()}
-            prop:descriptionTarget={canLink() ? () => sessionLink ?? null : undefined}
+          <div
+            class={["session-key-cell", { mono: !friendlyKeyLabel() }]}
+            data-tooltip={keyCellTitle()}
           >
-            <div class={["session-key-cell", { mono: !friendlyKeyLabel() }]}>
-              <div class="session-key-cell__text">
-                <span class="session-key-cell__primary">
-                  {row().unread === true ? (
-                    <span
-                      class="session-unread-dot"
-                      role="img"
-                      aria-label={t("sessionsView.unread")}
-                    />
-                  ) : undefined}
-                  {canLink() ? (
-                    <a
-                      ref={(element) => (sessionLink = element)}
-                      href={chatUrl()}
-                      class="session-link"
-                      onClick={(e: MouseEvent) =>
-                        handleNavigationClick(e, () => props.onNavigateToChat(row().key))
-                      }
-                    >
-                      {friendlyKeyLabel() ?? row().key}
-                    </a>
-                  ) : (
-                    <span>{friendlyKeyLabel() ?? row().key}</span>
-                  )}
-                  {trimmedLabel() ? (
-                    <span class="session-label-chip" title={trimmedLabel()}>
-                      {trimmedLabel()}
-                    </span>
-                  ) : undefined}
-                </span>
-                {showDisplayName() ? (
-                  <span class="muted session-key-display-name">{displayName()}</span>
+            <div class="session-key-cell__text">
+              <span class="session-key-cell__primary">
+                {row().unread === true ? (
+                  <span
+                    class="session-unread-dot"
+                    role="img"
+                    aria-label={t("sessionsView.unread")}
+                  />
                 ) : undefined}
-              </div>
+                {canLink() ? (
+                  <a
+                    href={chatUrl()}
+                    class="session-link"
+                    onClick={(e: MouseEvent) =>
+                      handleNavigationClick(e, () => props.onNavigateToChat(row().key))
+                    }
+                  >
+                    {friendlyKeyLabel() ?? row().key}
+                  </a>
+                ) : (
+                  <span>{friendlyKeyLabel() ?? row().key}</span>
+                )}
+                {trimmedLabel() ? (
+                  <span class="session-label-chip" title={trimmedLabel()}>
+                    {trimmedLabel()}
+                  </span>
+                ) : undefined}
+              </span>
+              {showDisplayName() ? (
+                <span class="muted session-key-display-name">{displayName()}</span>
+              ) : undefined}
             </div>
-          </openclaw-tooltip>
+          </div>
         </td>
         {props.allAgentsScope ? (
           <td class="session-agent-col">
@@ -379,7 +375,11 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                 props.onToggleDetails(row().key);
               }}
             >
-              <Icon name="chevronDown" />
+              <i
+                class="session-css-icon"
+                aria-hidden="true"
+                style={{ "mask-image": sessionIconMask("chevronDown") }}
+              />
             </button>
             <button
               ref={(element) => (menuTrigger = element)}
@@ -396,7 +396,11 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                 props.onOpenSessionMenu(row(), { x: rect.right, y: rect.bottom + 4 }, trigger);
               }}
             >
-              <Icon name="moreHorizontal" />
+              <i
+                class="session-css-icon"
+                aria-hidden="true"
+                style={{ "mask-image": sessionIconMask("moreHorizontal") }}
+              />
             </button>
           </div>
         </td>

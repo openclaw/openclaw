@@ -13,6 +13,7 @@ import { createPageState, type RecentCursor } from "./page-state.js";
 import { captureReadingState } from "./reading-state.js";
 import { recent } from "./recent-view.js";
 import { showDetail } from "./record-view.js";
+import { scribes } from "./scribes-view.js";
 import { temporalFilterForm, type TemporalSelection } from "./search-date-filters.js";
 import { searchForm, searchResults } from "./search-view.js";
 import { registerSessionPanel } from "./session-panel.js";
@@ -45,13 +46,16 @@ export default defineControlUiPlugin({
           agent: s.viewing,
           defaultAgent: s.storesSnapshot?.defaultAgent,
         }));
-        const root = el("section", undefined, "knowledge-page"),
+        // Agent-dependent copy stays hidden, with its space reserved, until the first scope check.
+        const root = el("section", undefined, "knowledge-page knowledge-copy-pending"),
           header = el("header", undefined, "knowledge-header"),
           title = el("div"),
           actions = el("div", undefined, "knowledge-actions");
-        const subtitle = el("p");
+        const subtitle = el("p", undefined, "knowledge-subtitle");
         title.append(el("h1", "Knowledge"), subtitle);
-        const status = el("span", "Connecting…", "knowledge-status");
+        // Silent until there is something to report: loading placeholders already say so.
+        const status = el("span", "", "knowledge-status");
+        status.hidden = true;
         status.setAttribute("role", "status");
         status.setAttribute("aria-live", "polite");
         const settingsButton = button("", () => openSettings("stores"), "knowledge-icon-button");
@@ -80,8 +84,15 @@ export default defineControlUiPlugin({
         // These are text navigation tabs, not host .btn controls. Theme-specific
         // .btn rules otherwise reintroduce filled backgrounds in light mode.
         const recentTab = button("Recent", () => navigate("recent"), "knowledge-tab"),
-          browseTab = button("Browse", () => navigate("browse"), "knowledge-tab");
-        nav.append(recentTab, browseTab);
+          browseTab = button("Browse", () => navigate("browse"), "knowledge-tab"),
+          scribesTab = button("Scribes", () => navigate("scribes"), "knowledge-tab");
+        // Count slots are reserved so the centered tabs barely move when the counts arrive.
+        for (const tab of [browseTab, scribesTab]) {
+          const pending = el("span", undefined, "knowledge-tab-count knowledge-tab-count-pending");
+          pending.setAttribute("aria-hidden", "true");
+          tab.append(pending);
+        }
+        nav.append(recentTab, browseTab, scribesTab);
         const banner = el("p", "", "knowledge-notice"),
           toolbar = el("div", undefined, "knowledge-toolbar"),
           content = el("div", undefined, "knowledge-content");
@@ -143,6 +154,7 @@ export default defineControlUiPlugin({
             s.tab,
             s.settingsSection,
             s.selectedId,
+            s.scribe,
             s.kind,
             s.type,
             s.offset,
@@ -174,6 +186,7 @@ export default defineControlUiPlugin({
           vault: s.expectedVault,
           tab: s.tab,
           record: s.selectedId,
+          scribe: s.scribe,
           section: s.settingsSection,
           kind: s.kind,
           type: s.type,
@@ -217,6 +230,7 @@ export default defineControlUiPlugin({
             vault: s.expectedVault,
             tab: s.tab,
             record: s.selectedId,
+            scribe: s.scribe,
             section: s.settingsSection,
             kind: s.kind,
             type: s.type,
@@ -247,6 +261,7 @@ export default defineControlUiPlugin({
             s.vocabulary = undefined;
             s.viewReady = false;
             s.mountedScreen = "";
+            s.retainedViews.clear();
             content.replaceChildren();
           }
           renderToolbar();
@@ -262,6 +277,7 @@ export default defineControlUiPlugin({
           s.pendingSnapshot = undefined;
           s.tab = next;
           s.selectedId = "";
+          s.scribe = "";
           s.offset = 0;
           s.browseBack = [];
           s.recentCursor = undefined;
@@ -300,6 +316,7 @@ export default defineControlUiPlugin({
           announcer,
           updates,
           browseTab,
+          scribesTab,
           recentBack,
           recentExpanded,
           evidenceLoaders,
@@ -365,6 +382,7 @@ export default defineControlUiPlugin({
           s.viewReady = false;
           s.vocabulary = undefined;
           s.browseBack = [];
+          s.retainedViews.clear();
           root.querySelector(".knowledge-chat-handoff")?.remove();
           content.replaceChildren();
           const entry = s.storesSnapshot && storeOf(s.storesSnapshot, agent);
@@ -372,8 +390,9 @@ export default defineControlUiPlugin({
             `Viewing ${displayName(agent)}’s knowledge${entry ? `: ${storeLabel(entry, displayName)}` : ""}.`,
           );
           renderStoreContext();
-          s.tab = s.tab === "settings" ? "settings" : "recent";
+          s.tab = s.tab === "settings" || s.tab === "scribes" ? s.tab : "recent";
           s.selectedId = "";
+          s.scribe = "";
           s.offset = 0;
           s.recentCursor = undefined;
           recentBack.length = 0;
@@ -383,7 +402,7 @@ export default defineControlUiPlugin({
           void refresh(false);
         }
         function open(id: string) {
-          if (s.tab === "settings") {
+          if (s.tab === "settings" || s.tab === "scribes") {
             s.tab = "browse";
           }
           updates.hidden = true;
@@ -395,6 +414,7 @@ export default defineControlUiPlugin({
         function renderToolbar() {
           recentTab.setAttribute("aria-pressed", String(!s.selectedId && s.tab === "recent"));
           browseTab.setAttribute("aria-pressed", String(!s.selectedId && s.tab === "browse"));
+          scribesTab.setAttribute("aria-pressed", String(s.tab === "scribes"));
           toolbar.replaceChildren();
           ++s.suggestGeneration;
           clearTimeout(s.timer);
@@ -402,6 +422,7 @@ export default defineControlUiPlugin({
           if (
             s.selectedId ||
             s.tab === "settings" ||
+            s.tab === "scribes" ||
             s.tab === "browse" ||
             s.storeState !== "ready"
           ) {
@@ -464,6 +485,10 @@ export default defineControlUiPlugin({
               }
               if (s.tab === "settings") {
                 return await settings(ui, n, target);
+              }
+              // Scribes are conversations and automations, readable before the store exists.
+              if (s.tab === "scribes") {
+                return await scribes(ui, n, target);
               }
               // A store that isn't ready has nothing to read; say why instead.
               if (s.storeState !== "ready") {

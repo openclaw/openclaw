@@ -39,6 +39,7 @@ const principalSchema = z.object({
 export type ScheduledTaskPrincipal = z.infer<typeof principalSchema>;
 
 export type WindowsProcessDiagnostic = {
+  Name?: string | null;
   CommandLine?: string | null;
   CreationDate?: string | null;
   UserModeTime?: number | string;
@@ -165,18 +166,28 @@ export function readTaskPrincipal(taskName: string): ScheduledTaskPrincipal {
   return parsed.data;
 }
 
-export function readRelatedProcessDiagnostics(needles: string[]): {
+export function readRelatedProcessDiagnostics(
+  needles: string[],
+  contextPids: number[] = [],
+): {
   error: string | null;
   ok: boolean;
+  ownedPids: number[];
   processes: WindowsProcessDiagnostic[];
   truncated: boolean;
 } {
   const script = [
     "$ErrorActionPreference='Stop'",
-    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,ReadOperationCount,WriteOperationCount,@{Name='CreationDate';Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress",
+    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,UserModeTime,KernelModeTime,ReadOperationCount,WriteOperationCount,@{Name='CreationDate';Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress",
   ].join("; ");
   const result = inspectWithPowerShell(script, 1024 * 1024);
-  const failed = (error: string) => ({ error, ok: false, processes: [], truncated: false });
+  const failed = (error: string) => ({
+    error,
+    ok: false,
+    ownedPids: [],
+    processes: [],
+    truncated: false,
+  });
   if (result.error) {
     return failed(result.error.message);
   }
@@ -219,7 +230,7 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
       }
     }
   } while (descendantsAdded);
-  const parentPids = ids("ParentProcessId");
+  const parentPids = new Set([...ids("ParentProcessId"), ...contextPids]);
   const processes = entries.filter(
     (entry) =>
       matching.includes(entry) ||
@@ -229,6 +240,7 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
   return {
     error: null,
     ok: true,
+    ownedPids: [...matchingPids],
     processes: processes.slice(0, DIAGNOSTIC_PROCESS_LIMIT),
     truncated: processes.length > DIAGNOSTIC_PROCESS_LIMIT,
   };
@@ -412,5 +424,121 @@ export async function waitForCompletedScheduledTaskRun(
         ? `observed state=${lastPrincipal.taskState} result=${lastPrincipal.lastTaskResult}`
         : `last inspection failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`
     }`,
+  );
+}
+
+export type FailureDiagnosticSnapshot = {
+  capturedAt: string;
+  principal: ScheduledTaskPrincipal | null;
+  principalError: string | null;
+  processCapture: ReturnType<typeof readRelatedProcessDiagnostics>;
+  taskXml: string | null;
+  verboseQuery: {
+    code: number;
+    stdout: string | null;
+    stderr: string | null;
+  };
+};
+
+export type ExternalStopObservation = {
+  method: string;
+  gatewayPid: number;
+  childPid: number;
+  supervisorPid: number;
+  ownedPids: number[];
+  before: ReturnType<typeof readRelatedProcessDiagnostics>;
+  failure?: {
+    capturedAt: string;
+    processCapture: ReturnType<typeof readRelatedProcessDiagnostics>;
+    signalProbes: Array<{ pid: number; error: string | null }>;
+  };
+};
+
+export async function readFailureDiagnosticSnapshot(params: {
+  eventsPath: string;
+  probePath: string;
+  replacements: Array<[string, string]>;
+  scriptPath: string;
+  taskName: string;
+}): Promise<FailureDiagnosticSnapshot> {
+  const verboseQuery = await execSchtasks(["/Query", "/TN", params.taskName, "/V", "/FO", "LIST"]);
+  const taskXml = await readTaskXml(params.taskName);
+  let principal: ScheduledTaskPrincipal | null = null;
+  let principalError: string | null = null;
+  try {
+    principal = readTaskPrincipal(params.taskName);
+  } catch (error) {
+    principalError = error instanceof Error ? error.message : String(error);
+  }
+  const processCapture = readRelatedProcessDiagnostics([
+    params.scriptPath,
+    params.probePath,
+    params.eventsPath,
+  ]);
+  for (const process of processCapture.processes) {
+    process.CommandLine = sanitizeDiagnosticText(process.CommandLine, params.replacements);
+  }
+  return {
+    capturedAt: new Date().toISOString(),
+    principal,
+    principalError: sanitizeDiagnosticText(principalError, params.replacements),
+    processCapture: {
+      ...processCapture,
+      error: sanitizeDiagnosticText(processCapture.error, params.replacements),
+    },
+    taskXml: sanitizeTaskXml(taskXml, params.replacements),
+    verboseQuery: {
+      code: verboseQuery.code,
+      stdout: sanitizeVerboseQuery(verboseQuery.stdout, params.replacements),
+      stderr: sanitizeDiagnosticText(verboseQuery.stderr, params.replacements),
+    },
+  };
+}
+
+export async function writeFailureDiagnostics(params: {
+  externalStop?: ExternalStopObservation;
+  cleanupEnd: { stdout: string; stderr: string; code: number } | null;
+  postEnd: FailureDiagnosticSnapshot | null;
+  postEndError: string | null;
+  preCleanup: FailureDiagnosticSnapshot | null;
+  preCleanupError: string | null;
+  replacements: Array<[string, string]>;
+  rootDir: string;
+  serviceOutput: string;
+}): Promise<void> {
+  // Keep the pre-stop ownership/identity census even when extinction fails.
+  for (const capture of [
+    params.externalStop?.before,
+    params.externalStop?.failure?.processCapture,
+  ]) {
+    if (capture) {
+      capture.error = sanitizeDiagnosticText(capture.error, params.replacements);
+      for (const entry of capture.processes) {
+        entry.CommandLine = sanitizeDiagnosticText(entry.CommandLine, params.replacements);
+      }
+    }
+  }
+  await fs.writeFile(
+    path.join(params.rootDir, "failure-diagnostics.json"),
+    `${JSON.stringify(
+      {
+        externalStop: params.externalStop,
+        preCleanup: params.preCleanup,
+        preCleanupError: sanitizeDiagnosticText(params.preCleanupError, params.replacements),
+        cleanupEnd: params.cleanupEnd
+          ? {
+              code: params.cleanupEnd.code,
+              stdout: sanitizeDiagnosticText(params.cleanupEnd.stdout, params.replacements),
+              stderr: sanitizeDiagnosticText(params.cleanupEnd.stderr, params.replacements),
+            }
+          : null,
+        postEnd: params.postEnd,
+        postEndError: sanitizeDiagnosticText(params.postEndError, params.replacements),
+        serviceOutput: sanitizeDiagnosticText(params.serviceOutput, params.replacements),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
   );
 }

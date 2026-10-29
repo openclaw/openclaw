@@ -1,11 +1,14 @@
 import { expect, it } from "vitest";
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
+import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import {
   parseSidebarSnapshot,
   restoreSnapshotSession,
   snapshotSections,
   snapshotSessions,
+  snapshotIssuesCount,
 } from "./sidebar-snapshot-model.ts";
 import { sidebarSnapshot as model } from "./sidebar-snapshot.test-support.ts";
 
@@ -28,6 +31,59 @@ function displayRow(key: string, label: string, pinned = false) {
 }
 const parse = (patch: Record<string, unknown>) => parseSidebarSnapshot({ ...model, ...patch });
 
+it("omits private session contributions from the saved Inbox count", () => {
+  const incognito = "agent:main:dashboard:incognito-private";
+  const outbox: SidebarInboxEntry = {
+    type: "outbox",
+    category: "system",
+    severity: "warning",
+    dismissal: null,
+    requiresAction: true,
+    id: "public",
+    sessionKey: "agent:main:public",
+    held: true,
+    command: false,
+  };
+  const approval: SidebarInboxEntry = {
+    type: "approval",
+    category: "approvals",
+    severity: "warning",
+    dismissal: null,
+    requiresAction: true,
+    approval: {
+      id: "approval",
+      kind: "exec",
+      request: { command: "synthetic", sessionKey: incognito },
+      createdAtMs: 0,
+      expiresAtMs: 1,
+    },
+  };
+  expect(
+    snapshotIssuesCount([
+      outbox,
+      { ...outbox, id: "private", sessionKey: incognito },
+      approval,
+      {
+        ...approval,
+        approval: {
+          ...approval.approval,
+          request: { command: "synthetic", sessionKey: "agent:main:parent" },
+          sourceSessionKey: incognito,
+        },
+      },
+      {
+        type: "mention",
+        category: "mentions",
+        severity: "neutral",
+        dismissal: null,
+        requiresAction: true,
+        mention: { ...inboxMention("private"), sessionKey: incognito },
+      },
+      { ...outbox, id: "quiet", requiresAction: false },
+    ]),
+  ).toBe(1);
+});
+
 it("roundtrips hidden-run child queries without retaining incognito parent keys", () => {
   const parent = displayRow("agent:main:parent", "Parent");
   const child = displayRow("agent:main:child", "Child");
@@ -37,15 +93,21 @@ it("roundtrips hidden-run child queries without retaining incognito parent keys"
     { ...parent, children: [child], childLoadParentKeys: [parent.key, hiddenRun, incognitoRun] },
   ]);
   expect(captured[0]?.childLoadParentKeys).toEqual([parent.key, hiddenRun]);
-  const saved = parse(structuredClone({ sessions: captured }));
-  const restored = restoreSnapshotSession(saved!.sessions[0]!, parent.key);
+  const saved = parseSidebarSnapshot(structuredClone({ ...model, pinnedSessions: captured }));
+  expect(saved).not.toBeNull();
+  const restored = restoreSnapshotSession(saved!.pinnedSessions[0]!, parent.key);
   expect(restored.childLoadParentKeys).toEqual([parent.key, hiddenRun]);
   expect(restored.children.map((row) => row.key)).toEqual([child.key]);
   const legacyParent = { ...captured[0], childLoadParentKeys: undefined };
-  expect(parse({ sessions: [legacyParent] })).toBeNull();
-  expect(parse({ sessions: [{ ...legacyParent, children: [] }] })).not.toBeNull();
+  expect(parseSidebarSnapshot({ ...model, pinnedSessions: [legacyParent] })).toBeNull();
   expect(
-    parse({ sessions: [{ ...captured[0], childLoadParentKeys: [parent.key, incognitoRun] }] }),
+    parseSidebarSnapshot({ ...model, pinnedSessions: [{ ...legacyParent, children: [] }] }),
+  ).not.toBeNull();
+  expect(
+    parseSidebarSnapshot({
+      ...model,
+      pinnedSessions: [{ ...captured[0], childLoadParentKeys: [parent.key, incognitoRun] }],
+    }),
   ).toBeNull();
 });
 
@@ -104,19 +166,67 @@ it("keeps display data without persisting authority, executable plugins, or watc
 it("excludes incognito roots and descendants and restores no live mutation facts", () => {
   const row = displayRow("agent:main:visible", "Project", true);
   const privateRow = { ...row, key: "agent:main:private", incognito: true };
+  const publicChild = { ...row, key: "agent:main:child", children: [] };
   const captured = snapshotSessions(
     [
-      { ...row, children: [privateRow], sharingRole: "owner", activeRunIds: ["live-run"] },
+      {
+        ...row,
+        children: [privateRow, publicChild],
+        sharingRole: "owner",
+        activeRunIds: ["live-run"],
+      },
       privateRow,
     ],
-    () => ({ snapshotSubtitle: { subtitle: "Private child approval details" } }),
+    (current) => ({
+      childrenDisplayMode: "expanded",
+      snapshotSubtitle:
+        current.key === row.key ? { subtitle: "Private child approval details" } : undefined,
+    }),
   );
   expect(captured).toHaveLength(1);
-  expect(captured[0]?.children).toEqual([]);
+  expect(captured[0]?.children.map((child) => child.key)).toEqual([publicChild.key]);
+  expect(captured[0]?.childrenDisplayMode).toBe("expanded");
   expect(captured[0]?.snapshotSubtitle).toBeUndefined();
   const restored = restoreSnapshotSession(captured[0]!, row.key);
   expect(restored).toMatchObject({ visuallyActive: true, pinnable: false });
   expect([restored.sharingRole, restored.activeRunIds]).toEqual([undefined, undefined]);
+});
+
+it("restores visible unread, activity and glyph facts without retaining attention text or run authority", () => {
+  const row = {
+    ...displayRow("agent:main:visible", "Project"),
+    unread: true,
+    hasActiveRun: true,
+    hasAutomation: true,
+    attention: {
+      kind: "agent",
+      icon: "key",
+      note: "Private status text",
+      sourceSessionKey: "another-session",
+    } as const,
+    ownAttention: { kind: "none" } as const,
+    runningChildCount: 2,
+  };
+  const [saved] = snapshotSessions([row]);
+  const parsed = parseSidebarSnapshot({ ...model, pinnedSessions: [saved] });
+  expect(parsed).not.toBeNull();
+  const restored = restoreSnapshotSession(parsed!.pinnedSessions[0]!, row.key);
+  expect(restored).toMatchObject({
+    unread: true,
+    hasAutomation: true,
+    isRunVisuallyActive: true,
+    runningChildCount: 2,
+    hasActiveRun: false,
+    attention: { kind: "agent", icon: "key", note: "" },
+    ownAttention: { kind: "none" },
+  });
+  expect(JSON.stringify(parsed)).not.toMatch(/Private status text|another-session/);
+  expect(
+    parseSidebarSnapshot({
+      ...model,
+      pinnedSessions: [{ ...saved, state: { attention: { kind: "agent" } } }],
+    }),
+  ).toBeNull();
 });
 
 it("omits incognito-only section metadata and counts while preserving existing empty groups", () => {

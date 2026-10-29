@@ -35,7 +35,7 @@ import {
 } from "./session-message-client.test-support.js";
 import { registerCronSessionCompletionEventTests } from "./session-message-cron.test-support.js";
 import { findWatchedPresenceEntry, getConnId } from "./session-message-presence.test-support.js";
-import { registerRecoveredSubagentSessionEventTest } from "./session-message-subagent.test-support.js";
+import { registerTerminalSubagentSessionEventTest } from "./session-message-subagent.test-support.js";
 import { createWorkerFanoutFixture } from "./session-message-worker.test-support.js";
 import { removeSessionTestDirectories } from "./session-test-directories.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
@@ -116,6 +116,36 @@ async function createSessionStore(entries: StoreEntries, agentId?: string) {
   return storePath;
 }
 
+async function appendAssistant(storePath: string, sessionKey: string, text: string) {
+  const appended = await appendAssistantMessageToSessionTranscript({ storePath, sessionKey, text });
+  expect(appended.ok).toBe(true);
+  if (!appended.ok) {
+    throw new Error(`append failed: ${appended.reason}`);
+  }
+  return appended;
+}
+
+function messageMetadata(message: unknown) {
+  return requireRecord(requireRecord(message, "message")["__openclaw"], "metadata");
+}
+
+function eventMessage(frame: { payload?: unknown }) {
+  return requireRecord(requireRecord(frame.payload, "event payload").message, "event message");
+}
+
+function expectNoSessionMessage(
+  ws: GatewayWs,
+  sessionKey: string,
+  action: () => Promise<unknown> | void,
+) {
+  return expectNoMessageWithin({
+    watch: (timeoutMs) => waitForSessionMessageEvent(ws, sessionKey, timeoutMs),
+    action: async () => {
+      await action();
+    },
+  });
+}
+
 function textMessage(text: string, role = "assistant", timestamp = Date.now()) {
   return { role, content: [{ type: "text", text }], timestamp };
 }
@@ -170,6 +200,23 @@ const copilotOptions = {
   client: copilotClient,
   scopes: ["operator.read", "operator.write"],
 };
+
+async function rejectCopilot(
+  deviceIdentityPath: string,
+  options: Parameters<typeof connectReq>[1],
+  error: { code?: string; message?: string },
+  origin: string | undefined = copilotOrigin,
+) {
+  using ws = await openTestSocket({ origin });
+  const response = await connectReq(ws, { ...copilotOptions, deviceIdentityPath, ...options });
+  expect(response.ok).toBe(false);
+  if (error.code) {
+    expect(response.error?.code).toBe(error.code);
+  }
+  if (error.message) {
+    expect(response.error?.message).toContain(error.message);
+  }
+}
 
 async function withOperatorSessionSubscriber<T>(
   run: (ws: NonNullable<typeof subscribedOperatorWs>) => Promise<T>,
@@ -355,92 +402,72 @@ describe("session.message websocket events", () => {
       other: { sessionId: "sess-other" },
     });
     const copilotIdentityPath = sessionClientCredentialPath(storePath, "copilot-device");
-    using unpairedWs = await openTestSocket({ origin: copilotOrigin });
     using pairingWs = await openTestSocket({ origin: copilotOrigin });
-    using wrongOriginWs = await openTestSocket({
-      origin: "chrome-extension://bcdefghijklmnopabcdefghijklmnopa",
-    });
     using mainWs = await openTestSocket({ origin: copilotOrigin });
     using otherWs = await openTestSocket();
     using legacyWs = await openTestSocket();
-    let otherReceived = false;
-    const observeOtherChat = (data: RawData) => {
-      const message = requireRecord(JSON.parse(rawDataToString(data)), "gateway message");
-      otherReceived ||= message.type === "event" && message.event === "chat";
-    };
-    try {
-      const scopedCaps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
-      const unpaired = await connectReq(unpairedWs, {
-        ...copilotOptions,
-        prePairDevice: false,
-        deviceIdentityPath: sessionClientCredentialPath(storePath, "unpaired-copilot-device"),
-      });
-      expect(unpaired.ok).toBe(false);
-      expect(unpaired.error?.code).toBe("NOT_PAIRED");
-      unpairedWs.close();
+    const scopedCaps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    await rejectCopilot(
+      sessionClientCredentialPath(storePath, "unpaired-copilot-device"),
+      { prePairDevice: false },
+      { code: "NOT_PAIRED" },
+    );
 
-      const pairedHello = await connectOk(pairingWs, {
-        ...copilotOptions,
-        deviceIdentityPath: copilotIdentityPath,
-        prePairDevice: true,
-        browserOrigin: copilotOrigin,
-      });
-      const deviceToken = (pairedHello as { auth?: { deviceToken?: string } }).auth?.deviceToken;
-      expect(deviceToken).toBeTruthy();
-      pairingWs.close();
-      const wrongOrigin = await connectReq(wrongOriginWs, {
-        ...copilotOptions,
-        deviceIdentityPath: copilotIdentityPath,
-        deviceToken,
-        skipDefaultAuth: true,
-      });
-      expect(wrongOrigin.ok).toBe(false);
-      expect(wrongOrigin.error?.code).toBe("NOT_PAIRED");
-      expect(wrongOrigin.error?.message).toContain("dedicated paired device identity");
-      wrongOriginWs.close();
+    const pairedHello = await connectOk(pairingWs, {
+      ...copilotOptions,
+      deviceIdentityPath: copilotIdentityPath,
+      prePairDevice: true,
+      browserOrigin: copilotOrigin,
+    });
+    const deviceToken = (pairedHello as { auth?: { deviceToken?: string } }).auth?.deviceToken;
+    expect(deviceToken).toBeTruthy();
+    pairingWs.close();
+    await rejectCopilot(
+      copilotIdentityPath,
+      { deviceToken, skipDefaultAuth: true },
+      { code: "NOT_PAIRED", message: "dedicated paired device identity" },
+      "chrome-extension://bcdefghijklmnopabcdefghijklmnopa",
+    );
 
-      await connectOk(mainWs, {
-        ...copilotOptions,
-        deviceIdentityPath: copilotIdentityPath,
-        deviceToken,
-        skipDefaultAuth: true,
-      });
-      await connectOk(otherWs, { scopes: ["operator.read"], caps: scopedCaps });
-      await connectOk(legacyWs, { scopes: ["operator.read"] });
-      await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
-      await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
+    await connectOk(mainWs, {
+      ...copilotOptions,
+      deviceIdentityPath: copilotIdentityPath,
+      deviceToken,
+      skipDefaultAuth: true,
+    });
+    await connectOk(otherWs, { scopes: ["operator.read"], caps: scopedCaps });
+    await connectOk(legacyWs, { scopes: ["operator.read"] });
+    await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
+    await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
 
-      otherWs.on("message", observeOtherChat);
-      const chatEvents = [mainWs, legacyWs].map((ws) =>
-        onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" })),
-      );
+    using otherChats = collectEventPayloads(otherWs, "chat");
+    const chatEvents = [mainWs, legacyWs].map((ws) =>
+      onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" })),
+    );
 
-      const [send, ...delivered] = await Promise.all([
-        rpcReq(mainWs, "chat.send", {
-          sessionKey: "main",
-          message: "/status",
-          toolBindings: {
-            browser: {
-              kind: "tab",
-              tabId: 7,
-              target: "host",
-              profile: "chrome",
-              targetId: "target-7",
-            },
+    const [send, ...delivered] = await Promise.all([
+      rpcReq(mainWs, "chat.send", {
+        sessionKey: "main",
+        message: "/status",
+        toolBindings: {
+          browser: {
+            kind: "tab",
+            tabId: 7,
+            target: "host",
+            profile: "chrome",
+            targetId: "target-7",
           },
-          idempotencyKey: "scoped-delivery-proof",
-        }),
-        ...chatEvents,
-      ]);
-      expect(send.ok, JSON.stringify(send)).toBe(true);
-      expect(delivered).toHaveLength(2);
-      // Reasserting existing membership replies after any chat frame already queued on this socket.
-      const barrier = rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
-      await expect(barrier).resolves.toMatchObject({ ok: true });
-      expect(otherReceived).toBe(false);
-    } finally {
-      otherWs.off("message", observeOtherChat);
-    }
+        },
+        idempotencyKey: "scoped-delivery-proof",
+      }),
+      ...chatEvents,
+    ]);
+    expect(send.ok, JSON.stringify(send)).toBe(true);
+    expect(delivered).toHaveLength(2);
+    // Reasserting existing membership replies after any chat frame already queued on this socket.
+    const barrier = rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
+    await expect(barrier).resolves.toMatchObject({ ok: true });
+    expect(otherChats.messages).toHaveLength(0);
   });
 
   test("rejects client identity changes across a dedicated copilot pairing", async () => {
@@ -448,53 +475,34 @@ describe("session.message websocket events", () => {
     const identityPath = sessionClientCredentialPath(storePath, "other-client-device");
     const copilotIdentityPath = sessionClientCredentialPath(storePath, "copilot-paired-device");
     using controlWs = await openTestSocket({ origin: `http://127.0.0.1:${harness.port}` });
-    using copilotWs = await openTestSocket({
-      origin: copilotOrigin,
-    });
-    using pairingWs = await openTestSocket({
-      origin: copilotOrigin,
-    });
+    using pairingWs = await openTestSocket({ origin: copilotOrigin });
     using downgradeWs = await openTestSocket();
-    using wrongModeWs = await openTestSocket({
-      origin: copilotOrigin,
-    });
-    using webOriginWs = await openTestSocket({ origin: `http://127.0.0.1:${harness.port}` });
-    using missingCapsWs = await openTestSocket({
-      origin: copilotOrigin,
-    });
-    const wrongMode = await connectReq(wrongModeWs, {
-      ...copilotOptions,
-      prePairDevice: false,
-      client: {
-        ...copilotClient,
-        id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+    const invalidConnections = [
+      {
+        name: "wrong-mode",
+        options: { client: { ...copilotClient, mode: GATEWAY_CLIENT_MODES.WEBCHAT } },
+        message: "requires ui mode",
       },
-      deviceIdentityPath: sessionClientCredentialPath(storePath, "wrong-mode-device"),
-    });
-    expect(wrongMode.ok).toBe(false);
-    expect(wrongMode.error?.message).toContain("requires ui mode");
-    wrongModeWs.close();
-
-    const missingCaps = await connectReq(missingCapsWs, {
-      ...copilotOptions,
-      caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
-      deviceIdentityPath: sessionClientCredentialPath(storePath, "missing-caps-device"),
-      prePairDevice: false,
-      scopes: ["operator.read", "operator.write"],
-    });
-    expect(missingCaps.ok).toBe(false);
-    expect(missingCaps.error?.message).toContain("session-scoped-events");
-    missingCapsWs.close();
-
-    const webOrigin = await connectReq(webOriginWs, {
-      ...copilotOptions,
-      prePairDevice: false,
-      deviceIdentityPath: sessionClientCredentialPath(storePath, "web-origin-device"),
-    });
-    expect(webOrigin.ok).toBe(false);
-    expect(webOrigin.error?.message).toContain("canonical Chrome extension origin");
-    webOriginWs.close();
+      {
+        name: "missing-caps",
+        options: { caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS] },
+        message: "session-scoped-events",
+      },
+      {
+        name: "web-origin",
+        options: {},
+        origin: `http://127.0.0.1:${harness.port}`,
+        message: "canonical Chrome extension origin",
+      },
+    ];
+    for (const invalid of invalidConnections) {
+      await rejectCopilot(
+        sessionClientCredentialPath(storePath, `${invalid.name}-device`),
+        { prePairDevice: false, ...invalid.options },
+        { message: invalid.message },
+        invalid.origin,
+      );
+    }
 
     await connectOk(controlWs, {
       client: { ...copilotClient, id: GATEWAY_CLIENT_IDS.CONTROL_UI },
@@ -504,14 +512,11 @@ describe("session.message websocket events", () => {
     });
     controlWs.close();
 
-    const response = await connectReq(copilotWs, {
-      ...copilotOptions,
-      prePairDevice: false,
-      deviceIdentityPath: identityPath,
-    });
-    expect(response.ok).toBe(false);
-    expect(response.error?.code).toBe("NOT_PAIRED");
-    expect(response.error?.message).toContain("dedicated paired device identity");
+    await rejectCopilot(
+      identityPath,
+      { prePairDevice: false },
+      { code: "NOT_PAIRED", message: "dedicated paired device identity" },
+    );
 
     await connectOk(pairingWs, {
       ...copilotOptions,
@@ -536,7 +541,7 @@ describe("session.message websocket events", () => {
     expect(downgrade.error?.message).toContain("dedicated paired device identity");
   });
 
-  registerRecoveredSubagentSessionEventTest({
+  registerTerminalSubagentSessionEventTest({
     createSessionStoreFile,
     withOperatorSessionSubscriber,
     expectNoMessageWithin,
@@ -555,15 +560,7 @@ describe("session.message websocket events", () => {
     await connectOk(nodeWs, { role: "node", scopes: [] });
 
     const subscribedEvent = waitForSessionMessageEvent(subscribedWs, "agent:main:main");
-    const appended = await appendAssistantMessageToSessionTranscript({
-      sessionKey: "agent:main:main",
-      text: "subscribed only",
-      storePath,
-    });
-    expect(appended.ok).toBe(true);
-    if (!appended.ok) {
-      throw new Error(`append failed: ${appended.reason}`);
-    }
+    const appended = await appendAssistant(storePath, "agent:main:main", "subscribed only");
     const event = await subscribedEvent;
     expectRecordFields(event, {
       type: "event",
@@ -639,9 +636,7 @@ describe("session.message websocket events", () => {
       scopes: ["operator.read"],
     });
     await subscribeMessages(ws, sessionKey);
-    const avatar = (message: unknown) =>
-      requireRecord(requireRecord(message, "message")["__openclaw"], "sender metadata")
-        .senderProfileAvatarUrl;
+    const avatar = (message: unknown) => messageMetadata(message).senderProfileAvatarUrl;
     const checkReads = async (messageId: string, expected: string) => {
       const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", { sessionKey });
       const direct = await rpcReq<{ ok?: boolean; message?: unknown }>(ws, "chat.message.get", {
@@ -651,9 +646,7 @@ describe("session.message websocket events", () => {
       expect(history.ok).toBe(true);
       expect(direct).toMatchObject({ ok: true, payload: { ok: true } });
       const row = history.payload?.messages?.find(
-        (message) =>
-          requireRecord(requireRecord(message, "history row")["__openclaw"], "metadata").id ===
-          messageId,
+        (message) => messageMetadata(message).id === messageId,
       );
       expect([avatar(row), avatar(direct.payload?.message)]).toEqual([expected, expected]);
     };
@@ -687,7 +680,7 @@ describe("session.message websocket events", () => {
         },
       });
       expect(persisted).toBeDefined();
-      expect(avatar(requireRecord((await delivered).payload, "event").message)).toBe(currentAvatar);
+      expect(avatar(eventMessage(await delivered))).toBe(currentAvatar);
       await checkReads(persisted!.messageId, currentAvatar);
       if (previousMessageId) {
         await checkReads(previousMessageId, currentAvatar);
@@ -701,17 +694,15 @@ describe("session.message websocket events", () => {
     const sessionId = "sess-web-tui-committed-turn";
     const sessionKey = "agent:main:web-tui-committed-turn";
     const storePath = await createSessionStore({ "web-tui-committed-turn": { sessionId } });
+    const target = { agentId: "main", sessionId, sessionKey, storePath };
 
     const earlierMessage = {
       id: "committed-existing-turn",
       text: "An existing message establishes the active-branch sequence.",
     };
-    const seeded = await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      {
-        messages: [userTurn(earlierMessage.id, earlierMessage.text, 1_699_999_999_999)],
-      },
-    );
+    const seeded = await persistSessionTranscriptTurn(target, {
+      messages: [userTurn(earlierMessage.id, earlierMessage.text, 1_699_999_999_999)],
+    });
     expect(seeded.messages.filter((m) => m.appended)).toHaveLength(1);
 
     using webWs = await openTestSocket({ origin: `http://127.0.0.1:${harness.port}` });
@@ -730,61 +721,38 @@ describe("session.message websocket events", () => {
 
     using webEvents = collectEventPayloads(webWs, "session.message", { sessionKey });
     using tuiEvents = collectEventPayloads(tuiWs, "session.message", { sessionKey });
-    const observedByClient = [webEvents.messages, tuiEvents.messages];
-    const position = (payload: Record<string, unknown>) => ({
-      messageId: payload.messageId,
-      messageSeq: payload.messageSeq,
-      sessionKey: payload.sessionKey,
-    });
-
-    // Install every real socket listener before the one SQLite commit can broadcast.
+    // The final message is the barrier; collectors retain every preceding frame in socket order.
     const deliveriesByClient = [webWs, tuiWs].map((ws) =>
-      committedMessages.map(({ id }) =>
-        onceMessage(ws, matchingEvent("session.message", { messageId: id })),
-      ),
+      onceMessage(ws, matchingEvent("session.message", { messageId: "committed-final-turn" })),
     );
     const committedTurn = {
       messages: committedMessages.map(({ id, text }, index) =>
         userTurn(id, text, 1_700_000_000_000 + index),
       ),
     };
-    const persisted = await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      committedTurn,
-    );
+    const persisted = await persistSessionTranscriptTurn(target, committedTurn);
     expect(persisted.messages.filter((m) => m.appended)).toHaveLength(committedMessages.length);
 
-    for (const [clientIndex, clientDeliveries] of deliveriesByClient.entries()) {
-      const frames = await Promise.all(clientDeliveries);
-      expect(observedByClient[clientIndex]?.map(position)).toEqual(
-        committedMessages.map(({ id }, index) => ({
+    await Promise.all(deliveriesByClient);
+    for (const { messages } of [webEvents, tuiEvents]) {
+      expect(messages).toMatchObject(
+        committedMessages.map(({ id, text }, index) => ({
           messageId: id,
           messageSeq: index + 2,
           sessionKey,
+          message: expectedUserMessage(id, text, index + 2),
         })),
       );
-      for (const [index, frame] of frames.entries()) {
-        const expected = committedMessages[index];
-        if (!expected) {
-          throw new Error(`unexpected committed-turn delivery at index ${index}`);
-        }
-        expect(requireRecord(frame.payload, "committed session event").message).toMatchObject(
-          expectedUserMessage(expected.id, expected.text, index + 2),
-        );
-      }
     }
 
     using reconnectedTuiWs = await openTestSocket();
-    const history = await (async () => {
-      try {
-        await connectOk(reconnectedTuiWs, { scopes: ["operator.read"] });
-        return await rpcReq(reconnectedTuiWs, "chat.history", { sessionKey });
-      } finally {
-        reconnectedTuiWs.close();
-      }
-    })();
+    await connectOk(reconnectedTuiWs, { scopes: ["operator.read"] });
+    const history = await rpcReq<{ messages?: unknown[] }>(reconnectedTuiWs, "chat.history", {
+      sessionKey,
+    });
+    reconnectedTuiWs.close();
     expect(history.ok).toBe(true);
-    expect((history.payload as { messages?: unknown[] }).messages).toMatchObject(
+    expect(history.payload?.messages).toMatchObject(
       [earlierMessage, ...committedMessages].map(({ id, text }, index) =>
         expectedUserMessage(id, text, index + 1),
       ),
@@ -796,10 +764,7 @@ describe("session.message websocket events", () => {
         () => false,
       ),
     );
-    const replayed = await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      committedTurn,
-    );
+    const replayed = await persistSessionTranscriptTurn(target, committedTurn);
     expect(replayed.messages.filter((m) => m.appended)).toHaveLength(0);
     await expect(Promise.all(duplicateDeliveries)).resolves.toEqual([false, false]);
   });
@@ -818,17 +783,12 @@ describe("session.message websocket events", () => {
           __openclaw: { beforeAgentRunBlocked: blocked },
         },
       });
-      const message = requireRecord(
-        requireRecord(messageEvent.payload, "payload").message,
-        "blocked message",
-      );
+      const message = eventMessage(messageEvent);
       expectRecordFields(message, {
         role: "user",
         content: [{ type: "text", text: "The agent cannot read this message." }],
       });
-      expect(requireRecord(message["__openclaw"], "metadata").beforeAgentRunBlocked).toEqual(
-        blocked,
-      );
+      expect(messageMetadata(message).beforeAgentRunBlocked).toEqual(blocked);
     });
   });
 
@@ -842,23 +802,19 @@ describe("session.message websocket events", () => {
         ws,
         "agent:main:hidden-runtime",
       );
-      await expectNoMessageWithin({
-        watch: (timeoutMs) =>
-          waitForSessionMessageEvent(ws, "agent:main:hidden-runtime", timeoutMs),
-        action: () => {
-          emitSessionTranscriptUpdate({
-            sessionFile: path.join(path.dirname(storePath), "sess-hidden-runtime.jsonl"),
-            sessionKey: "agent:main:hidden-runtime",
-            messageId: "runtime-context-1",
-            messageSeq: 1,
-            message: {
-              role: "custom",
-              customType: "openclaw.runtime-context",
-              content: "secret runtime context",
-              display: false,
-            },
-          });
-        },
+      await expectNoSessionMessage(ws, "agent:main:hidden-runtime", () => {
+        emitSessionTranscriptUpdate({
+          sessionFile: path.join(path.dirname(storePath), "sess-hidden-runtime.jsonl"),
+          sessionKey: "agent:main:hidden-runtime",
+          messageId: "runtime-context-1",
+          messageSeq: 1,
+          message: {
+            role: "custom",
+            customType: "openclaw.runtime-context",
+            content: "secret runtime context",
+            display: false,
+          },
+        });
       });
 
       const changedEvent = await changedEventPromise;
@@ -972,27 +928,10 @@ describe("session.message websocket events", () => {
     await subscribeMessages(ws, "agent:main:main");
 
     const mainEvent = waitForSessionMessageEvent(ws, "agent:main:main");
-    const [mainAppend] = await Promise.all([
-      appendAssistantMessageToSessionTranscript({
-        sessionKey: "agent:main:main",
-        text: "main only",
-        storePath,
-      }),
-      mainEvent,
-    ]);
-    expect(mainAppend.ok).toBe(true);
-
-    await expectNoMessageWithin({
-      watch: (timeoutMs) => waitForSessionMessageEvent(ws, "agent:main:worker", timeoutMs),
-      action: async () => {
-        const workerAppend = await appendAssistantMessageToSessionTranscript({
-          sessionKey: "agent:main:worker",
-          text: "worker hidden",
-          storePath,
-        });
-        expect(workerAppend.ok).toBe(true);
-      },
-    });
+    await Promise.all([appendAssistant(storePath, "agent:main:main", "main only"), mainEvent]);
+    await expectNoSessionMessage(ws, "agent:main:worker", () =>
+      appendAssistant(storePath, "agent:main:worker", "worker hidden"),
+    );
 
     const unsubscribeRes = await rpcReq(ws, "sessions.messages.unsubscribe", {
       key: "agent:main:main",
@@ -1000,17 +939,9 @@ describe("session.message websocket events", () => {
     expect(unsubscribeRes.ok).toBe(true);
     expect(unsubscribeRes.payload?.subscribed).toBe(false);
 
-    await expectNoMessageWithin({
-      watch: (timeoutMs) => waitForSessionMessageEvent(ws, "agent:main:main", timeoutMs),
-      action: async () => {
-        const hiddenAppend = await appendAssistantMessageToSessionTranscript({
-          sessionKey: "agent:main:main",
-          text: "hidden after unsubscribe",
-          storePath,
-        });
-        expect(hiddenAppend.ok).toBe(true);
-      },
-    });
+    await expectNoSessionMessage(ws, "agent:main:main", () =>
+      appendAssistant(storePath, "agent:main:main", "hidden after unsubscribe"),
+    );
   });
 
   test("streams worker commits and local-equivalent live events to the selected session", async () => {
@@ -1060,8 +991,7 @@ describe("session.message websocket events", () => {
       );
       expect(
         payloads.map((payload) => {
-          const message = requireRecord(payload.message, "message");
-          const metadata = requireRecord(message["__openclaw"], "metadata");
+          const metadata = messageMetadata(payload.message);
           return [payload.messageId, payload.messageSeq, metadata.id, metadata.seq];
         }),
       ).toEqual(outcome.result.entryIds.map((id, index) => [id, index + 1, id, index + 1]));
@@ -1070,11 +1000,8 @@ describe("session.message websocket events", () => {
         onceMessage(ws, matchingEvent("chat", { runId }), timeoutMs);
       const [workerEvent] = await Promise.all([
         waitForChat("worker"),
-        expectNoMessageWithin({
-          watch: (timeoutMs) => waitForSessionMessageEvent(ws, sessionKey, timeoutMs),
-          action: async () => {
-            expect((await push()).ok).toBe(true);
-          },
+        expectNoSessionMessage(ws, sessionKey, async () => {
+          expect((await push()).ok).toBe(true);
         }),
       ]);
       const workerChat = requireRecord(workerEvent.payload, "worker chat");
@@ -1118,4 +1045,3 @@ describe("session.message websocket events", () => {
     }
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -130,17 +130,6 @@ function makeParams() {
   } as unknown as Parameters<typeof finalizeAcceptedChatSendMessageInjection>[0];
 }
 
-function makeFailClosedEntry() {
-  return {
-    sessionId: "session-1",
-    restartRecoveryDeliveryRunId: "recovery-1",
-    restartRecoveryDeliverySourceRunId: "source-1",
-    restartRecoveryDeliveryReceiptState: "terminal-pending",
-    restartRecoveryDeliveryToolCallId: "message-call-1",
-    updatedAt: 1,
-  } as never;
-}
-
 function reserveTestSource(
   sessionKey = "agent:main:dashboard:s",
   sessionId = "session-1",
@@ -268,9 +257,6 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
 describe("createChatSendMessageInjectionStarter admission fence", () => {
   it.for([
     "normal",
-    "terminal receipt",
-    "active source tombstone",
-    "unrelated tombstone",
     "caller revoked",
     "source canceled",
     "backend unavailable",
@@ -374,19 +360,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
             signal,
           );
           expect(queueMessage).not.toHaveBeenCalled();
-          if (change === "terminal receipt" || change === "caller revoked") {
-            await upsertSessionEntryCore(scope, {
-              restartRecoveryDeliveryRunId: "recovery-1",
-              restartRecoveryDeliverySourceRunId: "source-1",
-              restartRecoveryDeliveryReceiptState: "delivered-terminal",
-            });
-          } else if (change === "active source tombstone" || change === "unrelated tombstone") {
-            await upsertSessionEntryCore(scope, {
-              restartRecoveryTerminalRunIds: [
-                change === "active source tombstone" ? "source-1" : "source-old",
-              ],
-            });
-          }
           callerCurrent = change !== "caller revoked";
           if (change === "source canceled") {
             source.abort(refusal);
@@ -407,9 +380,9 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
           if (change === "caller revoked" || change === "source canceled") {
             expect(result).toEqual({ error: refusal });
             expect(queueMessage).not.toHaveBeenCalled();
-          } else if (change === "normal" || change === "unrelated tombstone") {
+          } else if (change === "normal") {
             if (!("attempt" in result) || !result.attempt) {
-              throw new Error("Expected current terminal authority to admit steering", {
+              throw new Error("Expected current authority to admit steering", {
                 cause: result,
               });
             }
@@ -425,9 +398,6 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
               reason: change === "backend replaced" ? "no_active_run" : "injection_unavailable",
             });
             expect(queueMessage).not.toHaveBeenCalled();
-          } else {
-            expect(result).toEqual({ attempt: undefined });
-            expect(queueMessage).not.toHaveBeenCalled();
           }
         } finally {
           resume.resolve();
@@ -442,63 +412,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     },
   );
 
-  it.each(["unbound", "current", "refused"] as const)(
-    "composes captured terminal admission with %s authority",
-    async (authority) => {
-      // A captured terminal receipt rejects steering, but must not swallow
-      // an independent authority refusal into the follow-up return value.
-      const params = makeStarterParams({ entry: makeFailClosedEntry() });
-      const refusal = new Error("injection authority refused");
-      const assertCurrent = () => {
-        if (authority === "refused") {
-          throw refusal;
-        }
-      };
-      if (authority !== "unbound") {
-        params.assertCurrent = assertCurrent;
-      }
-      const begin = createChatSendMessageInjectionStarter(params);
-
-      if (authority === "refused") {
-        await expect(begin()).rejects.toBe(refusal);
-        expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
-      } else {
-        expect(await begin()).toBeUndefined();
-        expect(params.logGateway.warn).toHaveBeenCalled();
-      }
-    },
-  );
-
-  it("reads current terminal eligibility when the captured request snapshot is stale", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:dashboard:initial-steering",
-        storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-      };
-      for (const blocked of [true, false]) {
-        await upsertSessionEntryCore(scope, {
-          sessionId: "session-1",
-          updatedAt: 1,
-          restartRecoveryDeliveryReceiptState: blocked ? "terminal-pending" : undefined,
-        });
-        const params = makeStarterParams({
-          entry: blocked ? undefined : makeFailClosedEntry(),
-          ...scope,
-        });
-        const attempt = await createChatSendMessageInjectionStarter(params)();
-        if (blocked) {
-          expect(attempt).toBeUndefined();
-          expect(params.logGateway.warn).toHaveBeenCalled();
-        } else {
-          await expect(attempt?.outcome).resolves.toMatchObject({ status: "accepted" });
-        }
-        retireSessionControllerInput(params.sourceRef.input);
-      }
-    });
-  });
-
-  it("falls back without queuing when durable terminal metadata is unreadable", async () => {
+  it("falls back without queuing when session execution metadata is unreadable", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = await state.writeText(
         "agents/main/agent/openclaw-agent.sqlite",
@@ -611,28 +525,6 @@ describe("gateway steer contract after the injection-start fence", () => {
       );
     },
   );
-
-  it("routes a fail-closed inbound to follow-up dispatch exactly once, with no steer enqueued", async () => {
-    // Mock-gateway contract: the pre-ACK path creates the starter, invokes
-    // it after preparation, and hands the inbound to follow-up dispatch whenever
-    // no injection attempt exists. A terminal receipt present at the
-    // injection-start boundary must yield exactly one delivery path — the
-    // follow-up dispatch — and zero runtime queueMessage calls, instead of
-    // the old post-enqueue rejection (steer already queued + fallback
-    // second dispatch = inbound double delivery).
-    const dispatchFollowup = vi.fn();
-    const begin = createChatSendMessageInjectionStarter(
-      makeStarterParams({ entry: makeFailClosedEntry() }),
-    );
-
-    const attempt = await begin();
-    if (attempt) {
-      throw new Error("unexpected injection attempt for a fail-closed session");
-    }
-    dispatchFollowup();
-
-    expect(dispatchFollowup).toHaveBeenCalledOnce();
-  });
 });
 
 describe("createChatSendMessageInjectionStarter", () => {
@@ -793,9 +685,7 @@ describe("createChatSendMessageInjectionStarter", () => {
           kind: "document",
         },
       ],
-      replyOptionImages: [
-        { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
-      ],
+      replyOptionImages: [{ type: "image", data: "inbound-photo", mimeType: "image/png" }],
       documentContext: {
         status: "rendered",
         text: "[PDF content rendered to images]",
@@ -813,9 +703,9 @@ describe("createChatSendMessageInjectionStarter", () => {
         "see attached\n\n[PDF content rendered to images]",
       {
         images: [
-          { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
-          { type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 1 },
-          { type: "image", data: "page-2", mimeType: "image/png", sourceIndex: 1 },
+          { type: "image", data: "inbound-photo", mimeType: "image/png" },
+          { type: "image", data: "page-1", mimeType: "image/png" },
+          { type: "image", data: "page-2", mimeType: "image/png" },
         ],
       },
     );
@@ -837,7 +727,7 @@ describe("createChatSendMessageInjectionStarter", () => {
       expect.anything(),
       "scan attached\n\n[PDF content rendered to images]",
       expect.objectContaining({
-        images: [{ type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 0 }],
+        images: [{ type: "image", data: "page-1", mimeType: "image/png" }],
       }),
     );
   });

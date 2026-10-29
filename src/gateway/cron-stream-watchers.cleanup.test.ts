@@ -18,6 +18,17 @@ function cleanup(
   });
 }
 
+function expectHealthy(watchers: ReturnType<typeof createCronStreamWatcherFixture>["watchers"]) {
+  expect(watchers.inspect("stream-job")).toMatchObject({
+    state: "running",
+    consecutiveFailures: 0,
+    restartTimerPending: false,
+  });
+}
+
+const commands = (fake: ReturnType<typeof fakeSupervisor>) =>
+  fake.inputs.map((input) => (input.mode === "child" ? input.argv : undefined));
+
 function deferredSourceFixture() {
   const entered = createDeferred();
   const release = createDeferred();
@@ -105,14 +116,8 @@ it.each(["identical", "updated"])(
     const replacement = watchers.start(job({ schedule: { kind: "stream", command, batchMs: 50 } }));
     release();
     await Promise.all([starting, replacement]);
-    expect(fake.inputs.map((input) => (input.mode === "child" ? input.argv : undefined))).toEqual([
-      command,
-    ]);
-    expect(watchers.inspect("stream-job")).toMatchObject({
-      state: "running",
-      consecutiveFailures: 0,
-      restartTimerPending: false,
-    });
+    expect(commands(fake)).toEqual([command]);
+    expectHealthy(watchers);
     expect(recordFailure).not.toHaveBeenCalled();
   },
 );
@@ -123,7 +128,6 @@ it("keeps a running source current across repeated starts and reconciliation", a
   const streamJob = job();
   await watchers.start(streamJob);
   const assertCurrent = fake.inputs[0]?.assertCurrent;
-  expect(assertCurrent).toBeTypeOf("function");
   await watchers.start(streamJob);
   await watchers.reconcile([streamJob], true);
   expect(assertCurrent).not.toThrow();
@@ -141,28 +145,18 @@ it("does not revive a running source after a superseded replacement", async () =
   const original = job();
   await watchers.start(original);
   const assertOriginalCurrent = fake.inputs[0]?.assertCurrent;
-  expect(assertOriginalCurrent).toBeTypeOf("function");
   const replacement = watchers.start(
     job({ schedule: { kind: "stream", command: ["replacement"], batchMs: 50 } }),
   );
   const reverted = watchers.start(original);
-  // Both watcher calls admit their requests before the serialized owner operations run.
   await Promise.resolve();
   expect(assertOriginalCurrent).toThrow("Stream source admission is no longer current");
   await Promise.all([replacement, reverted]);
 
-  expect(fake.inputs.map((input) => (input.mode === "child" ? input.argv : undefined))).toEqual([
-    ["stream-source"],
-    ["stream-source"],
-  ]);
+  expect(commands(fake)).toEqual([["stream-source"], ["stream-source"]]);
   expect(fake.runs[0]?.cancel).toHaveBeenCalled();
   expect(assertOriginalCurrent).toThrow("Stream source admission is no longer current");
-  expect(fake.inputs[1]?.assertCurrent).toBeTypeOf("function");
   expect(fake.inputs[1]?.assertCurrent).not.toThrow();
-  expect(watchers.inspect(original.id)).toMatchObject({
-    state: "running",
-    consecutiveFailures: 0,
-    restartTimerPending: false,
-  });
+  expectHealthy(watchers);
   expect(recordFailure).not.toHaveBeenCalled();
 });

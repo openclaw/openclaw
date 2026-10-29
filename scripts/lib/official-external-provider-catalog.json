@@ -836,6 +836,65 @@
       }
     },
     {
+      "name": "@openclaw/liquid-ai-provider",
+      "description": "OpenClaw Liquid AI provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "liquid-ai",
+          "label": "Liquid AI"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "liquid-ai-native",
+            "hosts": [
+              "api.liquid.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "liquid-ai",
+            "name": "Liquid AI",
+            "docs": "/providers/liquid-ai",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "LIQUIDAI_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "liquid-ai-api-key",
+                "choiceLabel": "Liquid AI API key",
+                "groupId": "liquid-ai",
+                "groupLabel": "Liquid AI",
+                "groupHint": "Native Decision models",
+                "optionKey": "liquidAiApiKey",
+                "cliFlag": "--liquid-ai-api-key",
+                "cliOption": "--liquid-ai-api-key <key>",
+                "cliDescription": "Liquid AI API key"
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "decisionProviders": [
+            "liquid-ai"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/liquid-ai-provider",
+          "npmSpec": "@openclaw/liquid-ai-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/longcat-provider",
       "description": "OpenClaw LongCat provider plugin",
       "source": "official",

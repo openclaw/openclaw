@@ -63,11 +63,14 @@ type ExtraParamsApi =
   | "openai-chatgpt-responses"
   | "azure-openai-responses";
 type RunExtraParamsCaseParams<TPayload extends Record<string, unknown>> = {
+  agentId?: string;
   applyModelId?: string;
   applyProvider?: string;
   callerHeaders?: SimpleStreamOptions["headers"];
   cfg?: OpenClawConfig;
   model: Model<ExtraParamsApi>;
+  runtimeModel?: Model;
+  policyOptions?: Parameters<typeof applyExtraParamsToAgent>[11];
   mockProviderRuntime?: boolean;
   options?: SimpleStreamOptions;
   payload: TPayload;
@@ -103,8 +106,12 @@ export function runExtraParamsCase<TPayload extends Record<string, unknown>>(
       params.applyModelId ?? params.model.id,
       undefined,
       params.thinkingLevel,
-      undefined,
+      params.agentId,
       params.workspaceDir,
+      params.runtimeModel,
+      undefined,
+      undefined,
+      params.policyOptions,
     );
   } finally {
     if (params.mockProviderRuntime === true) {

@@ -24,7 +24,13 @@ export function createRetryController({
     ...runParams,
   };
   return createEmbeddedRunFailoverRetryController({
-    runInput: { runParams: params, globalLane: "test", agentDir, fallbackConfigured },
+    runInput: {
+      runParams: params,
+      globalLane: "test",
+      agentDir,
+      fallbackConfigured,
+      startedAtMs: Date.now(),
+    },
     preparedRuntime: {
       provider: "openai",
       modelId: "gpt-5.6-luna",

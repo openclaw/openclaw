@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -18,10 +22,6 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "../channel-tool-metadata.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
 import {
   getToolTerminalPresentation,
   setToolTerminalPresentation,

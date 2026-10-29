@@ -67,6 +67,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       partialNotice: null,
       sessions: [],
       creatorOptions: [],
+      filterOptions: undefined,
       totals: null,
       aggregates: null,
       costDaily: [],
@@ -148,6 +149,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
   if (props.data.sessions.length && !props.data.overview) {
     props.data.overview = projectUsageData(props.data.sessions, props.filters).overview;
   }
+  props.data.filterOptions ??= props.data.overview?.filterOptions;
   return props;
 }
 
@@ -169,20 +171,26 @@ export function createUsageOverview(
 ): NonNullable<UsageProps["data"]["overview"]> {
   const overview = projectUsageData([]).overview!;
   delete overview.selectedUsageComplete;
-  delete overview.usageReport;
   return Object.assign(overview, overrides);
 }
 
 export function projectUsageData(
   sessions: UsageSessionEntry[],
   filters: Partial<UsageProps["filters"]> = {},
-): Pick<UsageProps["data"], "sessions" | "totals" | "aggregates" | "overview" | "costDaily"> {
+): Pick<
+  UsageProps["data"],
+  "sessions" | "totals" | "aggregates" | "overview" | "costDaily" | "filterOptions"
+> {
   const result = buildUsageOverview({
     rows: sessions,
     options: filters,
     dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
   });
-  return { ...result, costDaily: result.aggregates.costDaily ?? [] };
+  return {
+    ...result,
+    costDaily: result.aggregates.costDaily ?? [],
+    filterOptions: result.overview.filterOptions,
+  };
 }
 
 export const buildAggregatesFromSessions = (

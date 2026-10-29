@@ -6,49 +6,40 @@ import {
   resolveMatrixMonitorCommandAccess,
 } from "./access-state.js";
 
-beforeEach(() => {
-  setMatrixRuntime(createPluginRuntimeMock());
-});
+beforeEach(() => setMatrixRuntime(createPluginRuntimeMock()));
+const alice = "@alice:example.org";
+type AccessInput = Partial<Parameters<typeof resolveMatrixMonitorAccessState>[0]>;
 
-function resolveAccess(overrides: Partial<Parameters<typeof resolveMatrixMonitorAccessState>[0]>) {
+function resolveAccess(overrides: AccessInput) {
   return resolveMatrixMonitorAccessState({
     allowFrom: [],
     storeAllowFrom: [],
     groupAllowFrom: [],
     roomUsers: [],
-    senderId: "@alice:example.org",
+    senderId: alice,
     isRoom: true,
     ...overrides,
   });
 }
 
-async function expectBlockedCommand(
-  state: Parameters<typeof resolveMatrixMonitorCommandAccess>[0],
-) {
-  expect(
-    await resolveMatrixMonitorCommandAccess(state, {
-      allowTextCommands: true,
-      hasControlCommand: true,
-    }),
-  ).toMatchObject({ authorized: false, shouldBlockControlCommand: true });
+async function expectBlockedCommand(state: Awaited<ReturnType<typeof resolveAccess>>) {
+  const access = await resolveMatrixMonitorCommandAccess(state, {
+    allowTextCommands: true,
+    hasControlCommand: true,
+  });
+  expect(access).toMatchObject({ authorized: false, shouldBlockControlCommand: true });
 }
 
 describe("resolveMatrixMonitorAccessState", () => {
   it("normalizes group allowlists and uses shared ingress matching", async () => {
     const state = await resolveAccess({
-      allowFrom: ["matrix:@Alice:Example.org"],
-      storeAllowFrom: ["user:@bob:example.org"],
       groupAllowFrom: ["@Carol:Example.org"],
       roomUsers: ["user:@Dana:Example.org"],
       senderId: "@Dana:Example.org",
       groupPolicy: "allowlist",
     });
 
-    expect(state).toMatchObject({
-      effectiveGroupAllowFrom: ["@Carol:Example.org"],
-      effectiveRoomUsers: ["user:@Dana:Example.org"],
-      messageIngress: { ingress: { decision: "allow" } },
-    });
+    expect(state.messageIngress.ingress.decision).toBe("allow");
   });
 
   it.each([
@@ -68,7 +59,7 @@ describe("resolveMatrixMonitorAccessState", () => {
 
   it("does not let pairing-store entries authorize open DMs without wildcard", async () => {
     const state = await resolveAccess({
-      storeAllowFrom: ["@alice:example.org"],
+      storeAllowFrom: [alice],
       dmPolicy: "open",
       isRoom: false,
     });
@@ -79,40 +70,16 @@ describe("resolveMatrixMonitorAccessState", () => {
     });
   });
 
-  it.each([
-    { source: "DM pairing store", storeAllowFrom: ["@alice:example.org"] },
-    {
-      source: "configured DM allowlist",
-      allowFrom: ["@alice:example.org"],
-      groupAllowFrom: ["@admin:example.org"],
-    },
-  ])(
-    "does not let $source authorize room control commands",
-    async ({ source: _source, ...entries }) => {
-      await expectBlockedCommand(await resolveAccess(entries));
-    },
-  );
-
-  it("treats unresolved configured room allowlists as configured but nonmatching", async () => {
-    const groupState = await resolveAccess({
-      groupAllowFrom: ["Alice"],
-      groupPolicy: "allowlist",
+  it.each<[string, AccessInput]>([
+    ["group", { groupAllowFrom: ["Alice"], groupPolicy: "allowlist" }],
+    ["room users", { roomUsers: ["Alice"], groupPolicy: "open" }],
+  ])("denies ingress and commands for unresolved %s", async (_source, entries) => {
+    const state = await resolveAccess(entries);
+    expect(state.messageIngress.ingress).toMatchObject({
+      decision: "block",
+      reasonCode: "group_policy_not_allowlisted",
     });
-    const roomState = await resolveAccess({
-      roomUsers: ["Dana"],
-      senderId: "@dana:example.org",
-      groupPolicy: "open",
-    });
-
-    expect(groupState.effectiveGroupAllowFrom).toEqual(["alice"]);
-    expect(roomState.effectiveRoomUsers).toEqual(["dana"]);
-    for (const state of [groupState, roomState]) {
-      expect(state.messageIngress.ingress).toMatchObject({
-        decision: "block",
-        reasonCode: "group_policy_not_allowlisted",
-      });
-      await expectBlockedCommand(state);
-    }
+    await expectBlockedCommand(state);
   });
 
   it("keeps room-user allowlists out of dm traffic", async () => {

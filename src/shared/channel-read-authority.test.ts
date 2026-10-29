@@ -26,19 +26,26 @@ function revocable(message: string) {
   };
 }
 
-it("keeps nested output until the outer read accepts it without retaining the inner callable", async () => {
+it("shares nested output across SDK chunks until acceptance, then closes the callable", async () => {
+  vi.resetModules();
+  const other = await import("./channel-read-authority.js");
   const settle = vi.fn(async (_accepted: boolean) => {});
   let innerAssertion: (() => void) | undefined;
+  let outerAssertion: (() => void) | undefined;
   await withAuthority(activeAuthority, async () => {
+    outerAssertion = captureAuthority();
     await withAuthority(activeAuthority, async () => {
-      innerAssertion = captureAuthority();
-      register(settle);
+      innerAssertion = other.captureChannelReadAuthority();
+      expect(innerAssertion).toBe(captureAuthority());
+      innerAssertion!();
+      other.captureChannelReadScope()!.registerResource({ key: "created-media", settle });
     });
     expect(() => innerAssertion!()).toThrow("no longer active");
     expect(settle).not.toHaveBeenCalled();
     expect(() => captureAuthority()!()).not.toThrow();
   });
   expect(settle).toHaveBeenCalledExactlyOnceWith(true);
+  expect(() => outerAssertion!()).toThrow("no longer active");
 });
 
 it.each(["provider", "source signal"])(
@@ -122,22 +129,6 @@ it("preserves authority-error precedence when rejection cleanup also fails", asy
   ).rejects.toBe(authority.error);
   expect(settle).toHaveBeenCalledExactlyOnceWith(false);
   expect(logError).toHaveBeenCalledWith(expect.stringContaining("synthetic cleanup failure"));
-});
-
-it("shares the callable and owned output with a separately evaluated SDK chunk", async () => {
-  vi.resetModules();
-  const otherChunk = await import("./channel-read-authority.js");
-  const settle = vi.fn(async (_accepted: boolean) => {});
-  let retained: (() => void) | undefined;
-  await withAuthority(activeAuthority, async () => {
-    retained = otherChunk.captureChannelReadAuthority();
-    expect(typeof retained).toBe("function");
-    expect(retained).toBe(captureAuthority());
-    retained!();
-    otherChunk.captureChannelReadScope()!.registerResource({ key: "created-media", settle });
-  });
-  expect(settle).toHaveBeenCalledExactlyOnceWith(true);
-  expect(() => retained!()).toThrow("no longer active");
 });
 
 it("leaves calls without a read scope unchanged", async () => {

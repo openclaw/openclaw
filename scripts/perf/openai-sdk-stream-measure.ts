@@ -6,11 +6,16 @@
  * checkouts. --owner accepts an alternate completions transport module in the same
  * source tree. Allocation profiles retain dependency frames; no provider credentials.
  * Requests and events are hashed outside measurement (only timestamps normalized).
+ * Add --api responses --text-only for 200 reasoning/text deltas without a tool call.
+ * For network-free replay, pass --api responses --fixture <recorded.sse>.
+ * Each run records its synthetic wire fixture at <output>.sse for later replay.
+ * The recording must match this script's fixture and the selected --text-only mode;
+ * replay splits its bytes into 1 KiB chunks before starting measurement.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
@@ -18,6 +23,7 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { configureAiTransportHost } from "../../packages/ai/src/host.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../packages/ai/src/transports/openai-responses-client.js";
 import type { Model } from "../../packages/ai/src/types.js";
 
@@ -25,16 +31,23 @@ const { values } = parseArgs({
   options: {
     api: { type: "string", default: "completions" },
     turns: { type: "string", default: "20" },
+    warmup: { type: "string", default: "10" },
     mode: { type: "string", default: "timing" },
     owner: { type: "string" },
     output: { type: "string" },
+    fixture: { type: "string" },
+    "text-only": { type: "boolean", default: false },
   },
 });
 assert(values.api === "completions" || values.api === "responses");
+const textOnly = values["text-only"];
+assert(!textOnly || values.api === "responses", "--text-only requires --api responses");
 assert(values.mode === "timing" || values.mode === "allocation");
 assert(values.output, "--output is required");
 const turns = Number(values.turns);
 assert(Number.isSafeInteger(turns) && turns > 0);
+const warmup = Number(values.warmup);
+assert(Number.isSafeInteger(warmup) && warmup >= 0);
 const {
   createOpenAICompletionsTransportStreamFn,
 }: typeof import("../../packages/ai/src/transports/openai-completions-transport.js") = await import(
@@ -44,6 +57,7 @@ const {
 );
 const delta = "A synthetic streaming delta café 🦞. ";
 const count = 100;
+const deltasPerTurn = count * (textOnly ? 2 : 3);
 const text = delta.repeat(count);
 const argsParts = ['{"query":"', ...Array.from({ length: count - 2 }, () => "synthetic "), '"}'];
 const args = argsParts.join("");
@@ -110,23 +124,25 @@ if (values.api === "responses") {
     content: [{ type: "output_text", text, annotations: [] }],
   };
   done(finalMessage, 1);
-  add(tool, 2);
-  for (const argumentDelta of argsParts) {
-    events.push({
-      type: "response.function_call_arguments.delta",
-      item_id: tool.id,
-      output_index: 2,
-      delta: argumentDelta,
-    });
-  }
   const finalTool = { ...tool, arguments: args, status: "completed" };
-  done(finalTool, 2);
+  if (!textOnly) {
+    add(tool, 2);
+    for (const argumentDelta of argsParts) {
+      events.push({
+        type: "response.function_call_arguments.delta",
+        item_id: tool.id,
+        output_index: 2,
+        delta: argumentDelta,
+      });
+    }
+    done(finalTool, 2);
+  }
   events.push({
     type: "response.completed",
     response: {
       id: "resp_fixture",
       status: "completed",
-      output: [finalReasoning, finalMessage, finalTool],
+      output: textOnly ? [finalReasoning, finalMessage] : [finalReasoning, finalMessage, finalTool],
       usage: { input_tokens: 100, output_tokens: 300, total_tokens: 400 },
     },
   });
@@ -188,29 +204,65 @@ const server = createServer((req, res) => {
     })();
   });
 });
-// Explicit loopback port range; never bind the operator's Gateway port.
-for (let port = 41000; ; port++) {
-  try {
-    server.listen(port, "127.0.0.1");
-    await once(server, "listening");
-    break;
-  } catch (error) {
-    if (
-      !(error instanceof Error && "code" in error && error.code === "EADDRINUSE") ||
-      port >= 41999
-    ) {
-      throw error;
+const replay = values.fixture ? await readFile(values.fixture) : undefined;
+await writeFile(`${values.output}.sse`, replay ?? Buffer.concat(frames));
+if (replay) {
+  const chunks = Array.from({ length: Math.ceil(replay.length / 1024) }, (_, index) =>
+    replay.subarray(index * 1024, (index + 1) * 1024),
+  );
+  configureAiTransportHost({
+    buildModelFetch: () => async (_input, init) => {
+      if (capture) {
+        capturedRequest = await new Response(init?.body).text();
+      }
+      requests++;
+      let index = 0;
+      return new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull(controller) {
+              const chunk = chunks[index++];
+              if (chunk !== undefined) {
+                controller.enqueue(chunk);
+              } else {
+                controller.close();
+              }
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    },
+  });
+}
+// Explicit loopback port range; fixture replay never opens a socket.
+if (!replay) {
+  for (let port = 41000; ; port++) {
+    try {
+      server.listen(port, "127.0.0.1");
+      await once(server, "listening");
+      break;
+    } catch (error) {
+      if (
+        !(error instanceof Error && "code" in error && error.code === "EADDRINUSE") ||
+        port >= 41999
+      ) {
+        throw error;
+      }
     }
   }
 }
 const address = server.address();
-assert(address && typeof address !== "string");
+assert(replay || (address && typeof address !== "string"));
 const model: Model = {
   id: "fixture",
   name: "Synthetic fixture",
   provider: "openai",
   api: values.api === "responses" ? "openai-responses" : "openai-completions",
-  baseUrl: `http://127.0.0.1:${address.port}/v1`,
+  baseUrl: replay
+    ? "https://fixture.invalid/v1"
+    : `http://127.0.0.1:${address && typeof address !== "string" ? address.port : 41000}/v1`,
   reasoning: true,
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -250,10 +302,12 @@ const run = async (hash?: ReturnType<typeof createHash>) => {
     }
     if (event.type === "done") {
       terminal = true;
-      assert.equal(event.message.stopReason, "toolUse");
-      const tool = event.message.content.find((part) => part.type === "toolCall");
-      assert(tool?.type === "toolCall");
-      assert.deepEqual(tool.arguments, JSON.parse(args));
+      assert.equal(event.message.stopReason, textOnly ? "stop" : "toolUse");
+      if (!textOnly) {
+        const tool = event.message.content.find((part) => part.type === "toolCall");
+        assert(tool?.type === "toolCall");
+        assert.deepEqual(tool.arguments, JSON.parse(args));
+      }
     }
   }
   assert(terminal);
@@ -266,7 +320,7 @@ try {
   capture = false;
   const eventHash = hash.digest("hex");
   const requestHash = createHash("sha256").update(capturedRequest).digest("hex");
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < warmup; i++) {
     await run();
   }
   eventCount = 0;
@@ -297,20 +351,22 @@ try {
   }
   const result = {
     api: values.api,
+    textOnly,
     mode: values.mode,
     turns,
-    deltas: turns * count * 3,
+    warmup,
+    deltas: turns * deltasPerTurn,
     requests,
     eventCount,
     requestHash,
     eventHash,
     elapsedMs,
     cpuMs: (cpu.user + cpu.system) / 1000,
-    cpuMsPer1000Deltas: (cpu.user + cpu.system) / (turns * count * 3),
-    mainThreadCpuMsPer1000Deltas: (thread.user + thread.system) / (turns * count * 3),
+    cpuMsPer1000Deltas: (cpu.user + cpu.system) / (turns * deltasPerTurn),
+    mainThreadCpuMsPer1000Deltas: (thread.user + thread.system) / (turns * deltasPerTurn),
     sampledBytes,
     sampledBytesPer1000Deltas:
-      sampledBytes === undefined ? undefined : (sampledBytes * 1000) / (turns * count * 3),
+      sampledBytes === undefined ? undefined : (sampledBytes * 1000) / (turns * deltasPerTurn),
     hostLoad,
     memory: process.memoryUsage(),
   };
@@ -318,8 +374,10 @@ try {
   console.log(JSON.stringify(result));
 } finally {
   inspector.disconnect();
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+  if (!replay) {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 }

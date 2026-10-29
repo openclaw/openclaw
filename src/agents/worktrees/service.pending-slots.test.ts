@@ -13,6 +13,7 @@ import * as gitWorker from "../../infra/git-worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import * as commandExec from "../../process/exec.js";
 import {
   registerProjectRegistry,
   selectStoredProjectRegistry,
@@ -104,6 +105,23 @@ describe("managed worktree pending slots", () => {
       release.resolve();
       await holder;
     };
+  }
+
+  function holdPastProjectDeadline(signal: AbortSignal) {
+    const waiting = createDeferred();
+    const release = createDeferred();
+    const now = performance.now.bind(performance);
+    let elapsed = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
+    vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
+      if (!elapsed) {
+        elapsed = 31_001;
+        return;
+      }
+      waiting.resolve();
+      await withinTest(release.promise, signal);
+    });
+    return { waiting, release };
   }
 
   function markPendingOwnerDead(record: ManagedWorktreeRecord) {
@@ -359,7 +377,20 @@ describe("managed worktree pending slots", () => {
       expect((await readPendingWorktrees(env)).map(({ record }) => record.name)).toEqual([
         "project-first",
       ]);
-      release.resolve();
+      const continued = holdPastProjectDeadline(signal);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            continued.waiting.promise,
+            second,
+            "Accepted registered-source creation settled before the source became available",
+          ),
+          signal,
+        );
+      } finally {
+        release.resolve();
+        continued.release.resolve();
+      }
       const results = await Promise.all([first, second, unrelated]);
       expect(new Set(results.map(({ record }) => record.id)).size).toBe(3);
       for (const [index, { record }] of results.entries()) {
@@ -378,6 +409,97 @@ describe("managed worktree pending slots", () => {
       await Promise.allSettled(operations);
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "continues publication after source contention without repeating completed setup",
+    async ({ signal }) => {
+      const script = path.join(repoRoot, ".openclaw", "worktree-setup.sh");
+      await fs.mkdir(path.dirname(script));
+      await fs.writeFile(
+        script,
+        '#!/bin/sh\nprintf "setup\\n" >> "$OPENCLAW_WORKTREE_PATH/setup-count"\n',
+        {
+          mode: 0o755,
+        },
+      );
+      const project = await registerProjectRegistry({ path: repoRoot }, { env });
+      const selected = await selectStoredProjectRegistry(project.id, { env, signal });
+      expect(selected).toBeDefined();
+      const setupCompleted = createDeferred<string>();
+      const returnSetup = createDeferred();
+      const execute = commandExec.runCommandWithTimeout;
+      vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        const result = await execute(argv, options);
+        if (argv[0] === script && typeof options === "object") {
+          setupCompleted.resolve(options.cwd!);
+          await withinTest(returnSetup.promise, signal);
+        }
+        return result;
+      });
+      const params = {
+        repoRoot,
+        name: "completed-setup",
+        baseRef: "HEAD",
+        ownerKind: "session" as const,
+        ownerId: "agent:main:completed-setup",
+        provisionIgnoredFiles: false,
+        signal,
+        withSource: selected!.withCurrent,
+        withRollback: selected!.withRollback,
+      };
+      const creating = service.createWithOutcome(params);
+      const sourceEntered = createDeferred();
+      const releaseSource = createDeferred();
+      let holder: Promise<void> | undefined;
+      let continued: ReturnType<typeof holdPastProjectDeadline> | undefined;
+      try {
+        const checkout = await withinTest(
+          awaitGateBeforeSettlement(setupCompleted.promise, creating, "Setup did not complete"),
+          signal,
+        );
+        holder = selected!.withCurrent(async () => {
+          sourceEntered.resolve();
+          await withinTest(releaseSource.promise, signal);
+        });
+        await withinTest(
+          awaitGateBeforeSettlement(sourceEntered.promise, holder, "Source holder did not enter"),
+          signal,
+        );
+        continued = holdPastProjectDeadline(signal);
+        returnSetup.resolve();
+        await withinTest(
+          awaitGateBeforeSettlement(
+            continued.waiting.promise,
+            creating,
+            "Completed setup failed instead of waiting to publish",
+          ),
+          signal,
+        );
+        expect(await fs.readFile(path.join(checkout, "setup-count"), "utf8")).toBe("setup\n");
+        expect(await service.listRegistryRecords()).toEqual([]);
+        expect((await readPendingWorktrees(env)).map(({ record }) => record.name)).toEqual([
+          "completed-setup",
+        ]);
+        releaseSource.resolve();
+        continued.release.resolve();
+        const created = await creating;
+        expect(created.materialized).toBe(true);
+        expect(created.record.path).toBe(checkout);
+        expect(await service.createWithOutcome(params)).toEqual({
+          record: created.record,
+          materialized: false,
+          sourceRoot: repoRoot,
+        });
+        expect(await fs.readFile(path.join(checkout, "setup-count"), "utf8")).toBe("setup\n");
+        expect(await readPendingWorktrees(env)).toEqual([]);
+      } finally {
+        returnSetup.resolve();
+        releaseSource.resolve();
+        continued?.release.resolve();
+        await Promise.allSettled([creating, ...(holder ? [holder] : [])]);
+      }
+    },
+  );
 
   it.each(["abort", "deadline"] as const)(
     "settles a registered-source %s without a slot or late creation",
@@ -408,22 +530,23 @@ describe("managed worktree pending slots", () => {
         if (ending === "abort") {
           caller.abort(new Error("Stop waiting for project"));
         } else {
-          clock += 30_001;
+          clock += 30 * 60_000 + 1;
         }
       });
       try {
-        await expect(
-          service.create({
-            repoRoot,
-            name: "stopped-project",
-            baseRef: "HEAD",
-            signal: caller.signal,
-            withSource: selected!.withCurrent,
-            withRollback: selected!.withRollback,
-          }),
-        ).rejects.toMatchObject({
-          code: ending === "abort" ? "OPENCLAW_STATE_LEASE_ABORTED" : "OPENCLAW_STATE_LEASE_HELD",
+        const creating = service.create({
+          repoRoot,
+          name: "stopped-project",
+          baseRef: "HEAD",
+          signal: caller.signal,
+          withSource: selected!.withCurrent,
+          withRollback: selected!.withRollback,
         });
+        if (ending === "abort") {
+          await expect(creating).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+        } else {
+          await expect(creating).rejects.toThrow(/timed out.*openclaw worktrees gc/);
+        }
       } finally {
         release.resolve();
         // The source holder shares cancellation for this fixture and must drain too.

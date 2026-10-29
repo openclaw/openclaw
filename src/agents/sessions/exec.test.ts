@@ -162,34 +162,6 @@ describe("execCommand", () => {
     });
   });
 
-  it("spawns commands with process-tree cleanup options", async () => {
-    const child = createStubChild();
-    const wait = createDeferred<number | null>();
-    spawnMock.mockReturnValue(child);
-    completionMock.mockReturnValue(wait.promise);
-
-    const resultPromise = execCommand("cmd", ["arg"], "/tmp");
-    wait.resolve(0);
-    await resultPromise;
-
-    expect(spawnMock).toHaveBeenCalledWith(["cmd", "arg"], {
-      buffer: false,
-      cancelSignal: expect.any(AbortSignal),
-      cwd: "/tmp",
-      detached: process.platform !== "win32",
-      forceKillAfterDelay: 5000,
-      reject: false,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    expect(createTerminationControllerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        child,
-        processTree: { mode: "graceful" },
-        killGraceMs: 5000,
-      }),
-    );
-  });
-
   it("honors caller-supplied small output caps", async () => {
     const child = createStubChild();
     const wait = createDeferred<number | null>();

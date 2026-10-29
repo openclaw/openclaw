@@ -28,7 +28,16 @@ Writer identity uses the protected CLI with included headers on both transports
 to retain the native writer route. Reviewer assignment requires REST and verifies
 the retained assignee. The CI watcher polls GraphQL summaries, expanding details
 for failures or pending checks after CI succeeds; primary quota exhaustion selects
-REST with complete check/status and workflow evidence.
+REST with complete check/status and workflow evidence. In `--completion ci-run`
+mode, active polling revalidates the attached run and attempt-specific job pages
+with REST ETags. Only a successful `304 Not Modified` reuses the previous body;
+changed responses and new attempts replace that evidence. Missing ETags retain
+ordinary fresh reads. Validators live only for this watcher and credential/host
+scope. PR head, lifecycle, and conflict observations remain fresh each poll, and
+completed runs do not reload job progress. `gh api --include` uses the protected
+CLI’s native caller-authenticated route, not the pooled relay; authenticated
+304s avoid GitHub’s primary quota but still make network requests and remain
+subject to secondary limits.
 
 Successful authentication is reused within one shell operation and its nested
 worktree entries; new processes and changed credential selection require a new
@@ -40,6 +49,18 @@ carry that observation through source acquisition and hosted gates; acquisition
 still independently rereads complete source identity after the immutable fetch.
 Publication revalidates immediately before each Git/GraphQL write, after transport
 preparation, and compares the successful publication observation before acquisition.
+
+PR-branch publication defaults to `OPENCLAW_PR_PUSH_MODE=auto`. Signed ranges
+use Git; unsigned linear ranges use GitHub’s verified `createCommitOnBranch`
+route when head-repository metadata is available. A range containing a merge
+uses Git to preserve its parents and must pass the existing signature checks
+or have the explicit `OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH=1` override. Signature
+checks cover first-parent commits, or all non-baseline task commits when an
+authenticated publication baseline is present. The override does not
+change the unsigned-linear default. Explicit `graphql` mode still refuses merge
+ancestry. A Git permission failure can fall back to GraphQL only for a linear
+range; a merge preserves the original Git failure instead. Uncertain outcomes
+never authorize another publication.
 
 Ordinary immediate squash prefers REST. Explicit recovery of a validated retained
 intent starts with GraphQL; normal fallback and immediate-only recovery gates

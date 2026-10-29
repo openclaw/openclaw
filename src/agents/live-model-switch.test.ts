@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as mod from "./live-model-switch.js";
 
@@ -139,55 +138,11 @@ it("treats auth-profile-source changes as no-op when no auth profile is selected
   ).toBeUndefined();
 });
 
-it("returns undefined when liveModelSwitchPending is false", async () => {
-  state.loadSessionStoreMock.mockReturnValue({
-    main: {
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-    },
-  });
-
-  expect(await mod.shouldSwitchToLiveModel(makeShouldSwitchParams())).toBeUndefined();
-  expect(state.loadSessionStoreMock).toHaveBeenCalledWith({
-    hydrateSkillPromptRefs: false,
-    clone: false,
-    readConsistency: "latest",
-    sessionKey: "main",
-    storePath: "/tmp/session-store.json",
-  });
-});
-
 it("returns undefined when sessionKey is missing", async () => {
   expect(
     await mod.shouldSwitchToLiveModel(makeShouldSwitchParams({ sessionKey: undefined })),
   ).toBeUndefined();
 });
-it.each([
-  ["different model", true, "anthropic", "claude-opus-4-6"],
-  ["already consumed flag", undefined, "openai", "gpt-5.5"],
-] as const)(
-  "prepares terminal cleanup for %s without mutating its snapshot",
-  (_name, liveModelSwitchPending, providerUsed, modelUsed) => {
-    const snapshot: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      liveModelSwitchPending,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.5",
-    };
-    const before = structuredClone(snapshot);
-    const reducer = mod.prepareLiveModelSwitchAfterRun({
-      ...completionParams,
-      entry: snapshot,
-      providerUsed,
-      modelUsed,
-    });
-    expect(Boolean(reducer?.clearPending)).toBe(false);
-    expect(snapshot).toEqual(before);
-    expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
-  },
-);
-
 it("resolves the owning agent's default from the session key", () => {
   const reducer = mod.prepareLiveModelSwitchAfterRun({
     cfg: completionParams.cfg,

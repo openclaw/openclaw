@@ -239,8 +239,8 @@ describe("managed Chrome early child exit", () => {
 
   it("rejects a child that exits while the final diagnostic succeeds", async () => {
     // Expire discovery before polling so this case owns only the final diagnostic race.
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => {
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => {
       now += 15_000;
       return now;
     });

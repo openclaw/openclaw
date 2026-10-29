@@ -153,19 +153,20 @@ it("probes the exact HTML document without credentials or redirects", async () =
   expect(response.release).toHaveBeenCalledOnce();
 });
 
-it.each(["ready", "timeout", "immediate"])("handles preparing dashboards: %s", async (outcome) => {
+it.each(["ready", "abort", "immediate"])("handles preparing dashboards: %s", async (outcome) => {
   vi.useFakeTimers();
   vi.setSystemTime(0);
   const preparing = preparingResponse();
   const ready = guardedResponse();
-  const fetch = mockFetch().mockResolvedValueOnce(preparing);
-  if (outcome === "ready") {
-    fetch.mockResolvedValueOnce(ready);
-  } else {
-    fetch.mockImplementation(async () => preparingResponse());
-  }
-  const onPending = vi.fn();
-  const pending = probe({ onPending, timeoutMs: 2_500, waitForPending: outcome !== "immediate" });
+  const fetch = mockFetch().mockResolvedValueOnce(preparing).mockResolvedValue(ready);
+  const controller = new AbortController();
+  const onPending = vi.fn(() => outcome === "abort" && controller.abort());
+  const pending = probe({
+    onPending,
+    timeoutMs: 2_500,
+    waitForPending: outcome !== "immediate",
+    signal: controller.signal,
+  });
   await vi.runAllTimersAsync();
   const expected =
     outcome === "ready"
@@ -175,15 +176,14 @@ it.each(["ready", "timeout", "immediate"])("handles preparing dashboards: %s", a
           reason:
             outcome === "immediate"
               ? "Control UI assets are still preparing."
-              : "Control UI assets did not finish preparing in time.",
+              : "Control UI readiness check was interrupted.",
           ...(outcome === "immediate" ? { status: 503 } : {}),
         };
   await expect(pending).resolves.toEqual(expected);
-  expect(Date.now()).toBe(outcome === "ready" ? 1_000 : outcome === "timeout" ? 2_500 : 0);
-  expect(fetch).toHaveBeenCalledTimes(outcome === "ready" ? 2 : outcome === "timeout" ? 3 : 1);
+  expect(Date.now()).toBe(outcome === "ready" ? 1_000 : 0);
+  expect(fetch).toHaveBeenCalledTimes(outcome === "ready" ? 2 : 1);
   expect(onPending).toHaveBeenCalledTimes(outcome === "immediate" ? 0 : 1);
   expect(preparing.release).toHaveBeenCalledOnce();
-  expect(ready.release).toHaveBeenCalledTimes(outcome === "ready" ? 1 : 0);
 });
 
 it("retries a real document timeout and reports pending once", async () => {

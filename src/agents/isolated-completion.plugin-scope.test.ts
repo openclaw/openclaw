@@ -5,9 +5,8 @@ import * as fixtures from "./isolated-completion.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 // Keep inference/auth synthetic; exercise the real entrypoint's registry plan and loader.
-const { prepareWorkspacePluginRegistries, preparedModelRuntimeWorkspaceFactsKey } =
+const { prepareWorkspacePluginRegistries } =
   await import("./prepared-model-runtime.inbound-registry.js");
-const { ownerKey, hasSameLifecycleInput } = await import("./prepared-model-runtime.owner.js");
 const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
 const {
   writePlugin,
@@ -121,37 +120,19 @@ it("completes without loading configured context/memory or unrelated startup plu
   expect(Reflect.get(globalThis, contextEvaluation)).toBeUndefined();
 });
 
-it("keeps isolated registry preparation distinct from an ordinary agent publication", () => {
-  const input: PreparedModelRuntimeInput = { config: {}, agentDir: "/fixture/agent" };
-  const isolated: PreparedModelRuntimeInput = {
-    ...input,
-    runtimePluginPurpose: "isolated-completion",
-  };
-  for (const key of [ownerKey, preparedModelRuntimeWorkspaceFactsKey]) {
-    expect(key(input)).not.toBe(key(isolated));
-  }
-  expect(hasSameLifecycleInput(input, isolated)).toBe(false);
-});
-
-it.each(["cli", "harness"] as const)("reports the %s owner the run dispatches to", async (kind) => {
-  const cli = kind === "cli";
-  mocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue(
-    cli ? { provider: "claude-cli" } : undefined,
-  );
+it("reports the CLI owner the run dispatches to", async () => {
+  mocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue({ provider: "claude-cli" });
   mocks.runCliAgent.mockResolvedValue({
     payloads: [{ text: "Utility result" }],
   });
   useHarness("done");
-  const request = cli
-    ? {
-        ...fixtures.isolatedRequest(),
-        provider: "anthropic",
-        model: "claude-test",
-        agentHarnessRuntimeOverride: undefined,
-      }
-    : fixtures.isolatedRequest();
+  const request = fixtures.isolatedRequest({
+    provider: "anthropic",
+    model: "claude-test",
+    agentHarnessRuntimeOverride: undefined,
+  });
   const status = await resolveIsolatedCompletionRuntime(request);
   const run = await fixtures.runIsolatedCompletion(request);
-  expect(run.owner).toEqual({ kind, id: cli ? "claude-cli" : "codex" });
-  expect(status).toEqual({ id: run.owner.id, kind, ...(cli ? {} : { harnessLabel: "Codex" }) });
+  expect(run.owner).toEqual({ kind: "cli", id: "claude-cli" });
+  expect(status).toEqual({ kind: "cli", id: "claude-cli" });
 });

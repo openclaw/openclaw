@@ -10,43 +10,42 @@ const cleanup: Array<() => void> = [];
 let resize: (target?: Element) => void;
 let disconnected = false;
 
-it.each([false, true])("remeasures when fonts settle unless disposed: %s", (disposed) => {
-  const fonts = Object.assign(new EventTarget(), { ready: new Promise(() => {}) });
+function mockFonts(fonts = new EventTarget()) {
   const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
   Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
-  onTestFinished(() => {
-    restorePropertyDescriptor(document, "fonts", previousFonts);
-  });
+  onTestFinished(() => restorePropertyDescriptor(document, "fonts", previousFonts));
+  return fonts;
+}
+
+function mountWidthMeasurement(
+  width: () => number,
+  options: Omit<Parameters<typeof createLayoutMeasurement>[2], "targets"> = {},
+  sample: "snapshot" | "live" = "snapshot",
+) {
   let element!: HTMLDivElement;
-  let width = 10;
+  let request!: () => void;
   const reads: number[] = [];
+  const measure = vi.fn((snapshot: { width: number } | undefined) => {
+    if (!snapshot) {
+      return undefined;
+    }
+    const measuredWidth = sample === "live" ? width() : snapshot.width;
+    reads.push(measuredWidth);
+    return () => {
+      element.style.width = measuredWidth + "px";
+    };
+  });
   const view = mountSolid(() => {
-    createLayoutMeasurement(
-      () => true,
-      () => {
-        const measuredWidth = width;
-        reads.push(measuredWidth);
-        return () => {
-          element.style.width = measuredWidth + "px";
-        };
-      },
-      { targets: () => [element], fonts: true },
-    );
+    request = createLayoutMeasurement(() => ({ width: width() }), measure, {
+      ...options,
+      targets: () => [element],
+    });
     return <div ref={(node) => (element = node)} />;
   });
   cleanup.push(view.unmount);
   flush();
-  vi.advanceTimersToNextFrame();
-  expect(element.style.width).toBe("10px");
-  width = 20;
-  if (disposed) {
-    view.unmount();
-  }
-  fonts.dispatchEvent(new Event("loadingdone"));
-  vi.advanceTimersToNextFrame();
-  expect(reads).toEqual(disposed ? [10] : [10, 20]);
-  expect(element.style.width).toBe(disposed ? "10px" : "20px");
-});
+  return { ...view, element, request, reads, measure };
+}
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
@@ -95,7 +94,7 @@ it("stops retired layout targets while the replacement keeps measuring", () => {
           reads.push(element);
         }
       },
-      { targets: () => [target()], changeTiming: "sync" },
+      { targets: (element) => (element ? [element] : []), changeTiming: "sync" },
     );
     return <>{[first, second]}</>;
   });
@@ -179,33 +178,8 @@ it.each([undefined, "sync"] as const)(
   "keeps %s change timing, current snapshots, and frame-batched resize",
   (changeTiming) => {
     const [width, setWidth] = createSignal(10);
-    const reads: number[] = [];
-    let element!: HTMLDivElement;
-    let requestMeasurement!: () => void;
-    const view = mountSolid(() => {
-      requestMeasurement = createLayoutMeasurement(
-        () => ({ width: width() }),
-        (snapshot) => {
-          if (!snapshot) {
-            return undefined;
-          }
-          reads.push(snapshot.width);
-          return () => {
-            element.style.width = snapshot.width + "px";
-          };
-        },
-        { targets: () => [element], changeTiming },
-      );
-      return (
-        <div
-          ref={(node) => {
-            element = node;
-          }}
-        />
-      );
-    });
-    cleanup.push(view.unmount);
-    flush();
+    const view = mountWidthMeasurement(width, { changeTiming });
+    const { element, reads } = view;
     expect(element.style.width).toBe(changeTiming === "sync" ? "10px" : "");
     vi.advanceTimersToNextFrame();
     expect(element.style.width).toBe("10px");
@@ -221,7 +195,7 @@ it.each([undefined, "sync"] as const)(
 
     element.style.width = "5px";
     resize();
-    requestMeasurement();
+    view.request();
     expect(element.style.width).toBe("5px");
     vi.advanceTimersToNextFrame();
     expect(element.style.width).toBe("30px");
@@ -243,37 +217,11 @@ it("shares font delivery across measurement and scroll owners without crossing f
   const secondFonts = new EventTarget();
   const subscribe = vi.spyOn(firstFonts, "addEventListener");
   const unsubscribe = vi.spyOn(firstFonts, "removeEventListener");
-  const originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
-  onTestFinished(() => restorePropertyDescriptor(document, "fonts", originalFonts));
+  mockFonts(firstFonts);
   const setFonts = (fonts: EventTarget) =>
     Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
   const widths = { current: 10 };
-  function measurement() {
-    let element!: HTMLDivElement;
-    const measure = vi.fn(() => {
-      const width = widths.current;
-      return () => {
-        element.style.width = `${width}px`;
-      };
-    });
-    const view = mountSolid(() => {
-      createLayoutMeasurement(() => true, measure, {
-        targets: () => [element],
-        fonts: true,
-      });
-      return (
-        <div
-          ref={(node) => {
-            element = node;
-          }}
-        />
-      );
-    });
-    cleanup.push(view.unmount);
-    flush();
-    return { ...view, element, measure };
-  }
-  setFonts(firstFonts);
+  const measurement = () => mountWidthMeasurement(() => widths.current, { fonts: true }, "live");
   const first = measurement();
   const second = measurement();
   const scroll = document.body.appendChild(document.createElement("div"));
@@ -301,10 +249,13 @@ it("shares font delivery across measurement and scroll owners without crossing f
   ]).toEqual(["20px", "20px", "10px"]);
   expect(publish).toHaveBeenLastCalledWith({ scrollable: false, atStart: true, atEnd: true });
   first.unmount();
+  first.measure.mockClear();
   second.measure.mockClear();
   widths.current = 30;
   firstFonts.dispatchEvent(new Event("loadingdone"));
   vi.advanceTimersToNextFrame();
+  expect(first.element.style.width).toBe("20px");
+  expect(first.measure).not.toHaveBeenCalled();
   expect(second.element.style.width).toBe("30px");
   expect(second.measure).toHaveBeenCalledOnce();
   expect(unsubscribe).not.toHaveBeenCalled();
@@ -322,10 +273,7 @@ it("shares font delivery across measurement and scroll owners without crossing f
 });
 
 it("retains duplicate font callbacks independently and skips only retired listeners", () => {
-  const fonts = new EventTarget();
-  const originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
-  Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
-  onTestFinished(() => restorePropertyDescriptor(document, "fonts", originalFonts));
+  const fonts = mockFonts();
   const callback = vi.fn();
   const first = observeFontLoading(document.fonts, callback);
   const second = observeFontLoading(document.fonts, callback);
@@ -351,10 +299,7 @@ it("retains duplicate font callbacks independently and skips only retired listen
 });
 
 it("reports a failed font subscriber without starving later measurements", () => {
-  const fonts = new EventTarget();
-  const originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
-  Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
-  onTestFinished(() => restorePropertyDescriptor(document, "fonts", originalFonts));
+  const fonts = mockFonts();
   const report = vi.fn();
   vi.stubGlobal("reportError", report);
   const error = new Error("font subscriber failed");

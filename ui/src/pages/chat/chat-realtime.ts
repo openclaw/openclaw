@@ -15,13 +15,14 @@ import type { RealtimeTalkCameraDevice } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import type { RealtimeTalkSession, RealtimeTalkStatus } from "./talk/session.ts";
 import type { SplitTalkOptions } from "./talk/split.ts";
-import { RealtimeTalkVoiceSelection } from "./talk/voice-selection.ts";
+import type { RealtimeTalkVoiceSelection } from "./talk/voice-selection.ts";
 
 export type ChatRealtimeState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   settings: UiSettings;
   sessionKey: string;
+  chatMessages: unknown[];
   lastError?: string | null;
   chatError?: string | null;
   realtimeTalk: ChatRealtimeOwner;
@@ -48,6 +49,7 @@ type ChatRealtimeSnapshot = {
   realtimeTalkUseSystemDefault: (() => Promise<void>) | null;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkVoiceController: RealtimeTalkVoiceSelection | null;
+  realtimeTalkPlayback: GatewaySpeechPlayback | null;
   realtimeTalkConversationState: RealtimeTalkConversationState;
 } & ChatRealtimeView;
 
@@ -67,6 +69,7 @@ class ChatRealtimeOwner {
     realtimeTalkCameraError: false,
     realtimeTalkSession: null,
     realtimeTalkVoiceController: null,
+    realtimeTalkPlayback: null,
     realtimeTalkConversationState: createRealtimeTalkConversationState(),
   };
   private readonly listeners = createChangeListeners();
@@ -95,12 +98,14 @@ export function stopChatRealtimeTalk(
   options: RealtimeVoiceCloseOptions & { preserveConversation?: boolean } = {},
 ) {
   const session = state.realtimeTalk.snapshot.realtimeTalkSession;
+  const playback = state.realtimeTalk.snapshot.realtimeTalkPlayback;
   state.realtimeTalk.snapshot.realtimeTalkVoiceController?.dispose();
   // Retire callback ownership before stop() can synchronously report idle.
   // Otherwise a closing session can still mutate the newly selected route.
   state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(0);
   state.realtimeTalk.update({
     realtimeTalkVoiceController: null,
+    realtimeTalkPlayback: null,
     realtimeTalkSession: null,
     realtimeTalkUseSystemDefault: null,
     realtimeTalkActive: false,
@@ -116,6 +121,7 @@ export function stopChatRealtimeTalk(
       ? continueRealtimeTalkConversation(state.realtimeTalk.snapshot.realtimeTalkConversationState)
       : createRealtimeTalkConversationState(),
   });
+  playback?.stop();
   void session?.stop({ disposition: options.disposition ?? "detach" });
 }
 
@@ -161,10 +167,12 @@ export function attachChatRealtimeActions(
       ? undefined
       : talkSettings.realtimeTalkInputDeviceId?.trim() || undefined;
     const { client, sessionKey } = state;
-    let voiceController = state.realtimeTalk.snapshot.realtimeTalkVoiceController;
+    const voiceController = voiceChange
+      ? state.realtimeTalk.snapshot.realtimeTalkVoiceController
+      : null;
     const playback = new GatewaySpeechPlayback();
     const onSuperseded = () => {
-      if (state.realtimeTalk.snapshot.realtimeTalkVoiceController === voiceController) {
+      if (state.realtimeTalk.snapshot.realtimeTalkPlayback === playback) {
         stopChatRealtimeTalk(state);
       }
     };
@@ -192,27 +200,8 @@ export function attachChatRealtimeActions(
     } else {
       conversationGeneration = 0;
       state.realtimeTalk.snapshot.realtimeTalkVoiceController?.dispose();
-      const controller: RealtimeTalkVoiceSelection = new RealtimeTalkVoiceSelection({
-        client,
-        sessionKey,
-        isCurrent: () =>
-          state.realtimeTalk.snapshot.realtimeTalkVoiceController === controller &&
-          state.client === client &&
-          state.sessionKey === sessionKey &&
-          state.connected,
-        currentCall: () => state.realtimeTalk.snapshot.realtimeTalkSession,
-        restart: (request) => startRealtimeTalk(useSystemDefault, request),
-        cancel: (message) => {
-          stopChatRealtimeTalk(state, { preserveConversation: true });
-          state.realtimeTalk.update({
-            realtimeTalkStatus: "error",
-            realtimeTalkDetail: message,
-          });
-        },
-      });
-      voiceController = controller;
       state.realtimeTalk.update({
-        realtimeTalkVoiceController: controller,
+        realtimeTalkVoiceController: null,
       });
     }
     const itemPrefix = voiceChange ? `voice-${conversationGeneration}:` : "";
@@ -222,6 +211,8 @@ export function attachChatRealtimeActions(
     const videoDeviceId = talkSettings.realtimeTalkVideoDeviceId?.trim() || undefined;
     const autoEnableCamera = talkSettings.talkCameraAutoEnable === true;
     state.realtimeTalk.update({
+      // The prepared playback owns this attempt before the lazy voice controller exists.
+      realtimeTalkPlayback: playback,
       realtimeTalkActive: true,
       realtimeTalkStatus: "connecting",
       realtimeTalkDetail: null,
@@ -256,17 +247,14 @@ export function attachChatRealtimeActions(
         closed,
       ]);
       if (
-        state.realtimeTalk.snapshot.realtimeTalkVoiceController !== voiceController ||
+        state.realtimeTalk.snapshot.realtimeTalkPlayback !== playback ||
         state.client !== client ||
         !state.connected ||
         state.sessionKey !== sessionKey ||
         !canStart()
       ) {
         playback.stop();
-        if (
-          !voiceChange &&
-          state.realtimeTalk.snapshot.realtimeTalkVoiceController === voiceController
-        ) {
+        if (!voiceChange && state.realtimeTalk.snapshot.realtimeTalkPlayback === playback) {
           stopChatRealtimeTalk(state);
         }
         return undefined;
@@ -291,7 +279,7 @@ export function attachChatRealtimeActions(
       if (voiceChange) {
         throw error;
       }
-      if (state.realtimeTalk.snapshot.realtimeTalkVoiceController === voiceController) {
+      if (state.realtimeTalk.snapshot.realtimeTalkPlayback === playback) {
         stopChatRealtimeTalk(state);
         state.realtimeTalk.update({
           realtimeTalkStatus: "error",
@@ -304,6 +292,7 @@ export function attachChatRealtimeActions(
       client,
       sessionKey,
       voiceController,
+      useSystemDefault,
       voiceChange,
       replacementTransport,
       inputDeviceId,

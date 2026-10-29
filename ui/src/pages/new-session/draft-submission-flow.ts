@@ -265,10 +265,15 @@ export class DraftSubmissionFlow {
     this.callbacks.changed();
   }
 
-  /** Follow the current gate after an attempt, including successive readiness gates. */
+  /** Audience retirement needs an explicit choice; other gates follow a submit attempt. */
   blockedSubmitNotice(): string | undefined {
-    const block = this.blockedSubmitAttempt ? this.submitBlock() : undefined;
-    return block && !PAGE_RENDERED_GATES.has(block.gate) ? block.reason : undefined;
+    const block = this.submitBlock();
+    if (block?.gate === "draft-unavailable") {
+      return block.reason;
+    }
+    return this.blockedSubmitAttempt && block && !PAGE_RENDERED_GATES.has(block.gate)
+      ? block.reason
+      : undefined;
   }
 
   private buildDraftSessionCreateParams = (options: DraftSessionCreateOverrides = {}) =>
@@ -502,12 +507,7 @@ export class DraftSubmissionFlow {
           message: input.message,
           mentions: input.mentions,
           displayName: preparedTitle,
-          ...(preparedTitle ? { displayNameGenerated: true } : {}),
-          visibility:
-            this.visibilityValue === "draft" &&
-            !this.capabilities.canStartAsDraft(this.read().context)
-              ? "normal"
-              : this.visibilityValue,
+          visibility: this.visibilityValue,
           attachments: input.draftAttachments,
         });
       const beginInstant = prepareInstantThreadHandoff({
@@ -631,8 +631,8 @@ export class DraftSubmissionFlow {
           onAccepted: () => this.callbacks.onAccepted?.({ ...result, agentId: input.agentId }),
           navigate: () =>
             this.startedSession.navigate(context, {
+              ...result,
               client: input.client,
-              key: result.key,
               agentId: input.agentId,
             }),
         });

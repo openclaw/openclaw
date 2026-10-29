@@ -37,7 +37,6 @@ async function loadCalendar(
     tokens: day.totalTokens,
     cost: day.totalCost,
     count: 1,
-    ...(day.usageReport ? { usageReport: day.usageReport } : {}),
   }));
   const result = {
     ...base,
@@ -45,19 +44,12 @@ async function loadCalendar(
     totals: {
       ...base.totals,
       totalTokens,
-      ...(!pending ? { input: totalTokens } : {}),
-      ...(daily.some((day) => day.usageReport?.state === "unavailable")
-        ? { usageReport: { state: "unavailable" as const } }
-        : {}),
+      input: pending ? base.totals.input : totalTokens,
     },
     sessions: daily.map((day, index) => ({
       key: `agent:main:${day.date}`,
-      label: pending
-        ? undefined
-        : day.date === "2026-05-03"
-          ? "Excluded session"
-          : `Usage on ${day.date}`,
-      agentId: pending ? undefined : "main",
+      label: day.date === "2026-05-03" ? "Excluded session" : `Usage on ${day.date}`,
+      agentId: "main",
       usage: {
         ...day,
         activityDates: [day.date],
@@ -85,28 +77,22 @@ const labelOf = (bar: HTMLElement) => textOf(bar, ".daily-bar-label");
 const shiftClick = (bar: HTMLElement) =>
   bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
 
-it.each([false, true])(
-  "keeps calendar attribution and completeness independent of the selected summary (partial calendar: %s)",
-  async (partial) => {
-    const { page } = await loadCalendar("fresh", [
-      dailyEntry("2026-05-02", 100),
-      {
-        ...dailyEntry("2026-05-04", 900),
-        ...(partial ? { usageReport: { state: "unavailable" as const } } : {}),
-      },
-    ]);
-    const legend = () =>
-      texts(page.element, ".daily-chart-legend li", false).map((text) => text.replace(/\s+/g, ""));
-    expect(legend()).toEqual(partial ? ["Anthropic", "OpenAI"] : ["Anthropic90%", "OpenAI10%"]);
-    barsIn(page)
-      .find((bar) => labelOf(bar) === "May 2")!
-      .click();
-    await settleUsageTimers(page);
-    expect(textOf(page, ".usage-metric-badge strong")).toBe("100");
-    expect(legend()).toEqual(partial ? ["Anthropic", "OpenAI"] : ["Anthropic90%", "OpenAI10%"]);
-    expect(texts(page.element, ".session-bar-title", false)).toEqual(["Usage on 2026-05-02"]);
-  },
-);
+it("keeps calendar attribution independent of the selected summary", async () => {
+  const { page } = await loadCalendar("fresh", [
+    dailyEntry("2026-05-02", 100),
+    dailyEntry("2026-05-04", 900),
+  ]);
+  const legend = () =>
+    texts(page.element, ".daily-chart-legend li", false).map((text) => text.replace(/\s+/g, ""));
+  expect(legend()).toEqual(["Anthropic90%", "OpenAI10%"]);
+  barsIn(page)
+    .find((bar) => bar.getAttribute("aria-label")?.startsWith("May 2, 2026:"))!
+    .click();
+  await settleUsageTimers(page);
+  expect(textOf(page, ".usage-metric-badge strong")).toBe("100");
+  expect(legend()).toEqual(["Anthropic90%", "OpenAI10%"]);
+  expect(texts(page.element, ".session-bar-title", false)).toEqual(["Usage on 2026-05-02"]);
+});
 
 it.each<["fresh" | "partial", boolean, string[]]>([
   ["fresh", false, ["May 1", "May 2", "May 3", "May 4"]],
@@ -190,4 +176,28 @@ it("keeps the same calendar interactive while day totals are pending", async () 
     ?.selectedDays;
   expect(days).toEqual(expect.arrayContaining(["2026-04-05", "2026-05-04"]));
   expect(Array.isArray(days) && days.length > 1).toBe(true);
+});
+
+it("retains the accepted heatmap while editing a query draft", async () => {
+  const { page, request } = await loadCalendar("fresh", [
+    dailyEntry("2026-05-02", 100),
+    dailyEntry("2026-05-04", 900),
+  ]);
+  changeUsageControl(
+    page.querySelector<HTMLInputElement>('input[aria-label="Start date"]')!,
+    "2026-01-01",
+  );
+  await settleUsageTimers(page, 400);
+  const cells = [...page.querySelectorAll(".usage-heatmap__cell")];
+  expect(cells.length).toBeGreaterThan(62);
+  const requests = request.mock.calls.length;
+  const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
+  input.value = "model:example";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await page.updateComplete;
+  const current = [...page.querySelectorAll(".usage-heatmap__cell")];
+  expect(current).toHaveLength(cells.length);
+  current.forEach((cell, index) => expect(cell).toBe(cells[index]));
+  expect(request.mock.calls).toHaveLength(requests);
+  expect(input.value).toBe("model:example");
 });

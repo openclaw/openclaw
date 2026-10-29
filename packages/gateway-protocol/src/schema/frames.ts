@@ -137,7 +137,9 @@ export const HelloOkSchema = closedObject({
     recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
-    sessionCap: Type.Optional(stringLiteralUnion(["write", "suggest", "view", "none"])),
+    // Presentation only: device approval cannot exceed this authenticated role ceiling.
+    roleAllowsAdmin: Type.Optional(Type.Boolean()),
+    sessionCap: Type.Optional(stringLiteralUnion(["write", "suggest", "view", "invited", "none"])),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     deviceTokens: Type.Optional(
       Type.Array(

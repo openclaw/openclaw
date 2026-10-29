@@ -7,7 +7,7 @@ title: "Bot loop protection"
 sidebarTitle: "Bot loop protection"
 ---
 
-OpenClaw can accept messages written by other bots on channels that support `allowBots`. Discord and Slack default to accepting them under the normal mention and access rules; an explicit `allowBots: false` still disables bot-triggered turns. Bot messages can remain visible as conversation context independently of turn admission.
+OpenClaw can accept messages written by other bots on channels that support `allowBots`. Discord, Mattermost, and Slack default to accepting them under the normal mention and access rules; an explicit `allowBots: false` still disables bot-triggered turns. Bot messages can remain visible as conversation context independently of turn admission.
 
 Pair loop protection bounds rapid exchanges between two bot identities. It is a sliding-window rate guard, so slower exchanges below the budget can continue.
 
@@ -114,6 +114,7 @@ Supporting channels layer their own config over the shared default, key by key. 
 - Feishu: native `sender_type=bot` facts for admitted bot-authored group messages, keyed by Feishu account, chat, and bot pair. Feishu uses only `channels.defaults.botLoopProtection`.
 - Google Chat: native `sender.type=BOT` facts for accepted bot-authored messages, keyed by account, space, and bot pair.
 - Matrix: configured Matrix bot accounts, keyed by Matrix account, room, and configured bot pair.
+- Mattermost: server-set `from_bot` post facts for accepted bot-authored posts, keyed by Mattermost account, channel, and bot pair. See [Mattermost](/channels/mattermost#posts-from-other-bots).
 - Slack: native `bot_id` facts for accepted bot-authored messages, keyed by Slack account, channel, and bot pair.
 
 Channels that do not expose a reliable inbound bot identity keep using their normal self-message and access-policy filters. They should not opt into this guard until they can identify both participants in the bot pair.

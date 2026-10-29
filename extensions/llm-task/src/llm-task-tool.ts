@@ -13,43 +13,6 @@ import {
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { llmTaskToolDefinition } from "./llm-task-tool-definition.js";
 
-function resolveLlmTaskModelRef(params: {
-  api: OpenClawPluginApi;
-  provider?: string;
-  rawModel?: string;
-  preserveProvider?: boolean;
-}): { provider?: string; model?: string } {
-  const defaultProvider =
-    normalizeOptionalString(params.provider) ??
-    normalizeOptionalString(params.api.runtime.agent.defaults.provider);
-  const rawModel = normalizeOptionalString(params.rawModel);
-  const providerPrefix = params.provider?.trim();
-  const selectedModelRef = {
-    provider: params.provider,
-    model:
-      providerPrefix && rawModel?.startsWith(`${providerPrefix}/`)
-        ? rawModel.slice(providerPrefix.length + 1)
-        : rawModel,
-  };
-  if (!rawModel || !defaultProvider) {
-    return selectedModelRef;
-  }
-
-  const cfg = params.api.config;
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
-  const resolved = resolveModelRefFromString({
-    cfg,
-    raw: rawModel,
-    defaultProvider,
-    aliasIndex,
-  });
-  // Selected providers own nested model IDs, but configured aliases still own their target.
-  if (params.preserveProvider && !resolved?.alias) {
-    return selectedModelRef;
-  }
-  return resolved?.ref ?? selectedModelRef;
-}
-
 export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
     ...llmTaskToolDefinition,
@@ -81,12 +44,33 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const hasModelOverride = Boolean(
         requestProvider || configuredProvider || requestModel || configuredModel,
       );
-      const { provider, model } = resolveLlmTaskModelRef({
-        api,
+      const defaultProvider =
+        normalizeOptionalString(requestedProvider) ??
+        normalizeOptionalString(api.runtime.agent.defaults.provider);
+      const normalizedModel = normalizeOptionalString(rawModel);
+      const providerPrefix = requestedProvider?.trim();
+      let selectedModelRef = {
         provider: requestedProvider,
-        rawModel,
-        preserveProvider: Boolean(requestProvider || (!requestModel && configuredProvider)),
-      });
+        model:
+          providerPrefix && normalizedModel?.startsWith(`${providerPrefix}/`)
+            ? normalizedModel.slice(providerPrefix.length + 1)
+            : normalizedModel,
+      };
+      if (normalizedModel && defaultProvider) {
+        const cfg = api.config;
+        const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
+        const resolved = resolveModelRefFromString({
+          cfg,
+          raw: normalizedModel,
+          defaultProvider,
+          aliasIndex,
+        });
+        // Selected providers own nested model IDs, but configured aliases still own their target.
+        if (!(requestProvider || (!requestModel && configuredProvider)) || resolved?.alias) {
+          selectedModelRef = resolved?.ref ?? selectedModelRef;
+        }
+      }
+      const { provider, model } = selectedModelRef;
 
       const authProfileId =
         normalizeOptionalString(params.authProfileId) ??

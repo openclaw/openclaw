@@ -40,7 +40,7 @@ function restrictedHarness(threadId = "thread-1", previousThread?: string, cwd?:
 setupRunAttemptTestHooks();
 
 it.each([false, true])(
-  "migrates and continues a browser-denied binding across LCM epochs (search enabled: %s)",
+  "migrates a browser-denied binding across LCM epochs and late policy rotation (search enabled: %s)",
   async (searchEnabled) => {
     const sessionFile = path.join(tempDir, "session-restricted-continuity.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-restricted-continuity");
@@ -60,14 +60,13 @@ it.each([false, true])(
     );
     let currentEpoch = "epoch-1";
     const attemptParams = createParams(sessionFile, workspaceDir);
-    attemptParams.contextEngine = createContextEngine({
-      assemble: vi.fn(async ({ prompt }) => ({
-        messages: [assistantMessage("retained LCM history", 10), userMessage(prompt ?? "", 11)],
-        estimatedTokens: 42,
-        systemPromptAddition: "context-engine system",
-        contextProjection: { mode: "thread_bootstrap" as const, epoch: currentEpoch },
-      })),
-    });
+    const assemble = vi.fn(async ({ prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: [assistantMessage("retained LCM history", 10), userMessage(prompt ?? "", 11)],
+      estimatedTokens: 42,
+      systemPromptAddition: "context-engine system",
+      contextProjection: { mode: "thread_bootstrap" as const, epoch: currentEpoch },
+    }));
+    attemptParams.contextEngine = createContextEngine({ assemble });
     attemptParams.config = {
       tools: { deny: ["browser"], web: { search: { enabled: searchEnabled } } },
     };
@@ -113,57 +112,37 @@ it.each([false, true])(
       });
       await harness.client.closeAndWait();
     }
+    const prepared = {
+      messages: [assistantMessage("prepared LCM snapshot", 10)],
+      estimatedTokens: 42,
+      systemPromptAddition: "context-engine system",
+      contextProjection: { mode: "thread_bootstrap" as const, epoch: currentEpoch },
+    };
+    assemble.mockResolvedValueOnce(prepared);
+    assemble.mockResolvedValue({
+      messages: [assistantMessage("new background LCM snapshot", 20)],
+      estimatedTokens: 42,
+      systemPromptAddition: "changed background developer instructions",
+      contextProjection: { mode: "thread_bootstrap", epoch: "epoch-3" },
+    });
+    attemptParams.extraSystemPrompt = "Updated conversation tool policy.";
+    const successorHarness = restrictedHarness("thread-policy-successor", "thread-compacted");
+    const successorRun = runUnmodifiedCodexAppServerAttempt(attemptParams);
+    await successorRun.waitForTurnAccepted();
+    expect(assemble).toHaveBeenCalledTimes(5);
+    expect(successorHarness.requests.map(({ method }) => method)).toContain("thread/start");
+    expect(getRequestInputText(successorHarness)).toContain("prepared LCM snapshot");
+    expect(getRequestInputText(successorHarness)).not.toContain("new background LCM snapshot");
+    const startParams = requireRequestParams(successorHarness, "thread/start");
+    expect(startParams.developerInstructions).toContain("context-engine system");
+    expect(startParams.developerInstructions).not.toContain(
+      "changed background developer instructions",
+    );
+    await successorHarness.completeTurn("completed", "thread-policy-successor");
+    await successorRun;
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-policy-successor",
+      contextEngine: { projection: { mode: "thread_bootstrap", epoch: "epoch-2" } },
+    });
   },
 );
-
-it("bootstraps the prepared LCM snapshot when creation-time policy rotates a restricted thread", async () => {
-  const sessionFile = path.join(tempDir, "session-late-policy-rotation.jsonl");
-  const workspaceDir = path.join(tempDir, "workspace-late-policy-rotation");
-  const prepared = {
-    messages: [assistantMessage("prepared LCM snapshot", 10)],
-    estimatedTokens: 42,
-    systemPromptAddition: "context-engine system",
-    contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
-  };
-  const assemble = vi.fn(async ({ prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
-    ...prepared,
-    messages: [...prepared.messages, userMessage(prompt ?? "", 11)],
-  }));
-  const attemptParams = createParams(sessionFile, workspaceDir);
-  attemptParams.contextEngine = createContextEngine({ assemble });
-  attemptParams.config = { tools: { deny: ["browser"], web: { search: { enabled: false } } } };
-  attemptParams.pluginHarnessToolPolicyRestricted = true;
-  attemptParams.pluginHarnessToolPolicyScope = "conversation";
-  const firstHarness = restrictedHarness();
-  const firstRun = runUnmodifiedCodexAppServerAttempt(attemptParams);
-  await firstRun.waitForTurnAccepted();
-  await firstHarness.completeTurn();
-  await firstRun;
-
-  assemble.mockResolvedValueOnce(prepared);
-  assemble.mockResolvedValue({
-    messages: [assistantMessage("new background LCM snapshot", 20)],
-    estimatedTokens: 42,
-    systemPromptAddition: "changed background developer instructions",
-    contextProjection: { mode: "thread_bootstrap", epoch: "epoch-2" },
-  });
-  attemptParams.extraSystemPrompt = "Updated conversation tool policy.";
-  const successorHarness = restrictedHarness("thread-policy-successor", "thread-1");
-  const successorRun = runUnmodifiedCodexAppServerAttempt(attemptParams);
-  await successorRun.waitForTurnAccepted();
-  expect(assemble).toHaveBeenCalledTimes(2);
-  expect(successorHarness.requests.map(({ method }) => method)).toContain("thread/start");
-  expect(getRequestInputText(successorHarness)).toContain("prepared LCM snapshot");
-  expect(getRequestInputText(successorHarness)).not.toContain("new background LCM snapshot");
-  const startParams = requireRequestParams(successorHarness, "thread/start");
-  expect(startParams.developerInstructions).toContain("context-engine system");
-  expect(startParams.developerInstructions).not.toContain(
-    "changed background developer instructions",
-  );
-  await successorHarness.completeTurn("completed", "thread-policy-successor");
-  await successorRun;
-  expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
-    threadId: "thread-policy-successor",
-    contextEngine: { projection: { mode: "thread_bootstrap", epoch: "epoch-1" } },
-  });
-});

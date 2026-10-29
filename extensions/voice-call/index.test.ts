@@ -495,7 +495,12 @@ it("starts and polls delegated gateway continue operations", async () => {
     tts: { timeoutMs: 30000 },
   });
   expectCliGatewayCall("voicecall.continue.start", { callId: "call-1", message: "Hello" }, "35000");
-  expectCliGatewayCall("voicecall.continue.result", { operationId: "op-1" }, "5000");
+  expect(callGatewayFromCliMock).toHaveBeenCalledWith(
+    "voicecall.continue.result",
+    { json: true, timeout: "5000" },
+    { operationId: "op-1" },
+    { progress: false, signal: expect.any(AbortSignal) },
+  );
   expect(createVoiceCallRuntime).not.toHaveBeenCalled();
   expect(output).toContain('"transcript": "gateway hello"');
 });
