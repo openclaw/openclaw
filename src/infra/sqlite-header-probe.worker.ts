@@ -6,7 +6,11 @@ if (!Array.isArray(input) || !input.every((pathname) => typeof pathname === "str
   throw new Error("SQLite header probe expects a JSON array of paths");
 }
 const paths: string[] = input;
+let unreadable: { code: unknown; path: string } | undefined;
 const results = paths.map((pathname) => {
+  if (unreadable) {
+    return false;
+  }
   try {
     if (!fs.lstatSync(pathname).isFile()) {
       return false;
@@ -26,7 +30,13 @@ const results = paths.map((pathname) => {
     if (code === "ENOENT" || code === "ELOOP") {
       return false;
     }
-    throw error;
+    unreadable = { code, path: pathname };
+    return false;
   }
 });
+if (unreadable) {
+  // The parent names the unreadable source; a stack trace would not.
+  process.stderr.write(JSON.stringify(unreadable));
+  process.exit(3);
+}
 process.stdout.write(JSON.stringify(results));
