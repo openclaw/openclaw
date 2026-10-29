@@ -356,6 +356,7 @@ function buildCliExecutionMetadata(
       attempts: [{ provider: context.params.provider, model: context.modelId, ...attempt }],
       fallbackUsed: false,
       runner: "cli",
+      cliBackendId: context.params.provider,
     },
     requestShaping: {
       ...(context.params.thinkLevel ? { thinking: context.params.thinkLevel } : {}),

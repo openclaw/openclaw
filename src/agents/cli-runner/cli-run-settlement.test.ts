@@ -364,6 +364,7 @@ it.each(
         ? undefined
         : expect.objectContaining({
             winnerProvider: "claude-cli",
+            cliBackendId: "claude-cli",
             attempts: [expect.objectContaining({ provider: "claude-cli" })],
           }),
     ]);
