@@ -329,6 +329,36 @@ describe("IMAP watcher protocol boundary", () => {
     },
   );
 
+  it("rejects nested-comment sender spoofing before token-authenticated dispatch", async () => {
+    const { server, state, context, authenticator, dispatchHookAgentTurn, waitForCursor } =
+      await startWatcher({
+        account: {
+          senderAuth: { min: "verified", trustedAuthservIds: [], acceptTrustedAuthservId: false },
+          addressTokens: [{ token: "secret-token", senders: ["trusted@example.com"] }],
+        },
+      });
+    authenticator.mockResolvedValue(createImapAuthResult("none"));
+    server.append(
+      "From: trusted@example.com\r\nTo: reader+secret-token@example.com\r\nSubject: Legitimate token sender\r\n\r\nTrusted content",
+    );
+    await waitForCursor(2);
+    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(1);
+    expect(dispatchHookAgentTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "hook:imap:inbox:17:2" }),
+    );
+    server.append(
+      "From: Attacker (x(y) <trusted@example.com>) <attacker@evil.example>\r\nTo: reader+secret-token@example.com\r\nSubject: Spoofed token sender\r\n\r\nUntrusted content",
+    );
+    await waitForCursor(3);
+    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(1);
+    expect(authenticator).not.toHaveBeenCalled();
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      "imap: account=inbox uid=3 domain=evil.example gate=sender-not-allowed",
+    );
+    expect(await state.skips.lookup("inbox:sender-not-allowed")).toEqual({ count: 1 });
+    expect(await state.claims.lookup("attempt:inbox:17:3")).toBeUndefined();
+  });
+
   it.each([
     { boundary: "snippet", body: `${"x".repeat(239)}🙂tail`, maxBytes: 20_000, truncated: false },
     {

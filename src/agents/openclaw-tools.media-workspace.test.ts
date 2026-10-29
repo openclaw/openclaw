@@ -5,10 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getMediaDir, saveMediaBuffer } from "../media/store.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
 import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.registration.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { loadMediaToolReferences } from "./tools/media-tool-shared.js";
+import * as delegateTools from "./tools/openclaw-delegate-tool.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
@@ -248,4 +249,69 @@ describe("media references in task workspaces", () => {
       );
     },
   );
+});
+
+describe("factory-derived filesystem policy", () => {
+  it.each(["global", "agent"])(
+    "restricts %s workspace-only media without an explicit policy",
+    async (scope) => {
+      const stateDir = tempDirs.make("derived-media-state-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const workspaceDir = path.join(stateDir, "workspace");
+      const outside = path.join(stateDir, "canvas", "outside.png");
+      await fs.mkdir(workspaceDir);
+      await fs.mkdir(path.dirname(outside));
+      await fs.writeFile(path.join(workspaceDir, "inside.png"), png);
+      await fs.writeFile(outside, png);
+      const config =
+        scope === "global"
+          ? { tools: { fs: { workspaceOnly: true } } }
+          : { agents: { entries: { main: { tools: { fs: { workspaceOnly: true } } } } } };
+      const tool = createMediaTool("view_image", { workspaceDir, config });
+      await expectLoadedImage(tool, "inside.png");
+      await expect(tool.execute("outside", { path: outside })).rejects.toThrow(
+        /not under an allowed directory/i,
+      );
+    },
+  );
+
+  it("preserves an explicitly supplied unrestricted filesystem policy", async () => {
+    const stateDir = tempDirs.make("derived-explicit-policy-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const workspaceDir = path.join(stateDir, "workspace");
+    const outside = path.join(stateDir, "canvas", "outside.png");
+    await fs.mkdir(workspaceDir);
+    await fs.mkdir(path.dirname(outside));
+    await fs.writeFile(outside, png);
+    const tool = createMediaTool("view_image", {
+      workspaceDir,
+      config: { tools: { fs: { workspaceOnly: true } } },
+      fsPolicy: { workspaceOnly: false },
+    });
+    await expectLoadedImage(tool, outside);
+  });
+});
+
+describe("prepared filesystem policy propagation", () => {
+  it("captures the derived policy before async delegate construction", async () => {
+    const boundaryReached = new Error("delegate preparation boundary reached");
+    const delegate = vi
+      .spyOn(delegateTools, "createOpenClawDelegateToolsForRunAsync")
+      .mockRejectedValueOnce(boundaryReached);
+    try {
+      await expect(
+        createOpenClawToolsAsync({
+          config: { tools: { fs: { workspaceOnly: true } } },
+          agentDir: tempDirs.make("prepared-policy-agent-"),
+          disablePluginTools: true,
+        }),
+      ).rejects.toThrow(boundaryReached);
+      expect(delegate).toHaveBeenCalledWith(
+        expect.objectContaining({ fsPolicy: { workspaceOnly: true } }),
+        expect.anything(),
+      );
+    } finally {
+      delegate.mockRestore();
+    }
+  });
 });

@@ -68,7 +68,8 @@ overrides:
   file-type: 22.1.1
   form-data: 4.0.6
   ip-address: 10.7.3
-  "mailauth@7.1.0>nodemailer": 10.0.13
+  "mailauth@7.1.0>nodemailer": 10.1.4
+  "mailparser@3.9.33>nodemailer": 10.1.4
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   proxy-addr: 2.0.8
@@ -118,6 +119,7 @@ packageExtensions:
       typescript: 5.9.3
 
 patchedDependencies:
+  "@discord/embedded-app-sdk@2.5.0": patches/@discord__embedded-app-sdk@2.5.0.patch
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch
   "matrix-js-sdk@42.4.0": patches/matrix-js-sdk@42.4.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch
