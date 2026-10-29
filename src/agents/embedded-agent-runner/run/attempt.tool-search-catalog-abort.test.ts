@@ -293,6 +293,29 @@ describe("runEmbeddedAttempt tool boundaries", () => {
     },
   );
 
+  it("gives late Code Mode controls the provider schema pass before diagnostics", async () => {
+    type ProbeTool = { name: string; parameters?: { probe?: true } };
+    const diagnosed = new Error("diagnostics observed");
+    let unnormalized: string[] | undefined;
+    registerCleanup([createStubTool("read")]);
+    const attempt = runAttempt({
+      runId: "run-late-control-schema",
+      config: { tools: { codeMode: { enabled: true } } },
+      runtimePlan: {
+        tools: {
+          normalize: (tools: ProbeTool[]) =>
+            tools.map((tool) => ({ ...tool, parameters: { probe: true } })),
+          logDiagnostics: (tools: ProbeTool[]) => {
+            unnormalized = tools.filter((tool) => !tool.parameters?.probe).map(({ name }) => name);
+            throw diagnosed;
+          },
+        },
+      } as never,
+    });
+    await expect(attempt).rejects.toBe(diagnosed);
+    expect(unnormalized).toEqual([]);
+  });
+
   it("attributes awaited bundle work separately from synchronous catalog preparation", async () => {
     const bundleLspTools = await import("../../agent-bundle-lsp-runtime.js");
     const runtimeToolPolicy = await import("../../runtime-plan/tools.js");
