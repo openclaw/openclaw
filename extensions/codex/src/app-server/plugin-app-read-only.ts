@@ -34,7 +34,9 @@ export function buildCodexAppReadOnlyTools(
   for (const tool of app.toolSummaries ?? []) {
     readable.set(
       tool.name,
-      readable.get(tool.name) !== false && tool.isReadOnly === true && tool.isEnabled === true,
+      readable.get(tool.name) !== false &&
+        isExplicitlyTrue(tool.isReadOnly) &&
+        isExplicitlyTrue(tool.isEnabled),
     );
   }
   for (const [name, tool] of runtimeTools ?? []) {
@@ -52,4 +54,9 @@ export function buildCodexAppReadOnlyTools(
     });
   }
   return Object.fromEntries([...enabledByKey].toSorted(([a], [b]) => a.localeCompare(b)));
+}
+
+// Keep runtime admission strict even if upstream JSON violates the static contract.
+function isExplicitlyTrue(value: unknown): boolean {
+  return value === true;
 }
