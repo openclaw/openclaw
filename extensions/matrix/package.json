@@ -14,7 +14,7 @@
     "fake-indexeddb": "6.2.5",
     "markdown-it": "15.0.3",
     "matrix-js-sdk": "42.4.0",
-    "music-metadata": "11.15.0",
+    "music-metadata": "11.16.0",
     "typebox": "1.3.34",
     "zod": "4.6.7"
   },

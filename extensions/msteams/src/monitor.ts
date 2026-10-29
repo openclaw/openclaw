@@ -39,6 +39,7 @@ import {
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
 import {
+  keepConfiguredMSTeamsAllowlistActive,
   looksLikeMSTeamsConversationId,
   projectStableMSTeamsGroupAllowlist,
   projectStableMSTeamsUserAllowlist,
@@ -178,6 +179,12 @@ export async function monitorMSTeamsProvider(
     runtime.error?.(
       `msteams resolve failed; mutable allowlist entries are disabled. ${formatUnknownError(err)}`,
     );
+  }
+
+  if (Array.isArray(configuredGroupAllowFrom)) {
+    // A configured sender list whose entries are all unresolvable names must keep restricting
+    // senders. An empty projection would fall back to the DM allowlist (or its wildcard).
+    groupAllowFrom = keepConfiguredMSTeamsAllowlistActive(configuredGroupAllowFrom, groupAllowFrom);
   }
 
   if (configuredGroupAllowFrom == null && groupAllowFrom) {

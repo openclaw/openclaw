@@ -524,11 +524,11 @@ try {
     return [environment, module.id];
   });
   for (const [environment, id] of entries) {
-    assert.equal(typeof ctx._fsCache.getMemoryCachePath(environment, id), "string");
+    assert.equal(typeof ctx.cache._modules.getMemoryCachePath(environment, id), "string");
   }
   ctx.clearAllCachePaths();
   for (const [environment, id] of entries) {
-    assert.equal(ctx._fsCache.getMemoryCachePath(environment, id), undefined);
+    assert.equal(ctx.cache._modules.getMemoryCachePath(environment, id), undefined);
   }
 } finally {
   await ctx.close();

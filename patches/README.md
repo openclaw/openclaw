@@ -136,3 +136,39 @@ The plugin package owner bundles patched runtime dependencies so installed
 WhatsApp plugins retain the adapter. Remove this patch and its registration
 when an upstream Baileys version accepts the current decoder and passes the
 same voice-note regression.
+
+`@discord/embedded-app-sdk@2.5.0` vendors Zod 3 in both `output/lib/zod/lib/index.mjs`
+and `index.cjs`; changing the separately installed Zod package does not repair
+the browser SDK. This patch is a local Zod-3 adaptation of the early upper-size
+guard in Colin McDonnell's upstream Zod commit
+`a0ebf970f2d752e5f58527cd2942ff48be4f46bd`
+([colinhacks/zod#6652](https://github.com/colinhacks/zod/pull/6652)), referenced by
+[GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5).
+It is not a cherry-pick, a Zod version upgrade, or a claim that all installed
+Zod copies are fixed. Only the bundled array `.max()` / oversized `.length()`
+and set `.max()` / oversized `.size()` branches change: return the existing
+invalid result before iterating elements or invoking outer refinements.
+The bundled Zod-3 map API has no upper-size constraint. Valid values, lower
+limits, individual bound messages, enum fallback handling, declarations, and
+exports stay on the existing API. Early rejection intentionally omits element
+and refinement issues; unions may report an `invalid_union` wrapper rather than
+the previous direct bound issue.
+
+As checked on 2026-10-29, the maintained SDK stable release is still 2.5.0 and
+3.0.0-beta.3 still depends on Zod 3. Upstream's Zod-4 migration
+([discord/embedded-app-sdk#318](https://github.com/discord/embedded-app-sdk/pull/318),
+authored by `renovate-bot`, head `81e49dfa871e935641d9b9591ed789e837dc89e1`)
+is open, not an available compatible stable fix. This six-branch adapter avoids
+replacing the entire embedded parser and changing the public schema major.
+Remove the patch and its exact-version registration when a published SDK
+passes `test/scripts/discord-sdk-zod.test.ts` without it, including the
+production browser build. Keep the root dependency-advisory disposition
+separate; this patch deliberately does not suppress audit findings.
+
+The patch SHA-256 is
+`016b529034315344702f9c7ac79ce5538b0934cf55381229946597b54343fdfd`.
+
+| Target | Published SHA-256 | Patched SHA-256 |
+| --- | --- | --- |
+| `output/lib/zod/lib/index.mjs` | `3030e5b032805870bb4a8674e36fd916885552832e52c6a0f2465a929ecec231` | `c520fe1f39ce21e24425fdfc49ab7905e23a2be049450eb549649ef87faabe75` |
+| `output/lib/zod/lib/index.cjs` | `feb2389d716ac303c1e7df76df1d7c4c4d7fb35d5aef3456d43718b68cf46aa1` | `a7ad12c2c2f0cf5b5435d7b4232f4c78adc19812ec9c4ddada333518e06cd92a` |

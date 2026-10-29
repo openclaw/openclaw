@@ -175,12 +175,12 @@ export function assertControlUiE2eOwnership(
   expect(config.test?.maxWorkers).toBe(Math.min(2, sharedVitestConfig.test.maxWorkers));
   expect(projects[0]?.test).toMatchObject({
     fileParallelism: sharedVitestConfig.test.fileParallelism,
-    maxWorkers: undefined,
+    maxWorkers: config.test?.maxWorkers,
     sequence: { groupOrder: 0 },
   });
   expect(projects[1]?.test).toMatchObject({
     fileParallelism: sharedVitestConfig.test.fileParallelism,
-    maxWorkers: undefined,
+    maxWorkers: config.test?.maxWorkers,
     sequence: { groupOrder: 0 },
   });
   for (const project of projects.slice(2)) {

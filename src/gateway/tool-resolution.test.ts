@@ -11,6 +11,7 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "./mcp-http.runtime.js";
+import { registerGatewayToolFinalEffectTests } from "./tool-resolution.effects.test-support.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 describe("resolveGatewayScopedTools", () => {
@@ -398,3 +399,5 @@ describe("resolveGatewayScopedTools", () => {
     }
   });
 });
+
+registerGatewayToolFinalEffectTests();

@@ -38,7 +38,7 @@ describe("check-package-patches", () => {
       ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
       ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
       ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],
-      ["vitest@5.0.1", "patches/vitest@5.0.1.patch"],
+      ["vitest@5.0.5", "patches/vitest@5.0.5.patch"],
       ["matrix-js-sdk@42.4.0", "patches/matrix-js-sdk@42.4.0.patch"],
     ] as const;
     const dir = makeRepo();
