@@ -6,6 +6,7 @@ import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionMessageCutMutationResult } from "./session-accessor.types.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
+import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
 import { extractEditorText } from "./session-message-cut-content.js";
@@ -112,7 +113,7 @@ export function planSessionMessageCut(
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
   // target the old session and cannot erase this leaf repoint from the active session.
   const forked = params.mode === "fork";
-  const nextEntry: SessionEntry = {
+  const cutEntry: SessionEntry = {
     // Rewind keeps retired history references so cleanup cannot orphan old transcripts.
     ...(forked ? inheritSessionSelection(currentEntry) : currentEntry),
     sessionId: nextSessionId,
@@ -152,9 +153,6 @@ export function planSessionMessageCut(
     resumeAfterRestart: undefined,
     abortCutoffMessageSid: undefined,
     abortCutoffTimestamp: undefined,
-    usageFamilyKey: forked ? undefined : currentEntry.usageFamilyKey,
-    usageFamilySessionIds: forked ? undefined : currentEntry.usageFamilySessionIds,
-    previousSessionId: forked ? undefined : currentEntry.sessionId,
     ...(forked
       ? {
           forkSource: {
@@ -177,6 +175,14 @@ export function planSessionMessageCut(
       ? { incognito: true as const }
       : {}),
   };
+  // Rewind and branch switch keep the session key, so Usage keeps the retired window in its family.
+  const nextEntry = forked
+    ? cutEntry
+    : preserveSqliteSameKeySessionRolloverLineage({
+        next: cutEntry,
+        previous: currentEntry,
+        sessionKey: params.targetKey,
+      });
   return {
     status: "prepared",
     header,
