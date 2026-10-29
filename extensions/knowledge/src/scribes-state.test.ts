@@ -9,13 +9,7 @@ import {
   setupIdempotencyKey,
   setupPrompt,
 } from "./scribes-catalog.js";
-import {
-  detectSources,
-  loadScribes,
-  pluginReadiness,
-  statusFromText,
-  type ScribeJob,
-} from "./scribes-state.js";
+import { detectSources, loadScribes, statusFromText, type ScribeJob } from "./scribes-state.js";
 
 const job = (overrides: Partial<ScribeJob> = {}): ScribeJob => ({
   id: "job-review",
@@ -342,25 +336,42 @@ describe("scribes state", () => {
 });
 
 describe("plugin readiness", () => {
-  const read = (answer: () => unknown) =>
-    pluginReadiness({ request: vi.fn(async () => answer()) } as never, "granola");
+  const read = async (answer: () => unknown) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugins.inspect") {
+        return answer();
+      }
+      if (method === "sessions.list") {
+        return { sessions: [], count: 0 };
+      }
+      if (method === "agents.files.list") {
+        return { files: [] };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    const detection = await detectSources({ request } as never, "main");
+    expect(request).toHaveBeenCalledWith("plugins.inspect", {
+      pluginId: scribeById("granola")!.plugin!.id,
+    });
+    return detection.plugins;
+  };
 
   it("maps plugins.inspect to missing, disabled, needs sign-in and ready", async () => {
     const plugin = (installed: boolean, enabled: boolean) => ({ installed, enabled });
-    expect(await read(() => ({ plugin: plugin(false, false) }))).toBe("missing");
-    expect(await read(() => ({ plugin: plugin(true, false) }))).toBe("disabled");
+    expect(await read(() => ({ plugin: plugin(false, false) }))).toEqual({ granola: "missing" });
+    expect(await read(() => ({ plugin: plugin(true, false) }))).toEqual({ granola: "disabled" });
     expect(
       await read(() => ({
         plugin: plugin(true, true),
         mcpAuth: [{ serverName: "granola", state: "requires-authorization" }],
       })),
-    ).toBe("needs-sign-in");
+    ).toEqual({ granola: "needs-sign-in" });
     expect(
       await read(() => ({
         plugin: plugin(true, true),
         mcpAuth: [{ serverName: "granola", state: "authorized" }],
       })),
-    ).toBe("ready");
+    ).toEqual({ granola: "ready" });
   });
 
   it("reads an unknown plugin as missing and any other failure as unknown", async () => {
@@ -370,7 +381,7 @@ describe("plugin readiness", () => {
           gatewayCode: "INVALID_REQUEST",
         });
       }),
-    ).toBe("missing");
+    ).toEqual({ granola: "missing" });
     expect(
       await read(() => {
         throw Object.assign(new Error("missing scope"), { gatewayCode: "UNAUTHORIZED" });

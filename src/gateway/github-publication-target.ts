@@ -6,7 +6,6 @@ import type { GitHubPublicationExecutionRow } from "../state/github-publication-
 import {
   assertExpectedSharedGitHubPublisher,
   prepareGitHubPublicationRepositoryIdentity,
-  type PublicationSessionIdentity,
   type readGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
@@ -29,6 +28,7 @@ import {
 } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";

@@ -6,6 +6,7 @@ import {
   errorShape,
   validateSessionGitHubPublishParams,
   validateSessionGitHubActionParams,
+  validateSessionGitHubReadinessParams,
   validateSessionGitHubOptionsParams,
   validateSessionGitHubStatusParams,
   validateSessionGitHubConfirmParams,
@@ -24,15 +25,16 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationOptionsIdentity,
-  hasSupportedGitHubPublicationTarget,
+  qualifyGitHubPublicationSource,
   prepareGitHubPublicationSession,
-  type PublicationSessionIdentity,
 } from "../github-publication-availability.js";
 import { refreshManagedWorkspaceBase } from "../github-publication-base-refresh.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { performSessionGitHubInspection } from "../github-publication-inspect.js";
+import { readGitHubPublicationReadiness } from "../github-publication-readiness.js";
 import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
 import { prepareGitHubPublicationRequesterV2 } from "../github-publication-requester.js";
+import type { PublicationSessionIdentity } from "../github-publication-session.types.js";
 import { adoptUnboundPullRequestWorkspace } from "../session-pr-workspace-adoption.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -60,6 +62,7 @@ const sessionGitHubFailureMessages = {
   "sessions.github.action":
     "GitHub pull request action failed; inspect its current state before retrying.",
   "sessions.github.options": "GitHub publication options are unavailable.",
+  "sessions.github.readiness": "GitHub publication readiness is unavailable.",
   "sessions.github.status": "GitHub publication status is unavailable.",
   "sessions.github.confirm": "GitHub publication confirmation failed.",
 };
@@ -392,6 +395,24 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       respond(true, result);
     },
   ),
+  "sessions.github.readiness": defineSessionGitHubMethod(
+    "sessions.github.readiness",
+    validateSessionGitHubReadinessParams,
+    async (options) => {
+      const deadline = new AbortController();
+      const result = await raceWithTimeout(
+        () => readGitHubPublicationReadiness(options, options.params, deadline.signal),
+        GITHUB_OPTIONS_TIMEOUT_MS,
+        () => {
+          const error = new GitHubOptionsTimeoutError();
+          deadline.abort(error);
+          throw error;
+        },
+        { ref: false },
+      );
+      options.respond(true, result);
+    },
+  ),
   "sessions.github.options": defineSessionGitHubMethod(
     "sessions.github.options",
     validateSessionGitHubOptionsParams,
@@ -447,13 +468,16 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
               }
             : null;
           if (shared && read.sessionScoped) {
-            if (
-              !(await hasSupportedGitHubPublicationTarget(
-                session,
-                assertResponseCurrent,
-                read.currentSessionRead,
-              ))
-            ) {
+            const source = await qualifyGitHubPublicationSource(
+              session,
+              assertResponseCurrent,
+              read.currentSessionRead,
+            );
+            if (!source.ok) {
+              throw source.cause;
+            }
+            source.assertCurrent();
+            if (source.target.kind !== "supported") {
               shared = null;
               sharedUnavailableReason = "unsupported_workspace";
             }

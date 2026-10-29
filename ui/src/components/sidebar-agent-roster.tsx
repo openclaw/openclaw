@@ -14,7 +14,7 @@ import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
-import { templateCreatorAction } from "../pages/templates/creator-flow.ts";
+import { templateCreatorAction } from "../pages/templates/creator-owner.ts";
 import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";

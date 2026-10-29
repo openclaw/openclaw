@@ -355,6 +355,14 @@ export const validateSessionGitHubActionParams = createProtocolValidator(
   S.SessionGitHubActionParamsSchema,
   Checks.isSessionGitHubActionParams,
 );
+export const validateSessionGitHubReadinessParams = createProtocolValidator(
+  S.SessionGitHubReadinessParamsSchema,
+  Checks.isSessionGitHubReadinessParams,
+);
+export const validateSessionGitHubReadinessResult = createProtocolValidator(
+  S.SessionGitHubReadinessResultSchema,
+  Checks.isSessionGitHubReadinessResult,
+);
 export const validateSessionGitHubOptionsParams = createProtocolValidator(
   S.SessionGitHubOptionsParamsSchema,
   Checks.isSessionGitHubOptionsParams,

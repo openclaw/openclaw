@@ -108,8 +108,38 @@ export function registerRestartRecoveryAdmissionTests({
           marker,
         );
       }
+      const legacyScope =
+        outcome === "ready"
+          ? {
+              ...scope,
+              sessionKey: "agent:main:legacy-restart-admission",
+              sessionId: "legacy-restart-admission",
+            }
+          : undefined;
+      const database = openAgent({ ...scope, ...(sharedStore ? { path: sharedStore } : {}) });
+      if (legacyScope) {
+        // Persisted upgrade input from the retired producer; admission and recovery remain real.
+        const legacy = {
+          sessionId: legacyScope.sessionId,
+          updatedAt: Math.floor(performance.timeOrigin) - 1000,
+          status: "interrupted",
+          abortedLastRun: true,
+          createdActor: { type: "human", source: "profile", id: profile.id },
+          mainRestartRecovery: { cycleId: "legacy-restart-cycle", revision: 1, chargedAttempts: 0 },
+        };
+        database.db
+          .prepare(
+            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES (?, ?, ?, ?, 1)",
+          )
+          .run(
+            legacyScope.sessionKey,
+            legacyScope.sessionId,
+            JSON.stringify(legacy),
+            legacy.updatedAt,
+          );
+      }
       setUserProfileRole(profile.id, "reader");
-      const pathname = openAgent({ ...scope, ...(sharedStore ? { path: sharedStore } : {}) }).path;
+      const pathname = database.path;
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       {
@@ -274,13 +304,21 @@ export function registerRestartRecoveryAdmissionTests({
             expect(
               (await readSessionEntryReadOnlyInWorker(scope))?.resumeAfterRestart,
             ).toBeUndefined();
-            expect(warn).toHaveBeenCalledTimes(2);
+            expect(warn).toHaveBeenCalledTimes(legacyScope ? 3 : 2);
+            if (legacyScope) {
+              expect(
+                (await readSessionEntryReadOnlyInWorker(legacyScope))?.mainRestartRecovery,
+              ).toBeUndefined();
+              expect(warn).toHaveBeenCalledWith(
+                `Skipped restart resume for ${legacyScope.sessionKey}: Error: Session principal has no current run authority.`,
+              );
+            }
             expect(warn).toHaveBeenCalledWith(
               `Skipped restart resume for ${scope.sessionKey}: Error: Session principal has no current run authority.`,
             );
           }
           await withinTest(resumeMarkedSessions({ context, signal, log: { warn } }), signal);
-          expect(warn).toHaveBeenCalledTimes(outcome === "refused" ? 1 : 2);
+          expect(warn).toHaveBeenCalledTimes(outcome === "refused" ? 1 : legacyScope ? 3 : 2);
         } finally {
           recovery.abort();
           preparationReady.resolve();

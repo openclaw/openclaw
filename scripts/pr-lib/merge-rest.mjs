@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { parseGithubResponse } from "./gh-api-preflight.mjs";
 import { execPrGh, execPrGhAsync, execPrGhJson } from "./github.mjs";
@@ -780,8 +781,7 @@ export async function withPriorCiObservation(repo, pr, { prepare, finish }) {
   };
 }
 
-function mergeBody(value) {
-  const snapshot = JSON.parse(value);
+function mergeBody(snapshot) {
   requireEvidence(
     typeof snapshot?.base64 === "string" && /^[0-9a-f]{64}$/.test(snapshot.sha256 ?? ""),
     "invalid merge body snapshot",
@@ -894,15 +894,33 @@ async function main([
       Number.isSafeInteger(Number(prValue)) &&
       extra.length === 0 &&
       (mode === "merge"
-        ? OID.test(head ?? "") &&
-          nonemptyString(bodySnapshot) &&
-          nonemptyString(expectedObservation)
+        ? OID.test(head ?? "") && bodySnapshot === undefined && expectedObservation === undefined
         : head === undefined),
     "invalid command arguments",
   );
   const repo = parseMergeRepository(repository);
   const pr = Number(prValue);
-  const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
+  let envelope;
+  if (mode === "merge") {
+    try {
+      envelope = JSON.parse(readFileSync(0, "utf8"));
+    } catch {
+      requireEvidence(false, "invalid merge dispatch envelope");
+    }
+    requireEvidence(
+      envelope !== null &&
+        typeof envelope === "object" &&
+        !Array.isArray(envelope) &&
+        Object.keys(envelope).length === 2 &&
+        Object.hasOwn(envelope, "bodySnapshot") &&
+        Object.hasOwn(envelope, "expectedObservation") &&
+        envelope.expectedObservation !== null &&
+        typeof envelope.expectedObservation === "object" &&
+        !Array.isArray(envelope.expectedObservation),
+      "invalid merge dispatch envelope",
+    );
+  }
+  const body = mode === "merge" ? mergeBody(envelope.bodySnapshot) : undefined;
   if (mode === "projection") {
     const response = parseGithubResponse(
       execPrGh(apiArgs(repo, `/pulls/${pr}`, ["--include"]), { encoding: "utf8" }, "plain"),
@@ -1012,7 +1030,7 @@ async function main([
         nonemptyString(current.title),
       "immediate squash requires the prepared open, non-draft, clean PR head",
     );
-    const { main: _main, ...expectedFacts } = JSON.parse(expectedObservation);
+    const { main: _main, ...expectedFacts } = envelope.expectedObservation;
     requireEvidence(
       JSON.stringify(
         canonical({

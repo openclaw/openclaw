@@ -17,7 +17,6 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { bindDeliveryQueueEntry } from "./delivery-queue-sqlite-bound.js";
 import {
   prepareClaimedSessionDelivery,
-  prepareSessionDelivery,
   SESSION_DELIVERY_QUEUE_NAME,
   SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryAttemptStartError,
@@ -170,15 +169,6 @@ function publishSessionDelivery<
       ]),
     }),
   );
-}
-
-export async function enqueueSessionDelivery(
-  params: QueuedSessionDeliveryPayload,
-  context: OpenClawStateWorkerContext,
-): Promise<string> {
-  const entry = prepareSessionDelivery(params);
-  await publishSessionDelivery(entry, "sessionDelivery.enqueue", context);
-  return entry.id;
 }
 
 export async function enqueueClaimedSessionDelivery(

@@ -11,6 +11,8 @@ import {
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import {
   resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -18,6 +20,7 @@ import {
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import { localPlacement } from "../../gateway/worker-environments/placement-suite.test-support.js";
+import { rotateAgentRunRegistryLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import {
@@ -33,6 +36,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { mintReplyMessageActionTurnCapability } from "./agent-runner-utils.js";
 import {
   bindGoalContinuationExecution,
+  bindCreatedGoalContinuation,
   promoteGoalContinuationYield,
   withGoalContinuationSettlement,
   readGoalContinuationContext,
@@ -515,9 +519,10 @@ function retainedGoal(existingChild?: SubagentRunRecord) {
         return context;
       },
     );
-  const retain = () =>
+  const retain = (beforeYield?: () => void) =>
     createGoalContinuationReturn(f.params)(() => {
       bindGoalContinuationExecution(f.params.sourceRunId, f.params.sessionKey);
+      beforeYield?.();
       promoteGoalContinuationYield({
         requesterTurnRunId: f.params.sourceRunId,
         entries: [child],
@@ -534,6 +539,73 @@ function retainedGoal(existingChild?: SubagentRunRecord) {
 }
 
 describe("Goal return from committed child custody", () => {
+  it.each([
+    "created",
+    "no creation",
+    "other run",
+    "missing run",
+    "other session",
+    "other agent",
+    "other store",
+    "stopped",
+    "terminal source",
+    "retired generation",
+    "mutated entry handle",
+    "replacement Goal",
+    "scheduled turn",
+  ])("binds a newly created Goal only to its admitted chat return: %s", async (mode) => {
+    const f = retainedGoal();
+    f.params.initialGoalId = undefined;
+    f.params.expectedSession = { ...identity };
+    if (mode === "scheduled turn") {
+      f.params.base.run.scheduledAutomation = { ...TEST_SCHEDULED_TURN, job: makeCronJob({}) };
+    }
+    f.retain(() => {
+      if (mode === "no creation") {
+        return;
+      }
+      if (mode === "stopped") {
+        f.controller.abort();
+      } else if (mode === "terminal source") {
+        f.operation.complete();
+      } else if (mode === "retired generation") {
+        rotateAgentRunRegistryLifecycleGeneration();
+      } else if (mode === "mutated entry handle") {
+        f.params.expectedSession.sessionId = "different-session";
+        f.params.expectedSession.lifecycleRevision = "different-revision";
+      }
+      const created = {
+        runId:
+          mode === "missing run"
+            ? undefined
+            : mode === "other run"
+              ? "command-run"
+              : f.params.sourceRunId,
+        sessionKey: mode === "other session" ? "agent:main:other" : f.params.sessionKey,
+        agentId: mode === "other agent" ? "other" : "main",
+        storePath: mode === "other store" ? "/other/sessions.json" : f.params.storePath,
+        goalId: identity.goalId,
+      };
+      bindCreatedGoalContinuation(created);
+      if (mode === "replacement Goal") {
+        bindCreatedGoalContinuation({ ...created, goalId: "replacement-goal" });
+      }
+    });
+    f.operation.complete();
+    const shouldContinue = ["created", "mutated entry handle", "replacement Goal"].includes(mode);
+    const context = f.publish();
+    if (shouldContinue) {
+      expect(context?.text).toContain("Active goal: Finish the checklist");
+    } else {
+      expect(context).toBeUndefined();
+    }
+    await f.finish();
+    expect(enqueueFollowupRun).toHaveBeenCalledTimes(Number(shouldContinue));
+    if (shouldContinue) {
+      expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1].goalContinuation).toEqual(identity);
+    }
+  });
+
   it.each(["settle-run", "independent-command"])(
     "injects Goal context at the actual built-in harness only for the admitted settlement (%s)",
     async (runId) => {

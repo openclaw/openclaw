@@ -59,6 +59,10 @@ const GATEWAY_RESTART_RESUME_TEXT =
   "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
 const BACKGROUND_EXEC_STOPPED_TEXT =
   "Background exec processes were stopped; rerun them if still needed.";
+// Old shutdown bumped updatedAt, but abandoned cycles can survive for weeks. Limit adoption
+// to six hours before process start; longer stops lose this one-time upgrade resume.
+// Remove this bridge once stable includes the graceful-restart redesign (#185730).
+const LEGACY_RESTART_RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 type SessionIdentity = {
   agentId: string;
@@ -335,7 +339,7 @@ async function prepareRestartStore(
   let entries: PreparedRestartStore["entries"];
   try {
     entries = (await readSessionEntrySummariesInWorker(target)).filter(
-      ({ entry }) => entry.resumeAfterRestart,
+      ({ entry }) => entry.resumeAfterRestart || entry.mainRestartRecovery,
     );
     signal.throwIfAborted();
   } catch (error) {
@@ -441,6 +445,7 @@ async function resumeRestartStore(
   { context, signal, log }: RestartResumeParams,
   { target, entries, orphaned }: PreparedRestartStore,
 ): Promise<void> {
+  const processStartedAt = performance.timeOrigin;
   signal.throwIfAborted();
   for (const session of orphaned) {
     try {
@@ -453,7 +458,7 @@ async function resumeRestartStore(
     }
   }
   for (const { sessionKey, entry: marked } of entries) {
-    if (!marked.resumeAfterRestart) {
+    if (!marked.resumeAfterRestart && !marked.mainRestartRecovery) {
       continue;
     }
     let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
@@ -471,13 +476,25 @@ async function resumeRestartStore(
         requireWriteSuccess: true,
         update: (current) => {
           const selected = current.find((row) => row.sessionKey === sessionKey)?.entry;
-          if (!selected?.resumeAfterRestart) {
+          if (!selected || (!selected.resumeAfterRestart && !selected.mainRestartRecovery)) {
             return { result: undefined };
           }
-          const marker = selected.resumeAfterRestart;
-          const entry = { ...selected, resumeAfterRestart: undefined };
+          const marker: InternalSessionEntry["resumeAfterRestart"] =
+            selected.resumeAfterRestart ??
+            (selected.mainRestartRecovery &&
+            selected.abortedLastRun === true &&
+            selected.status === "interrupted" &&
+            selected.updatedAt <= processStartedAt &&
+            selected.updatedAt >= processStartedAt - LEGACY_RESTART_RESUME_WINDOW_MS
+              ? { queuedInputIds: [] }
+              : undefined);
+          const entry = {
+            ...selected,
+            resumeAfterRestart: undefined,
+            mainRestartRecovery: undefined,
+          };
           return {
-            result: { entry, marker },
+            result: marker ? { entry, marker } : undefined,
             replacements: [{ sessionKey, entry }],
           };
         },

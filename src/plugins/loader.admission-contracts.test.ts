@@ -12,7 +12,7 @@ import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
+import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { activatePluginRegistry } from "./loader-shared.js";
 import {
   loadOpenClawPluginCliRegistry,
@@ -178,10 +178,10 @@ it("keeps system routing bound to the replacement lifecycle owner", async () => 
   });
   const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  fs.writeFileSync(
-    manifestPath,
-    JSON.stringify({ ...manifest, contracts: { tools: ["preparation_probe"] } }),
-  );
+  writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+    ...manifest,
+    contracts: { tools: ["preparation_probe"] },
+  });
   const config = pluginFixtureConfig(plugin);
   setRuntimeConfigSnapshot(config, config);
   const previous = createEmptyPluginRegistry();
@@ -331,14 +331,11 @@ describe("registration config snapshot", () => {
       }), { name: 'config_capture' });
     } };`,
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: plugin.id,
-        configSchema: { type: "object", additionalProperties: false },
-        contracts: { tools: ["config_capture"] },
-      }),
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: plugin.id,
+      configSchema: { type: "object", additionalProperties: false },
+      contracts: { tools: ["config_capture"] },
+    });
     const source: OpenClawConfig = {
       agents: { entries: { ops: { name: "registration snapshot" } } },
       gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
