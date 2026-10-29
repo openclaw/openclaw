@@ -40,7 +40,6 @@ import {
 import { readTranscriptStatsFromDatabase } from "../../config/sessions/session-accessor.sqlite-transcript-stats.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
-import { readSessionPendingInputContext } from "../../config/sessions/session-pending-input-history.js";
 import { discardSessionPendingInput } from "../../config/sessions/session-pending-input-withdrawal.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -299,7 +298,6 @@ conformance("pending input workers", () => {
       total: 1,
       items: [expected],
     });
-    expect(await readSessionPendingInputContext(scope)).toMatchObject({ items: [expected] });
   });
 
   it("recovers submitted input from its retained pending row before transcript consumption", async () => {

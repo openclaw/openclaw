@@ -7,10 +7,8 @@ import type { ModelCatalogProvider } from "./model-catalog-types.js";
 import {
   parseRemoteModelCatalogBundle as parseV1,
   parseRemoteModelCatalogBundleV2 as parseV2,
-  parseRemoteModelCatalogBundleV3 as parseV3,
   validateAndSanitizeRemoteModelCatalogBundle as sanitizeV1,
   validateAndSanitizeRemoteModelCatalogBundleV2 as sanitizeV2,
-  validateAndSanitizeRemoteModelCatalogBundleV3 as sanitizeV3,
 } from "./remote-catalog-bundle.js";
 
 const normalize = (value: unknown, ownedProviders = [" OpenAI "]) =>
@@ -481,29 +479,11 @@ it("strips v2 transport metadata while preserving transport-like provider identi
   expect(() => parseV2(bundle)).not.toThrow();
 });
 
-it("negotiates task metadata only on v3 and rejects malformed declarations per row", () => {
+it("rejects task metadata and unknown schema versions on the v2 wire", () => {
   const inference = { chat: false, decision: { protocol: "fixture", input: ["text"] } };
-  const native = { ...firstModel, inference, compat: { nested: transport } };
-  const candidate = {
-    ...validBundleV2,
-    schemaVersion: 3,
-    providers: { first: { recommendedModels: [native.id] } },
-    models: [native],
-  };
+  const candidate = { ...validBundleV2, models: [{ ...firstModel, inference }] };
   expect(() => parseV2(candidate)).toThrow();
-  expect(() => parseV2({ ...candidate, schemaVersion: 2 })).toThrow();
-  expect(parseV3(candidate).models[0]?.inference).toEqual(inference);
-  const warn = vi.fn();
-  const invalid = {
-    ...native,
-    id: "invalid",
-    inference: { ...inference, decision: { ...inference.decision, protocol: "invalid protocol" } },
-  };
-  const admitted = sanitizeV3({ ...candidate, models: [native, invalid] }, warn);
-  expect(admitted.models).toHaveLength(1);
-  expect(admitted.models[0]).toMatchObject({ inference, compat: { nested: {} } });
-  expect(admitted.providers.first?.recommendedModels).toEqual([]);
-  expect(warn).toHaveBeenCalledOnce();
+  expect(() => parseV2({ ...candidate, schemaVersion: 3 })).toThrow();
 });
 
 it("limits configured-origin discovery to owned runtime catalogs", () => {

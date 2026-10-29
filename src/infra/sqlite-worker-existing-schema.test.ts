@@ -5,11 +5,12 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
+import {
+  executeOpenClawStateWorker,
+  openOpenClawStateWorkerCleanupStore,
+} from "../state/openclaw-state-worker-store.js";
+import { withGatewayServiceInstallation } from "./gateway-service-installation-context.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { openSharedStateSqliteWorkerStore } from "./sqlite-worker-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -45,30 +46,36 @@ function read(context: ReturnType<typeof captureOpenClawStateWorkerContext>) {
   });
 }
 
-describe("existing-schema shared-state workers", () => {
-  it("preserves installed release metadata through managed and ordinary worker opens", async () => {
+describe("shared-state worker schema policies", () => {
+  it("reopens the whole actor when schema policy changes with a cleanup client retained", async () => {
     const { env, databasePath } = await fixture();
+    const captured = captureOpenClawStateWorkerContext({ path: databasePath, env });
+    expect(await read(captured)).toEqual([]);
+    const cleanup = await openOpenClawStateWorkerCleanupStore(
+      databasePath,
+      captured,
+      () => {},
+      captured.admission.identity,
+    );
+    expect(cleanup).toBeDefined();
 
-    await withExistingOpenClawStateSchema({ path: databasePath }, async () => {
-      const captured = captureOpenClawStateWorkerContext({ path: databasePath, env });
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        expect(await read(captured)).toEqual([]);
-        expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
-      }
-    });
-
-    const ordinary = captureOpenClawStateWorkerContext({ path: databasePath, env });
-    await expect(
-      openSharedStateSqliteWorkerStore(
-        {
-          moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),
+    await withGatewayServiceInstallation(
+      {
+        installation: {
+          root: "/synthetic-installed-runtime",
+          version: "2026.10.1",
+          cliVersion: "2026.10.9",
           databasePath,
         },
-        ordinary,
-      ),
-    ).rejects.toThrow("schema policy changed");
-    expect(await read(ordinary)).toEqual([]);
+      },
+      async () => {
+        const installed = captureOpenClawStateWorkerContext({ path: databasePath, env });
+        expect(await read(installed)).toEqual([]);
+      },
+    );
+
     expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
+    await cleanup?.close();
   });
 
   it("admits queued checks only while their captured existing-schema scope remains active", async () => {

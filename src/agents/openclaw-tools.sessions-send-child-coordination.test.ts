@@ -66,6 +66,7 @@ import {
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import { registerSessionsSendReceiptRetentionTests } from "./openclaw-tools.sessions-send-receipt-retention.test-support.js";
 import {
   deliveredRequesterReply,
   endChildRun,
@@ -651,6 +652,21 @@ describe("child followups", () => {
       await cleanupFollowup();
     }
   });
+});
+
+registerSessionsSendReceiptRetentionTests({
+  config,
+  callGatewayMock,
+  calls,
+  writeEntry,
+  writeFinal,
+  sendTool,
+  yieldTool,
+  requesterCalls,
+  settlePair,
+  settleSessionWork,
+  releaseAndObserve,
+  cleanupFollowup,
 });
 
 it("yields two watched followups when the first settles during yield preparation", async () => {

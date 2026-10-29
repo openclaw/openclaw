@@ -994,7 +994,17 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
     script_parent_dir="$original_scripts"
   fi
 fi
-if [ "\${9:-}" = verify ]; then
+if [ -n "\${FIXTURE_DISPATCH_BODY:-}" ]; then
+  MERGE_REPO=$(jq -c .repo "$FIXTURE_STATE")
+  MERGE_REPO_HOST=github.com
+  MERGE_OUTCOME_REF=refs/openclaw/pr-merge-outcomes/123
+  MERGE_OUTCOME_OID=$(git rev-parse "$MERGE_OUTCOME_REF")
+  MERGE_OUTCOME_RECORD=$(git show "$MERGE_OUTCOME_OID:outcome.json")
+  observation=$(merge_read observe 123)
+  MERGE_OBSERVATION=$(merge_outcome_normalize "$observation" 123)
+  body=$(snapshot_merge_body "$FIXTURE_DISPATCH_BODY")
+  merge_outcome_dispatch_async 123 "$(jq -r .pr.headRefOid "$FIXTURE_STATE")" "$body"
+elif [ "\${9:-}" = verify ]; then
   merge_verify 123 '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
 elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
@@ -1032,6 +1042,7 @@ fi
       FIXTURE_NODE: nodeExecutable,
       FIXTURE_BASE: base,
       FIXTURE_WORKFLOW_BINDING: "false",
+      FIXTURE_DISPATCH_BODY: "",
       OPENCLAW_PR_MERGE_METHOD: "squash",
       OPENCLAW_PR_STRICT_DRIFT: "",
       // Only partial-clone cases consume trace evidence to reject implicit hydration.
@@ -1185,6 +1196,22 @@ fi
       state,
       save,
       run,
+      dispatchAsync: (bodyPath: string) => {
+        env.FIXTURE_DISPATCH_BODY = bodyPath;
+        try {
+          return run();
+        } finally {
+          env.FIXTURE_DISPATCH_BODY = "";
+        }
+      },
+      rest: (args: string[], input = "") => {
+        const result = spawnSync(
+          nodeExecutable,
+          [...nodeArgs, join(scripts, "pr-lib/merge-rest.mjs"), ...args],
+          { cwd: repo, env, input, encoding: "utf8" },
+        );
+        return { ...result, output: result.stdout + result.stderr };
+      },
       bindWorkflow: () => {
         env.FIXTURE_WORKFLOW_BINDING = "true";
       },

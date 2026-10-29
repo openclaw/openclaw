@@ -69,7 +69,7 @@ async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<v
 }
 
 suite.define(() => {
-  it("restores a prompt and image in a fresh page, then clears them after creation", async () => {
+  it("restores a prompt, image and permission choice, then clears them after creation", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const firstPage = await context.newPage();
@@ -92,7 +92,12 @@ suite.define(() => {
         "restore this prompt after restart and incognito",
         1,
       );
+      const permission = firstPage.locator('[data-chat-permission-select="true"]');
+      await permission.click();
+      await firstPage.locator('[data-chat-permission-option="read-only"]').click();
+      await pollAttribute(permission, "data-chat-select-value").toBe("read-only");
       await firstPage.reload();
+      await pollAttribute(permission, "data-chat-select-value").toBe("read-only");
       await pollValue(firstMessage).toBe("restore this prompt after restart and incognito");
       await pollCount(firstPage.locator(".chat-attachment-thumb")).toBe(1);
       await firstPage.close();
@@ -107,11 +112,16 @@ suite.define(() => {
       const restoredMessage = restoredPage.locator(".new-session-page__message");
       await pollValue(restoredMessage).toBe("restore this prompt after restart and incognito");
       await pollCount(restoredPage.locator(".chat-attachment-thumb")).toBe(1);
+      await pollAttribute(
+        restoredPage.locator('[data-chat-permission-select="true"]'),
+        "data-chat-select-value",
+      ).toBe("read-only");
       await restoredPage.getByRole("button", { name: "Start session" }).click();
 
       const create = await restoredGateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         message: "restore this prompt after restart and incognito",
+        permissionMode: "read-only",
         attachments: [{ ...pngAttachment, type: "image", mimeType: "image/png" }],
       });
       await restoredPage.waitForURL(
@@ -126,6 +136,10 @@ suite.define(() => {
       await clearedPage.goto(`${suite.server.baseUrl}new`);
       await pollValue(clearedPage.locator(".new-session-page__message")).toBe("");
       await pollCount(clearedPage.locator(".chat-attachment-thumb")).toBe(0);
+      await pollAttribute(
+        clearedPage.locator('[data-chat-permission-select="true"]'),
+        "data-chat-select-value",
+      ).toBe("");
     } finally {
       await context.close();
     }

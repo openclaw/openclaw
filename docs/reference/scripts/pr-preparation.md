@@ -49,6 +49,66 @@ the old baseline review as current approval. A genuine fresh incoming NEEDS WORK
 review, the existing publication, signature and live-identity checks, and a new
 candidate READY review and gates are still required.
 
+## Publish a candidate for required proof
+
+Some package proofs require a remotely addressable candidate before the review
+can become READY. For that case, an independent correction reviewer can authorize
+`scripts/pr prepare-publish-for-proof <PR>` without resolving the proof finding.
+The command publishes only the exact signed commit; it does not run proof,
+approve the correction, create successful gate stamps, or authorize merging.
+
+Keep the correction recommendation `NEEDS WORK` and each pending incoming
+finding's resolution empty. Add this exact typed record under `correction` in
+`.local/correction-review.json`:
+
+```json
+{
+  "proofPublication": {
+    "version": 1,
+    "kind": "published-candidate-proof",
+    "headSha": "<candidate commit SHA>",
+    "treeOid": "<candidate tree OID>",
+    "workflowSource": "<admitted workflow commit SHA>",
+    "workflowBinding": "<current workflow binding OID>",
+    "expectedHostedHead": "<observed PR head SHA>",
+    "pendingFindings": [
+      {
+        "id": "R2",
+        "evidence": "The exact published package must demonstrate the required upgrade behavior."
+      }
+    ]
+  }
+}
+```
+
+Use full lowercase 40-character object IDs. Enumerate every current IMPORTANT
+finding and its concrete required evidence. Every other incoming required finding
+must be resolved. Unresolved BLOCKER findings, unvalidated issues, incomplete
+finding sets, and changed source or review authority refuse publication.
+
+If the retained workflow predates this command, first land the capability through
+ordinary review and qualification. Then use the existing exact-identity
+`prepare-workflow-successor` command with `--for-proof`, naming that authenticated
+current-main workflow in the review record. It preserves the same candidate,
+review, predecessor binding, and atomic operation-lock/binding transaction.
+The record keeps the predecessor binding OID; the successor binds those exact
+review bytes. Neither an unlanded implementation nor a manual binding edit can
+authorize the transition.
+
+Publication requires an open PR with no auto-merge request, queue membership,
+retained merge outcome, or unresolved execution. Unknown observations refuse;
+the command does not cancel another operation. It requires Git transport and
+valid signatures, rejects unsigned overrides and same-tree commit aliases, and
+does not fall back to GraphQL after a Git failure. An uncertain push remains
+incomplete. After independently reconciling the hosted OID, an explicit invocation
+can record an already-published exact candidate without another push.
+
+The existing `prepare-push-result.env` records `PUSH_PURPOSE=proof`, the exact
+review OID, and pending finding IDs alongside publication identity. It is not a
+qualified `prep.env`. Normal gates, push, sync, and merge still require a genuine
+READY correction review. After obtaining the enumerated proof, independently
+resolve those findings for the exact candidate and run ordinary qualification.
+
 ## Signing a baseline on another host
 
 When the preparation host can verify signatures but the signing key is available

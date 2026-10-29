@@ -483,6 +483,10 @@ def checkout_harness(sha):
         "scripts/generate-npm-package-lock.mts",
         "scripts/changed-lanes.mts",
         "scripts/lib/merge-head-diff-base.mjs",
+        "scripts/lib/npm-lock-package-selection.mjs",
+        "scripts/lib/npm-lock-package-selection.d.mts",
+        "scripts/lib/record-shared.mjs",
+        "scripts/lib/record-shared.d.mts",
     )
     linux_node_scripts = (
         *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",

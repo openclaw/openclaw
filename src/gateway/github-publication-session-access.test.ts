@@ -58,6 +58,85 @@ describe("local checkout publication", () => {
     creatorEmail: "publication-guest@example.test",
     realWorktree: true,
   });
+  it("publishes an owned checkout outside the default workspace without admin", async () => {
+    const f = await createFixture();
+    const source = f.local!;
+    const workspace = path.join(root, "default-workspace");
+    await fs.mkdir(workspace);
+    const alias = path.join(workspace, "owned-checkout");
+    await fs.symlink(source.cwd, alias, "junction");
+    setRuntimeConfigSnapshot({
+      ...f.config,
+      agents: { entries: { main: { workspace } } },
+    });
+    const invoke = async (workspacePath: string, handoff = true) => {
+      const respond = vi.fn();
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: SESSION_KEY,
+          ...(handoff ? { workspacePrAdoptionSessionId: SESSION_ID } : {}),
+        },
+        () =>
+          handleGatewayRequest({
+            req: {
+              type: "req",
+              id: "owned-checkout",
+              method: "sessions.github.publish",
+              params: { sessionKey: SESSION_KEY, idempotencyKey: "owned-checkout", workspacePath },
+            },
+            context: {
+              ...createDirectChatContext({ getRuntimeConfig }),
+              githubPublicationService: f.coordinator,
+            },
+            client: f.guestSource.client,
+            isWebchatConnect: () => false,
+            respond,
+          }),
+      );
+      return respond.mock.calls[0];
+    };
+    const before = await worktreeState(source);
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    const worktree = loadSessionEntryReadOnly(scope)!.worktree;
+    await upsertSessionEntryCore(scope, { worktree: undefined });
+    expect(await invoke(source.cwd)).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("operator.admin") },
+    ]);
+    await upsertSessionEntryCore(scope, { worktree });
+    expect(await worktreeState(source)).toEqual(before);
+    expect(source.effects).toEqual([]);
+    expect(f.guestSource.client.connect.scopes).not.toContain("operator.admin");
+    expect(await invoke(source.cwd, false)).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("agent handoff") },
+    ]);
+    for (const other of [workspace, root, path.join(source.cwd, ".git"), "repository"]) {
+      expect(await invoke(other)).toMatchObject([
+        false,
+        undefined,
+        { message: expect.stringContaining("current managed worktree") },
+      ]);
+      expect(await worktreeState(source)).toEqual(before);
+      expect(source.effects).toEqual([]);
+    }
+    const result = await invoke(source.cwd);
+    expect(result).toMatchObject([
+      true,
+      { status: "published", url: expect.stringContaining("/pull/") },
+    ]);
+    expect(source.effects).toEqual(["push", "pull_request"]);
+    expect(await invoke(alias)).toEqual(result);
+    expect(await invoke(`${source.cwd}/.`)).toEqual(result);
+    expect(source.effects).toEqual(["push", "pull_request"]);
+    await f.revoke();
+    expect(await invoke(source.cwd)).toMatchObject([false, undefined, expect.anything()]);
+    expect(source.effects).toEqual(["push", "pull_request"]);
+  });
+
   it.each(["published", "before binding", "before push", "before PR"] as const)(
     "local checkout outcome: %s",
     async (outcome) => {

@@ -39,17 +39,20 @@ const repositoryScriptEntries = [
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
   "scripts/perf/catalog-worker-churn-measure.mjs!",
+  "scripts/perf/code-mode-control-schema-measure.ts!",
   "scripts/perf/code-mode-result-load-measure.ts!",
   "scripts/perf/completion-payload-bytes-measure.ts!",
   "scripts/perf/connect-profile-binding-measure.ts!",
   "scripts/perf/cron-reader-reuse-measure.ts!",
   "scripts/perf/cron-registry-read-measure.ts!",
   "scripts/perf/doctor-session-manifests.ts!",
+  "scripts/perf/history-model-projection-measure.ts!",
   "scripts/perf/inspection-read-admission.ts!",
   "scripts/perf/local-workspace-refresh-measure.ts!",
   "scripts/perf/local-workspace-request-bytes-measure.ts!",
   "scripts/perf/node-worker-churn-measure.mjs!",
   "scripts/perf/placement-retirement-replies.mjs!",
+  "scripts/perf/plugin-state-authority-receipts.ts!",
   "scripts/perf/plugin-state-claims-measure.ts!",
   "scripts/perf/reef-state-request-bytes.ts!",
   "scripts/perf/schema-crossing-measure.ts!",
@@ -67,6 +70,8 @@ const repositoryScriptEntries = [
   "scripts/perf/worktree-creation-measure.ts!",
   // The source header documents this matched Code Mode engine probe by path.
   "scripts/perf/code-mode-engine-measure.ts!",
+  // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
+  "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
@@ -896,6 +901,8 @@ const repositoryScriptEntries = [
   "scripts/perf/branch-rotation-measure-preload.ts!",
   // The plugin scope census is loaded by the documented stress --gateway-preload option.
   "scripts/perf/plugin-scope-attribution-preload.mjs!",
+  // The documented stress --gateway-preload option selects this main-isolate probe.
+  "scripts/perf/main-code-space-preload.mjs!",
   // The documented placement shutdown reproduction is invoked as a standalone CLI.
   "scripts/perf/worker-placement-reconcile-shutdown-measure.ts!",
   // Their headers document these standalone measurement CLIs by path.
@@ -1028,6 +1035,9 @@ const repositoryScriptEntries = [
   // run.sh invokes this CLI and preloads it into updater/Doctor children.
   "scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs!",
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
+  // Installed recovery launches its driver and preloads its fault observer by path.
+  "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs!",
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   // run.sh starts this persistent native peer as a separate process.

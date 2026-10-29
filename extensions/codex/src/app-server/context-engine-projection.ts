@@ -146,7 +146,7 @@ export async function projectContextEngineAssemblyForCodex(params: {
     const remaining = options.maxRenderedContextChars - retainedChars;
     // Read only retained attachments, then charge their rendered text to this same window.
     const files =
-      remaining > 0 && message.role === "user"
+      remaining > 0 && (message.role === "user" || message.role === "assistant")
         ? await options.prepareFileContext?.(message, Math.min(remaining, options.maxTextPartChars))
         : undefined;
     // Use the shared image estimate; native image payloads consume context too.

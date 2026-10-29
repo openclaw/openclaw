@@ -87,12 +87,26 @@ export type ScribeSnapshot = {
   firstRunDue?: boolean;
 };
 
+/**
+ * Whether a plugin a scribe needs can be used: not installed, turned off, installed but not
+ * signed in to its service, or ready.
+ */
+export type PluginReadiness = "missing" | "disabled" | "needs-sign-in" | "ready";
+
+/** Readiness of the plugin `scribe` needs; undefined when it needs none or it was not read. */
+export const neededPluginState = (
+  scribe: ScribeDefinition,
+  detection: ScribeDetection,
+): PluginReadiness | undefined => scribe.plugin && detection.plugins?.[scribe.plugin.id];
+
 /** Cheap facts for the Available rows. Absent fields could not be read. */
 export type ScribeDetection = {
   activeConversations?: number;
   archivedConversations?: number;
   /** MEMORY.md in the agent workspace: null when it does not exist. */
   memoryFile?: { size?: number } | null;
+  /** Readiness of the plugins scribes need, by plugin id. */
+  plugins?: Record<string, PluginReadiness>;
 };
 
 /** The Gateway access scribe reads need: the page host's authenticated request. */
@@ -372,12 +386,58 @@ async function conversationCount(host: ScribeReader, agentId: string, archived: 
   return result?.count === 0 ? 0 : undefined;
 }
 
+/**
+ * Readiness of one plugin from plugins.inspect. A plugin the Gateway does not know is rejected
+ * as an invalid request; any other failure is left unknown (undefined).
+ */
+async function pluginReadiness(
+  host: ScribeReader,
+  pluginId: string,
+): Promise<PluginReadiness | undefined> {
+  const result = await host
+    .request<{
+      plugin?: { installed?: boolean; enabled?: boolean };
+      mcpAuth?: { state?: string }[];
+    }>("plugins.inspect", { pluginId })
+    .catch((error: unknown) =>
+      isRecord(error) && error.gatewayCode === "INVALID_REQUEST" ? null : undefined,
+    );
+  if (result === undefined) {
+    return undefined;
+  }
+  if (!result?.plugin?.installed) {
+    return "missing";
+  }
+  if (!result.plugin.enabled) {
+    return "disabled";
+  }
+  // Every MCP server the plugin declares must be signed in; one without sign-in has no entries.
+  return (result.mcpAuth ?? []).every((server) => server.state === "authorized")
+    ? "ready"
+    : "needs-sign-in";
+}
+
+// The plugins scribes need, once each.
+const scribePluginIds = () => [
+  ...new Set(SCRIBES.flatMap((scribe) => (scribe.plugin ? [scribe.plugin.id] : []))),
+];
+
+// Readiness by plugin id, leaving out plugins that could not be read.
+async function detectPlugins(host: ScribeReader) {
+  const ids = scribePluginIds();
+  const states = await Promise.all(ids.map((id) => pluginReadiness(host, id)));
+  return Object.fromEntries(
+    ids.flatMap((id, i) => (states[i] === undefined ? [] : [[id, states[i]] as const])),
+  );
+}
+
 /** Facts the Available rows can show honestly. Failed reads leave their fields out. */
 export async function detectSources(host: ScribeReader, agentId: string): Promise<ScribeDetection> {
-  const [active, archived, files] = await Promise.allSettled([
+  const [active, archived, files, plugins] = await Promise.allSettled([
     conversationCount(host, agentId, false),
     conversationCount(host, agentId, true),
     host.request<{ files?: unknown[] }>("agents.files.list", { agentId }),
+    detectPlugins(host),
   ]);
   const detection: ScribeDetection = {};
   if (active.status === "fulfilled" && active.value !== undefined) {
@@ -398,6 +458,9 @@ export async function detectSources(host: ScribeReader, agentId: string): Promis
             ? { size: memory.size }
             : {};
     }
+  }
+  if (plugins.status === "fulfilled" && Object.keys(plugins.value).length) {
+    detection.plugins = plugins.value;
   }
   return detection;
 }

@@ -37,6 +37,7 @@ const sheetAdapter: OverlayNativeAdapter = {
     surface.hidden = true;
   },
 };
+const normalizeSearch = (value: string) => value.toLocaleLowerCase().normalize("NFC");
 
 export function PickerContent<Option extends PickerOption>(props: {
   params: PickerParams<Option>;
@@ -113,15 +114,13 @@ export function PickerContent<Option extends PickerOption>(props: {
   const searchText = createMemo(
     () =>
       catalog().map(({ option, group }) =>
-        [option.label, option.value, option.description, group?.label]
-          .join(" ")
-          .toLocaleLowerCase(),
+        normalizeSearch([option.label, option.value, option.description, group?.label].join(" ")),
       ),
     { lazy: true },
   );
   const sections = createMemo(
     () => {
-      const search = query().trim().toLocaleLowerCase();
+      const search = normalizeSearch(query().trim());
       const terms = search ? search.split(/\s+/u) : [];
       const text = search ? searchText() : undefined;
       const ungrouped: Section<Option> = { options: [], expanded: true };

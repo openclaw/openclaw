@@ -45,6 +45,15 @@ backup.
 
 ## Update implementation contract
 
+Linux managed updates run in a separate user service and slice, so an agent exec's
+descendant cleanup, Gateway restarts, and the Gateway unit's memory limit do not
+own the handoff. If its recorded helper and updater die, update status or startup
+reconciliation records `handoff-terminated` with the last phase. An owned npm stage
+that never reached activation is removed after checking for surviving work;
+uncertain cleanup leaves a warning and retains the stage. Activation recovery
+and backups remain with their existing recovery owners. These changes must be
+present in the installed updater; a newer candidate cannot repair an old launcher.
+
 Managed systemd stops bound the native command by the selected unit's effective
 stop timeout plus five seconds. Unavailable or infinite policy uses the finite
 Gateway stop budget with a warning; a command timeout retains its reason code
@@ -76,6 +85,16 @@ compatible process helper, wait for the recorded driver to exit, then run
 `openclaw update repair`. Doctor reports the native load failure and runtime
 glibc version when available.
 
+SQLite update backup admission measures database and journal families, reserves the
+retained backup and writable rollback images, and sizes history scratch from shared
+state rather than a large agent database. Actual rollback output space is checked
+again before current databases move. A disk-space refusal retains the required and
+available capacity and the backup or rollback volume role in the package-swap failure
+fact without exposing private paths. The candidate worker and installed updater
+must contain the diagnostic repair; an older updater cannot gain it from a newer
+candidate alone. If capture refuses before the package changes, final recovery
+restarts and verifies the previous owned Gateway unless recorded data is at risk.
+
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
 update failures retain the final consistency reason code and attempt count in
 `openclaw update status` and the prepared failure report. The candidate worker
@@ -103,6 +122,12 @@ Gateway shutdown cancellation stays quiet; unexpected scheduled task failures
 are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
+
+PostgreSQL original-state captures acquire offline custody before using the exact
+database backup provider. The installed updater must contain this repair.
+Update-history writes participate in PostgreSQL's generation handoff to Doctor;
+all other generation checks remain in force. Update status reads history and
+recovery outcomes through the configured database engine.
 
 During overlapping Gateway restarts, config recovery reads health facts through
 the same isolated read-only transaction used for startup plugin metadata while
@@ -362,6 +387,12 @@ recorded run, and names `openclaw update repair` as the next action. Repair or t
 next update's admission can record the failed outcome without waiting for the
 inactivity grace period. Live or unverifiable drivers and retained recovery
 continue to preserve their ownership.
+
+If an explicit update timeout expires during preparation, the original updater
+records a failed outcome after its child work settles, while it still owns
+bookkeeping. Expiration during activation, unresolved child work, or lost
+ownership retains recovery custody instead. A timeout does not authorize a new
+process to take over an unresolved update.
 
 A successful foreground update hands completion to the replacement Gateway.
 Automatic history reconciliation preserves that handoff while startup verifies
@@ -1114,6 +1145,11 @@ Post-activation schema inspection preserves captured SQLite database, WAL, and s
 artifacts so the final Doctor can verify the same migration source.
 
 Database rehearsal also avoids a second full backup of each private snapshot.
+Candidate inventory reads database registrations and the installed plugin index
+in one read-only transaction instead of copying the whole shared database just
+for metadata. Sources requiring private recovery keep the snapshot path. The
+candidate worker must contain this improvement; snapshot publication, integrity
+checks, and rollback verification are unchanged.
 Update schema inspection and rehearsal use SQLite online backup with a pinned
 read transaction, so a busy Gateway can keep writing while the copy includes
 committed WAL data. Each acquisition makes one copy instead of retrying until
@@ -1832,6 +1868,15 @@ when every plugin migration phase reports no remaining work and its settings
 validate. It does not run offline repairs. A remaining migration stays pending
 with its phase named in the Gateway log. An explicit state-migration obligation
 also stays pending if the installed plugin no longer supplies its detector.
+Doctor settles an unused or disabled unavailable plugin's pending upgrade when
+there are no retained settings to migrate, even if an earlier update recorded a
+required migration. It keeps existing plugin state and defers required migration
+or inspection until the plugin is active. Installing or enabling that plugin
+does not bypass its migration: runtime admission holds it until Doctor migrates
+the state or confirms it is already ready. This deferral clears the inactive
+plugin's repair warning without claiming its state was migrated.
+Active plugins and retained settings still require their
+migration owner; Doctor names the install or enable step when that owner is missing.
 For a systemd system unit, Doctor
 checks stop permission before draining the Gateway; an unprivileged run names
 the `sudo systemctl stop <unit>` command for the service owner. Run Doctor as the

@@ -1,11 +1,23 @@
-import { err, ok } from "@openclaw/normalization-core/result";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
+import type { CombinedSessionStoreTopologyRequest } from "./combined-store.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
+import {
+  measureSessionStoreTargetInventoryInputBytes,
+  type SessionStoreReadCandidate,
+} from "./session-store-read-candidates.js";
+import type {
+  SessionStoreTargetReadRequest,
+  SessionStoreTargetReadResult,
+  SessionStoreTargetInventoryRequest,
+} from "./session-store-target-inventory.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
+  type SessionHistoryWorkerInput,
   type SessionHistoryWorkerDatabase,
   type SessionHistoryWorkerPreparedInput,
   type SessionTranscriptWorkerValues,
@@ -494,3 +506,88 @@ const readers: Readers & ThisType<ReaderContext> = {
     (value) => value,
   ),
 };
+
+// Discovery uses routing settings; model and plugin config stays with host consumers.
+export function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
+  return { agents, acp, session };
+}
+
+export function createSessionStoreTargetReaders(
+  capturedCandidates: SessionStoreReadCandidate[],
+  runRead: <
+    Input extends Extract<
+      SessionHistoryWorkerInput,
+      { kind: "session-store-target" | "session-target-inventory" | "combined-store-topology" }
+    >,
+  >(
+    input: Input,
+    inputBytes: number,
+  ) => Promise<SessionTranscriptWorkerValues[Input["kind"]]>,
+  settleCandidates: () => Promise<void>,
+) {
+  const readStoreTargetResult = async (
+    request: Omit<SessionStoreTargetReadRequest, "candidates">,
+  ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
+    const preparedRequest = {
+      ...request,
+      env: captureSessionTranscriptStorageEnvironment(request.env),
+      candidates: capturedCandidates,
+    };
+    const result = await runRead(
+      { kind: "session-store-target", request: preparedRequest },
+      JSON.stringify(preparedRequest).length * 2,
+    );
+    return "readError" in result
+      ? err(decodeSessionTranscriptWorkerReadError(result.readError))
+      : ok(result);
+  };
+  return {
+    readCombinedTopology: async (
+      request: Omit<CombinedSessionStoreTopologyRequest, "candidates">,
+    ) => {
+      const preparedRequest = {
+        ...request,
+        config: sessionDiscoveryConfig(request.config),
+        options: {
+          ...request.options,
+          discovery: {
+            ...request.options.discovery,
+            env: captureSessionTranscriptStorageEnvironment(request.options.discovery.env),
+          },
+        },
+        candidates: capturedCandidates,
+      };
+      return await runRead(
+        { kind: "combined-store-topology", request: preparedRequest },
+        JSON.stringify(preparedRequest).length * 2,
+      );
+    },
+    readStoreTargetResult,
+    readStoreTarget: async (request: Omit<SessionStoreTargetReadRequest, "candidates">) => {
+      const read = await readStoreTargetResult(request);
+      if (!read.ok) {
+        throw read.error;
+      }
+      return read.value;
+    },
+    readTargetInventory: async (
+      request: Omit<SessionStoreTargetInventoryRequest, "candidates">,
+    ) => {
+      const preparedRequest = {
+        ...request,
+        config: sessionDiscoveryConfig(request.config),
+        env: captureSessionTranscriptStorageEnvironment(request.env),
+        candidates: capturedCandidates,
+      };
+      const result = await runRead(
+        { kind: "session-target-inventory", request: preparedRequest },
+        measureSessionStoreTargetInventoryInputBytes(preparedRequest),
+      );
+      if (result.kind === "session-target-registry-required") {
+        // Release native readers before registry work without discarding a healthy worker.
+        await settleCandidates();
+      }
+      return result;
+    },
+  };
+}

@@ -49,6 +49,20 @@ no schema migration.
 There are no restart checkpoints written per turn or tool call, startup orphan
 scans, or crash-time execution reconstruction.
 
+Startup recovers ready session stores immediately. If a store is still undergoing
+inspection and preparation, its existing startup owner discovers retained work
+before admitting fresh inputs. Recovery runs after database preparation ends,
+under the session's current authority. An unrelated store's inspection does not
+hold up ready agents. Refused databases keep their normal admission safeguards,
+and shutdown cancels pending recovery without consuming its markers.
+
+The initial recovery pass keeps the existing external-input fence until its
+retained inputs own their ordinary queue slots. A store prepared later keeps its
+own input readiness pending until its retained inputs are admitted. This also
+applies when several logical agents share the same physical store. Database
+reads and writes retain their normal admission rules; recovery does not borrow
+startup's temporary database access or wait for model executions to finish.
+
 <a id="graceful-restarts-drain-first" />
 
 ## Graceful shutdown
@@ -62,6 +76,11 @@ a full run-completion drain before shutdown.
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
 Managed update handoffs keep their own stop handling.
+
+Failed startup uses the same cleanup grace when the CLI will exit. Usage backfill
+cancels pending discovery reads and scans when its sidecar stops; a later startup
+rebuilds any unfinished cache work. Embedded hosts and in-process startup recovery
+still join cleanup before reusing the runtime.
 
 An external stop or restart logs bounded-grace leftovers, such as a service-child
 cleanup deadline, lifetime sidecar, or retained plugin runtime, and returns with
@@ -306,6 +325,16 @@ Copying one does not grant permission to restart a service.
 
 ## Automatic resume
 
+On the first upgrade from a version with legacy main-session recovery, startup
+adopts an unsettled cycle only when the entry has `abortedLastRun: true`, status
+`interrupted`, and an `updatedAt` within the six hours before this process started.
+Old shutdown marking updated that timestamp. Startup clears the cycle and sends
+the same single resume input under the current-authority rules below. Stale,
+future-dated, settled, tombstoned, `done`, and `killed` entries do not resume.
+An installation stopped for longer than six hours before upgrading loses this
+one-time resume; send a new message to continue. Old execution and authority
+snapshots are not restored.
+
 Startup clears each marker and admits exactly one new input through the normal
 session-event path:
 
@@ -405,7 +434,7 @@ Marker persistence, skipped authority, and bounded shutdown leftovers are report
 in logs. A resume admission proves only that the new input was accepted; use the
 session transcript and actual delivery outcome to check whether work finished.
 
-Old restart claims, authority snapshots, interrupted pending-input rows, and queued
+Apart from that upgrade bridge, old restart claims, authority snapshots, interrupted pending-input rows, and queued
 inference records may remain in existing databases. They are ignored rather than
 reconstructed or deleted. Their text stays preserved. Legacy interrupted and
 ownerless queued inputs left by a crash do not add pending counts, notices, or
@@ -429,7 +458,7 @@ does not prove that a reply reached its channel.
 - Deleted or archived sessions, and human-owned sessions whose current principal
   cannot be admitted.
 - Gateway terminal PTYs and background OS processes.
-- Legacy inference queue entries or old execution-recovery records.
+- Legacy inference queue entries or settled old execution-recovery records.
 
 After a lossy stop, the stored conversation remains available. Send a new message
 to continue and inspect uncertain effects before repeating them.

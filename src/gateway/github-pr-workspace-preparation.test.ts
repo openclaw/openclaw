@@ -173,6 +173,7 @@ describe("existing PR preparation through the registered agent action", () => {
       ).resolves.toMatchObject({
         status: "failed",
         code: "push_rejected",
+        nextAction: expect.stringContaining("call prepare_pr with this PR's URL"),
       });
       await expect(f.invoke({ action: "refresh_base", pullRequestUrl: undefined })).rejects.toThrow(
         "prepare_pr",

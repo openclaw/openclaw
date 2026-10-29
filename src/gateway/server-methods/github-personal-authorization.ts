@@ -174,6 +174,7 @@ export async function prepareGitHubPublicationOptionsRead(
     >,
   { sessionKey, agentId: requestedAgentId }: SessionMutationTarget,
   signal?: AbortSignal,
+  purpose: "options" | "shared-observation" = "options",
 ) {
   const authority = readGatewayRequestMutationAuthority(options);
   const client = options.client;
@@ -209,6 +210,7 @@ export async function prepareGitHubPublicationOptionsRead(
   };
   const eligibleClient = currentClient();
   const personal: PersonalEligibility =
+    purpose === "shared-observation" ||
     !eligibleClient ||
     !hasCurrentPersonalGatewaySource(options.client, options.context) ||
     !operatorScopeSatisfied("operator.read", eligibleClient.connect.scopes ?? [])
@@ -219,7 +221,22 @@ export async function prepareGitHubPublicationOptionsRead(
             kind: "eligible",
             action: preparePersonalGitHubAction(options, signal),
           };
-  const preparedSession = await prepareOptionsSession(sessionKey, requestedAgentId, currentClient);
+  const preparedSession =
+    purpose === "shared-observation"
+      ? await prepareGitHubPublicationSession(sessionKey, {
+          agentId: requestedAgentId,
+          assertCurrent: currentClient,
+          // Workspace changes belong to source observation, not disclosure authority.
+          fields: [
+            "sessionId",
+            "lifecycleRevision",
+            "owner",
+            "createdActor",
+            "visibility",
+            "incognito",
+          ],
+        })
+      : await prepareOptionsSession(sessionKey, requestedAgentId, currentClient);
   let sharing: Awaited<ReturnType<typeof prepareSessionSharingRead>> | undefined;
   const release = () => {
     sharing?.release();

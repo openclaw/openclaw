@@ -719,6 +719,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                   ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
                   cwd: run.session.cwd,
                   tail: run.session.tail,
+                  ...(warnings.length ? { warningText: warnings.join("\n") } : {}),
                   // Structured callers receive details without the visible content.
                   followUp,
                 },

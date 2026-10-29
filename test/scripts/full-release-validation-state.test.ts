@@ -12,6 +12,7 @@ import {
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
   releaseExecutionPlanSha256,
+  releasePlanGateFailures,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseCoveragePolicyBinding,
@@ -21,6 +22,7 @@ import {
   affectedActiveRunIds,
   buildReleaseStateArtifact,
   classifyReleaseSnapshot,
+  effectiveReleasePlanGates,
   formatReleaseStateOutcome,
   hydrateReusedPlan,
   readChild,
@@ -84,11 +86,16 @@ function planInput(overrides: Record<string, unknown> = {}) {
     candidateRequestInput: canonicalCandidateRequest(),
     children: {},
     dockerPreflightResult: "success",
+    dockerPreparationResult: "success",
     evidenceReuse: false,
+    npmPreparationResult: "success",
+    npmQualificationResult: "success",
     parentRunAttempt: 1,
     parentRunId: "77",
     rerunGroup: "all",
     resolveTargetResult: "success",
+    pluginNpmPreflightRequired: false,
+    pluginNpmPreparationResult: "skipped",
     trustedWorkflow: TRUSTED_MAIN,
     workflowRef: "release-ci/tooling",
     workflowSha: SHA,
@@ -823,6 +830,116 @@ describe("full release execution plan", () => {
       name: "Acquire full release candidate",
       required: false,
       result: "skipped",
+    });
+  });
+
+  it("retains every required artifact qualification result as a parent gate", () => {
+    const result = plan({
+      candidateRequired: false,
+      childPhaseVersion: 3,
+      npmPreparationResult: "success",
+      npmQualificationResult: "failure",
+      pluginNpmPreflightRequired: true,
+      pluginNpmPreparationResult: "timed_out",
+      dockerPreparationResult: "cancelled",
+    });
+
+    expect(result.gates).toEqual(
+      expect.arrayContaining([
+        { name: "Prepare release npm artifacts", required: true, result: "success" },
+        { name: "Qualify release npm artifacts", required: true, result: "failure" },
+        { name: "Prepare exact plugin npm artifacts", required: true, result: "timed_out" },
+        { name: "Prepare release Docker artifacts", required: true, result: "cancelled" },
+      ]),
+    );
+    expect(releasePlanGateFailures(result.gates)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ job: "Qualify release npm artifacts", conclusion: "failure" }),
+        expect.objectContaining({
+          job: "Prepare exact plugin npm artifacts",
+          conclusion: "timed_out",
+        }),
+        expect.objectContaining({
+          job: "Prepare release Docker artifacts",
+          conclusion: "cancelled",
+        }),
+      ]),
+    );
+  });
+
+  it("keeps the admitted gate set while accepting recovered producer outcomes", () => {
+    const frozen = plan({
+      npmQualificationResult: "failure",
+      pluginNpmPreflightRequired: true,
+      pluginNpmPreparationResult: "cancelled",
+      dockerPreparationResult: "failure",
+    });
+    const effective = effectiveReleasePlanGates(frozen.gates, {
+      NPM_PREPARATION_RESULT: "success",
+      NPM_QUALIFICATION_RESULT: "success",
+      PLUGIN_NPM_PREPARATION_RESULT: "success",
+      DOCKER_PREPARATION_RESULT: "success",
+    });
+
+    expect(effective.map(({ name, required }) => ({ name, required }))).toEqual(
+      frozen.gates.map(({ name, required }) => ({ name, required })),
+    );
+    expect(releasePlanGateFailures(effective)).toEqual([]);
+  });
+
+  it("clears a frozen qualification failure through the real decision collector", () => {
+    const root = tempDirs.make("frv-recovered-parent-gate-");
+    const output = join(root, "decision.json");
+    const executionPlanPath = join(root, "plan.json");
+    const gh = join(root, "gh");
+    const sealedPlan = executionPlan({ npmQualificationResult: "failure" });
+    writeFileSync(executionPlanPath, JSON.stringify(sealedPlan));
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const endpoint = args.find((entry) => entry.startsWith("repos/"));
+const children = JSON.parse(process.env.FRV_PLANNED_CHILDREN);
+if (args.includes("--paginate")) {
+  process.stdout.write(JSON.stringify({
+    name: "test", status: "completed", conclusion: "success",
+    started_at: "2026-08-21T00:00:00Z", completed_at: "2026-08-21T00:01:00Z",
+    html_url: "https://example.invalid/jobs/1"
+  }) + "\\n");
+  process.exit(0);
+}
+const runId = endpoint.match(/actions\\/runs\\/([0-9]+)/)[1];
+const child = children.find((entry) => entry.runId === runId);
+process.stdout.write(JSON.stringify({
+  id: Number(runId), event: "workflow_dispatch",
+  path: ".github/workflows/" + child.workflow + "@refs/heads/" + child.workflowRef,
+  display_title: child.displayTitle, head_branch: child.workflowRef,
+  head_sha: child.workflowSha, run_attempt: 1, status: "completed", conclusion: "success",
+  created_at: "2026-08-21T00:00:00Z", updated_at: "2026-08-21T00:01:00Z",
+  html_url: child.url, actor: { login: "github-actions[bot]" },
+  triggering_actor: { login: "github-actions[bot]" },
+  repository: { full_name: "openclaw/openclaw" }
+}));
+`,
+    );
+    chmodSync(gh, 0o755);
+
+    const result = runCollector("decision", {
+      FULL_RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
+      FULL_RELEASE_STATE_PATH: output,
+      FRV_PLANNED_CHILDREN: JSON.stringify(sealedPlan.children),
+      PATH: `${root}:${process.env.PATH}`,
+      RERUN_GROUP: "all",
+      FAIL_FAST: "false",
+      NPM_PREPARATION_RESULT: "success",
+      NPM_QUALIFICATION_RESULT: "success",
+      PLUGIN_NPM_PREPARATION_RESULT: "skipped",
+      DOCKER_PREPARATION_RESULT: "success",
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
+      blockers: [],
+      state: "passed",
     });
   });
 
@@ -1751,6 +1868,43 @@ describe("release state artifacts", () => {
       stateExpected(),
     );
   }
+
+  it("carries recovered parent gate outcomes through selection and final verification", () => {
+    const base = executionPlan({ rerunGroup: "ci" });
+    const sealedPlan = {
+      ...base,
+      gates: base.gates.map((gate: Record<string, any>) =>
+        gate.name === "Qualify release npm artifacts"
+          ? Object.assign({}, gate, { required: true, result: "failure" })
+          : gate,
+      ),
+    };
+    sealedPlan.sha256 = releaseExecutionPlanSha256(sealedPlan);
+    const effectiveGates = sealedPlan.gates.map((gate: Record<string, any>) =>
+      gate.name === "Qualify release npm artifacts"
+        ? Object.assign({}, gate, { result: "success" })
+        : gate,
+    );
+    const decision = collectorArtifact("decision", 2, sealedPlan);
+    const drain = collectorArtifact("drain", 2, sealedPlan);
+    const expected = { ...stateExpected(), effectiveGates };
+
+    expect(() => selectPair(sealedPlan, decision, drain)).toThrow(
+      "release decision omits baseline blockers",
+    );
+    expect(
+      selectReleaseStateArtifacts(
+        sealedPlan,
+        [{ name: "full-release-decision-77-2", payload: decision }],
+        [{ name: "full-release-diagnostics-77-2", payload: drain }],
+        expected,
+      ),
+    ).toMatchObject({ decision: { state: "passed" }, drain: { state: "passed" } });
+    expect(verifyReleaseStateArtifacts(sealedPlan, decision, drain, expected)).toMatchObject({
+      decision: { state: "passed" },
+      drain: { state: "passed" },
+    });
+  });
 
   it("uses one policy for decision, drain, and final verification", () => {
     expect(
