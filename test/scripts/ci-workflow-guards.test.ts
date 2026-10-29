@@ -2850,15 +2850,18 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           expect(authority).toContain("github.event_name == 'workflow_dispatch'");
           continue;
         }
-        if (step.with?.path === "${{ runner.temp }}/openclaw-watch-rtc-release-libraries") {
-          expect(file).toBe(".github/workflows/ios-store-release.yml");
+        const releaseCacheId = new Map([
+          ["${{ runner.temp }}/openclaw-watch-rtc-release-libraries", "watch-rtc-cache"],
+          ["~/Library/Developer/Xcode/DerivedData/OpenClaw-*/SourcePackages", "ios-packages-cache"],
+        ]).get(String(step.with?.path));
+        if (file === ".github/workflows/ios-store-release.yml" && releaseCacheId) {
           expect(jobId).toBe("release");
           expectIncludes(jobCondition, [
             "github.repository == 'openclaw/openclaw'",
             "github.ref == 'refs/heads/main'",
           ]);
-          expect(step.if).toBe("steps.watch-rtc-cache.outputs.cache-hit != 'true'");
-          expect(step.with.key).toBe("${{ steps.watch-rtc-cache.outputs.cache-primary-key }}");
+          expect(step.if).toBe(`steps.${releaseCacheId}.outputs.cache-hit != 'true'`);
+          expect(step.with?.key).toBe(`\${{ steps.${releaseCacheId}.outputs.cache-primary-key }}`);
           continue;
         }
         if (step.with?.path === ".artifacts/ci-sdk-declarations/sdk.json.gz") {

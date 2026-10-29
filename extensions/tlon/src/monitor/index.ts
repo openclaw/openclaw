@@ -502,6 +502,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         CommandAuthorized: commandAuthorized,
         CommandSource: "text" as const,
         ...(attachments.length > 0 && { Attachments: attachments }),
+        // Tlon groups support one reply level: durable delivery selects the root or channel.
+        ...(isGroup && { ReplyThreading: { implicitCurrentMessage: "deny" as const } }),
         ...(parentId && { ThreadId: parentId }),
       },
     });

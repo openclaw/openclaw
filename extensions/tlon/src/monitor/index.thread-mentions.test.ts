@@ -194,7 +194,12 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       expect(inboundRuntimeMock.dispatch).toHaveBeenCalledTimes(row.admitted ? 1 : 0);
       if (row.rawReplyId) {
         expect(inboundRuntimeMock.buildContext).toHaveBeenCalledWith(
-          expect.objectContaining({ messageId: row.rawReplyId }),
+          expect.objectContaining({
+            messageId: row.rawReplyId,
+            extra: expect.objectContaining({
+              ReplyThreading: { implicitCurrentMessage: "deny" },
+            }),
+          }),
         );
       }
       if (row.summary) {

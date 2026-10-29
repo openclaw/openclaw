@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
@@ -334,9 +335,19 @@ function createSharedStateWorkerOwner() {
         if (
           stores.has(candidate) &&
           (candidate.context.existingSchemaPath !== context.existingSchemaPath ||
-            candidate.context.gatewayServiceInstallation !== context.gatewayServiceInstallation ||
+            !isDeepStrictEqual(
+              candidate.context.gatewayServiceInstallation,
+              context.gatewayServiceInstallation,
+            ) ||
             candidate.source.moduleUrl.href !== source.moduleUrl.href)
         ) {
+          // A nested caller cannot join closure of the client scope retaining its
+          // outer lease. Preserve policy refusal without waiting on that scope.
+          if (hasActiveActorOperations(candidate)) {
+            throw new Error(
+              "Shared-state worker policy changed while its actor is in use; close its leases first",
+            );
+          }
           await wait(retire(candidate));
           assertAdmission();
         }
@@ -346,6 +357,11 @@ function createSharedStateWorkerOwner() {
           matches(retiringEntry, admission.identity) &&
           retiringEntry.context.maintenanceScope === context.maintenanceScope
         ) {
+          if (hasActiveActorOperations(retiringEntry)) {
+            throw new Error(
+              "Shared-state worker is retiring while its actor is in use; close its leases first",
+            );
+          }
           if (!attempt.pending) {
             // Another retained owner may have completed the failed admission's cleanup.
             if (!hasPendingCleanup(retiringEntry)) {
@@ -373,7 +389,10 @@ function createSharedStateWorkerOwner() {
           matches(candidate, admission.identity) &&
           candidate.context.maintenanceScope === context.maintenanceScope &&
           candidate.context.existingSchemaPath === context.existingSchemaPath &&
-          candidate.context.gatewayServiceInstallation === context.gatewayServiceInstallation,
+          isDeepStrictEqual(
+            candidate.context.gatewayServiceInstallation,
+            context.gatewayServiceInstallation,
+          ),
       );
       const ownsOpening = !entry;
       if (!entry) {

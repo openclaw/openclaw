@@ -242,6 +242,20 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       Object.assign(sessionDetails, registerChatDetailsEnglish.catalog.chat.sessionDetails);
     }
   }
+  // Keep source translation order while the composer notice copy follows its lazy view.
+  const workspaceConflict: TranslationMap = {};
+  for (const [key, value] of Object.entries(
+    registerChatSessionOptionalEnglish.catalog.chat.workspaceConflict,
+  )) {
+    workspaceConflict[key] = value;
+    if (key === "showCommands") {
+      workspaceConflict.morePaths =
+        registerChatSessionEnglish.catalog.chat.workspaceConflict.morePaths;
+      workspaceConflict.stagedResult =
+        registerChatSessionEnglish.catalog.chat.workspaceConflict.stagedResult;
+    }
+  }
+  Object.assign(workspaceConflict, registerChatSessionEnglish.catalog.chat.workspaceConflict);
   const toolCards: TranslationMap = {};
   const toolContent = registerChatToolContentEnglish.catalog.chat.toolCards;
   for (const [key, value] of Object.entries(registerChatToolLabelsEnglish.catalog.chat.toolCards)) {
@@ -370,6 +384,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         ...registerChatSessionEnglish.catalog.chat,
         ...registerChatSessionOptionalEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
+        workspaceConflict,
         sessionDetails,
         sessionSuggestions: {
           ...registerSessionNavigationEnglish.catalog.chat.sessionSuggestions,

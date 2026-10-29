@@ -167,6 +167,10 @@ the bot ship can read regardless of the auto-discovery setting.
 Once the bot has replied inside a thread, it keeps responding to later messages in that thread
 without requiring another mention.
 
+Automatic group responses stay at the channel top level for a top-level message,
+or reply to the existing root for a thread message. They do not nest a reply under
+another reply. Explicit reply directives and direct messages keep their own targets.
+
 Set `channels.tlon.implicitMentions.threadParticipation: false` to require a new explicit mention
 for those follow-ups. Account overrides use `channels.tlon.accounts.<id>.implicitMentions`. Tlon
 does not currently produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.

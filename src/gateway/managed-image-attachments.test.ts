@@ -25,10 +25,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import {
-  completeSessionDelivery,
-  enqueueSessionDelivery,
-} from "../infra/session-delivery-queue-storage.js";
+import { completeSessionDelivery } from "../infra/session-delivery-queue-storage.js";
+import { enqueueUnclaimedSessionDeliveryFixture as enqueueSessionDelivery } from "../infra/session-delivery-queue.test-helpers.js";
 import { readImageProbeFromHeader, resizeToJpeg } from "../media/image-ops.js";
 import {
   disposeStoreRemoteFixtures,
