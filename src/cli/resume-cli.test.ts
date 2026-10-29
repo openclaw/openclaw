@@ -235,8 +235,9 @@ describe("runResumeCommand", () => {
     const client = createGatewayClient([]);
     const rpc = Promise.withResolvers();
     const cleanupFailure = new Error("transport cleanup failed");
+    client.start = vi.fn(stage === "resolve" ? () => client.onConnected?.() : () => {});
+    client.resolveSession.mockReturnValue(rpc.promise);
     const awaiting = stage === "resolve" ? client.resolveSession : client.start;
-    awaiting.mockImplementation(() => rpc.promise);
     client.stop.mockImplementation(async () => {
       if (stage === "resolve") {
         rpc.reject(new Error("sensitive upstream details"));
