@@ -5,6 +5,7 @@ import {
   type PresentationValue,
 } from "../lib/presentation.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { createDocumentVisibility } from "../lib/reactive/platform.ts";
 import { LinkReaderPrefetchOwner } from "./link-reader-prefetch-owner.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 
@@ -56,6 +57,7 @@ export function markdownBlocksRef(
   presented: () => PresentationValue,
 ): (element: HTMLElement) => void {
   const [element, setElement] = createSignal<HTMLElement>();
+  const documentVisible = createDocumentVisibility();
   const owner = createMemo(() => {
     const root = element();
     const current = root && new MarkdownBlocks(root);
@@ -64,9 +66,9 @@ export function markdownBlocksRef(
   });
   const readPresentation = createPresentationReader(() => owner()?.update(false));
   createEffect(
-    () => [owner(), presented()] as const,
-    ([current, value]) => {
-      const active = readPresentation(value);
+    () => [owner(), presented(), documentVisible()] as const,
+    ([current, value, visible]) => {
+      const active = readPresentation(value) && visible;
       current?.update(active);
     },
   );
