@@ -10,7 +10,9 @@ import {
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
+import { buildCodexRuntimeThreadConfigForRun } from "./thread-requests.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
+import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 const appServer = { start: {}, requestTimeoutMs: 1_000 } as CodexAppServerRuntimeOptions;
 
@@ -111,16 +113,53 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     await expect(resolveSupport()).resolves.toBe("unsupported");
   });
 
-  it("does not use default OpenAI capabilities for a copilot thread", async () => {
-    const read = vi.fn(async (method: string) =>
-      method === "config/read" ? { config: { model_provider: undefined } } : { webSearch: true },
-    );
-    clientFactory.mockResolvedValue({ request: read } as unknown as CodexAppServerClient);
-    await expect(resolveSupport({ expectedNativeModelProvider: "copilot" })).resolves.toBe(
-      "unknown",
-    );
-    expect(read.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
-  });
+  it.each([true, false])(
+    "keeps custom-provider native search behind its standalone declaration (%s)",
+    async (declared) => {
+      const read = vi.fn(async (method: string) =>
+        method === "config/read"
+          ? {
+              config: {
+                model_provider: "custom-responses",
+                model_providers: {
+                  "custom-responses": { supports_standalone_web_search: declared },
+                },
+              },
+            }
+          : { webSearch: true },
+      );
+      clientFactory.mockResolvedValue({ request: read } as unknown as CodexAppServerClient);
+      const support = await resolveSupport({ modelProviderOverride: "custom-responses" });
+      const plan = resolveCodexWebSearchPlan({ nativeProviderWebSearchSupport: support });
+      const thread = buildCodexRuntimeThreadConfigForRun({ modelId: "fixture-model" }, undefined, {
+        nativeCodeModeEnabled: true,
+        nativeProviderWebSearchSupport: support,
+      });
+
+      expect(plan).toMatchObject({
+        kind: declared ? "native-hosted" : "managed",
+        suppressManagedWebSearch: declared,
+        threadConfig: {
+          "features.standalone_web_search": declared,
+          web_search: declared ? "cached" : "disabled",
+        },
+      });
+      expect(thread["features.standalone_web_search"]).toBe(declared);
+      expect(thread.web_search).toBe(declared ? "cached" : "disabled");
+    },
+  );
+
+  it.each(["expectedNativeModelProvider", "modelProviderOverride"] as const)(
+    "does not borrow default OpenAI capabilities for a copilot %s",
+    async (field) => {
+      const read = vi.fn(async (method: string) =>
+        method === "config/read" ? { config: { model_provider: undefined } } : { webSearch: true },
+      );
+      clientFactory.mockResolvedValue({ request: read } as unknown as CodexAppServerClient);
+      await expect(resolveSupport({ [field]: "copilot" })).resolves.toBe("unknown");
+      expect(read.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
+    },
+  );
 
   it("forwards one prepared auth handoff to capability startup", async () => {
     request.mockResolvedValue({ webSearch: true });
@@ -140,14 +179,8 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     await expect(resolveSupport()).resolves.toBe("unknown");
   });
 
-  it.each([
-    [" OpenAI ", "supported"],
-    ["amazon-bedrock", "unsupported"],
-  ])(
-    "resolves the %s override without probing native capabilities",
-    async (modelProviderOverride, expected) => {
-      await expect(resolveSupport({ modelProviderOverride })).resolves.toBe(expected);
-      expect(clientFactory).not.toHaveBeenCalled();
-    },
-  );
+  it("resolves an OpenAI override without probing native capabilities", async () => {
+    await expect(resolveSupport({ modelProviderOverride: " OpenAI " })).resolves.toBe("supported");
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
 });
