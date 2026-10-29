@@ -349,6 +349,52 @@ describe("secrets audit", () => {
     }
   });
 
+  it("recognizes populated include-backed env markers only for their owning provider apiKey", async () => {
+    fixture.env.FACTCHAT_API_KEY = "synthetic-factchat-value";
+    await writeJsonFile(path.join(fixture.stateDir, "providers.json"), {
+      providers: { "custom.factchat": modelProvider("${FACTCHAT_API_KEY}") },
+    });
+    await writeConfig({ models: { $include: "providers.json" } });
+    await writeJsonFile(fixture.modelsPath, {
+      providers: {
+        "custom.factchat": modelProvider("FACTCHAT_API_KEY", {
+          headers: { Authorization: "FACTCHAT_API_KEY" },
+        }),
+        unrelated: modelProvider("FACTCHAT_API_KEY"),
+      },
+    });
+
+    const report = await audit();
+    expect(report.summary.unresolvedRefCount).toBe(0);
+    expect(report.findings.filter((finding) => finding.file === fixture.modelsPath)).toEqual([
+      expect.objectContaining({
+        code: "PLAINTEXT_FOUND",
+        jsonPath: "providers.custom.factchat.headers.Authorization",
+      }),
+      expect.objectContaining({ code: "PLAINTEXT_FOUND", jsonPath: "providers.unrelated.apiKey" }),
+    ]);
+  });
+
+  it.each([
+    ["env", "WINNING_AUDIT_KEY", false],
+    ["env", "LOSING_AUDIT_KEY", true],
+    ["literal", "LOSING_AUDIT_KEY", true],
+  ] as const)("keeps canonical %s ownership when auditing %s", async (kind, marker, finding) => {
+    fixture.env.WINNING_AUDIT_KEY = "synthetic-winning-value";
+    fixture.env.LOSING_AUDIT_KEY = "synthetic-losing-value";
+    await writeConfig({
+      models: {
+        providers: {
+          openai: modelProvider(kind === "env" ? "${WINNING_AUDIT_KEY}" : "synthetic-literal"),
+          OpenAI: modelProvider("${LOSING_AUDIT_KEY}"),
+        },
+      },
+    });
+    await writeModelsProvider({ apiKey: marker });
+
+    expectModelsFinding(await audit(), "PLAINTEXT_FOUND", "providers.openai.apiKey", finding);
+  });
+
   it("scans hardlinked agent models.json files for plaintext provider apiKey values", async () => {
     await writeModelsProvider({ apiKey: "sk-models-plaintext" }); // pragma: allowlist secret
     await fs.link(fixture.modelsPath, path.join(fixture.rootDir, "models-alias.json"));
