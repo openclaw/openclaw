@@ -49,6 +49,10 @@ import {
 } from "./update-candidate-state.sizes.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
 import {
+  readUnchangedUpdateDatabaseGeneration,
+  type SqliteDatabaseGenerationReceipt,
+} from "./update-database-generations.js";
+import {
   readUpdatePhysicalDatabaseGenerations,
   readUpdatePhysicalDatabaseObservation,
   readUpdatePostgresDatabaseGenerations,
@@ -293,6 +297,7 @@ export async function createUpdateDatabaseBackupInProcess(
   const readGeneration = async (
     file: string,
     observation?: ReturnType<typeof readUpdatePhysicalDatabaseObservation>,
+    receipt?: SqliteDatabaseGenerationReceipt,
   ) => {
     try {
       if (observation) {
@@ -303,8 +308,11 @@ export async function createUpdateDatabaseBackupInProcess(
           ? (await readUpdatePostgresDatabaseGenerations([file], input.pluginOwners))[file]
           : (observation.generation.value ?? undefined);
       }
+      const unchanged = receipt && readUnchangedUpdateDatabaseGeneration(file, receipt);
       return (
-        (await readUpdatePhysicalDatabaseGenerations([file], input.pluginOwners))[file] ?? undefined
+        unchanged ??
+        (await readUpdatePhysicalDatabaseGenerations([file], input.pluginOwners))[file] ??
+        undefined
       );
     } catch (error) {
       warnings.push(
@@ -435,7 +443,11 @@ export async function createUpdateDatabaseBackupInProcess(
           // Automatic rollback keeps write attribution after custody ends. Manual original
           // capture stays under its maintenance owner and never grants restore authority.
           if (retainGeneration) {
-            const after = await readGeneration(sourcePath);
+            const after = await readGeneration(
+              sourcePath,
+              undefined,
+              observations.get(sourcePath)?.sqliteReceipt,
+            );
             if (after !== undefined && before === after) {
               sourceGenerations[sourcePath] = after;
             } else {

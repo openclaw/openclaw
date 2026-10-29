@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configIo from "../config/io.js";
 import * as databaseBackup from "../snapshot/database-backup.js";
+import * as fileDescriptor from "./file-descriptor.js";
 import * as fileGeneration from "./sqlite-file-generation.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
@@ -84,6 +85,15 @@ it.each(["auto", "off"] as const)(
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3_000);
     const originalRead = fs.readSync;
     let privateReadBytes = 0;
+    let privateHashes = 0;
+    const hash = fileDescriptor.hashFileDescriptorSync;
+    vi.spyOn(fileDescriptor, "hashFileDescriptorSync").mockImplementation((descriptor) => {
+      const opened = fs.fstatSync(descriptor, { bigint: true });
+      if (opened.size === source.size && (opened.dev !== source.dev || opened.ino !== source.ino)) {
+        privateHashes++;
+      }
+      return hash(descriptor);
+    });
     vi.spyOn(fs, "readSync").mockImplementation(
       (
         descriptor: number,
@@ -116,9 +126,12 @@ it.each(["auto", "off"] as const)(
     } finally {
       configureFsSafeNative(previous);
     }
-    // Before/after generation observations each verify one private image. The
-    // recovery snapshot must consume the first image without comparing a third.
-    expect(privateReadBytes).toBeLessThanOrEqual(2 * before.length + 512);
+    // Fresh source-family verification reuses the first committed receipt;
+    // neither snapshot publication nor its after-check needs another image hash.
+    expect(f.generationImages.mock.calls.filter(([file]) => file === payload)).toHaveLength(1);
+    expect(privateHashes).toBe(1);
+    expect(privateReadBytes).toBeGreaterThanOrEqual(before.length);
+    expect(privateReadBytes).toBeLessThanOrEqual(before.length + 512);
     const entry = backup.databases.find((database) => database.path === payload);
     expect(entry).toMatchObject({
       userVersion: 17,
@@ -214,28 +227,84 @@ it.each(["replace", "same-size-write", "wal", "journal"] as const)(
   },
 );
 
-it("keeps the captured image but refuses automatic rollback after a later source write", async () => {
+it.each(["new content", "same-content WAL commit"] as const)(
+  "keeps the captured image but refuses automatic rollback after a later %s",
+  async (write) => {
+    const f = await fixture();
+    using writer = new DatabaseSync(f.shared);
+    if (write === "same-content WAL commit") {
+      writer.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;");
+    }
+    let wrote = false;
+    const backup = await f.capture({
+      onProgress: ({ phase }) => {
+        if (wrote || phase !== "pre-migration database backup") {
+          return;
+        }
+        wrote = true;
+        // Keep the writer open so WAL commit identity survives even when rows match.
+        writer.exec("UPDATE payload SET value = 'new-value';");
+        if (write === "same-content WAL commit") {
+          writer.exec("UPDATE payload SET value = 'retained';");
+        }
+      },
+    });
+    expect(wrote).toBe(true);
+    expect(backup.sourceGenerations[f.shared]).toBeUndefined();
+    expect(backup.warnings).toContainEqual(
+      expect.stringContaining("snapshot requires manual recovery"),
+    );
+    using captured = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+    expect(captured.prepare("SELECT value FROM payload").get()).toEqual({ value: "retained" });
+    using source = new DatabaseSync(f.shared, { readOnly: true });
+    expect(source.prepare("SELECT value FROM payload").get()).toEqual({
+      value: write === "new content" ? "new-value" : "retained",
+    });
+    expect(f.generationImages).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("reacquires a metadata-drifted family and retains unchanged committed authority", async () => {
   const f = await fixture();
-  let wrote = false;
   const backup = await f.capture({
     onProgress: ({ phase }) => {
-      if (wrote || phase !== "pre-migration database backup") {
-        return;
+      if (phase === "pre-migration database backup") {
+        const before = fs.statSync(f.shared);
+        fs.utimesSync(f.shared, before.atime, new Date(before.mtimeMs + 1_000));
       }
-      wrote = true;
-      using writer = new DatabaseSync(f.shared);
-      writer.exec("UPDATE payload SET value = 'new-value';");
     },
   });
-  expect(wrote).toBe(true);
-  expect(backup.sourceGenerations[f.shared]).toBeUndefined();
-  expect(backup.warnings).toContainEqual(
-    expect.stringContaining("snapshot requires manual recovery"),
+  expect(f.generationImages).toHaveBeenCalledTimes(2);
+  expect(backup.sourceGenerations[f.shared]).toEqual(expect.any(String));
+  expect(backup.warnings).toEqual([]);
+  expect(fs.readdirSync(f.stagingRoot)).toEqual([]);
+});
+
+it("keeps manual recovery after fresh after-capture observation fails without reacquisition", async () => {
+  const f = await fixture();
+  const failure = new Error("fresh source-family observation unavailable");
+  const capture = sqliteSnapshot.createVerifiedSqliteSnapshot;
+  vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot").mockImplementationOnce(
+    async (options) => {
+      const snapshot = await capture(options);
+      vi.spyOn(fileGeneration, "readStableSqliteFileGeneration").mockImplementationOnce(() => {
+        throw failure;
+      });
+      return snapshot;
+    },
   );
-  using captured = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
-  expect(captured.prepare("SELECT value FROM payload").get()).toEqual({ value: "retained" });
-  using source = new DatabaseSync(f.shared, { readOnly: true });
-  expect(source.prepare("SELECT value FROM payload").get()).toEqual({ value: "new-value" });
+  const backup = await f.capture();
+  expect(f.generationImages).toHaveBeenCalledTimes(1);
+  expect(backup.sourceGenerations[f.shared]).toBeUndefined();
+  expect(backup.warnings).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining(failure.message),
+      expect.stringContaining("snapshot requires manual recovery"),
+    ]),
+  );
+  using snapshot = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+  expect(snapshot.prepare("SELECT value FROM payload").all()).toEqual([{ value: "retained" }]);
+  expect(fs.readdirSync(f.stagingRoot)).toEqual([]);
 });
 
 it.each(["success", "false", "throw"] as const)(

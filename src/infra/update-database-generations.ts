@@ -9,6 +9,7 @@ import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
   serializeSqliteFileGeneration,
+  type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
@@ -18,7 +19,10 @@ import type {
   PreparedSqliteReadOnlyLocation,
   PreparedSqliteSnapshotSource,
 } from "./sqlite-readonly-location.types.js";
-import { assertPublishedFileIdentitySync } from "./sqlite-snapshot-file.js";
+import {
+  assertPublishedFileIdentitySync,
+  sameFileStatFingerprint,
+} from "./sqlite-snapshot-file.js";
 import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import {
   databaseFileIdentityKey,
@@ -117,25 +121,98 @@ type DatabaseGenerationObservation = {
   preparedSource?: PreparedSqliteSnapshotSource;
 };
 
+export type SqliteDatabaseGenerationReceipt = Readonly<{
+  sourcePath: string;
+  generation: string;
+  physical: string;
+}>;
+
+function readGenerationFamily(pathname: string) {
+  const entries = ["", "-journal", "-wal"].map((suffix) =>
+    fs.lstatSync(`${pathname}${suffix}`, { bigint: true, throwIfNoEntry: false }),
+  );
+  if (!entries[0] && entries.slice(1).some(Boolean)) {
+    throw new Error(`Database is absent but retained journal data exists: ${pathname}`);
+  }
+  if (entries.some((entry) => entry && !entry.isFile())) {
+    throw new Error(`Database generation requires a regular file: ${pathname}`);
+  }
+  // Empty WAL files carry no frames, but must still pass the regular-file gate.
+  return entries.map((entry, index) => (index === 2 && entry?.size === 0n ? undefined : entry));
+}
+
+function verifyGenerationFamily(
+  pathname: string,
+  before: ReturnType<typeof readGenerationFamily>,
+  generation: SqliteFileGeneration,
+) {
+  const after = readGenerationFamily(pathname);
+  const files = [
+    generation.database,
+    generation.journal,
+    generation.wal?.size === 0n ? undefined : generation.wal,
+  ];
+  if (
+    files.some((file, index) =>
+      [before[index], after[index]].some((entry) =>
+        file === undefined ? entry !== undefined : !entry || !sameFileStatFingerprint(entry, file),
+      ),
+    )
+  ) {
+    throw new Error(`SQLite file generation changed while reading: ${pathname}`);
+  }
+}
+
+function serializePhysicalGeneration(generation: SqliteFileGeneration, header: Buffer | null) {
+  // Published 2026.9.33/34 parents bind this exact family and full WAL-header format.
+  return sha256Hex(
+    JSON.stringify([
+      serializeSqliteFileGeneration(
+        generation.wal?.size === 0n ? { ...generation, wal: undefined } : generation,
+      ),
+      header?.toString("hex") ?? null,
+    ]),
+  );
+}
+
+/** Fresh source bytes may reuse only a successful same-path SQLite observation. */
+export function readUnchangedUpdateDatabaseGeneration(
+  pathname: string,
+  receipt: SqliteDatabaseGenerationReceipt,
+): string | undefined {
+  if (receipt.sourcePath !== pathname) {
+    return undefined;
+  }
+  const entries = readGenerationFamily(pathname);
+  if (!entries[0]) {
+    return undefined;
+  }
+  const before = readWalIndexHeader(pathname);
+  // Never carry a digest reader across observations: coarse clocks can hide writes.
+  const current = readStableSqliteFileGeneration(pathname);
+  const after = readWalIndexHeader(pathname);
+  verifyGenerationFamily(pathname, entries, current);
+  if (
+    (before === null ? after !== null : !after?.equals(before)) ||
+    (current.wal && current.wal.size > 0n && after?.[12] !== 1)
+  ) {
+    throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
+  }
+  return serializePhysicalGeneration(current, after) === receipt.physical
+    ? receipt.generation
+    : undefined;
+}
+
 /** Isolated raw-close owner; retained images must stay inside a retained snapshot-work scope. */
 export function readUpdateDatabaseGeneration(
   pathname: string,
   inspectImage?: (imagePath: string, sourcePath: string) => void,
   retain?: { stagingRoot: string; accept: () => boolean },
 ): DatabaseGenerationObservation {
-  const entry = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
+  const entries = readGenerationFamily(pathname);
+  const entry = entries[0];
   if (!entry) {
-    if (
-      ["-wal", "-journal"].some((suffix) =>
-        fs.lstatSync(`${pathname}${suffix}`, { throwIfNoEntry: false }),
-      )
-    ) {
-      throw new Error(`Database is absent but retained journal data exists: ${pathname}`);
-    }
     return { generation: null, physical: null };
-  }
-  if (!entry.isFile()) {
-    throw new Error(`Database generation requires a regular file: ${pathname}`);
   }
   const before = readWalIndexHeader(pathname);
   // Acquisition binds this provisional observation; the final stable read
@@ -177,6 +254,7 @@ export function readUpdateDatabaseGeneration(
       const content = readCommittedContent(pathname, prepared, inspectImage, retain?.accept);
       const current = readStableSqliteFileGeneration(pathname, readGeneration);
       const after = readWalIndexHeader(pathname);
+      verifyGenerationFamily(pathname, entries, current);
       if (
         !sameSqliteFileGeneration(generation, current) ||
         (before === null ? after !== null : !after?.equals(before)) ||
@@ -214,15 +292,7 @@ export function readUpdateDatabaseGeneration(
       }
       return {
         generation: fingerprint(change, checksum),
-        // Published 2026.9.33/34 parents bind the physical family and full WAL header.
-        physical: sha256Hex(
-          JSON.stringify([
-            serializeSqliteFileGeneration(
-              current.wal?.size === 0n ? { ...current, wal: undefined } : current,
-            ),
-            after?.toString("hex") ?? null,
-          ]),
-        ),
+        physical: serializePhysicalGeneration(current, after),
         // The first read-only native open can create this zero-write WAL index;
         // closing the last writer can remove it. Neither changes committed content.
         ...(emptyReader

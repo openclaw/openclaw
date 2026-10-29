@@ -7,6 +7,7 @@ import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.ty
 import {
   readUpdateDatabaseGeneration,
   readUpdateDatabaseGenerationPair,
+  type SqliteDatabaseGenerationReceipt,
 } from "./update-database-generations.js";
 
 export function readUpdatePhysicalDatabaseObservation(
@@ -16,6 +17,7 @@ export function readUpdatePhysicalDatabaseObservation(
   engine?: BackupEngine;
   generation: Result<string | null, unknown>;
   preparedSource?: PreparedSqliteSnapshotSource;
+  sqliteReceipt?: SqliteDatabaseGenerationReceipt;
 } {
   let engine: BackupEngine | undefined;
   let classificationFailed = false;
@@ -36,6 +38,15 @@ export function readUpdatePhysicalDatabaseObservation(
       engine,
       generation: ok(observation.generation),
       preparedSource: observation.preparedSource,
+      ...(engine?.engine === "sqlite" && observation.generation && observation.physical
+        ? {
+            sqliteReceipt: Object.freeze({
+              sourcePath: pathname,
+              generation: observation.generation,
+              physical: observation.physical,
+            }),
+          }
+        : {}),
     };
   } catch (error) {
     if (

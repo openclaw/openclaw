@@ -363,7 +363,7 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
         mode === "original-custody" ? [f.shared] : [],
       );
       expect(generations.mock.calls.map(([file]) => file)).toEqual(
-        mode === "original-custody" ? [] : [f.shared, f.shared],
+        mode === "original-custody" ? [] : [f.shared],
       );
     }
     expect(await readFiles(files)).toEqual(family);
