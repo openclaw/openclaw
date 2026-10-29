@@ -53,6 +53,7 @@ vi.mock("../logging/json-console-line.js", async (importOriginal) => {
 vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
 vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
 vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
+// mock-isolation: the real helper would inspect and destroy the test runner's own stdin.
 vi.mock("../process/release-stdin.js", () => ({ releaseProcessStdin: state.releaseStdin }));
 // mock-isolation: keep the worker's process-local agent/exec state out of admission tests.
 vi.mock("../worker/worker.runtime.js", () => ({

@@ -19,6 +19,7 @@ vi.mock("../infra/runtime-guard.js", () => ({
   assertSupportedRuntime: runtime.assertSupportedRuntime,
 }));
 vi.mock("./worker-process.js", () => ({ runWorkerProcess: runtime.runWorkerProcess }));
+// mock-isolation: the real helper would inspect and destroy the test runner's own stdin.
 vi.mock("../process/release-stdin.js", () => ({
   releaseProcessStdin: runtime.releaseProcessStdin,
 }));
