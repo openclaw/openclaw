@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   ErrorCodes,
   type GatewayCoreRequestParams,
@@ -326,16 +328,6 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         if (caller?.workspacePrAdoptionSessionId !== loaded.entry.sessionId) {
           throw new Error("Local checkout publication requires an agent handoff.");
         }
-        const source = await prepareSessionCreateRequestedCwd({
-          cfg: context.getRuntimeConfig(),
-          requestedCwd: params.workspacePath,
-          clientPresent: true,
-          clientScopes: admitted.requester.snapshot.scopes,
-        });
-        admitted.requester.assertCurrent();
-        if (!source.ok) {
-          throw new Error(source.error.message);
-        }
         if (loaded.entry.worktree) {
           using owner = await resolveLocalWorkspaceOwner({
             ...session,
@@ -345,14 +337,28 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
               admitted.requester.assertCurrent();
             },
           });
+          const requestedPath = path.isAbsolute(params.workspacePath)
+            ? await fs.realpath(params.workspacePath)
+            : undefined;
+          owner?.assertCurrent();
+          // Existing ownership admits this checkout, even outside the default workspace.
           // canonicalWorkspaceDir is the skills/source workspace, not the owned checkout.
-          if (!owner || owner.worktree.path !== source.value) {
+          if (!owner || owner.worktree.path !== requestedPath) {
             throw new Error(
               "This session already publishes a different checkout. Publish from its current managed worktree, or use a separate session for the other checkout; no files were moved or published.",
             );
           }
-          owner.assertCurrent();
         } else {
+          const source = await prepareSessionCreateRequestedCwd({
+            cfg: context.getRuntimeConfig(),
+            requestedCwd: params.workspacePath,
+            clientPresent: true,
+            clientScopes: admitted.requester.snapshot.scopes,
+          });
+          admitted.requester.assertCurrent();
+          if (!source.ok) {
+            throw new Error(source.error.message);
+          }
           const placements = context.workerSessionPlacementService;
           if (!placements?.withLocalWorkspaceReservation) {
             throw new Error("Workspace preparation is unavailable during Gateway startup.");
