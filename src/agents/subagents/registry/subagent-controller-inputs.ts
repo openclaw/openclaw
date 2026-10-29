@@ -1,5 +1,3 @@
-import type { InternalSessionEntry } from "../../../config/sessions/types.js";
-import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
   abortSessionControllerInput,
@@ -16,8 +14,7 @@ import {
   shouldRemoveSubagentAttachments,
 } from "./subagent-registry-helpers.js";
 import type { CleanupBookkeepingParams } from "./subagent-registry-lifecycle-context.js";
-import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
-import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
@@ -112,42 +109,6 @@ export function retireSubagentCompletionControllerInput(entry: SubagentRunRecord
   }
 }
 
-/** Only a resumable producer may retain its restored requester reservation. */
-export function retainRestoredCompletionReservation(
-  runs: Map<string, SubagentRunRecord>,
-  snapshot: SubagentRunRecord,
-  sessionEntry?: InternalSessionEntry,
-) {
-  const entry = getCurrentSubagentRunOwner(runs, snapshot);
-  if (!entry || entry.runId !== snapshot.runId) {
-    retireSubagentCompletionControllerInput(snapshot);
-    return undefined;
-  }
-  const authority = resolveSubagentChildAuthority(entry, sessionEntry);
-  const missingResult =
-    entry.execution.status === "terminal" &&
-    entry.execution.outcome === undefined &&
-    entry.pauseReason !== "sessions_yield" &&
-    entry.execution.lifecycleGeneration !== undefined &&
-    !isAgentEventLifecycleGenerationCurrent(entry.execution.lifecycleGeneration);
-  // Queued collectors retain their launch owner even before child session reconciliation.
-  const orphanedSession =
-    !(entry.collect && entry.execution.status === "queued") &&
-    (sessionEntry?.abortedLastRun === true || isRetiredSubagentSessionOwner(entry, sessionEntry));
-  if (
-    authority.status === "mismatch" ||
-    entry.execution.restartRecovery ||
-    entry.killIntent ||
-    entry.killReconciliation ||
-    missingResult ||
-    orphanedSession
-  ) {
-    retireSubagentCompletionControllerInput(entry);
-    return undefined;
-  }
-  return { entry, authority };
-}
-
 /** Expired idle deliveries settle quietly; live producers and cohorts keep their custody. */
 export async function settleSubagentCompletionReservation(
   entry: SubagentRunRecord,
@@ -176,7 +137,6 @@ export async function settleSubagentCompletionReservation(
     entry.delivery.queueId ||
     entry.pauseReason === "sessions_yield" ||
     entry.requesterSettleWake ||
-    entry.execution.restartRecovery ||
     entry.killIntent ||
     entry.killReconciliation ||
     subagentRuns.isCompletionAuthorityRetired(entry) ||

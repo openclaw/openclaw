@@ -53,8 +53,6 @@ export async function handoffSessionTool(
     requestOwners?: readonly ExecRequestOwner[];
     onYield?: SessionsYieldCallback;
     signal?: AbortSignal;
-    /** The yielding turn was admitted as an owner; its resume keeps that decision. */
-    senderIsOwner?: boolean;
     formatResult: (payload: Record<string, unknown>) => string;
   },
 ) {
@@ -123,7 +121,6 @@ export async function handoffSessionTool(
     }
     const target = await captureSessionEventTargetForHost(caller.agentId, caller.sessionKey, {
       operatorAuthority: continuation.operatorAuthority,
-      ...(params.senderIsOwner === true ? { ownerContinuation: true as const } : {}),
     });
     const storePath = target.storePath;
     if (target.sessionId !== params.sessionId || !storePath) {
@@ -231,7 +228,7 @@ export async function handoffSessionTool(
                     sourceRunId: params.runId,
                     contextKey,
                     expectedTarget: target,
-                    assertCurrent: retained.assertCurrent,
+                    assertAcceptanceCurrent: retained.assertCurrent,
                     abortSignal: signal,
                   },
                   params.requestOwners,
@@ -242,7 +239,7 @@ export async function handoffSessionTool(
                 throw new Error(accepted.error);
               }
               const outcome = await receipt.settled;
-              // Once execution starts, the resumed turn owns its failure/restart recovery.
+              // Once execution starts, the ordinary turn owns its failure.
               // It is no longer an undelivered tool result.
               if (outcome.status === "failed" && !outcome.executionStarted) {
                 throw new Error(outcome.error ?? "Tool result resume failed");

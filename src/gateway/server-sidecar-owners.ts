@@ -4,6 +4,7 @@ import {
   runWithProcessCleanupBudget,
   type ProcessCleanupBudget,
 } from "../process/supervisor/cleanup-budget.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 
 export type GatewaySidecarStopOwner = ReturnType<typeof createGatewaySidecarStopOwner>;
@@ -54,7 +55,10 @@ export function createGatewaySidecarStopOwner() {
           const results = await Promise.allSettled(
             sidecars.map(
               async (sidecar) =>
-                await runWithProcessCleanupBudget(cleanupBudget, () => sidecar.stop()),
+                await measureGatewayCloseStep(
+                  `shutdown.sidecar.${sidecar.name ?? sidecar.stop.name}`,
+                  () => runWithProcessCleanupBudget(cleanupBudget, () => sidecar.stop()),
+                ),
             ),
           );
           const pending = sidecars.filter(

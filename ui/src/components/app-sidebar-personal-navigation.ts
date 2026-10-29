@@ -530,5 +530,5 @@ export function sidebarVisibleRowsInOrder(
         host.sessionDataContext?.sessions.archiveVisibility(key),
       );
   // Keep appearances until the clicked range is resolved; batch targets deduplicate later.
-  return [...personalGroupRows, ...pins, ...visibleRows];
+  return [...pins, ...personalGroupRows, ...visibleRows];
 }

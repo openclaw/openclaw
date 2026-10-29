@@ -1,6 +1,3 @@
-# Preserve 131 net lines of Knowledge page and plugin-page navigation regression coverage
-# (#186993: first-load ordering, count failure and retained views; #186994: params update
-# a mounted plugin page). Main 52e1c75e measured 6,311,485 lines; 6,311,485 + 131 =
-# 6,311,616. Add 84 lines (~0.0013%) for main advancing during exact-head CI. Both PRs
-# carry this identical file. Counting and CI rules stay unchanged.
-6311700
+# Measured bf6a97a1761 plus pending regression additions: 6,312,681 lines.
+# Keep 7,319 lines of bounded headroom for remaining regression work.
+6320000

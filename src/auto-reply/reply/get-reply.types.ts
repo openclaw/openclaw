@@ -74,6 +74,8 @@ type InternalReplySessionOptions = {
   scheduledAutomation?: ScheduledSessionAutomation;
   /** Producer callbacks follow this occurrence through queueing and delivery. */
   internalEventExecution?: SessionEventExecution;
+  /** Trusted host admission, never inferred from caller-supplied provenance. */
+  sessionPrincipalTurn?: true;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
   queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */
@@ -94,14 +96,6 @@ type InternalReplySessionOptions = {
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
-  /** An accepted source supplies a fresh exact-run message capability without new ingress. */
-  prepareMessageActionTurnCapability?: (identity: {
-    agentId: string;
-    runId: string;
-    sessionId: string;
-    sessionKey: string;
-    runtimePolicySessionKey?: string;
-  }) => string | undefined;
   /** Current external dashboard turn only; never persisted or inherited by another run. */
   dashboardReadAdmission?: DashboardMessageReadAdmission;
   expectedExistingSessionId?: string;

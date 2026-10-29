@@ -387,10 +387,10 @@ export function prepareSessionStoreTargetInventory(
   const configuredPaths = (environment.configuredPaths ??= new Map(
     listConfiguredSessionStoreAgentIds(config).map((agentId) => [agentId, capturePaths(agentId)]),
   ));
-  // Recovery skips unavailable stores before discovery can join their native opening.
+  // Background inventories skip unavailable stores before joining their native opening.
   // The preparing owner can still discover its own borrowed admission.
   const refusals =
-    selection === "recovery"
+    selection === "recovery" || selection === "configured"
       ? listAgentDatabaseAdmissionRefusals({ env }).filter((refusal) =>
           admission === "read"
             ? readAgentDatabaseReadAdmissionRefusal(refusal.agentId, { env })
@@ -612,7 +612,9 @@ export function readSessionStoreTargetInventory(
         });
       } else {
         dedupeSessionStoreTargetsBySqliteTarget(
-          resolveConfiguredSessionStoreTargets(config, env, request.paths),
+          resolveConfiguredSessionStoreTargets(config, env, request.paths).filter(
+            (target) => !options.excludeTarget(target),
+          ),
           options,
         );
       }

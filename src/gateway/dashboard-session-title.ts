@@ -376,12 +376,16 @@ export async function prepareDashboardSessionTitle(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   try {
-    const skillCommands = await prepareTitleSkillCommands({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      assertCurrent: params.assertCurrent,
-    });
-    const sourceText = resolveSessionTitleSource(params.userMessage, skillCommands);
+    const sourceText =
+      resolveSessionTitleSource(params.userMessage) ??
+      resolveSessionTitleSource(
+        params.userMessage,
+        await prepareTitleSkillCommands({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          assertCurrent: params.assertCurrent,
+        }),
+      );
     return sourceText
       ? await generateDashboardSessionTitle({ ...params, sourceText, utilityOnly: true })
       : null;

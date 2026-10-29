@@ -21,6 +21,7 @@ import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { readToolEffectReceipt } from "../../tool-effect-receipt.js";
 import { managedWorktrees, ManagedWorktreeService } from "../../worktrees/service.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { activateSubagentRegistry } from "../registry/subagent-registry.js";
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import type {
   BoundParent,
@@ -124,6 +125,8 @@ export function registerManagedWorktreeSpawnCases(
           ownedBound = await createBoundParent();
           signal.throwIfAborted();
           ownedGateway = await createBoundGateway(ownedBound);
+          vi.mocked(ownedGateway.runtime.lifecycle.waitForAgent).mockRestore();
+          await activateSubagentRegistry(ownedBound.resolveGatewayContext);
           signal.throwIfAborted();
           const allocate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
           const allocation = vi

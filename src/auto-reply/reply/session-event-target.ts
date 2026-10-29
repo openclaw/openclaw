@@ -43,7 +43,6 @@ const targetScopes = resolveGlobalSingleton(
       {
         env?: NodeJS.ProcessEnv;
         operatorAuthority?: AdmittedRunOperatorAuthority;
-        ownerContinuation?: true;
         /** The captured requester keys the authority, whose source label is shared by owners. */
         commandOwner?: {
           authority: PreparedCommandOwnerAuthority;
@@ -94,8 +93,6 @@ export async function captureSessionEventTargetForHost(
     producerPolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
     /** Original host-issued source; the producer owns its lifetime until enqueue. */
     operatorAuthority?: AdmittedRunOperatorAuthority;
-    /** The producing turn held command-owner authority under `operatorAuthority`. */
-    ownerContinuation?: true;
     /**
      * Continue the producing turn's requester as command owner while they remain one.
      * The identity comes from the host-owned caller, never from the producer.
@@ -227,7 +224,6 @@ export async function captureSessionEventTargetForHost(
     targetScopes.set(target, {
       env,
       operatorAuthority,
-      ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
       ...(requester?.messageProvider &&
       requester.senderId &&
       commandOwner?.source &&
@@ -383,11 +379,6 @@ export function readSessionEventTargetOperatorAuthority(
   return targetScopes.get(target)?.operatorAuthority;
 }
 
-/** Whether the producing turn was an owner under the target's captured operator source. */
-export function readSessionEventTargetOwnerContinuation(target: SessionEventTarget): boolean {
-  return targetScopes.get(target)?.ownerContinuation === true;
-}
-
 export type CommandOwnerRequester = Readonly<{
   channel: string;
   accountId?: string;
@@ -434,8 +425,6 @@ export function combineSessionEventTargetsForHost(
       target.chatType !== first.chatType ||
       readSessionEventTargetOperatorAuthority(target) !==
         readSessionEventTargetOperatorAuthority(first) ||
-      readSessionEventTargetOwnerContinuation(target) !==
-        readSessionEventTargetOwnerContinuation(first) ||
       commandOwnerRequesterKey(target) !== commandOwnerRequesterKey(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {

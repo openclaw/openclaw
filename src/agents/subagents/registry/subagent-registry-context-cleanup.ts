@@ -36,6 +36,7 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 export function createSubagentRegistryContextCleanup(config: {
   isEndedHookOwnerCurrent: (entry: SubagentRunRecord) => boolean;
@@ -149,22 +150,24 @@ export function createSubagentRegistryContextCleanup(config: {
     if (!isCurrent()) {
       return false;
     }
-    const contextEnded = contextAlreadyEnded
-      ? true
-      : await tryContextEngineSubagentEnded(
-          {
-            childSessionKey: entry.childSessionKey,
-            reason: "deleted",
-            agentDir: entry.agentDir,
-            workspaceDir: entry.workspaceDir,
-          },
-          "context-engine collector cleanup failed",
-          { isCurrent },
-        );
-    if (!contextAlreadyEnded && contextEnded && isCurrent()) {
+    const isContextCurrent = () => isCurrent() && !shouldSuppressSubagentSessionEffects(entry);
+    const contextEnded =
+      contextAlreadyEnded || !isContextCurrent()
+        ? true
+        : await tryContextEngineSubagentEnded(
+            {
+              childSessionKey: entry.childSessionKey,
+              reason: "deleted",
+              agentDir: entry.agentDir,
+              workspaceDir: entry.workspaceDir,
+            },
+            "context-engine collector cleanup failed",
+            { isCurrent: isContextCurrent },
+          );
+    if (!contextAlreadyEnded && contextEnded && isContextCurrent()) {
       const runId = entry.runId;
       const assertCurrent = () => {
-        if (!isCurrent() || entry.runId !== runId) {
+        if (!isContextCurrent() || entry.runId !== runId) {
           throw new SubagentRegistryMutationRejectedError(
             "Collector cleanup address changed before persistence.",
           );

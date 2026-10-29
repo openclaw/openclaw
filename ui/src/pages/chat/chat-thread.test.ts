@@ -1210,7 +1210,7 @@ describe("buildCachedChatItems", () => {
           user("Interrupted request", 1_000),
           assistant("Interrupted reply", 2_000),
           user("[System] Continue the interrupted turn.", 3_000, {
-            provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+            provenance: { kind: "internal_system", sourceTool: "system-event" },
           }),
         ],
       },

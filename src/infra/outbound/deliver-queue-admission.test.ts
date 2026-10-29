@@ -67,15 +67,11 @@ describe("stageAndEnqueueOutboundDelivery", () => {
       lifecycleRevision: null,
     };
     expect(
-      restoreQueuedDeliveryCustody(
-        { ...params, sessionGeneration: generation, transcriptGeneration: generation },
-        entry,
-      ),
+      restoreQueuedDeliveryCustody({ ...params, sessionGeneration: generation }, entry),
     ).toMatchObject({
       to: entry.to,
       payloads,
       sessionGeneration: undefined,
-      transcriptGeneration: undefined,
     });
     expect(
       restoreQueuedDeliveryCustody(params, { ...entry, sessionGeneration: generation }),
@@ -83,7 +79,6 @@ describe("stageAndEnqueueOutboundDelivery", () => {
       to: entry.to,
       payloads,
       sessionGeneration: generation,
-      transcriptGeneration: generation,
     });
   });
 

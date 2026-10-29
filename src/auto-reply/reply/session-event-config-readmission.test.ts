@@ -11,7 +11,6 @@ import {
 import {
   createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { completionConfig } from "../../agents/bash-tools.lifecycle.test-support.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
@@ -37,6 +36,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { isCronExecutionInputProvenance } from "../../sessions/input-provenance.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -66,18 +66,12 @@ await Promise.all([
 ]);
 
 /** Uses the real managed write tool; the model decision alone is mocked. */
-async function attemptRealWrite(
-  params: RunEmbeddedAgentParams,
-  filePath: string,
-  operatorAuthority?: AdmittedRunOperatorAuthority,
-) {
+async function attemptRealWrite(params: RunEmbeddedAgentParams, filePath: string) {
   const { admittedRunContext, tools, close } = await openEventToolHost(params, "reply admission");
   try {
-    if (operatorAuthority) {
-      expect(readAdmittedRunOperatorAuthority(admittedRunContext)?.profileId).toBe(
-        "original-guest",
-      );
-    }
+    expect(readAdmittedRunOperatorAuthority(admittedRunContext)?.profileId).toBe(
+      isCronExecutionInputProvenance(params.inputProvenance) ? "original-guest" : undefined,
+    );
     await tools
       .find((tool) => tool.name === "write")
       ?.execute("readmission-write", { path: filePath, content: "written\n" })
@@ -199,7 +193,6 @@ it.for([
                 thinkingLevel: "off",
               }
             : {}),
-          // A channel route arms durable restart-recovery source claims.
           delivery: normalizeSessionDeliveryState({
             context: { channel: "telegram", to: "-100001", accountId: "readmission" },
           }),
@@ -261,7 +254,7 @@ it.for([
                 binding.assertCurrent();
                 expect(params.allowAuthProfileFallback).toBe(false);
               }
-              await attemptRealWrite(params, filePath, operatorAuthority);
+              await attemptRealWrite(params, filePath);
             }
             return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
           });
@@ -501,11 +494,6 @@ it.for([
               : undefined,
           );
           if (scenario === "allow-control") {
-            const completed = expectDefined(
-              await readSessionEntryInWorker(scope),
-              "completed source",
-            );
-            expect(completed.restartRecoveryTerminalRunIds).toContain("exec:readmission-process");
             await fs.writeFile(filePath, "retained after completion\n");
             replay = enqueueSessionEventForHost("Background exec completed", {
               ...scope,
@@ -524,9 +512,6 @@ it.for([
             });
             expect(prompts).toHaveLength(2);
             expect(await fs.readFile(filePath, "utf8")).toBe("retained after completion\n");
-            expect((await readSessionEntryInWorker(scope))?.restartRecoveryTerminalRunIds).toEqual(
-              completed.restartRecoveryTerminalRunIds,
-            );
             expect(replay.cancel()).toBe(false);
           }
           // Settled either way: nothing is left for a later ordinary turn to drain.

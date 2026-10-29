@@ -75,7 +75,6 @@ const REQUIRED_INVARIANT_FIELDS: Record<WorkerScenario, readonly string[]> = {
     "removedRows",
     "retainedCurrent",
     "sessionEffects",
-    "recoveryProjections",
     "lostContextCompletions",
   ],
   duplicateSuppression: [

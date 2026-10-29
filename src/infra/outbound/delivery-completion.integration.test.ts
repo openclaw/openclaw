@@ -89,7 +89,11 @@ describe("pending-final durable delivery completion", () => {
       expect(results).toMatchObject([{ messageId: "ops-final-message" }]);
       expect(sendMatrix).toHaveBeenCalledOnce();
       expect(loadSessionEntry(ops)?.pendingFinalDelivery?.deliveries).toEqual([
-        { id: completion.deliveryId, state: "delivered" },
+        {
+          id: completion.deliveryId,
+          state: "delivered",
+          receipt: { platformMessageId: "ops-final-message", resultCount: 1 },
+        },
       ]);
       await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
       expect(sendMatrix).toHaveBeenCalledOnce();
@@ -134,7 +138,11 @@ describe("pending-final durable delivery completion", () => {
     expect(sendMatrix).toHaveBeenCalledOnce();
     expect(queuedAuthority).toEqual(authority);
     expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
-      { id: completion.deliveryId, state: "delivered" },
+      {
+        id: completion.deliveryId,
+        state: "delivered",
+        receipt: { platformMessageId: "rendered-final-message", resultCount: 1 },
+      },
     ]);
     expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
     custody.release();

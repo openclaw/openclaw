@@ -1,6 +1,15 @@
+import { isCronSessionKey } from "../../routing/session-key.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { FollowupRun } from "./queue/types.js";
+
+/** Cron retains its scheduled authority; ordinary system turns resolve the current principal. */
+export function resolveTranscriptFollowupOperatorAuthority(base: FollowupRun) {
+  return base.run.scheduledAutomation || isCronSessionKey(base.run.sessionKey ?? "")
+    ? base.operatorAuthority
+    : undefined;
+}
 
 /** Internal continuations reuse the transcript, not the source turn's admission. */
 export function buildTranscriptFollowupRun(
@@ -8,8 +17,14 @@ export function buildTranscriptFollowupRun(
   params: { prompt: string; sourceTool: string; expiredSkillAuthoringMessage: string },
 ): FollowupRun {
   const source = base.queuedFollowupReplyDisposition;
-  return {
+  const operatorAuthority = resolveTranscriptFollowupOperatorAuthority(base);
+  const followup: FollowupRun = {
     ...base,
+    operatorAuthority,
+    sessionPrincipalTurn:
+      !base.run.scheduledAutomation && !isCronSessionKey(base.run.sessionKey ?? "")
+        ? true
+        : undefined,
     prompt: formatSystemTurnPrompt(params.prompt),
     disableCollectBatching: true,
     enqueuedAt: Date.now(),
@@ -39,6 +54,12 @@ export function buildTranscriptFollowupRun(
       ),
     },
   };
+  if (!operatorAuthority && getCommandOwnerAuthority(base.run)?.operatorAuthority) {
+    followup.run.senderIsOwner = false;
+    followup.run.traceAuthorized = false;
+    bindCommandOwnerAuthority(followup.run, { isCurrent: () => false });
+  }
+  return followup;
 }
 
 /**

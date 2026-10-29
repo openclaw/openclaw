@@ -221,6 +221,7 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     expect(compactState.compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
+    expect(result).toMatchObject({ isError: true });
   });
 
   it.each([
@@ -641,9 +642,8 @@ describe("runReplyAgent block streaming", () => {
 });
 
 it("delivers tool progress with inline on over stored full", async () => {
-  const stored = "full";
   const override = "on";
-  const { storePath, sessionKey, reply } = await storedSession({ verboseLevel: stored });
+  const { storePath, sessionKey, reply } = await storedSession({ verboseLevel: "full" });
   const onToolResult = vi.fn(async (_payload: ReplyPayload) => {});
   const onRunVerbosityResolved = vi.fn();
   runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
@@ -668,7 +668,7 @@ it("delivers tool progress with inline on over stored full", async () => {
     },
   }).run();
   expect(onToolResult.mock.calls.map(([payload]) => payload.text)).toEqual(["Tool summary"]);
-  expect(loadSessionEntry({ storePath, sessionKey })?.verboseLevel).toBe(stored);
+  expect(loadSessionEntry({ storePath, sessionKey })?.verboseLevel).toBe("full");
   expectReplyText(result, "Done");
 });
 

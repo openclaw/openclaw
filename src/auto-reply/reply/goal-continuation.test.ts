@@ -199,55 +199,43 @@ afterEach(async () => {
 });
 
 describe("Goal continuation eligibility", () => {
-  it.each([
-    "remote-exec",
-    "local",
-    "worker-turn",
-    "wrong-session",
-    "unsupported",
-    "no-authority",
-  ] as const)("binds Codex continuation to supported placement facts (%s)", async (mode) => {
-    const f = fixture();
-    f.params.base.operatorAuthority = {
-      profileId: "operator",
-      scopes: ["operator.admin"],
-      assertCurrent: () => {},
-    };
-    if (mode === "no-authority") {
-      f.params.base.operatorAuthority = undefined;
-    }
-    vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue({
-      ...entry(),
-      agentHarnessId: "codex",
-    });
-    workerPlacement.supported = mode !== "unsupported";
-    workerPlacement.current.mockReturnValue({
-      ...localPlacement(identity.sessionId),
-      agentId: "main",
-      sessionKey: mode === "wrong-session" ? "other" : f.params.sessionKey,
-      sessionId: identity.sessionId,
-      state: mode === "local" ? "local" : "requested",
-      executionMode: mode === "worker-turn" ? "worker-turn" : "remote-exec",
-    });
-    expect(await enqueueGoalContinuation(f.params)).toBe(
-      mode === "remote-exec" || mode === "local",
-    );
-    if (mode === "remote-exec") {
-      expect(vi.mocked(enqueueFollowupRun).mock.calls[0]![1].goalContinuation).toEqual({
-        ...identity,
-        workerGoal: true,
+  it.each(["remote-exec", "local", "worker-turn", "wrong-session", "unsupported"] as const)(
+    "binds Codex continuation to supported placement facts (%s)",
+    async (mode) => {
+      const f = fixture();
+      vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue({
+        ...entry(),
+        agentHarnessId: "codex",
       });
-    } else if (mode === "local") {
-      expect(vi.mocked(enqueueFollowupRun).mock.calls[0]![1].goalContinuation).toEqual({
-        ...identity,
-        localCodexGoal: true,
+      workerPlacement.supported = mode !== "unsupported";
+      workerPlacement.current.mockReturnValue({
+        ...localPlacement(identity.sessionId),
+        agentId: "main",
+        sessionKey: mode === "wrong-session" ? "other" : f.params.sessionKey,
+        sessionId: identity.sessionId,
+        state: mode === "local" ? "local" : "requested",
+        executionMode: mode === "worker-turn" ? "worker-turn" : "remote-exec",
       });
-    } else {
-      expect(enqueueFollowupRun).not.toHaveBeenCalled();
-    }
-  });
+      expect(await enqueueGoalContinuation(f.params)).toBe(
+        mode === "remote-exec" || mode === "local",
+      );
+      if (mode === "remote-exec") {
+        expect(vi.mocked(enqueueFollowupRun).mock.calls[0]![1].goalContinuation).toEqual({
+          ...identity,
+          workerGoal: true,
+        });
+      } else if (mode === "local") {
+        expect(vi.mocked(enqueueFollowupRun).mock.calls[0]![1].goalContinuation).toEqual({
+          ...identity,
+          localCodexGoal: true,
+        });
+      } else {
+        expect(enqueueFollowupRun).not.toHaveBeenCalled();
+      }
+    },
+  );
   it.each(["local", "worker-required", "no-authority", "revoked"] as const)(
-    "admits unplaced Codex goals only with current local authority (%s)",
+    "selects unplaced Codex goals before resolving fresh authority (%s)",
     async (mode) => {
       const f = fixture();
       vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue({
@@ -269,12 +257,8 @@ describe("Goal continuation eligibility", () => {
       if (mode === "worker-required") {
         f.params.base.run.config = { cloudWorkers: { requiredProfile: "worker" } };
       }
-      if (mode === "revoked") {
-        await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("operator revoked");
-      } else {
-        expect(await enqueueGoalContinuation(f.params)).toBe(mode === "local");
-      }
-      expect(enqueueFollowupRun).toHaveBeenCalledTimes(mode === "local" ? 1 : 0);
+      expect(await enqueueGoalContinuation(f.params)).toBe(mode !== "worker-required");
+      expect(enqueueFollowupRun).toHaveBeenCalledTimes(mode === "worker-required" ? 0 : 1);
     },
   );
   it.each([
@@ -607,25 +591,18 @@ describe("Goal return from committed child custody", () => {
     },
   );
 
-  it("keeps the original route and independently retained operator restriction until queue handoff", async () => {
+  it("keeps the original route after source authority ends without lending it to the next turn", async () => {
     const f = retainedGoal();
-    let holds = 1;
-    const source = createAdmittedRunOperatorAuthority({
+    let current = true;
+    f.params.base.operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
       assertCurrent() {
-        if (!holds) {
+        if (!current) {
           throw new Error("source released");
         }
       },
-      retain() {
-        holds++;
-        return () => {
-          holds--;
-        };
-      },
     });
-    f.params.base.operatorAuthority = source;
     f.params.base.originatingThreadId = "original-thread";
     f.params.base.originatingChannel = "webchat";
     const delivered = vi.fn(async () => ({ kind: "delivered" as const }));
@@ -649,14 +626,13 @@ describe("Goal return from committed child custody", () => {
       completion: { kind: "completed" },
     });
     f.operation.complete();
-    holds--; // The original chat input has settled, but child custody is independent.
-    expect(holds).toBe(1);
+    current = false;
     expect(f.publish()?.text).toContain("Active goal: Finish the checklist");
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
     await f.finish();
     const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
     expect(queued?.originatingThreadId).toBe("original-thread");
-    expect(queued?.operatorAuthority).toBe(source);
+    expect(queued?.operatorAuthority).toBeUndefined();
     expect(queued?.goalContinuation).toEqual(identity);
     if (queued?.queuedFollowupReplyDisposition?.kind !== "deliver") {
       throw new Error("Goal lost its original reply route");
@@ -669,7 +645,6 @@ describe("Goal return from committed child custody", () => {
       completion: { kind: "completed" },
     });
     expect(delivered).toHaveBeenCalledTimes(2);
-    expect(holds).toBe(0);
     await f.finish();
     expect(enqueueFollowupRun).toHaveBeenCalledOnce();
   });
@@ -730,27 +705,17 @@ describe("Goal return from committed child custody", () => {
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });
 
-  it("releases an obsolete return when a newer requester owns the same child cohort", async () => {
+  it("replaces an obsolete return when a newer requester owns the same child cohort", async () => {
     const first = retainedGoal();
-    const release = vi.fn();
-    const authority = createAdmittedRunOperatorAuthority({
-      profileId: "goal-owner",
-      scopes: ["operator.write"],
-      assertCurrent() {},
-      retain: () => release,
-    });
-    first.params.base.operatorAuthority = authority;
     first.retain();
     first.operation.complete();
     const next = retainedGoal(first.child);
     next.params.sourceRunId = "new-source-run";
-    next.params.base.operatorAuthority = authority;
     next.retain();
-    expect(release).toHaveBeenCalledOnce();
+    first.controller.abort();
     next.operation.complete();
-    next.publish();
+    expect(next.publish()?.text).toContain("Active goal: Finish the checklist");
     await next.finish();
-    expect(release).toHaveBeenCalledTimes(2);
     expect(enqueueFollowupRun).toHaveBeenCalledOnce();
   });
 
@@ -840,7 +805,7 @@ describe("Goal return from committed child custody", () => {
   });
 
   it.each(["Stop", "source retirement", "operator revocation"])(
-    "checks %s again after asynchronous final enqueue preparation",
+    "preserves source cancellation while resolving new authority after %s",
     async (boundary) => {
       const f = retainedGoal();
       const revoked = new AbortController();
@@ -897,7 +862,7 @@ describe("Goal return from committed child custody", () => {
       read.resolve(entry());
       await finishing;
       await stopped?.settled;
-      expect(enqueueFollowupRun).not.toHaveBeenCalled();
+      expect(enqueueFollowupRun).toHaveBeenCalledTimes(boundary === "operator revocation" ? 1 : 0);
     },
   );
 });

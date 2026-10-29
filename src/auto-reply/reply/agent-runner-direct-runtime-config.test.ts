@@ -414,9 +414,7 @@ describe("runReplyAgent runtime config", () => {
 
     const result = await runReplyAgent(replyParams);
 
-    expect(result).toMatchObject({
-      text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-    });
+    expect(result).toEqual({});
     expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
     expect(executeAgentTurnMock).not.toHaveBeenCalled();
   });

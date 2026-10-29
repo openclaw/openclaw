@@ -88,7 +88,8 @@ it
         expect(output).not.toContain("process proof: acquisition-joined");
         expect(output).toContain("shutdown deadline reached");
         expect(elapsed, output).toBeGreaterThanOrEqual(shutdownTimeoutMs);
-        expect(output).not.toContain("process-exit:");
+        // Returning a status leaves the leaked worker to the native watchdog.
+        expect(output).toContain("process-exit:0");
       }
     } finally {
       await stop();

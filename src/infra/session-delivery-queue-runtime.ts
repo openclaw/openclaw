@@ -13,7 +13,10 @@ import {
   loadPendingSessionDeliveries,
   loadPendingSessionDelivery,
 } from "./session-delivery-queue-storage.js";
-import type { QueuedSessionDelivery } from "./session-delivery-queue.records.js";
+import {
+  isProducedSessionDelivery,
+  type QueuedSessionDelivery,
+} from "./session-delivery-queue.records.js";
 
 type SessionDeliveryRuntime = {
   scheduler: GatewayScheduler;
@@ -78,7 +81,7 @@ function armSessionDelivery(
 ): void {
   // The active drain owns rearming after its authoritative reload. Coalesce
   // duplicate schedules so they cannot poll the same due row in a timer loop.
-  if (activeRuntime.runningEntries.has(entry.id)) {
+  if (!isProducedSessionDelivery(entry) || activeRuntime.runningEntries.has(entry.id)) {
     return;
   }
   armSessionDeliveryId(

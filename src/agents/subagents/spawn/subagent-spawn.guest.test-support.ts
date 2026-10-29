@@ -9,7 +9,10 @@ import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
-import { settleRequesterAfterSessionSpawns } from "../registry/subagent-registry.js";
+import {
+  activateSubagentRegistry,
+  settleRequesterAfterSessionSpawns,
+} from "../registry/subagent-registry.js";
 import { admitEmbeddedRun, recordFinal } from "./subagent-spawn.boundary-run.test-support.js";
 import {
   collectFailure,
@@ -46,6 +49,8 @@ export function registerGuestSpawnCases(
       const { bound, source, modelPolicy, scopes } = await options.createGuestParent(audit);
       const readSession = sessionReader(bound.storePath);
       const { runtime } = await options.createBoundGateway(bound);
+      vi.mocked(runtime.lifecycle.waitForAgent).mockRestore();
+      await activateSubagentRegistry(bound.resolveGatewayContext);
       const nativeAnnounce = await vi.importActual<
         typeof import("../announce/subagent-announce.js")
       >("../announce/subagent-announce.js");

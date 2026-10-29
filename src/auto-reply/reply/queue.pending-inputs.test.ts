@@ -218,7 +218,7 @@ describe("followup queue durable input consumption", () => {
           "ownership ended",
         );
         const retained = await listSessionPendingInputs(scope());
-        expect(retained).toMatchObject({ total: 1, items: [{ state: "interrupted" }] });
+        expect(retained).toMatchObject({ total: 1, items: [{ state: "cancelled" }] });
         rotateAgentEventLifecycleGeneration();
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
