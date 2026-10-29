@@ -58,7 +58,7 @@ export class McpStartupBackoffError extends Error {
     super(
       state.authorization
         ? state.message
-        : `${state.message}; server unavailable; retry after ${new Date(retryAfterMs).toISOString()}. Check server reachability or reload MCP after fixing it.`,
+        : `${state.message}; server unavailable; retry after ${new Date(Date.now() - performance.now() + retryAfterMs).toISOString()}. Check server reachability or reload MCP after fixing it.`,
     );
     this.retryAfterMs = retryAfterMs;
     this.authorizationRequired = state.authorization !== undefined;
@@ -112,7 +112,7 @@ async function connectWithMcpStartupBackoff(
   }
   signal.throwIfAborted();
   const backoff = getMcpStartupBackoff(key, signal, recoveryRetryMs, authorizationKey);
-  if (backoff && Date.now() < backoff.retryAfterMs) {
+  if (backoff && performance.now() < backoff.retryAfterMs) {
     throw backoff;
   }
   const state: StartupState = startups.get(key) ?? {
@@ -151,7 +151,7 @@ async function connectWithMcpStartupBackoff(
       throw error;
     }
     state.delayMs = Math.min(state.delayMs * 2, 600_000);
-    state.retryAfterMs = Date.now() + state.delayMs;
+    state.retryAfterMs = performance.now() + state.delayMs;
     state.message = redactMcpDiagnosticError(error);
     const reportFailure =
       !state.authorization ||

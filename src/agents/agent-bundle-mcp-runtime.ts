@@ -128,11 +128,11 @@ function createServerMcpRuntime(
         launchSummary: server.launchSummary,
         message,
       });
-      catalogRetryAfterMs = Date.now();
+      catalogRetryAfterMs = performance.now();
     }
   };
   const catalogRetryIsDue = (): boolean =>
-    catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
+    catalogRetryAfterMs !== undefined && performance.now() >= catalogRetryAfterMs;
   let currentSession: BundleMcpSession | undefined;
   const nativeContextKey = nativeContext
     ? stableStringify({ capabilities: nativeContext.capabilities, roots: nativeContext.roots })
@@ -216,7 +216,7 @@ function createServerMcpRuntime(
   ): Promise<T> => {
     const requestSignal = getSessionMcpRequestSignal();
     const tracksFailureBackoff = options?.failureBackoff !== "ignore";
-    const nowMs = Date.now();
+    const nowMs = performance.now();
     const backoff = serverBackoff;
     if (
       tracksFailureBackoff &&
@@ -225,7 +225,7 @@ function createServerMcpRuntime(
       nowMs < backoff.retryAfterMs
     ) {
       throw new Error(
-        `bundle-mcp server "${serverName}" is paused after repeated tool failures; retry after ${new Date(backoff.retryAfterMs).toISOString()}`,
+        `bundle-mcp server "${serverName}" is paused after repeated tool failures; retry after ${new Date(Date.now() - nowMs + backoff.retryAfterMs).toISOString()}`,
       );
     }
     if (backoff && backoff.session !== session) {
@@ -616,7 +616,7 @@ function createServerMcpRuntime(
         awaitSessionRecovery = false;
       }
       catalogRetryAfterMs = nextCatalog.diagnostics?.length
-        ? (startupRetryAfterMs ?? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
+        ? (startupRetryAfterMs ?? performance.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
         : undefined;
       return nextCatalog;
     } finally {
@@ -666,7 +666,7 @@ function createServerMcpRuntime(
     catalogRetryAfterMs = undefined;
     void loadCatalog(discoveryContext).catch(() => {
       if (!retiredCatalog && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
-        catalogRetryAfterMs = Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
+        catalogRetryAfterMs = performance.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
       }
     });
     return staleCatalog;
