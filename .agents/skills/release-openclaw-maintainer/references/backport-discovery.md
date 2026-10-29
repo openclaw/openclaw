@@ -202,7 +202,7 @@ version and SHA.
 ## Port with Bounded Workers
 
 Read-only audit lanes may fan out. Porting lanes write to the release candidate
-and share one host, so run at most two concurrent writing workers, and do not
+and share one host, so run at most eight concurrent writing workers, and do not
 launch or resume workers close to a session usage limit. A worker does not
 spawn its own agents unless its brief allows it. A 17-lane porting wave on
 2026.10.8 saturated the Mac and lost 16 lanes mid-port when the session limit
