@@ -339,8 +339,11 @@ drafts, then try **Refresh** again. **Keep drafts** leaves them protected in thi
 Each draft shows the session title, session key, and pane position captured when
 the file was opened, so matching filenames remain distinguishable. Newer edits
 remain protected if they change while you review an older draft.
-File edits stay in memory in the current page;
-an explicit browser reload or closing the browser tab discards them.
+File edits stay in memory in the current page. After editing a file, the browser
+asks for confirmation before an ordinary reload or tab close, including when the
+file preview is closed. Cancel keeps your edits available. Saving or explicitly
+discarding the last draft removes this protection. Confirming the reload or tab
+close discards the unsaved edits; it does not save them to the file.
 
 ## Visualizations during a connection loss
 

@@ -2,6 +2,7 @@ import { registerControlUiReloadGuard } from "../../../app/document-reload-guard
 import { t } from "../../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { showToast } from "../../../lib/toast.ts";
 import type { FileSidebarContent } from "./chat-sidebar-content-types.ts";
 import { reviewFileDrafts } from "./file-draft-recovery-dialog-loading.tsx";
@@ -23,6 +24,7 @@ const retainedFileDrafts = new Map<
   }
 >();
 let stopReloadGuard: (() => void) | undefined;
+let stopBeforeUnload: (() => void) | undefined;
 let reviewingDrafts = false;
 
 export async function reviewRetainedFileDrafts(target?: {
@@ -114,8 +116,16 @@ function syncReloadGuard() {
           onAction: () => void reviewRetainedFileDrafts(),
         }),
     );
+    if (typeof window !== "undefined") {
+      stopBeforeUnload ??= listen(window, "beforeunload", (event) => {
+        event.preventDefault();
+        event.returnValue = "";
+      });
+    }
   } else {
     stopReloadGuard?.();
     stopReloadGuard = undefined;
+    stopBeforeUnload?.();
+    stopBeforeUnload = undefined;
   }
 }

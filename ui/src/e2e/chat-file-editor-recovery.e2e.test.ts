@@ -1,6 +1,10 @@
-import type { Page } from "playwright";
+import type { Dialog, Frame, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { selectFileAction } from "./chat-file-actions.test-support.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import { exactButton, twoFrames } from "./chat-presentation.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -39,7 +43,8 @@ async function replaceEditor(page: Page, body: (url: string) => string) {
 }
 
 async function openFilePreview(page: Page) {
-  await installMockGateway(page, {
+  const gateway = await installMockGateway(page, {
+    featureMethods: [...defaultControlUiFeatureMethods, "sessions.files.set"],
     historyMessages: [
       chatMessage("assistant", "Review `notes.txt` and `other.txt`.", { timestamp: 1 }),
     ],
@@ -48,8 +53,10 @@ async function openFilePreview(page: Page) {
         cases: ["notes.txt", "other.txt"].map((name) => ({
           match: { path: name },
           response: {
+            sessionKey: "agent:main:main",
             root: "/workspace",
             file: {
+              hash: "original-hash",
               previewKind: "text",
               contentEncoding: "utf8",
               content: `Synthetic ${name} content`,
@@ -62,13 +69,85 @@ async function openFilePreview(page: Page) {
           },
         })),
       },
+      "sessions.files.set": {
+        sessionKey: "agent:main:main",
+        file: { hash: "saved-hash" },
+      },
     },
   });
   await page.goto(`${suite.server.baseUrl}chat`);
   await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
+  return gateway;
 }
 
 suite.define(() => {
+  it.each(["Save", "Discard"] as const)(
+    "protects file drafts across browser reload and navigation until %s",
+    async (settle) => {
+      await suite.withPage(editorContext, async ({ page }) => {
+        const gateway = await openFilePreview(page);
+        const panel = page.locator(".sidebar-file-view:visible");
+        const editor = page.locator(".cm-content:visible");
+        await selectFileAction(panel, "Edit file");
+        await editor.click();
+        await editor.press("ControlOrMeta+End");
+        await page.keyboard.type("\nKeep this unsaved paragraph.");
+        const draft = "Synthetic notes.txt content\nKeep this unsaved paragraph.";
+        expect(await exactButton(panel, "Save").isEnabled()).toBe(true);
+
+        const reload = async () => {
+          const session = await page.context().newCDPSession(page);
+          const outcome = Promise.withResolvers<string | undefined>();
+          const onDialog = (dialog: Dialog) => {
+            void dialog.dismiss().then(() => outcome.resolve(dialog.type()), outcome.reject);
+          };
+          const onNavigation = (frame: Frame) => {
+            if (frame === page.mainFrame()) {
+              outcome.resolve(undefined);
+            }
+          };
+          page.on("dialog", onDialog);
+          page.on("framenavigated", onNavigation);
+          try {
+            // Cancellation has no navigation to await; observe the native outcome instead.
+            await session.send("Page.reload");
+            return await outcome.promise;
+          } finally {
+            page.off("dialog", onDialog);
+            page.off("framenavigated", onNavigation);
+            await session.detach();
+          }
+        };
+        expect(await reload()).toBe("beforeunload");
+        expect(await editor.locator(".cm-line").allTextContents()).toEqual(draft.split("\n"));
+        await editor.press("End");
+        await page.keyboard.type(" Continued after cancellation.");
+        const continued = `${draft} Continued after cancellation.`;
+        await page.getByRole("link", { name: "New conversation", exact: true }).first().click();
+        await page.waitForURL(/\/new(?:\?|$)/);
+        await editor.waitFor({ state: "hidden" });
+        expect(await reload()).toBe("beforeunload");
+        await page.goBack();
+        await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
+        await expect
+          .poll(() => editor.locator(".cm-line").allTextContents())
+          .toEqual(continued.split("\n"));
+        await exactButton(panel, settle).click();
+        if (settle === "Save") {
+          await expect.poll(() => exactButton(panel, "Save").isDisabled()).toBe(true);
+          expect((await gateway.getRequests("sessions.files.set")).at(-1)?.params).toMatchObject({
+            content: continued,
+            expectedHash: "original-hash",
+          });
+        } else {
+          expect(await gateway.getRequests("sessions.files.set")).toEqual([]);
+        }
+        expect(await reload()).toBeUndefined();
+        await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').waitFor();
+      });
+    },
+  );
+
   it("keeps initialization failures terminal until an explicit retry", async () => {
     await suite.withPage(editorContext, async ({ page }) => {
       await replaceEditor(
