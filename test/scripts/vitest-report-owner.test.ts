@@ -386,7 +386,8 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
           {
             name: "beta",
             namePrefix: "",
-            root: path.join(root, "test/vitest"),
+            // The leaf explicitly configures the fixture root; patched Vitest preserves it.
+            root,
             config: path.join(root, "test/vitest/vitest.beta.config.ts"),
             pool: "forks",
           },
