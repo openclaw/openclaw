@@ -301,6 +301,15 @@ export async function resolveDeliveryTarget(
       agentId,
     });
   }
+  if (!accountId && channel) {
+    // Later normalization would otherwise route an unnamed account to the literal
+    // "default", which a channel with only named accounts does not have (#186043).
+    accountId = deliveryTargetRuntime.resolveChannelDefaultAccountIdForDelivery({
+      cfg,
+      channel,
+      agentId,
+    });
+  }
 
   if (!channel) {
     return {
