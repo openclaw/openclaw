@@ -11,6 +11,7 @@ import { packageUpdateRefusal } from "./package-update-refusal.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
 const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
+const PACKAGE_ACTIVATION_CONTROL_SUFFIX = ".control";
 // Published openclaw@2026.9.8 recovery helper; newer writers keep full verification.
 export const LEGACY_PACKAGE_RECOVERY_HELPER =
   "e08dfc1fb3ba7962f9e01d7a6770117c6cd77406b3fa4f7ba94788a670030ba0";
@@ -51,6 +52,24 @@ export function resolvePackageActivationJournalPath(anchor: string): string {
 
 export function resolvePackageActivationHelper(anchor: string): string {
   return path.join(resolvePackageActivationControl(anchor), "recovery.mjs");
+}
+
+/**
+ * Whether a path is (or lives under) an activation-controlled artifact:
+ * the anchor directory itself, its .control sibling, or files within them.
+ * These paths are later gated by privatePackageActivationIdentity, which
+ * requires hard link count 1 for files — retention and copy steps must
+ * never hard-link anything under here.
+ */
+export function isPackageActivationControlPath(file: string): boolean {
+  return path
+    .normalize(file)
+    .split(path.sep)
+    .some(
+      (segment) =>
+        segment.startsWith(PACKAGE_ACTIVATION_PREFIX) &&
+        segment.replace(PACKAGE_ACTIVATION_PREFIX, "").length > 0,
+    );
 }
 
 export function packageActivationIdentity(

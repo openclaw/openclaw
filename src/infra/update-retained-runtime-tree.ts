@@ -3,6 +3,7 @@ import path from "node:path";
 import { collectPluginSafetyInspectedFiles } from "../plugins/plugin-safety-inspected-files.js";
 import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import { root as openRoot } from "./fs-safe.js";
+import { isPackageActivationControlPath } from "./package-update-activation-paths.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { copyUpdateCandidatePluginFileBytes } from "./update-candidate-plugin-file.js";
 import { runUpdateCandidatePluginTasks } from "./update-candidate-plugin-tasks.js";
@@ -103,7 +104,16 @@ export async function linkUpdateCandidatePluginTrees(
         { privateRoot, candidateRoot },
       );
     } else {
-      let copy = pluginFiles.has(entry.path) || Boolean(resolveRuntimeFileRelocator(destination));
+      let copy =
+        pluginFiles.has(entry.path) ||
+        Boolean(resolveRuntimeFileRelocator(destination)) ||
+        isPackageActivationControlPath(entry.path);
+      // Activation-controlled artifacts (the package activation journal and its
+      // recovery helper) are later gated by privatePackageActivationIdentity,
+      // which requires hard link count 1 for files. Hard-linking them here leaves
+      // the installed package with nlink > 1, so every subsequent update fails at
+      // package-swap with "publication recovery permissions are unsafe". Copy
+      // instead of linking so the nlink=1 invariant keeps holding.
       if (!copy) {
         params.assertCurrent();
         try {
