@@ -105,6 +105,8 @@ it("sends no request for another operator's session but lets its owner reach the
           NO_PROXY: "127.0.0.1,localhost,::1",
         },
         async () => {
+          // Keep Vitest's lazy module transformation outside the fork's request deadline.
+          await import("../agents/btw.js");
           const baseUrl = `http://127.0.0.1:${claim.port}/v1`;
           const model = makeProviderModelFixture<"openai-completions">({
             provider: fixture.providerId,

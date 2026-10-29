@@ -11,7 +11,6 @@ import {
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readAgentRunProviderReview } from "../sessions/provider-review-terminal.js";
 import {
   AgentDeletionPendingError,
@@ -25,8 +24,6 @@ import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveLifecycleFailureSummary } from "./session-lifecycle-projection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
-const restartRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
-
 type GatewaySessionLifecycleEventParams = {
   sessionKey: string;
   agentId?: string;
@@ -34,6 +31,7 @@ type GatewaySessionLifecycleEventParams = {
   event: LifecycleEventLike;
   assertCommitAllowed?: () => void;
   expectedWriter?: {
+    allowUnstartedFailure?: true;
     requireYielded?: true;
     runId: string;
     sessionId: string;
@@ -156,7 +154,6 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           runId: params.event.runId,
           clientRunId: params.clientRunId ?? params.event.clientRunId,
           lifecycleGeneration: params.event.lifecycleGeneration,
-          mainSessionRestartRecovery: params.event.mainSessionRestartRecovery,
           controlUiVisible: params.event.controlUiVisible,
           contextClaimId: params.event.contextClaimId,
           data: params.event.data,
@@ -200,11 +197,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       },
     },
   );
-  const { terminalRecovery, failedRun } = effects ?? {};
-  if (persisted && terminalRecovery) {
-    const message = `main-session restart recovery terminal: session=${sessionEntry.canonicalKey} run=${terminalRecovery.runId} status=${terminalRecovery.outcome.status} reason=${terminalRecovery.outcome.reason}`;
-    restartRecoveryLog[terminalRecovery.outcome.status === "ok" ? "info" : "warn"](message);
-  }
+  const { failedRun } = effects ?? {};
   if (persisted && failedRun) {
     const { runId, error, errorKind, suppressErrorNotice } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and

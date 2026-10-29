@@ -39,6 +39,7 @@ type ReasonedSubmitGate =
   | "attachment-reads"
   | "outcome-unknown"
   | "disconnected"
+  | "draft-unavailable"
   | "access"
   | "folder"
   | "placement-recovery"
@@ -237,6 +238,14 @@ export function resolveNewSessionSubmitBlock(
     // Same string readSessionMethodAccess reports for its disconnected
     // cause; checked here so the gates below can rely on a live client.
     return { gate: "disconnected", reason: t("sessionsView.actionRequiresConnection") };
+  }
+  if (
+    kind === "session" &&
+    !pendingPlacementActive &&
+    draft.visibility === "draft" &&
+    connection.snapshot.hello?.policy?.allowedSessionVisibilities?.includes("draft") === false
+  ) {
+    return { gate: "draft-unavailable", reason: t("newSession.draftUnavailable") };
   }
   const access =
     kind === "terminal"

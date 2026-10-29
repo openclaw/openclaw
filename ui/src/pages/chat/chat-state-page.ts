@@ -73,6 +73,7 @@ import {
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { handleAbortChat, hasAbortableSessionRun, isChatStopCommand } from "./run-lifecycle.ts";
 import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
+import { cacheChatAvatarSource } from "./session-message-cache.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   updateSidebarSessionActivePanel,
@@ -286,6 +287,8 @@ export function createPageState(
     sessionWorkspaceState: undefined,
   }) as unknown as ChatPageHost;
 
+  state.cacheChatAvatarSource = (agentId, source) =>
+    cacheChatAvatarSource(chatMessagesBySession, state, state, agentId, source);
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.scrollToBottom = (options) => {

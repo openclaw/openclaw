@@ -239,8 +239,8 @@ export function renderSessionListFrame(host: () => SidebarSessionListHost, body:
         </div>
       ) : undefined}
       {renderSessionMutationError(host())}
-      <PersonalSessionGroups host={host()} />
       <PinnedSessionSection host={host()} />
+      <PersonalSessionGroups host={host()} />
       {body}
     </section>
   );

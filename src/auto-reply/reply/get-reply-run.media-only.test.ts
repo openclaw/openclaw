@@ -139,20 +139,6 @@ vi.mock("../../infra/env.js", async (importOriginal) => ({
   isFastTestRuntimeEnv: () => envMockState.fastTestRuntime,
 }));
 
-vi.mock("../../agents/main-session-recovery/main-session-recovery-owner-release.js", () => ({
-  scheduleMainSessionRecoveryPendingTarget: vi.fn(),
-}));
-
-vi.mock("../../config/sessions/restart-recovery-state.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/sessions/restart-recovery-state.js")>()),
-  isMainRestartRecoveryCandidate: vi.fn().mockReturnValue(false),
-}));
-
-vi.mock("../../agents/main-session-recovery/main-session-recovery-store.js", () => ({
-  claimMainSessionRecoveryOwner: vi.fn(),
-  releaseMainSessionRecoveryOwner: vi.fn(),
-}));
-
 // Provider profile discovery is owned by thinking.test.ts. Keep the real thinking-policy
 // projection here while preventing an unrelated active-plugin and public-artifact graph load.
 vi.mock("../../plugins/provider-thinking.js", () => ({

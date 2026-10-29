@@ -146,6 +146,7 @@ export async function collectPluginDoctorStateMigrationPlans(
     plannedActions?: readonly PlannedPluginDoctorAction[];
     inventory?: PluginDoctorStateMigrationInventory;
     validateDeclarations?: boolean;
+    pluginIds?: readonly string[];
   },
 ): Promise<PluginDoctorPlanCollection> {
   const plans: DetectedPluginDoctorStateMigrationPlan[] = [];
@@ -171,6 +172,7 @@ export async function collectPluginDoctorStateMigrationPlans(
       env,
       inventory: params.inventory,
       validateDeclarations: params.validateDeclarations,
+      pluginIds: params.pluginIds,
       onInspectedPlugin: (pluginId) => inspectedPluginIds.add(pluginId),
       onInspectedStatelessPlugin: (pluginId) => statelessPluginIds.add(pluginId),
       onUnavailablePlugin: (pluginId, error) => {
@@ -431,6 +433,8 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
   maintenanceAuthority?: { assertCurrent(): void };
   plannedActions?: readonly PlannedPluginDoctorAction[];
   inventory?: PluginDoctorStateMigrationInventory;
+  /** Read-only admission inspects both phases for the selected pending owners. */
+  inspectPluginIds?: readonly string[];
   beforeCompletion?: (
     completedPluginIds: readonly string[],
     assertCurrent: () => void,
@@ -456,8 +460,9 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
       warnings,
       plannedActions: params.plannedActions,
       inventory: params.inventory,
+      pluginIds: params.inspectPluginIds,
     });
-    if (!repairAuthority) {
+    if (!repairAuthority && !params.inspectPluginIds) {
       return {
         changes: [],
         ...(collected.notices.length > 0 ? { notices: collected.notices } : {}),
@@ -470,18 +475,21 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
         ],
       };
     }
-    const result = await migratePluginDoctorStatePlans(
-      input,
-      collected.plans,
-      repairAuthority,
-      collected.assertResourceScope,
-    );
+    const result = repairAuthority
+      ? await migratePluginDoctorStatePlans(
+          input,
+          collected.plans,
+          repairAuthority,
+          collected.assertResourceScope,
+        )
+      : { changes: [], warnings: [] };
     // The later phase cannot certify an earlier action that still reports pending work.
     // Without a consumer for that certification, the default-phase detectors stay unrun.
     const earlier = certifyCompletion
       ? await collectPluginDoctorStateMigrationPlans(input, {
           includeDoctorOnly: true,
           inventory: params.inventory,
+          pluginIds: params.inspectPluginIds,
           repairAuthority,
           warnings,
         })
@@ -503,7 +511,16 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
           )
         : {}),
       ...pluginInspectionFacts(collected),
-      warnings: [...warnings, ...result.warnings],
+      warnings: [
+        ...warnings,
+        ...result.warnings,
+        ...(!repairAuthority
+          ? [...collected.plans, ...(earlier?.plans ?? [])].map(
+              (plan) =>
+                `Plugin "${plan.pluginId}" data/settings upgrade is blocked in ${plan.migration.phase ?? "default"}: ${plan.migration.label}. Stop the Gateway through its service owner, then run openclaw doctor --fix.`,
+            )
+          : []),
+      ],
       ...(notices.length > 0
         ? { notices: [...new Set([...notices, ...(result.notices ?? [])])] }
         : {}),

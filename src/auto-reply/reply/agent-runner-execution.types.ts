@@ -142,7 +142,6 @@ export type AgentTurnParams = ReplyAgentTurnContext & {
   activeSessionStore?: Record<string, SessionEntry>;
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
-  isRestartRecoveryArmed?: () => Promise<boolean>;
 };
 
 export type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;

@@ -1,17 +1,21 @@
 import { readFile } from "node:fs/promises";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
+import { startControlUiBenchGatewayServer } from "../../../scripts/lib/control-ui-bench-gateway-server.ts";
 import {
   persistColdLoadWarmState,
   restoreColdLoadWarmState,
 } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
+import { warmReloadProbe } from "../../../scripts/lib/control-ui-warm-reload-probe.ts";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
-import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "../pages/chat/session-snapshot-projection.ts";
+import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "../pages/chat/session-snapshot-record.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
+  createControlUiMockBootstrapConfig,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -26,7 +30,17 @@ import { layoutBox } from "./chat-presentation.test-support.ts";
 import { createLocalNetworkControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Team-scale cold-load fixture" });
+let http: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
+const suite = createControlUiE2eSuite({
+  name: "Team-scale cold-load fixture",
+  startServer: async () => {
+    const root = inject("controlUiE2eBuildRoot");
+    if (!root) {
+      throw new Error("Team reload proof requires the shared production UI build");
+    }
+    return (http = await startControlUiBenchGatewayServer(root));
+  },
+});
 
 function observeStoreWrite(
   page: Page,
@@ -452,5 +466,155 @@ suite.define(() => {
       expect(await composer.inputValue()).toBe("");
       await page.locator(".chat-pane__header").first().waitFor();
     });
+  });
+  it.each(["chat", "dashboard"] as const)("%s cached rows stay complete", async (route) => {
+    const fixture = createControlUiTeamScaleFixture({
+      baseUrl: suite.server.baseUrl,
+      ...sandbox(""),
+      transcriptMessages: 4,
+      lateRowFacts: true,
+    });
+    sandboxAssets = fixture.assets;
+    const facts = fixture.lateRowFacts!;
+    const scenario = { ...fixture.scenario, deferredMethods: ["connect"] };
+    http.setFixtureReader((pathname, url) => {
+      if (pathname === "/control-ui-config.json") {
+        return {
+          body: JSON.stringify(createControlUiMockBootstrapConfig(scenario)),
+          contentType: "application/json",
+        };
+      }
+      if (pathname === "/__openclaw__/assistant-media") {
+        if (url.searchParams.get("source") !== facts.cacheableImageSource) {
+          return undefined;
+        }
+        if (url.searchParams.get("meta") === "1") {
+          return { body: JSON.stringify(facts.metadata), contentType: "application/json" };
+        }
+        if (url.searchParams.get("mediaTicket") !== facts.metadata.mediaTicket) {
+          return { body: "Ticket required", contentType: "text/plain", status: 403 };
+        }
+      }
+      return fixture.assets.get(pathname);
+    });
+    await suite.withPage(
+      { ...createLocalNetworkControlUiContextOptions(), viewport: { width: 1440, height: 1800 } },
+      async ({ page }) => {
+        const sessions = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+        const gateway = await installMockGateway(page, scenario, {
+          afterInitScript: `;globalThis.__name = (fn) => fn; (${warmReloadProbe.toString()})({rowFacts:true,lateRowFacts:true});`,
+          requestHandlers: {
+            "sessions.list": queryHandler(
+              "sessions.list",
+              (params) => sessions.list(params).result,
+            ),
+            "cron.list": queryHandler("cron.list", (params) => fixture.listCronJobs(params)),
+          },
+        });
+        // Native HTTP, including ticketed media, must retain Chromium's real cache.
+        await page.unroute("**/control-ui-config.json");
+        const media = ["/api/artifacts/download/", "/__openclaw__/assistant-media"].map((path) =>
+          page.waitForResponse(
+            (response) =>
+              response.request().method() === "GET" &&
+              response.status() === 200 &&
+              response.url().includes(path) &&
+              response.headers()["content-type"]?.startsWith("image/") === true,
+          ),
+        );
+        await page.goto(
+          controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, route),
+        );
+        await gateway.waitForRequest("connect");
+        await gateway.resolveDeferred("connect");
+        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+        const complete = async () => {
+          await thread
+            .locator(".markdown-session-link--titled > .session-label")
+            .filter({ hasText: facts.sessionTitle })
+            .waitFor();
+          await thread.locator('.markdown-github-item[data-link-reader-tone="positive"]').waitFor();
+          await thread.locator('.chat-notice[data-chat-row-key^="archive:"]').waitFor();
+          await page.waitForFunction(() => {
+            const pane = document.querySelector(".chat-pane-cache__pane--active");
+            const threadElement = pane?.querySelector(".chat-thread");
+            const cache: ChatMessageCache | undefined = pane
+              ? Reflect.get(pane, "chatMessagesBySession")
+              : undefined;
+            const thumbnails = [...(cache?.values() ?? [])]
+              .flatMap(({ snapshot }) =>
+                Object.values(snapshot.rowDisplay ?? {}).flatMap((row) =>
+                  Object.values(row.images ?? {}),
+                ),
+              )
+              .flatMap((image) => (image.thumbnail instanceof Blob ? [image.thumbnail.size] : []));
+            const images = [
+              ...(threadElement?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
+            ];
+            const avatars = [
+              ...(threadElement?.querySelectorAll<HTMLImageElement>(
+                "img.chat-avatar.assistant, .chat-avatar.assistant img, .identity-avatar--agent img",
+              ) ?? []),
+            ];
+            return (
+              thumbnails.length === 2 &&
+              thumbnails.every((bytes) => bytes >= 32 * 1024 && bytes <= 96 * 1024) &&
+              images.length === 2 &&
+              images.every(
+                (image) =>
+                  image.complete && image.naturalWidth === 480 && image.naturalHeight === 240,
+              ) &&
+              avatars.some(
+                (image) => image.checkVisibility() && image.complete && image.naturalWidth > 0,
+              )
+            );
+          });
+          expect(await thread.locator(".chat-image-skeleton").count()).toBe(0);
+        };
+        await complete();
+        for (const [index, response] of (await Promise.all(media)).entries()) {
+          expect(response.headers()["cache-control"]).toBe(
+            index === 0 ? "private, no-store" : "private, no-cache",
+          );
+        }
+        await page.evaluate(async () => {
+          await Reflect.get(
+            document.querySelector(".chat-pane-cache__pane--active")!,
+            "sessionSnapshotStore",
+          ).flush();
+        });
+        const requests = http.requests.length;
+        await page.reload();
+        await gateway.waitForRequest("connect");
+        await complete();
+        expect(
+          await thread
+            .locator(".chat-image-frame img")
+            .evaluateAll((images) =>
+              images.map((image) => image.getAttribute("src")?.startsWith("blob:")),
+            ),
+        ).toEqual([true, true]);
+        expect(
+          http.requests
+            .slice(requests)
+            .filter(({ url }) => /assistant-media|artifacts\/download/.test(url)),
+        ).toEqual([]);
+        await gateway.resolveDeferred("connect");
+        await page.waitForFunction(() =>
+          Reflect.get(document.querySelector(".chat-pane-cache__pane--active")!, "transcriptReady"),
+        );
+        await page.screenshot({ path: `${suite.artifactDir}/complete-cached-rows.png` });
+        const proof = await page.evaluate(
+          () => Reflect.get(window, "__warmReload").read().lateRowFacts,
+        );
+        expect(proof).toMatchObject({ measuredPaint: true, visualChanges: 0 });
+        // ResizeObserver can leave a 1/64 px rounding residual after cached row hydration.
+        expect(Math.abs(proof.heightDelta ?? Infinity)).toBeLessThanOrEqual(0.5);
+        expect(proof.maximumHeightChange).toBeLessThanOrEqual(0.5);
+        for (const kind of ["links", "images", "notices", "avatars"]) {
+          expect(proof.firstFrame[kind].length).toBeGreaterThan(0);
+        }
+      },
+    );
   });
 });

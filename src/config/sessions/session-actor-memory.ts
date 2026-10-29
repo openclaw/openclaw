@@ -27,7 +27,6 @@ import type {
 } from "./session-actor-memory-owner-contract.js";
 import { createSessionActorMemoryPending } from "./session-actor-memory-pending.js";
 import { publishSessionActorMemoryChanges } from "./session-actor-memory-publication.js";
-import { validateSessionActorMemoryRecoveryInput } from "./session-actor-memory-recovery.js";
 import { registerMemorySessionActorHandle } from "./session-actor-memory-registry.js";
 import { validateSessionActorMemorySources } from "./session-actor-memory-sources.js";
 import {
@@ -224,8 +223,6 @@ export function createMemorySessionActorOwner(
                     },
                     ...transcript,
                     validateSources,
-                    validateRecoveryInput: (claim) =>
-                      validateSessionActorMemoryRecoveryInput(working, claim),
                     mutatePendingInput: (value) => pending.mutate(value),
                     admit,
                   });

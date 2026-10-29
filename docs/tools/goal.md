@@ -13,7 +13,7 @@ title: "Goal"
 
 A **goal** is one durable objective attached to the current OpenClaw session.
 It gives the agent and the operator a shared target for long-running work.
-In built-in chat runs and supported Codex cloud-worker sessions, OpenClaw continues
+In built-in chat runs and supported local or cloud-worker Codex sessions, OpenClaw continues
 pursuing an active goal after a normal turn finishes, even when the model ends with a final reply instead of calling
 another tool. A goal is not a reminder, cron job, or standing order.
 
@@ -125,8 +125,6 @@ In textual CLI/TUI commands, starting a second goal still fails with
   objective and records the error as a status note; sending an ordinary message
   does not automatically resume the goal. Errors that recover through a retry
   do not pause it.
-  A definitive restart-recovery failure also pauses an active goal and records
-  its reason, rather than leaving stopped work labeled as pursuing the goal.
 - `blocked`: the agent or operator reported a real blocker. `/goal resume`
   makes it active again when new information or state is available.
 - `budget_limited`: the configured token budget was reached. `/goal resume`
@@ -223,15 +221,16 @@ The goal and session are checked again at admission, so a stale queued nudge
 cannot pursue a cleared, replaced, completed, blocked, paused, or limited goal.
 
 **Stop** cancels the current work and pending follow-ups; it does not mark an
-unfinished goal complete. Pause prevents further goal turns. Terminal errors
-and timeouts pause the goal as described above. Resuming a paused or limited
+unfinished goal complete. Once the stopped work has fully settled, **Resume**
+can pursue the same goal again without clearing its history. Pause prevents further
+goal turns. Terminal errors and timeouts pause the goal as described above. Resuming a paused or limited
 goal remains an explicit operator action, not something the continuation does.
 
 Each settled automatic Goal turn increments `continuationTurns` once, including
 the turn that completes the Goal. Human Start and Resume turns do not increment it.
 
-Automatic nudges apply to built-in chat/auto-reply execution and supported Codex
-cloud-worker sessions, not other external runtimes, heartbeat turns, or independent
+Automatic nudges apply to built-in chat/auto-reply execution and supported local
+and cloud-worker Codex sessions, not other external runtimes, heartbeat turns, or independent
 scheduled work. They
 use the existing queue and run lifecycle rather than a periodic background
 scanner. A saved active goal alone does not start a new process or create a

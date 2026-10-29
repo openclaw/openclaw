@@ -2,8 +2,12 @@
  * Offline native-update crossing on synthetic state; never point this at operator state.
  * node --import ./scripts/tsx.mjs scripts/perf/schema-crossing-measure.ts seed .local/crossing-fixture [agents=16] [archiveMiBPerAgent=128] [sessionsPerAgent=625]
  * Copy that fixture before each run, then:
- * node --import ./scripts/tsx.mjs scripts/perf/schema-crossing-measure.ts run .local/crossing-base [allocation|timing]
+ * node --import ./scripts/tsx.mjs scripts/perf/schema-crossing-measure.ts run .local/crossing-base [allocation|timing|memory]
+ * For post-cleanup memory diagnostics, add --expose-gc to Node and select memory mode.
+ * Memory mode disables allocation sampling; forced GC runs outside the measured crossing.
  * Compare summary.json and stderr startup-trace phase timings on base/candidate.
+ * Summaries include native migrate/cleanup time and nested phase spans; do not add
+ * parent and child durations when accounting for the whole crossing.
  * Seed uses the frozen schema-35 fixture and current agent schemas. Each archive is
  * synthetic JSONL; current session rows have one synthetic transcript event each.
  */
@@ -15,6 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
+import { getHeapSpaceStatistics } from "node:v8";
 
 const [mode, directory, agentArg = "16", archiveArg = "128", sessionsArg = "625"] =
   process.argv.slice(2);
@@ -169,6 +174,8 @@ if (mode === "seed") {
   fs.writeFileSync(path.join(root, "fixture.json"), JSON.stringify(fixture, null, 2));
   console.log(JSON.stringify(fixture));
 } else {
+  const forceGc = agentArg === "memory" ? globalThis.gc : undefined;
+  assert.ok(agentArg !== "memory" || forceGc, "Memory mode requires node --expose-gc");
   // A copied fixture needs its own pristine binding; it contains no operator credentials.
   const { bindFreshClientCredentialStore } =
     await import("../../src/infra/client-credential-migration.js");
@@ -185,9 +192,15 @@ if (mode === "seed") {
     await import("../../src/cli/update-cli/update-command-migrate.js");
   const { withCliProcessScope, withCliCommandCleanup } =
     await import("../../src/cli/runtime-cleanup-scope.js");
-  const { closeCliResources } = await import("../../src/cli/runtime-cleanup.js");
+  const { closeCliResources, getPendingCliDisposers, waitForPendingCliDisposers } =
+    await import("../../src/cli/runtime-cleanup.js");
+  const sampleMemory = () => ({
+    memory: process.memoryUsage(),
+    heapSpaces: getHeapSpaceStatistics(),
+    pendingDisposers: getPendingCliDisposers(),
+  });
   const contentBefore = readCanonicalContent();
-  const sampling = agentArg !== "timing";
+  const sampling = agentArg !== "timing" && !forceGc;
   const inspector = new Session();
   if (sampling) {
     inspector.connect();
@@ -209,18 +222,25 @@ if (mode === "seed") {
   const before = process.cpuUsage();
   const threadBefore = process.threadCpuUsage();
   const loadBefore = os.loadavg();
+  let migrationMs = 0;
+  let cleanupMs = 0;
+  const { consumeGatewayBootstrapSteps } = await import("../../src/cli/startup-trace.js");
   const started = performance.now();
   await withCliProcessScope(() =>
     withCliCommandCleanup(false, async (cleanup) => {
       const pluginResources = cleanup?.pluginResources;
       assert.ok(pluginResources, "Benchmark requires executable CLI cleanup");
+      const migrationStarted = performance.now();
       try {
         await pluginResources.run(() =>
           updateMigrateCommand(path.join(root, "recovery", "native")),
         );
       } finally {
+        migrationMs = performance.now() - migrationStarted;
+        const cleanupStarted = performance.now();
         await closeCliResources(cleanup);
         await pluginResources.release();
+        cleanupMs = performance.now() - cleanupStarted;
       }
     }),
   );
@@ -229,6 +249,7 @@ if (mode === "seed") {
   const mainThreadCpu = process.threadCpuUsage(threadBefore);
   const memory = process.memoryUsage();
   const maxRssKiB = process.resourceUsage().maxRSS;
+  const immediateMemory = forceGc ? sampleMemory() : undefined;
   let allocatedBytes: number | undefined;
   if (sampling) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -239,20 +260,36 @@ if (mode === "seed") {
     setImmediate(resolve);
   });
   observer.disconnect();
+  let memoryDiagnostics:
+    | Record<"immediate" | "settled" | "postGc", ReturnType<typeof sampleMemory>>
+    | undefined;
+  if (forceGc && immediateMemory) {
+    await waitForPendingCliDisposers();
+    const settled = sampleMemory();
+    forceGc();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    memoryDiagnostics = { immediate: immediateMemory, settled, postGc: sampleMemory() };
+  }
   assert.deepEqual(
     readCanonicalContent(),
     contentBefore,
     "Migration changed retained transcript content",
   );
   const summary = {
-    mode: sampling ? "allocation" : "timing",
+    mode: forceGc ? "memory" : sampling ? "allocation" : "timing",
     elapsedMs,
+    migrationMs,
+    cleanupMs,
+    phases: consumeGatewayBootstrapSteps(),
     cpu,
     mainThreadCpu,
     allocatedBytes,
     gcMs,
     gcCount,
     memory,
+    memoryDiagnostics,
     maxRssKiB,
     loadBefore,
     loadAfter: os.loadavg(),

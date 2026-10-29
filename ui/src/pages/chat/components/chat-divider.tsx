@@ -243,12 +243,9 @@ function OrdinaryNotice(props: ChatNoticeProps) {
                 <button
                   class="btn btn--sm"
                   type="button"
-                  aria-label={t(
-                    retired().status === "interrupted"
-                      ? "chat.pendingInputs.dismissInterrupted"
-                      : "chat.pendingInputs.dismissCancelled",
-                    { preview: retired().preview },
-                  )}
+                  aria-label={t("chat.pendingInputs.dismissCancelled", {
+                    preview: retired().preview,
+                  })}
                   onClick={() => dismiss()(retired().id)}
                 >
                   {t("chat.pendingInputs.dismiss")}

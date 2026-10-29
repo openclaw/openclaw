@@ -409,7 +409,7 @@ describe("Team activation handoff ordering and prepared recovery", () => {
     const result = runOwner(f, ["--interrupt-after-drain"]);
     assert.equal(result.status, 0, result.stderr + events(f));
     const log = events(f);
-    assert.ok(log.indexOf("handoff.armed") >= 0 && log.indexOf("handoff.armed") < log.indexOf("service.system.stop"), log);
+    assert.ok(log.indexOf("handoff.committed") >= 0 && log.indexOf("handoff.committed") < log.indexOf("service.system.stop"), log);
     assert.ok(log.indexOf("service.system.stop") < log.indexOf("pointer.current.inactive"), log);
     assert.ok(log.indexOf("pointer.current.inactive") < log.indexOf("service.system.start"), log);
     assert.doesNotMatch(log, /pointer\.current\.active|service\.system\.restart/);

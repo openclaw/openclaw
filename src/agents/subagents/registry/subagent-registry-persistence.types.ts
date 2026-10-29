@@ -1,4 +1,3 @@
-import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { createDeferredCore } from "../../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
@@ -42,12 +41,6 @@ export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> =
   context?: OpenClawStateWorkerContext;
   assertCurrent?: () => void;
   pendingKillClaim?: SubagentRunRecord;
-  gatewayRecovery?: {
-    expected: SubagentRunRecord;
-    previousResolver: GatewayContextResolver;
-    resolver: GatewayContextResolver;
-    gateway: NonNullable<ReturnType<GatewayContextResolver>>;
-  };
   onPublished?: (
     postimages: ReadonlyMap<string, SubagentRunRecord | null>,
     value: P["value"],

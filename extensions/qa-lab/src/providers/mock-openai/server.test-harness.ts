@@ -12,7 +12,6 @@ export const guestCodeModeExecTool = {
   parameters: Type.Object({
     title: Type.String({ minLength: 1, maxLength: 120, pattern: "\\S" }),
     code: Type.String(),
-    restartSafe: Type.Optional(Type.Boolean()),
   }),
 };
 

@@ -1,9 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { getWorkerMessageMetrics } from "../../infra/worker-message-metrics.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import {
   createPlacementSessionRetirement,
@@ -43,7 +43,7 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
       }
     }
   });
-  const listAsync = vi.fn(async () => [...placements.values()]);
+  const listSessionIdentitiesAsync = vi.fn(async () => [...placements.values()]);
   const retireSessionPlacementAsync = vi.fn(async (input: WorkerSessionPlacementRetirement) => {
     const current = placements.get(input.sessionId);
     if (
@@ -61,7 +61,7 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
       getAsync: async (sessionId) => placements.get(sessionId),
       getManyAsync: async (sessionIds) =>
         new Map([...placements].filter(([sessionId]) => sessionIds.includes(sessionId))),
-      listAsync,
+      listSessionIdentitiesAsync,
       retireSessionPlacementAsync,
     },
     environments: {
@@ -85,7 +85,7 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
     createSessionEvidenceResolver,
     forceDestroyEnvironment,
     placements,
-    listAsync,
+    listSessionIdentitiesAsync,
     retireSessionPlacementAsync,
     resolveSessionEvidence,
     retired,
@@ -93,9 +93,10 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
   };
 }
 
-it("reuses evidence until invalidation, including receipts during discovery", async () => {
+it("checks changed identities and invalidates evidence, including changes during discovery", async () => {
   const placement = localPlacement("session-current");
-  const harness = createHarness([placement]);
+  const second = localPlacement("session-other");
+  const harness = createHarness([placement, second]);
   const uninstall = harness.retirement.installMaintenancePreservation({
     prepareMaintenancePlacements: async () => ({
       placements: [],
@@ -107,19 +108,31 @@ it("reuses evidence until invalidation, including receipts during discovery", as
     harness.resolveSessionEvidence.mockResolvedValue("current");
     await harness.retirement.reconcile();
     await harness.retirement.reconcile();
-    expect(harness.listAsync).toHaveBeenCalledTimes(1);
+    expect(harness.createSessionEvidenceResolver).toHaveBeenCalledExactlyOnceWith(
+      [placement, second],
+      undefined,
+    );
+    harness.resolveSessionEvidence.mockResolvedValue("absent");
+    harness.retirement.markPending(placement.sessionId);
+    await harness.retirement.reconcile();
+    expect(harness.createSessionEvidenceResolver).toHaveBeenLastCalledWith([placement], undefined);
+    expect(harness.placements.has(placement.sessionId)).toBe(false);
+    expect(harness.placements.has(second.sessionId)).toBe(true);
+    expect(harness.listSessionIdentitiesAsync).toHaveBeenCalledOnce();
 
+    harness.resolveSessionEvidence.mockResolvedValue("current");
     sessionChanges.emit({ all: true, scope: "config" });
-    harness.listAsync.mockImplementationOnce(async () => {
+    harness.listSessionIdentitiesAsync.mockImplementationOnce(async () => {
       sessionChanges.emit({ all: true, scope: "stores" });
-      return [placement];
+      return [second];
     });
     await harness.retirement.reconcile();
     harness.resolveSessionEvidence.mockResolvedValue("absent");
     await harness.retirement.reconcile();
-    expect(harness.placements.has(placement.sessionId)).toBe(false);
+    expect(harness.placements.size).toBe(0);
     expect(harness.retired).toEqual([
       { sessionId: placement.sessionId, expectedState: "local", expectedGeneration: 1 },
+      { sessionId: second.sessionId, expectedState: "local", expectedGeneration: 1 },
     ]);
     expect(harness.forceDestroyEnvironment).not.toHaveBeenCalled();
   } finally {
@@ -138,36 +151,61 @@ it("fences the environment before retiring its failed placement", async () => {
   );
 });
 
-it("retires only ownerless requested placements for absent sessions", async () => {
-  const dirs = createTempDirTracker();
-  const root = dirs.make("openclaw-placement-retirement-");
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-  const requested = await placements.startDispatch(sessionIdentity("session-requested"));
-  const ownedIdentity = sessionIdentity("session-owned-requested");
-  const ownedClaim = await placements.claimTurn({
-    ...ownedIdentity,
-    owner: { kind: "local" },
-    claimId: "requested-owner-claim",
-    runId: "requested-owner-run",
-  });
-  const ownedRequested = await placements.startDispatch(ownedIdentity);
-  const retireSessionPlacement = vi.spyOn(placements, "retireSessionPlacementAsync");
-  const forceDestroyEnvironment = vi.fn();
-  const warn = vi.fn();
-  const retirement = createPlacementSessionRetirement({
-    placements,
-    environments: { get: () => undefined },
-    forceDestroyEnvironment,
-    createSessionEvidenceResolver: async () => async () => "absent",
-    reportChanges: (operation) => operation(),
-    warn,
-  });
-
-  try {
+it("bounds discovery replies, preserves local identities, and retires only ownerless placements", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+    const requested = await placements.startDispatch(sessionIdentity("requested"));
+    await placements.startDispatch(sessionIdentity("failed"));
+    await placements.fail({ sessionId: "failed", recoveryError: "failure ".repeat(128) });
+    const ownedIdentity = sessionIdentity("owned");
+    const claimInput = {
+      ...ownedIdentity,
+      owner: { kind: "local" as const },
+      claimId: "claim",
+      runId: "run",
+    };
+    const ownedClaim = await placements.claimTurn(claimInput);
+    let discovered: readonly ReturnType<typeof sessionIdentity>[] = [];
+    const resolveEvidence = vi.fn<PlacementSessionEvidenceResolver>(async () => "current");
+    const forceDestroyEnvironment = vi.fn();
+    const warn = vi.fn();
+    const retirement = createPlacementSessionRetirement({
+      placements,
+      environments: { get: () => undefined },
+      forceDestroyEnvironment,
+      createSessionEvidenceResolver: async (identities) => {
+        discovered = identities;
+        return resolveEvidence;
+      },
+      reportChanges: (operation) => operation(),
+      warn,
+    });
+    const replyBytes = () =>
+      getWorkerMessageMetrics().find(
+        ({ kind, direction }) => kind === "sqlite_reply" && direction === "from_worker",
+      )?.payloadBytesByRequestClass?.workerPlacements ?? 0;
+    const before = replyBytes();
     await retirement.reconcile();
-
-    expect(retireSessionPlacement).toHaveBeenCalledExactlyOnceWith({
+    const bytes = replyBytes() - before;
+    expect(bytes).toBeGreaterThan(0);
+    expect(bytes).toBeLessThan(1_024);
+    expect(discovered).toEqual([
+      sessionIdentity("failed"),
+      sessionIdentity("requested"),
+      ownedIdentity,
+    ]);
+    discovered[2]!.sessionKey = "changed-by-caller";
+    expect(await placements.getAsync("owned")).toMatchObject(ownedIdentity);
+    await placements.releaseTurn(ownedClaim);
+    expect(await placements.listSessionIdentitiesAsync()).toContainEqual(ownedIdentity);
+    await placements.claimTurn(claimInput);
+    const ownedRequested = await placements.startDispatch(ownedIdentity);
+    const retire = vi.spyOn(placements, "retireSessionPlacementAsync");
+    resolveEvidence.mockResolvedValue("absent");
+    retirement.markPending(requested.sessionId);
+    retirement.markPending(ownedRequested.sessionId);
+    await retirement.reconcile();
+    expect(retire).toHaveBeenCalledExactlyOnceWith({
       sessionId: requested.sessionId,
       expectedState: "requested",
       expectedGeneration: requested.generation,
@@ -176,47 +214,13 @@ it("retires only ownerless requested placements for absent sessions", async () =
     expect(placements.get(ownedRequested.sessionId)).toMatchObject({
       state: "requested",
       generation: ownedRequested.generation,
-      turnClaim: {
-        owner: "local",
-        claimId: ownedClaim.claimId,
-        runId: ownedClaim.runId,
-      },
+      turnClaim: { owner: "local", claimId: ownedClaim.claimId, runId: ownedClaim.runId },
     });
     expect(warn).toHaveBeenCalledWith(
       `Retired ownerless worker placement ${requested.sessionId} because its authoritative session is absent (requested@${requested.generation})`,
     );
     expect(forceDestroyEnvironment).not.toHaveBeenCalled();
-  } finally {
-    await closeStateDatabaseForTest();
-    dirs.cleanup();
-  }
-});
-
-it("checks only changed placement identities", async () => {
-  const first = localPlacement("session-one");
-  const second = localPlacement("session-two");
-  const harness = createHarness([first, second]);
-  harness.resolveSessionEvidence.mockResolvedValue("current");
-
-  await harness.retirement.reconcile();
-  await harness.retirement.reconcile();
-  await harness.retirement.reconcile();
-
-  expect(harness.listAsync).toHaveBeenCalledOnce();
-  expect(harness.createSessionEvidenceResolver).toHaveBeenCalledExactlyOnceWith(
-    [first, second],
-    undefined,
-  );
-
-  harness.resolveSessionEvidence.mockResolvedValue("absent");
-  harness.retirement.markPending(first.sessionId);
-  await harness.retirement.reconcile();
-
-  expect(harness.createSessionEvidenceResolver).toHaveBeenLastCalledWith([first], undefined);
-  expect(harness.placements.has(first.sessionId)).toBe(false);
-  expect(harness.placements.has(second.sessionId)).toBe(true);
-  expect(harness.listAsync).toHaveBeenCalledOnce();
-});
+  }));
 
 it.each(["unknown", "read", "write", "teardown"] as const)(
   "retries %s failures without losing pending cleanup",
@@ -227,7 +231,7 @@ it.each(["unknown", "read", "write", "teardown"] as const)(
     if (failure === "unknown") {
       harness.resolveSessionEvidence.mockResolvedValueOnce("unknown");
     } else if (failure === "read") {
-      harness.listAsync.mockRejectedValueOnce(new Error("reader unavailable"));
+      harness.listSessionIdentitiesAsync.mockRejectedValueOnce(new Error("reader unavailable"));
     } else if (failure === "write") {
       harness.retireSessionPlacementAsync.mockRejectedValueOnce(new Error("writer unavailable"));
     } else {

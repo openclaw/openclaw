@@ -379,7 +379,6 @@ const hoisted = vi.hoisted(() => ({
   activeEmbeddedRunCount: { value: 0 },
   activeEmbeddedRunSessionIds: [] as string[],
   activeEmbeddedRunSessionKeys: [] as string[],
-  markRestartAbortedMainSessions: vi.fn(async (_params: unknown) => ({ marked: 1, skipped: 0 })),
   runtimeConfig: { value: { session: { store: "/tmp/active-sessions.json" } } as OpenClawConfig },
   assertOpenClawDatabasesReady: vi.fn(() => {}),
   applyLoggingConfig: vi.fn(),
@@ -433,10 +432,6 @@ vi.mock("../sessions/session-controller.queries.js", async (importOriginal) => (
   getActiveSessionRunCount: () => hoisted.activeEmbeddedRunCount.value,
   listActiveSessionRunIds: () => hoisted.activeEmbeddedRunSessionIds,
   listActiveSessionRunKeys: () => hoisted.activeEmbeddedRunSessionKeys,
-}));
-
-vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
-  markRestartAbortedMainSessions: hoisted.markRestartAbortedMainSessions,
 }));
 
 vi.mock("../state/openclaw-database-preflight.js", () => ({
@@ -857,7 +852,6 @@ afterEach(async () => {
   hoisted.activeAgentRunCount.value = 0;
   hoisted.activeEmbeddedRunCount.value = 0;
   hoisted.activeEmbeddedRunSessionIds.length = hoisted.activeEmbeddedRunSessionKeys.length = 0;
-  hoisted.markRestartAbortedMainSessions.mockClear();
   hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
   hoisted.assertOpenClawDatabasesReady.mockClear();
   hoisted.reloadEvents.length = 0;
@@ -2538,7 +2532,6 @@ describe("gateway restart deferral preflight", () => {
         waitMs: 300_000,
         reason: "config reload forced restart",
       });
-      expect(hoisted.markRestartAbortedMainSessions).not.toHaveBeenCalled();
       expect(logReload.warn.mock.calls).toEqual(
         expect.arrayContaining([
           [
@@ -3866,7 +3859,7 @@ describe("gateway Gmail hot reload handlers", () => {
     },
   );
 
-  it("supersedes a blocked emission preflight without marking sessions or signaling", async () => {
+  it("supersedes a blocked emission preflight without signaling", async () => {
     vi.useFakeTimers();
     const { clock, scheduler } = createConfigReloadTestClock();
     const harness = await createManagedRestartSequenceHarness({ scheduler });
@@ -3908,7 +3901,7 @@ describe("gateway Gmail hot reload handlers", () => {
       releaseEmissionPreflight();
       await emissionAdvance;
       await leaseClock.waitFor(Promise.resolve(clock.wake()));
-      expectCalls(0, harness.requestRecoveryRestart, hoisted.markRestartAbortedMainSessions);
+      expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
     } finally {
       releaseEmissionPreflight();
       hoisted.activeAgentRunCount.value = 0;

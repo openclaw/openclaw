@@ -134,8 +134,13 @@ An ambiguous older cache file may therefore remain preserved.
 If local workspace preparation reports that it expired during cleanup, retry the
 session. Both workspaces remain intact. Older missing baseline records repair
 automatically when either workspace still matches the saved baseline, or when an
-intact pending-checkpoint result reconstructs that exact baseline. Recovery keeps
-other live edits and pending receipts. If neither can be verified, the error names
+intact pending-checkpoint result reconstructs that exact baseline. Repair retains
+accepted path membership from surviving saved records. If needed, it also checks a
+canonical candidate containing paths observed by a complete sandbox scan, so
+accepted guest-created files need not be in the host Git index. These paths are
+only recovery candidates: their current content must reproduce the exact saved
+baseline before replacement metadata is accepted. Recovery keeps other live
+edits and pending receipts. If neither can be verified, the error names
 both preserved paths and a command to compare them. That command only inspects
 differences; it does not restore the missing baseline. Keep both directories and
 ask a Gateway administrator to recover the saved baseline inventory before retrying.

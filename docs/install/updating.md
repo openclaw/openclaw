@@ -66,6 +66,16 @@ keeps the Gateway's process-exit deadline active so a managed update can reach i
 existing stop-failure recovery instead of waiting indefinitely. These repairs must
 be present in the old Gateway being stopped, not only in the update candidate.
 
+On Linux, update workers verify their driver's ancestry through kernel procfs
+identities when the native process helper cannot load, including older-glibc
+hosts. The candidate worker must contain this fix. The inherited run ID alone
+never grants continuation: driver liveness, birth identity, and parent birth
+ordering remain required. If both native inspection and procfs are unavailable,
+Doctor records `ancestry-unverified`; restore readable `/proc/<pid>/stat` or a
+compatible process helper, wait for the recorded driver to exit, then run
+`openclaw update repair`. Doctor reports the native load failure and runtime
+glibc version when available.
+
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
 update failures retain the final consistency reason code and attempt count in
 `openclaw update status` and the prepared failure report. The candidate worker
@@ -118,6 +128,14 @@ the updater already owns the stopped-Gateway window. Required archive migrations
 and their integrity and recovery checks still run under maintenance custody.
 The candidate must contain this change; older installed updater work is unchanged.
 
+Native migration records the advisory checks selected by candidate Doctor in its
+existing recovery receipt. After the supervisor accepts the serving Gateway,
+`openclaw update finish` runs those selected `doctor --lint` checks and records
+findings in update history. If readiness, inspection, or history recording fails,
+the update stays accepted and the pending checks remain retryable with
+`openclaw update finish`; the result reports the next action. Migration admission,
+repairs, backup verification, and recovery fences still complete before startup.
+
 Stopped update and Doctor database snapshots tolerate concurrent read-only SQLite
 probes. The transient `-shm` WAL index is rebuilt privately, never copied or used
 to detect durable changes. Empty WAL files created by readers count as absent.
@@ -125,6 +143,12 @@ Changes to the main database, WAL data, or rollback journal still refuse the
 stopped backup and identify the changed file. This repair must
 be present in the runtime performing the snapshot, including the candidate worker
 when the installed updater delegates capture to it.
+
+For checkpointed databases under stopped-update custody, backup identifies the
+database engine from the retained backup image instead of acquiring a second
+whole-store image for classification. WAL and rollback-journal captures retain
+their pre-capture engine inspection. Backup digests, PostgreSQL exports, and
+source-change refusal still apply. The candidate backup worker must contain this change.
 
 Candidate Doctor also accepts an empty WAL index appearing or disappearing
 between an older updater's capture and migration admission, provided the database
@@ -574,6 +598,20 @@ instead of the managed-service commands above.
 Detects your install type (npm, pnpm, Bun, or git), checks the new version while
 the old Gateway serves, then activates and verifies the update.
 
+Use `openclaw update` for a managed Gateway so the updater coordinates the package
+and the service definition. To update the service's existing installation in place,
+run the CLI from the install root shown by `openclaw gateway status`. Writable Node
+services can instead move to the invoking CLI's updated installation, as described
+below; externally managed installations retain their deployment owner.
+
+A bare `npm install -g openclaw@<version>` uses the global prefix of the Node/npm
+selected by your shell. Switching Node versions can install a second OpenClaw
+without changing the service's entrypoint. `openclaw --version` then reports only
+the shell's CLI version. Check `openclaw status`, `openclaw doctor`, or
+`openclaw gateway status` for both install roots and versions, then run
+`openclaw update` or use the CLI from the service's install root. Changing only
+the Node executable in a service definition does not update its OpenClaw package.
+
 ```bash
 openclaw update
 ```
@@ -888,6 +926,13 @@ path installs and links outside the plugin system's owned locations are left
 unchanged. If filesystem permissions prevent repair, startup reports the
 affected plugin and keeps it unavailable until the links can be repaired with
 `openclaw doctor --fix`.
+
+System-package ownership inspection treats missing package-manager executables as
+inapplicable without warning. Unavailable backend results are reused across update
+phases of one update run and command search path; other query failures warn once
+per run. The next update always probes again, including in a long-lived Gateway.
+Successful inventories stay fresh before installation effects to protect files
+claimed by a system package manager. This behavior requires the updated updater.
 
 Directory permission checks remain in the **installed updater**. Older updaters cannot gain new
 admission behavior from the candidate they have not staged yet. If upgrading
@@ -1781,6 +1826,16 @@ warning with backup and retry instructions; repair-specific migration backups st
 Doctor restores a managed Gateway it stopped, including after SIGINT, SIGTERM,
 or SIGHUP interrupts repair. If restoration fails, it prints the failure and the
 command to start the Gateway after resolving it.
+
+On startup, the Gateway can confirm an unfinished plugin data/settings upgrade
+when every plugin migration phase reports no remaining work and its settings
+validate. It does not run offline repairs. A remaining migration stays pending
+with its phase named in the Gateway log. An explicit state-migration obligation
+also stays pending if the installed plugin no longer supplies its detector.
+For a systemd system unit, Doctor
+checks stop permission before draining the Gateway; an unprivileged run names
+the `sudo systemctl stop <unit>` command for the service owner. Run Doctor as the
+state-owning account after that stop, then have the service owner start the unit.
 
 On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
 after a systemd user-manager re-exec. The manager's `--deserialize` argument and

@@ -155,12 +155,12 @@ it("reuses packed row bytes across sibling changes without retaining another vie
       visibility: "shared" as const,
       sharingRole,
     });
-  const ownerRows = [row("a", "A", "owner"), row("b", "B", "owner"), row("c", "C", "owner")];
+  const ownerRows = [row("a", "A", "owner"), row("b", "B🦞", "owner"), row("c", "C", "owner")];
   const viewerRows = ownerRows.map((value) => row(value.key, value.label, "viewer"));
   const first = shareSidebarSessionRows(ownerRows);
   const viewer = shareSidebarSessionRows(viewerRows);
   expect(JSON.stringify(first.sessions)).toBe(
-    '[{"key":"a","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"A","sharedFacts":[0]},{"key":"b","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"B","sharedFacts":[0]},{"key":"c","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"C","sharedFacts":[0]}]',
+    '[{"key":"a","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"A","sharedFacts":[0]},{"key":"b","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"B🦞","sharedFacts":[0]},{"key":"c","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"C","sharedFacts":[0]}]',
   );
   expect(first.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "owner" }]);
   expect(viewer.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "viewer" }]);
@@ -174,10 +174,10 @@ it("reuses packed row bytes across sibling changes without retaining another vie
   ).toHaveLength(2);
   stringify.mockRestore();
   // A sibling joining a singleton fact changes the unchanged row's reference layout.
-  const regrouped = shareSidebarSessionRows([row("a", "B", "owner"), ...ownerRows.slice(1)]);
+  const regrouped = shareSidebarSessionRows([row("a", "B🦞", "owner"), ...ownerRows.slice(1)]);
   expect(regrouped.sessions[1]).not.toBe(first.sessions[1]);
   expect(regrouped.sharedFacts).toEqual([
-    { label: "B" },
+    { label: "B🦞" },
     { visibility: "shared", sharingRole: "owner" },
   ]);
   expect(regrouped.sessions[1]?.sharedFacts).toEqual([0, 1]);
@@ -197,6 +197,37 @@ it("reuses packed row bytes across sibling changes without retaining another vie
   ).toHaveLength(0);
   movedStringify.mockRestore();
   expect(wire(moved)).toBe(JSON.stringify({ type: "res", id: "list", ok: true, payload: moved }));
+  // Index-only page churn must not rescan the same viewer-specific UTF-8 row prefixes.
+  const pages = [
+    [row("d", "D🦞", "owner"), row("e", "D🦞", "owner"), ...ownerRows],
+    [
+      row("d", "D🦞", "owner"),
+      row("e", "D🦞", "owner"),
+      row("f", "É", "owner"),
+      row("g", "É", "owner"),
+      ...ownerRows,
+    ],
+    viewerRows,
+  ];
+  for (const page of pages) {
+    shareSidebarSessionRows([...page]);
+  }
+  using byteLength = vi.spyOn(Buffer, "byteLength");
+  for (let turn = 0; turn < 4; turn++) {
+    for (const page of pages) {
+      const packed = shareSidebarSessionRows([...page]);
+      expect(expandSessionRowFacts(packed.sessions, packed.sharedFacts)).toEqual(page);
+      expect(wire(packed)).toBe(
+        JSON.stringify({ type: "res", id: "list", ok: true, payload: packed }),
+      );
+    }
+  }
+  expect(
+    byteLength.mock.calls.filter(
+      ([value]) => typeof value === "string" && value.includes('"key":"b"'),
+    ),
+  ).toHaveLength(0);
+  byteLength.mockRestore();
   for (const payload of [first, viewer, changed, regrouped]) {
     const frame = { type: "res", id: "rows", ok: true, payload };
     expect(serializeGatewayFrame(frame).toString()).toBe(JSON.stringify(frame));

@@ -80,16 +80,7 @@ function fixture() {
     outcome: Extract<PendingInputMutation, { kind: "complete" }>["outcome"],
     runId = owner.runId,
   ) => pending.mutate({ ...owner, runId, kind: "complete", outcome }).outcome;
-  const interrupt = (ids: string[], protectedId?: string) =>
-    pending.interruptHistory(
-      { ...scope, ids },
-      {
-        isProtected: (candidate, currentSessionId) =>
-          currentSessionId === scope.sessionId && candidate.input_id === protectedId,
-        admit() {},
-      },
-    );
-  return { state, pending, grants, stageInput, stageMany, source, finish, complete, interrupt };
+  return { state, pending, grants, stageInput, stageMany, source, finish, complete };
 }
 
 describe("memory actor pending input custody", () => {
@@ -181,12 +172,17 @@ describe("memory actor pending input custody", () => {
     stageMany(3);
     const consumed = state.pendingInputs.get("key-2")!;
     state.pendingInputs.set("key-2", { ...consumed, consumed_event_id: "event-2" });
-    const page = pending.history({ ...scope, limit: 1 });
+    const page = pending.history({ ...scope, liveInputIds: ["input-1", "input-3"], limit: 1 });
     expect(page.rows.map((row) => row.input_id)).toEqual(["input-3"]);
     expect(page.total).toBe(2);
     expect(
       pending
-        .history({ ...scope, limit: 1, before: page.nextBefore })
+        .history({
+          ...scope,
+          liveInputIds: ["input-1", "input-3"],
+          limit: 1,
+          before: page.nextBefore,
+        })
         .rows.map((row) => row.input_id),
     ).toEqual(["input-1"]);
     expect(pending.history({ ...scope, id: "input-2" }).rows).toEqual([]);
@@ -199,20 +195,6 @@ describe("memory actor pending input custody", () => {
     );
     expect(() => pending.receipts({ ...scope, runIds: ["run-1"] })).toThrow(
       "ambiguous source run IDs",
-    );
-  });
-
-  it("interrupts only unconsumed inputs without live custody", () => {
-    const { pending, stageMany, interrupt } = fixture();
-    stageMany(2);
-    const receipt = interrupt(["input-1", "input-2"], "input-1");
-    expect(receipt).toEqual({ kind: "pending-input-history-interrupted", ids: ["input-2"] });
-    expect(interrupt(["input-2"])).toEqual(receipt);
-    expect(pending.history(scope).rows.map(({ input_id, state }) => ({ input_id, state }))).toEqual(
-      [
-        { input_id: "input-2", state: "interrupted" },
-        { input_id: "input-1", state: "queued" },
-      ],
     );
   });
 });

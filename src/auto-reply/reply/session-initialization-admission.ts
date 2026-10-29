@@ -58,7 +58,6 @@ export function assertReplySessionInitializationAllowed(
   sessionKey: string,
   entry: Parameters<typeof resolveSessionWorkStartBlock>[1],
   options: {
-    allowRestartTombstoneReplacement: boolean;
     providerReviewAcknowledgment: InitSessionStateParams["providerReviewAcknowledgment"];
   },
 ) {

@@ -8,10 +8,6 @@ import {
 } from "../../infra/gateway-shutdown-budget.js";
 import { readLaunchdStopTimeout } from "../../infra/launchd-stop-timeout.js";
 import { readSystemdStopTimeout } from "../../infra/systemd-stop-timeout.js";
-import type { GatewayRunSignalAction } from "./run-loop-request.js";
-
-// A stop must reach cancellation and durable cleanup before the 30s deployer window.
-const STOP_DRAIN_TIMEOUT_MS = 20_000;
 
 // Only an inconclusive probe may retain the startup budget; a confirmed absence
 // of a native deadline must not constrain an in-process restart.
@@ -94,64 +90,5 @@ export async function resolveGatewayShutdownBudget(
         `shutdown budget at ${phase}: drain=${Math.max(0, timeoutMs - reserveMs)}ms shutdown=${timeoutMs}ms reserve=${reserveMs}ms exitMargin=${exitMarginMs}ms; source=${retained ? `startup shutdown budget=${retained.timeoutMs}ms` : `${stop.source}=${stop.timeoutMs}ms`}`,
       );
     },
-  };
-}
-
-export function resolveGatewayShutdownDrainBudget(params: {
-  budget: { nativeStopBudget: boolean; timeoutMs: number; reserveMs: number };
-  action: GatewayRunSignalAction;
-  forceRestart: boolean;
-  interruptAfterDrain?: true;
-  restartWithoutSupervisor: boolean;
-  acceptedAtMs: number;
-  requestedRestartDrainTimeoutMs?: number;
-}) {
-  const { budget, action } = params;
-  const isRestart = action !== "stop";
-  const requested = params.interruptAfterDrain ? 0 : params.requestedRestartDrainTimeoutMs;
-  const elapsedMs = performance.now() - params.acceptedAtMs;
-  const remaining = requested === undefined ? undefined : Math.max(0, requested - elapsedMs);
-  const restartDrainTimeoutMs = budget.nativeStopBudget
-    ? Math.min(remaining ?? Infinity, Math.max(0, budget.timeoutMs - budget.reserveMs))
-    : remaining;
-  const restartDrainDeadlineAt =
-    isRestart && restartDrainTimeoutMs !== undefined
-      ? Date.now() + restartDrainTimeoutMs
-      : undefined;
-  const forcedRestartDeadlineAt =
-    params.forceRestart && restartDrainDeadlineAt !== undefined
-      ? restartDrainDeadlineAt + budget.reserveMs
-      : undefined;
-  const restartTimeoutMs = (drainTimeoutMs: number) => {
-    if (forcedRestartDeadlineAt !== undefined) {
-      return Math.max(0, forcedRestartDeadlineAt - Date.now());
-    }
-    // A containing service can bound an in-process restart without replacing it.
-    return budget.nativeStopBudget && params.restartWithoutSupervisor
-      ? budget.timeoutMs
-      : drainTimeoutMs + (budget.nativeStopBudget ? budget.reserveMs : GATEWAY_SHUTDOWN_TIMEOUT_MS);
-  };
-  return {
-    restartDrainDeadlineAt,
-    restartTimeoutMs: () =>
-      budget.nativeStopBudget || params.forceRestart
-        ? restartTimeoutMs(Math.max(0, (restartDrainDeadlineAt ?? Date.now()) - Date.now()))
-        : GATEWAY_SHUTDOWN_TIMEOUT_MS,
-    closeDrainTimeoutMs: () =>
-      restartDrainTimeoutMs === undefined
-        ? GATEWAY_SHUTDOWN_TIMEOUT_MS - budget.reserveMs
-        : Math.max(0, (restartDrainDeadlineAt ?? Date.now()) - Date.now()),
-    drainTimeoutMs: isRestart
-      ? restartDrainTimeoutMs
-      : Math.min(STOP_DRAIN_TIMEOUT_MS, Math.max(0, budget.timeoutMs - budget.reserveMs)),
-    // A supervisor SIGTERM owns the stop deadline. Its shorter drain request
-    // must not discard time still available for checkpointing and native close.
-    forceExitMs:
-      !isRestart ||
-      (action === "external-restart" && (budget.nativeStopBudget || params.interruptAfterDrain))
-        ? budget.timeoutMs
-        : restartDrainTimeoutMs === undefined
-          ? undefined
-          : restartTimeoutMs(restartDrainTimeoutMs),
   };
 }
