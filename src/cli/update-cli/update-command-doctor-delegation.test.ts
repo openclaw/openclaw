@@ -151,14 +151,14 @@ it("shows activation Doctor progress before child completion while JSON and ledg
             options.beforeInput?.(pid, argv);
           },
           onOutputChunk(chunk, stream) {
-            const result = options.onOutputChunk?.(chunk, stream);
+            const decision = options.onOutputChunk?.(chunk, stream);
             if (stream === "stderr") {
               observed += chunk.toString();
               if (observed.includes("Doctor: state schema\n")) {
                 ready.resolve();
               }
             }
-            return result;
+            return decision;
           },
         },
       );
