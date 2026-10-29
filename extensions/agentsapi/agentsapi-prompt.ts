@@ -150,11 +150,12 @@ export async function buildAgentsApiInstructions(
       : undefined,
     // Without Gateway control tools, omit the shared builder's CLI setup hint:
     // the hosted VM cannot configure the Gateway with a local OpenClaw CLI.
-    buildCredentialSafetyPrompt(
-      toolNames.has("openclaw") || toolNames.has("gateway")
-        ? { controlToolsAvailable: true }
-        : undefined,
-    ),
+    buildCredentialSafetyPrompt({
+      controlToolsAvailable:
+        toolNames.has("openclaw") || toolNames.has("gateway") ? true : undefined,
+      secretsToolName:
+        params.disableTools !== true && toolNames.has("secrets") ? "secrets" : undefined,
+    }),
     params.gitCoauthorPrompt,
     params.extraSystemPrompt,
   ]);

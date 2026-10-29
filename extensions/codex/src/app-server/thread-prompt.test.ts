@@ -56,6 +56,38 @@ function render(
 }
 
 describe("buildDeveloperInstructions deferred tool discovery", () => {
+  it.each([false, true])(
+    "routes credential entry to the admitted qualified tool (deferred: %s)",
+    (deferred) => {
+      const instructions = render(
+        {},
+        {
+          nativeCodeModeEnabled: true,
+          nativeCodeModeOnlyEnabled: true,
+          dynamicTools: [namespace([tool("secrets", {}, deferred)])],
+        },
+      );
+      expect(instructions).toContain("use `openclaw.secrets` for masked entry");
+      expect(instructions).toContain("Discover its schema first if deferred");
+      expect(instructions).toContain("check the supported consumer, list metadata");
+      expect(instructions).toContain("ALL_TOOLS");
+    },
+  );
+
+  it.each([
+    { disableTools: false, dynamicTools: [] },
+    { disableTools: true, dynamicTools: [namespace([tool("secrets", {}, true)])] },
+  ])("does not advertise unavailable credential entry: %j", ({ disableTools, dynamicTools }) => {
+    const instructions = render(
+      { disableTools },
+      {
+        dynamicTools,
+      },
+    );
+    expect(instructions).not.toContain("for masked entry");
+    expect(instructions).toContain("Use or store credentials the user supplies as requested");
+  });
+
   it.each([
     [false, false, false],
     [true, false, false],
