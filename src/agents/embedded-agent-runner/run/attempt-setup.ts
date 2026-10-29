@@ -34,10 +34,14 @@ import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
+import { hasPersistedMedia } from "../../../sessions/user-turn-media.js";
+import { readModelPromptProjection } from "../../../sessions/user-turn-transcript.message.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
+import { isSandboxProvisioningError } from "../../sandbox/provisioning-error.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
@@ -117,7 +121,44 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
   };
 
   phases.mark("attempt.setup.workspace");
-  const workspace = await resolveAttemptWorkspaceSandbox(params);
+  const workspace = await resolveAttemptWorkspaceSandbox(params).catch(async (error: unknown) => {
+    const recorder = params.userTurnTranscriptRecorder;
+    if (isSandboxProvisioningError(error) && recorder?.captureModelPromptProjection) {
+      const assertCurrent = resolveAdmittedRunActiveAssertion(
+        params.admittedRunContext,
+        params.abortSignal,
+      );
+      if (assertCurrent && !recorder.isBlocked()) {
+        try {
+          assertCurrent();
+          const message = await recorder.resolveMessage();
+          assertCurrent();
+          if (
+            message &&
+            hasPersistedMedia(message) &&
+            readModelPromptProjection(message) === undefined
+          ) {
+            // Provisioning is terminal before prompt hooks or provider dispatch. Retain
+            // this input's prepared attachment context while its original owner is live.
+            await recorder.persistFallback();
+            assertCurrent();
+            const persisted = recorder.getPersistedMessage?.();
+            if (persisted && readModelPromptProjection(persisted) === undefined) {
+              await recorder.captureModelPromptProjection(params.prompt, assertCurrent);
+            }
+          }
+        } catch (retentionError) {
+          // Keep the provisioning cause so model fallback cannot retry this setup error.
+          throw new AggregateError(
+            [error, retentionError],
+            "Sandbox setup failed and accepted attachment context could not be retained",
+            { cause: retentionError },
+          );
+        }
+      }
+    }
+    throw error;
+  });
   phases.mark("attempt.setup.finalize");
   const { effectiveWorkspace } = workspace;
 
