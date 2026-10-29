@@ -240,6 +240,9 @@ describe("mutable update execution", () => {
               ),
             });
             expect(execution?.preManagedServiceStop?.serviceMutationSkipMessage).toContain(
+              "Stop the Gateway through its owner",
+            );
+            expect(execution?.preManagedServiceStop?.serviceMutationSkipMessage).not.toContain(
               "Restart the Gateway you launched manually",
             );
           }

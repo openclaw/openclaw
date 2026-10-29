@@ -30,6 +30,9 @@ it.each([false, true])(
     assertDatabasePath(databasePath);
     const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    // The production deadline uses a monotonic clock; fake wall time alone cannot expire it.
+    let elapsedMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
     const admitted = createDeferredCore();
     const finish = createDeferredCore();
     let fence: UpdateRecoveryFence | undefined;
@@ -50,6 +53,7 @@ it.each([false, true])(
     try {
       await admitted.promise;
       expect(signal?.aborted).toBe(false);
+      elapsedMs = 1000;
       await vi.advanceTimersByTimeAsync(1000);
       expect(signal?.reason).toBeInstanceOf(UpdateActivationTimeoutError);
       expect(ended).toBe(false);

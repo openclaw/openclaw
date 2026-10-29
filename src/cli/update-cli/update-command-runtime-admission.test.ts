@@ -7,6 +7,7 @@ import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
 import * as recovery from "./update-command-node-runtime-resolution.js";
 import { inspectPackageEngineAdmission } from "./update-command-runtime-admission.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import * as servicePlan from "./update-command-service-plan.js";
 
@@ -20,6 +21,8 @@ let oldNode: string;
 let currentNode: string;
 let service: PreManagedServiceStop;
 beforeEach(() => {
+  // Model a Node updater even when the test runner itself is Bun.
+  stubNodeRuntime();
   vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(true);
   root = dirs.make("engine-admission-");
   oldNode = path.join(root, "old-node");

@@ -377,15 +377,17 @@ describe("update-cli", () => {
         prefix: tempDirs.make("preserved-runtime-"),
       });
       const serviceNode = fixture.serviceNode;
+      // Real PATH discovery must probe a real Node, not assume the host is Node 26.
+      const replacementRuntime = runtimeRecovery.getNodeRuntimeFixture();
       const replacementNode = path.join(tempDirs.make("replacement-runtime-"), "bin", "node");
       await fs.mkdir(path.dirname(replacementNode), { recursive: true });
       // Preserve the host runtime's dynamic-library paths when metadata probes execute it.
       if (process.platform === "win32") {
-        await fs.copyFile(process.execPath, replacementNode);
+        await fs.copyFile(replacementRuntime.execPath, replacementNode);
       } else {
         await fs.writeFile(
           replacementNode,
-          `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`,
+          `#!/bin/sh\nexec ${quoteCliArg(replacementRuntime.execPath)} "$@"\n`,
           {
             mode: 0o755,
           },
@@ -409,7 +411,7 @@ describe("update-cli", () => {
       });
       primeNpmChannelTag("latest", "2026.7.1");
       vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-        packageTargetStatus({ version: "2026.7.1", nodeEngine: ">=26.12.1" }),
+        packageTargetStatus({ version: "2026.7.1", nodeEngine: ">=24.22.1" }),
       );
       const actualGuard = await vi.importActual<typeof import("../infra/runtime-guard.js")>(
         "../infra/runtime-guard.js",
@@ -417,7 +419,7 @@ describe("update-cli", () => {
       nodeVersionSatisfiesEngine.mockImplementation(actualGuard.nodeVersionSatisfiesEngine);
       resolveNodeRuntimeInfo.mockImplementation(async (nodePath) => ({
         status: "supported",
-        version: nodePath === replacementNode ? "26.12.1" : "24.20.0",
+        version: nodePath === replacementNode ? replacementRuntime.versions.node : "24.20.0",
         sqliteVersion: "3.51.3",
         nodeSharedSqlite: false,
         sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
@@ -429,7 +431,7 @@ describe("update-cli", () => {
       if (existing) {
         expect(
           await recovery.resolveTargetNodeRuntime({
-            engine: ">=26.12.1",
+            engine: ">=24.22.1",
             recovery: { env: discoveryEnv },
           }),
         ).toBe(replacementNode);
@@ -443,7 +445,7 @@ describe("update-cli", () => {
         npmCommands: ["npm", fixture.serviceNpm, requireValue(fixture.serviceNpmReal, "npm")],
         nodeVersions: {
           [serviceNode]: "v24.20.0",
-          [replacementNode]: "v26.12.1",
+          [replacementNode]: "v" + replacementRuntime.versions.node,
         },
         onGatewayInstall: (argv) =>
           primeServiceCommand([requireValue(argv[0], "Node"), fixture.entrypoint, "gateway"]),
@@ -456,7 +458,7 @@ describe("update-cli", () => {
         expect(recoverNode).toHaveBeenCalledOnce();
         expect(recoverNode).toHaveBeenCalledWith(
           expect.objectContaining({
-            engine: ">=26.12.1",
+            engine: ">=24.22.1",
             recovery: { env: expect.any(Object) },
           }),
         );

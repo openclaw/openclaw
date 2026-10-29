@@ -101,7 +101,18 @@ it.each(["permission", "definition", "executable"] as const)(
     const actualAdmission = admission.inspectPackageEngineAdmission;
     let earlySucceeded = false;
     vi.spyOn(admission, "inspectPackageEngineAdmission").mockImplementation(async (params) => {
-      const retained = await actualAdmission(params);
+      // Model Node-only fallback during admission without changing the actual
+      // Bun executable/identity used by initialized-state workers afterward.
+      const versions = vi.spyOn(process, "versions", "get").mockReturnValue({
+        ...process.versions,
+        bun: undefined,
+      });
+      let retained: Awaited<ReturnType<typeof actualAdmission>>;
+      try {
+        retained = await actualAdmission(params);
+      } finally {
+        versions.mockRestore();
+      }
       expect(retained.runtime.ok).toBe(true);
       return {
         ...retained,
