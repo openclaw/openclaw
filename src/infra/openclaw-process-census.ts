@@ -184,6 +184,8 @@ function classifyProcessArtifactCustody(
 type HandoffReferences = {
   runId: string;
   artifactPaths: readonly string[];
+  /** Pre-activation disposal checks only the private stage, not other serving installations. */
+  artifactPathsOnly?: true;
   /** Installation and service roots that processes outside the handoff also run from. */
   sharedRoots?: readonly string[];
   /** Epoch ms after which the recorded family starts no work: last activity plus grace. */
@@ -429,7 +431,10 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
           serviceMarker: command && "argv" in command ? command.serviceMarker : undefined,
           additionalEntrypoints: workerEntrypoints,
         });
-        if (texts.some((value) => matches.test(normalize(value))) || identity.kind === "openclaw") {
+        if (
+          texts.some((value) => matches.test(normalize(value))) ||
+          (!handoff.artifactPathsOnly && identity.kind === "openclaw")
+        ) {
           // Shared roots and OpenClaw identity also match work started outside the handoff.
           const runReference = texts.some((value) => runReferences.test(normalize(value)));
           if (!outsideHandoffFamily(pid, runReference ? undefined : handoff.familyDeadline)) {

@@ -226,6 +226,8 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
     windowsUserSid,
     requester,
     sessionKey,
@@ -239,6 +241,8 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
     windowsUserSid,
   });
   if (Buffer.byteLength(retained) > JSON_BYTES) {
@@ -248,7 +252,15 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
   const hasAdmission = origin.admission !== undefined || origin.candidateAdmission !== undefined;
   // Admission diagnostics cannot shorten routing; both yield to recovery receipts.
   const identities = hasAdmission
-    ? JSON.stringify({ driver, previousDrivers, updateRecoveryCapture, windowsUserSid, ...routing })
+    ? JSON.stringify({
+        driver,
+        previousDrivers,
+        updateRecoveryCapture,
+        managedHandoff,
+        packageStage,
+        windowsUserSid,
+        ...routing,
+      })
     : retained;
   const diagnostics = hasAdmission ? admissionDiagnostics : { ...admissionDiagnostics, ...routing };
   // Merging removes the diagnostic braces and needs a comma only when identities exist.
@@ -316,8 +328,15 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
       : [];
   });
   // Process identities and recovery receipts are operational facts, not diagnostics.
-  const { driver, previousDrivers, updateRecoveryCapture, windowsUserSid, ...originDiagnostics } =
-    input.origin;
+  const {
+    driver,
+    previousDrivers,
+    updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
+    windowsUserSid,
+    ...originDiagnostics
+  } = input.origin;
   const record = UpdateRunRecordSchema.parse(
     mapJsonText(
       {
@@ -344,6 +363,8 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     driver,
     previousDrivers,
     updateRecoveryCapture,
+    managedHandoff,
+    packageStage,
     windowsUserSid,
   });
   // Shipped readers parse recovery strictly. Its named risk lives in a retained step fact.

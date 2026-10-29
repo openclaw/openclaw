@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
+import { createConnection } from "node:net";
 import { hostname } from "node:os";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
@@ -48,6 +49,7 @@ let prints: number;
 let atBootout: unknown;
 let mutations: string[];
 let revoked: boolean;
+let cleanupServingChild: (() => Promise<void>) | undefined;
 const label = "ai.openclaw.private-update-intent-test";
 const runId = "native-intent-test-run";
 const ownerError = "Cannot verify a live serving Gateway owner";
@@ -252,7 +254,6 @@ beforeEach(async () => {
 
 it("joins the serving child's database cleanup after its launchd wrapper exits", async () => {
   await closeChild();
-  const releasePath = path.join(root, "release-serving-child");
   const retiredPath = path.join(root, "serving-child-retired");
   const databasePath = path.join(root, "held-agent.sqlite");
   const servingSource = `
@@ -260,24 +261,25 @@ it("joins the serving child's database cleanup after its launchd wrapper exits",
     const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync(${JSON.stringify(databasePath)});
     db.exec("CREATE TABLE proof (value TEXT); BEGIN IMMEDIATE; INSERT INTO proof VALUES ('preserved')");
-    const watcher = fs.watch(${JSON.stringify(root)}, () => {
-      if (!fs.existsSync(${JSON.stringify(releasePath)})) return;
-      db.exec('COMMIT'); db.close(); watcher.close();
+    const server = require('node:net').createServer((socket) => {
+      db.exec('COMMIT'); db.close(); socket.end(); server.close();
       fs.writeFileSync(${JSON.stringify(retiredPath)}, 'closed');
     });
-    process.send('ready'); process.disconnect();
+    server.listen(0, '127.0.0.1', () => { process.send(server.address().port); process.disconnect(); });
   `;
-  const servingPid = Number(
+  const serving = (
     await startChild(`
     const { spawn } = require('node:child_process');
     const serving = spawn(process.execPath, ['-e', ${JSON.stringify(servingSource)}], {
       env: process.env, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     });
-    serving.once('message', () => process.stdout.write(String(serving.pid) + '\\n'));
+    serving.once('message', (port) => process.stdout.write(serving.pid + ' ' + port + '\\n'));
     serving.once('exit', () => process.exit(1));
     setInterval(() => {}, 60000);
-  `),
-  );
+  `)
+  ).split(" ");
+  const servingPid = Number(serving[0]);
+  const releasePort = Number(serving[1]);
   replaceServing(servingPid);
   const waiting = createDeferredCore();
   const output = new Writable({
@@ -288,31 +290,34 @@ it("joins the serving child's database cleanup after its launchd wrapper exits",
       done();
     },
   });
-  let stopping: Promise<void> | undefined;
-  try {
-    stopping = stop(true, false, output);
-    const outcome = await Promise.race([
-      waiting.promise.then(() => "waiting"),
-      stopping.then(() => "stopped-before-database-close"),
-    ]);
-    expect(outcome).toBe("waiting");
-    expect(isPidAlive(servingPid)).toBe(true);
-    expect(fs.existsSync(retiredPath)).toBe(false);
-    fs.writeFileSync(releasePath, "release");
-    await stopping;
-    expect(isPidAlive(servingPid)).toBe(false);
-    using persisted = new DatabaseSync(databasePath);
-    expect(persisted.prepare("SELECT value FROM proof").get()).toEqual({ value: "preserved" });
-  } finally {
-    fs.writeFileSync(releasePath, "release");
-    await stopping?.catch(() => {});
+  const stopping = stop(true, false, output);
+  cleanupServingChild = async () => {
     if (isPidAlive(servingPid)) {
       process.kill(servingPid, "SIGTERM");
     }
-  }
+    await stopping.catch(() => {});
+  };
+  const outcome = await Promise.race([
+    waiting.promise.then(() => "waiting"),
+    stopping.then(() => "stopped-before-database-close"),
+  ]);
+  expect(outcome).toBe("waiting");
+  expect(isPidAlive(servingPid)).toBe(true);
+  expect(fs.existsSync(retiredPath)).toBe(false);
+  const release = createConnection(releasePort, "127.0.0.1");
+  release.resume();
+  await once(release, "close");
+  await stopping;
+  expect(isPidAlive(servingPid)).toBe(false);
+  using persisted = new DatabaseSync(databasePath);
+  expect(persisted.prepare("SELECT value FROM proof").get()).toEqual({ value: "preserved" });
 });
 
 afterEach(async () => {
+  // A timed-out case must retire its child before joining the native shutdown wait.
+  const cleanup = cleanupServingChild;
+  cleanupServingChild = undefined;
+  await cleanup?.();
   await closeChild();
   stateDb.closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();

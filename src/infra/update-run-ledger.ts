@@ -183,7 +183,10 @@ export function createUpdateRun(
 }
 
 /** Adoption is explicit: reading or reserving an existing run does not make this process its driver. */
-export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): UpdateRunRecord {
+export function adoptUpdateRun(
+  runId: string,
+  options: LedgerOptions & { managedHandoffParent?: UpdateRunDriver } = {},
+): UpdateRunRecord {
   const driver = readUpdateRunDriver();
   let identityUnavailable = false;
   const adopted = mutateRun(
@@ -203,6 +206,9 @@ export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): Upda
           identityUnavailable = true;
         }
         return;
+      }
+      if (options.managedHandoffParent) {
+        record.origin.managedHandoff = { parent: options.managedHandoffParent, helper: driver };
       }
       const previousDrivers: UpdateRunDriver[] = [];
       for (const previous of recordedUpdateRunDrivers(record)) {
