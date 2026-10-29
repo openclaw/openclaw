@@ -8,6 +8,7 @@ import { clearLiveCatalogCacheForTests } from "../../plugin-sdk/provider-catalog
 import type { LiveModelCatalogFetchGuard } from "../../plugin-sdk/provider-catalog-live-runtime.js";
 import { registerProviderPlugins } from "../../test-utils/plugin-registration.js";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
+import type { ProviderCatalogOutcome } from "../provider-catalog-outcome.js";
 import { runProviderCatalog } from "../provider-discovery.js";
 
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn<LiveModelCatalogFetchGuard>());
@@ -18,6 +19,7 @@ vi.mock("../../plugin-sdk/ssrf-runtime.js", async (importOriginal) => ({
 }));
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
+const PROBE_MODEL_ID = "contract-probe-chat-1";
 
 // Each entry names why the provider cannot list models live yet. Remove the entry
 // when the provider gains live listing.
@@ -69,20 +71,31 @@ async function requestsModelList({ pluginDir, providerId, baseUrl }: HostedProvi
   if (!provider) {
     throw new Error(`${pluginDir} registers no provider ${providerId}`);
   }
-  // Any vendor request during the catalog run is a live listing; endpoints differ
-  // (`/models`, `/models/managed`, vendor-specific paths).
-  let requests = 0;
+  // One body serves every inventory shape in use: OpenAI `data[]` (DeepInfra reads row
+  // `metadata.tags`), Cohere `models[].name`, and NVIDIA's `featured-models[]` overlay.
+  // DeepInfra's pricing list is a bare array.
+  let requestedInventory = false;
   fetchWithSsrFGuard.mockImplementation(async ({ url }) => {
-    requests += 1;
+    const { pathname } = new URL(url);
+    requestedInventory ||= /\/models(?:\/managed)?$/.test(pathname);
     return {
-      response: Response.json({ data: [{ id: "contract-probe-chat-1", object: "model" }] }),
+      response: Response.json(
+        pathname === "/models/list"
+          ? []
+          : {
+              data: [{ id: PROBE_MODEL_ID, object: "model", metadata: { tags: [] } }],
+              models: [{ name: PROBE_MODEL_ID }],
+              "featured-models": [],
+            },
+      ),
       finalUrl: url,
       release: async () => {},
     };
   });
   // Live discovery runs only with a resolved secret, not a config marker.
   const credential = { apiKey: "contract-probe-key", discoveryApiKey: "contract-probe-key" };
-  await runProviderCatalog({
+  const outcomes: ProviderCatalogOutcome[] = [];
+  const result = await runProviderCatalog({
     provider,
     providerIds: [providerId],
     // Region-scoped plans list only after setup records the endpoint.
@@ -90,8 +103,19 @@ async function requestsModelList({ pluginDir, providerId, baseUrl }: HostedProvi
     env: {} as NodeJS.ProcessEnv,
     resolveProviderApiKey: () => credential,
     resolveProviderAuth: () => ({ ...credential, mode: "api_key", source: "env" }),
+    reportCatalogOutcome: (outcome) => outcomes.push(outcome),
   });
-  return requests > 0;
+  const published = [
+    ...(result && "provider" in result ? [result.provider] : []),
+    ...(result && "providers" in result ? Object.values(result.providers ?? {}) : []),
+  ].flatMap((entry) => entry?.models ?? []);
+  // Static rows surviving a successful listing mean the manifest, not the account,
+  // decided the models. Providers may drop the capability-free probe.
+  return {
+    ready: outcomes.some((outcome) => outcome.status === "ready"),
+    requestedInventory,
+    listingOnly: published.every((model) => model.id === PROBE_MODEL_ID),
+  };
 }
 
 describe("bundled hosted OpenAI-compatible providers list models live", () => {
@@ -105,7 +129,8 @@ describe("bundled hosted OpenAI-compatible providers list models live", () => {
     const { providerId } = hosted;
     const reason = STATIC_LISTING_REASONS[providerId];
     it(`${providerId} ${reason ? "keeps a recorded static-listing reason" : "requests the account's model list"}`, async () => {
-      const lists = await requestsModelList(hosted);
+      const listing = await requestsModelList(hosted);
+      const lists = listing.ready && listing.requestedInventory && listing.listingOnly;
       expect(lists, reason ? `${providerId} lists live now: remove its reason` : undefined).toBe(
         !reason,
       );
