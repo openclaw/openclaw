@@ -21,6 +21,21 @@ it("resolves relative Lobster paths inside the repo root", () => {
   expect(resolveLobsterCwd(relative)).toBe(path.resolve(process.cwd(), relative));
 });
 
+it("resolves literal cwd values without trimming their whitespace", () => {
+  expect(resolveLobsterCwd("demo ")).toBe(path.resolve(process.cwd(), "demo "));
+  expect(resolveLobsterCwd(" demo")).toBe(path.resolve(process.cwd(), " demo"));
+  expect(resolveLobsterCwd("demo\t")).toBe(path.resolve(process.cwd(), "demo\t"));
+});
+
+it("still treats blank or non-string cwd as the gateway working directory", () => {
+  expect(resolveLobsterCwd("   ")).toBe(process.cwd());
+  expect(resolveLobsterCwd(undefined)).toBe(process.cwd());
+});
+
+it("still rejects absolute cwd values", () => {
+  expect(() => resolveLobsterCwd("/tmp/demo")).toThrow("cwd must be a relative path");
+});
+
 describe("createEmbeddedLobsterRunner", () => {
   const runRequest = vi.fn<(params: { ctx?: { signal?: AbortSignal } }) => Promise<unknown>>();
   const resumeRequest = vi.fn<() => Promise<unknown>>();

@@ -99,7 +99,9 @@ export function resolveLobsterCwd(cwdRaw: unknown): string {
   if (typeof cwdRaw !== "string" || !cwdRaw.trim()) {
     return process.cwd();
   }
-  const cwd = cwdRaw.trim();
+  // Keep the caller's literal directory name: its whitespace is part of the
+  // filesystem identity, not decoration to strip before resolution.
+  const cwd = cwdRaw;
   if (path.isAbsolute(cwd)) {
     throw new Error("cwd must be a relative path");
   }
