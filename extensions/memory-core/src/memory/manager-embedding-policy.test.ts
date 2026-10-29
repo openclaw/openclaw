@@ -501,12 +501,10 @@ describe("memory embedding policy", () => {
       'HTTP 400: {"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
       // Zhipu embedding-3 caps `input` at 64 items under its generic 1214 code.
       'openai-compatible embeddings failed: HTTP 400: {"error":{"code":"1214","message":"input array max 64"}}',
-      "input array max 64",
       // Zhipu embedding-3 rejects batches over 64 items with a Chinese message (#136261).
       'HTTP 400: {"error":{"code":"1214","message":"input数组最大不得超过64条"}}',
       // Mistral rejects the aggregate token count of a batch and asks for more batches (#183556).
       'openai-compatible embeddings failed: HTTP 400: {"object":"error","message":"Too many tokens overall, split into more batches.","type":"invalid_request_prompt","code":"3210"}',
-      "Too many tokens overall, split into more batches.",
     ]) {
       expect(await probeBatchSplits(message)).toBe(true);
     }
@@ -538,37 +536,6 @@ describe("memory embedding policy", () => {
     }
   });
 
-  it("splits when the item cap only appears in the preserved provider error body", async () => {
-    // Java gateways wrapping upstream providers (e.g. Alibaba DashScope) report
-    // their own exception string. The normalized message preview truncates
-    // before the batch-limit text, while the bounded raw-body preview keeps it.
-    const failure = Object.assign(
-      new Error(
-        'openai embeddings failed (400): com.openai.errors.BadRequestException: 400: HTTP请求失败: response=Response{protocol=h2, code=400, message=, url=https://gateway.example/v1/embeddings}, body={"error":{"messa… [request_id=fixture]',
-      ),
-      {
-        status: 400,
-        statusCode: 400,
-        errorBody:
-          '{"timestamp":"2026-10-27T13:06:41.768+08:00","status":400,"error":"com.openai.errors.BadRequestException: 400: HTTP请求失败: response=Response{protocol=h2, code=400, message=, url=https://gateway.example/v1/embeddings}, body={\\"error\\":{\\"message\\":\\"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents\\"}}","path":"/v1/embeddings"}',
-      },
-    );
-    const items = Array.from({ length: 33 }, (_, index) => `input-${index}`);
-    const run = vi.fn(async (batch: string[]) => {
-      if (batch.length > 10) {
-        throw failure;
-      }
-      return batch;
-    });
-
-    // The message alone carries no item cap, so the split must cap at the
-    // limit parsed from the error body rather than fail terminally.
-    await expect(
-      runMemoryEmbeddingBatchRetryWithSplit({ items, run, waitForRetry: async () => {} }),
-    ).resolves.toEqual(items);
-    expect(run.mock.calls.map(([batch]) => batch.length)).toEqual([33, 10, 10, 10, 3]);
-  });
-
   it.each([
     { declared: undefined, requests: [33, 10, 10, 10, 3] },
     { declared: 10, requests: [10, 10, 10, 3] },
@@ -576,28 +543,30 @@ describe("memory embedding policy", () => {
   ])(
     "preserves paired inputs and persists each slice once with declared cap $declared",
     async ({ declared, requests }) => {
-      const items = Array.from({ length: 33 }, (_, index) => ({
-        input: index,
-        cacheCandidate: `candidate-${index}`,
+      const items = Array.from({ length: 33 }, (_, input) => ({
+        input,
+        cacheCandidate: `candidate-${input}`,
       }));
       const completed: Array<{ candidates: string[]; outputs: string[] }> = [];
       const run = vi.fn(async (batch: typeof items) => {
         if (batch.length > 10) {
-          throw new Error("embeddings max input length is 10");
+          const cap = "embeddings max input length is 10";
+          throw declared === undefined
+            ? Object.assign(new Error("wrapped HTTP 400"), {
+                status: 400,
+                errorBody: JSON.stringify({ error: `${"x".repeat(260)} ${cap}` }),
+              })
+            : new Error(cap);
         }
         return batch.map((item) => `output-${item.input}`);
       });
-
       await expect(
         runMemoryEmbeddingBatchRetryWithSplit({
           items,
           maxInputsPerRequest: declared,
           run,
           onSuccess: (batch, outputs) => {
-            completed.push({
-              candidates: batch.map((item) => item.cacheCandidate),
-              outputs,
-            });
+            completed.push({ candidates: batch.map((item) => item.cacheCandidate), outputs });
           },
           waitForRetry: async () => {},
         }),
