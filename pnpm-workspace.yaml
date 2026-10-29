@@ -63,13 +63,6 @@ minimumReleaseAgeExclude:
   - "@openclaw/proc-safe-linux-x64-musl@0.4.2"
   - "@openclaw/proc-safe-win32-arm64-msvc@0.4.2"
   - "@openclaw/proc-safe-win32-x64-msvc@0.4.2"
-  # Draft tsrs type-check trial (obviyus); remove after 2026-10-23T16:59:18.996Z.
-  - "tsrs@0.16.0-ts7.1.0-dev.20260929"
-  - "@tsrs/darwin-arm64@0.16.0-ts7.1.0-dev.20260929"
-  - "@tsrs/linux-arm64-gnu@0.16.0-ts7.1.0-dev.20260929"
-  - "@tsrs/linux-arm64-musl@0.16.0-ts7.1.0-dev.20260929"
-  - "@tsrs/linux-x64-gnu@0.16.0-ts7.1.0-dev.20260929"
-  - "@tsrs/linux-x64-musl@0.16.0-ts7.1.0-dev.20260929"
   # Claude ACP adapter bump for CVE-2026-111497 (brotli fix in SDK 0.3.309 binaries); remove after 2026-10-30T20:00:57.929Z.
   - "@agentclientprotocol/claude-agent-acp@0.95.0"
   - "@agentclientprotocol/sdk@2.0.1"

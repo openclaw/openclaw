@@ -34,6 +34,18 @@ function sourceCommit(
 ) {
   copyPrWrapperSources(directory);
   writeFileSync(join(directory, "owner.txt"), f.git(["show", `${parent}:owner.txt`]) + "\n");
+  if (!current) {
+    // Pre-admission writers preserve unknown JSON and their predecessor, but
+    // retain only the historical schema's direct parents.
+    const outcome = join(directory, "scripts/pr-lib/merge-outcome.sh");
+    writeFileSync(
+      outcome,
+      readFileSync(outcome, "utf8").replace(
+        ",.workflowAdmission.binding,.workflowAdmission.from,.workflowAdmission.to",
+        "",
+      ),
+    );
+  }
   if (current) {
     const path = join(directory, "scripts/pr-lib/review.sh");
     writeFileSync(path, readFileSync(path, "utf8") + "\n# Current canonical workflow fixture.\n");
@@ -120,7 +132,153 @@ function selection(
   });
 }
 
-const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
+const { preExistingCandidate, artifactBuildCandidate } = createPriorCiCandidateFactory(fixture);
+const firstAdmission = reuseCompletedSetup(() => {
+  const f = artifactBuildCandidate();
+  const retainedDirectory = join(f.root, "retained-source");
+  const source = sourceCommit(f, f.base, retainedDirectory, false);
+  const directory = join(f.root, "selected-source");
+  const current = sourceCommit(f, source, directory, true);
+  f.git(["push", "-q", "origin", `${current}:refs/heads/main`]);
+  f.git(["fetch", "-q", "origin", "main"]);
+  f.workflowSource(source, directory);
+  f.bindWorkflow();
+  f.useScripts(join(directory, "scripts"));
+  f.git([
+    "config",
+    "--add",
+    `url.file://${f.remote}.insteadOf`,
+    "https://github.com/openclaw/openclaw",
+  ]);
+  f.git(["remote", "set-url", "origin", "https://github.com/openclaw/openclaw"]);
+  configureMerge(f, { comment: "lost" });
+  return { f, source, current, retainedDirectory, directory };
+});
+
+function admitCurrent(setup: ReturnType<typeof firstAdmission>) {
+  const { f } = setup;
+  return f.run(
+    false,
+    f.repo,
+    "squash",
+    "",
+    "",
+    "",
+    "",
+    "",
+    false,
+    "",
+    false,
+    f.path,
+    true,
+    "",
+    "",
+    true,
+  );
+}
+
+describePosix("current-main first admission with a retained workflow", () => {
+  it("native entrypoint accepts only the explicit first-admission shape and fences an existing outcome", () => {
+    const { f, source } = firstAdmission();
+    const bind = join(f.root, "bind.sh");
+    writeFileSync(bind, `${gitOwner}\npr_batch_wrapper_git workflow-admit "$1" 123 "$2" ""\n`);
+    const env = { ...createIndependentPrFixtureEnv(), GIT_EXEC: "git", GIT_ALLOW_PROTOCOL: "file" };
+    const bound = spawnSync("bash", [bind, f.repo, source], { env, encoding: "utf8" });
+    expect(bound.status, bound.stderr).toBe(0);
+    const binding = f.git(["rev-parse", bindingRef]);
+    const rejected = f.git(["hash-object", "-w", "--stdin"], "rejected");
+    f.git(["update-ref", outcomeRef, rejected]);
+    mkdirSync(join(f.repo, "scripts"), { recursive: true });
+    writeFileSync(join(f.repo, "scripts/pr"), wrapper);
+    const args = [
+      "merge-run",
+      "123",
+      "--current-workflow",
+      "--admin-evidence",
+      f.path,
+      "--confirmed-operator-admin",
+    ];
+    const invoke = (argv: string[]) =>
+      spawnSync("bash", [join(f.repo, "scripts/pr"), ...argv], {
+        cwd: f.repo,
+        env,
+        encoding: "utf8",
+      });
+    const result = invoke(args);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("first admission requires no retained outcome");
+    for (const invalid of [
+      args.slice(0, -1),
+      [...args, "--auto-merge"],
+      [...args, "--current-workflow"],
+      [...args, "--replacement-head", f.head],
+    ]) {
+      const refused = invoke(invalid);
+      expect(refused.status, refused.stderr).toBe(2);
+      expect(refused.stderr).toContain("--current-workflow requires");
+    }
+    expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+    expect(f.git(["rev-parse", outcomeRef])).toBe(rejected);
+    expect(f.state().mutations).toBe(0);
+  });
+
+  it("retains the original binding through lost acknowledgment, reconciliation, and completion", () => {
+    const setup = firstAdmission();
+    const { f, source, current, retainedDirectory, directory } = setup;
+    expectExit(admitCurrent(setup), 1);
+    const binding = f.git(["rev-parse", bindingRef]);
+    const admission = { binding, from: source, to: current };
+    expect(f.record()).toMatchObject({ phase: "commenting", workflowAdmission: admission });
+    expect(f.record()).not.toHaveProperty("workflowRecovery");
+    expect(f.record()).not.toHaveProperty("recovery");
+    expectAncestors(f, [binding, source, current], outcomeRef);
+    f.recover();
+    f.useScripts(join(retainedDirectory, "scripts"));
+    expectExit(f.run(), 0);
+    expect(f.record()).toMatchObject({ phase: "commented", workflowAdmission: admission });
+    expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
+    expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+    f.git(["worktree", "remove", "--force", f.worktree]);
+    f.git(["branch", "-D", "pr-123-prep", "pr-123", "topic"]);
+    f.git(["push", "-q", "origin", ":refs/heads/topic"]);
+    expectExit(f.complete(f.git(["rev-parse", outcomeRef])), 0);
+    expect(f.record()).toMatchObject({ phase: "complete", workflowAdmission: admission });
+    f.useScripts(join(directory, "scripts"));
+    expectExit(f.run(), 0);
+    expectAncestors(f, [binding, source, current], outcomeRef);
+    expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
+  });
+
+  it.each(["outcome", "symbolic outcome", "capture", "head", "source", "binding"])(
+    "refuses first-admission %s drift before dispatch",
+    (fault) => {
+      const setup = firstAdmission();
+      const { f, source, current } = setup;
+      if (fault === "capture") {
+        writeFileSync(join(f.worktree, ".local/merge-output.log"), "");
+      } else if (fault === "outcome") {
+        f.git(["update-ref", outcomeRef, f.git(["hash-object", "-w", "--stdin"], "rejected")]);
+      } else if (fault === "symbolic outcome") {
+        f.git(["symbolic-ref", outcomeRef, "refs/heads/main"]);
+      } else if (fault === "head") {
+        configureMerge(f, { pr: { headRefOid: f.base } });
+      } else {
+        const hook = join(f.root, "after-hold.sh");
+        const command =
+          fault === "source"
+            ? `git --git-dir='${f.remote}' update-ref refs/heads/main '${source}' '${current}'`
+            : `git -C '${f.repo}' update-ref '${bindingRef}' '${source}'`;
+        writeFileSync(hook, command + "\n");
+        f.workflowAfterHold(hook);
+      }
+      const result = admitCurrent(setup);
+      expectExit(result, 1);
+      expect(result.output).toMatch(/retained outcome|merge output|head|workflow|binding/i);
+      expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
+    },
+  );
+});
+
 const rejectedAdmin = reuseCompletedSetup(() => {
   const f = preExistingCandidate();
   const retainedDirectory = join(f.root, "retained-source");
