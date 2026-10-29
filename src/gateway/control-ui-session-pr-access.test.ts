@@ -549,6 +549,7 @@ it("retires cached branch data after canonical replacement and hydrates the new 
   try {
     await withFixture("operator.read", async (f) => {
       await f.subscribe();
+      await f.subscriptions.pollNow();
       await f.subscriptions.replace(f.client.connId!, [sessionKey], new Set([sessionKey]));
       const retiredRefresh = f.subscriptions.replace(
         f.client.connId!,

@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Evidence, LoadedRecord } from "./model.js";
 import type { ClaimInput } from "./mutation-contract.js";
 import type { RememberInput, RememberItem, RememberResult } from "./remember-contract.js";
@@ -92,7 +93,7 @@ function title(text: string): string {
   if (clean.length <= 200) {
     return clean;
   }
-  const cut = clean.slice(0, 199),
+  const cut = truncateUtf16Safe(clean, 199),
     space = cut.lastIndexOf(" ");
   return `${(space > 100 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }

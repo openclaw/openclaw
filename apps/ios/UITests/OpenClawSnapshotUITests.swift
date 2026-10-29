@@ -113,6 +113,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let stop = app.buttons["Stop response"]
         XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        self.waitForEnabled(stop)
         stop.tap()
         XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
         self.attachScreenshot(named: "dup-filter-settled")
@@ -133,10 +134,16 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertEqual(input.value as? String, focusProbe)
             self.clearTextField(input)
             XCTAssertEqual(input.value as? String, "")
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+            // Dismiss through the transcript gutter, not a diagram that opens its preview on tap.
+            app.scrollViews["chat-transcript"]
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).tap()
             if keyboard.exists {
                 XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
             }
+            XCTAssertFalse(app.buttons["Close diagram preview"].exists)
+            let diagram = app.buttons["Mermaid diagram"]
+            XCTAssertTrue(diagram.waitForExistence(timeout: 8))
+            XCTAssertTrue(diagram.isHittable)
         }
     }
 
@@ -173,7 +180,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let showsWaiting = waiting.waitForExistence(timeout: 5)
         self.attachScreenshot(named: "startup-status-waiting")
         XCTAssertTrue(showsWaiting, "STARTUP_STATUS_MISSING: waiting run has no Gateway startup label")
-        app.buttons["Stop response"].tap()
+        let stop = app.buttons["Stop response"]
+        self.waitForEnabled(stop)
+        stop.tap()
         XCTAssertTrue(waiting.waitForNonExistence(timeout: 5))
     }
 
@@ -279,16 +288,23 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
     func testOnboardingExplainsCapabilitiesAndTrust() {
         let app = XCUIApplication()
-        app.launchArguments += ["--openclaw-reset-onboarding"]
+        app.launchArguments += ["--openclaw-reset-onboarding", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         self.app = app
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "onboarding-capabilities-and-trust")
+        let device = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+        XCTAssertTrue(app.staticTexts[
+            "Your agent, in your pocket. Pair this \(device) with your gateway to get started.",
+        ].exists)
+        let setupInstruction = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label CONTAINS %@", "Pair this \(device) by scanning a setup code")).firstMatch
+        XCTAssertTrue(setupInstruction.exists)
         XCTAssertTrue(app.staticTexts["Security notice"].exists)
         let disclosure = app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS[c] 'camera' AND label CONTAINS[c] 'trust the gateway and agent'")).firstMatch
         XCTAssertTrue(disclosure.exists)
-        self.attachScreenshot(named: "onboarding-capabilities-and-trust")
     }
 
     func testSidebarOverviewNavigation() throws {
@@ -806,6 +822,44 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-composer-paste-image")
     }
 
+    func testStopIgnoresTapsForAMomentAfterItReplacesSend() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-stop-guard"),
+            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep this response running.")
+
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        self.waitForEnabled(send)
+        // Cache an absolute screen coordinate before sending, so the second independent tap
+        // reaches the replacement Stop without a stale Send lookup or an intervening snapshot.
+        let sendFrame = send.frame
+        let sendPosition = app.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: sendFrame.midX, dy: sendFrame.midY))
+        sendPosition.tap()
+        sendPosition.tap()
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(
+            stop.waitForExistence(timeout: 5),
+            "STOP_GUARD_MISSING: double-tapping Send cancelled the response")
+        self.waitForEnabled(stop)
+        self.attachScreenshot(named: "stop-guard-response-survived-double-tap")
+
+        // The held fixture cannot finish by itself, so disappearance proves deliberate cancellation.
+        stop.tap()
+        XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
+        self.attachScreenshot(named: "stop-guard-deliberate-stop-cancelled-response")
+    }
+
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
         self.launchApp(
@@ -828,7 +882,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let stop = app.buttons["Stop response"]
         XCTAssertTrue(stop.waitForExistence(timeout: 8))
-        XCTAssertTrue(stop.isEnabled)
+        self.waitForEnabled(stop)
 
         let microphone = app.buttons["chat-dictation-control"]
         XCTAssertTrue(microphone.waitForExistence(timeout: 5))
@@ -845,7 +899,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let voiceNote = app.staticTexts["Voice note"]
         XCTAssertTrue(voiceNote.waitForExistence(timeout: 8))
         XCTAssertTrue(stop.waitForExistence(timeout: 5))
-        XCTAssertTrue(stop.isEnabled)
+        self.waitForEnabled(stop)
         self.attachScreenshot(named: "voice-note-stop-active-response")
 
         stop.tap()
@@ -935,6 +989,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
+        let result = app.buttons["chat-tool-activity-fixture-long-review"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        result.tap()
+        let earlier = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Earlier response context.")).firstMatch
+        XCTAssertTrue(earlier.waitForExistence(timeout: 5))
         // A visible text leaf can be unhittable inside its accessible message container.
         // This setup needs the reply's pixels in the viewport, not a tap target.
         for _ in 0..<12 where !latestSeededReply.exists || !transcript.frame.contains(latestSeededReply.frame) {
@@ -1051,6 +1111,48 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(finalReply.exists)
     }
 
+    func testAnthropicWorkChunksKeepNarrationVisibleInOrder() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-anthropic-work-chunks-fixture", "--openclaw-no-reactions-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let first = app.staticTexts["I will read the sample file."]
+        let second = app.staticTexts["The file looks good. I will run the check."]
+        let final = app.staticTexts["All checks passed."]
+        XCTAssertTrue(final.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "180490-after-initial")
+        XCTAssertTrue(first.exists)
+        XCTAssertTrue(second.exists)
+        let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked"))
+        XCTAssertEqual(work.count, 2, "Each adjacent tool/result pair needs its own disclosure")
+        let firstWork = work.element(boundBy: 0)
+        let secondWork = work.element(boundBy: 1)
+        XCTAssertLessThan(first.frame.maxY, firstWork.frame.midY)
+        XCTAssertLessThan(firstWork.frame.midY, second.frame.minY)
+        XCTAssertLessThan(second.frame.maxY, secondWork.frame.midY)
+        XCTAssertLessThan(secondWork.frame.midY, final.frame.minY)
+        for (index, disclosure) in [firstWork, secondWork].enumerated() {
+            disclosure.tap()
+            XCTAssertTrue(first.exists)
+            XCTAssertTrue(second.exists)
+            XCTAssertTrue(final.exists)
+            let detail = index == 0 ? "sample.txt" : "printf checked"
+            let otherDetail = index == 0 ? "printf checked" : "sample.txt"
+            let tool = app.descendants(matching: .any).matching(NSPredicate(
+                format: "value CONTAINS %@", detail)).firstMatch
+            let otherTool = app.descendants(matching: .any).matching(NSPredicate(
+                format: "value CONTAINS %@", otherDetail)).firstMatch
+            XCTAssertTrue(tool.waitForExistence(timeout: 5), "The selected tool did not expand")
+            XCTAssertFalse(otherTool.exists, "Expanding one chunk must not expand the other")
+            self.attachScreenshot(named: "180490-after-work-\(index + 1)-expanded")
+            disclosure.tap()
+        }
+        self.assertElementHasRenderedContent(first, named: "first narration outside work")
+        self.assertElementHasRenderedContent(second, named: "second narration outside work")
+        self.assertElementHasRenderedContent(final, named: "final answer outside work")
+        self.attachScreenshot(named: "180490-after-collapsed")
+    }
+
     func testUnknownOutcomeStepUsesLocalToolTitle() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -1108,6 +1210,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY)
         self.assertElementHasRenderedContent(latest, named: "final reply with work collapsed")
         work.tap()
+        let result = app.buttons["chat-tool-activity-fixture-long-review"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        result.tap()
         XCTAssertTrue(earlier.waitForExistence(timeout: 5))
         self.attachScreenshot(named: "completed-work-expanded")
         let workLabel = work.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
@@ -2214,8 +2319,8 @@ extension OpenClawSnapshotUITests {
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
-    private func waitForEnabled(_ element: XCUIElement) {
-        XCTAssertTrue(element.wait(for: \.isEnabled, toEqual: true, timeout: 5))
+    private func waitForEnabled(_ element: XCUIElement, timeout: TimeInterval = 5) {
+        XCTAssertTrue(element.wait(for: \.isEnabled, toEqual: true, timeout: timeout))
     }
 
     private func waitForHittable(_ isHittable: Bool, of element: XCUIElement) {

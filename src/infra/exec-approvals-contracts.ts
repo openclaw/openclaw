@@ -1,5 +1,5 @@
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
-import type { ExecApprovalsSnapshot, ExecAsk, ExecSecurity } from "./exec-approvals-core.js";
+import type { ExecApprovalsFile, ExecAsk, ExecSecurity } from "./exec-approvals-core.js";
 import type { AllowAlwaysPattern, ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecApprovalsDefaultOverrides = {
@@ -45,5 +45,5 @@ export type ExecAuthorizationCommitInput = {
 };
 
 export type ExecAuthorizationCommitOutcome =
-  | { ok: true; snapshot: ExecApprovalsSnapshot }
+  | { ok: true; file: ExecApprovalsFile }
   | { ok: false; message: string };

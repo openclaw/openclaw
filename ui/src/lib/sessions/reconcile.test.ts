@@ -140,7 +140,6 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
     agentStatus: { state: "needs_attention" },
     observerDigest: { headline: "Waiting" },
     controlOwnerSessionKey: "agent:main:owner",
-    restartRecoveryStatus: "pending",
     goal: "ship it",
   };
   const tombstones = Object.fromEntries(Object.keys(fields).map((field) => [field, null]));

@@ -100,6 +100,7 @@ export function admitStoreSearchExtension(
         },
         base.postgresVectorDecoderVersion,
         base.postgresVectorSearchVersion,
+        base.postgresTextSearchVersion,
       ),
     );
     if (!Object.keys(base.searchExtensions ?? {}).length) {

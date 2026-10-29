@@ -48,6 +48,8 @@ When a `message` tool call runs inside a Slack thread and targets the same chann
 `replyToMode="off"` disables optional outbound Slack reply threading, including explicit `[[reply_to_*]]` tags. Agent View and Assistant View are Slack-managed threaded experiences, so their replies and status remain on the visible root regardless of this setting. It does not flatten other inbound Slack thread sessions. This differs from Telegram, where explicit tags are still honored in `"off"` mode. Slack threads hide messages from the channel while Telegram replies stay visible inline.
 </Note>
 
+Delayed `sessions_send` completions retain the request's admitted destination. With `replyToMode: "off"`, a top-level request stays top-level; the triggering message timestamp is only a reply anchor, not a thread root. Requests made inside a genuine Slack thread retain that thread.
+
 ### Agent View DMs
 
 Slack Agent View (`features.agent_view`) is Slack's messaging experience for AI apps. Slack marks the app as an agent, and in the app's **Messages** tab each message typed in the top-level composer starts a new root that Slack threads on its own; follow-ups belong inside that root's thread. OpenClaw treats every root as a separate conversation:
@@ -89,6 +91,10 @@ debounced source messages, and later messages are excluded from the recent windo
 Initial thread history uses its existing rendering path once. With
 `thread.historyScope: "channel"`, the recent window uses the channel timeline
 while initial thread seeding remains separate.
+
+When the bounded session transcript confirms a completed answer, unchanged
+requests with matching message IDs are not quoted again. Edits, unseen discussion,
+unfinished requests, and attachments remain eligible; reply targets stay separate.
 
 Thread-scoped history reads only that thread. Slack returns thread replies oldest
 first, so automatic thread recovery stops after three pages. If that cannot reach

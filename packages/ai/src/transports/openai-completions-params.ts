@@ -470,7 +470,8 @@ export function buildOpenAICompletionsRequest(
       if (policy.mode === "managed") {
         emitModelTransportDebug(
           log,
-          `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
+          () =>
+            `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
             `modelMaxTokens=${modelMaxTokens}`,
         );
@@ -511,7 +512,8 @@ export function buildOpenAICompletionsRequest(
         contextOutputCap = remainingBudget;
         emitModelTransportDebug(
           log,
-          `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
+          () =>
+            `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );

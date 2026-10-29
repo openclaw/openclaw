@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -6,37 +7,34 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
+  profileSessionEntry,
 } from "./sessions-read-cache.test-support.js";
 import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export const sessionKey = "agent:main:main";
 
-export function upsertDefaultSuggestionSession(
+export const upsertDefaultSuggestionSession = (
   patch: Parameters<typeof upsertSessionEntryCore>[1] = {},
   key = sessionKey,
-) {
-  return upsertSessionEntryCore(
+) =>
+  upsertSessionEntryCore(
     { agentId: "main", sessionKey: key },
     {
-      sessionId: "session-main",
-      updatedAt: 1,
-      createdActor: { type: "human", source: "profile", id: "owner" },
+      ...profileSessionEntry("session-main", 1, "owner"),
       visibility: "suggest",
       ...patch,
     },
   );
-}
 
-export function withSuggestionState(
+export const withSuggestionState = (
   run: Parameters<typeof withOpenClawTestState>[1],
   options: { prepareProfileCatalog?: boolean } = {},
-) {
-  return withOpenClawTestState({ scenario: "minimal", ...options }, async (state) => {
+) =>
+  withOpenClawTestState({ scenario: "minimal", ...options }, async (state) => {
     setRuntimeConfigSnapshot({});
     await run(state);
   });
-}
 
 export function client(profileId: string, displayName: string, admin = false): GatewayClient {
   const result = identifiedClient(profileId);
@@ -48,17 +46,16 @@ export function client(profileId: string, displayName: string, admin = false): G
   return result;
 }
 
-export function context(
+export const context = (
   broadcast = vi.fn(),
   runtimeConfig: ReturnType<GatewayRequestContext["getRuntimeConfig"]> = {},
-): GatewayRequestContext {
-  return {
+): GatewayRequestContext =>
+  ({
     getRuntimeConfig: () => runtimeConfig,
     broadcast,
     broadcastToConnIds: vi.fn(),
     logGateway: { warn: vi.fn() },
-  } as unknown as GatewayRequestContext;
-}
+  }) as unknown as GatewayRequestContext;
 
 export async function call(
   method: `session.suggestions.${"add" | "list" | "resolve"}` | "session.typing",
@@ -91,10 +88,7 @@ export function requests(
 
 export function responseSuggestionId(result: Awaited<ReturnType<typeof call>>): string {
   const payload = result.responses[0]?.[1] as { suggestion?: { id?: string } } | undefined;
-  if (!payload?.suggestion?.id) {
-    throw new Error("suggestion response id missing");
-  }
-  return payload.suggestion.id;
+  return expectDefined(payload?.suggestion?.id || undefined, "suggestion response id missing");
 }
 
 export function registerSessionSuggestionTestLifecycle(mocks: {

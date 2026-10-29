@@ -51,7 +51,7 @@ defineDiscordVoiceTests((h) => {
     expectOccupancy(otherListener, false, true, false, true);
   });
 
-  it.each(["Ready", "Resumed", "GuildCreate"] as const)(
+  it.each(["Ready", "GuildCreate"] as const)(
     "waits for a known snapshot and reconciles on %s without conversational auto-join",
     async (event) => {
       const { cache, client, manager, seed } = fixture();
@@ -61,7 +61,6 @@ defineDiscordVoiceTests((h) => {
       seed(voiceState("human-one", "1001"));
       const listeners = {
         Ready: new h.listenersModule.DiscordVoiceReadyListener(manager),
-        Resumed: new h.listenersModule.DiscordVoiceResumedListener(manager),
         GuildCreate: new h.listenersModule.DiscordVoiceGuildCreateListener(manager),
       };
       const reconcile = () =>
@@ -77,14 +76,24 @@ defineDiscordVoiceTests((h) => {
     },
   );
 
-  it("emits occupied on subscription, survives transcript join/leave, and clears on destroy", async () => {
-    const { manager, update } = fixture();
+  it("retains occupancy and channel title through transcript join/leave, then clears on destroy", async () => {
+    const { manager, client, update } = fixture();
+    const channel = client.fetchChannel.getMockImplementation()!;
+    client.fetchChannel.mockImplementation(async (id) => ({
+      ...h.expectDefined(await channel(id), "voice channel"),
+      name: "Planning room",
+    }));
     await update(voiceState("human-one", "1001"));
     const listener = vi.fn();
     manager.watchChannelOccupancy(room, listener);
     expect(listener).toHaveBeenCalledExactlyOnceWith({ occupied: true });
     for (const sessionId of ["first", "second"]) {
-      await h.startTranscripts(manager, vi.fn(), sessionId, "1001", "primary");
+      expect(
+        await h.startTranscripts(manager, vi.fn(), sessionId, "1001", "primary"),
+      ).toMatchObject({ ok: true, session: { title: "Planning room" } });
+      if (sessionId === "first") {
+        expect(client.fetchChannel).toHaveBeenCalledExactlyOnceWith("1001");
+      }
       await h.stopTranscripts(sessionId, "1001", "primary");
     }
     await update(voiceState("human-one", null));
@@ -96,21 +105,5 @@ defineDiscordVoiceTests((h) => {
     manager.watchChannelOccupancy(room, listener);
     await update(voiceState("human-one", "1001"));
     expect(listener).toHaveBeenCalledTimes(3);
-  });
-
-  it("returns the joined channel title without another channel lookup or starting realtime", async () => {
-    const { manager, client } = fixture();
-    const channel = {
-      id: "1001",
-      guildId: "g1",
-      guild: { id: "g1", name: "Guild One" },
-      type: h.ChannelType.GuildVoice,
-      name: "Planning room",
-    };
-    client.fetchChannel.mockResolvedValue(channel);
-    const result = await h.startTranscripts(manager, vi.fn(), "notes", "1001", "primary");
-    expect(result).toMatchObject({ ok: true, session: { title: "Planning room" } });
-    expect(client.fetchChannel).toHaveBeenCalledExactlyOnceWith("1001");
-    expect(h.createRealtimeVoiceBridgeSessionMock).not.toHaveBeenCalled();
   });
 });

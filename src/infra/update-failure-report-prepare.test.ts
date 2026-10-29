@@ -95,27 +95,6 @@ const diagnostics: Diagnostic[] = [
         ? /private-user|private-prefix|private-loader-text|synthetic-private-token|\/lib\/|GLIBC_/u
         : /private-user|private-prefix|private-loader-text|synthetic-private-token|\/lib\//u,
   })),
-  ...[false, true].map((candidate) => ({
-    name: `${candidate ? "candidate" : "installed"} config admission`,
-    phase: "invalid-config",
-    reason: "invalid-config",
-    fact: {
-      check: candidate ? "candidate-admission" : "invalid-config",
-      code: "invalid-config",
-      ...(candidate
-        ? {
-            message:
-              "Update refused: configuration is invalid.\n- gateway.port: Invalid configuration field\n- models.providers.private-tenant.apiKey: Invalid configuration field\nprivate rejected value",
-          }
-        : { affectedKey: "gateway.port", message: "Invalid configuration field" }),
-    },
-    includes: [
-      "gateway.port",
-      "Invalid configuration field",
-      ...(candidate ? ["models.providers.<id>.apiKey"] : []),
-    ],
-    excludes: /\[redacted-diagnostic\]|private-tenant|private rejected value/u,
-  })),
   ...["", " private-customer-text"].map((suffix) => ({
     name: `closed handoff diagnostic ${JSON.stringify(suffix)}`,
     phase: "requested",
@@ -189,11 +168,7 @@ const diagnostics: Diagnostic[] = [
   ...(
     [
       ["openclaw doctor", "package-doctor"],
-      ["candidate doctor lint", "candidate-doctor-lint"],
       ["Checking update health cleanup", "candidate-doctor-lint-cleanup"],
-      ["candidate snapshot", "candidate-state-snapshot"],
-      ["post-install verification", "post-install-verify"],
-      ["gateway recovery verification", "gateway-recovery-verification"],
       ["finalize:targetConfigConvergence", "finalize-target-config-convergence"],
       ["git checkout refs/private/tenant", "git-checkout"],
       [

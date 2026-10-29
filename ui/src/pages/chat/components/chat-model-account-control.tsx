@@ -69,7 +69,7 @@ export function ChatModelAccountSectionView(
                     data-chat-model-key={`account:${option().value}`}
                     data-chat-model-rank={search?.row(`account:${option().value}`)?.rank}
                     data-chat-model-highlighted={
-                      search?.highlighted() === `account:${option().value}` ? "" : undefined
+                      search?.isHighlighted(`account:${option().value}`) ? "" : undefined
                     }
                     style={{ "--chat-model-rank": search?.row(`account:${option().value}`)?.rank }}
                     data-chat-model-index={props.startIndex + index()}

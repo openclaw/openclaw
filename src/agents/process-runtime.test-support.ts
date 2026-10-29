@@ -40,6 +40,16 @@ export const agentProcessTestEntrypoints = {
     sourceWorkerName: "sessions/tools/read.retention.test-support",
     distWorkerPath: "agents/sessions/tools/read.retention.test-support.js",
   },
+  sessionManager: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "sessions/session-manager",
+    distWorkerPath: "agents/sessions/session-manager.js",
+  },
+  transcriptWrite: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../config/sessions/session-accessor.sqlite-transcript-write.test-support",
+    distWorkerPath: "config/sessions/session-accessor.sqlite-transcript-write.test-support.js",
+  },
   transcriptLifecycleRetention: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName:

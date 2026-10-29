@@ -32,6 +32,7 @@ export function resolveReplySessionRolloverState(
     responseUsage: entry.responseUsage,
     ...selectSessionModelOverride(preservedSelection),
     communication: preservedSelection.communication,
+    cyberAccessProgram: preservedSelection.cyberAccessProgram,
     authProfileOverride: preservedSelection.authProfileOverride,
     authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,

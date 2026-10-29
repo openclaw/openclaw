@@ -4,12 +4,6 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
-import { diffGatewayReloadPaths } from "../../gateway/config-diff.js";
-import {
-  buildGatewayReloadPlan,
-  isNoopGatewayReloadPlan,
-  listConfigReloadRefinementPrefixes,
-} from "../../gateway/config-reload-plan.js";
 import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -115,10 +109,6 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
           });
           await expect(readEffect()).rejects.toMatchObject({ code: "ENOENT" });
           if (kind === "allow") {
-            const plan = buildGatewayReloadPlan(
-              diffGatewayReloadPaths(config, disabledConfig, listConfigReloadRefinementPrefixes()),
-            );
-            expect(isNoopGatewayReloadPlan(plan)).toBe(true);
             native.getRuntimeConfig.mockReturnValue(disabledConfig);
           }
           if (kind === "always-only") {

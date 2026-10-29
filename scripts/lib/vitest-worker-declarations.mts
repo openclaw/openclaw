@@ -11,7 +11,7 @@ export const vitestWorkerRuntimeAssets = [
   "node-runtime-env.mjs",
 ];
 
-export const runtimeProcessDeclarationEntries = {
+export const rootRuntimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":
     "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
   "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
@@ -21,6 +21,10 @@ export const runtimeProcessDeclarationEntries = {
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
   "infra/package-update-activation-runtime-assets":
     "src/infra/package-update-activation-runtime-assets.ts",
+};
+
+export const runtimeProcessDeclarationEntries = {
+  ...rootRuntimeProcessDeclarationEntries,
   // Codex is package-owned and excluded from the root runtime bundle.
   "extensions/codex/catalog-page-worker-entrypoint":
     "extensions/codex/catalog-page-worker-entrypoint.ts",
@@ -60,7 +64,7 @@ export const vitestWorkerDeclarationEntries = {
     "src/daemon/service-process-env-runtime.test-support.ts",
   "shared/worker-bundle-archive-runtime.test-support":
     "src/shared/worker-bundle-archive-runtime.test-support.ts",
-  "claws/project-runtime.test-support": "src/claws/project-runtime.test-support.ts",
+  "templates/project-runtime.test-support": "src/templates/project-runtime.test-support.ts",
   "test-helpers/temp-dir-runtime.test-support": "src/test-helpers/temp-dir-runtime.test-support.ts",
   "infra/outbound/delivery-queue-process-runtime.test-support":
     "src/infra/outbound/delivery-queue-process-runtime.test-support.ts",

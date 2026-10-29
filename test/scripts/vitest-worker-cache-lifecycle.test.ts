@@ -200,6 +200,21 @@ try {
   metadataTarget = first.descriptor.directory;
   if (process.platform !== 'win32') assert.equal(fs.statSync(metadataTarget).mode & 0o777, ${0o700 & ~process.umask()});
   const second = reserve();
+  if (${reusesReleasedSlot}) {
+    const runtime = createVitestWorkerRun(process.env, undefined, 'runtime');
+    owners.push(runtime);
+    assert.equal(path.basename(runtime.descriptor.directory), 'run-cache-runtime-0');
+    assert.equal(path.basename(first.descriptor.directory), 'run-cache-1');
+    const nextRuntime = createVitestWorkerRun(process.env, undefined, 'runtime');
+    owners.push(nextRuntime);
+    assert.equal(path.basename(nextRuntime.descriptor.directory), 'run-cache-runtime-1');
+    await runtime.dispose();
+    const reusedRuntime = createVitestWorkerRun(process.env, undefined, 'runtime');
+    owners.push(reusedRuntime);
+    assert.equal(reusedRuntime.descriptor.directory, runtime.descriptor.directory);
+    assert(fs.existsSync(nextRuntime.descriptor.directory));
+    assert(fs.existsSync(first.descriptor.directory));
+  }
   await first.dispose();
   assert.equal(fs.existsSync(first.descriptor.directory), false);
   assert.equal(fs.existsSync(second.descriptor.directory), true);

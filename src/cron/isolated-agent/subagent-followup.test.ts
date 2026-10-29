@@ -2,9 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { hasDescendantRunAwaitingSettleFromRuns } from "../../agents/subagents/registry/subagent-registry-queries.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 
-vi.hoisted(() => {
-  vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-});
+vi.hoisted(() => vi.stubEnv("OPENCLAW_TEST_FAST", "1"));
 
 import {
   readDescendantSubagentFallbackReply,
@@ -29,9 +27,11 @@ vi.mock("../../agents/run-wait.js", async () => {
   };
 });
 
+import * as announceOutput from "../../agents/subagents/announce/subagent-announce-output.js";
 import * as gatewayCallRuntime from "../../gateway/call.js";
 const callGateway = vi.spyOn(gatewayCallRuntime, "callGateway").mockResolvedValue({ status: "ok" });
-afterAll(() => callGateway.mockRestore());
+const finalAnswer = vi.spyOn(announceOutput, "readSubagentRunFinalAnswer");
+afterAll(() => [callGateway, finalAnswer].forEach((spy) => spy.mockRestore()));
 
 const { listDescendantRunsForRequester } = await import("./run-subagent-registry.runtime.js");
 const { hasUnsettledCronDescendants } = await import("./delivery-subagent-registry.runtime.js");
@@ -95,8 +95,10 @@ function createDescendantRun(
 function terminalRun(
   terminalReply: NonNullable<SubagentRunRecord["completion"]>["terminalReply"],
   resultText = "stale output",
+  outcome: "ok" | "error" = "ok",
 ) {
   return createDescendantRun({
+    execution: { status: "terminal", endedAt: 2000, outcome: { status: outcome } },
     completion: { required: true, terminalReply, resultText, fallbackResultText: "older fallback" },
   });
 }
@@ -130,6 +132,17 @@ describe("readDescendantSubagentFallbackReply", () => {
     latestReply.mockResolvedValue("stale transcript").mockClear();
     await expect(fallbackReply()).resolves.toBe(expected);
     expect(latestReply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["ok", "\nrecovered\n", "recovered"],
+    ["ok", undefined, "brief…"],
+    ["error", "must not publish", "brief…"],
+  ] as const)("capped child preview %# (%s)", async (outcome, answer, expected) => {
+    const run = terminalRun({ disposition: "visible", text: "brief…" }, "stale output", outcome);
+    listRuns.mockResolvedValue([run]);
+    finalAnswer.mockReset().mockResolvedValue(answer);
+    await expect(fallbackReply()).resolves.toBe(expected);
   });
 });
 
@@ -281,18 +294,36 @@ describe("waitForDescendantSubagentSummary", () => {
     },
   );
 
-  it("keeps an unsettled task within the existing deadline without selecting interim output", async () => {
-    vi.useFakeTimers();
-    const paused = createDescendantRun({ pauseReason: "sessions_yield" });
-    listRuns.mockResolvedValue([paused]);
-    unsettled.mockResolvedValue(true);
-    latestReply.mockResolvedValue("Partial results are available.");
-
-    const resultPromise = waitSummary({ sessionKey: "test-session", timeoutMs: 60 });
-    expect(await resolveAfterAdvancingTimers(resultPromise, 60)).toBeUndefined();
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-  });
+  it.each([-60_000, 0, 60_000])(
+    "keeps the descendant wait budget after a %s ms wall-clock step",
+    async (wallClockStepMs) => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      listRuns.mockResolvedValue([createDescendantRun({ pauseReason: "sessions_yield" })]);
+      unsettled.mockResolvedValue(true);
+      latestReply.mockResolvedValue("Partial results are available.");
+      let settled = false;
+      const resultPromise = waitSummary({ timeoutMs: 300, abortSignal: controller.signal }).then(
+        (result) => {
+          settled = true;
+          return result;
+        },
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(100);
+        vi.setSystemTime(Date.now() + wallClockStepMs);
+        await vi.advanceTimersByTimeAsync(150);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(settled).toBe(true);
+        await expect(resultPromise).resolves.toBeUndefined();
+        expect([vi.getTimerCount(), callGateway.mock.calls.length]).toEqual([0, 0]);
+      } finally {
+        controller.abort();
+        await resultPromise;
+      }
+    },
+  );
 
   it.each(["handoff", "running"])("stops waiting when cron cancels during %s", async (phase) => {
     vi.useFakeTimers();

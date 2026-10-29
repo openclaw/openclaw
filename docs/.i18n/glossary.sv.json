@@ -372,6 +372,10 @@
     "target": "OpenAI"
   },
   {
+    "source": "Decision models",
+    "target": "Beslutsmodeller"
+  },
+  {
     "source": "Speech and audio",
     "target": "Tal och ljud"
   },

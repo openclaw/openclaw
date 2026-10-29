@@ -209,7 +209,7 @@ describe("runCliAgent spawn path", () => {
       createData: () => Buffer.from("selected-node-token"),
     };
     context.openClawHistoryPrompt = "gateway transcript reseed";
-    context.claudeSkillsPluginArgs = ["--plugin-dir", "/tmp/gateway-skills"];
+    context.claudeSkillsPlugin = { args: ["--plugin-dir", "/tmp/gateway-skills"] };
     context.params.forkCliSessionOnResume = true;
     context.params.claimCliSessionFork = vi.fn(async () => true);
     context.params.persistCliSessionForkSuccessor = vi.fn(async () => {});
@@ -1105,7 +1105,7 @@ describe("runCliAgent spawn path", () => {
   );
 
   it("runs CLI through supervisor and returns payload", async () => {
-    const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
+    using logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
     mockSuccessfulCliRun();
 
     const context = buildPreparedCliRunContext({
@@ -1114,44 +1114,40 @@ describe("runCliAgent spawn path", () => {
     });
     context.reusableCliSession = { mode: "reuse", sessionId: "thread-123" };
 
-    try {
-      const result = await executePreparedCliRun(context, "thread-123");
+    const result = await executePreparedCliRun(context, "thread-123");
 
-      expect(result.text).toBe("ok");
-      const input = mockCallArg(supervisorSpawnMock) as {
-        argv?: string[];
-        mode?: string;
-        timeoutMs?: number;
-        noOutputTimeoutMs?: number;
-        replaceExistingScope?: boolean;
-        scopeKey?: string;
-      };
-      expect(input.mode).toBe("child");
-      expect(input.argv).toEqual([
-        "codex",
-        "exec",
-        "resume",
-        "thread-123",
-        "--skip-git-repo-check",
-        "--model",
-        "gpt-5.4",
-        "hi",
-      ]);
-      expect(input.timeoutMs).toBe(1_000);
-      expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
-      expect(input.replaceExistingScope).toBe(true);
-      expect(input.scopeKey).toContain("thread-123");
+    expect(result.text).toBe("ok");
+    const input = mockCallArg(supervisorSpawnMock) as {
+      argv?: string[];
+      mode?: string;
+      timeoutMs?: number;
+      noOutputTimeoutMs?: number;
+      replaceExistingScope?: boolean;
+      scopeKey?: string;
+    };
+    expect(input.mode).toBe("child");
+    expect(input.argv).toEqual([
+      "codex",
+      "exec",
+      "resume",
+      "thread-123",
+      "--skip-git-repo-check",
+      "--model",
+      "gpt-5.4",
+      "hi",
+    ]);
+    expect(input.timeoutMs).toBe(1_000);
+    expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
+    expect(input.replaceExistingScope).toBe(true);
+    expect(input.scopeKey).toContain("thread-123");
 
-      const turnLog = logInfoSpy.mock.calls
-        .map(([message]) => message)
-        .find((message) => message.startsWith("cli turn:"));
-      expect(turnLog).toContain("provider=codex-cli");
-      expect(turnLog).toContain("model=gpt-5.4");
-      expect(turnLog).toContain("outBytes=2 outHash=2689367b205c");
-      expect(turnLog).not.toContain("ok");
-    } finally {
-      logInfoSpy.mockRestore();
-    }
+    const turnLog = logInfoSpy.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.startsWith("cli turn:"));
+    expect(turnLog).toContain("provider=codex-cli");
+    expect(turnLog).toContain("model=gpt-5.4");
+    expect(turnLog).toContain("outBytes=2 outHash=2689367b205c");
+    expect(turnLog).not.toContain("ok");
   });
 
   it("rejects Gemini stream-json error results emitted with a zero exit code", async () => {

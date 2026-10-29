@@ -50,9 +50,9 @@ const TOOL_USE_WITHOUT_CALL_RETRY_INSTRUCTION =
 const REJECTED_TOOL_CALL_RETRY_INSTRUCTION =
   "The previous assistant turn's tool call was rejected before it ran because the provider returned incomplete or malformed tool-call arguments, so nothing ran for that call. Any visible text from that turn has already been shown; do not repeat it. Continue from the current state: re-issue the call you need through the tool interface with complete, valid JSON arguments, or produce the visible answer now. Do not repeat completed tool calls or restart from scratch.";
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";
 const REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+  "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";
 const READ_ONLY_TOOL_CONTINUATION_INSTRUCTION =
   "Your turn ended before completing the task. Continue from the current transcript, using tools for any remaining work, then produce the final reply. Do not repeat completed tool calls or restart from scratch.";
 const OUTPUT_LIMIT_FINALIZATION_INSTRUCTION =

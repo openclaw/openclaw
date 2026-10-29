@@ -419,8 +419,9 @@ two; at most 4 GiB caps them at one. Committed timing weights are unchanged.
 
 Docker seed runs one published-upgrade survivor on every admitted upstream main
 run; QA Smoke retains owner-path selection. Ordinary manual CI and Full Release
-Validation select all six Docker seed lanes. Main builds the complete runtime
-and public SDK declarations through `ciArtifacts` before standard packaging;
+Validation select all six Docker seed lanes. Main builds the complete runtime,
+workspace package declarations, and public SDK declarations through
+`ciArtifacts` before standard packaging;
 manual/release runs retain full package generation. Pull requests and their
 exact-head fallback dispatches omit these jobs,
 real-Gateway UI, and named built-process verifiers. Unit/boundary and mocked

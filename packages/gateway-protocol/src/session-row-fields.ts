@@ -101,8 +101,6 @@ export const SESSION_SIDEBAR_ROW_FIELDS: ReadonlySet<string> = new Set([
   "lastRunError",
   "suppressErrorNotice",
   "abortedLastRun",
-  "restartRecoveryStatus",
-  "restartRecoveryCycleId",
   "startedAt",
   "endedAt",
   "runtimeMs",

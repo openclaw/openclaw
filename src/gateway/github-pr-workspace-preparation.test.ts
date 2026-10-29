@@ -1,11 +1,14 @@
 // Install the shared GitHub fixture before loading the registered action owners.
 // oxfmt-ignore
-import { bindFixtureRuntime, fixture, mocks } from "./github-pr-workspace-preparation.test-support.js";
+import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks } from "./github-pr-workspace-preparation.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isNodeError } from "@openclaw/fs-safe/path";
 import { describe, expect, it, vi } from "vitest";
+import * as sandboxBackend from "../agents/sandbox/backend.js";
+import { resolveSandboxContext } from "../agents/sandbox/context.js";
+import { acquireSandboxGatewayOwner } from "../agents/sandbox/registry.test-support.js";
 import { ensureEmptyWorktreeSource } from "../agents/worktrees/empty-source.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
@@ -13,8 +16,6 @@ import {
   commandResult,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
-import * as workspaceStore from "./worker-environments/local-workspace-store.js";
-import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 
 describe("existing PR preparation through the registered agent action", () => {
   installGitHubPublicationTestHarness({
@@ -110,6 +111,8 @@ describe("existing PR preparation through the registered agent action", () => {
         guestHead: await f.guestGit("rev-parse", "HEAD"),
         guestIndex: await f.guestGit("write-tree"),
         guestStatus: await f.guestGit("status", "--porcelain"),
+        guestArtifact: await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8"),
+        guestUntracked: await fs.readFile(path.join(f.projection, "untracked.txt"), "utf8"),
       });
       const beforeRepeat = await workspaceState();
       await closeOpenClawAgentDatabasesAsync();
@@ -134,8 +137,18 @@ describe("existing PR preparation through the registered agent action", () => {
       }
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(continuedGuestHead);
       expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
-      await f.advanceHead({ "newer-pr.txt": "newer remote PR work\n" });
-      expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: f.pr.head.sha });
+      for (const advance of [false, true]) {
+        if (advance) {
+          await f.advanceHead({ "newer-pr.txt": "newer remote PR work\n" });
+        }
+        f.pr.base.ref = "another-base";
+        const beforeRetarget = await workspaceState();
+        expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: f.pr.head.sha });
+        expect(f.readSession().worktree?.githubPullRequest?.base.branch).toBe("another-base");
+        if (!advance) {
+          expect(await workspaceState()).toEqual(beforeRetarget);
+        }
+      }
       const refreshedAssociation = f.readSession().worktree?.githubPullRequest;
       expect(refreshedAssociation?.preparedHeadCommit).toBe(f.pr.head.sha);
       await f.git("merge-base", "--is-ancestor", f.headCommit, "HEAD");
@@ -181,6 +194,124 @@ describe("existing PR preparation through the registered agent action", () => {
       );
       expect(f.writes).toEqual([]);
       expect(f.externalWrites).toEqual([]);
+    },
+  );
+
+  it("reconciles a new destination and its advancing tip without restaging saved work", async () => {
+    const f = await fixture();
+    const acceptedHead = await f.advanceHead({ "continued-pr.txt": "later contribution\n" });
+    expect(await f.invoke()).toMatchObject({ review: { base: f.commonAncestor } });
+    await fs.writeFile(path.join(f.projection, "notes.txt"), "saved guest history\n");
+    await f.guestGit("add", "notes.txt");
+    await f.guestGit("commit", "-m", "Save guest work");
+    await fs.writeFile(path.join(f.projection, "artifact.txt"), "staged version\n");
+    await f.guestGit("add", "artifact.txt");
+    await fs.writeFile(path.join(f.projection, "artifact.txt"), "working version\n");
+    await fs.writeFile(path.join(f.projection, "untracked.txt"), "untracked work\n");
+    const snapshot = async () => ({
+      hostHead: await f.git("rev-parse", "HEAD"),
+      hostIndex: await f.git("write-tree"),
+      guestHead: await f.guestGit("rev-parse", "HEAD"),
+      guestIndex: await f.guestGit("write-tree"),
+      guestStatus: await f.guestGit("status", "--porcelain"),
+      artifact: await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8"),
+      notes: await fs.readFile(path.join(f.projection, "notes.txt"), "utf8"),
+      untracked: await fs.readFile(path.join(f.projection, "untracked.txt"), "utf8"),
+    });
+    const before = await snapshot();
+    f.pr.base.ref = "new-destination";
+    f.pr.base.sha = f.headCommit;
+    await f.local!.git("-C", f.upstream, "checkout", "-b", f.pr.base.ref, f.headCommit);
+    for (const advance of [false, true]) {
+      if (advance) {
+        await fs.writeFile(path.join(f.upstream, "destination-only.txt"), "new destination work\n");
+        await f.local!.git("-C", f.upstream, "add", "destination-only.txt");
+        await f.local!.git("-C", f.upstream, "commit", "-m", "Advance destination");
+        f.pr.base.sha = await f.local!.git("-C", f.upstream, "rev-parse", "HEAD");
+      }
+      expect(await f.invoke()).toMatchObject({
+        status: "prepared",
+        headCommit: acceptedHead,
+        headChanged: false,
+        changedPaths: [],
+        conflictPaths: [],
+        review: { mode: "local", base: f.headCommit },
+      });
+      expect(await f.guestGit("rev-parse", "refs/openclaw/review-base")).toBe(f.headCommit);
+      expect(f.readSession().worktree?.githubPullRequest).toMatchObject({
+        base: { branch: f.pr.base.ref, commit: f.pr.base.sha },
+        head: { commit: acceptedHead },
+        preparedHeadCommit: acceptedHead,
+      });
+      expect(await snapshot()).toEqual(before);
+      await expect(fs.stat(path.join(f.projection, "destination-only.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+    expect(f.writes).toEqual([]);
+  });
+
+  it.each(["clean", "authored directory", "cache-only directory"] as const)(
+    "admits only pristine source after native managed sandbox layout (%s)",
+    async (contents) => {
+      const f = await fixture({ empty: true, fork: true });
+      f.config.agents ??= {};
+      f.config.agents.defaults ??= {};
+      f.config.agents.defaults.sandbox = {
+        mode: "all",
+        workspaceAccess: "rw",
+        prune: { idleHours: 0, maxAgeDays: 0 },
+        docker: { user: "1000:1000" },
+      };
+      using gatewayOwner = acquireSandboxGatewayOwner(process.env.OPENCLAW_STATE_DIR!);
+      // Only container transport is synthetic; layout, projection and source import stay real.
+      const create = vi
+        .spyOn(sandboxBackend, "createSandboxBackend")
+        .mockResolvedValue(f.sandbox.backend!);
+      let sandbox: Awaited<ReturnType<typeof resolveSandboxContext>> = null;
+      try {
+        sandbox = await resolveSandboxContext({
+          config: f.config,
+          agentId: "main",
+          sessionKey: f.session.sessionKey,
+          workspaceDir: f.cwd,
+          assertCurrent: () => {
+            gatewayOwner.assertCurrent();
+            f.guest.assertCurrent();
+          },
+        });
+        expect(sandbox?.workspaceSource).toBe("managed-worktree");
+        if (contents === "authored directory") {
+          await fs.mkdir(path.join(f.projection, "saved-empty"));
+          await expect(f.invoke({}, sandbox)).rejects.toThrow(
+            "existing dirty, untracked, or unpublished work",
+          );
+          expect((await fs.stat(path.join(f.projection, "saved-empty"))).isDirectory()).toBe(true);
+          await expect(fs.stat(path.join(f.projection, "pr.txt"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          expect(f.readSession().worktree?.githubPullRequest).toBeUndefined();
+        } else {
+          if (contents === "cache-only directory") {
+            await fs.mkdir(path.join(f.projection, ".cache", "vitest"), { recursive: true });
+          }
+          expect(await f.invoke({}, sandbox)).toMatchObject({
+            status: "prepared",
+            headCommit: f.headCommit,
+          });
+          expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
+            "original PR contents\n",
+          );
+          expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+          await expect(fs.stat(path.join(f.cwd, ".cache"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+        expect(f.writes).toEqual([]);
+      } finally {
+        sandbox?.[Symbol.dispose]?.();
+        create.mockRestore();
+      }
     },
   );
 
@@ -482,29 +613,9 @@ describe("existing PR preparation through the registered agent action", () => {
       const originalHead = await f.git("rev-parse", "HEAD");
       const guestHead = await f.guestGit("rev-parse", "HEAD");
       const guestBranch = await f.guestGit("symbolic-ref", "HEAD");
-      const withStore = workspaceStore.withLocalWorkspaceStore;
-      let interrupted = false;
-      const interruption = vi
-        .spyOn(workspaceStore, "withLocalWorkspaceStore")
-        .mockImplementation((params, operation) =>
-          withStore(params, (store) =>
-            operation({
-              ...store,
-              update: async (row, patch, authority, manifest) => {
-                const result = await store.update(row, patch, authority, manifest);
-                if (
-                  !interrupted &&
-                  patch.pending_target === "projection" &&
-                  isLocalWorkspaceBaseRefreshRef(result.pending_ref)
-                ) {
-                  interrupted = true;
-                  throw new Error("interrupted after initial canonical acceptance");
-                }
-                return result;
-              },
-            }),
-          ),
-        );
+      const { interruption, wasInterrupted } = interruptCanonicalWorkspaceAcceptance(
+        "interrupted after initial canonical acceptance",
+      );
       try {
         await expect(f.invoke()).rejects.toThrow(
           "Accepted workspace publication is indeterminate and requires recovery",
@@ -512,7 +623,7 @@ describe("existing PR preparation through the registered agent action", () => {
       } finally {
         interruption.mockRestore();
       }
-      expect(interrupted).toBe(true);
+      expect(wasInterrupted()).toBe(true);
       expect(f.readSession().worktree?.githubPullRequest).toMatchObject({
         head: { commit: f.headCommit },
       });

@@ -37,34 +37,46 @@ function replaceFixture(source: string, from: string, to: string) {
   expect(replaced).not.toBe(source);
   return replaced;
 }
+function createDynamicConsumerCompiler() {
+  const readFileSync = fs.readFileSync.bind(fs);
+  const readFile = vi.spyOn(fs, "readFileSync");
+  return (overrides: ReadonlyMap<string, string> = new Map()) => {
+    readFile.mockImplementation(
+      (file, options) => overrides.get(path.resolve(String(file))) ?? readFileSync(file, options),
+    );
+    return knipConfig.compilers.mjs("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+  };
+}
 const isEntry = (entries: readonly string[], file: string) =>
   entries.some((entry) => path.matchesGlob(file, entry.replace(/!$/u, "")));
 afterEach(() => vi.restoreAllMocks());
 
 describe("check-deadcode-exports", () => {
+  it("models the renderer and path-selected native compiler as executable roots", () => {
+    expect(knipConfig.workspaces).toHaveProperty(
+      "packages/mermaid-renderer.entry",
+      expect.arrayContaining(["src/renderer.ts!", "src/native.ts!", "src/pele.min.ts!"]),
+    );
+  });
+
   it("models the PostgreSQL broker fixture only when both consumers exist", () => {
-    const compile = knipConfig.compilers.mjs;
-    const filePath = "config/knip-dynamic-consumers.mjs";
-    expect(compile("// dynamic consumers", filePath)).toContain(
+    const compile = createDynamicConsumerCompiler();
+    expect(compile()).toContain(
       'import { createSqliteWorkerBackend as __dynamicPgPool_0 } from "../scripts/perf/pg-pool-broker.fixture.mts";',
     );
-
-    const readFileSync = fs.readFileSync.bind(fs);
-    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      const source = readFileSync(file, options);
-      return path.resolve(String(file)) === path.resolve("scripts/perf/pg-pool-lifecycle.mts")
-        ? String(source).replace('moduleUrl: new URL("./pg-pool-broker.fixture.mts", self),', "")
-        : source;
-    });
-    expect(compile("// dynamic consumers", filePath)).not.toContain("pg-pool-broker.fixture.mts");
-
-    vi.mocked(fs.readFileSync).mockImplementation((file, options) => {
-      const source = readFileSync(file, options);
-      return path.resolve(String(file)) === path.resolve("src/infra/sqlite-store.worker.ts")
-        ? String(source).replace('"createSqliteWorkerBackend"', '""')
-        : source;
-    });
-    expect(compile("// dynamic consumers", filePath)).not.toContain("pg-pool-broker.fixture.mts");
+    for (const [file, from, to] of [
+      [
+        "scripts/perf/pg-pool-lifecycle.mts",
+        'moduleUrl: new URL("./pg-pool-broker.fixture.mts", self),',
+        "",
+      ],
+      ["src/infra/sqlite-store.worker.ts", '"createSqliteWorkerBackend"', '""'],
+    ] as const) {
+      const removed = replaceFixture(fs.readFileSync(file, "utf8"), from, to);
+      expect(compile(new Map([[path.resolve(file), removed]]))).not.toContain(
+        "pg-pool-broker.fixture.mts",
+      );
+    }
   });
 
   it("makes tests in every workspace roots of the full-tree export audit", () => {
@@ -270,8 +282,9 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
   });
 
   it("models only Vite runner members consumed by the build", () => {
-    const source = `const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
-  path.join(here, "src/app-route-paths.ts"), options);
+    const source = `const { module: routes, dependencies: routeDependencies } = await runnerImport<
+  typeof import("./src/app-route-paths.ts")
+>(routePath, options);
 const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
     const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
     expect(knipConfig.workspaces["."].project).toContain("config/knip-vite-consumers.mjs!");
@@ -321,31 +334,99 @@ const catalog = module.loadControlUiSourceCatalog();`;
     );
   });
 
+  it("roots benchmark parents and follows only their live computed child launches", () => {
+    const entries = knipConfig.workspaces["."].entry;
+    for (const parent of [
+      "scripts/perf/archive-worker-churn-measure.ts!",
+      "scripts/perf/session-create-measure.ts!",
+      "scripts/perf/session-create-repository-measure.ts!",
+    ]) {
+      expect(
+        entries.filter((entry) => entry === parent),
+        parent,
+      ).toHaveLength(1);
+    }
+    expect(entries).not.toContain("scripts/perf/archive-worker-churn-preload.mjs!");
+    expect(entries).not.toContain("scripts/perf/session-create-measure-loader.mjs!");
+
+    const archivePath = path.resolve("scripts/perf/archive-worker-churn-measure.ts");
+    const sessionCreatePath = path.resolve("scripts/perf/session-create-measure.ts");
+    const archiveSource = fs.readFileSync(archivePath, "utf8");
+    const sessionCreateSource = fs.readFileSync(sessionCreatePath, "utf8");
+    const compile = createDynamicConsumerCompiler();
+    const compileWithSources = (archive: string, sessionCreate: string) =>
+      compile(
+        new Map([
+          [archivePath, archive],
+          [sessionCreatePath, sessionCreate],
+        ]),
+      );
+
+    const compiled = compileWithSources(archiveSource, sessionCreateSource);
+    expect(compiled).toContain('import "../scripts/perf/archive-worker-churn-preload.mjs";');
+    expect(compiled).toContain('import "../scripts/perf/session-create-measure-loader.mjs";');
+
+    const archiveWithoutLaunch = replaceFixture(
+      archiveSource,
+      '              execArgv: [...(options.execArgv ?? process.execArgv), "--import", preload],',
+      `              execArgv: [...(options.execArgv ?? process.execArgv)],
+              // "--import", preload remains a decoy after the launch is removed.`,
+    );
+    const archiveWithDetachedFragments = `${archiveWithoutLaunch}
+const preload = pathToFileURL(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "archive-worker-churn-preload.mjs"),
+).href;
+const options = {};
+const unrelatedWorkerOptions = {
+  execArgv: [...(options.execArgv ?? process.execArgv), "--import", preload],
+};`;
+    const withoutArchiveLaunch = compileWithSources(
+      archiveWithDetachedFragments,
+      sessionCreateSource,
+    );
+    expect(withoutArchiveLaunch).not.toContain("archive-worker-churn-preload.mjs");
+    expect(withoutArchiveLaunch).toContain(
+      'import "../scripts/perf/session-create-measure-loader.mjs";',
+    );
+
+    const sessionCreateWithoutLaunch = replaceFixture(
+      sessionCreateSource,
+      `      "--import",
+      new URL("./session-create-measure-loader.mjs", import.meta.url).pathname,`,
+      `      "--inspect",
+      new URL("./session-create-measure-loader.mjs", import.meta.url).pathname,
+      // "--import" and the loader path remain decoys after the launch is removed.`,
+    );
+    const sessionCreateWithDetachedArgs = `${sessionCreateWithoutLaunch}
+const unrelatedArgs = [
+  "--import",
+  new URL("./session-create-measure-loader.mjs", import.meta.url).pathname,
+];`;
+    const withoutSessionCreateLaunch = compileWithSources(
+      archiveSource,
+      sessionCreateWithDetachedArgs,
+    );
+    expect(withoutSessionCreateLaunch).toContain(
+      'import "../scripts/perf/archive-worker-churn-preload.mjs";',
+    );
+    expect(withoutSessionCreateLaunch).not.toContain("session-create-measure-loader.mjs");
+  });
+
   it("models exact generated and module-hook named consumers", () => {
     expect(knipConfig.workspaces["."].project).toContain("config/knip-dynamic-consumers.mjs!");
     const compile = knipConfig.compilers.mjs;
     const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
-    expect(compiled).toContain(
+    for (const imported of [
       'import { runtimeProcessDeployManifest as __dynamic0_0, runtimeProcessHelperManifest as __dynamic0_1, runtimeProcessWorkerDependencies as __dynamic0_2 } from "../src/infra/runtime-process-manifest.ts";',
-    );
-    expect(compiled).toContain(
       'import { gatewayBenchTaskOperation as __dynamic1_0 } from "../scripts/lib/gateway-bench-worker-messages.ts";',
-    );
-    expect(compiled).toContain(
       'import { fetchWithSsrFGuard as __dynamic2_0 } from "../extensions/team-reports/src/report-run.benchmark-fixtures.test-support.ts";',
-    );
-    expect(compiled).toContain(
       'import { addDoctorLegacyIssues as __dynamic3_0 } from "../src/commands/doctor/shared/legacy-config-issues.js";',
-    );
-    expect(compiled).toContain(
       'import { projectBundleMcpServerCatalog as __dynamic4_0 } from "../src/agents/agent-bundle-mcp-catalog-projection.js";',
-    );
-    expect(compiled).toContain(
       'import { observeNativeMcpProbe as __dynamic10_0 } from "../src/agents/native-mcp-connect.js";',
-    );
-    expect(compiled).toContain(
       'import { r2Task as __dynamic12_0, r2SearchStart as __dynamic12_1, r2SearchMatch as __dynamic12_2, r2SearchBuild as __dynamic12_3, r2SearchEnd as __dynamic12_4, r2PresentCalled as __dynamic12_5, r2PresentMiss as __dynamic12_6, r2Presentation as __dynamic12_7, r2Consume as __dynamic12_8, r2Materialized as __dynamic12_9 } from "../scripts/perf/session-row-churn-probe.js";',
-    );
+    ]) {
+      expect(compiled).toContain(imported);
+    }
     expect(compiled).toMatch(
       /import \{ recordTrajectoryFlush as __dynamic\d+_0 \} from "\.\.\/scripts\/perf\/trajectory-flush-preload\.mts";/u,
     );
@@ -414,6 +495,79 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(withoutConsumers).not.toContain("recordTrajectoryFlush");
   });
 
+  it("models Codex lazy runtime members only from their live loaders and consumers", () => {
+    const consumerPaths = {
+      plugin: path.resolve("extensions/codex/src/native-plugin-tool.ts"),
+      thread: path.resolve("extensions/codex/src/native-thread-tool.ts"),
+      adoption: path.resolve("extensions/codex/src/session-catalog-list-operation.ts"),
+      control: path.resolve("extensions/codex/src/session-catalog-control.ts"),
+    };
+    const sources = new Map(
+      Object.values(consumerPaths).map((consumerPath) => [
+        consumerPath,
+        fs.readFileSync(consumerPath, "utf8"),
+      ]),
+    );
+    const compileWithSources = createDynamicConsumerCompiler();
+
+    const compiled = compileWithSources();
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bcodexBindingConnectionSelection as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/app-server\/binding-connection\.js";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\blistNodeAdoptedSessionEntries as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/session-catalog-node-adoption\.js";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bclearSharedCodexAppServerClientAndWait as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/app-server\/shared-client\.js";/u,
+    );
+
+    const bindingWithoutPluginConsumer = replaceFixture(
+      sources.get(consumerPaths.plugin) ?? "",
+      "const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =",
+      "const { resolveCodexBindingAppServerConnection } =",
+    );
+    const pluginRemoved = compileWithSources(
+      new Map([[consumerPaths.plugin, bindingWithoutPluginConsumer]]),
+    );
+    expect(pluginRemoved).toContain("codexBindingConnectionSelection as");
+
+    const bindingWithoutThreadConsumer = replaceFixture(
+      sources.get(consumerPaths.thread) ?? "",
+      "const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =",
+      "const { resolveCodexBindingAppServerConnection } =",
+    );
+    const bothBindingConsumersRemoved = compileWithSources(
+      new Map([
+        [consumerPaths.plugin, bindingWithoutPluginConsumer],
+        [consumerPaths.thread, bindingWithoutThreadConsumer],
+      ]),
+    );
+    expect(bothBindingConsumersRemoved).not.toContain("codexBindingConnectionSelection as");
+
+    const adoptionWithoutLoader = replaceFixture(
+      sources.get(consumerPaths.adoption) ?? "",
+      `const loadNodeAdoption = createLazyRuntimeModule(
+  () => import("./session-catalog-node-adoption.js"),
+);`,
+      `const loadNodeAdoption = async () => import("./session-catalog-node-adoption.js");`,
+    );
+    expect(
+      compileWithSources(new Map([[consumerPaths.adoption, adoptionWithoutLoader]])),
+    ).not.toContain("listNodeAdoptedSessionEntries as");
+
+    const controlWithoutMember = replaceFixture(
+      sources.get(consumerPaths.control) ?? "",
+      `        const { clearSharedCodexAppServerClientAndWait } = await loadSharedClient();
+        await clearSharedCodexAppServerClientAndWait();`,
+      `        await loadSharedClient();`,
+    );
+    const withoutControlMember = compileWithSources(
+      new Map([[consumerPaths.control, controlWithoutMember]]),
+    );
+    expect(withoutControlMember).not.toContain("clearSharedCodexAppServerClientAndWait as");
+    expect(withoutControlMember).toContain("runtimeProcessDeployManifest");
+  });
+
   it("models a computed checkout module member only while its binding and call exist", () => {
     const consumerPath = path.resolve(
       ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-scenario.mjs",
@@ -425,14 +579,9 @@ const catalog = module.loadControlUiSourceCatalog();`;
       /import \{[^}\n]*\bcreateScenarioCommandEnvironment as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/\.agents\/skills\/telegram-e2e-userbot\/scripts\/run-mock-sut-user-e2e\.mjs";/u,
     );
 
-    const readFileSync = fs.readFileSync.bind(fs);
-    const readFile = vi.spyOn(fs, "readFileSync");
-    const compileWithConsumer = (source: string) => {
-      readFile.mockImplementation((file, options) =>
-        path.resolve(String(file)) === consumerPath ? source : readFileSync(file, options),
-      );
-      return compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
-    };
+    const compileWithSources = createDynamicConsumerCompiler();
+    const compileWithConsumer = (source: string) =>
+      compileWithSources(new Map([[consumerPath, source]]));
 
     const withoutBinding = compileWithConsumer(
       replaceFixture(
@@ -456,6 +605,49 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(withoutCall).toContain("observeNativeMcpProbe");
   });
 
+  it("follows PR cache named imports only through their supplying heredoc argument", () => {
+    const wrapperPath = path.resolve("scripts/pr");
+    const wrapper = fs.readFileSync(wrapperPath, "utf8");
+    const expected = [
+      "claimCreatedAnchor",
+      "collectUnusedDependencyCaches",
+      "dependencyCacheRoot",
+      "holdDependencyCache",
+      "publishDependencyCache",
+      "privateDependencyDonor",
+      "withDependencyCacheLock",
+    ];
+    const compileWithSources = createDynamicConsumerCompiler();
+    const compile = (source: string) => {
+      const output = compileWithSources(new Map([[wrapperPath, source]]));
+      expect(output).toContain("runtimeProcessDeployManifest");
+      return (
+        output.match(
+          /import \{([^}\n]+)\} from "\.\.\/scripts\/pr-lib\/cache-lifetime\.mjs";/u,
+        )?.[1] ?? ""
+      )
+        .split(",")
+        .map((binding) => binding.trim().split(/\s+as\s+/u)[0])
+        .filter(Boolean);
+    };
+    expect(compile(wrapper)).toEqual(expected);
+    expect(compile(replaceFixture(wrapper, "dependencyCacheRoot, ", ""))).toEqual(
+      expected.filter((name) => name !== "dependencyCacheRoot"),
+    );
+    for (const disconnected of [
+      replaceFixture(wrapper, '"$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs"', '""'),
+      replaceFixture(wrapper, "pathToFileURL(process.argv[6])", "pathToFileURL(process.argv[5])"),
+      replaceFixture(wrapper, "const { claimCreatedAnchor,", "// const { claimCreatedAnchor,"),
+      replaceFixture(
+        wrapper,
+        '  node --input-type=module - "$1"',
+        '  # node --input-type=module - "$1"',
+      ),
+    ]) {
+      expect(compile(disconnected)).toEqual([]);
+    }
+  });
+
   it("removes projected MCP and Python edges with their actual consumers", () => {
     const runtimePath = path.resolve("src/agents/agent-bundle-mcp-runtime.ts");
     const instrumenterPath = path.resolve("scripts/perf/session-row-churn-instrument.py");
@@ -471,21 +663,11 @@ const catalog = module.loadControlUiSourceCatalog();`;
       "edit('src/infra/main-thread-stall.ts',task)",
       "# removed main-thread task instrumentation",
     );
-    const readFileSync = fs.readFileSync.bind(fs);
-    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      const resolved = path.resolve(String(file));
-      if (resolved === runtimePath) {
-        return runtimeWithoutCatalogConsumer;
-      }
-      if (resolved === instrumenterPath) {
-        return instrumenterWithoutTaskConsumer;
-      }
-      return readFileSync(file, options);
-    });
-
-    const compiled = knipConfig.compilers.mjs(
-      "// dynamic consumers",
-      "config/knip-dynamic-consumers.mjs",
+    const compiled = createDynamicConsumerCompiler()(
+      new Map([
+        [runtimePath, runtimeWithoutCatalogConsumer],
+        [instrumenterPath, instrumenterWithoutTaskConsumer],
+      ]),
     );
     expect(compiled).not.toContain("projectBundleMcpServerCatalog");
     expect(compiled).not.toContain("r2Task");
@@ -510,38 +692,31 @@ const catalog = module.loadControlUiSourceCatalog();`;
     );
     expect(compiled).not.toContain("HANDOFF_SCRIPT");
 
-    const generatorPath = path.resolve("scripts/generate-runtime-script-assets.mjs");
-    const prepareHooksPath = path.resolve("scripts/prepare-git-hooks.mjs");
-    const workerArtifactsPath = path.resolve("test/scripts/vitest-worker-artifacts.test.ts");
-    const readFileSync = fs.readFileSync.bind(fs);
-    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      const source = String(readFileSync(file, options));
-      const resolved = path.resolve(String(file));
-      if (resolved === generatorPath) {
-        return replaceFixture(
-          source,
-          'import { materializeRuntimeProcessScriptFile } from "./src/infra/runtime-process-script-file.ts";',
-          "",
-        );
-      }
-      if (resolved === prepareHooksPath) {
-        return replaceFixture(
-          source,
-          'import { resolveRuntimeBootstrapToolingEntrypointUrl } from "../runtime-process-bootstrap.generated.mjs";',
-          "",
-        );
-      }
-      if (resolved === workerArtifactsPath) {
-        return replaceFixture(
-          source,
-          'import { isSqliteWalResetSafeVersion as isSafeVersion } from "../../node-sqlite.mjs";\\n',
-          "const isSafeVersion = () => true;\\n",
-        );
-      }
-      return source;
-    });
-
-    const withoutConsumers = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    const removed = new Map(
+      (
+        [
+          [
+            "scripts/generate-runtime-script-assets.mjs",
+            'import { materializeRuntimeProcessScriptFile } from "./src/infra/runtime-process-script-file.ts";',
+            "",
+          ],
+          [
+            "scripts/prepare-git-hooks.mjs",
+            'import { resolveRuntimeBootstrapToolingEntrypointUrl } from "../runtime-process-bootstrap.generated.mjs";',
+            "",
+          ],
+          [
+            "test/scripts/vitest-worker-artifacts.test.ts",
+            'import { isSqliteWalResetSafeVersion as isSafeVersion } from "../../node-sqlite.mjs";\\n',
+            "const isSafeVersion = () => true;\\n",
+          ],
+        ] as const
+      ).map(([file, from, to]) => [
+        path.resolve(file),
+        replaceFixture(fs.readFileSync(file, "utf8"), from, to),
+      ]),
+    );
+    const withoutConsumers = createDynamicConsumerCompiler()(removed);
     expect(withoutConsumers).not.toContain("materializeRuntimeProcessScriptFile");
     expect(withoutConsumers).not.toContain("resolveRuntimeBootstrapToolingEntrypointUrl");
     expect(withoutConsumers).not.toContain("isSqliteWalResetSafeVersion");

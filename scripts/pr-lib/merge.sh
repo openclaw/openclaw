@@ -657,6 +657,12 @@ merge_run() {
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
+  if [ -n "${PR_WORKFLOW_ADMISSION_PROVENANCE:-}" ]; then
+    [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ -z "$recovery_oid$MERGE_OUTCOME_OID" ] || {
+      merge_outcome_stop "current workflow first admission requires confirmed admin evidence and no retained outcome"
+      return 1
+    }
+  fi
   if [ -n "${PR_WORKFLOW_RECOVERY_PROVENANCE:-}" ]; then
     [ "$recovery_oid" = "${PR_WORKFLOW_RECOVERY_OUTCOME:-}" ] &&
       [ "$replacement_head" = "${PR_WORKFLOW_RECOVERY_HEAD:-}" ] &&
@@ -1307,6 +1313,17 @@ merge_run() {
   if [ -n "$refusal" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson refusal "$refusal" '.recovery.preDispatchRefusal=$refusal') || return 1
   fi
+  if [ -n "${PR_WORKFLOW_ADMISSION_PROVENANCE:-}" ]; then
+    # Recheck the original binding and absence under the lock before the first
+    # intent CAS. This provenance never changes ordinary workflow selection.
+    local admission
+    admission=$(pr_batch_wrapper_git workflow-admission-provenance "$canonical_repo_root" "$pr" \
+      "" "" "$PR_WORKFLOW_TRUST_ANCHOR" "$PR_WORKFLOW_SOURCE_REVISION") || return 1
+    [ "$admission" = "$PR_WORKFLOW_ADMISSION_PROVENANCE" ] || {
+      merge_outcome_stop "workflow binding changed before first admission"; return 1;
+    }
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson provenance "$admission" '.workflowAdmission=$provenance') || return 1
+  fi
   if [ -n "${PR_WORKFLOW_RECOVERY_PROVENANCE:-}" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson provenance "$PR_WORKFLOW_RECOVERY_PROVENANCE" \
       '.workflowRecovery=$provenance') || return 1
@@ -1392,7 +1409,7 @@ merge_run() {
       "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" ":refs/heads/$MERGE_HEAD_REF" 2>&1); then
       # GitHub may already have deleted the branch, or the delete response was
       # lost. Only a successful advertisement with no exact ref proves absence.
-      pr_git ls-remote --exit-code --refs "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" "refs/heads/$MERGE_HEAD_REF" >/dev/null || ref_status=$?
+      pr_remote_branch_sha "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" "$MERGE_HEAD_REF" >/dev/null || ref_status=$?
       if [ "$ref_status" -ne 2 ]; then
         cleanup_complete=false
         echo "Warning: remote cleanup pending; branch changed or inaccessible. Inspect $MERGE_HEAD_REPO:$MERGE_HEAD_REF; never delete it by name without verifying ownership."

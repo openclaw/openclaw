@@ -95,7 +95,7 @@ export class SearchableSelectList extends SelectListInput implements Component, 
 
   // Rank exact label matches before description matches, then fuzzy matches.
   private smartFilter(query: string): SearchableSelectItem[] {
-    const q = normalizeLowercaseStringOrEmpty(query);
+    const q = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
     type ScoredItem = { item: SearchableSelectItem; tier: number; score: number };
     type FuzzyCandidate = { item: SearchableSelectItem; searchText: string };
     const scoredItems: ScoredItem[] = [];
@@ -108,11 +108,11 @@ export class SearchableSelectList extends SelectListInput implements Component, 
       const searchText = stripAnsi(item.searchText ?? "");
       return {
         item,
-        label: normalizeLowercaseStringOrEmpty(label),
-        description: normalizeLowercaseStringOrEmpty(description),
+        label: normalizeLowercaseStringOrEmpty(label).normalize("NFC"),
+        description: normalizeLowercaseStringOrEmpty(description).normalize("NFC"),
         searchText: normalizeLowercaseStringOrEmpty(
           [label, description, searchText].filter((value) => value.length > 0).join(" "),
-        ),
+        ).normalize("NFC"),
       };
     });
     for (const prepared of this.preparedItems) {

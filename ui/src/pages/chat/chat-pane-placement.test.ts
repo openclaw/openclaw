@@ -6,7 +6,7 @@ import type {
   WorkerEnvironmentProfileSummary,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { nativeRuntime, createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
@@ -24,6 +24,7 @@ import {
 } from "./chat-pane-placement.test-support.ts";
 import { resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import {
+  runPaneHeaderAction,
   activePlacementSession as placementSession,
   offlineDeviceSession,
   createTestChatPane,
@@ -133,14 +134,7 @@ function repositoryRecoveryFixture(placementState: "local" | undefined) {
           },
         }
       : {}),
-    agentRuntime: {
-      id: "openclaw",
-      cloudPlacementSupported: true,
-      cloudPlacementExecutionMode: "worker-turn",
-      devicePlacementSupported: true,
-      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-      source: "model",
-    },
+    agentRuntime: { ...nativeRuntime(), devicePlacementSupported: true },
   };
   state.sessionKey = session.key;
   state.currentSessionId = session.sessionId;
@@ -411,9 +405,7 @@ describe("local session placement actions", () => {
     "does not dispatch after the picker becomes stale: %s",
     async (change) => {
       const { pane, session, state, request } = localFixture();
-      const moving = dialogs.track(
-        pane.handleHeaderSessionAction({ kind: "move-session" }, session),
-      );
+      const moving = dialogs.track(runPaneHeaderAction(pane, { kind: "move-session" }, session));
       await selectRepositoryWorker();
       const current = { ...session };
       if (change === "replacement") {
@@ -463,33 +455,42 @@ describe("local session placement actions", () => {
     await moving;
     expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
   });
-  it("does not dispatch a profile after administrator access is revoked", async () => {
-    const { pane, session, request } = localFixture();
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.dispatch"],
-      ["operator.admin", "operator.write"],
-    );
-    const original = request.getMockImplementation()!;
-    request.mockImplementation(async (method, ...args) =>
-      method === "environments.list"
-        ? {
-            profiles: [{ id: "cloud", providerId: "crabbox", executionModes: ["worker-turn"] }],
-            environments: [],
-          }
-        : original(method, ...args),
-    );
-    const moving = dialogs.track(pane.handleHeaderSessionAction({ kind: "move-session" }, session));
-    await dialogs.waitFor(() => expect(option("cloud:cloud")).not.toBeNull());
-    option("cloud:cloud")!.click();
-    flush();
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.dispatch"],
-      ["operator.write"],
-    );
-    answerWorkerPicker("Continue on worker");
-    await moving;
-    expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-  });
+  it.each(["operator.write", "operator.read"])(
+    "rechecks %s after losing administrator access",
+    async (scope) => {
+      const { pane, session, request } = localFixture();
+      pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+        ["sessions.dispatch"],
+        ["operator.admin", "operator.write"],
+      );
+      const original = request.getMockImplementation()!;
+      request.mockImplementation(async (method, ...args) =>
+        method === "environments.list"
+          ? {
+              profiles: [{ id: "cloud", providerId: "crabbox", executionModes: ["worker-turn"] }],
+              dispatchableProfileIds: ["cloud"],
+              environments: [],
+            }
+          : original(method, ...args),
+      );
+      const moving = dialogs.track(runPaneHeaderAction(pane, { kind: "move-session" }, session));
+      await dialogs.waitFor(() => expect(option("cloud:cloud")).not.toBeNull());
+      option("cloud:cloud")!.click();
+      flush();
+      pane.context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.dispatch"], [scope]);
+      answerWorkerPicker("Continue on worker");
+      await moving;
+      if (scope === "operator.write") {
+        expect(request).toHaveBeenCalledWith("sessions.dispatch", {
+          agentId: "main",
+          key: session.key,
+          profileId: "cloud",
+        });
+      } else {
+        expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
+      }
+    },
+  );
 });
 
 describe("cloud placement stop confirmation authority", () => {

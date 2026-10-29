@@ -27,6 +27,7 @@ import {
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_VECTOR_DECODER_SCHEMA_VERSION,
+  AGENT_TEXT_SEARCH_SCHEMA_VERSION,
   AGENT_VECTOR_SEARCH_SCHEMA_VERSION,
   AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
   AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
@@ -48,6 +49,7 @@ import {
   withLegacyAgentPostgresMemoryRevisionTriggers,
 } from "./openclaw-agent-memory-revision-migration.js";
 import { agentTranscriptSearchSchema } from "./openclaw-agent-search-schema.js";
+import { AGENT_TEXT_SEARCH_POSTGRES_SQL } from "./openclaw-agent-text-search-migration.js";
 import {
   AGENT_TRAJECTORY_STORAGE_POSTGRES_MIGRATION_SQL,
   withLegacyAgentPostgresTrajectoryStorage,
@@ -115,6 +117,7 @@ export const agentEngineSchema: StoreSchema = {
   postgres: agentPostgresSql,
   postgresVectorDecoderVersion: 2,
   postgresVectorSearchVersion: 2,
+  postgresTextSearchVersion: 2,
   search: agentTranscriptSearchSchema,
   postgresMigrations: [
     {
@@ -261,6 +264,26 @@ export const agentEngineSchema: StoreSchema = {
       sql: `${agentColdArchiveChunksPostgresMigration(agentPostgresSql)}
         UPDATE schema_meta
         SET schema_version = ${AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: AGENT_TEXT_SEARCH_SCHEMA_VERSION,
+      fromSchema: {
+        postgres: agentPostgresSql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+      },
+      schema: {
+        postgres: agentPostgresSql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      sql: `${AGENT_TEXT_SEARCH_POSTGRES_SQL}
+        UPDATE schema_meta
+        SET schema_version = ${AGENT_TEXT_SEARCH_SCHEMA_VERSION},
           app_version = '${VERSION.replaceAll("'", "''")}',
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,

@@ -108,7 +108,7 @@ it("keeps decoding, connection preparation, and transcription within one deadlin
   prepareWebSocket.mockImplementationOnce(async () => {
     await vi.advanceTimersByTimeAsync(300);
   });
-  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   const errors: unknown[] = [];
   const transcription = server
     .transcribe({ timeoutMs: 1000 })

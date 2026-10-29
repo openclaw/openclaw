@@ -133,6 +133,7 @@ export function startSessionCostUsageProjectionLifetime(params: {
   // The same queue bounds startup and incremental batches and publishes partial progress.
   refreshAgents();
   return {
+    name: "session-cost-usage",
     async stop() {
       offTranscript();
       offRows();

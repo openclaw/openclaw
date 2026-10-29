@@ -361,7 +361,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         const description = `Automation ${label}: retain ${candidate.profileId} for ${modelRef}; model/default/fallback selections stay unchanged.${alternatives.length > 0 ? ` Also eligible: ${alternatives.join(", ")}; to change, run openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef}@<profileId>`)}.` : ""}`;
         if (!params.shouldRepair) {
           warnings.push(
-            `${description} Run openclaw doctor --fix to record its inference account.`,
+            `${description} Its runs are refused until it records this account. Run openclaw doctor --fix to record it.`,
           );
           continue;
         }

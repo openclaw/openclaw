@@ -644,6 +644,7 @@ export function createChatState<TState extends ChatPageHost>(
     }
     const state = stateValue;
     if (state) {
+      state.accessPreferences?.disconnect();
       disposeSelectedSessionMessageSubscription(state);
       releaseChatMediaResourceOwner(state);
       chatRunPresentation(state).cancelFrame();

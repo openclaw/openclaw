@@ -283,11 +283,17 @@ export async function readStartupEntryState(
 ): Promise<GatewayServiceState> {
   const deadline = args.timeoutMs === undefined ? undefined : performance.now() + args.timeoutMs;
   let command: GatewayServiceCommandConfig | null = null;
+  let effectiveExecutable: string | undefined;
   let env = args.env ?? process.env;
   let runtime: GatewayServiceRuntime;
   let loadState: GatewayServiceState["loadState"] = { status: "loaded" };
   try {
-    command = await readStartupEntryCommand(startupEntryPath, { deadline });
+    command = await readStartupEntryCommand(startupEntryPath, {
+      deadline,
+      onEffectiveExecutable: (executable) => {
+        effectiveExecutable = executable;
+      },
+    });
     env = mergeGatewayServiceEnv(env, command);
     args.validateEnvBeforeStatusRead?.(env);
     runtime = await resolveFallbackRuntime(env, command, "control", deadline).catch(
@@ -314,6 +320,9 @@ export async function readStartupEntryState(
     env,
     command,
     runtime,
+    ...(command && runtime.status !== "unknown" && effectiveExecutable
+      ? { effectiveExecutable }
+      : {}),
     ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
   };
 }

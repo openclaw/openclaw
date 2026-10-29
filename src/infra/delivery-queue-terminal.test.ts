@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -220,16 +221,30 @@ describe("delivery queue pending terminal transition", () => {
       // backfilled over-cap group untouched.
       expect(status("missing")).toBeUndefined();
       expect(retainedIds(queueName)).toEqual(ids.toSorted());
-      const prepare = vi.spyOn(db, "prepare");
+      const originalPrepare = db.prepare.bind(db);
+      const pruningQueries = new Map<StatementSync, string>();
+      const prepare = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+        const statement = originalPrepare(sql);
+        if (/^with\s/i.test(sql)) {
+          pruningQueries.set(statement, statement.expandedSQL);
+          statement.run = new Proxy(statement.run.bind(statement), {
+            apply(invoke, receiver: StatementSync, args) {
+              const result = Reflect.apply(invoke, receiver, args);
+              // Capture bindings before the executor releases the statement.
+              pruningQueries.set(statement, statement.expandedSQL);
+              return result;
+            },
+          });
+        }
+        return statement;
+      });
       try {
         if (mode === "exact lookup") {
           expect(status(ids[0])).toBeUndefined();
-          const prune = prepare.mock.results
-            .flatMap((result) => (result.type === "return" ? [result.value] : []))
-            .find((statement) => /^with\s/i.test(statement.sourceSQL));
+          const prune = pruningQueries.values().next().value;
           expect(prune).toBeDefined();
           const plan = db
-            .prepare(`EXPLAIN QUERY PLAN ${prune!.expandedSQL}`)
+            .prepare(`EXPLAIN QUERY PLAN ${prune!}`)
             .all()
             .map((row) => row.detail)
             .join("\n");

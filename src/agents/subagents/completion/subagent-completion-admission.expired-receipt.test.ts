@@ -86,9 +86,7 @@ it.each([
     const input = await suspend("expiry", completionTarget, resultText);
     const before = structuredClone(input.subagent);
     const notices = readCompletionSystemEvents(db.value);
-    if (!delivered) {
-      expect(notices).toHaveLength(1);
-    }
+    expect(notices).toEqual([]);
     const driver = requesterWakeDriver([input]);
     driver.wake.mockImplementation(async (params) => {
       await params.completeBatch(

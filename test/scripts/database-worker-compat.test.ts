@@ -671,31 +671,31 @@ it.each([
     const pluginStateFile = "src/plugin-state/plugin-state-store.sqlite.ts";
     const entryFile = plugin ? pluginStateFile : "src/transaction-reader.ts";
     const entry = plugin ? "accessPluginState" : "read";
-    const inspectCallback = (callback: string) =>
+    const inspectCallback = (callback: string, otherArgument = plugin ? "'failed'" : "db") =>
       inspect(
         {
           [kernelFile]: kernel,
-          ...(plugin
-            ? {}
-            : {
-                [transactionFile]: `export function ${scope}(db, callback) { return callback(); }`,
-              }),
+          ...(!plugin && {
+            [transactionFile]: `export function ${scope}(db, callback) { return callback(); }`,
+          }),
           [entryFile]: plugin
             ? `import { readKernel } from '../session-kernel.js';
 function ${scope}(operation, message, callback) { return callback(); }
-export function accessPluginState() {
-  return ${scope}('lookup', 'failed', ${callback});
-}`
-            : `import { ${scope} } from './infra/sqlite-transaction.js';
+export function accessPluginState() { return ${scope}('lookup', ${otherArgument}, ${callback}); }`
+            : `const { ${scope}: enterScope } = await import('./infra/sqlite-transaction.js');
 import { readKernel } from './session-kernel.js';
-export function read() { return ${scope}(db, ${callback}); }`,
+export function read() { return enterScope(${otherArgument}, ${callback}); }`,
         },
         `import { ${entry} } from '../${entryFile.slice(4).replace(/\.ts$/, ".js")}';
 /** @deprecated Use workers. */
 export function ${first}() { return ${entry}(); }`,
       );
 
-    expectClosed(inspectCallback("() => readKernel()"));
+    const callback = "() => { readKernel(); readKernel(); return readKernel(); }";
+    expectClosed(inspectCallback(callback));
+    const misplaced = inspectCallback(callback, "() => readKernel()");
+    expect(misplaced.operations.has(kernelFile)).toBe(false);
+    expect(misplaced.callLocations.get(entryFile)?.size).toBe(plugin ? 5 : 4);
     expect(inspectCallback("() => () => readKernel()").operations.has(kernelFile)).toBe(false);
   },
 );

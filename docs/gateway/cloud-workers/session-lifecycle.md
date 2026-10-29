@@ -37,11 +37,17 @@ If the node is still reconnecting after a Gateway restart or update, that same s
 
 A message that arrives while the Gateway is installing an updated worker runtime on its machine waits for that installation before admission instead of interrupting it. Bytes still transferring to the node keep the turn alive; Stop, the turn's timeout, or a Gateway restart cancels the wait. After installation, the turn runs on the updated runtime; a failed update follows the existing pending-update recovery.
 
-Graceful Gateway stop and restart interrupt OpenClaw worker turns as soon as draining begins, because worker protocol admission is closed during shutdown. The Gateway retains each interrupted turn's claim and pending workspace results for startup recovery instead of waiting for worker admission retries or failing the placement. Local embedded turns keep their normal drain behavior.
+Graceful Gateway stop and restart mark running root sessions and abort active
+worker turns promptly. They do not preserve execution claims for startup replay.
+In-flight provisioning is cancelled and its resources released; the resumed root
+turn can request provisioning again if needed.
 
-Shutdown also cancels active worker provisioning and allocation recovery, then waits for their commands to settle before closing state. It retains the allocation's operation ID and recorded lease for restart recovery; stopping the Gateway does not request destruction of the machine.
-
-For node-backed sessions interrupted by a restart, recovery confirms the old worker has stopped, settles pending workspace results, and retires the interrupted turn while retaining the machine. An interrupted claim without a finishing acknowledgment enters the same result recovery flow, so edits already made on the retained machine are accepted before the next turn. The next message receives fresh authority; it does not replay the interrupted tool call automatically. Explicit Stop, Move, and failed-provider cleanup retain their normal teardown behavior.
+Resource and file integrity remain separate responsibilities. Recorded leases,
+staged workspace results, move journals, and orphan cleanup remain durable. Their
+owners can finish reconciliation or release resources without restarting an agent
+turn. The next admitted input uses fresh authority and does not mechanically replay
+an interrupted tool call. Explicit Stop, Move, and failed-provider cleanup keep
+their normal teardown behavior.
 
 ## Synchronize workspace files
 
@@ -52,7 +58,7 @@ for implementation and benchmarking details.
 
 Workspace manifest downloads use gzip when the node supports it and remain compatible with uncompressed transfers. Both the compressed response and its decoded manifest stay within the 64 MiB safety limit; the node verifies the decoded manifest before changing the workspace.
 
-For a Gateway-source worktree, synchronization is not continuous: OpenClaw sends a fresh eligible inventory at dispatch, not before every turn on an existing worker. Files created only on the Gateway after dispatch remain local until explicitly staged with `git add`. Staged paths join the accepted manifest at the next completed worker reconciliation. Unstaged new inputs require a fresh dispatch.
+For a Gateway-source worktree, OpenClaw sends a fresh eligible inventory at dispatch. Files created only on the Gateway afterward remain local until explicitly staged with `git add`. Before the next worker turn executes, reconciliation admits those staged paths, preserves independent worker edits, and retains conflicting worker bytes for inspection. Completed turns also reconcile workspace changes. Unstaged new inputs require a fresh dispatch.
 
 ### Deliver skills to the worker
 
@@ -237,7 +243,7 @@ unsynced-file and in-flight-work loss boundary as the Control UI confirmation.
 
 ## Recover after an interruption
 
-Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines; interrupted pending provisioning retains its fixed provider operation for startup replay. A failed model turn keeps the active placement available for a retry. In Gateway-source worktrees, workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
+Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), with durable resource cleanup so interruption does not justify guessing or leaking a machine. In-flight provisioning is cancelled at graceful shutdown rather than replayed as execution at startup. A failed model turn keeps the active placement available for a retry. In Gateway-source worktrees, workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
 
 Recovery requested for one worker inspects that environment and resumes only its associated workspace results and moves, waiting for earlier operations on those sessions. Regular background sweeps reconcile all environments, then recover sessions one at a time. They skip sessions with an unfinished placement operation and retry them on the next sweep. Orphan workspace cleanup also waits until every session sharing that workspace is idle. A targeted recovery does not wait for an unrelated background sweep. These queues exist only in the running Gateway; updates do not change persisted placement state or configuration.
 

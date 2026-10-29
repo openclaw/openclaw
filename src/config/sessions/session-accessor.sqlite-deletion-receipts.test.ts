@@ -27,7 +27,7 @@ import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { mutateMemory } from "./session-actor-memory-publication.test-support.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -101,7 +101,8 @@ it.each([false, true])(
     const unrelatedScopes = [baseKey, admission.sqliteSessionIdWriteScope(unrelatedSessionId)];
     token(scopes);
     token(unrelatedScopes);
-    const scopeCount = () => admissions()[0]?.writeScopes.size;
+    const scopeCount = () =>
+      admissions()[0]?.writeScopes.reduce((size, bucket) => size + bucket.size, 0);
     const retainedBefore = scopeCount();
     expect(retainedBefore).toBeGreaterThanOrEqual(4);
     const failure = new Error("rollback receipt retirement");
@@ -171,8 +172,12 @@ it("retires a replaced legacy key while retaining the transferred window scope",
     admission.sqliteSessionIdWriteScope(sessionId),
   ]);
   const scopes = () =>
-    admission.captureSqliteDatabaseAdmissions().find((record) => record.location === database.path)!
-      .writeScopes;
+    new Map(
+      admission
+        .captureSqliteDatabaseAdmissions()
+        .find((record) => record.location === database.path)!
+        .writeScopes.flatMap((bucket) => Array.from(bucket)),
+    );
   const retained = new Map(scopes());
   expect(retained.delete(JSON.stringify(["key", sessionKey]))).toBe(true);
   const stale = structuredClone(admission.captureSqliteDatabaseAdmissions());

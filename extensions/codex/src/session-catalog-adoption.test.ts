@@ -48,13 +48,12 @@ type SessionSummary = ReturnType<typeof createRuntime>["entries"][number];
 const THREAD_ID = "thread-1";
 const SESSION_KEY = supervisionSessionKey(THREAD_ID);
 
-function bulkState(namespace: string) {
-  const state = createCodexSqliteTestBindingStateStore({
+function bindingState(namespace: string) {
+  return createCodexSqliteTestBindingStateStore({
     namespace,
     maxEntries: 10,
     env: { ...process.env },
   });
-  return { state, bindingStore: createLazyCodexAppServerBindingStore(state) };
 }
 
 function bindingIdentity(summary: SessionSummary, cfg = config) {
@@ -137,6 +136,24 @@ function catalogControl(threadIds: string[], status = "idle") {
   });
 }
 
+const adoptionSummary = (sourceThreadId: string, agentId = "main"): SessionSummary => ({
+  sessionKey: `agent:${agentId}:${supervisionSessionInputKey(sourceThreadId)}`,
+  entry: adoptedEntry({ sourceThreadId, sessionId: `${agentId}-${sourceThreadId}-session` }),
+});
+
+async function withBulkState(
+  namespace: string,
+  run: (state: ReturnType<typeof bindingState>, store: CodexAppServerBindingStore) => Promise<void>,
+) {
+  const state = bindingState(namespace);
+  try {
+    await run(state, createLazyCodexAppServerBindingStore(state));
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+  }
+}
+
 async function adoptedSource(
   sourceThreadId: string,
   entry = adoptedEntry({ sourceThreadId }),
@@ -184,17 +201,13 @@ async function duringHistoryImport(
 }
 
 it("refreshes bulk adoption authority after a generation changes or a binding disappears", async () => {
-  const { state, bindingStore } = bulkState("adoption-cohort");
-  const entries = ["first", "second"].map((sourceThreadId) => ({
-    sessionKey: supervisionSessionKey(sourceThreadId),
-    entry: adoptedEntry({ sourceThreadId, sessionId: `session-${sourceThreadId}` }),
-  }));
+  const entries = ["first", "second"].map((id) => adoptionSummary(id));
   const { runtime } = createRuntime({ entries });
   const sessionEntries: SessionCatalogEntrySnapshot = {
     revision: {},
     entriesForAgent: () => entries,
   };
-  try {
+  await withBulkState("adoption-cohort", async (state, bindingStore) => {
     for (const [index, sourceThreadId] of ["first", "second"].entries()) {
       await seedSummary(bindingStore, entries[index]!, sourceThreadId);
     }
@@ -222,10 +235,7 @@ it("refreshes bulk adoption authority after a generation changes or a binding di
     expect(await list()).toEqual([entries[0]!.sessionKey, undefined]);
     expect(syncLookupMany).not.toHaveBeenCalled();
     expect(lookup).not.toHaveBeenCalled();
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-  }
+  });
 });
 
 it("reuses adoption preparation across catalog lists until the entry revision changes", async () => {
@@ -272,20 +282,13 @@ it("reuses adoption preparation across catalog lists until the entry revision ch
 });
 
 it("reports duplicate adoption across agents before decoding a later malformed bulk row", async () => {
-  const { state, bindingStore } = bulkState("adoption-order");
   const cohortConfig: OpenClawConfig = {
     agents: { entries: { main: {}, beta: {}, gamma: {} } },
   };
-  const duplicates = ["main", "beta"].map((agentId) => ({
-    sessionKey: `agent:${agentId}:${supervisionSessionInputKey("duplicate")}`,
-    entry: adoptedEntry({ sourceThreadId: "duplicate", sessionId: `${agentId}-session` }),
-  }));
-  const malformed = {
-    sessionKey: `agent:gamma:${supervisionSessionInputKey("malformed")}`,
-    entry: adoptedEntry({ sourceThreadId: "malformed", sessionId: "malformed-session" }),
-  };
+  const duplicates = ["main", "beta"].map((agentId) => adoptionSummary("duplicate", agentId));
+  const malformed = adoptionSummary("malformed", "gamma");
   const { runtime, entries } = createRuntime({ entries: [...duplicates, malformed] });
-  try {
+  await withBulkState("adoption-order", async (state, bindingStore) => {
     for (const duplicate of duplicates) {
       await seedSummary(bindingStore, duplicate, "duplicate");
     }
@@ -298,41 +301,30 @@ it("reports duplicate adoption across agents before decoding a later malformed b
     await expect(
       listAdoptedSessionEntries({ agentId: "main", bindingStore, config: cohortConfig, runtime }),
     ).rejects.toThrow(`Invalid Codex app-server binding row: ${key}`);
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-  }
+  });
 });
 
-it("enriches only the local source row with its adopted OpenClaw session", async () => {
-  const control = catalogControl(["source-thread"], "active");
-  const f = await adoptedSource("source-thread", undefined, {
-    nodes: [
-      { nodeId: "devbox", connected: true, commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND] },
-    ],
-    invoke: vi.fn(async () => ({
-      payloadJSON: JSON.stringify({ sessions: [catalogRow("source-thread")] }),
-    })),
-  });
-  const result = await f.list({ control });
-
-  expect(sessionRows(result)?.[0]).toMatchObject({
-    threadId: "source-thread",
-    sessionKey: f.sessionKey,
-  });
-  expect(sessionRows(result, 1)).toEqual([catalogRow("source-thread")]);
-});
-
-it("ignores a public marker retarget and trusts the private source binding", async () => {
-  const control = catalogControl(["source-thread", "forged-thread"]);
-  const f = await adoptedSource("source-thread", adoptedEntry({ sourceThreadId: "forged-thread" }));
-
+it("enriches only the trusted local binding, not a retargeted marker or paired source", async () => {
+  const control = catalogControl(["source-thread", "forged-thread"], "active");
+  const f = await adoptedSource(
+    "source-thread",
+    adoptedEntry({ sourceThreadId: "forged-thread" }),
+    {
+      nodes: [
+        { nodeId: "devbox", connected: true, commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND] },
+      ],
+      invoke: vi.fn(async () => ({
+        payloadJSON: JSON.stringify({ sessions: [catalogRow("source-thread")] }),
+      })),
+    },
+  );
   const result = await f.list({ control });
 
   expect(sessionRows(result)).toEqual([
-    { ...catalogRow("source-thread"), sessionKey: f.sessionKey },
-    catalogRow("forged-thread"),
+    { ...catalogRow("source-thread", "active"), sessionKey: f.sessionKey },
+    catalogRow("forged-thread", "active"),
   ]);
+  expect(sessionRows(result, 1)).toEqual([catalogRow("source-thread")]);
 });
 
 it.each([
@@ -665,13 +657,7 @@ describe("adoption recovery", () => {
 
   it("rolls back the session when its pending binding cannot be committed", async () => {
     const f = recoveryFixture();
-    const inner = createCodexAppServerBindingStore(
-      createCodexSqliteTestBindingStateStore({
-        namespace: "adoption-rollback",
-        maxEntries: 10,
-        env: { ...process.env },
-      }),
-    );
+    const inner = createCodexAppServerBindingStore(bindingState("adoption-rollback"));
     let rejectBinding = true;
     const mutate = vi.fn(async (...args: Parameters<CodexAppServerBindingStore["mutate"]>) => {
       if (rejectBinding && args[1].kind === "set") {

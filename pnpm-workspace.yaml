@@ -63,13 +63,6 @@ minimumReleaseAgeExclude:
   - "@openclaw/proc-safe-linux-x64-musl@0.4.2"
   - "@openclaw/proc-safe-win32-arm64-msvc@0.4.2"
   - "@openclaw/proc-safe-win32-x64-msvc@0.4.2"
-  # Draft tsrs type-check trial (obviyus); remove after 2026-10-23T16:59:18.996Z.
-  - "tsrs@0.16.0-ts7.1.0-dev.20260929"
-  - "@tsrs/darwin-arm64@0.16.0-ts7.1.0-dev.20260929"
-  - "@tsrs/linux-arm64-gnu@0.16.0-ts7.1.0-dev.20260929"
-  - "@tsrs/linux-arm64-musl@0.16.0-ts7.1.0-dev.20260929"
-  - "@tsrs/linux-x64-gnu@0.16.0-ts7.1.0-dev.20260929"
-  - "@tsrs/linux-x64-musl@0.16.0-ts7.1.0-dev.20260929"
   # Claude ACP adapter bump for CVE-2026-111497 (brotli fix in SDK 0.3.309 binaries); remove after 2026-10-30T20:00:57.929Z.
   - "@agentclientprotocol/claude-agent-acp@0.95.0"
   - "@agentclientprotocol/sdk@2.0.1"
@@ -100,14 +93,14 @@ overrides:
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
   "@agentclientprotocol/codex-acp@2.2.2>@openai/codex": 0.164.0
-  "@codemirror/commands@6.11.1>@codemirror/view": 6.43.14
-  "@codemirror/view@6.43.14>@codemirror/state": 6.7.6
+  "@codemirror/commands@6.11.1>@codemirror/view": 6.43.15
+  "@codemirror/view@6.43.15>@codemirror/state": 6.7.6
   "@anthropic-ai/sdk": 0.135.0
   "@anthropic-ai/vertex-sdk@0.21.0>google-auth-library": 11.3.1
   "@opentelemetry/core": 2.12.0
   "@opentelemetry/propagator-jaeger": 2.12.0
-  "@aws-sdk/core": 3.978.3
-  "@aws-sdk/credential-provider-node": 3.972.86
+  "@aws-sdk/core": 3.978.4
+  "@aws-sdk/credential-provider-node": 3.972.87
   "@aws-sdk/xml-builder": 3.972.41
   "@hono/node-server": 2.1.5
   axios: 1.20.0
@@ -129,7 +122,7 @@ overrides:
   proxy-addr: 2.0.8
   qs: 6.16.1
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.4.1
+  typebox: 1.4.2
   tar: 7.5.22
   tough-cookie: 6.0.2
   "tsdown>rolldown-plugin-dts": 0.28.8

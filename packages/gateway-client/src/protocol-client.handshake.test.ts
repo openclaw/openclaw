@@ -326,6 +326,9 @@ it("retires requests and authority before a synchronous close callback restarts 
   await expectCountAfter(100, connections, 2);
   const replacement = connections[1];
   assert(replacement);
+  receiveConnectChallenge(replacement);
+  receiveHello(replacement);
+  await vi.advanceTimersByTimeAsync(0);
   respond(replacement, lastFrame(replacement).id, { healthy: true });
   await expect(recoveredRequest).resolves.toEqual({ healthy: true });
   expect(client.hasPendingRequests).toBe(false);

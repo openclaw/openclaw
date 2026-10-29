@@ -36,6 +36,7 @@ import {
 import {
   readGitHubPublicationRequestInWorker,
   reconcileGitHubPublication,
+  observeGitHubPublication,
   type GitHubPublicationRecoveryBackoff,
 } from "./github-publication-recovery.js";
 import { insertGitHubPublicationRequestAsync } from "./github-publication-request-async.js";
@@ -237,6 +238,7 @@ export function createGitHubPublicationCoordinator(params: {
     validateExecution: () => boolean,
     assertInvocationCurrent?: () => void,
     invocationSignal?: AbortSignal,
+    recoveryResult?: SessionGitHubPublicationResult,
   ): Promise<SessionGitHubPublicationResult> => {
     if (initial.status === "published" || initial.status === "failed") {
       return Promise.resolve(publicationResult(initial));
@@ -320,6 +322,16 @@ export function createGitHubPublicationCoordinator(params: {
             assertOwned();
             return await executeGitHubPublication({
               initial: claimed,
+              recoveryResult:
+                recoveryResult ??
+                (claimed.head_commit
+                  ? () =>
+                      observeGitHubPublication({
+                        initial: claimed,
+                        validateCustody,
+                        beforeRetry: true,
+                      })
+                  : undefined),
               requester: getRequester,
               requesterProfileId: () => {
                 const actor = getRequester().snapshot.actor;

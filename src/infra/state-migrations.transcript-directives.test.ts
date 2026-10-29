@@ -444,16 +444,18 @@ describe("historical transcript directive migration", () => {
     const { env, databasePath } = fixture();
     closeOpenClawAgentDatabasesForTest();
     const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
-    vi.spyOn(agentDatabaseLease, "assertNoOpenClawAgentDatabaseLeases").mockImplementation(() => {
-      throw new Error("shared-state lease inspection failed");
-    });
+    vi.spyOn(agentDatabaseLease, "assertNoOpenClawAgentDatabaseLeasesReadOnly").mockImplementation(
+      () => {
+        throw new Error("shared-state lease inspection failed");
+      },
+    );
 
     const result = await migrateHistoricalTranscriptDirectives({ env });
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
       expect.stringContaining(
-        `Skipped historical transcript directive migration preflight for ${databasePath}: Error: shared-state lease inspection failed`,
+        "Skipped historical transcript directive migration: Error: shared-state lease inspection failed",
       ),
     ]);
     expect(readMigrationCursor(databasePath)).toBeUndefined();
@@ -479,6 +481,42 @@ describe("historical transcript directive migration", () => {
         .get("historical-transcript-directives-v1"),
     ).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "defers idle bookkeeping but keeps actual legacy repair exclusive (legacy=%s)",
+    async (legacy) => {
+      const { env, database, databasePath } = fixture();
+      const event = textEvent(
+        "idle-assistant",
+        legacy ? "[[reply_to_current]] repair" : "Canonical",
+      );
+      insertSession(database, {
+        events: [event],
+        generation: "before",
+        sessionId: "idle-session",
+        legacy,
+      });
+      const active = openOpenClawAgentDatabase({ agentId: "active", env });
+      closeOpenClawAgentDatabasesForTest();
+      const leaseId = claimOpenClawAgentDatabaseLease({
+        agentId: "active",
+        path: active.path,
+        env,
+      });
+
+      const result = await migrateHistoricalTranscriptDirectives({ env }).finally(() =>
+        releaseOpenClawAgentDatabaseLease(leaseId, { env }),
+      );
+
+      if (legacy) {
+        expect(result.warnings).toEqual([expect.stringContaining("still open")]);
+      } else {
+        expect(result).toEqual(NO_CHANGES);
+      }
+      expect(readMigrationCursor(databasePath)).toBeUndefined();
+      expect(JSON.parse(readEventJson(databasePath, "idle-session", 0))).toEqual(event);
+    },
+  );
 
   it("continues preflight after an unreadable target", async () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-preflight-targets-");

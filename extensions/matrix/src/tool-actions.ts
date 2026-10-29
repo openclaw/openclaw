@@ -49,6 +49,7 @@ import {
   startMatrixVerification,
   verifyMatrixRecoveryKey,
 } from "./matrix/actions/verification.js";
+import { resolveMatrixAuthContext } from "./matrix/client.js";
 import { withAuthorizedMatrixReadTarget } from "./matrix/read-policy.js";
 import type { MatrixClient } from "./matrix/sdk.js";
 import { reactMatrixMessage, sendMessageMatrix } from "./matrix/send.js";
@@ -352,7 +353,13 @@ export async function handleMatrixAction(
       readStringParam(params, "filePath");
     const displayName = readStringParam(params, "displayName") ?? readStringParam(params, "name");
     const avatarUrl = readStringParam(params, "avatarUrl");
-    const { accountId } = prepareAction("profile");
+    // Omitted account ids resolve to defaultAccount. Check that account's profile gate.
+    const contextAccountId = readStringParam({ accountId: ctx.accountId }, "accountId");
+    const accountId = contextAccountId ?? resolveMatrixAuthContext({ cfg }).accountId;
+    const profileEnabled = createActionGate(resolveMatrixAccountConfig({ cfg, accountId }).actions);
+    if (!profileEnabled("profile")) {
+      throw new Error(MATRIX_ACTION_DISABLED_MESSAGES.profile);
+    }
     const result = await applyMatrixProfileUpdate({
       cfg,
       account: accountId,

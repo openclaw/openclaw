@@ -1,7 +1,10 @@
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
+import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import type { CronDeliveryPreview, CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
 import { ExitError } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { registerCronCli } from "./cron-cli.js";
 import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
 
@@ -164,54 +167,23 @@ async function editSchedule(
   return rpcParams<{ patch: CronJobPatch }>("cron.update").patch;
 }
 
-async function runCronRunAndCaptureExit(params: {
-  ran?: boolean;
-  enqueued?: boolean;
-  runId?: string;
-  history?: Array<
-    { status: "ok"; completionStatus?: "failed"; deliveryStatus?: "not-requested" } | undefined
-  >;
-  expectedError?: string;
-  args?: string[];
-}) {
+function mockQueuedRun(...history: Array<Partial<CronRunLogEntry> | undefined>) {
   resetGatewayMock();
-  let runPollCount = 0;
-  callGatewayFromCli.mockImplementation(async (method: string) => {
-    if (method === "cron.run") {
-      return {
-        ok: true,
-        ran: params.ran,
-        enqueued: params.enqueued,
-        runId: params.runId,
-      };
-    }
-    if (method === "cron.runs") {
-      const entry = params.history?.[runPollCount++];
-      return { entries: entry ? [entry] : [] };
-    }
-    return { ok: true };
-  });
+  callGatewayFromCli
+    .mockResolvedValueOnce({ ok: true, enqueued: true, runId: "manual:job-1:123:0" })
+    .mockImplementation(async () => ({ entries: history.splice(0, 1).filter(Boolean) }));
+}
 
-  let exitCode: number | undefined;
+async function parseExit(args: string[]): Promise<number | undefined> {
   try {
-    await parse(params.args ?? ["cron", "run", "job-1"]);
+    await parse(args);
+    return undefined;
   } catch (error) {
     if (!(error instanceof ExitError)) {
       throw error;
     }
-    exitCode = error.code;
+    return error.code;
   }
-  if (params.expectedError) {
-    expectRuntimeErrorContaining(params.expectedError);
-  } else {
-    expect(defaultRuntime.error).not.toHaveBeenCalled();
-  }
-  const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
-  return {
-    exitCode,
-    runOpts: (runCall?.[1] ?? {}) as { timeout?: string },
-    calls: callGatewayFromCli.mock.calls,
-  };
 }
 
 function flags(options: Record<string, string | true>): string[] {
@@ -255,30 +227,17 @@ it("resolves Gateway options with leaf overrides", async () => {
   );
 });
 
-it.each([
-  {
-    name: "exits 0 for cron run when job is queued successfully",
-    enqueued: true,
-    expectedExitCode: 0,
-  },
-  {
-    name: "exits 1 for cron run when job does not execute",
-    ran: false,
-    expectedExitCode: 1,
-  },
-])("$name", async ({ ran, enqueued, expectedExitCode }) => {
-  const { exitCode } = await runCronRunAndCaptureExit({ ran, enqueued });
-  expect(exitCode).toBe(expectedExitCode);
+it.each([{ enqueued: true }, { ran: false }])("returns run exit status for %j", async (result) => {
+  resetGatewayMock();
+  callGatewayFromCli.mockResolvedValueOnce({ ok: true, ...result });
+  expect(await parseExit(["cron", "run", "job-1"])).toBe("enqueued" in result ? 0 : 1);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
 });
 
 it("waits for stored failed completion", async () => {
-  const { calls, exitCode } = await runCronRunAndCaptureExit({
-    enqueued: true,
-    runId: "manual:job-1:123:0",
-    history: [{ status: "ok", completionStatus: "failed" }],
-    args: [...RUN_WAIT, "--wait-timeout", "1s", "--poll-interval", "1ms"],
-  });
-  expect(exitCode).toBe(1);
+  mockQueuedRun({ status: "ok", completionStatus: "failed" });
+  expect(await parseExit([...RUN_WAIT, "--wait-timeout", "1s", "--poll-interval", "1ms"])).toBe(1);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
   expect(rpcParams("cron.runs")).toEqual({
     id: "job-1",
     runId: "manual:job-1:123:0",
@@ -289,7 +248,7 @@ it("waits for stored failed completion", async () => {
     status: "ok",
     completionStatus: "failed",
   });
-  expect(calls.some(([method]) => method === "cron.get")).toBe(false);
+  expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.get")).toBe(false);
 });
 
 it("reduces each history RPC timeout after the system clock jumps backward", async () => {
@@ -300,12 +259,8 @@ it("reduces each history RPC timeout after the system clock jumps backward", asy
   const startedAt = new Date("2026-07-27T12:00:00.000Z");
   vi.setSystemTime(startedAt);
 
-  const pendingRun = runCronRunAndCaptureExit({
-    enqueued: true,
-    runId: "manual:job-1:123:0",
-    history: [undefined, { status: "ok", deliveryStatus: "not-requested" }],
-    args: [...RUN_WAIT, "--wait-timeout", "100ms", "--poll-interval", "25ms"],
-  });
+  mockQueuedRun(undefined, { status: "ok", deliveryStatus: "not-requested" });
+  const pendingRun = parseExit([...RUN_WAIT, "--wait-timeout", "100ms", "--poll-interval", "25ms"]);
 
   await vi.advanceTimersByTimeAsync(0);
   expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.runs")).toHaveLength(
@@ -314,13 +269,13 @@ it("reduces each history RPC timeout after the system clock jumps backward", asy
   vi.setSystemTime(new Date(startedAt.getTime() - 3_600_000));
   await vi.advanceTimersByTimeAsync(25);
 
-  const { calls, exitCode, runOpts } = await pendingRun;
-  const pollTimeouts = calls
+  expect(await pendingRun).toBe(0);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  const pollTimeouts = callGatewayFromCli.mock.calls
     .filter(([method]) => method === "cron.runs")
     .map(([, options]) => Number((options as { timeout?: string }).timeout));
 
-  expect(exitCode).toBe(0);
-  expect(runOpts.timeout).toBe("600000");
+  expect(callGatewayFromCli.mock.calls[0]?.[1]).toMatchObject({ timeout: "600000" });
   expect(pollTimeouts).toHaveLength(2);
   expect(pollTimeouts.every(Number.isSafeInteger)).toBe(true);
   expect(pollTimeouts[0]).toBeLessThanOrEqual(100);
@@ -330,16 +285,59 @@ it("reduces each history RPC timeout after the system clock jumps backward", asy
 
 it("bounds oversized poll intervals by the wait timeout", async () => {
   vi.useFakeTimers();
-  const run = runCronRunAndCaptureExit({
-    enqueued: true,
-    runId: "manual:job-1:123:0",
-    args: [...RUN_WAIT, "--wait-timeout", "10ms", "--poll-interval", "999999999999999ms"],
-    expectedError: "timed out waiting for cron run",
-  });
+  mockQueuedRun();
+  const run = parseExit([
+    ...RUN_WAIT,
+    "--wait-timeout",
+    "10ms",
+    "--poll-interval",
+    "999999999999999ms",
+  ]);
   await vi.advanceTimersByTimeAsync(0);
   expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.runs")).toBe(true);
   await vi.advanceTimersByTimeAsync(10);
-  expect((await run).exitCode).toBe(1);
+  expect(await run).toBe(1);
+  expectRuntimeErrorContaining("timed out waiting for cron run");
+});
+
+it.each(["sleep", "request", "completion"])("cancels cron wait during %s", async (phase) => {
+  vi.useFakeTimers();
+  resetGatewayMock();
+  const scope = new AsyncWorkScope();
+  const completed = { entries: [{ status: "ok", completionStatus: "succeeded" }] } as const;
+  const read = createDeferredCore<typeof completed>();
+  const polls = () => callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.runs");
+  callGatewayFromCli
+    .mockResolvedValue(completed)
+    .mockResolvedValueOnce({ ok: true, enqueued: true, runId: "queued-run" })
+    .mockImplementationOnce(async (_method, _opts, _params, extra?: { signal?: AbortSignal }) => {
+      if (phase === "request" && extra?.signal) {
+        const { signal } = extra;
+        signal.addEventListener("abort", () => read.reject(signal.reason), { once: true });
+      }
+      return phase === "sleep" ? { entries: [] } : read.promise;
+    });
+  const settled = vi.fn();
+  const running = scope.track(() => parse([...RUN_WAIT, "--poll-interval", "500ms"]));
+  void running.then(() => settled(), settled);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(polls()).toHaveLength(1);
+    scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
+    if (phase === "completion") {
+      read.resolve(completed);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledExactlyOnceWith();
+    for (const output of [defaultRuntime.writeStdout, defaultRuntime.error, defaultRuntime.exit]) {
+      expect(output).not.toHaveBeenCalled();
+    }
+    expect(polls()).toHaveLength(1);
+  } finally {
+    read.resolve(completed);
+    await vi.advanceTimersByTimeAsync(500);
+    await scope.drain();
+  }
 });
 
 it.each([

@@ -9,6 +9,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { formatErrorMessage } from "./errors.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
+import { cleanupTerminatedHandoffStage } from "./update-handoff-recovery.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { canReconcileUpdateRunCandidates } from "./update-run-read.kernel.js";
 import type {
@@ -97,6 +98,9 @@ async function reconcileCandidates(
   );
   if (!result) {
     throw new Error("Update history disappeared before reconciliation");
+  }
+  for (const run of result.reconciled) {
+    await cleanupTerminatedHandoffStage(run, options);
   }
   return result;
 }

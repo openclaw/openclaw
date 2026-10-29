@@ -5,7 +5,9 @@ import {
   inspectPostgresGeneration,
   lockPostgresGeneration,
 } from "../../snapshot/postgres-generation.js";
-import type { PostgresPoolEndpoint, PostgresPoolSetup, PostgresPoolWorkerData } from "./pool.js";
+import { materializeErrorStack } from "../error-graph-internal.js";
+import type { PostgresPoolEndpoint } from "./pool-state.js";
+import type { PostgresPoolSetup, PostgresPoolWorkerData } from "./pool.js";
 import type {
   BridgeReply,
   BridgeRequest,
@@ -75,6 +77,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
             return;
           } catch (error) {
             connectionError = error instanceof Error ? error : new Error(String(error));
+            materializeErrorStack(connectionError);
           }
         }
         if (client) {
@@ -95,6 +98,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
           },
         });
         client.on("error", (error) => {
+          materializeErrorStack(error);
           connectionError = error;
         });
         await client.connect();

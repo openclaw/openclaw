@@ -188,7 +188,7 @@ export async function installChromeExtensionBootstrap(params: {
     );
   }
   const waitMs = normalizeExtensionInstallWaitMs(params.waitMs);
-  const deadline = Date.now() + waitMs;
+  const deadline = performance.now() + waitMs;
   let discovery = await discoverChromeExtensionIds({
     approvedDirs: approvedPaths,
     storeExtensionId: FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID,
@@ -197,14 +197,14 @@ export async function installChromeExtensionBootstrap(params: {
   while (
     discovery.discovered.length === 0 &&
     discovery.storeDiscovered.length === 0 &&
-    Date.now() < deadline
+    performance.now() < deadline
   ) {
     if (!announcedWait) {
       params.onProgress?.("Waiting for Chrome to verify the OpenClaw extension…");
       announcedWait = true;
     }
     params.signal?.throwIfAborted();
-    await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
+    await sleep(Math.min(500, Math.max(1, deadline - performance.now())));
     params.signal?.throwIfAborted();
     discovery = await discoverChromeExtensionIds({
       approvedDirs: approvedPaths,

@@ -58,6 +58,8 @@ Patch:
 }
 ```
 
+Patch content preserves trailing spaces and final newlines in changed lines.
+
 Useful options:
 
 - `mode`: `view`, `file`, or `both`

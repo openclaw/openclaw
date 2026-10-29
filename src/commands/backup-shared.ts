@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { readExistingWorktreePaths } from "../agents/worktrees/registry-read.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
@@ -24,6 +24,7 @@ import {
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import {
@@ -95,7 +96,7 @@ export async function recordBackupOutcomeBestEffort(
   } catch (error) {
     const label = params.kind === "git" ? "Git backup" : "backup";
     runtime.error(
-      `Warning: the ${label} outcome could not be recorded: ${sanitizeTerminalText(formatErrorMessage(error))}`,
+      terminalText`Warning: the ${label} outcome could not be recorded: ${formatErrorMessage(error)}`,
     );
   }
 }
@@ -109,6 +110,16 @@ export function resolveRequiredBackupPath(
     throw new Error(`Missing required ${label} value.`);
   }
   return resolveUserPath(trimmed);
+}
+
+export function resolveBackupArchivePath(
+  value: string | undefined,
+  label: "--output" | "<archive>" | "--target",
+): string {
+  if (!value?.trim()) {
+    throw new Error(`Missing required ${label} value.`);
+  }
+  return path.resolve(expandHomePrefix(value));
 }
 
 type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent" | "managed skill";

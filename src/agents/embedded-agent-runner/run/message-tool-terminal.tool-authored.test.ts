@@ -1,10 +1,10 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { setInternalToolTurnCompletion } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
 import { Agent, type AgentTool } from "../../runtime/index.js";
-import { setInternalToolTurnCompletion } from "../../runtime/internal-hooks.js";
 import { installToolAuthoredSourceReplyTerminalHook } from "./message-tool-terminal.js";
 import {
   createTerminalTestModel,

@@ -446,6 +446,9 @@ export async function mutateChatGoal(
     if (!sessionId || isInitialChatHistoryUnavailable(host)) {
       return rejectGoalOperation(host, t("chat.thread.loading"));
     }
+    if (action.action === "resume" && (isChatBusy(host) || hasDirectSessionRun(host))) {
+      return rejectGoalOperation(host, t("chat.goals.busy"));
+    }
     const identity = {
       sessionKey,
       ...(agentId ? { agentId } : {}),

@@ -1,21 +1,50 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, merge, onSettled, Show } from "solid-js";
+import { serializeSidebarEntry } from "../../../app-navigation.ts";
+import { isNativeLocalGateway } from "../../../app/native-editor-locality.runtime.ts";
+import { resolveSidebarSessionParentKey } from "../../../components/app-sidebar-session-parent.ts";
 import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
 import { boardWidgetMenuEntries } from "../../../components/board/board-widget-menu.tsx";
 import { activateMenuShortcut } from "../../../components/menu-shortcut-activation.ts";
-import { SessionMenuActions } from "../../../components/session-menu-actions.ts";
+import { sessionMenuReasons } from "../../../components/session-menu-access.ts";
+import {
+  SessionMenuActions,
+  type SessionMenuData,
+} from "../../../components/session-menu-actions.ts";
 import { compactSessionMenuViewForValue } from "../../../components/session-menu-compact.ts";
+import { sessionMenuDataFromRow } from "../../../components/session-menu-data.ts";
 import { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
 import { createSessionOwnerMenu } from "../../../components/session-owner-menu.ts";
+import { sessionPlacementAction } from "../../../components/session-placement-action.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { MenuControls, MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { readSessionMethodAccess } from "../../../lib/session-method-access.ts";
+import { collectKnownSessionGroups } from "../../../lib/sessions/grouping.ts";
+import {
+  canDeleteSessionRows,
+  isNativeCatalogAdoptionSessionKey,
+  isPinnableUiSessionRow,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+  resolveUiConversationIdentity,
+} from "../../../lib/sessions/session-key.ts";
+import {
+  canCopySessionMarkdown,
+  canSplitSessionView,
+} from "../../../lib/sessions/session-menu-navigation.ts";
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
+import { ChatPaneHeaderMemo } from "../chat-pane-header-memo.ts";
+import { ChatPaneNativeSessionActions } from "../chat-pane-native-session-actions.ts";
+import { runChatHeaderSessionAction } from "../chat-pane-session-menu-actions.ts";
+import type { HeaderMenuAction, HeaderMenuActionKind } from "../chat-pane-session-menu-contract.ts";
+import { buildContinueInTerminalCommand } from "../continue-in-terminal-command.ts";
 import { createMobileHeaderSessionMenu } from "./chat-header-session-menu-mobile.tsx";
 import type {
-  HeaderMenuAction,
   HeaderMenuContentProps,
+  HeaderMenuProps,
   CompactMenuView,
 } from "./chat-header-session-menu.tsx";
 import { useChatQuickActionEntries } from "./chat-quick-action.tsx";
@@ -34,7 +63,109 @@ const VIEW_SETTINGS = [
 ] as const;
 
 export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
-  const props = merge(() => inputs.menuProps);
+  const sessionDataMemo = new ChatPaneHeaderMemo<SessionMenuData>();
+  const reasonsMemo = new ChatPaneHeaderMemo<Partial<Record<HeaderMenuActionKind, string>>>();
+  const groupsMemo = new ChatPaneHeaderMemo<string[]>();
+  const panePresentation = createMemo((): Partial<HeaderMenuProps> => {
+    const menu = inputs.menuProps;
+    const source = menu.actionSource;
+    const row = source?.readRow();
+    if (!source || !row) {
+      return {};
+    }
+    const owner = source.readOwner();
+    const snapshot = owner.context.gateway.snapshot;
+    const agentsList = owner.context.agents.state.agentsList;
+    const mainKey = resolveUiConfiguredMainKey({ agentsList, hello: snapshot.hello });
+    const mainSessionKey = resolveUiConversationIdentity(
+      { agentsList, hello: snapshot.hello },
+      "main",
+      parseAgentSessionKey(row.key)?.agentId ?? row.agentId,
+    ).sessionKey;
+    const label = menu.session.label;
+    const isChild =
+      !isSubagentSessionKey(row.key) &&
+      Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey])));
+    const archiving = owner.context.sessions.archiveVisibility(row.key) === "pending";
+    const pinned = owner.context.navigation.snapshot.sidebarEntries.includes(
+      serializeSidebarEntry({ type: "session", key: row.key }),
+    );
+    const pinnable = isPinnableUiSessionRow(row);
+    const session = sessionDataMemo.read(
+      [
+        label,
+        sessionPlacementAction(row),
+        row.key,
+        row.agentId,
+        row.sessionId,
+        isChild,
+        pinned,
+        pinnable,
+        row.snoozedUntil,
+        row.unread,
+        row.hiddenFromInvolvingMe,
+        row.communication,
+        row.effectiveCommunication,
+        row.archived,
+        archiving,
+        row.category,
+        row.icon,
+        row.color,
+      ],
+      () => sessionMenuDataFromRow(row, { label, isChild, pinned, pinnable, archiving }),
+    );
+    const sessionReasons = sessionMenuReasons({
+      snapshot,
+      placementRow: row,
+      requiredProfile: agentsList?.sessionPlacement?.requiredProfile?.id,
+      session: { ...row, pinnable },
+    });
+    const assignment = readSessionMethodAccess(snapshot, {
+      method: "sessions.assignOwner",
+      params: { key: row.key, owner: { type: "human", id: snapshot.selfUser?.id ?? "profile" } },
+      requiredScope: "operator.write",
+    });
+    const terminal =
+      snapshot.client && snapshot.phase === "connected"
+        ? buildContinueInTerminalCommand({
+            gatewayUrl: snapshot.client.gatewayUrl,
+            sessionKey: row.key,
+            rowAgentId: row.agentId,
+            selectedAgentId: owner.context.agentSelection.state.selectedId ?? undefined,
+          })
+        : undefined;
+    const terminalReason = !terminal
+      ? t("chat.sessionHeader.continueInTerminal.disconnected")
+      : terminal.ok
+        ? undefined
+        : t(
+            terminal.reason === "query-routed"
+              ? "chat.sessionHeader.continueInTerminal.queryRouted"
+              : "chat.sessionHeader.continueInTerminal.unavailable",
+          );
+    const reasons = {
+      ...sessionReasons,
+      ...(!assignment.allowed ? { "assign-owner": assignment.reason } : {}),
+      ...(terminalReason ? { "continue-in-terminal": terminalReason } : {}),
+    };
+    const groups = owner.context.sessions.state.groups;
+    const sessions = owner.context.sessions.state.result?.sessions;
+    return {
+      session,
+      worktreePath: row.execNode || !isNativeLocalGateway() ? null : source.workspaceRoot,
+      copyMarkdownAllowed: canCopySessionMarkdown(snapshot),
+      splitAllowed: canSplitSessionView(),
+      mainKey,
+      groups: groupsMemo.read([groups, sessions], () =>
+        collectKnownSessionGroups(groups ?? [], sessions ?? []),
+      ),
+      actionDisabledReasons: reasonsMemo.read(Object.entries(reasons).flat(), () => reasons),
+      archiveAllowed: owner.canArchiveHeaderSession(row),
+      deleteAllowed:
+        !isNativeCatalogAdoptionSessionKey(row.key) && canDeleteSessionRows([row], mainKey),
+    };
+  });
+  const props = merge(() => inputs.menuProps, panePresentation);
   const controls: MenuControls = {
     get elements() {
       return inputs.controls.elements;
@@ -42,7 +173,35 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
     ref: () => inputs.controls.ref(),
   };
   const presented = () => inputs.presented;
-  const quickActions = useChatQuickActionEntries(() => props.sessionActions, false, "quick:");
+  const onAction = (action: HeaderMenuAction) => {
+    if (props.onAction && props.onAction(action) !== false) {
+      return;
+    }
+    const source = props.actionSource;
+    if (source) {
+      const row = source.readRow();
+      if (row) {
+        void runChatHeaderSessionAction(source.readOwner(), action, row);
+      }
+    }
+  };
+  const nativeActions = new ChatPaneNativeSessionActions();
+  const sessionActions = createMemo(() => {
+    const source = props.actionSource;
+    const actions = source
+      ? [
+          ...nativeActions.read(
+            source.readOwner().context,
+            source.readRow(),
+            source.stopDisabledReason,
+            onAction,
+          ),
+          ...props.sessionActions,
+        ]
+      : props.sessionActions;
+    return props.composeSessionActions?.(actions) ?? actions;
+  });
+  const quickActions = useChatQuickActionEntries(sessionActions, false, "quick:");
   const viewActions = useChatQuickActionEntries(() => props.viewActions ?? [], true, "layout:");
   const mobile = () => props.mobile === true && Boolean(props.mobileHost) && !props.boardWidgetMenu;
   const state = merge(props, () => ({
@@ -55,7 +214,6 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
   const close = () => {
     inputs.readMenu()?.close();
   };
-  const onAction = (action: HeaderMenuAction) => props.onAction(action);
   const actions = new SessionMenuActions(
     () => {
       void inputs.host.updateComplete.then(() => {
@@ -393,7 +551,7 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       return;
     }
     if (value.startsWith("quick:")) {
-      const action = props.sessionActions.find(
+      const action = sessionActions().find(
         (candidate) => candidate.id === value.slice("quick:".length),
       );
       if (action && !action.disabled) {
@@ -447,7 +605,7 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
     }
     if (value === "continue-in-terminal" && !props.actionDisabledReasons[value]) {
       close();
-      props.onAction({ kind: value });
+      onAction({ kind: value });
     }
   }
   return (

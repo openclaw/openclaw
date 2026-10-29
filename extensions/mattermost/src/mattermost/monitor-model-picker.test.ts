@@ -1,3 +1,5 @@
+import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
+import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it, vi } from "vitest";
 
@@ -31,7 +33,8 @@ vi.mock("./model-picker.js", async (importOriginal) => ({
   resolveMattermostModelPickerCurrentModel: async () => "openai/gpt-5.4",
 }));
 
-vi.mock("./monitor-auth.js", () => ({
+vi.mock("./monitor-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor-auth.js")>()),
   authorizeMattermostCommandInvocation: mocks.authorize,
 }));
 
@@ -236,3 +239,59 @@ it.each(scenarios)(
     });
   },
 );
+
+it.each([
+  { code: "PAIR1234", pairing: true },
+  { code: "", pairing: false },
+])("answers a DM pairing picker action with code=$code", async ({ code, pairing }) => {
+  vi.clearAllMocks();
+  mocks.parseContext.mockReturnValue({ action: "providers", ownerUserId: "user-1" });
+  mocks.authorize.mockResolvedValue({ ok: false, denyReason: "dm-pairing" });
+  const buildReply = vi.fn(buildPairingReply);
+  const monitor = {
+    account: { accountId: "default", config: {} },
+    cfg: {},
+    core: {
+      channel: {
+        commands: { shouldHandleTextCommands: vi.fn(() => true) },
+        pairing: { buildPairingReply: buildReply },
+        text: { hasControlCommand: vi.fn(() => true) },
+      },
+    },
+    pairing: {
+      readAllowFromStore: vi.fn(async () => []),
+      upsertPairingRequest: vi.fn(async () => ({ code, created: false })),
+    },
+    resources: {
+      resolveChannelInfo: vi.fn(async () => ({ id: "channel-1", type: "D" })),
+      updateModelPickerPost: vi.fn(),
+    },
+    runtime: { error: vi.fn() },
+  } as unknown as MattermostMonitorContext;
+
+  const response = await createMattermostModelPickerInteractionHandler(monitor)({
+    payload: {
+      channel_id: "channel-1",
+      post_id: "picker-post-1",
+      user_id: "user-1",
+    },
+    userName: "tester",
+    context: {},
+    post: { id: "picker-post-1", channel_id: "channel-1", message: "picker" },
+  });
+
+  if (pairing) {
+    expectPairingReplyText(response?.ephemeral_text ?? "", {
+      channel: "mattermost",
+      idLine: "Your Mattermost user id: user-1",
+      code,
+    });
+    expect(buildReply).toHaveBeenCalledOnce();
+  } else {
+    expect(response?.ephemeral_text).toContain("DM pairing is full");
+    expect(response?.ephemeral_text).toContain("no pairing request was saved");
+    expect(response?.ephemeral_text).not.toContain("pairing approve");
+    expect(buildReply).not.toHaveBeenCalled();
+  }
+  expect(mocks.dispatch).not.toHaveBeenCalled();
+});

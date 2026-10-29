@@ -3,7 +3,7 @@ import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createCommandError } from "../process/command-error.js";
-import type { SpawnResult } from "../process/exec-result.js";
+import { recordCommandProcessFailure, type SpawnResult } from "../process/exec-result.js";
 import type { BufferSpawnResult } from "../process/exec-runner.js";
 import type {
   BufferedCommandOptions,
@@ -372,12 +372,24 @@ export function requireGitCommandOutput(
   result: GitCommandResult,
   createError: (command: string, result: GitCommandResult) => Error = createGitCommandError,
 ): string {
+  let failed: GitCommandResult | undefined;
   if (result.termination !== "exit" || result.code !== 0) {
-    throw createError(command, result);
+    failed = result;
+  } else if (result.stdoutTruncatedBytes) {
+    // Required stdout is data; a clean exit cannot make truncated output complete.
+    failed = { ...result, code: null, outputLimitExceeded: true };
   }
-  // Required stdout is data, not a diagnostic tail; a clean exit cannot make it complete.
-  if (result.stdoutTruncatedBytes) {
-    throw createError(command, { ...result, code: null, outputLimitExceeded: true });
+  if (failed) {
+    // Required-output translation must preserve native settlement and cancellation,
+    // without retaining command output in the private lifecycle facts.
+    throw recordCommandProcessFailure(createError(command, failed), {
+      pid: result.pid,
+      code: result.code,
+      cleanup: result.cleanup,
+      termination: result.termination,
+      killIssuedByAbort: result.killIssuedByAbort,
+      outputLimitExceeded: result.outputLimitExceeded,
+    });
   }
   return result.stdout;
 }
@@ -386,4 +398,9 @@ export function requireGitCommandOutput(
 // Config values such as core.hooksPath still accept os.devNull.
 export function gitNullConfigPath(): string {
   return process.platform === "win32" ? "NUL" : "/dev/null";
+}
+
+/** Quote a Git config value without treating its contents as config syntax. */
+export function quoteGitConfig(value: string): string {
+  return `"${value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n").replace(/\t/gu, "\\t").replaceAll("\b", "\\b")}"`;
 }

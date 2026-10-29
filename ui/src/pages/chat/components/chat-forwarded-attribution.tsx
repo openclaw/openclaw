@@ -1,7 +1,7 @@
 import { createMemo, onSettled, Show } from "solid-js";
 import "./chat-attribution.css";
 import { pathForRoute } from "../../../app-route-paths.ts";
-import { registerSessionTitleTarget } from "../../../components/session-title-target-registration.ts";
+import { registerSessionTitleTarget } from "../../../components/markdown-link-display.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";

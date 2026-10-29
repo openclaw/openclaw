@@ -439,10 +439,10 @@ export async function executePreparedReplyRun(
       sourceTurnId,
       admissionRunId: sourceMessageId,
       ingressProvider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
-      entry: preparedSessionState.sessionEntry,
     }),
     personalBootstrapEligible,
     operatorAuthority: opts?.operatorAuthority,
+    sessionPrincipalTurn: opts?.sessionPrincipalTurn,
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
@@ -483,12 +483,6 @@ export async function executePreparedReplyRun(
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
     ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),
-    ...(opts?.forceRestartSafeTools !== undefined
-      ? { forceRestartSafeTools: opts.forceRestartSafeTools }
-      : {}),
-    ...(opts?.forceCodeModeTools !== undefined
-      ? { forceCodeModeTools: opts.forceCodeModeTools }
-      : {}),
     enqueuedAt: Date.now(),
     currentTurnImagesPrepared: true as const,
     images: currentTurnImages.images,

@@ -37,6 +37,7 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createWorkerPlacementSessionEvidenceResolver as createResolver } from "./server-worker-placement-session-evidence.js";
+import * as sessionStoreKey from "./session-store-key.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -344,6 +345,7 @@ describe("worker placement session evidence", () => {
         }
 
         registryListing.invalidateRegisteredAgentDatabasesMemo({ env: process.env });
+        const resolveOwner = vi.spyOn(sessionStoreKey, "resolveSessionStoreAgentId");
         const observation = observeMainThreadSql();
         try {
           observation.calibrate();
@@ -352,7 +354,9 @@ describe("worker placement session evidence", () => {
             placements.map(() => "current"),
           );
           observation.expectIdle();
+          expect(resolveOwner).not.toHaveBeenCalled();
         } finally {
+          resolveOwner.mockRestore();
           observation.restore();
         }
       }),

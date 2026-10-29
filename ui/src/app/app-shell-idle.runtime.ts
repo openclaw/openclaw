@@ -1,4 +1,5 @@
 import { routeIdFromPath, isSessionRouteId, type RouteId } from "../app-route-paths.ts";
+import { hasIdleWarmups, takeIdleWarmups } from "../lib/idle-warmup.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ShellOwner } from "./app-host.tsx";
 import type { ApplicationContext } from "./context.ts";
@@ -10,7 +11,6 @@ function canPreload(): boolean {
   return navigator.onLine && !connection?.saveData && document.visibilityState === "visible";
 }
 
-/** Fetch and compile code without evaluating modules or applying route styles. */
 /** Optional shell services share the existing deferred import and its lifetime. */
 export function connectShellIdle(
   host: ShellOwner,
@@ -66,7 +66,12 @@ export function connectShellIdle(
       return intent;
     }
     const currentRoute = router.getState().matches[0]?.routeId;
-    const currentNext = currentRoute ? `${currentRoute}-next` : undefined;
+    const currentNext =
+      currentRoute === "new-session" && context.theme.settings.sidebarAgentsMode === "roster"
+        ? "roster-next"
+        : currentRoute
+          ? `${currentRoute}-next`
+          : undefined;
     if (currentNext && manifest?.[currentNext]) {
       return pending.has(currentNext) ? currentNext : undefined;
     }
@@ -93,7 +98,7 @@ export function connectShellIdle(
   };
   const schedule = () => {
     cancel();
-    if (!available() || running || (manifest && !nextPending())) {
+    if (!available() || running || (manifest && !nextPending() && !hasIdleWarmups())) {
       return;
     }
     // Readiness can precede first paint. Leave a quiet window, then ask for idle
@@ -134,6 +139,13 @@ export function connectShellIdle(
       if (!ready()) {
         return;
       }
+      // Current-page menu bodies precede next-route guesses; navigation intent still wins.
+      const warmups = intent ? [] : takeIdleWarmups();
+      if (warmups.length) {
+        // Speculation only; opening the surface owns any load failure.
+        await Promise.all(warmups.map((load) => load().catch(() => undefined)));
+        return;
+      }
       const currentRoute = router.getState().matches[0]?.routeId;
       if (currentRoute) {
         pending.delete(currentRoute);
@@ -147,7 +159,12 @@ export function connectShellIdle(
       const loads: Promise<void>[] = [];
       for (const file of manifest?.[key] ?? []) {
         const href = new URL(file, base).href;
-        if (seen.has(href)) {
+        // Plugin activation owns its styles; roster warming only applies host Chat CSS.
+        const applyStyle =
+          key === "roster-next" && file.endsWith(".css") && !file.startsWith("assets/plugins/");
+        const styleApplied = () =>
+          [...document.styleSheets].some((stylesheet) => stylesheet.href === href);
+        if (seen.has(href) && (!applyStyle || styleApplied())) {
           continue;
         }
         seen.add(href);
@@ -166,7 +183,21 @@ export function connectShellIdle(
               stopError();
               resolve();
             };
-            const stopLoad = listen(link, "load", finish, { once: true });
+            const stopLoad = listen(
+              link,
+              "load",
+              () => {
+                if (applyStyle && !styleApplied()) {
+                  // Keep Chat's style matching out of Create Template, but its JS lazy.
+                  // Vite adopts this loaded sheet; it must outlive the idle owner.
+                  link.rel = "stylesheet";
+                  link.removeAttribute("as");
+                  links.delete(link);
+                }
+                finish();
+              },
+              { once: true },
+            );
             const stopError = listen(link, "error", finish, { once: true });
             links.set(link, finish);
             document.head.append(link);
@@ -271,6 +302,7 @@ export function connectShellIdle(
   const stops = [
     router.subscribe(schedule),
     gateway.subscribe(schedule),
+    context.theme.subscribe(schedule),
     listen(shell, "pointerover", onIntent),
     listen(shell, "pointerout", onIntent),
     listen(shell, "focusin", onIntent),

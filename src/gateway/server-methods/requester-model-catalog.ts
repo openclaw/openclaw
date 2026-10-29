@@ -163,6 +163,7 @@ export async function readRequesterModelCatalog(params: {
         prepareOperatorModelPolicyPresentation({
           cfg: config,
           policy,
+          rolePolicy: authority.rolePolicy,
           metadataSnapshot: owner.metadataSnapshot,
         })
           ?.forAgent(params.agentId, models)

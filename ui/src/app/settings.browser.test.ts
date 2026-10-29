@@ -4,50 +4,25 @@ import { normalizeChatMessageMaxWidth } from "./settings-contract.ts";
 import { loadSettings, saveSettings, settingsKeyForGateway } from "./settings.ts";
 
 beforeEach(({ onTestFinished }) => {
-  const stored = Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)!] as const);
+  const initial = loadSettings();
+  const previous = Object.keys(localStorage).map(
+    (key) => [key, localStorage.getItem(key)!] as const,
+  );
   onTestFinished(() => {
+    saveSettings(initial);
     localStorage.clear();
-    for (const [key, value] of stored) {
+    for (const [key, value] of previous) {
       localStorage.setItem(key, value);
     }
   });
 });
 
-it("persists canonical bubble sessions only for their Gateway", () => {
-  const settings = loadSettings();
-  const scopedKey = settingsKeyForGateway(settings.gatewayUrl);
-  saveSettings({
-    ...settings,
-    chatBubbleSessionKeys: [" main ", "AGENT:MAIN:MAIN", "agent:main:other"],
-  });
-  expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatBubbleSessionKeys).toEqual([
-    "agent:main:main",
-    "agent:main:other",
-  ]);
-  expect(isChatBubbleMode(loadSettings(settings.gatewayUrl), "main", true)).toBe(true);
-  const otherGateway = "ws://other-bubbles.example:18789";
-  localStorage.removeItem(settingsKeyForGateway(otherGateway));
-  expect(loadSettings(otherGateway).chatBubbleSessionKeys).toBeUndefined();
-  saveSettings({ ...loadSettings(otherGateway), chatBubbleSessionKeys: ["agent:main:third"] });
-  expect(loadSettings(settings.gatewayUrl).chatBubbleSessionKeys).toEqual([
-    "agent:main:main",
-    "agent:main:other",
-  ]);
-  const withoutMain = setChatBubbleMode(loadSettings(settings.gatewayUrl), "main", false);
-  const withoutOther = setChatBubbleMode(withoutMain, "agent:main:other", false);
-  saveSettings({ ...loadSettings(settings.gatewayUrl), ...withoutOther });
-  expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
-    "chatBubbleSessionKeys",
-  );
-  expect(loadSettings(settings.gatewayUrl).chatBubbleDisabledSessionKeys).toEqual([
-    "agent:main:main",
-    "agent:main:other",
-  ]);
-});
+function stored(gatewayUrl = loadSettings().gatewayUrl) {
+  return JSON.parse(localStorage.getItem(settingsKeyForGateway(gatewayUrl)) ?? "{}");
+}
 
-it("preserves pre-bubble v1 preferences when opting a session into bubbles", () => {
-  const gatewayUrl = "ws://legacy-bubbles.example:18789";
-  // This record uses the persisted fields written by v2026.10.1, before bubbles existed.
+it.each([false, true])("persists Gateway-scoped bubbles (legacy preferences=%s)", (legacy) => {
+  const gatewayUrl = "ws://bubbles.example:18789";
   const preferences = {
     gatewayUrl,
     theme: "claw",
@@ -59,66 +34,56 @@ it("preserves pre-bubble v1 preferences when opting a session into bubbles", () 
     navWidth: 300,
     chatMessageMaxWidth: "48rem",
   };
-  const key = settingsKeyForGateway(gatewayUrl);
-  localStorage.setItem(key, JSON.stringify(preferences));
-
-  const loaded = loadSettings(gatewayUrl);
-  expect(loaded).toMatchObject(preferences);
-  expect(isChatBubbleMode(loaded, "main")).toBe(false);
-
-  saveSettings({ ...loaded, ...setChatBubbleMode(loaded, "main", true) });
-  const reopened = loadSettings(gatewayUrl);
-  expect(reopened).toMatchObject(preferences);
-  expect(isChatBubbleMode(reopened, "main", true)).toBe(true);
-  expect(JSON.parse(localStorage.getItem(key) ?? "{}")).toMatchObject({
-    ...preferences,
-    chatBubbleSessionKeys: ["agent:main:main"],
+  // v2026.10.1 predates bubble preferences.
+  if (legacy) {
+    localStorage.setItem(settingsKeyForGateway(gatewayUrl), JSON.stringify(preferences));
+  }
+  const settings = loadSettings(gatewayUrl);
+  if (legacy) {
+    expect(isChatBubbleMode(settings, "main")).toBe(false);
+  }
+  const sessions = ["agent:main:main", "agent:main:other"];
+  saveSettings({
+    ...settings,
+    chatBubbleSessionKeys: [" main ", "AGENT:MAIN:MAIN", "agent:main:other"],
   });
-});
-
-it("normalizes and persists browser-local chat message width", () => {
-  const settings = loadSettings();
-  const scopedKey = settingsKeyForGateway(settings.gatewayUrl);
-
-  expect(normalizeChatMessageMaxWidth("  min(1280px,   82%)  ")).toBe("min(1280px, 82%)");
-  expect(normalizeChatMessageMaxWidth("960px; color: red")).toBeUndefined();
-
-  saveSettings({ ...settings, chatMessageMaxWidth: "  min(1280px,   82%)  " });
-  expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatMessageMaxWidth).toBe(
-    "min(1280px, 82%)",
-  );
-  expect(loadSettings().chatMessageMaxWidth).toBe("min(1280px, 82%)");
-
-  saveSettings({ ...loadSettings(), chatMessageMaxWidth: undefined });
-  expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
-    "chatMessageMaxWidth",
-  );
+  expect(stored(gatewayUrl).chatBubbleSessionKeys).toEqual(sessions);
+  expect(isChatBubbleMode(loadSettings(settings.gatewayUrl), "main", true)).toBe(true);
+  if (legacy) {
+    expect(loadSettings(gatewayUrl)).toMatchObject(preferences);
+    expect(stored(gatewayUrl)).toMatchObject(preferences);
+  }
+  const otherGateway = "ws://other-bubbles.example:18789";
+  localStorage.removeItem(settingsKeyForGateway(otherGateway));
+  expect(loadSettings(otherGateway).chatBubbleSessionKeys).toBeUndefined();
+  saveSettings({ ...loadSettings(otherGateway), chatBubbleSessionKeys: ["agent:main:third"] });
+  expect(loadSettings(settings.gatewayUrl).chatBubbleSessionKeys).toEqual(sessions);
+  const withoutMain = setChatBubbleMode(loadSettings(settings.gatewayUrl), "main", false);
+  const withoutOther = setChatBubbleMode(withoutMain, "agent:main:other", false);
+  saveSettings({ ...loadSettings(settings.gatewayUrl), ...withoutOther });
+  expect(stored(settings.gatewayUrl)).not.toHaveProperty("chatBubbleSessionKeys");
+  expect(loadSettings(settings.gatewayUrl).chatBubbleDisabledSessionKeys).toEqual(sessions);
 });
 
 it("persists and resets the browser-local terminal font without changing text faces", () => {
   const initial = loadSettings();
-  try {
-    saveSettings({ ...initial, terminalFontFamily: "  FiraCode Nerd Font Mono  " });
-    expect(loadSettings().terminalFontFamily).toBe("FiraCode Nerd Font Mono");
-    expect(loadSettings().fontUi).toBe(initial.fontUi);
-    expect(loadSettings().fontChat).toBe(initial.fontChat);
-    saveSettings({ ...loadSettings(), terminalFontFamily: undefined });
-    expect(loadSettings().terminalFontFamily).toBeUndefined();
-    expect(
-      JSON.parse(localStorage.getItem(settingsKeyForGateway(initial.gatewayUrl)) ?? "{}"),
-    ).not.toHaveProperty("terminalFontFamily");
-  } finally {
-    saveSettings(initial);
-  }
+  saveSettings({ ...initial, terminalFontFamily: "  FiraCode Nerd Font Mono  " });
+  expect(loadSettings()).toMatchObject({
+    terminalFontFamily: "FiraCode Nerd Font Mono",
+    fontUi: initial.fontUi,
+    fontChat: initial.fontChat,
+  });
+  saveSettings({ ...loadSettings(), terminalFontFamily: undefined });
+  expect(loadSettings().terminalFontFamily).toBeUndefined();
+  expect(stored()).not.toHaveProperty("terminalFontFamily");
 });
 
-it.each(["none", "48rem"])("preserves supported message width %s", (value) => {
-  expect(normalizeChatMessageMaxWidth(value)).toBe(value);
+it.each([
+  ["none", "none"],
+  ["48rem", "48rem"],
+  ["960px; color: red", undefined],
+  ["10cm", undefined],
+  ["fit-content", undefined],
+])("normalizes message width %s", (value, expected) => {
+  expect(normalizeChatMessageMaxWidth(value)).toBe(expected);
 });
-
-it.each(["calc(100%-2rem)", "10cm", "fit-content"])(
-  "rejects unsupported message width %s",
-  (value) => {
-    expect(normalizeChatMessageMaxWidth(value)).toBeUndefined();
-  },
-);

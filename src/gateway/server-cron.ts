@@ -17,9 +17,8 @@ import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { isCronExecutionIdle } from "../cron/execution-idle.js";
-import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
-import { CronService, type CronEvent } from "../cron/service.js";
+import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type { CronJob } from "../cron/types.js";
@@ -85,14 +84,13 @@ import {
   createGatewayCronFailureRepair,
 } from "./server-cron-notifications.js";
 import { toPluginCronChangedEvent } from "./server-cron-plugin-job.js";
+import { createGatewayCronPublisher } from "./server-cron-publication.js";
 import { createGatewayCronTargetResolver } from "./server-cron-targets.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
-  invalidateSessionAutomationIndex,
   registerSessionAutomationSource,
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
-import { getSessionRowProjection } from "./session-row-projection-access.js";
 
 export function buildGatewayCronService(params: {
   scheduler: GatewayScheduler;
@@ -289,46 +287,12 @@ export function buildGatewayCronService(params: {
     }
   };
 
-  // Cron job changes flip session automation badges; push refreshed rows so
-  // subscribed session lists update without waiting for unrelated session events.
-  const broadcastCronBoundSessionChanges = (evt: CronEvent) => {
-    const job = evt.job ?? cron.getJob(evt.jobId);
-    if (!job) {
-      return;
-    }
-    const boundKeys = resolveCronJobBoundSessionKeys(job, {
-      cfg: getRuntimeConfig(),
-      defaultAgentId: cron.getDefaultAgentId(),
-    });
-    for (const sessionKey of boundKeys) {
-      const context = scheduledGatewayContextResolver?.();
-      const projection = getSessionRowProjection(context);
-      const publish = () =>
-        params.broadcast(
-          "sessions.changed",
-          {
-            sessionKey,
-            reason: "cron-binding",
-            ts: Date.now(),
-          },
-          { dropIfSlow: true },
-        );
-      if (projection) {
-        void (async () => {
-          do {
-            await projection.ensureMaterialized();
-          } while (projection.needsMaterialization);
-          if (scheduledGatewayContextResolver?.() === context) {
-            publish();
-          }
-        })().catch((error: unknown) =>
-          cronLogger.warn({ error }, "Cron session publication failed"),
-        );
-      } else {
-        publish();
-      }
-    }
-  };
+  const publishCronInventoryChange = createGatewayCronPublisher({
+    broadcast: params.broadcast,
+    getCron: () => cron,
+    resolveGatewayContext: scheduledGatewayContextResolver,
+    logger: cronLogger,
+  });
 
   const heartbeatSummary = createGatewayCronHeartbeatSummary({
     storePath,
@@ -582,10 +546,8 @@ export function buildGatewayCronService(params: {
       getChildLogger({ module: "cron", storeKey: storePath }),
       getResolvedLoggerSettings().level,
     ),
+    onDefinitionChange: publishCronInventoryChange,
     onEvent: (evt) => {
-      // Any job/store change can alter session automation bindings, including
-      // in-place enable flips during runs; the index publishes only binding deltas.
-      invalidateSessionAutomationIndex();
       const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
       if (legacyMonitorJobs.has(evt.jobId)) {
         legacyProjectionRevision += 1;
@@ -648,7 +610,6 @@ export function buildGatewayCronService(params: {
       runCronChangedHook(toPluginCronChangedEvent(evt, jobSnapshot));
       // Re-arm / cancel scheduler-owned process watchers when the job set changes.
       if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
-        broadcastCronBoundSessionChanges(evt);
         void reconcileExitWatchers();
         // cron.update and cron.add (including declarative convergence) route
         // lifecycle after the mutation. Ignoring state-only update events keeps
@@ -667,7 +628,6 @@ export function buildGatewayCronService(params: {
         // Fully deleted jobs emit their own "removed" event instead.
         const finishedJob = evt.job ?? cron.getJob(evt.jobId);
         if (finishedJob?.enabled === false) {
-          broadcastCronBoundSessionChanges(evt);
           void routeStreamWatcherMutation(evt.jobId, "finished").catch((err: unknown) => {
             cronLogger.warn(
               { err: formatErrorMessage(err), jobId: evt.jobId },

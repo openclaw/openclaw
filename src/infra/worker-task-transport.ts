@@ -9,6 +9,6 @@ export type WorkerTaskContext = {
   databaseEngineSelection?: DatabaseEngineSelection;
   deletedAgentDatabaseFences: [string, string][];
   databaseAdmissionPort?: MessagePort;
-  postgresPool?: import("./postgres-sync/pool.js").PostgresPoolEndpoints;
+  postgresPool?: import("./postgres-sync/pool-state.js").PostgresPoolEndpoints;
   databaseAdmissionDeadlineAtMs?: number;
 };

@@ -181,5 +181,23 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
     listen(document, "visibilitychange", () => prediction.sync(readPredictionSource())),
   );
 
-  return renderChatComposerView(context, currentProps, state);
+  // Owners and handlers retain live reads; only scalar presentation values filter updates.
+  const scalarContext = createProjection(() => {
+    const current = context();
+    return {
+      attachmentReadRevision: current.attachmentReadRevision,
+      canCompose: current.canCompose,
+      showAbortableUi: current.showAbortableUi,
+      visibleDraft: current.visibleDraft,
+      predictionText: current.predictionText,
+      runStatusAnnouncement: current.runStatusAnnouncement,
+      cancellationCaveat: current.cancellationCaveat,
+      sendShortcut: current.sendShortcut,
+      showComposer: current.showComposer,
+      draftKey: current.draftKey,
+      mentionError: current.mentionError,
+    };
+  });
+  const viewContext = merge(context, scalarContext);
+  return renderChatComposerView(() => viewContext, currentProps, state);
 }

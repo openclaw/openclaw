@@ -1134,6 +1134,22 @@ function maturityRun(
   });
 }
 
+posixIt(
+  "generated publisher batches multi-path inspection without changing published blobs",
+  async ({ signal }) => {
+    const generatedFiles = Object.fromEntries(
+      ["a", "b", "c", "d"].map((name) => [`generated/${name}.txt`, `desired-${name}\n`]),
+    );
+    const report = await publisherRun(signal, { publisher: { generatedFiles } });
+    expectReport(report, { code: 0, authHeaderPresent: false }, { pushes: 1 });
+    const publication = expectDefined(report.publication, "real generated publication");
+    expect(publication.branchHead).toBe(publication.localHead);
+    expect(publication.generatedFiles).toEqual(generatedFiles);
+    expect(report.githubSummary).toContain("Generated pull request:");
+    expect(commandArgs(report, "ls-tree")).toHaveLength(4);
+  },
+);
+
 // The shared owner fences ordinary calls; push has its own typed recovery boundary.
 posixIt.for(["cleanup-failure", "cancel"] as const)(
   "generated publisher push %s is terminal before any continuation",
@@ -1184,24 +1200,51 @@ posixIt.for(["ls-remote"])(
   },
 );
 
-posixIt.for([
-  ["overlap tree read", "^ls-tree ", 1, {}],
-  ["ancestor probe", "^merge-base ", 1, {}],
-  ["reconciliation tree read", "^ls-tree ", 5, { reconciliation: "missing" }],
-] satisfies [
-  string,
-  string,
-  number,
-  NonNullable<Parameters<typeof publisherRun>[1]>["publisher"],
-][])(
-  "generated publisher ordinary failure inside %s never becomes success",
+posixIt.for(
+  (
+    [
+      ["overlap tree read", "^ls-tree ", 1, {}],
+      ["ancestor probe", "^merge-base ", 1, {}],
+      [
+        "reconciliation tree read",
+        `^ls-tree -t -z --full-tree ${remoteMain} `,
+        2,
+        { reconciliation: "missing" },
+      ],
+    ] satisfies [
+      string,
+      string,
+      number,
+      NonNullable<Parameters<typeof publisherRun>[1]>["publisher"],
+    ][]
+  ).flatMap(([label, match, occurrence, publisher]) =>
+    ([23, "cleanup-failure", "cancel"] as const).map((code) => ({
+      label,
+      match,
+      occurrence,
+      publisher,
+      code,
+    })),
+  ),
+)(
+  "generated publisher $code inside $label never becomes success",
   { timeout: 55_000 },
-  async ([_label, match, occurrence, publisher], { signal }) => {
+  async ({ match, occurrence, publisher, code }, { signal }) => {
     const report = await publisherRun(signal, {
       publisher: { baseChangePath: null, ...publisher },
-      gitFault: { match, occurrence, code: 23 },
+      gitFault: { match, occurrence, code, output: "partial tree record\n" },
     });
-    expectReport(report, { code: 23, githubSummary: "", authHeaderPresent: false });
+    expectReport(report, {
+      code: code === "cancel" ? 143 : code === "cleanup-failure" ? 125 : code,
+      githubSummary: "",
+      authHeaderPresent: code !== 23,
+    });
+    expect(
+      report.commands.filter(({ args }) => new RegExp(match).test(args.join(" "))),
+    ).toHaveLength(occurrence);
+    if (code !== 23) {
+      expect(report.commands.at(-1)?.args.join(" ")).toMatch(new RegExp(match));
+    }
     expect(report.output).not.toMatch(
       /Generated output was merged|Deferred stale|Neutralized stale/u,
     );

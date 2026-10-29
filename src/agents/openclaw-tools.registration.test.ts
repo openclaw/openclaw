@@ -197,28 +197,20 @@ describe("openclaw-tools progress_card gating", () => {
     ).toBe(false);
     // ask_user must not depend on the TUI embedded-host flag; normal gateway
     // runs are the primary consumer.
-    expect(
-      createFastToolNames({
-        runSessionKey: "agent:main:non-embedded",
-        questionInputMode: "native",
-      }),
-    ).toEqual(expect.arrayContaining(["ask_user", "secrets"]));
-    setEmbeddedMode(true);
-
-    expect(
-      await withPreparedSessionCapabilityRead(() =>
-        createFastToolNames({
-          agentSessionKey: "agent:main:subagent:worker",
-          questionInputMode: "native",
-        }),
-      ),
-    ).not.toContain("ask_user");
-    expect(
-      createFastToolNames({
-        runSessionKey: "agent:main:run",
-        questionInputMode: "native",
-      }),
-    ).toContain("ask_user");
+    for (const [embedded, sessionOptions, available] of [
+      [false, { runSessionKey: "agent:main:non-embedded" }, true],
+      [true, { agentSessionKey: "agent:main:subagent:worker" }, false],
+      [true, { runSessionKey: "agent:main:run" }, true],
+    ] as const) {
+      setEmbeddedMode(embedded);
+      const names = await withPreparedSessionCapabilityRead(() =>
+        createFastToolNames({ ...sessionOptions, questionInputMode: "native" }),
+      );
+      expect(names.includes("ask_user")).toBe(available);
+      if (!embedded) {
+        expect(names).toContain("secrets");
+      }
+    }
   });
 
   it("keeps message tool in embedded message-tool-only completions", () => {
@@ -434,27 +426,24 @@ describe("gateway client capability tool filtering", () => {
   it("retains the requesting browser through coding tool assembly", async () => {
     const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
     const targets: unknown[] = [];
-    const call = vi
+    using _ = vi
       .spyOn(inProcessGateway, "callInProcessGatewayTool")
       .mockImplementation(async () => {
         targets.push(getGatewayToolCallerIdentity()?.gatewayUiCommandTarget);
         return { ok: true } as never;
       });
-    try {
-      const tools = createOpenClawCodingTools({
-        config: withDefaultRoster(undefined),
-        sessionKey: "agent:main:main",
-        clientCaps: ["ui-commands"],
-        gatewayUiCommandTarget,
-      });
-      await expectToolNamed(tools, "screen").execute("select", {
-        action: "navigate",
-        sessionKey: "agent:main:other",
-      });
-      expect(targets).toEqual([gatewayUiCommandTarget]);
-    } finally {
-      call.mockRestore();
-    }
+
+    const tools = createOpenClawCodingTools({
+      config: withDefaultRoster(undefined),
+      sessionKey: "agent:main:main",
+      clientCaps: ["ui-commands"],
+      gatewayUiCommandTarget,
+    });
+    await expectToolNamed(tools, "screen").execute("select", {
+      action: "navigate",
+      sessionKey: "agent:main:other",
+    });
+    expect(targets).toEqual([gatewayUiCommandTarget]);
   });
 
   it("exposes GitHub publication only from a prepared session capability", () => {
@@ -638,38 +627,35 @@ describe("gateway client capability tool filtering", () => {
       tools: resolveSandboxToolPolicyForAgent(cfg, "main"),
     });
     const callers: unknown[] = [];
-    const call = vi
+    using call = vi
       .spyOn(inProcessGateway, "callInProcessGatewayTool")
       .mockImplementation(async () => {
         callers.push(getGatewayToolCallerIdentity()?.sessionKey);
         return { requestId: "publication-1", status: "requested" } as never;
       });
-    try {
-      const tools = createOpenClawCodingTools({
-        config: cfg,
-        sessionKey,
-        sandbox,
-        githubPublicationAvailable: available,
-        senderIsOwner: false,
-        wrapBeforeToolCallHook: false,
-        toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey,
+      sandbox,
+      githubPublicationAvailable: available,
+      senderIsOwner: false,
+      wrapBeforeToolCallHook: false,
+      toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
+    });
+    expect(hasTool(tools, "github_publish")).toBe(expected);
+    if (expected && available) {
+      await expectToolNamed(tools, "github_publish").execute("publish-1", {
+        title: "Publish fix",
       });
-      expect(hasTool(tools, "github_publish")).toBe(expected);
-      if (expected && available) {
-        await expectToolNamed(tools, "github_publish").execute("publish-1", {
-          title: "Publish fix",
-        });
-        expect(call).toHaveBeenCalledWith("sessions.github.publish", {
-          sessionKey,
-          idempotencyKey: "publish-1",
-          title: "Publish fix",
-        });
-        expect(callers).toEqual([sessionKey]);
-      } else {
-        expect(call).not.toHaveBeenCalled();
-      }
-    } finally {
-      call.mockRestore();
+      expect(call).toHaveBeenCalledWith("sessions.github.publish", {
+        sessionKey,
+        idempotencyKey: "publish-1",
+        title: "Publish fix",
+      });
+      expect(callers).toEqual([sessionKey]);
+    } else {
+      expect(call).not.toHaveBeenCalled();
     }
   });
 

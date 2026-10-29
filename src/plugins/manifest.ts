@@ -400,6 +400,9 @@ export function loadPluginManifest(
     ...(autoEnableWhenConfiguredProviders.length > 0 ? { autoEnableWhenConfiguredProviders } : {}),
     kind,
     ...(contextEngineIds ? { contextEngineIds } : {}),
+    ...(isRecord(raw.reload) && raw.reload.turnHandover === true
+      ? { reload: { turnHandover: true } }
+      : {}),
     channels,
     channelAccountKeyPolicies: setupNormalizers.normalizeChannelAccountKeyPolicies(
       raw.channelAccountKeyPolicies,

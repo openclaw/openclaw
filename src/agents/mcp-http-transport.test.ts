@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { Client, SdkErrorCode } from "@modelcontextprotocol/client";
 import { describe, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { disposeMcpClient, isMcpHttpSessionExpired } from "./mcp-client-lifecycle.js";
@@ -694,15 +695,10 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
           expect(response.status).toBe(200);
           await response.arrayBuffer();
           return new Response(
-            new ReadableStream({
-              start(controller) {
-                controller.enqueue(new TextEncoder().encode("bye"));
-              },
-              cancel() {
-                return cancellation === "rejecting"
-                  ? Promise.reject(new Error("synthetic cancellation rejection"))
-                  : new Promise(() => {});
-              },
+            makeStallingStream([new TextEncoder().encode("bye")], () => {
+              return cancellation === "rejecting"
+                ? Promise.reject(new Error("synthetic cancellation rejection"))
+                : new Promise(() => {});
             }),
             {
               status: response.status,

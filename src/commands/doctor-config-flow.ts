@@ -5,7 +5,6 @@ import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-c
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
-import { applyMessageQueueDefaults } from "../config/defaults.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import {
@@ -18,6 +17,7 @@ import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withDoctorProgress } from "../flows/doctor-health-startup.js";
+import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
@@ -195,9 +195,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     retainLegacyDefaultAgentId(state.cfg, legacyDefaultAgentId);
     retainLegacyDefaultAgentId(state.candidate, legacyDefaultAgentId);
   }
-  const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
   const persistCanonicalAgentRoster =
-    snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster;
+    snapshot.exists && rosterMigrationNeeded && !configIncludeOwnsAgentRoster(snapshot);
   if (persistCanonicalAgentRoster) {
     applyConfigMutation(
       {
@@ -282,7 +281,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
   changesPanelSink.emit(legacyStep.changeLines);
 
-  const { MODEL_METADATA_CORRUPTION_AUDIT_LIMIT, repairGeneratedModelMetadataCorruption } =
+  const { repairGeneratedModelMetadataCorruption } =
     await import("./doctor/shared/model-metadata-corruption-repair.js");
   const modelMetadataRepair = runWithCurrentPluginMetadata(state.candidate, () =>
     repairGeneratedModelMetadataCorruption({
@@ -290,11 +289,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       authoredRoot: snapshot.parsed,
       configPath: snapshot.path,
       currentHash: hashConfigRaw(snapshot.raw),
-      auditRecords: readRecentConfigAuditRecords({
-        env: process.env,
-        homedir,
-        limit: MODEL_METADATA_CORRUPTION_AUDIT_LIMIT,
-      }),
+      loadAuditRecords: () =>
+        readRecentConfigAuditRecords({ env: process.env, homedir, limit: 2048 }),
     }),
   );
   applyConfigMutation(
@@ -313,18 +309,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }),
   );
   applyConfigMutation(normalized, `Run "${doctorFixCommand}" to apply these changes.`);
-
-  const queueDefaults = applyMessageQueueDefaults(state.candidate);
-  applyConfigMutation(
-    {
-      config: queueDefaults,
-      changes:
-        queueDefaults === state.candidate
-          ? []
-          : ["Set messages.queue.allowCollaborativeSteering to false (default)."],
-    },
-    `Run "${doctorFixCommand}" to persist the collaborative steering default.`,
-  );
 
   const { recoverCommandOwnerTargetKinds } = await import("./doctor-command-owner-recovery.js");
   applyConfigMutation(
@@ -500,7 +484,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     snapshot.authoredConfig?.agents?.defaults?.workspace ??
     (isRecord(parsedDefaults) ? parsedDefaults.workspace : undefined);
   const systemAgentWorkspaceOptions = {
-    includeOwnsRoster,
+    includeOwnsRoster: configIncludeOwnsAgentRoster(snapshot),
     authoredDefaultWorkspace:
       typeof authoredDefaultWorkspace === "string" ? authoredDefaultWorkspace : undefined,
   };
@@ -518,12 +502,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const prompter = params.prompter;
     const repairSequence = await withDoctorProgress(
-      "Config repairs",
+      formatDoctorProgressPhase("Config repairs"),
       () =>
         runDoctorRepairSequence({
           state,
           installedPluginIdRecovery: installedPluginRecovery.recovery,
           doctorFixCommand,
+          modelReplacements: params.options.modelReplacements,
           reportFindings: params.reportFindings,
           env: process.env,
           blockedCodexProviderPlan,

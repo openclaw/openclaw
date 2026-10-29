@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
 import {
   registerSignalExitBarrier,
@@ -53,7 +54,7 @@ describe("backup commands", () => {
     "escapes terminal controls in archive creation output without changing paths",
     async () => {
       await mockStateOnlyBackupPlan(stateDir);
-      const output = path.join(tempHome.home, "café\u001b[31m\nforged\tend\rrow\u0007.tar.gz");
+      const output = path.join(tempHome.home, "café\u001b[31m\nforged\tend\rrow\u0007.tar.gz ");
       const runtime = createTestRuntime();
       const result = await create({ output, includeWorkspace: false }, runtime);
       const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
@@ -66,13 +67,9 @@ describe("backup commands", () => {
   );
 
   async function writeWorkspaceBackupConfig(workspaceDir: string) {
-    await fs.writeFile(
-      path.join(stateDir, "openclaw.json"),
-      JSON.stringify({
-        agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },
-      }),
-      "utf8",
-    );
+    await writeFixtureJson(path.join(stateDir, "openclaw.json"), {
+      agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },
+    });
   }
 
   async function prepareWorkspace() {
@@ -340,7 +337,7 @@ describe("backup commands", () => {
 
     await withTestDir({ prefix: "openclaw-backup-link-" }, async (symlinkDir) => {
       const symlinkPath = path.join(symlinkDir, "linked-state");
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await writeFixtureJson(path.join(stateDir, "openclaw.json"), {});
       await fs.symlink(stateDir, symlinkPath);
 
       const runtime = createTestRuntime();

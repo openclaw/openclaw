@@ -47,6 +47,17 @@ vi.mock("../../state/user-profile-list.js", () => ({
       profileId: id === "alice-alias" ? state.canonical : id,
       role: state.role,
     }),
+    readCurrentAuthority: (id: string) => ({
+      profileId: id === "alice-alias" ? state.canonical : id,
+      role: state.role,
+      aliases: [id],
+      display: {
+        id: id === "alice-alias" ? state.canonical : id,
+        displayName: null,
+        hasAvatar: false,
+        avatarRevision: "0",
+      },
+    }),
     release: () => {},
   }),
   hasMultipleSessionSharingIdentities: () => state.multipleProfiles,
@@ -169,12 +180,13 @@ const save = (content: string, expectedHash: string | null = null) =>
 const personalPath = () => path.join(workspace, "users", "alice", "USER.md");
 
 describe("personal USER.md self-service", () => {
-  function toolTurn() {
+  function toolTurn(scopes = ["operator.read"]) {
+    client.connect.scopes = scopes;
     const sessionKey = "agent:main:dashboard:someone-elses-project";
     let active = true;
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "alice-alias",
-      scopes: ["operator.read"],
+      scopes,
       assertCurrent: () => {
         if (!active) {
           throw new Error("requester revoked");
@@ -217,35 +229,38 @@ describe("personal USER.md self-service", () => {
     };
   }
 
-  it("routes the read-only requester's chat tool from a foreign session to their canonical file", async () => {
-    const { identity } = toolTurn();
-    const tool = createPersonalInstructionsTool("main");
-    const execute = (params: Record<string, unknown>) =>
-      withGatewayToolCallerIdentity(identity, () =>
-        tool.execute("personal-call", params, controller.signal),
-      );
-    expect((await execute({ action: "get" })).details).toMatchObject({
-      profileId: "alice",
-      missing: true,
-      hash: null,
-    });
-    expect(
-      (await execute({ action: "set", content: "Prefer examples.", expectedHash: null })).details,
-    ).toMatchObject({ profileId: "alice", content: "Prefer examples." });
-    expect((await execute({ action: "get" })).details).toMatchObject({
-      profileId: "alice",
-      missing: false,
-      content: "Prefer examples.",
-    });
-    expect(await fs.readFile(personalPath(), "utf8")).toBe("Prefer examples.");
-    expect(await fs.readdir(path.join(workspace, "users"))).toEqual(["alice"]);
-    expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
-    expect(await loadPersonalUserBootstrapFile(workspace, "alice")).toMatchObject({
-      personalUser: true,
-      content: "Prefer examples.",
-      path: personalPath(),
-    });
-  });
+  it.each(["operator.read", "operator.sessions.read"])(
+    "routes the %s requester's chat tool from a foreign session to their canonical file",
+    async (scope) => {
+      const { identity } = toolTurn([scope]);
+      const tool = createPersonalInstructionsTool("main");
+      const execute = (params: Record<string, unknown>) =>
+        withGatewayToolCallerIdentity(identity, () =>
+          tool.execute("personal-call", params, controller.signal),
+        );
+      expect((await execute({ action: "get" })).details).toMatchObject({
+        profileId: "alice",
+        missing: true,
+        hash: null,
+      });
+      expect(
+        (await execute({ action: "set", content: "Prefer examples.", expectedHash: null })).details,
+      ).toMatchObject({ profileId: "alice", content: "Prefer examples." });
+      expect((await execute({ action: "get" })).details).toMatchObject({
+        profileId: "alice",
+        missing: false,
+        content: "Prefer examples.",
+      });
+      expect(await fs.readFile(personalPath(), "utf8")).toBe("Prefer examples.");
+      expect(await fs.readdir(path.join(workspace, "users"))).toEqual(["alice"]);
+      expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
+      expect(await loadPersonalUserBootstrapFile(workspace, "alice")).toMatchObject({
+        personalUser: true,
+        content: "Prefer examples.",
+        path: personalPath(),
+      });
+    },
+  );
 
   function withRequesterTurn(test: Parameters<typeof withPersonalToolTurn>[1]) {
     const { identity } = toolTurn();
@@ -532,7 +547,7 @@ describe("personal USER.md self-service", () => {
     });
   });
 
-  it.each(["single-user", "selected-profile", "anonymous", "synthetic", "node"])(
+  it.each(["single-user", "selected-profile", "anonymous", "synthetic", "node", "no-scope"])(
     "rejects personal-file requests for %s before touching files",
     async (kind) => {
       if (kind === "single-user") {
@@ -549,6 +564,9 @@ describe("personal USER.md self-service", () => {
       }
       if (kind === "node") {
         client.connect.role = "node";
+      }
+      if (kind === "no-scope") {
+        client.connect.scopes = [];
       }
       for (const method of ["get", "set"] as const) {
         expect(
@@ -576,10 +594,15 @@ describe("personal USER.md self-service", () => {
     "workspace-change",
     "cancellation",
   ])("rechecks %s inside the safe writer before mutation", async (kind) => {
+    client.connect.scopes = ["operator.sessions.read"];
     config.gateway = {
       roles: {
         definitions: {
-          reader: { scopes: ["operator.read"], agents: ["main"], sessions: { others: "none" } },
+          reader: {
+            scopes: ["operator.sessions.read"],
+            agents: ["main"],
+            sessions: { others: "none" },
+          },
           denied: { scopes: [], agents: [], sessions: { others: "none" } },
         },
       },

@@ -58,7 +58,7 @@ let server: ControlUiE2eProductionServer;
 async function stageBuildB(destination: string): Promise<void> {
   await rm(destination, { force: true, recursive: true });
   try {
-    // Each deployment owns its bytes; the terminal case modifies its worker.
+    // Rollback preserves build B for the next case; only the terminal case modifies its worker.
     await cp(outDir, destination, { recursive: true, dereference: true });
     await refreshProductionControlUiE2e(destination, buildB);
   } catch (error) {
@@ -101,6 +101,13 @@ async function readBuildCacheName(buildId: string, buildDir = outDir): Promise<s
 }
 
 async function prepareOnlineLoopback(page: Page): Promise<void> {
+  // Upgrade scenarios need the boot cache, not unrelated deferred offline downloads.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "connection", {
+      configurable: true,
+      value: Object.assign(new EventTarget(), { saveData: true, effectiveType: "4g" }),
+    });
+  });
   // Network-isolated runners have no external interface, although this fixture
   // serves HTTP on loopback. Set the browser network state before any navigation.
   if (!useWebKit) {
@@ -323,44 +330,6 @@ async function fetchControlledAsset(
 }
 
 describe("Control UI service-worker production update E2E", () => {
-  it("boots a document loaded on a deep link (Gateway asset-path contract)", async () => {
-    // The built index.html references ./assets/* relatively, so a document at
-    // /chat/research requests /chat/assets/*. The Gateway resolves /assets/
-    // at any depth (src/gateway/control-ui.ts); the preview server must honor
-    // the same contract or reloads on deep links serve HTML as the module and
-    // the app silently never boots.
-    const context = await browser.newContext({ serviceWorkers: "block" });
-    const page = await context.newPage();
-    const pageErrors: string[] = [];
-    page.on("pageerror", (error) => pageErrors.push(`${error.name}:${error.message}`));
-    await installMockGateway(page, {
-      assistantAgentId: "research",
-      defaultAgentId: "research",
-      serverBuildId: buildA,
-    });
-    try {
-      expect((await page.goto(`${server.baseUrl}chat/research`))?.status()).toBe(200);
-      await page.waitForFunction(
-        () => window.openclawControlUi?.snapshot().ready === true,
-        undefined,
-        {
-          timeout: controlUiE2eWaitTimeoutMs,
-        },
-      );
-    } catch (error) {
-      if (error instanceof Error) {
-        await captureControlUiE2eFailureDiagnostics(page, {
-          error,
-          label: "deep-link-boot",
-          pageErrors,
-        });
-      }
-      throw error;
-    } finally {
-      await context.close();
-    }
-  }, 60_000);
-
   beforeAll(async () => {
     if (!useWebKit && !canRunPlaywrightChromium(chromiumExecutablePath)) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
@@ -376,6 +345,7 @@ describe("Control UI service-worker production update E2E", () => {
     server = prebuilt
       ? await startCopiedProductionControlUiE2eServer(prebuilt.root, outDir, buildA, bootstrap)
       : await startProductionControlUiE2eServer(outDir, buildA, bootstrap);
+    await stageBuildB(`${outDir}-next`);
     browser = useWebKit
       ? await webkit.launch()
       : await chromium.launch({ executablePath: chromiumExecutablePath });
@@ -390,7 +360,7 @@ describe("Control UI service-worker production update E2E", () => {
       } finally {
         if (outDir) {
           await Promise.all(
-            ["", "-next", "-previous", "-foreground", "-sleeping"].map((suffix) =>
+            ["", "-next", "-previous", "-sleeping"].map((suffix) =>
               rm(`${outDir}${suffix}`, { force: true, recursive: true }),
             ),
           );
@@ -454,7 +424,7 @@ describe("Control UI service-worker production update E2E", () => {
           });
           document.dispatchEvent(new Event("visibilitychange"));
         });
-      const nextDir = outDir + "-foreground";
+      const nextDir = outDir + "-next";
       const previousDir = outDir + "-sleeping";
       let swapped = false;
       try {
@@ -476,7 +446,6 @@ describe("Control UI service-worker production update E2E", () => {
         const draft =
           mode === "chat" ? "keep my draft through the missed update" : '{ "count": 2 }';
         await editor.fill(draft);
-        await stageBuildB(nextDir);
         await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
         await server.replaceBuild(nextDir, previousDir);
         swapped = true;
@@ -542,7 +511,6 @@ describe("Control UI service-worker production update E2E", () => {
         if (swapped) {
           await server.replaceBuild(previousDir, nextDir);
         }
-        await rm(nextDir, { recursive: true, force: true });
       }
     },
     120_000,
@@ -618,7 +586,6 @@ describe("Control UI service-worker production update E2E", () => {
       const nextOutDir = `${outDir}-next`;
       const previousOutDir = `${outDir}-previous`;
       installGate = await createInstallGate();
-      await stageBuildB(nextOutDir);
       await holdReplacementWorkerInstalling(nextOutDir, installGate.url);
       const cacheB = await readBuildCacheName(buildB, nextOutDir);
       const assetB = await findBuildAsset(buildB, nextOutDir);

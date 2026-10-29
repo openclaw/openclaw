@@ -4,6 +4,7 @@ import { parseStoredJson } from "./plugin-state-error.js";
 import { readCommittedPluginStateNamespace } from "./plugin-state-namespace-owner.js";
 import {
   assertPluginStatePublicationSettled,
+  assertPluginStatePublicationPreserves,
   pluginStatePublication,
   pluginStatePublicationKey,
 } from "./plugin-state-publication.js";
@@ -21,11 +22,19 @@ export async function capturePluginStateNativeBindingFacts(
   store: NonNullable<ReturnType<typeof capturePluginStateNativeBindingStore>>,
   key: string,
   authority = false,
+  assertValueCurrent?: (value: unknown) => void,
 ): Promise<PluginStatePinnedEntry> {
   const { options } = store;
   const context = captureOpenClawStateWorkerContext({ env: options.env });
   const identity = () => context.admission.identity.key;
   const scope = { pluginId: options.pluginId, namespace: options.namespace, key };
+  const assertPublicationCurrent = () => {
+    if (assertValueCurrent) {
+      assertPluginStatePublicationPreserves(identity(), scope, assertValueCurrent);
+    } else {
+      assertPluginStatePublicationSettled(identity(), scope);
+    }
+  };
   const entryKey = pluginStatePublicationKey({
     plugin_id: scope.pluginId,
     namespace: scope.namespace,
@@ -78,7 +87,7 @@ export async function capturePluginStateNativeBindingFacts(
   };
   try {
     if (authority) {
-      assertPluginStatePublicationSettled(identity(), scope);
+      assertPublicationCurrent();
     }
     const cached = readCommittedPluginStateNamespace(identity(), scope);
     if (cached) {
@@ -93,13 +102,16 @@ export async function capturePluginStateNativeBindingFacts(
           throw new Error("Native binding committed state is unavailable");
         }
         if (authority) {
-          assertPluginStatePublicationSettled(identity(), scope);
+          assertPublicationCurrent();
           store.assertCurrent?.();
         }
         (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-        return row && (row.expires_at == null || row.expires_at > Date.now())
-          ? parseStoredJson(row.value_json, "lookup", context.admission.databasePath)
-          : undefined;
+        const value =
+          row && (row.expires_at == null || row.expires_at > Date.now())
+            ? parseStoredJson(row.value_json, "lookup", context.admission.databasePath)
+            : undefined;
+        assertValueCurrent?.(value);
+        return value;
       },
       release,
     };

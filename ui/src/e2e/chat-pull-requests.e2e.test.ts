@@ -329,33 +329,33 @@ suite.define(() => {
           expect(row.width).toBeCloseTo(bounds.stackWidth, 1);
           previousBottom = row.bottom;
         }
-        for (let index = 0; index < count; index++) {
-          const chip = chips.nth(index);
-          const expectedUrl = `https://github.com/openclaw/openclaw/pull/${index + 1}`;
-          if (mobile) {
-            await chip.click();
-            const detail = page.locator(
-              '.chat-mobile-details-page[data-details-page="pull-request"]:visible',
-            );
-            const link = detail.getByRole("link", { name: "Open on GitHub", exact: true });
-            await pollAttr(link, "href").toBe(expectedUrl);
-            await link.click({ trial: true });
-            await detail.getByRole("button", { name: "Hide", exact: true }).click({ trial: true });
-            await openDetailsPullRequests(page);
-          } else {
-            await pollAttr(chip.locator(".chat-pr__link"), "href").toBe(expectedUrl);
-            await chip.locator(".chat-pr__link").click({ trial: true });
-            await chip
-              .getByRole("button", {
-                name: `Actions for pull request openclaw/openclaw#${index + 1}`,
-                exact: true,
-              })
-              .click();
-            const menu = chip.getByRole("menu");
-            await menu.getByRole("menuitem", { name: "Hide", exact: true }).click({ trial: true });
-            await page.keyboard.press("Escape");
-            await menu.waitFor({ state: "hidden" });
-          }
+      }
+      for (let index = 0; index < 3; index++) {
+        const chip = chips.nth(index);
+        const expectedUrl = `https://github.com/openclaw/openclaw/pull/${index + 1}`;
+        if (mobile) {
+          await chip.click();
+          const detail = page.locator(
+            '.chat-mobile-details-page[data-details-page="pull-request"]:visible',
+          );
+          const link = detail.getByRole("link", { name: "Open on GitHub", exact: true });
+          await pollAttr(link, "href").toBe(expectedUrl);
+          await link.click({ trial: true });
+          await detail.getByRole("button", { name: "Hide", exact: true }).click({ trial: true });
+          await openDetailsPullRequests(page);
+        } else {
+          await pollAttr(chip.locator(".chat-pr__link"), "href").toBe(expectedUrl);
+          await chip.locator(".chat-pr__link").click({ trial: true });
+          await chip
+            .getByRole("button", {
+              name: `Actions for pull request openclaw/openclaw#${index + 1}`,
+              exact: true,
+            })
+            .click();
+          const menu = chip.getByRole("menu");
+          await menu.getByRole("menuitem", { name: "Hide", exact: true }).click({ trial: true });
+          await page.keyboard.press("Escape");
+          await menu.waitFor({ state: "hidden" });
         }
       }
       if (mobile) {
@@ -474,8 +474,27 @@ suite.define(() => {
     },
   );
 
-  it("publishes through the Gateway and renders the terminal pull request URL", async () => {
-    const { page, gateway, watchedKey } = await openPublicationChat();
+  it("publishes from a cloud-idle workspace and renders the terminal pull request URL", async () => {
+    const { page, gateway, watchedKey } = await openPublicationChat({
+      "sessions.list": {
+        count: 1,
+        defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+        path: "",
+        sessions: [
+          {
+            contextTokens: null,
+            hasActiveRun: false,
+            key: "main",
+            kind: "direct",
+            placement: { state: "active" },
+            status: "done",
+            totalTokens: 0,
+            updatedAt: 1,
+          },
+        ],
+        ts: 1,
+      },
+    });
     await emitPullRequests(
       gateway,
       watchedKey,
@@ -488,7 +507,14 @@ suite.define(() => {
     await openChatPublication(page);
     await gateway.deferNext("sessions.github.publish");
     const publish = page.getByRole("button", { name: "Create PR" });
-    await publish.waitFor();
+    await expect.poll(() => publish.isEnabled()).toBe(true);
+    expect(
+      await page.getByRole("button", { name: "Publication account", exact: true }).count(),
+    ).toBe(0);
+    expect(await page.locator(".chat-pr__accounts-panel").count()).toBe(0);
+    expect(await page.locator(".chat-environment__branch").textContent()).not.toContain(
+      "reclaim the workspace",
+    );
     await publish.click();
     const request = await gateway.waitForRequest("sessions.github.publish");
     expect(request.params).toMatchObject({
@@ -635,6 +661,7 @@ suite.define(() => {
       after: requestCountB,
     });
     expect(requestB.params).toMatchObject({ sessionKey: sessionB });
+    await openChatPublication(page);
     const publishingB = page.getByRole("button", { name: "Publishing…" });
     const publishingBState = () =>
       publishingB.evaluateAll((buttons) => ({
@@ -725,53 +752,5 @@ suite.define(() => {
       after: requestCount,
     });
     expect(publicationRequestKey(third.params)).not.toBe(publicationRequestKey(second.params));
-  });
-
-  it("preserves explicit shared publication on a cloud-idle workspace", async () => {
-    const { page, gateway, watchedKey } = await openPublicationChat({
-      "sessions.github.publish": {
-        requestId: "cloud-publication",
-        status: "requested",
-        publisher: sharedPublisher,
-        message: "Publication requested after workspace reconciliation.",
-      },
-      "sessions.list": {
-        count: 1,
-        defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-        path: "",
-        sessions: [
-          {
-            contextTokens: null,
-            hasActiveRun: false,
-            key: "main",
-            kind: "direct",
-            placement: { state: "active" },
-            status: "done",
-            totalTokens: 0,
-            updatedAt: 1,
-          },
-        ],
-        ts: 1,
-      },
-    });
-    await emitPullRequests(gateway, watchedKey, publicationState("openclaw/cloud-idle"));
-
-    await openChatPublication(page);
-    await expect.poll(() => page.getByRole("button", { name: "Create PR" }).isEnabled()).toBe(true);
-    expect(
-      await page.getByRole("button", { name: "Publication account", exact: true }).count(),
-    ).toBe(0);
-    expect(await page.locator(".chat-pr__accounts-panel").count()).toBe(0);
-    expect(await page.locator(".chat-environment__branch").textContent()).not.toContain(
-      "reclaim the workspace",
-    );
-    await page.getByRole("button", { name: "Create PR" }).click();
-    const request = await gateway.waitForRequest("sessions.github.publish");
-    expect(request.params).toMatchObject({
-      selection: { source: "shared", expected: sharedPublisher },
-    });
-    await pollText(page.locator(".chat-pr__publication-outcome")).toContain(
-      "Publication requested after workspace reconciliation.",
-    );
   });
 });

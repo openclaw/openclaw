@@ -24,6 +24,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { formatCliFailureLines, isExpectedCliError } from "../failure-output.js";
 import { registerBackupCommand } from "./register.backup.js";
 import { registerStorageCommand } from "./register.storage.js";
 
@@ -86,7 +87,14 @@ function createCliHarness() {
     const program = new Command().exitOverride();
     registerBackupCommand(program);
     registerStorageCommand(program);
-    await program.parseAsync([...argv, "--json"], { from: "user" });
+    await program.parseAsync([...argv, "--json"], { from: "user" }).catch((error: unknown) => {
+      if (!isExpectedCliError(error)) {
+        throw error;
+      }
+      const lines = formatCliFailureLines({ title: "The CLI command failed.", error });
+      defaultRuntime.error(lines.join("\n"));
+      defaultRuntime.exit(1);
+    });
     return writeJson.mock.calls.at(-1)?.[0];
   };
   const create = async (namespace: string, ...args: string[]): Promise<OffsiteBackupResult> =>

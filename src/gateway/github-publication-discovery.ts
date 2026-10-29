@@ -178,6 +178,7 @@ export function startGitHubPublicationDiscovery(params: {
     }
   });
   return {
+    name: "github-publication-discovery",
     stop: async () => {
       scheduler.beginClose();
       githubIdentityChanges.onChange = undefined;

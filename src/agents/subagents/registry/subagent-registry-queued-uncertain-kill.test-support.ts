@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
@@ -43,7 +44,7 @@ export function registerQueuedUnknownKillAuthorityTest() {
         childSessionKey: "agent:main:subagent:unrelated",
       };
       await f.manager.registerSubagentRun(unrelated);
-      expect(f.runs.get(unrelated.runId)?.queuedLaunch).toBeDefined();
+      expect(f.runs.get(unrelated.runId)?.execution.status).toBe("queued");
       await closeOpenClawStateDatabaseAsync();
       await expect(
         mutateSubagentRuns([entry.runId], () => ({ value: true }), { runs: f.runs }),
@@ -92,7 +93,7 @@ export function registerQueuedUnknownKillAuthorityTest() {
           "Accepted rekey did not reach native ACK",
         );
         expect(loadSubagentRegistryFromSqlite().has(original.runId)).toBe(false);
-        expect(loadSubagentRegistryFromSqlite().get(acceptedId)?.queuedLaunch).toBeUndefined();
+        expect(loadSubagentRegistryFromSqlite().get(acceptedId)?.execution.status).toBe("running");
         ack.loseReceipt(new SqliteWorkerError("Accepted address receipt lost", "outcome-unknown"));
         await expect(accepting).rejects.toMatchObject({ outcome: "unknown" });
         expect(f.runs.get(original.runId)).toBe(original);
@@ -112,7 +113,6 @@ export function registerQueuedUnknownKillAuthorityTest() {
           taskRunId: original.taskRunId,
           execution: { status: "running" },
         });
-        expect(accepted.queuedLaunch).toBeUndefined();
         expect(getSubagentRunRuntimeKey(accepted)).toBe(runtimeKey);
         expect(getCurrentSubagentRunOwner(f.runs, original)).toBe(accepted);
         expect(retirement.observation).toMatchObject({
@@ -154,4 +154,3 @@ export function registerQueuedUnknownKillAuthorityTest() {
     }, subagentRuns);
   });
 }
-import { expectDefined } from "@openclaw/normalization-core";

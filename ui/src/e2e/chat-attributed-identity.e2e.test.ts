@@ -14,7 +14,11 @@ import {
   readFooterGeometry,
   sampleMetadataReveal,
 } from "./chat-attributed-identity.test-support.ts";
-import { requireRecord, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import {
+  requireRecord,
+  scrollChatThreadToTop,
+  waitForChatScrollIdle,
+} from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -80,9 +84,20 @@ async function send(page: Page, prompt: string) {
   await page.getByRole("button", { name: "Send message" }).click();
 }
 
-async function deliveryFixture(page: Page, prompt: string) {
+async function deliveryFixture(page: Page, prompt: string, shared = false) {
   const gateway = await installMockGateway(page, {
-    historyMessages: [assistant([{ text: ready, type: "text" }], Date.now() - 1_000)],
+    historyMessages: [
+      ...(shared
+        ? [
+            userMessage(
+              profile("profile-riley", "Riley Chen"),
+              "A shared delivery check.",
+              Date.now() - 2_000,
+            ),
+          ]
+        : []),
+      assistant([{ text: ready, type: "text" }], Date.now() - 1_000),
+    ],
     presenceUsers: [
       { ...profile("c3e32452-0467-47e5-aafa-233cd5dae29f", "Collin Johnson"), self: true },
     ],
@@ -233,14 +248,19 @@ suite.define(() => {
               transcript.getByText("The response uses the available transcript width."),
               label,
             ).toBeVisible();
-            const expectColumn = async (content: Locator, phase: string) => {
-              const frame = await transcript.boundingBox();
-              const bounds = await content.boundingBox();
+            const expectColumn = async (content: Locator, phase: string, outer = false) => {
+              const frame = (await transcript.boundingBox())!;
+              const bounds = (await content.boundingBox())!;
               const columnLabel = `${label}: ${phase}`;
-              expect(frame, columnLabel).not.toBeNull();
-              expect(bounds, columnLabel).not.toBeNull();
-              expect(bounds!.x, columnLabel).toBeCloseTo(frame!.x, 0);
-              expect(bounds!.width, columnLabel).toBeCloseTo(frame!.width, 0);
+              expect(bounds.x + bounds.width / 2, columnLabel).toBeCloseTo(
+                frame.x + frame.width / 2,
+                0,
+              );
+              if (outer) {
+                expect(bounds.width, columnLabel).toBeGreaterThanOrEqual(frame.width);
+              } else {
+                expect(bounds.width, columnLabel).toBeCloseTo(frame.width, 0);
+              }
             };
             for (const direction of ["ltr", "rtl"]) {
               await page.evaluate((dir) => {
@@ -249,6 +269,7 @@ suite.define(() => {
               await expectColumn(
                 pane.locator(".agent-chat__composer-shell"),
                 `${direction} composer`,
+                true,
               );
               const frame = await transcript.boundingBox();
               const directionLabel = `${label} (${direction})`;
@@ -318,6 +339,11 @@ suite.define(() => {
                 Date.now(),
               ),
             });
+            // Fixture delivery does not wait for the new row's presentation.
+            await expect(
+              transcript.getByText("Riley joined this conversation."),
+              label,
+            ).toBeVisible();
             if (profiled) {
               const peer = pane.locator(".chat-group--peer", {
                 hasText: "Riley joined this conversation.",
@@ -329,11 +355,7 @@ suite.define(() => {
             if (height === 430) {
               // The first message can leave the virtual window after new turns.
               // Return to it before checking its attributed identity.
-              await waitForChatScrollIdle(page);
-              await thread.focus();
-              await thread.press("Home");
-              // Chromium drops a keyboard scroll that lands in the tail of the
-              // previous smooth one, so End must wait for Home to settle.
+              await scrollChatThreadToTop(page);
               await waitForChatScrollIdle(page);
               expect(await thread.evaluate((element) => element.scrollTop), label).toBe(0);
             }
@@ -349,7 +371,11 @@ suite.define(() => {
               await expect
                 .poll(() => thread.evaluate((element) => element.scrollTop), { message: label })
                 .toBeGreaterThan(0);
-              await expectColumn(pane.locator(".agent-chat__composer-shell"), "scrolled composer");
+              await expectColumn(
+                pane.locator(".agent-chat__composer-shell"),
+                "scrolled composer",
+                true,
+              );
             }
           }
         },
@@ -554,7 +580,9 @@ suite.define(() => {
               return bounds.top + bounds.height / 2;
             };
             const buttons = [...footer.querySelectorAll(".chat-group-footer-actions button")];
+            const name = footer.querySelector<HTMLElement>(".chat-sender-name")!;
             return {
+              nameOverflow: name.scrollWidth - name.clientWidth,
               time: centerY(footer.querySelector(".chat-group-timestamp")!),
               icons: [...footer.querySelectorAll(".chat-group-footer-actions button svg")].map(
                 centerY,
@@ -570,6 +598,7 @@ suite.define(() => {
             };
           });
           expect((await group.boundingBox())?.height).toBe(restingHeight);
+          expect(alignment.nameOverflow).toBeLessThanOrEqual(1);
           expect(alignment.icons.length).toBeGreaterThan(0);
           for (const center of alignment.icons) {
             expect(Math.abs(center - alignment.time)).toBeLessThanOrEqual(1);
@@ -723,14 +752,16 @@ suite.define(() => {
       const { gateway, request, group } = await deliveryFixture(
         page,
         "Keep my identity stable when delivery fails.",
+        true,
       );
       const firstRunId = String((request.params as { idempotencyKey?: unknown }).idempotencyKey);
-      await expect(group).toHaveClass(/\bchat-group--sender-tint\b/u);
+      await expect(group).toHaveCSS("flex-direction", "row-reverse");
       const background = () =>
         group
           .locator(".chat-bubble")
           .evaluate((element) => getComputedStyle(element).backgroundColor);
       const sendingBackground = await background();
+      expect(sendingBackground).not.toBe("rgba(0, 0, 0, 0)");
 
       await rejectDelivery(gateway);
       await expect
@@ -743,7 +774,22 @@ suite.define(() => {
       await expect(composer(page)).toHaveValue("");
       const status = group.locator(".chat-send-status");
       await expect(status.locator(".chat-send-status__discard")).toBeVisible();
-      await expect(group.locator(".chat-sender-name")).toHaveCount(0);
+      await expect(group.locator(".chat-sender-name")).toHaveText("Collin Johnson");
+      await page.mouse.move(0, 0);
+      const [actions, metadata] = await Promise.all(
+        [
+          group.locator(".chat-group-footer-actions"),
+          group.locator(".chat-group-footer__meta"),
+        ].map((element) => element.boundingBox()),
+      );
+      expect(actions).not.toBeNull();
+      expect(metadata).not.toBeNull();
+      expect(
+        actions!.x + actions!.width <= metadata!.x ||
+          metadata!.x + metadata!.width <= actions!.x ||
+          actions!.y + actions!.height <= metadata!.y ||
+          metadata!.y + metadata!.height <= actions!.y,
+      ).toBe(true);
       const footerLineCenters = await Promise.all(
         [
           status.getByText("Not sent", { exact: true }),
@@ -762,10 +808,8 @@ suite.define(() => {
 
       await gateway.deferNext("chat.send");
       await group.getByRole("button", { name: "Retry queued message" }).click();
-      await expect(group.locator(".chat-send-status")).toHaveAttribute(
-        "data-send-state",
-        "sending",
-      );
+      await expect(group.locator(".chat-send-status")).toHaveCount(0);
+      await expect(group.locator("time.chat-group-timestamp")).toHaveCount(1);
       await expect(group.getByRole("button", { name: "Retry queued message" })).toHaveCount(0);
       await expect(group).toBeVisible();
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
@@ -776,6 +820,7 @@ suite.define(() => {
       expect(retryRunId).not.toBe(firstRunId);
       await gateway.resolveDeferred("chat.send", { runId: retryRunId, status: "started" });
       await expect(group.locator(".chat-send-status")).toHaveCount(0);
+      expect(await background()).toBe(sendingBackground);
     });
   });
 
@@ -851,6 +896,7 @@ suite.define(() => {
       await expect(userGroup.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
+      const originalImage = (await image.elementHandles())[0] ?? null;
 
       await userGroup.hover();
       await userGroup.getByRole("button", { name: "Reply to message" }).click();
@@ -865,7 +911,15 @@ suite.define(() => {
       );
 
       expect(avatarRequests).toHaveLength(1);
-      await expect(image).toHaveCount(0);
+      await expect(userGroup.locator("img.chat-avatar.user[src]")).toHaveCount(0);
+      await expect(image).toBeHidden();
+      // A settled miss may retain its first frame, but rerenders must not create more images.
+      expect(
+        await image.evaluateAll(
+          (images, original) => images.every((candidate) => candidate === original),
+          originalImage,
+        ),
+      ).toBe(true);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
     });

@@ -26,6 +26,10 @@ runtime-local policy can use `createNodeLlmRuntime`; it preserves that host acro
 provider work without replacing the process default. `createLlmRuntime` continues
 to use the process-default host.
 
+Embedding hosts can implement optional `isLogEnabled(subsystem, level)` to skip
+diagnostic preparation for disabled sinks. Hosts without it retain emission-time
+filtering.
+
 OpenAI HTTP adapters report rejected response status and headers through
 `onResponse` before consuming the error body. Successful streaming responses
 invoke the callback before the first event. Retry and failover policy remains

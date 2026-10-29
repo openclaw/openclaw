@@ -46,12 +46,20 @@ export const WORKER_ATTACHMENT_DIRECTORY_PATTERN =
     UUID_HEX.repeat(12),
   ].join("-");
 
+// Match a whole segment without splitting each inventory path. The negative
+// class ends at a slash or the actual end, unlike "$" before a final newline.
+const DERIVED_WORKSPACE_SEGMENT_PATTERN = `(?:^|/)(?:${[
+  ...DERIVED_WORKSPACE_DIRECTORY_NAMES.map((name) => name.replaceAll(".", "\\.")),
+  ...DERIVED_WORKSPACE_FILE_NAMES.map((name) => name.replaceAll(".", "\\.")),
+  ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `[^/]*${suffix.replaceAll(".", "\\.")}`),
+  WORKER_ATTACHMENT_DIRECTORY_PATTERN,
+].join("|")})(?![^/])`;
+
 // Derived caches and runtime attachment copies are not workspace edits. Keep
 // sync, manifest, divergence, apply, and recovery on this single predicate.
 export const WORKSPACE_PATH_EXCLUSIONS_JS = `
 ${STAGED_INPUT_PATHS_JS}
 ${MANAGED_SANDBOX_SKILLS_PATH_JS}
-const DERIVED_WORKSPACE_DIRECTORY_NAMES = new Set(${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)});
 const DERIVED_WORKSPACE_ROOT_PATHS = ${JSON.stringify(DERIVED_WORKSPACE_ROOT_PATHS)};
 const BUILD_CACHE_ROOT_PATHS = ${JSON.stringify(BUILD_CACHE_ROOT_PATHS)};
 function isBuildCacheWorkspacePath(relativePath) {
@@ -67,11 +75,11 @@ function buildCacheInputPaths(paths = []) {
   return retained;
 }
 const RUNTIME_WORKSPACE_ROOT_PATHS = ${JSON.stringify(RUNTIME_WORKSPACE_ROOT_PATHS)};
-const DERIVED_WORKSPACE_FILE_NAMES = new Set(${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)});
-const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
-const WORKER_ATTACHMENT_DIRECTORY_RE = new RegExp(${JSON.stringify(`^${WORKER_ATTACHMENT_DIRECTORY_PATTERN}$`)});
+const DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(${JSON.stringify(DERIVED_WORKSPACE_SEGMENT_PATTERN)});
 function isRuntimeOwnedWorkspacePath(relativePath) {
-  return isManagedSandboxSkillsPath(relativePath) || RUNTIME_WORKSPACE_ROOT_PATHS.some(
+  return relativePath === ".git" || relativePath.startsWith(".git/") ||
+    relativePath.endsWith("/.git") || relativePath.includes("/.git/") ||
+    isManagedSandboxSkillsPath(relativePath) || RUNTIME_WORKSPACE_ROOT_PATHS.some(
     (root) => relativePath === root || relativePath.startsWith(root + "/"),
   );
 }
@@ -88,15 +96,7 @@ function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuil
   )) {
     return true;
   }
-  const segments = relativePath.split("/");
-  // "$" can match before a final newline; require the entire path segment.
-  return segments.some(
-    (segment) =>
-      WORKER_ATTACHMENT_DIRECTORY_RE.exec(segment)?.[0] === segment ||
-      DERIVED_WORKSPACE_DIRECTORY_NAMES.has(segment) ||
-      DERIVED_WORKSPACE_FILE_NAMES.has(segment) ||
-      DERIVED_WORKSPACE_FILE_SUFFIXES.some((suffix) => segment.endsWith(suffix)),
-  );
+  return DERIVED_WORKSPACE_SEGMENT_RE.test(relativePath);
 }
 function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
   const nonemptyDirectories = new Set();

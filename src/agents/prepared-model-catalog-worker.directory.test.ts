@@ -1,16 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
-import "../claws/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import "../templates/tool-policy-runtime.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import { stubCatalogEnv } from "./prepared-model-catalog-worker.shared.test-support.js";
 import {
@@ -54,13 +55,17 @@ function createInspector(env: NodeJS.ProcessEnv) {
   const request = {
     kind: "catalog" as const,
     syntheticAuth: [],
-    clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
+    templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({ env }),
   };
   return {
     run: (
       value: CatalogInspectionTask["value"],
       inspection?: CatalogInspectionTask["inspection"],
-    ) => pool.run({ value, request, inspection }, { timeoutMs: 30_000 }),
+    ) =>
+      pool.run(
+        { context: prepareModelCatalogWorkerContext(value), value, request, inspection },
+        { timeoutMs: 30_000 },
+      ),
     [Symbol.asyncDispose]: () => pool.close(),
   };
 }
