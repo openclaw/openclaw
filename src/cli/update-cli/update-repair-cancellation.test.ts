@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   assertManagedHandoffTestConsumer,
@@ -19,12 +19,12 @@ import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as census from "../../infra/openclaw-process-census.js";
+import { mockInertSealedHelper } from "../../infra/package-update-activation-lifetime.test-support.js";
 import {
   publicationActivation,
   withPublicationFence,
 } from "../../infra/package-update-publication.test-support.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
-import * as runtimeWorker from "../../infra/runtime-worker-url.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
@@ -84,13 +84,8 @@ function createCrashFixture(root: string) {
   expect(handoffLease.resolveManagedUpdateLeaseDatabasePath()).toBe(databasePath);
   vi.spyOn(os, "tmpdir").mockReturnValue(privateTmp);
   const binding = createManagedHandoffTestBinding(privateTmp);
-  const childEnv = writePrivateUpdateHandoffChildGuard(
-    databasePath,
-    privateTmp,
-  )({
-    ...process.env,
-    TMPDIR: privateTmp,
-  });
+  const guardEnv = writePrivateUpdateHandoffChildGuard(databasePath, privateTmp);
+  const childEnv = guardEnv({ ...process.env, TMPDIR: privateTmp });
   // Host census is the only synthetic observation; process and SQLite custody stay real.
   const censusRuns: string[] = [];
   const censusMatches: number[] = [];
@@ -114,6 +109,7 @@ function createCrashFixture(root: string) {
   const script = path.join(root, "cancelled-original.mts");
   const url = (relative: string) => JSON.stringify(new URL(relative, import.meta.url).href);
   const fixture = {
+    root,
     install,
     slot,
     databasePath,
@@ -212,64 +208,82 @@ function lastJson() {
   return vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
 }
 
+/** Repair finished its own maintenance and reported the cancelled custody it could not settle. */
+async function expectRetainedCustody(
+  original: ReturnType<typeof f.crash>["original"],
+  reason: string | RegExp,
+  nextAction: string | RegExp = "update repair",
+) {
+  mocks.doctor.mockClear();
+  await expect(repair()).rejects.toEqual(new ExitError(2));
+  expect(mocks.doctor).toHaveBeenCalled();
+  expect(lastJson()).toMatchObject({
+    status: "warning",
+    nextAction: expect.stringMatching(nextAction),
+    retainedUpdateCustody: {
+      key: f.install,
+      owner: original.owner,
+      leaseVersion: 4,
+      lastActivityAt: new Date(original.updated_at).toISOString(),
+      reason: expect.stringMatching(reason),
+    },
+  });
+}
+
+/** Repair released the whole custody family, recorded its settled keys, and admits the next run. */
+async function expectSettledCustody(runId: string, family?: ReturnType<typeof f.rows>) {
+  expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  expect(lastJson()).toMatchObject({ status: "ok" });
+  expect(lastJson()).not.toHaveProperty("retainedUpdateCustody");
+  expect(f.rows()).toEqual([]);
+  if (family) {
+    const keys = family.map((row) => row.install_root).join(", ");
+    expect(
+      listUpdateRuns()[0]!.steps.find(({ step }) => step === "finalize:handoff-settlement"),
+    ).toMatchObject({
+      status: "completed",
+      detail: expect.stringContaining(`Settled keys: ${keys}`),
+    });
+  }
+  await expect(admit(runId)).resolves.toBe("admitted");
+}
+
+/** An earlier Gateway's handoff store beside the private temp root; admission reads it. */
+async function useEarlierGatewayStore(name: string) {
+  const databasePath = path.join(f.root, name, "managed-update-handoffs.sqlite");
+  fs.mkdirSync(path.dirname(databasePath), { mode: 0o700 });
+  vi.spyOn(
+    legacyHandoffStore,
+    "resolveLegacyGatewayManagedUpdateLeaseDatabasePath",
+  ).mockReturnValue(databasePath);
+  const store = await handoffLease.prepareManagedHandoffLeaseStore({
+    databasePath,
+    serviceManagerEnv: resolveServiceManagerEnv(),
+  });
+  return { databasePath, store };
+}
+
 unix(
   "repair settles a dead updater's cancelled custody family and admits the next update",
   { timeout: 60_000 },
   async () => {
     const { family, original, runId } = f.crash();
-    const lastActivityAt = new Date(original.updated_at).toISOString();
     await expect(admit("blocked-update")).rejects.toThrow(
-      `Another update executor owns this installation. It retains cancelled update custody (owner ${original.owner}, lease version 4, last activity ${lastActivityAt})`,
+      `Another update executor owns this installation. It retains cancelled update custody (owner ${original.owner}, lease version 4, last activity ${new Date(original.updated_at).toISOString()})`,
     );
 
     // A live candidate and then a referencing process each keep the exact family;
     // repair still finishes its own maintenance and reports the blocker.
-    const refusals: [() => Promise<void> | void, string | RegExp][] = [
-      [() => undefined, `live or unverified: PID ${f.candidate}`],
-      [
-        async () => {
-          await f.stopCandidate();
-          f.censusMatches.push(424242);
-        },
-        /PID 424242/,
-      ],
-    ];
-    for (const [prepare, reason] of refusals) {
-      await prepare();
-      vi.mocked(defaultRuntime.writeJson).mockClear();
-      mocks.doctor.mockClear();
-      await expect(repair()).rejects.toEqual(new ExitError(2));
-      expect(mocks.doctor).toHaveBeenCalled();
-      expect(lastJson()).toMatchObject({
-        status: "warning",
-        nextAction: expect.stringContaining("update repair"),
-        retainedUpdateCustody: {
-          key: f.install,
-          owner: original.owner,
-          leaseVersion: 4,
-          lastActivityAt,
-          reason: expect.stringMatching(reason),
-        },
-      });
-      expect(f.rows()).toEqual(family);
-    }
+    await expectRetainedCustody(original, `live or unverified: PID ${f.candidate}`);
+    expect(f.rows()).toEqual(family);
+    await f.stopCandidate();
+    f.censusMatches.push(424242);
+    await expectRetainedCustody(original, /PID 424242/);
+    expect(f.rows()).toEqual(family);
     expect(f.censusRuns).toEqual([runId]);
 
-    vi.mocked(defaultRuntime.writeJson).mockClear();
     await repair();
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-    expect(lastJson()).toMatchObject({ status: "ok" });
-    expect(lastJson()).not.toHaveProperty("retainedUpdateCustody");
-    expect(f.rows()).toEqual([]);
-    expect(
-      listUpdateRuns()[0]!.steps.find(({ step }) => step === "finalize:handoff-settlement"),
-    ).toMatchObject({
-      status: "completed",
-      detail: expect.stringContaining(
-        `Settled keys: ${family.map((row) => row.install_root).join(", ")}`,
-      ),
-    });
-    await expect(admit("next-update")).resolves.toBe("admitted");
+    await expectSettledCustody("next-update", family);
     expect(f.rows()).toEqual([]);
   },
 );
@@ -281,15 +295,7 @@ unix(
     const swap = await createPackageSwapFixture(path.dirname(f.install));
     fs.rmSync(f.install, { recursive: true });
     fs.renameSync(swap.packageRoot, f.install);
-    // Journals record the built sealed helper; source tests seal inert bytes.
-    const helper = path.join(path.dirname(f.install), "sealed.mjs");
-    fs.writeFileSync(helper, "");
-    const resolveWorkerUrl = runtimeWorker.resolveRuntimeWorkerUrl;
-    vi.spyOn(runtimeWorker, "resolveRuntimeWorkerUrl").mockImplementation((entry) =>
-      entry.sourceWorkerName === "package-update-activation-sealed"
-        ? pathToFileURL(helper)
-        : resolveWorkerUrl(entry),
-    );
+    mockInertSealedHelper(path.dirname(f.install));
     await withPublicationFence(f.slot, async (fence) =>
       preparePackagePublication({ ...swap, packageRoot: f.install }, publicationActivation(fence)),
     );
@@ -301,9 +307,7 @@ unix(
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("closed as publication-not-started"),
     );
-    expect(lastJson()).toMatchObject({ status: "ok" });
-    expect(f.rows()).toEqual([]);
-    await expect(admit("next-update")).resolves.toBe("admitted");
+    await expectSettledCustody("next-update");
   },
 );
 
@@ -312,7 +316,6 @@ unix.each(["failed", "deferred"] as const)(
   { timeout: 60_000 },
   async (interruption) => {
     const { original, runId } = f.crash();
-    const lastActivityAt = new Date(original.updated_at).toISOString();
     await f.stopCandidate();
     if (interruption === "failed") {
       mocks.doctor.mockRejectedValueOnce(new Error("Doctor interrupted"));
@@ -325,21 +328,12 @@ unix.each(["failed", "deferred"] as const)(
           reason: "coordinator-contention",
         }),
       );
-      await expect(repair()).rejects.toEqual(new ExitError(2));
       // The open claim still guards the cancelled custody; the report says so.
-      expect(lastJson()).toMatchObject({
-        status: "warning",
-        nextAction: expect.stringMatching(
-          /gateway stop.*update repair.*Cancelled update custody/su,
-        ),
-        retainedUpdateCustody: {
-          key: f.install,
-          owner: original.owner,
-          leaseVersion: 4,
-          lastActivityAt,
-          reason: expect.stringContaining("Doctor maintenance remains pending"),
-        },
-      });
+      await expectRetainedCustody(
+        original,
+        "Doctor maintenance remains pending",
+        /gateway stop.*update repair.*Cancelled update custody/su,
+      );
     }
     const [claim, ...others] = f.rows();
     expect(others).toEqual([]);
@@ -361,20 +355,7 @@ unix.each(["failed", "deferred"] as const)(
 
     // An immediate rerun still finishes maintenance and reports the retained custody.
     // This process owns the interrupted claim, so it stays live and is refused.
-    vi.mocked(defaultRuntime.writeJson).mockClear();
-    mocks.doctor.mockClear();
-    await expect(repair()).rejects.toEqual(new ExitError(2));
-    expect(mocks.doctor).toHaveBeenCalled();
-    expect(lastJson()).toMatchObject({
-      status: "warning",
-      retainedUpdateCustody: {
-        key: f.install,
-        owner: original.owner,
-        leaseVersion: 4,
-        lastActivityAt,
-        reason: expect.stringContaining(`live or unverified: PID ${process.pid}`),
-      },
-    });
+    await expectRetainedCustody(original, `live or unverified: PID ${process.pid}`);
     expect(f.rows()).toHaveLength(1);
   },
 );
@@ -385,7 +366,7 @@ unix(
   async () => {
     const { family } = f.crash();
     // The current per-user store is empty; the Gateway's TMPDIR store holds the family.
-    const current = path.join(path.dirname(path.dirname(f.databasePath)), "current-tmp");
+    const current = path.join(f.root, "current-tmp");
     fs.mkdirSync(current, { mode: 0o700 });
     vi.mocked(temporaryRoot.resolvePreferredOpenClawTmpDir).mockReturnValue(current);
     vi.mocked(handoffLease.resolveManagedUpdateLeaseDatabasePath).mockReturnValue(
@@ -402,35 +383,13 @@ unix(
     );
     await f.stopCandidate();
     await repair();
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-    expect(lastJson()).toMatchObject({ status: "ok" });
-    expect(lastJson()).not.toHaveProperty("retainedUpdateCustody");
-    expect(f.rows()).toEqual([]);
-    expect(
-      listUpdateRuns()[0]!.steps.find(({ step }) => step === "finalize:handoff-settlement"),
-    ).toMatchObject({
-      status: "completed",
-      detail: expect.stringContaining(
-        `Settled keys: ${family.map((row) => row.install_root).join(", ")}`,
-      ),
-    });
-    await expect(admit("after-earlier-gateway-repair")).resolves.toBe("admitted");
+    await expectSettledCustody("after-earlier-gateway-repair", family);
   },
 );
 
 unix("a live owner in an earlier macOS Gateway's store keeps admission fenced", async () => {
-  const earlier = path.join(path.dirname(path.dirname(f.databasePath)), "gateway-tmp");
-  fs.mkdirSync(earlier, { mode: 0o700 });
-  const databasePath = path.join(earlier, "managed-update-handoffs.sqlite");
-  vi.spyOn(
-    legacyHandoffStore,
-    "resolveLegacyGatewayManagedUpdateLeaseDatabasePath",
-  ).mockReturnValue(databasePath);
   // This live process stands in for an earlier Gateway still running its update.
-  const store = await handoffLease.prepareManagedHandoffLeaseStore({
-    databasePath,
-    serviceManagerEnv: resolveServiceManagerEnv(),
-  });
+  const { databasePath, store } = await useEarlierGatewayStore("gateway-tmp");
   const held = store.acquire(fs.realpathSync(f.install), "earlier-gateway", { kind: "update" });
   assert(held.kind === "acquired", "Expected the earlier Gateway lease");
 
@@ -446,17 +405,7 @@ unix("a live owner in an earlier macOS Gateway's store keeps admission fenced", 
 unix(
   "an earlier Gateway's original-updater custody fences admission after its owners die",
   async () => {
-    const earlier = path.join(path.dirname(path.dirname(f.databasePath)), "gateway-tmp");
-    fs.mkdirSync(earlier, { mode: 0o700 });
-    const databasePath = path.join(earlier, "managed-update-handoffs.sqlite");
-    vi.spyOn(
-      legacyHandoffStore,
-      "resolveLegacyGatewayManagedUpdateLeaseDatabasePath",
-    ).mockReturnValue(databasePath);
-    await handoffLease.prepareManagedHandoffLeaseStore({
-      databasePath,
-      serviceManagerEnv: resolveServiceManagerEnv(),
-    });
+    const { databasePath } = await useEarlierGatewayStore("gateway-tmp");
     // Original custody waits for its explicit settlement; process death never reclaims it.
     const exitedProcess = () => ({
       pid: Number(
