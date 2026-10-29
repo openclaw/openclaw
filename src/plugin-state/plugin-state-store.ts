@@ -5,6 +5,7 @@ import type {
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { validatePluginStateComparison } from "./plugin-state-observation.js";
@@ -343,7 +344,10 @@ function createAsyncKeyedStore<T>(
     },
     entries: async () => {
       // SAFETY: Entries come from this namespace and retain the caller's JSON value type.
-      return (await listPluginStateInWorker(scope)) as PluginStateEntry<T>[];
+      return (await listPluginStateInWorker({
+        ...scope,
+        signal: getAsyncWorkSignal(),
+      })) as PluginStateEntry<T>[];
     },
     entriesInKeyRange: async (range) => {
       const params = {

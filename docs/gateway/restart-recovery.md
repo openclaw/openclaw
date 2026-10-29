@@ -63,6 +63,11 @@ A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
 Managed update handoffs keep their own stop handling.
 
+Failed startup uses the same cleanup grace when the CLI will exit. Usage backfill
+cancels pending discovery reads and scans when its sidecar stops; a later startup
+rebuilds any unfinished cache work. Embedded hosts and in-process startup recovery
+still join cleanup before reusing the runtime.
+
 An external stop or restart logs bounded-grace leftovers, such as a service-child
 cleanup deadline, lifetime sidecar, or retained plugin runtime, and returns with
 status `0` unless required persistence failed. A runtime that still owns resources
