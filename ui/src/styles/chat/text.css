@@ -1169,7 +1169,7 @@
 }
 
 .chat-text :where(pre) {
-  background: var(--bg-muted);
+  background: var(--inline-code-bg, var(--bg-muted));
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   margin-top: 0.75em;

@@ -67,7 +67,7 @@
   --accent-foreground: var(--primary-foreground);
 
   --bg-content: #ebe5e0;
-  --inline-code-bg: color-mix(in srgb, var(--text) 5.5%, var(--bg-content));
+  --inline-code-bg: color-mix(in srgb, var(--text) 5.5%, transparent);
 
   --card-foreground: #2c2118;
   --card-highlight: rgba(80, 50, 20, 0.02);

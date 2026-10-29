@@ -8,7 +8,7 @@
   --sidebar-rail-surface: color-mix(in srgb, var(--text) 4%, var(--bg-content));
   --bg: color-mix(in srgb, var(--text) 2%, var(--bg-content));
   --bg-muted: color-mix(in srgb, var(--text) 4%, var(--bg-content));
-  --inline-code-bg: color-mix(in srgb, var(--text) 5%, var(--bg-content));
+  --inline-code-bg: color-mix(in srgb, var(--text) 5%, transparent);
   --card: var(--bg-elevated);
   --popover: var(--bg-elevated);
   --panel-strong: var(--bg-content);
@@ -61,7 +61,6 @@
   --bg-elevated: color-mix(in srgb, var(--text) 8%, var(--bg-content));
   --bg-hover: color-mix(in srgb, var(--text) 10%, var(--bg-content));
   --chat-composer-surface: color-mix(in srgb, var(--text) 14%, var(--bg-content));
-  --chat-user-surface: color-mix(in srgb, var(--accent) 14%, var(--bg-content));
 
   --card-foreground: #e8e8e2;
   --card-highlight: rgba(255, 255, 248, 0.04);
@@ -113,7 +112,6 @@
   --bg-elevated: color-mix(in srgb, var(--bg-content) 50%, white);
   --bg-hover: color-mix(in srgb, var(--text) 5%, var(--bg-content));
   --bg-content: #f7f6f5;
-  --chat-user-surface: color-mix(in srgb, var(--accent) 12%, var(--bg-content));
 
   --card-foreground: #20201e;
   --card-highlight: rgba(30, 30, 24, 0.02);

@@ -1500,9 +1500,9 @@ select.settings-select:not([multiple]) {
   width: 100%;
   margin-block: 1em;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border: 1px solid var(--inline-code-border, var(--border-strong));
   border-radius: var(--radius-md);
-  background: transparent;
+  background: var(--inline-code-bg, var(--bg-muted));
 }
 
 .code-block-wrapper pre {
@@ -1588,12 +1588,17 @@ select.settings-select:not([multiple]) {
   height: 28px;
   padding: 6px;
   margin-block: 8px 4px;
-  background: color-mix(in srgb, var(--text) 3%, var(--bg));
+  background:
+    linear-gradient(var(--inline-code-bg, var(--bg-muted)), var(--inline-code-bg, var(--bg-muted))),
+    var(--chat-bubble-background, var(--bg));
 }
 
 .code-block-wrapper--long :is(.code-block-copy, .code-block-wrap):hover,
 .code-block-wrapper--long .code-block-wrap[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--text) 8%, var(--bg));
+  background:
+    linear-gradient(var(--surface-hover), var(--surface-hover)),
+    linear-gradient(var(--inline-code-bg, var(--bg-muted)), var(--inline-code-bg, var(--bg-muted))),
+    var(--chat-bubble-background, var(--bg));
   color: var(--text);
 }
 
