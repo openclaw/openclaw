@@ -128,8 +128,6 @@ suite.define(() => {
           await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         }
         if (action.section) {
-          // Leave the previous control so its tooltip cannot cover the next header.
-          await composer.hover();
           await page
             .locator(`[data-session-section="${action.section}"] .sidebar-recent-sessions__head`)
             .hover();
