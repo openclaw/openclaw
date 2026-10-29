@@ -12,6 +12,7 @@ import {
   type SessionPickerChoice,
 } from "../tui/tui-session-picker.js";
 import type { ResumeCliOptions } from "./resume-cli.js";
+import { registerSignalExitGate } from "./signal-exit-barrier.js";
 import { isTerminalInteractive } from "./terminal-interactivity.js";
 
 const RESUME_INTERACTIVE_TERMINAL_GUIDANCE =
@@ -62,6 +63,22 @@ async function connectResumeGateway(opts: ResumeCliOptions, handoffTarget: boole
   }
 }
 
+/** The pre-TUI client has no cancellation owner yet, so an accepted CLI interruption
+ *  closes it here instead of leaving the transport open behind the signal barrier. */
+function trackResumeClientGate(client: { stop: () => Promise<void> }): () => void {
+  let releaseGate = () => {};
+  const gateFinished = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  const unregisterGate = registerSignalExitGate(gateFinished, () => {
+    void client.stop();
+  });
+  return () => {
+    releaseGate();
+    unregisterGate();
+  };
+}
+
 function formatResumeCandidate(candidate: SessionPickerChoice): string {
   const label = sanitizeTerminalText(candidate.label);
   const key = sanitizeTerminalText(candidate.value);
@@ -88,6 +105,7 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       { ...connectionOptions, url: handoff.gatewayUrl },
       true,
     );
+    const releaseClientGate = trackResumeClientGate(client);
     try {
       let result: unknown;
       try {
@@ -111,9 +129,11 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       sessionKey = result.key;
     } finally {
       await client.stop();
+      releaseClientGate();
     }
   } else {
     const client = await connectResumeGateway(connectionOptions, false);
+    const releaseClientGate = trackResumeClientGate(client);
     let sessions: Awaited<ReturnType<typeof loadRecentSessions>>;
     try {
       connection = client.connection;
@@ -127,6 +147,7 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       throw await formatResumeConnectionError(error);
     } finally {
       await client.stop();
+      releaseClientGate();
     }
     if (explicitGlobalSession) {
       sessionKey = `agent:${explicitGlobalSession.agentId}:global`;

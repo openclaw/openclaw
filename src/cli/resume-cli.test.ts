@@ -7,6 +7,7 @@ import { encodeResumeHandoff } from "../shared/resume-handoff.js";
 import type { TuiSessionList } from "../tui/tui-backend.js";
 import { registerResumeCli } from "./resume-cli.js";
 import { runResumeCommand } from "./resume-cli.runtime.js";
+import { waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
@@ -255,6 +256,26 @@ describe("runResumeCommand", () => {
     );
     expect(mocks.connect).not.toHaveBeenCalled();
     expect(mocks.runTui).not.toHaveBeenCalled();
+  });
+  it("closes the pre-TUI client when the command is interrupted", async () => {
+    const client = createGatewayClient([]);
+    let rejectResolve: (error: Error) => void = () => {};
+    client.resolveSession.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectResolve = reject;
+        }),
+    );
+    client.stop.mockImplementation(async () => {
+      rejectResolve(new Error("Gateway connection closed"));
+    });
+
+    const pending = runResumeCommand(undefined, { handoff: createHandoff() });
+    await vi.waitFor(() => expect(client.resolveSession).toHaveBeenCalledOnce());
+    await waitForSignalExitBarriers("SIGINT");
+
+    expect(client.stop).toHaveBeenCalled();
+    await expect(pending).rejects.toThrow();
   });
 });
 
