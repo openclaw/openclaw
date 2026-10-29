@@ -668,13 +668,7 @@ run_quiet_step() {
     if [[ -s "$log" ]]; then
         tail -n 80 "$log" >&2 || true
     fi
-    # Preserve signal exit codes (130=SIGINT, 143=SIGTERM) so callers
-    # like run_doctor can distinguish user cancellation from normal errors.
-    # Return 1 for all other failures to keep existing caller semantics.
-    if (( cmd_exit > 128 )); then
-        return "$cmd_exit"
-    fi
-    return 1
+    return "$cmd_exit"
 }
 
 run_required_step() {
@@ -1510,7 +1504,7 @@ install_homebrew() {
                 exit 1
             fi
             ui_info "Homebrew not found, installing"
-            run_quiet_step "Installing Homebrew" run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+            run_quiet_step "Installing Homebrew" run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh" || return $?
 
             # Add Homebrew to PATH for this session
             if [[ -f "/opt/homebrew/bin/brew" ]]; then
@@ -2264,7 +2258,7 @@ require_sudo() {
 
 install_git() {
     if [[ "$OS" == "macos" ]]; then
-        install_homebrew
+        install_homebrew || return $?
         run_quiet_step "Installing Git" brew install git
     elif [[ "$OS" == "linux" ]]; then
         require_sudo
@@ -3490,7 +3484,7 @@ ensure_bun_sqlite() {
             elif [[ -x /usr/local/bin/brew ]]; then prepend_path_dir /usr/local/bin
             fi
         fi
-        install_homebrew
+        install_homebrew || return $?
         HOMEBREW_PREFIX="$(brew --prefix)"
         export HOMEBREW_PREFIX
         if [[ ! -f "$HOMEBREW_PREFIX/opt/sqlite/lib/libsqlite3.dylib" ]]; then
@@ -3807,7 +3801,7 @@ main() {
         if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
             install_node_with_existing_nvm || exit 1
         else
-            install_homebrew
+            install_homebrew || return $?
             install_node
         fi
     fi
