@@ -1129,7 +1129,7 @@
   padding: 3px 9px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--text) 8%, transparent);
-  color: var(--link);
+  color: var(--chat-text-link, var(--link));
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
   text-decoration: none;
@@ -1137,7 +1137,7 @@
 
 :is(.chat-text, .sidebar-markdown) .markdown-external-image > a:hover {
   background: color-mix(in srgb, var(--text) 13%, transparent);
-  color: var(--link-hover);
+  color: var(--chat-text-link-hover, var(--link-hover));
 }
 
 /* Inline-code overrides let palettes separate chips from their host without
