@@ -349,7 +349,7 @@ function isDynamicStandaloneAssignment(node: TreeSitterNode): boolean {
   return (
     node.childForFieldName("name")?.type === "subscript" ||
     (value?.type === "array" &&
-      value.namedChildren.some((entry) => /^\s*\[[\s\S]*\]=/u.test(entry.text))) ||
+      value.namedChildren.some((entry) => /^\s*\[[\s\S]*\]\+?=/u.test(entry.text))) ||
     node.descendantsOfType(["arithmetic_expansion", "expansion"]).length > 0
   );
 }

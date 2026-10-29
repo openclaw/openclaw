@@ -163,6 +163,12 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
       `y='a[$(touch ${JSON.stringify(compoundMarker)})]'; x=([y]=1); ${echoPath} unsafe`,
       compoundMarker,
     );
+    const compoundAppendMarker = path.join(root, "recursive-compound-append-ran");
+    await expectBlocked(
+      "recursive-compound-append-assignment",
+      `y='a[$(touch ${JSON.stringify(compoundAppendMarker)})]'; x=([y]+=1); ${echoPath} unsafe`,
+      compoundAppendMarker,
+    );
   });
 
   for (const shell of ["/bin/bash", "/bin/zsh"]) {

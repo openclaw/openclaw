@@ -316,6 +316,7 @@ describe("command explainer tree-sitter runtime", () => {
     ["x=(${arr[y]}); :", true],
     ["x[y]=1; :", true],
     ["x=([y]=1); :", true],
+    ["x=([y]+=1); :", true],
     ["x+=([y]=1); :", true],
     ["x=([0]=1); :", true],
     ["x=(one two); :", false],

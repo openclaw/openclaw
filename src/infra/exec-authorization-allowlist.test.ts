@@ -104,6 +104,7 @@ describe("authorization-backed exec allowlist", () => {
     ["y='a[$(id)]'; x=$((y)); :", [], "dynamic-assignment", null],
     ["x[y]=1; true", [], "dynamic-assignment", null],
     ["y='a[$(id)]'; x=([y]=1); true", [], "dynamic-assignment", null],
+    ["y='a[$(id)]'; x=([y]+=1); true", [], "dynamic-assignment", null],
   ] as const)(
     "requires approval for unsafe shell syntax: %s",
     async (command, bins, reason, argv) => {
