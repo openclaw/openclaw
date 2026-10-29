@@ -25,7 +25,7 @@ function resolveUpdateRecoveryTerminalOutcome(
 }
 
 /** Backup-local pending markers cannot override the update's durable terminal result. */
-export async function inspectUpdateRecoveryBackups() {
+export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) {
   const evidence = await readUpdateRecoveryBackups();
   const snapshots = evidence.filter((entry) => entry.kind === "sealed");
   const forwardResolved = new Set<string>();
@@ -52,7 +52,7 @@ export async function inspectUpdateRecoveryBackups() {
       // A failure that never activated left the captured state live; nothing needs recovery.
       let unchanged = false;
       try {
-        const run = await getUpdateRunAsync(manifest.runId);
+        const run = await readRun(manifest.runId);
         if (
           !run &&
           manifest.schemaVersion === 2 &&

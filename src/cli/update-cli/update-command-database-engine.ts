@@ -26,7 +26,10 @@ export async function withUpdateDatabaseEngine<T>(
     observe: false,
     pluginValidation: "core-only",
   }).readConfigFileSnapshot();
-  if (isConfigReadFailure(snapshot)) {
+  if (
+    isConfigReadFailure(snapshot) ||
+    snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+  ) {
     throw createUpdateConfigFailure(snapshot);
   }
   // Candidate Doctor owns config recovery; admission only needs the authored engine choice.

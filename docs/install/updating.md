@@ -107,7 +107,8 @@ are reported by the scheduler without restarting the Gateway.
 PostgreSQL original-state captures acquire offline custody before using the exact
 database backup provider. The installed updater must contain this repair.
 Update-history writes participate in PostgreSQL's generation handoff to Doctor;
-all other generation checks remain in force.
+all other generation checks remain in force. Update status reads history and
+recovery outcomes through the configured database engine.
 
 During overlapping Gateway restarts, config recovery reads health facts through
 the same isolated read-only transaction used for startup plugin metadata while
