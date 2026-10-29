@@ -8866,7 +8866,7 @@ describe("ci workflow guards", () => {
       })),
     ),
   )(
-    "qualifies $scope $packageVersion without native app jobs through a validated $context",
+    "qualifies $scope $packageVersion with deferred native app jobs through a validated $context",
     ({ scope, packageVersion, branch, context }) => {
       const options = {
         bundledPlanner: true,
@@ -8889,12 +8889,19 @@ describe("ci workflow guards", () => {
       expect(qualification.status, qualification.output).toBe(0);
       expect(qualification.output).toContain(`CI release scope: ${scope}`);
       expect(qualification.summary).toContain(`Scope: \`${scope}\``);
-      expect(qualification.summary).toContain("Native app qualification: deferred");
+      // Stable tags also ship the macOS app, so only beta defers its Swift proof.
+      const macosSwiftDeferred = scope === "npm-beta";
+      expect(qualification.summary).toContain(
+        macosSwiftDeferred
+          ? "Native app qualification: deferred;"
+          : "Native app qualification: deferred except macOS Swift;",
+      );
+      expect(full.outputs.run_macos_swift).toBe("true");
       expect(qualification.outputs).toEqual({
         ...full.outputs,
         release_scope: scope,
-        run_macos_swift: "false",
-        run_openclawkit_tests: "false",
+        run_macos_swift: String(!macosSwiftDeferred),
+        run_openclawkit_tests: macosSwiftDeferred ? "false" : full.outputs.run_openclawkit_tests,
         run_ios_build: "false",
         run_ios_voice_cleanup_tests: "false",
         run_ios_lifecycle_tests: "false",

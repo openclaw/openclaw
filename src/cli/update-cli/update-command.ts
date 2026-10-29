@@ -534,18 +534,25 @@ async function updateCommandInternal(
         ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords,
       packageUpdateNodeRunner,
     };
-    const rollbackBlockedReason = opts.recovery
-      ? undefined
-      : await inspectActivatedUpdateState({
-          result,
-          root,
-          packageUpdateNodeRunner,
-          schemaVersions: execution.schemaVersions,
-          candidateSchemaVersions: execution.candidateSchemaVersions,
-          config: finalization.configSnapshot.config,
-          env: ownedManagedUpdateContext?.env ?? run.env,
-          timeoutMs: updateStepTimeoutMs,
-        });
+    // Before update mutation, the restored predecessor may already be writing state again.
+    // A post-activation scan would replace the original failure without a mutation to inspect.
+    const failedBeforeMutation =
+      result.status === "error" &&
+      !execution.mutationStarted &&
+      !(result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk);
+    const rollbackBlockedReason =
+      opts.recovery || failedBeforeMutation
+        ? undefined
+        : await inspectActivatedUpdateState({
+            result,
+            root,
+            packageUpdateNodeRunner,
+            schemaVersions: execution.schemaVersions,
+            candidateSchemaVersions: execution.candidateSchemaVersions,
+            config: finalization.configSnapshot.config,
+            env: ownedManagedUpdateContext?.env ?? run.env,
+            timeoutMs: updateStepTimeoutMs,
+          });
     run.executorFence?.assertCurrent();
     if (opts.recovery || rollbackBlockedReason) {
       // Only candidate code may reopen migrated state, including during reporting and cleanup.

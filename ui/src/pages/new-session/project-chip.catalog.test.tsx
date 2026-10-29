@@ -10,10 +10,12 @@ it("keeps project search live through catalog reads and retires invalidated rows
   const { browser, state: place, context, gateway, changed, request } = fixture;
   const first = createDeferred<ProjectsListResult>();
   const refreshed = createDeferred<ProjectsListResult>();
+  const recovered = createDeferred<ProjectsListResult>();
   const replacement = createDeferred<ProjectsListResult>();
   request
     .mockImplementationOnce(() => first.promise)
     .mockImplementationOnce(() => refreshed.promise)
+    .mockImplementationOnce(() => recovered.promise)
     .mockImplementationOnce(() => replacement.promise);
   Object.assign(gateway, {
     connected: true,
@@ -145,7 +147,17 @@ it("keeps project search live through catalog reads and retires invalidated rows
   refreshed.reject(new Error("Fixture catalog unavailable"));
   await refresh;
   await waitForSolid(() => expect(rows()).toEqual([refreshedAlphaRow]));
-  expect(view.container.querySelector(".new-session-page__project-error")).toBeNull();
+  const failure = view.container.querySelector(".new-session-page__project-error");
+  expect(failure?.textContent).toContain("Fixture catalog unavailable");
+  const retry = failure?.querySelector("button");
+  expect(retry?.textContent).toContain("Retry");
+  retry?.click();
+  recovered.resolve({ projects: [alpha, beta] });
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".new-session-page__project-error")).toBeNull(),
+  );
+  expect(rows()).toEqual([refreshedAlphaRow]);
+  expect(document.activeElement).toBe(input);
   const replace = browser.refreshProjects(true);
   await waitForSolid(() => expect(rows()).toHaveLength(0));
   expect(input.value).toBe("alpha");
@@ -156,5 +168,5 @@ it("keeps project search live through catalog reads and retires invalidated rows
   type("beta");
   await waitForSolid(() => expect(rows()[0]?.textContent).toContain("Beta project"));
   expect(view.container.querySelector('[data-value="project:alpha"]')).toBeNull();
-  expect(request).toHaveBeenCalledTimes(3);
+  expect(request).toHaveBeenCalledTimes(4);
 });

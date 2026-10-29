@@ -75,6 +75,9 @@ vi.mock("./doctor-health-contribution-runners.state.js", async (importOriginal) 
 vi.mock("./doctor-health-contribution-runners.config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-health-contribution-runners.config.js")>()),
   runWriteConfigHealth: async () => observed.events.push("config-write"),
+}));
+vi.mock("./doctor-config-validation-findings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-config-validation-findings.js")>()),
   runFinalConfigValidationHealth: async () => observed.events.push("final-readiness"),
 }));
 
