@@ -249,6 +249,26 @@ it("lists non-archived interactive threads without probing transcript previews",
   ).not.toContain("thread/resume");
 });
 
+it.each([
+  { name: "Caf\u00e9 thread", query: "Caf\u00e9", label: "composed name" },
+  { name: "Cafe\u0301 thread", query: "Caf\u00e9", label: "decomposed name" },
+  { name: "Caf\u00e9 thread", query: "Cafe\u0301", label: "composed name, decomposed query" },
+  { name: "Cafe\u0301 thread", query: "Cafe\u0301", label: "decomposed name and query" },
+])("matches canonically equivalent $label in catalog search", async ({ name, query }) => {
+  const pluginConfig = await fixture.normalizeCodexManifestConfig({
+    supervision: { enabled: true },
+    appServer: { command: "codex-catalog" },
+  });
+  fixture.commandRpcMocks.codexControlRequest.mockResolvedValue({
+    data: [nativeThread("thread-nfc", { name, cwd: "/workspace/one" })],
+  });
+  const control = createFactory({ getPluginConfig: () => pluginConfig }).forRequest("main");
+  await control.initialize();
+  await expect(control.listPage({ limit: 25, searchTerm: query })).resolves.toMatchObject({
+    sessions: [{ threadId: "thread-nfc" }],
+  });
+});
+
 it.each(["direct", "pinned"] as const)(
   "lists the primary native store through %s requests without importing its auth file",
   async (connectionKind) => {
