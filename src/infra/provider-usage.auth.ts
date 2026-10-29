@@ -9,6 +9,7 @@ import {
   resolveAuthProfileOrder,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
+import { authProfilesLog } from "../agents/auth-profiles/constants.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
@@ -26,6 +27,7 @@ import type { ProviderUsageAuthToken } from "../plugins/provider-runtime.types.j
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveProviderAuthEnvVarCandidatesCore } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { formatErrorMessage } from "./errors.js";
 import { isOAuthOnlyUsageProvider } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
@@ -276,8 +278,13 @@ async function resolveOAuthToken(params: {
         // identity for static bearer profiles whose tokens expose no claims.
         ...(cred.email ? { email: cred.email } : {}),
       };
-    } catch {
+    } catch (error) {
       params.state.signal?.throwIfAborted();
+      authProfilesLog.debug("usage auth: skipped auth profile that failed to resolve", {
+        profileId,
+        provider: params.provider,
+        error: formatErrorMessage(error),
+      });
     }
   }
 
