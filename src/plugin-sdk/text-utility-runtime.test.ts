@@ -14,20 +14,41 @@ describe("escapeHtml", () => {
 });
 
 describe("runChannelProbe", () => {
-  it("adds elapsed time to successful results", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
+  it.each([
+    { clockOffset: 60_000, succeeds: true },
+    { clockOffset: -60_000, succeeds: false },
+  ])("measures elapsed time across a wall-clock step: %j", async ({ clockOffset, succeeds }) => {
+    const epoch = 1_700_000_000_000;
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(epoch)
+      .mockReturnValue(epoch + clockOffset);
+    vi.spyOn(performance, "now").mockReturnValueOnce(100).mockReturnValue(145);
 
-    await expect(
-      runChannelProbe(
-        undefined,
-        async ({ startedAt }) => ({ ok: startedAt === 100 }),
-        (error) => ({ ok: false, error: String(error) }),
-      ),
-    ).resolves.toEqual({ ok: true, elapsedMs: 45 });
+    const result = await runChannelProbe(
+      undefined,
+      async ({ startedAt }) => {
+        expect(startedAt).toBe(epoch);
+        if (!succeeds) {
+          throw new Error("probe failed");
+        }
+        return { ok: true };
+      },
+      (error) => ({ ok: false, error: String(error) }),
+    );
+
+    expect(result).toEqual(
+      succeeds
+        ? { ok: true, elapsedMs: 45 }
+        : { ok: false, error: "Error: probe failed", elapsedMs: 45 },
+    );
   });
 
   it("preserves an explicit timing snapshot", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(120);
+    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValue(-59_900);
+    vi.spyOn(performance, "now")
+      .mockReturnValueOnce(100)
+      .mockReturnValueOnce(120)
+      .mockReturnValue(145);
 
     await expect(
       runChannelProbe(

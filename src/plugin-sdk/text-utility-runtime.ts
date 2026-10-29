@@ -29,7 +29,8 @@ export async function runChannelProbe<
   onError?: (error: unknown) => TErrorResult,
 ): Promise<(TResult | TErrorResult) & { elapsedMs: number }> {
   const startedAt = Date.now();
-  const elapsedMs = () => Date.now() - startedAt;
+  const startedAtMonotonic = performance.now();
+  const elapsedMs = () => performance.now() - startedAtMonotonic;
   const finish = <T extends ChannelProbeResult>(result: T) => ({
     ...result,
     elapsedMs: result.elapsedMs ?? elapsedMs(),
