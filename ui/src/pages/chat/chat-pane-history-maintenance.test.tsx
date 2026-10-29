@@ -62,7 +62,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     state.client = createGatewayBrowserClientFixture({ request });
     state.connected = true;
     state.chatMessages = Array.from({ length: 12 }, (_, index) => nativeHistoryMessage(index + 3));
-    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
+    state.chatHistoryPagination = { hasMore: true, olderCursor: "older-2", totalMessages: 4 };
     state.chatLoading = false;
     state.chatHasAutoScrolled = true;
     pane.render();
@@ -162,7 +162,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
         limit: 1000,
         maxBytes: 3 * 1024 * 1024,
         toolResultMaxChars: 2_000,
-        offset: 2,
+        cursor: "older-2",
       },
       { signal: expect.any(AbortSignal) },
     );

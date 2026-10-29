@@ -53,7 +53,10 @@ import {
   resolveFollowupAbortSignal,
   type FollowupRun,
 } from "./queue/types.js";
-import { prepareReplySourceAdmission } from "./reply-source-admission.js";
+import {
+  prepareReplySourceAdmission,
+  prepareReplySystemPrincipalAuthority,
+} from "./reply-source-admission.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import type { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
@@ -144,7 +147,8 @@ export function prepareReplyAgentTurn(
 export async function prepareReplyAgentTurn<TConfigured>(
   params: PrepareReplyAgentTurnParams<TConfigured>,
 ): Promise<PreparedReplyAgentTurn<TConfigured | undefined>> {
-  const assertOperatorCurrent = () => params.queued.operatorAuthority?.assertCurrent();
+  let operatorAuthority = params.queued.operatorAuthority;
+  const assertOperatorCurrent = () => operatorAuthority?.assertCurrent();
   assertOperatorCurrent();
   const readAdmissionConfig = () =>
     params.queued.readAdmissionConfig?.() ?? selectLiveRuntimeConfig(params.queued.run.config);
@@ -278,6 +282,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
     let admissionFailed = false;
     let callerOwnsOperation = false;
     let releaseSourceAdmission: (() => Promise<void>) | undefined;
+    let principalAuthority: Awaited<ReturnType<typeof prepareReplySystemPrincipalAuthority>>;
     try {
       callerOwnsOperation = params.onOperationOwned?.(operation) === true;
       params.queued.run.onOperationAdmitted?.(operation);
@@ -298,8 +303,19 @@ export async function prepareReplyAgentTurn<TConfigured>(
       });
       assertAdmissionCurrent();
       run = { ...run, config };
+      principalAuthority = await prepareReplySystemPrincipalAuthority({
+        followupRun: { ...params.queued, run },
+        sessionKey: replySessionKey,
+        sessionId: operation.sessionId,
+        storePath: params.defaults.storePath,
+        resolveGatewayContext: params.defaults.resolveGatewayContext,
+        assertCurrent: () => operation.abortSignal.throwIfAborted(),
+      });
+      operatorAuthority = principalAuthority?.authority ?? operatorAuthority;
+      assertAdmissionCurrent();
       const origin = run.requesterOrigin;
       if (
+        !principalAuthority &&
         !params.providedReplyOperation &&
         origin?.messageProvider &&
         !origin.operatorProfileId &&
@@ -380,7 +396,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         entry: admittedSelectionEntry,
         sessionKey: replySessionKey,
       });
-      const queued: FollowupRun = { ...params.queued, run };
+      const queued: FollowupRun = { ...params.queued, operatorAuthority, run };
       const sessionEntryHandle = createReplySessionEntryHandle({
         sessionEntry: activeEntry,
         sessionKey: replySessionKey,
@@ -496,12 +512,21 @@ export async function prepareReplyAgentTurn<TConfigured>(
               await params.onCompactionNotice?.(phase, text, turn);
             }
           : undefined;
-      releaseSourceAdmission = await prepareReplySourceAdmission({
+      const releaseInput = await prepareReplySourceAdmission({
         operation,
         followupRun: turn.queued,
         recorder: turn.queued.userTurnTranscriptRecorder,
         runId: turn.runId,
       });
+      const principal = principalAuthority;
+      releaseSourceAdmission = async () => {
+        try {
+          await releaseInput?.();
+        } finally {
+          principal?.release();
+        }
+      };
+      principalAuthority = undefined;
       turn.releaseSourceAdmission = releaseSourceAdmission;
       const preflightEntry = session.current();
       try {
@@ -640,7 +665,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
           continuation: goalContinuation,
           agentId: run.agentId,
           sessionKey: replySessionKey ?? "",
-          hasOperatorAuthority: Boolean(params.queued.operatorAuthority),
+          hasOperatorAuthority: Boolean(operatorAuthority),
           requiresWorker: Boolean(run.config?.cloudWorkers?.requiredProfile),
         });
         assertOperatorCurrent();
@@ -671,7 +696,11 @@ export async function prepareReplyAgentTurn<TConfigured>(
         }
       } finally {
         try {
-          await releaseSourceAdmission?.();
+          try {
+            await releaseSourceAdmission?.();
+          } finally {
+            principalAuthority?.release();
+          }
         } finally {
           if (admissionFailed && !callerOwnsOperation) {
             operation.complete();
