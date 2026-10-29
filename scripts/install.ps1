@@ -350,11 +350,17 @@ function Test-NodePackageEngine {
 }
 
 function Resolve-NodePackageEngine {
-    if ($InstallMethod -ne 'npm') { return }
+    param([string]$RepoDir)
     $script:NodePackageEngine = ">=24.22.1 <25 || >=26.12.1"
     try {
-        $target = Resolve-NpmOpenClawInstallSpec -PackageName 'openclaw' -RequestedTag $Tag
-        $output = @(Invoke-NpmCommand -Arguments @('view', $target, 'engines.node', '--fetch-timeout=5000', '--fetch-retries=0') 2>$null)
+        if ($InstallMethod -eq 'git') {
+            $package = Get-Content -LiteralPath (Join-Path $RepoDir 'package.json') -Raw | ConvertFrom-Json
+            $output = @($package.engines.node)
+            $global:LASTEXITCODE = 0
+        } else {
+            $target = Resolve-NpmOpenClawInstallSpec -PackageName 'openclaw' -RequestedTag $Tag
+            $output = @(Invoke-NpmCommand -Arguments @('view', $target, 'engines.node', '--fetch-timeout=5000', '--fetch-retries=0') 2>$null)
+        }
         if ($LASTEXITCODE -eq 0 -and $output.Count -eq 1) {
             $engine = $output[0].ToString().Trim()
             $verdict = Test-NodePackageEngine -Version '0.0.0' -Engine $engine
@@ -365,6 +371,23 @@ function Resolve-NodePackageEngine {
         }
     } catch { }
     Write-Host "[!] Could not resolve target Node requirement; using $script:NodePackageEngine" -ForegroundColor Yellow
+}
+
+function Ensure-Node {
+    if (-not (Check-Node)) {
+        if (-not (Install-Node)) {
+            return $false
+        }
+
+        # Verify installation
+        if (-not (Check-Node)) {
+            Write-Host ""
+            Write-Host "Error: Node.js installation may require a terminal restart" -ForegroundColor Red
+            Write-Host "Please close this terminal, open a new one, and run this installer again." -ForegroundColor Yellow
+            return $false
+        }
+    }
+    return $true
 }
 
 function Check-Node {
@@ -2126,6 +2149,9 @@ function Install-OpenClawFromGit {
         Write-Host "[!] Git update disabled; skipping git pull" -ForegroundColor Yellow
     }
 
+    Resolve-NodePackageEngine -RepoDir $RepoDir
+    if (-not (Ensure-Node)) { return $false }
+
     $prevPnpmChildConcurrency = $env:PNPM_CONFIG_CHILD_CONCURRENCY
     $prevPnpmNetworkConcurrency = $env:PNPM_CONFIG_NETWORK_CONCURRENCY
     $prevPnpmWorkspaceConcurrency = $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY
@@ -2431,28 +2457,21 @@ function Main {
     # Check for existing installation
     $isUpgrade = Check-ExistingOpenClaw
 
-    # Step 1: Node.js
-    Resolve-NodePackageEngine
-    if (-not (Check-Node)) {
-        if (-not (Install-Node)) {
-            Fail-Install
-            return
-        }
-
-        # Verify installation
-        if (-not (Check-Node)) {
-            Write-Host ""
-            Write-Host "Error: Node.js installation may require a terminal restart" -ForegroundColor Red
-            Write-Host "Please close this terminal, open a new one, and run this installer again." -ForegroundColor Yellow
-            Fail-Install
-            return
-        }
+    if ($InstallMethod -eq 'npm') {
+        Resolve-NodePackageEngine
+        if (-not (Ensure-Node)) { Fail-Install; return }
     }
 
     $finalGitDir = $null
 
     # Step 2: OpenClaw
     if ($InstallMethod -eq "git") {
+        $finalGitDir = $GitDir
+        $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
+        if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
+            Fail-Install
+            return
+        }
         $hadNpmOwner = $false
         try {
             $npmCommand = Get-NpmCommandPath
@@ -2461,12 +2480,6 @@ function Main {
                 $hadNpmOwner = ($LASTEXITCODE -eq 0)
             }
         } catch { }
-        $finalGitDir = $GitDir
-        $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
-        if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
-            Fail-Install
-            return
-        }
         if ($hadNpmOwner) {
             Remove-PreviousNpmOwner -GitWrapper (Join-Path (Join-Path $env:USERPROFILE ".local\bin") "openclaw.cmd")
         }
