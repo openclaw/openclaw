@@ -65,6 +65,7 @@
     "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts gateway-client"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "@openclaw/gateway-protocol": "workspace:*",
     "ipaddr.js": "2.5.0",
     "ws": "8.22.0"

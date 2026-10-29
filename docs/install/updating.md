@@ -598,6 +598,20 @@ instead of the managed-service commands above.
 Detects your install type (npm, pnpm, Bun, or git), checks the new version while
 the old Gateway serves, then activates and verifies the update.
 
+Use `openclaw update` for a managed Gateway so the updater coordinates the package
+and the service definition. To update the service's existing installation in place,
+run the CLI from the install root shown by `openclaw gateway status`. Writable Node
+services can instead move to the invoking CLI's updated installation, as described
+below; externally managed installations retain their deployment owner.
+
+A bare `npm install -g openclaw@<version>` uses the global prefix of the Node/npm
+selected by your shell. Switching Node versions can install a second OpenClaw
+without changing the service's entrypoint. `openclaw --version` then reports only
+the shell's CLI version. Check `openclaw status`, `openclaw doctor`, or
+`openclaw gateway status` for both install roots and versions, then run
+`openclaw update` or use the CLI from the service's install root. Changing only
+the Node executable in a service definition does not update its OpenClaw package.
+
 ```bash
 openclaw update
 ```

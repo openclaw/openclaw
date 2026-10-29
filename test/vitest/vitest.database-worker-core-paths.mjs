@@ -784,6 +784,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli.package-lifecycle.test.ts",
   "src/cli/update-cli.plugin-convergence.test.ts",
   "src/cli/update-cli.post-core-handoff.test.ts",
+  "src/cli/update-cli.preactivation-inspection.test.ts",
   "src/cli/update-cli.service-authority.test.ts",
   "src/cli/update-cli.target-schema.test.ts",
   "src/cli/update-cli.test.ts",
