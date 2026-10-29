@@ -50,7 +50,7 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
       },
     });
   }
-  for (const record of records.slice(0, 9)) {
+  for (const record of records.slice(0, 10)) {
     registry.updateRegistryWorktree(env, record.id, { lastActiveAt: 1 });
   }
   for (const record of records.slice(0, 4)) {
@@ -66,7 +66,24 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
   registry.updateRegistryWorktree(env, records[8]!.id, {
     repositoryIdentity: { repoRoot: missingRepository, repoFingerprint: "missing" },
   });
-  const text = vi.spyOn(gitExec, "executeGitCommand");
+  const invalidGitfileRepository = path.join(root, "invalid-gitfile-repository");
+  await fs.mkdir(invalidGitfileRepository);
+  await fs.writeFile(path.join(invalidGitfileRepository, ".git"), "gitdir: missing\n");
+  registry.updateRegistryWorktree(env, records[9]!.id, {
+    repositoryIdentity: { repoRoot: invalidGitfileRepository, repoFingerprint: "invalid-gitfile" },
+  });
+  const executeGitCommand = gitExec.executeGitCommand;
+  const text = vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (...args) => {
+    const result = await executeGitCommand(...args);
+    // Exercise the alternate Git diagnostic independently of the installed Git version.
+    if (args[0] === invalidGitfileRepository && result.code !== 0) {
+      return {
+        ...result,
+        stderr: `fatal: gitfile does not point to a valid repository: ${invalidGitfileRepository}/.git`,
+      };
+    }
+    return result;
+  });
   const bytes = vi.spyOn(gitExec, "executeGitCommandBytes");
   const buffered = vi.spyOn(gitExec, "executeGitCommandBuffered");
   const measurements = [];
@@ -99,7 +116,7 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
   expect(measurements[1]!.gitSpawns).toBe(0);
   expect(
     records
-      .slice(0, 9)
+      .slice(0, 10)
       .every((record) => registry.getRegistryWorktree(env, record.id)?.gcProtection),
   ).toBe(true);
   // A managed owner revision reopens only that record, even if it is still idle.

@@ -143,7 +143,11 @@ export function createWorktreeGcErrorHandler(context: {
         }
       }
       log.warn(`${stage} cleanup failed for ${record.id}: ${String(error)}`);
-      if (/not a git repository|^Git metadata is unavailable /u.test(formatErrorMessage(error))) {
+      if (
+        /not a git repository|gitfile does not point to a valid repository|^Git metadata is unavailable /u.test(
+          formatErrorMessage(error),
+        )
+      ) {
         await deferWorktreeGcRecord(
           env,
           record,
