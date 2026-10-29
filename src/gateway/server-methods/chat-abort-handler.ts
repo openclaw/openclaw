@@ -8,7 +8,7 @@ import { captureExecRequestCancellation } from "../../agents/bash-process-contro
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { discardSessionPendingInput } from "../../config/sessions/session-pending-input-withdrawal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { getSessionControllerSourceIdentity } from "../../sessions/session-controller.identity.js";
 import { holdSessionControllerSourceWithdrawal } from "../../sessions/session-controller.mailbox.js";
 import {
@@ -46,6 +46,7 @@ import { getWorkerInferenceSessionControl } from "../worker-environments/inferen
 import {
   canRequesterAbortChatRun,
   resolveChatAbortTargetRejection,
+  resolveChatAbortSessionRestriction,
   resolveChatAbortRequester,
 } from "./chat-abort-authorization.js";
 import * as exactRun from "./chat-abort-exact-run.js";
@@ -76,6 +77,7 @@ type ChatAbortLifecycle = {
     result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
   ) => void;
   cascadeDescendants?: true;
+  yieldedRequesterRunId?: string;
   hookContext?: SessionStopHookContext;
 };
 
@@ -94,15 +96,13 @@ export async function handleChatAbortRequestWithLifecycle(
   if (!assertValidParams(params, validateChatAbortParams, "chat.abort", respond)) {
     return;
   }
-  const { sessionKey: rawSessionKey, runId, preserveSideRuns, discardPendingInput } = params;
-  if (discardPendingInput && !runId) {
-    respondError(
-      respond,
-      ErrorCodes.INVALID_REQUEST,
-      "discardPendingInput requires an exact runId",
-    );
-    return;
-  }
+  const {
+    sessionKey: rawSessionKey,
+    sessionId: requestedSessionId,
+    runId,
+    preserveSideRuns,
+    discardPendingInput,
+  } = params;
   const agentIdOverride = normalizeOptionalString(params.agentId);
   const abortCfg = context.getRuntimeConfig();
   const parsedAbortSessionKey = parseAgentSessionKey(rawSessionKey);
@@ -147,28 +147,23 @@ export async function handleChatAbortRequestWithLifecycle(
     sessionKey: rawSessionKey,
     storeAgentId: abortAgentId,
   });
-  if (discardPendingInput && isIncognitoSessionKey(canonicalAbortSessionKey)) {
-    respondError(
-      respond,
-      ErrorCodes.INVALID_REQUEST,
-      "Removing accepted queued input is unavailable in incognito sessions. Use Stop to cancel it.",
-    );
-    return;
-  }
   const narrow =
     authority.sessionScope === "operator.sessions.write" ||
     requester.sessionAuthority !== undefined;
-  const admittedTarget = sessionMutationAuthorization?.admittedTarget;
-  if (
-    narrow &&
-    (!admittedTarget?.sessionId.trim() ||
-      admittedTarget.sessionKey !== canonicalAbortSessionKey ||
-      admittedTarget.agentId !== normalizeAgentId(abortAgentId))
-  ) {
-    respondError(respond, ErrorCodes.INVALID_REQUEST, "session target is unavailable");
+  const restriction = resolveChatAbortSessionRestriction({
+    requestedSessionId,
+    runId,
+    discardPendingInput,
+    narrow,
+    admittedTarget: sessionMutationAuthorization?.admittedTarget,
+    sessionKey: canonicalAbortSessionKey,
+    agentId: normalizeAgentId(abortAgentId),
+  });
+  if (!restriction.ok) {
+    respondError(respond, ErrorCodes.INVALID_REQUEST, restriction.message);
     return;
   }
-  const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
+  const { requiredSessionId } = restriction;
   const ops = createChatAbortOps(context);
 
   const prepareAbortSession = (key = canonicalAbortSessionKey, agentId = abortAgentId) =>
@@ -203,6 +198,7 @@ export async function handleChatAbortRequestWithLifecycle(
         assertCurrent,
         preserveSideRuns,
         cascadeDescendants: lifecycle.cascadeDescendants,
+        yieldedRequesterRunId: lifecycle.yieldedRequesterRunId,
       },
       prepareAbortSession,
     );
@@ -241,15 +237,16 @@ export async function handleChatAbortRequestWithLifecycle(
   ) {
     const adapter = reservedCandidate.sourceAdapter;
     const knownAgentId = adapter.preparation?.agentId;
-    const rejection = narrow
-      ? "runId does not match session incarnation"
-      : knownAgentId && normalizeAgentId(knownAgentId) !== normalizeAgentId(abortAgentId)
-        ? "runId does not match agentId"
-        : !canRequesterAbortChatRun({ requester: adapter.requester }, requester, {
-              requireOwnerMatch: true,
-            })
-          ? "unauthorized"
-          : undefined;
+    const rejection =
+      requiredSessionId !== undefined
+        ? "runId does not match session incarnation"
+        : knownAgentId && normalizeAgentId(knownAgentId) !== normalizeAgentId(abortAgentId)
+          ? "runId does not match agentId"
+          : !canRequesterAbortChatRun({ requester: adapter.requester }, requester, {
+                requireOwnerMatch: true,
+              })
+            ? "unauthorized"
+            : undefined;
     if (rejection) {
       respondError(respond, ErrorCodes.INVALID_REQUEST, rejection);
       return;
@@ -276,6 +273,15 @@ export async function handleChatAbortRequestWithLifecycle(
   });
   const abortSession = await prepareAbortSession();
   const abortSessionEntry = abortSession.ok ? abortSession.value.entry : undefined;
+  if (requestedSessionId) {
+    if (!abortSession.ok) {
+      throw abortSession.error;
+    }
+    if (abortSessionEntry?.sessionId !== requestedSessionId) {
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "session incarnation changed");
+      return;
+    }
+  }
   const capturedStores = new Set(
     [...capturedSources.map(([, entry]) => entry.input), reservedCandidate].flatMap((input) =>
       input?.target ? [input.target.storeScope] : [],
@@ -340,6 +346,9 @@ export async function handleChatAbortRequestWithLifecycle(
   const workerTarget = getWorkerInferenceSessionControl(
     context.workerEnvironmentService,
   )?.resolveSessionTargetForRunId(runId);
+  if (workerTarget && requiredSessionId !== undefined && !authorizeRunTarget(workerTarget)) {
+    return;
+  }
 
   const workerCancellation = captureWorkerInferenceForSession({
     context,

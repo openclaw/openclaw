@@ -115,10 +115,10 @@ export function registerNativeCancellationCases(
         client: createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } }),
       });
       const waitForAgent = vi
-        .spyOn(runtime.recovery, "waitForAgent")
+        .spyOn(runtime.lifecycle, "waitForAgent")
         .mockImplementation(
           <T>(
-            params: Parameters<typeof runtime.recovery.waitForAgent>[0],
+            params: Parameters<typeof runtime.lifecycle.waitForAgent>[0],
             timeoutMs?: number,
           ): Promise<T> => {
             const completion = waitFacade

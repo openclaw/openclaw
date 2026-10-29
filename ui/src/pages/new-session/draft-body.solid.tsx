@@ -97,6 +97,7 @@ export function NewSessionBody(props: NewSessionBodyProps) {
           props.inChat ? "" : "new-session-page__scroll",
           {
             "chat-thread": Boolean(props.pendingMessage || props.inChat),
+            "chat-thread--annotations": Boolean(props.pendingMessage || props.inChat),
             "chat-thread--direct":
               Boolean(props.pendingMessage || props.inChat) && avatarPlacement() === "footer",
           },

@@ -156,6 +156,15 @@ resolved open question, or page text that later claims show to be wrong.
   amendment next to the original text rather than rewriting it. Mark answered
   open questions as resolved and keep the original question.
 - Cite every added sentence with `[[claim-id|label]]` links to the claims.
+- Page bodies have a size budget
+  ([page budgets](references/publish.md#page-budgets)). A `state: "rejected"`
+  edit saved nothing, but the linked claims already hold the facts. Move a
+  section to its subject's page with `knowledge_extract_section` (creating the
+  page per step 3 when needed), reread, and retry. Never shorten other prose to
+  make room. Extraction makes the destination the first subject of the claims
+  the section cites and keeps their existing subjects, including the page you
+  extracted from. Apply step 2 to each of those claims and drop the source page
+  with `knowledge_annotate` `entities` where the claim says nothing about it.
 
 Use `knowledge_edit_body` for section edits. Compute UTF-16 offsets from a fresh
 full read, and reread the revision and hash before every edit: other sessions

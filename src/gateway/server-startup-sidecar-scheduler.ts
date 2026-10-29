@@ -7,6 +7,7 @@ import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace
 type Awaitable<T> = T | Promise<T>;
 
 export type GatewayPostReadySidecarHandle = {
+  name?: string;
   stop: () => Awaitable<void>;
   preparePluginReload?: (params: {
     previousRegistry: PluginRegistry;
@@ -48,6 +49,7 @@ export function schedulePostReadySidecarTask(params: {
     });
   }).unref();
   return {
+    name: params.name,
     stop: async () => {
       // Sidecars get both a synchronous stopped predicate and an AbortSignal so
       // lazy imports and long-running watchers can cooperate with shutdown.
@@ -92,5 +94,5 @@ export function scheduleGatewayGenerationTimer(params: {
       });
     },
   });
-  return scope;
+  return { name: params.origin, stop: scope.stop };
 }

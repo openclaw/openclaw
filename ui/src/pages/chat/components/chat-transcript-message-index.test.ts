@@ -697,7 +697,7 @@ describe("system event presentation", () => {
     role: "user",
     content: "[System] Continue the interrupted turn.",
     timestamp: 20,
-    provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+    provenance: { kind: "internal_system", sourceTool: "system-event" },
     __openclaw: { id, idempotencyKey: runId + ":user" },
   });
 

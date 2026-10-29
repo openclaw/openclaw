@@ -16,7 +16,7 @@ suite.define(() =>
           ...sessionRow(key, label, createdAt),
           createdAt,
         });
-        const olderRows = Array.from({ length: 10 }, (_, i) =>
+        const olderRows = Array.from({ length: 15 }, (_, i) =>
           createdRow(`agent:main:older-${i}`, `Older session ${i}`, baseTime - i * 1_000),
         );
         const newestKey = "agent:main:external-new";
@@ -29,7 +29,7 @@ suite.define(() =>
 
         await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, olderRows[0]!.key));
         const rows = page.locator(".sidebar-recent-session");
-        await expect.poll(() => rows.count(), { timeout: 10_000 }).toBe(10);
+        await expect.poll(() => rows.count(), { timeout: 10_000 }).toBe(15);
         const retainedSessionKey = olderRows[5]!.key;
         await rows.nth(5).evaluate((row) => Reflect.set(row, "__retainedSessionRow", true));
         await support.captureUiProof(suite, page, "sidebar-created-sort-before-refresh.png");

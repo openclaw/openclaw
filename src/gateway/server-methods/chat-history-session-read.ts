@@ -55,7 +55,7 @@ export async function prepareChatHistorySessionRead({
     return undefined;
   }
   const queries = (cfg: OpenClawConfig) => {
-    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
+    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride, "read");
     if (!requested.ok) {
       return [];
     }
@@ -68,7 +68,7 @@ export async function prepareChatHistorySessionRead({
   };
   const selectSession = (read: SessionRowReadView) => {
     const cfg = read.state.cfg;
-    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
+    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride, "read");
     if (!requested.ok) {
       respond(false, undefined, requested.error);
       return undefined;

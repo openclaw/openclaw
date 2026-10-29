@@ -10,14 +10,10 @@ import { BrokerChild } from "./child.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["exit", "disconnect", "requested disconnect"] as const)(
+it.for(["exit", "disconnect", "requested disconnect"] as const)(
   "joins IPC and process exit when %s arrives first",
-  async (first) => {
+  async (first, { signal }) => {
     const child = new BrokerChild(1, ["fixture"], async () => {});
-    const events: string[] = [];
-    for (const event of ["exit", "disconnect", "close"]) {
-      child.on(event, () => events.push(event));
-    }
     const spawned = once(child, "spawn");
     child.receive({
       type: "spawned",
@@ -28,19 +24,24 @@ it.each(["exit", "disconnect", "requested disconnect"] as const)(
       connected: true,
       stdioLength: 4,
     });
-    await spawned;
-    await setImmediate();
-    if (first === "requested disconnect") {
-      child.disconnect();
-      expect(child.connected).toBe(false);
-    }
     const exit = { type: "exit", id: 1, code: null, signal: "SIGKILL" } as const;
     const disconnect = { type: "disconnect", id: 1 } as const;
     const exitFirst = first !== "disconnect";
     child.receive(exitFirst ? exit : disconnect);
+    await withinTest(spawned, signal);
+    expect(child.signalCode).toBe(null);
+    const events: string[] = [];
+    for (const event of ["exit", "disconnect", "close"]) {
+      child.on(event, () => events.push(event));
+    }
+    if (first === "requested disconnect") {
+      child.disconnect();
+      expect(child.connected).toBe(false);
+    }
+    await setImmediate();
     expect(events).toEqual([exitFirst ? "exit" : "disconnect"]);
     child.receive(exitFirst ? disconnect : exit);
-    await child.waitForClose();
+    await withinTest(child.waitForClose(), signal);
     expect(events).toEqual(
       exitFirst ? ["exit", "disconnect", "close"] : ["disconnect", "exit", "close"],
     );

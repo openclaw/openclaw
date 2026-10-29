@@ -307,17 +307,37 @@ contents, its fresh current analysis also supplies the comparison counts.
 Changed snapshots retain both full analyses and historical-cache validation.
 Frozen targets without the aggregate command retain their original commands.
 
+<a id="test-line-budget" />
+
 `pnpm check:test-lines-ratchet` compares total tracked test lines with the
-integer ceiling in `config/test-lines-baseline.txt`, counting newline-terminated
-lines like `wc -l` in `*.test.{ts,tsx,mts,mjs,js,cjs}`, `*.test-support.ts`,
+fixed integer in `config/test-lines-baseline.txt` plus the sum of tracked
+`config/test-lines-allocations/*.txt` records. Each record contains one
+non-negative integer, with optional `#` comments. For justified net regression
+growth, use a unique record and explain its necessity in the PR. Independent
+changes use separate records instead of editing the shared scalar.
+
+The checker counts literal newline bytes, like `wc -l`, in
+`*.test.{ts,tsx,mts,mjs,js,cjs}`, `*.test-support.ts`,
 `*test-helpers*`, and `**/test-support/**`. In `checks-fast-baseline-ratchets`, an
 over-ceiling tree fails only when this change's net test-line delta against the
 comparison base is positive; non-growing changes pass with an over-ceiling notice,
-while runs without a base retain the absolute ceiling check. Run
-`pnpm check:test-lines-ratchet --prune` to lower the ceiling to the current total;
-this command never raises it. A higher ceiling requires a deliberate manual
-edit and justification in the PR, and the check reports the increase against
-the comparison base.
+while runs without a base retain the absolute ceiling check.
+
+When allocation keys or values change, positive effective-ceiling growth must
+not exceed positive net test-line growth against the same comparison base.
+This includes scalar changes in the same diff, prevents overlapping grants
+from counting the same growth twice, and does not forgive inherited debt.
+Comments do not change credit. Untracked records are ignored; `--staged` reads
+the index exactly. Scalar-only raises retain the explicit review-owned warning
+route and need approval under the
+[testing policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#baseline-and-expected-failure-exceptions).
+
+`pnpm check:test-lines-ratchet --prune` folds the measured total into the scalar
+and removes tracked allocation records, even at zero slack. The effective ceiling
+never increases; the scalar can rise when it absorbs existing allocations.
+Commit the scalar and record deletions together. Pruning refuses an over-budget
+tree or `--staged`, and preserves untracked files. A branch based before pruning
+can add credit only for its new test growth, not reuse the folded allocations.
 
 The max-lines suppression inventory and the environment-variable count budget
 must describe the tree, and that check blocks in GitHub Actions as well as

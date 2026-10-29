@@ -37,9 +37,12 @@ export class FilterableSelectList extends SelectListInput implements Component, 
     private readonly theme: FilterableSelectListTheme,
   ) {
     super();
-    // Each overlay owns fixed rows; search keeps raw fields while display copies stay sanitized.
+    // Normalize only the search projection; display stays sanitized and values stay exact.
     this.allItems = items.map((item) => ({
-      searchText: [item.label, item.description, item.searchText].filter(Boolean).join(" "),
+      searchText: [item.label, item.description, item.searchText]
+        .filter(Boolean)
+        .join(" ")
+        .normalize("NFC"),
       item: {
         ...item,
         label:
@@ -103,8 +106,9 @@ export class FilterableSelectList extends SelectListInput implements Component, 
     }
 
     if (this.updateInput(keyData)) {
+      const query = this.input.getValue().normalize("NFC");
       this.selectList = this.createSelectList(
-        fuzzyFilter(this.allItems, this.input.getValue(), (entry) => entry.searchText),
+        fuzzyFilter(this.allItems, query, (entry) => entry.searchText),
       );
     }
   }

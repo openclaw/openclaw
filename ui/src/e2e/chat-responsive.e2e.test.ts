@@ -446,7 +446,7 @@ suite.define(() => {
       expect(
         await bubble
           .getByText(
-            "Not sent · Rejected by the local attachment allowlist. Send a supported file type.",
+            "Not sent · This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file.",
           )
           .count(),
       ).toBe(5);

@@ -26,7 +26,10 @@ export function unsupportedIsolatedCompletionError(
 export function attachCliReplyBackend(
   params: RunCliAgentParams,
   cancel: () => void,
-  capabilities?: Pick<ReplyBackendHandle, "messageInjectionV2" | "supportsTranscriptCommitWait">,
+  capabilities?: Pick<
+    ReplyBackendHandle,
+    "messageInjectionV2" | "supportsTranscriptCommitWait" | "turnStatus"
+  >,
 ) {
   if (!params.replyOperation) {
     return undefined;
@@ -43,6 +46,9 @@ export function attachCliReplyBackend(
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel,
     ...capabilities,
+    get turnStatus() {
+      return capabilities?.turnStatus;
+    },
   };
   params.replyOperation.attachBackend(handle);
   return () => params.replyOperation?.detachBackend(handle);

@@ -104,6 +104,9 @@ export function openMessageImage(
   previewUrl: string,
   opts: ImageRenderOptions | undefined,
 ) {
+  if (opts?.mediaReadAllowed === false) {
+    return;
+  }
   const safePreviewUrl = resolveSafeExternalUrl(previewUrl, window.location.href, {
     allowDataImage: true,
   });

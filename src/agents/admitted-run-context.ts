@@ -7,7 +7,6 @@ import {
   enqueueExecutionIdentityContextAtAdmission,
   type ExecutionIdentityAdmissionFacts,
   type ExecutionIdentityAdmissionToken,
-  type ExecutionIdentityRecoveryAdmission,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
 import {
@@ -272,34 +271,6 @@ export type PreparedAgentRunAdmission = Readonly<{
   close: () => void;
 }>;
 
-type PreparedRestartRecovery = Readonly<{
-  operationalRunInstance: OperationalRunInstanceRef;
-  assertCurrent: () => void;
-}>;
-
-// Existing adapters preserve this exact prepared owner through its close operation.
-const preparedRestartRecoveries = new WeakMap<
-  PreparedAgentRunAdmission["close"],
-  PreparedRestartRecovery
->();
-
-/** Recognizes an admitted restart continuation without granting execution permission. */
-export function isPreparedRunRestartRecovery(
-  prepared: PreparedAgentRunAdmission,
-  runId: string,
-): boolean {
-  const recovery = preparedRestartRecoveries.get(prepared.close);
-  if (
-    !recovery ||
-    recovery.operationalRunInstance !== prepared.operationalRunInstance ||
-    prepared.operationalRunInstance.runId !== runId
-  ) {
-    return false;
-  }
-  recovery.assertCurrent();
-  return true;
-}
-
 type DelegatedAuthorityLease = {
   authority: AgentRunDelegatedAuthority;
   foregroundClosed: boolean;
@@ -501,37 +472,6 @@ export function retainAdmittedRunBeforeToolCallRecovery(
   };
 }
 
-/** Creates a one-shot recovery admission owned by the durable recovery resolver. */
-export function createExecutionIdentityRecoveryAdmission(params: {
-  retryOnly: boolean;
-  token?: ExecutionIdentityAdmissionToken;
-  expectedOperationalRunId?: string;
-}): ExecutionIdentityRecoveryAdmission {
-  let consumed = false;
-  return Object.freeze({
-    retryOnly: params.retryOnly,
-    consume: (runId: string) => {
-      if (consumed) {
-        return { accepted: false };
-      }
-      consumed = true;
-      if (
-        params.expectedOperationalRunId !== undefined &&
-        params.expectedOperationalRunId !== runId
-      ) {
-        return { accepted: false };
-      }
-      // The trusted recovery resolver binds the current operational owner separately.
-      // Without that explicit binding, only the token's original run may redeem it.
-      const token =
-        params.expectedOperationalRunId !== undefined || params.token?.runId === runId
-          ? params.token
-          : undefined;
-      return { accepted: true, ...(token ? { token } : {}) };
-    },
-  });
-}
-
 /** Prepares a system-owned run without selecting its eventual execution runtime early. */
 export function prepareSystemAgentRunAdmission(
   cfg: OpenClawConfig,
@@ -563,7 +503,6 @@ export function prepareAgentRunAdmission(params: {
   admissionSource?: AdmittedRunContext["admissionSource"];
   facts: Omit<ExecutionIdentityAdmissionFacts, "runtime">;
   operationalRunInstance: OperationalRunInstanceRef;
-  recovery?: ExecutionIdentityRecoveryAdmission;
   onAdmitted?: (context: AdmittedRunContext) => void | Promise<void>;
   assertSourceCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -662,7 +601,6 @@ export function prepareAgentRunAdmission(params: {
             facts,
             operationalRunInstance,
             runtimeInstanceId: admittedRuntimeInstanceId,
-            ...(params.recovery ? { recovery: params.recovery } : {}),
           });
           bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, operatorAuthority);
           admittedContext = context;
@@ -682,20 +620,6 @@ export function prepareAgentRunAdmission(params: {
       return admitted;
     },
   });
-  if (
-    params.facts.ingress.kind === "recovery" &&
-    params.facts.ingress.boundary === "gateway.main-session-recovery"
-  ) {
-    preparedRestartRecoveries.set(prepared.close, {
-      operationalRunInstance,
-      assertCurrent: () => {
-        if (closed) {
-          throw new Error("prepared restart recovery is no longer active");
-        }
-        assertSourceCurrent?.();
-      },
-    });
-  }
   return prepared;
 }
 
@@ -733,7 +657,6 @@ function admitPreparedAgentRun(params: {
   facts: ExecutionIdentityAdmissionFacts;
   operationalRunInstance: OperationalRunInstanceRef;
   runtimeInstanceId?: string;
-  recovery?: ExecutionIdentityRecoveryAdmission;
 }): AdmittedRunContext {
   if (params.operationalRunInstance.runId !== params.facts.runId) {
     throw new Error("operational run instance disagrees with prepared admission");
@@ -743,29 +666,15 @@ function admitPreparedAgentRun(params: {
     operationalRunInstance,
     ...(params.admissionSource ? { admissionSource: params.admissionSource } : {}),
   };
-  // Consume the one-shot recovery lease even while collection is disabled so a
-  // later operational instance cannot adopt evidence that belonged to this run.
-  const recovery =
-    typeof params.recovery?.consume === "function"
-      ? params.recovery.consume(params.facts.runId)
-      : undefined;
   if (!isExecutionIdentityCollectionEnabled(params.cfg)) {
     return Object.freeze(prepareGatewayContextBindingOwner(admitted));
   }
-  const executionIdentityToken =
-    recovery?.token ??
-    (!params.recovery || (recovery?.accepted && !params.recovery.retryOnly)
-      ? createExecutionIdentityAdmissionToken(params.facts.runId)
-      : undefined);
-  if (!executionIdentityToken) {
-    return Object.freeze(prepareGatewayContextBindingOwner(admitted));
-  }
+  const executionIdentityToken = createExecutionIdentityAdmissionToken(params.facts.runId);
 
   enqueueExecutionIdentityContextAtAdmission(params.facts, {
     enabled: true,
     token: executionIdentityToken,
     runtimeInstanceId: params.runtimeInstanceId,
-    retryOnly: params.recovery?.retryOnly === true,
   });
   return Object.freeze(prepareGatewayContextBindingOwner({ ...admitted, executionIdentityToken }));
 }

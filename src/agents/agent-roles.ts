@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { readClawManifestFile } from "../claws/reader.js";
-import type { ClawManifest } from "../claws/types.js";
+import { readTemplateManifestFile } from "../templates/reader.js";
+import type { TemplateManifest } from "../templates/types.js";
 import { pathExists } from "../utils.js";
 import { resolveWorkspaceTemplateSearchDirs } from "./workspace-templates.js";
 
@@ -50,14 +50,14 @@ async function resolveCatalogFile(...segments: string[]): Promise<string> {
 }
 
 export async function loadAgentRole(role: string): Promise<{
-  manifest: ClawManifest;
+  manifest: TemplateManifest;
   identity: { name: string; emoji: string; theme: string };
   files: Record<"AGENTS.md" | "SOUL.md" | "IDENTITY.md", string>;
 }> {
   if (!AGENT_ROLES.some((candidate) => candidate === role)) {
     throw new Error(`Unknown agent role "${role}". Available roles: ${AGENT_ROLES.join(", ")}.`);
   }
-  const read = await readClawManifestFile(await resolveCatalogFile(role, "CLAW.md"));
+  const read = await readTemplateManifestFile(await resolveCatalogFile(role, "CLAW.md"));
   if (!read.ok) {
     throw new Error(read.diagnostics.map(({ message }) => message).join("\n"));
   }
@@ -70,7 +70,7 @@ export async function loadAgentRole(role: string): Promise<{
     !identity.emoji ||
     !identity.theme ||
     !agentsSource ||
-    !read.clawMarkdownBody
+    !read.templateMarkdownBody
   ) {
     throw new Error(
       `Agent role "${role}" requires its matching id, complete identity, AGENTS.md, and SOUL body.`,
@@ -81,7 +81,7 @@ export async function loadAgentRole(role: string): Promise<{
     identity: { name: identity.name, emoji: identity.emoji, theme: identity.theme },
     files: {
       "AGENTS.md": await fs.readFile(path.join(read.source.packageRoot, agentsSource), "utf8"),
-      "SOUL.md": read.clawMarkdownBody.toString("utf8"),
+      "SOUL.md": read.templateMarkdownBody.toString("utf8"),
       "IDENTITY.md": `# Identity\n\n- **Name:** ${identity.name}\n- **Creature:** ${role} assistant\n- **Vibe:** ${identity.theme}\n- **Emoji:** ${identity.emoji}\n- **Theme:** ${identity.theme}\n`,
     },
   };

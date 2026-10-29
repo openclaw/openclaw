@@ -370,7 +370,7 @@ describe("resolveSessionKeyForRequest", () => {
   });
 
   it.each(["legacy", "explicit"] as const)(
-    "creates a missing session-id target under the %s roster's default owner",
+    "creates a canonical missing session-id target under the %s roster's default owner",
     async (ownership) => {
       hoisted.listAgentIdsMock.mockReturnValue(["ops", "research"]);
       mockSessionStores({});
@@ -387,7 +387,7 @@ describe("resolveSessionKeyForRequest", () => {
         "ops",
       );
 
-      const result = await resolveSessionKeyForRequest({ cfg, sessionId: "new-session" });
+      const result = await resolveSessionKeyForRequest({ cfg, sessionId: "New-Session" });
 
       const expectedAgentId = ownership === "explicit" ? "research" : "ops";
       expect(result.agentId).toBe(expectedAgentId);

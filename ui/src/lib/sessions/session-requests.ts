@@ -34,6 +34,17 @@ export const DEFAULT_SESSION_LIST_QUERY = {
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const satisfies SessionListOptions;
 
+/** User-facing session pickers (command palette, section editor) list the same sessions. */
+export const SESSION_SEARCH_SCOPE = {
+  includeGlobal: false,
+  includeUnknown: false,
+  configuredAgentsOnly: true,
+  excludeSubagents: true,
+  excludeCron: true,
+  excludeSystem: true,
+  excludeDock: true,
+} as const satisfies SessionListOptions;
+
 export function dashboardSessionListQuery(agentId?: string | null): SessionListOptions {
   const normalizedAgentId = agentId?.trim();
   return {
@@ -42,21 +53,6 @@ export function dashboardSessionListQuery(agentId?: string | null): SessionListO
     source: "dashboard",
     excludeDock: true,
     hasBoard: true,
-    archivedFilter: "all",
-    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
-  };
-}
-
-/** Progress cards resolve an explicit cross-session target independently of
- *  dashboard gallery membership: the Gateway filters hasBoard against each
- *  session's own board inventory, so a running target without its own board
- *  would disappear from a gallery-filtered roster and render as paused. */
-export function sessionProgressTargetQuery(agentId?: string | null): SessionListOptions {
-  const normalizedAgentId = agentId?.trim();
-  return {
-    ...DEFAULT_SESSION_LIST_QUERY,
-    source: "dashboard",
-    excludeDock: false,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
   };

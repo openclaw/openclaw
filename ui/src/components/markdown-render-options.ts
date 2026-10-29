@@ -10,6 +10,7 @@ export type MarkdownRenderOptions = {
   codeBlockChrome?: "copy" | "none";
   codeBlockInteraction?: "interactive" | "static";
   fileLinks?: boolean;
+  documentFileLinks?: boolean;
   humanMentions?: readonly HumanMention[];
   interactiveImages?: boolean;
   linkFavicons?: boolean;
@@ -33,6 +34,7 @@ export function normalizeMarkdownRenderOptions(
     codeBlockChrome: options.codeBlockChrome ?? "copy",
     codeBlockInteraction: options.codeBlockInteraction ?? "static",
     fileLinks: options.fileLinks ?? false,
+    documentFileLinks: options.documentFileLinks ?? false,
     humanMentions: options.humanMentions ?? [],
     interactiveImages: options.interactiveImages ?? false,
     linkFavicons: options.linkFavicons ?? false,

@@ -36,6 +36,25 @@ function mount(result = createDiscoveryDetail(), overrides: Partial<Props> = {})
   return render(() => <Detail {...detailProps(result, overrides)} />);
 }
 
+it.each([undefined, "bundle-plugin"] as const)(
+  "places qualified installation trust before the actions (family=%s)",
+  (family) => {
+    const result = createDiscoveryDetail(
+      createPlugin({ installed: false, state: "not-installed" }),
+    );
+    result.plugin.catalog.family = family;
+    result.detail.uiCapabilities = ["page"];
+    const { container } = mount(result);
+    const notice = container.querySelector(".plugin-native-ui-disclosure");
+    expect(notice?.textContent).toContain(
+      family === "bundle-plugin" ? "Bundles can add content" : "If a plugin includes native web UI",
+    );
+    expect(notice?.textContent).not.toContain("Includes native web UI");
+    const actions = container.querySelector(".plugin-catalog-detail__actions")!;
+    expect(notice!.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  },
+);
+
 it.each([false, true])(
   "keeps Ask available when installation is blocked (installed=%s)",
   (installed) => {

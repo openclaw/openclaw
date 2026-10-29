@@ -48,7 +48,6 @@ full behavior and rationale of each numbered check, follow the links under
   <Accordion title="State and integrity">
     - Session lock file inspection and stale lock cleanup.
     - Session transcript repair for duplicated prompt-rewrite branches created by affected 2026.4.24 builds.
-    - Wedged main-session and subagent restart-recovery tombstone detection. Doctor reports the blocked sessions and only repairs stale aborted flags that conflict with an existing tombstone; it does not re-enable automatic recovery.
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Warnings for SQLite databases on confirmed network filesystems, including NFS, SMB, and SSHFS. Doctor recommends a local disk; this diagnostic does not move data, change journaling, or block updates. Unknown filesystems and cross-VM mounts are not identified as network storage.
     - Config file permission checks (chmod 600) when running locally.

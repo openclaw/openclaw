@@ -41,10 +41,14 @@ export async function prepareRemoteIngressSessionRead(
   const prepared = await prepareSessionSharingRead({ cfg, sessionKey, agentId: agent.agentId });
   const assertCurrent = () => {
     assertIngress();
-    const { target } = prepared.readCurrent(getRuntimeConfig());
+    const { target, membership } = prepared.readCurrent(getRuntimeConfig());
     const identity = principal.preparedSessionProfile;
     const visible = createProfileSessionEntryFilter(
-      { profileId: identity.profileId, sessionCap: principal.operatorRolePolicy?.sessions.others },
+      {
+        profileId: identity.profileId,
+        sessionCap: principal.operatorRolePolicy?.sessions.others,
+        membership,
+      },
       prepareSessionCreatorProfile(identity.profileId, identity.aliases),
     );
     if (!target || !visible(target.canonicalKey, target.entry)) {

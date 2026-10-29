@@ -17,6 +17,12 @@ imports inside their route's `component` loader.
 - Scope caches/requests to connection, agent, session. Before publishing: check owner + request generation; old results must not overwrite newer intent/another context.
 - Optimistic updates: retain visible recovery state + reconcile with authority. Old requests must not roll back newer edits. Failed writes follow Gateway [target and outcome contract](../src/gateway/AGENTS.md#write-target-and-outcome), never renderer-selected fallback account/connection.
 - Background updates may refresh scoped cache, never replace foreground selection/publish another context's state.
+- Routes wait only for first-paint data. Each source (session usage, provider plans, credentials, catalog) loads, refreshes and retries on its own; refreshing one never reloads another.
+
+## Layout Stability
+
+- Zero layout shift on load, navigation and data arrival: reserve space for late content, one loading boundary, loaded rows never return to skeletons, shell chrome keeps the same geometry on every route.
+- Prove with a `layout-shift` PerformanceObserver at 400, 820 and 1280 px, entering from other routes, against a real isolated Gateway on the current build with real-scale data. Models and Usage also load fully in < 200 ms under the same setup.
 
 ## Session Roster Refresh
 

@@ -7,7 +7,7 @@
  * its base arm matches full changed-entry receipts, candidate uses field deltas.
  * --phase append-changed measures the same activity change during a transcript
  * append; its base arm matches the full changed-entry append receipt protocol.
- * --phase adoptRun|completeTurn|deliveryPending|deliverySettled measures changed
+ * --phase adoptRun|completeTurn|deliverySettled measures changed
  * lifecycle receipts; base matches their full-entry protocol, candidate uses the
  * existing field-delta protocol. Report bytes/reply by phase; multiply by an
  * explicitly stated synthetic calls/minute, not an inferred production rate.
@@ -67,7 +67,6 @@ assert(
     phase === "patch-changed" ||
     phase === "adoptRun" ||
     phase === "completeTurn" ||
-    phase === "deliveryPending" ||
     phase === "deliverySettled",
 );
 assert(arm === "base" || arm === "candidate", "Choose --arm base or candidate");
@@ -125,11 +124,7 @@ const appended: SessionActorHotState = {
   },
 };
 const isAppend = phase === "append" || phase === "append-changed";
-const lifecycle =
-  phase === "adoptRun" ||
-  phase === "completeTurn" ||
-  phase === "deliveryPending" ||
-  phase === "deliverySettled";
+const lifecycle = phase === "adoptRun" || phase === "completeTurn" || phase === "deliverySettled";
 const changed = phase === "patch-changed" || phase === "append-changed" || lifecycle;
 const after = isAppend ? appended : { ...appended, transcript: before.transcript };
 if (changed) {

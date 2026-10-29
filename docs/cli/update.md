@@ -47,10 +47,21 @@ same SID. A different or unresolved account remains protected from automatic rep
 If service inspection is unavailable, package updates refuse before replacement
 when a live Gateway lock identifies the same installation. On Windows, a live lock
 PID is enough when its command-line package identity cannot be read.
-The public reason is `gateway-stop-unverified`. Stop the Gateway through Task
-Scheduler, its original terminal, or `openclaw gateway stop`, then rerun
-`openclaw update`. Updates without a live lock still continue on all platforms.
-This admission check requires an updated installed updater.
+The public reason is `gateway-stop-unverified`. Stop the Gateway through its
+systemd user/system unit on Linux, launchd on macOS, Task Scheduler on Windows,
+or its original terminal, then rerun `openclaw update`. For a managed service,
+try `openclaw gateway stop`. Run `openclaw gateway status --deep --json` to inspect
+the native failure: a missing systemd user bus (often over SSH or in a container),
+missing service-manager tools, denied access, and inspection timeouts retain their
+specific reason and recovery guidance. Updates without a live lock still continue
+on all platforms; an unverified live owner remains protected.
+
+An already-current registry target skips core package replacement and does not
+require a Gateway stop for replacement. The registry artifact's schema limits do
+not apply when that artifact will not be installed. Plugin, runtime, and service maintenance
+still follow their own checks. Explicit package artifacts and installation
+rebinding can still require replacement even when version strings match.
+These admission checks require an updated installed updater.
 
 For a global npm installation, OpenClaw prints a short manual alternative
 (`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
@@ -105,6 +116,8 @@ retires its own original-state capture, since nothing it captured changed.
 Cleanup warnings never fail or roll back the successful update. Manual
 `openclaw update cleanup` remains available for inspection and retry; see
 [recovery retirement](/cli/update/repair-and-recovery#update-cleanup).
+
+Compatible Node 24.16.0+ on 24.x and 26.1.0+ remain accepted. If the updater or selected service Node is below the recommended security patches (24.22.1/26.12.1), update prints a prominent warning and continues; this recommendation alone does not reject the update. SQLite capability and target-package compatibility checks still apply. Run `openclaw security audit` to review the local Node security-patch warning.
 
 ## Usage
 

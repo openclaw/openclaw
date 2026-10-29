@@ -480,7 +480,14 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       ...(fromLastCompleted ? { forkFrom: "last-completed" as const } : {}),
       ...(agentId ? { agentId } : {}),
     };
-    if (mutationAccessError(scope, { method: "sessions.create", params: createParams })) {
+    if (
+      mutationAccessError(scope, {
+        method: "sessions.create",
+        params: createParams,
+        sessionScope: true,
+        session: state.result?.sessions.find((row) => row.key === key),
+      })
+    ) {
       return;
     }
     state.error = null;

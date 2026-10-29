@@ -1748,9 +1748,10 @@ const reviewedOperations = new Map([
           "readWorkerPlacementsForReconcileInDatabase",
           "readWorkerPlacementChangeSnapshotInDatabase",
           "readWorkerPlacementsInDatabase",
+          "readWorkerPlacementIdentitiesInDatabase",
         ],
         evidence:
-          "State read and placement workers own all row queries; GitHub deferral selection runs only in state/github-publication.worker.ts. Host consumers use pure row codecs or async/receipt-backed readers.",
+          "State read and placement workers own all row queries; the identity census runs through placement-lifecycle.worker.ts workerPlacements.readIdentities. GitHub deferral selection runs only in state/github-publication.worker.ts. Host consumers use pure row codecs or async/receipt-backed readers.",
       },
       {
         tier: "W",
@@ -2614,40 +2615,40 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/claws/cron.ts",
+    "src/templates/cron.ts",
     [
       {
         tier: "T3",
         operations: ["persistPendingRef", "updateRef", "deleteClawCronRef", "upsertClawCronRef"],
         evidence:
-          "CLI add/update/remove only: src/cli/claws-cli.ts:115,152,181 → add.ts:585, update-apply.ts:541 and lifecycle-state.ts:555,557 → cron.ts/cron-update.ts.",
+          "CLI add/update/remove only: src/cli/templates-cli.ts:115,152,181 → add.ts:585, update-apply.ts:541 and lifecycle-state.ts:555,557 → cron.ts/cron-update.ts.",
       },
     ],
   ],
   [
-    "src/claws/lifecycle-config-removal.ts",
+    "src/templates/lifecycle-config-removal.ts",
     [
       {
         tier: "T3",
         operations: ["withClawAgentConfigRemoval"],
         evidence:
-          "src/cli/claws-cli.runtime.ts:562 invokes removal → src/claws/lifecycle-state.ts:489 (sole caller).",
+          "src/cli/templates-cli.runtime.ts:562 invokes removal → src/templates/lifecycle-state.ts:489 (sole caller).",
       },
     ],
   ],
   [
-    "src/claws/lifecycle-delete-support.ts",
+    "src/templates/lifecycle-delete-support.ts",
     [
       {
         tier: "T3",
         operations: ["releaseClawRemoveRows"],
         evidence:
-          "src/cli/claws-cli.runtime.ts:562 invokes removal → src/claws/lifecycle-state.ts:650 (sole caller).",
+          "src/cli/templates-cli.runtime.ts:562 invokes removal → src/templates/lifecycle-state.ts:650 (sole caller).",
       },
     ],
   ],
   [
-    "src/claws/mcp.ts",
+    "src/templates/mcp.ts",
     [
       {
         tier: "T3",
@@ -2658,23 +2659,23 @@ const reviewedOperations = new Map([
           "upsertClawMcpServerRef",
         ],
         evidence:
-          "CLI add/update/remove only: src/cli/claws-cli.ts:115,152,181 → add.ts:568,570, update-apply.ts:410 and lifecycle-state.ts:506 → mcp.ts/mcp-update.ts/lifecycle-mcp-removal.ts.",
+          "CLI add/update/remove only: src/cli/templates-cli.ts:115,152,181 → add.ts:568,570, update-apply.ts:410 and lifecycle-state.ts:506 → mcp.ts/mcp-update.ts/lifecycle-mcp-removal.ts.",
       },
     ],
   ],
   [
-    "src/claws/package-update-provenance.ts",
+    "src/templates/package-update-provenance.ts",
     [
       {
         tier: "T3",
         operations: ["replaceClawPackageRefExpected"],
         evidence:
-          "CLI update: src/cli/claws-update-cli.runtime.ts:175 → src/claws/update-apply.ts:300,322 → package-update.ts:59,98,99,182,183,228,234,254.",
+          "CLI update: src/cli/templates-update-cli.runtime.ts:175 → src/templates/update-apply.ts:300,322 → package-update.ts:59,98,99,182,183,228,234,254.",
       },
     ],
   ],
   [
-    "src/claws/workspace.ts",
+    "src/templates/workspace.ts",
     [
       {
         tier: "T3",
@@ -2686,7 +2687,7 @@ const reviewedOperations = new Map([
           "deleteClawWorkspaceFileRecord",
         ],
         evidence:
-          "CLI add: src/claws/add.ts:509,511 → workspace.ts:376,408,417,419,427,432; CLI update: update-apply.ts:398 → workspace-update.ts:115,121,171,173,177.",
+          "CLI add: src/templates/add.ts:509,511 → workspace.ts:376,408,417,419,427,432; CLI update: update-apply.ts:398 → workspace-update.ts:115,121,171,173,177.",
       },
     ],
   ],
@@ -3279,7 +3280,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["unregisterOpenClawAgentDatabases"],
         evidence:
-          "Plural unregister: CLI claw removal src/claws/lifecycle-delete-support.ts:519 → cli/claws-cli.runtime.ts:562; CLI agent deletion src/commands/agents.commands.delete.ts:450 → cli/program/register.agent.ts:183.",
+          "Plural unregister: CLI claw removal src/templates/lifecycle-delete-support.ts:519 → cli/templates-cli.runtime.ts:562; CLI agent deletion src/commands/agents.commands.delete.ts:450 → cli/program/register.agent.ts:183.",
       },
     ],
   ],
@@ -3482,10 +3483,9 @@ const workerModules = new Set([
   "src/config/sessions/session-accessor.sqlite-participants.native.ts", // Participant mutation SQL runs only through the sharing worker; host imports are type-only.
   "src/config/sessions/session-group-categories.read.ts", // Category enumeration runs only in session-sharing-store.worker.ts.
   "src/config/sessions/session-pending-input-history.kernel.ts", // History-read worker owns all remaining callers.
-  "src/config/sessions/session-pending-input-history-reconcile.ts", // Pending-input execution registry dispatches only in openclaw-agent-execution.worker.ts.
   "src/infra/session-cost-usage-cache-read.ts", // Usage-cache reads run only in session-transcript.worker.ts.
-  "src/claws/provenance-runtime-read.kernel.ts", // Only clawInstallSchemaOperations in provenance-runtime-read.worker.ts reads consent rows; host imports are types.
-  "src/claws/provenance-runtime-read.worker.ts", // Shared-state registry owns claws.install-schema-versions.
+  "src/templates/provenance-runtime-read.kernel.ts", // Only templateInstallSchemaOperations in provenance-runtime-read.worker.ts reads consent rows; host imports are types.
+  "src/templates/provenance-runtime-read.worker.ts", // Shared-state registry owns templates.install-schema-versions.
   "src/state/user-profiles.worker.ts", // Registered profile operations; Gateway submits commands through user-profile-operations.ts.
   "src/state/user-profile-writes.worker.ts", // Shared-state profile mutation implementation; loaded by the profile worker only.
   "src/state/user-profile-read.worker.ts", // Shared-state read registry owns catalog identity and channel identity reads.
@@ -3540,8 +3540,6 @@ const workerModules = new Set([
 
   "src/agents/mcp-oauth-store.kernel.ts", // MCP OAuth write dispatcher and shared-state read worker only.
   "src/agents/harness/native-hook-relay-store.kernel.ts", // native-hook-relay-store.worker.ts owns all runtime SQL.
-
-  "src/agents/subagents/completion/subagent-completion-queue-receipt.ts", // Completion mutation kernel runs through the session-delivery worker.
 
   "src/audit/audit-event-read.kernel.ts", // Audit event list SQL runs only in the shared-state worker dispatcher.
   "src/audit/audit-event-store.ts", // Audit writer worker owns inserts/pruning; host listing delegates to the worker.
@@ -3649,8 +3647,8 @@ const cliModules = new Map([
     "Explicit developer-only benchmark of cold preparation and mutation on synthetic state; no runtime imports or Gateway callers",
   ],
   [
-    "src/claws/provenance-adopted.ts",
-    "Only claws migrate/remove CLI one-shots call these writers via migrate.ts and lifecycle-adopted-removal.ts; no Gateway caller",
+    "src/templates/provenance-adopted.ts",
+    "Only templates migrate/remove CLI one-shots call these writers via migrate.ts and lifecycle-adopted-removal.ts; no Gateway caller",
   ],
   [
     "src/infra/package-update-activation-immutable.ts",
@@ -4059,7 +4057,7 @@ function render(rows) {
     "",
     "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer or an exact synchronous guard. These qualifiers exclude nested function bodies, and a guard applies only to its then-branch, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",
-    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks require native transactions; initialization rollback uses the worker's commit finalizer. Synchronous lifecycle checks and opaque source validators remain native residuals; conversation-bound final effects consume published binding facts. Memory actor category reads use prepared catalog facts; native approval SDK compatibility retains its existing classification. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
+    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks require native transactions; initialization rollback uses the worker's commit finalizer. Synchronous lifecycle checks and opaque source validators remain native residuals; conversation-bound final effects consume published binding facts. Memory actor category reads use prepared catalog facts; native approval SDK compatibility retains its existing classification. Template provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
     "",
     "The scan covers JavaScript/TypeScript files under `src/`, `extensions/`, `packages/`, and `scripts/` as selected by `rg` (respecting ignore rules). It recognizes direct calls, property calls with these names, and named-import aliases. It does not resolve higher-order aliases, dynamic dispatch, transitive wrappers, direct `DatabaseSync` methods, other query primitives, or native-language SQLite. It is a reproducible migration queue, not a complete prohibition checker. Tests are deliberately excluded rather than counted as T3.",
     "",

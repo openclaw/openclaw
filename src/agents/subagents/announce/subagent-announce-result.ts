@@ -150,10 +150,6 @@ function describeSubagentOutcome(child: ChildCompletionRow): string {
     const error = outcome?.error?.trim();
     return error ? `cancelled: ${error}` : "cancelled";
   }
-  if (child.execution.interruptionReason === "gateway-restart") {
-    const error = outcome?.error?.trim();
-    return error ? `interrupted by gateway restart: ${error}` : "interrupted by gateway restart";
-  }
   if (!outcome) {
     return "unknown";
   }
@@ -172,10 +168,7 @@ export type ChildCompletionRow = Pick<
   "childSessionKey" | "task" | "taskName" | "label" | "createdAt" | "endedReason"
 > & {
   announceResult?: string;
-  execution: Pick<
-    SubagentRunRecord["execution"],
-    "endedAt" | "outcome" | "transcriptTarget" | "interruptionReason"
-  >;
+  execution: Pick<SubagentRunRecord["execution"], "endedAt" | "outcome" | "transcriptTarget">;
   completion?: Partial<
     Pick<
       NonNullable<SubagentRunRecord["completion"]>,

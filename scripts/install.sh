@@ -72,11 +72,12 @@ NODE_BREW_FORMULA="node"
 # Linux package repositories can publish builds ahead of the Node release line.
 # Provision the supported LTS line there so a fresh install never receives a prerelease runtime.
 NODE_LINUX_DEFAULT_MAJOR=24
-NODE_24_MIN_MINOR=22
-NODE_24_MIN_PATCH=1
-NODE_26_MIN_MINOR=12
-NODE_26_MIN_PATCH=1
-NODE_SUPPORTED_VERSION_LABEL="24.22.1+ or 26.12.1+"
+# Compatibility floors mirror node-version.mjs; provisioning still selects patched releases.
+NODE_24_MIN_MINOR=16
+NODE_24_MIN_PATCH=0
+NODE_26_MIN_MINOR=1
+NODE_26_MIN_PATCH=0
+NODE_SUPPORTED_VERSION_LABEL="24.16.0+ or 26.1.0+"
 
 ORIGINAL_PATH="${PATH:-}"
 

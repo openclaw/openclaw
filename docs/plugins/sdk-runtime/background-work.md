@@ -221,7 +221,7 @@ services, and timers cannot obtain the capability. Before exposing it, the host
 adopts and commits the actual command text as a user turn and admits its current
 requester under `auto-reply.plugin-command`. Children inherit that requester’s
 lineage and effective tool ceiling. No new hook is registered, so Goal
-start/resume and restart-safe chat admission keep their existing rules.
+start/resume and ordinary chat admission keep their existing rules.
 
 Gateway chat and channel text commands are both eligible. Messages without explicit
 provenance use the ingress's ordinary sender authorization. On Gateway chat, an

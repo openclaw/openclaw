@@ -35,7 +35,12 @@ describe("cloud target menu", () => {
     const profile = { id: "zeta", providerId: "crabbox", machines: [machine] };
     const environment = { id: "node:zeta", type: "node", status: "available" };
     const request = vi.fn().mockResolvedValue({
-      profiles: [profile, { id: "alpha", providerId: "crabbox" }],
+      profiles: [
+        profile,
+        { id: "alpha", providerId: "crabbox" },
+        { id: "denied", providerId: "crabbox" },
+      ],
+      dispatchableProfileIds: ["alpha", "zeta"],
       environments: [
         environment,
         { id: "node:alpha", type: "node", status: "available" },

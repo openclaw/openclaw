@@ -127,6 +127,29 @@ async function createStaleLocalFixture() {
   };
 }
 
+async function createManagedNpmPeerLinkFixture() {
+  const stateDir = makeTempDir();
+  const managed = createManagedNpmPlugin({
+    stateDir,
+    id: "codex",
+    packageName: "codex-plugin",
+    version: "2026.5.3",
+    peerDependencies: {
+      openclaw: ">=2026.5.3",
+    },
+  });
+  await writePersistedInstalledPluginIndex(
+    createCurrentIndexWithNpmRecord({
+      pluginId: "codex",
+      packageName: "codex-plugin",
+      packageDir: managed.packageDir,
+      version: "2026.5.3",
+    }),
+    { stateDir },
+  );
+  return { stateDir, managed };
+}
+
 describe("maybeRepairPluginRegistryState", () => {
   it.each([false, true])(
     "builds missing registry state only with repair enabled (%s)",
@@ -662,25 +685,7 @@ describe("maybeRepairPluginRegistryState", () => {
   });
 
   it("repairs managed npm openclaw peer links during registry repair", async () => {
-    const stateDir = makeTempDir();
-    const managed = createManagedNpmPlugin({
-      stateDir,
-      id: "codex",
-      packageName: "codex-plugin",
-      version: "2026.5.3",
-      peerDependencies: {
-        openclaw: ">=2026.5.3",
-      },
-    });
-    await writePersistedInstalledPluginIndex(
-      createCurrentIndexWithNpmRecord({
-        pluginId: "codex",
-        packageName: "codex-plugin",
-        packageDir: managed.packageDir,
-        version: "2026.5.3",
-      }),
-      { stateDir },
-    );
+    const { stateDir, managed } = await createManagedNpmPeerLinkFixture();
 
     await maybeRepairPluginRegistryState({
       stateDir,
@@ -696,25 +701,7 @@ describe("maybeRepairPluginRegistryState", () => {
   });
 
   it("warns about broken managed npm openclaw peer links without repairing them", async () => {
-    const stateDir = makeTempDir();
-    const managed = createManagedNpmPlugin({
-      stateDir,
-      id: "codex",
-      packageName: "codex-plugin",
-      version: "2026.5.3",
-      peerDependencies: {
-        openclaw: ">=2026.5.3",
-      },
-    });
-    await writePersistedInstalledPluginIndex(
-      createCurrentIndexWithNpmRecord({
-        pluginId: "codex",
-        packageName: "codex-plugin",
-        packageDir: managed.packageDir,
-        version: "2026.5.3",
-      }),
-      { stateDir },
-    );
+    const { stateDir, managed } = await createManagedNpmPeerLinkFixture();
 
     await maybeRepairPluginRegistryState({
       stateDir,

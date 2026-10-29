@@ -12,7 +12,7 @@ import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 import type { SessionBranchListParams, SessionBranchListResult } from "./session-accessor.types.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 const pendingBranchReads = new Map<string, Promise<SessionBranchSummaryReadResult>>();

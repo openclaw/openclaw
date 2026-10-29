@@ -5,19 +5,16 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll } from "vitest";
 import { parse } from "yaml";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
 const publisherTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
-let generatedPublisherTemplate: string | undefined;
+let generatedPublisherTemplate: { root: string; initialMain: string } | undefined;
 function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
@@ -48,16 +45,18 @@ function copyGeneratedPublisherFixture(root: string, workspaceName: string) {
     runGit(worktree, ["remote", "add", "origin", "../origin.git"]);
     runGit(worktree, ["push", "-u", "origin", "main"]);
     runGit(templateRoot, ["--git-dir", origin, "symbolic-ref", "HEAD", "refs/heads/main"]);
-    generatedPublisherTemplate = templateRoot;
+    const initialMain = runGit(worktree, ["rev-parse", "HEAD"]);
+    generatedPublisherTemplate = { root: templateRoot, initialMain };
   }
-  // Relative origin follows each copied repository pair, isolating refs, hooks and config.
+  // Immutable seed and relative origin isolate each copy's initial commit, refs, hooks and config.
   for (const name of ["origin.git", "worktree"]) {
     cpSync(
-      path.join(generatedPublisherTemplate, name),
+      path.join(generatedPublisherTemplate.root, name),
       path.join(root, name === "worktree" ? workspaceName : name),
       { recursive: true, mode: fsConstants.COPYFILE_FICLONE },
     );
   }
+  return generatedPublisherTemplate.initialMain;
 }
 
 export type GeneratedPublisherOptions = {
@@ -94,13 +93,11 @@ export function prepareGeneratedPublisherFixture(
   const runnerTemp = path.join(root, "runner-temp");
   const prState = path.join(root, "pr-open");
   const mergeCalls = path.join(root, "merge-calls");
-  const ghCalls = path.join(root, "gh-calls");
   const stalePrHeadOnce = path.join(root, "stale-pr-head-once");
   const stalePrViewHeadOnce = path.join(root, "stale-pr-view-head-once");
   const summary = path.join(root, "summary.md");
 
-  copyGeneratedPublisherFixture(root, workspaceName);
-  const initialMain = runGit(worktree, ["rev-parse", "HEAD"]);
+  const initialMain = copyGeneratedPublisherFixture(root, workspaceName);
   let initialBranch = "";
   mkdirSync(fakeBin);
   mkdirSync(runnerTemp, { recursive: true });
@@ -239,7 +236,7 @@ export function prepareGeneratedPublisherFixture(
       FAKE_MALFORMED_AUTO_MERGE_RECORD: String(options.malformedAutoMergeRecord ?? false),
       FAKE_ORIGIN: origin,
       FAKE_HEAD_BRANCH: headBranch,
-      FAKE_GH_CALLS: ghCalls,
+      FAKE_GH_CALLS: path.join(root, "gh-calls"),
       FAKE_MERGE_CALLS: mergeCalls,
       FAKE_PR_STATE: prState,
       FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
@@ -259,13 +256,15 @@ export function prepareGeneratedPublisherFixture(
       RUNNER_TEMP: runnerTemp,
     },
     inspect(publishOutput: string, checkAuth = true) {
-      const authHeader = spawnSync(
-        "git",
-        ["config", "--local", "--get-all", "http.https://github.com/.extraheader"],
-        { cwd: worktree, encoding: "utf8" },
-      );
-      if (checkAuth && (authHeader.status !== 1 || authHeader.stdout.trim() !== "")) {
-        throw new Error("generated publisher left its Git authorization header configured");
+      if (checkAuth) {
+        const authHeader = spawnSync(
+          "git",
+          ["config", "--local", "--get-all", "http.https://github.com/.extraheader"],
+          { cwd: worktree, encoding: "utf8" },
+        );
+        if (authHeader.status !== 1 || authHeader.stdout.trim() !== "") {
+          throw new Error("generated publisher left its Git authorization header configured");
+        }
       }
 
       const branchRef = "refs/heads/" + headBranch;
@@ -294,7 +293,8 @@ export function runGeneratedPublisherScenario(
   baseChangePath: "a" | "b" | null,
   options: GeneratedPublisherOptions = {},
 ) {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-generated-pr-"));
+  const tempDirs = createTempDirTracker();
+  const root = tempDirs.make("openclaw-generated-pr-");
   try {
     const fixture = prepareGeneratedPublisherFixture(root, baseChangePath, options);
     const action = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
@@ -324,6 +324,6 @@ export function runGeneratedPublisherScenario(
     }
     return fixture.inspect(publishOutput);
   } finally {
-    rmSync(root, { force: true, recursive: true });
+    tempDirs.cleanup();
   }
 }

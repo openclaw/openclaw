@@ -37,7 +37,7 @@ export class SampleVault extends VaultScanner {
     },
   ) {
     const data = await this.scan();
-    const query = input.query?.toLowerCase().trim();
+    const query = input.query?.toLowerCase().trim().normalize("NFC");
     const timeMatches = temporalPredicate(input);
     const types = input.type ? expandTypes(data.ontology, input.type) : null;
     const current = eligible(data, undefined, false);
@@ -63,7 +63,7 @@ export class SampleVault extends VaultScanner {
             r.title,
             ...(r.kind === "claim" ? [r.body] : []),
             ...(r.metadata.aliases ?? []),
-          ].some((v) => v.toLowerCase().includes(query))),
+          ].some((v) => v.toLowerCase().normalize("NFC").includes(query))),
     );
     matched.sort(
       (a, b) =>

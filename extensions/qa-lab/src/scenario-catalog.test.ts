@@ -94,9 +94,6 @@ it("requires explicit suite isolation for gateway state restart scenarios", () =
   for (const scenario of scenarios) {
     expect(scenario.execution.suiteIsolation, scenario.id).toBe("isolated");
   }
-  expect(
-    scenarios.find((scenario) => scenario.id === "gateway-restart-unclaimed-delivery")?.execution,
-  ).toMatchObject({ suiteIsolation: "isolated", isolationReason: expect.stringMatching(/\S/) });
 });
 
 it("declares every release agentic scenario in the core lane", () => {

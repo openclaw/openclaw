@@ -30,6 +30,10 @@ const digest = (value) => createHash("sha256").update(value).digest("hex");
 const blobOid = (bytes) =>
   createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 const preExisting = (value) => value.changeKind === "pre-existing-failure";
+// Only the optional built-artifact workflow has this separate-primary contract.
+// Other secondary workflows, especially security publishers, are not CI exceptions.
+const secondaryWorkflow = ".github/workflows/ci-build-artifacts-testbox.yml";
+const secondaryFailure = (value) => value.primaryCi !== undefined;
 const git = (args) =>
   execFileSync(process.env.OPENCLAW_PR_GIT || "git", args, {
     env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
@@ -278,6 +282,15 @@ function readEvidence(path, repository, pr, head, immutable) {
       ),
     "scoped passing commands and their evidence are required; these remain operator attestations",
   );
+  if (secondaryFailure(value)) {
+    requireEvidence(
+      preExisting(value) &&
+        positiveInteger(value.primaryCi?.runId) &&
+        positiveInteger(value.primaryCi?.runAttempt) &&
+        value.primaryCi.runId !== value.runId,
+      "artifact-build failure requires a separate exact primary CI run and attempt",
+    );
+  }
   const delta = priorCiDelta(value.priorHead, head);
   requireEvidence(
     value.deltaSha256 === delta.deltaSha256,
@@ -368,10 +381,13 @@ function qualifyPreExistingFailure(evidence, run, jobs, cancelledRoots) {
     "all current-attempt jobs must have complete, matching terminal identities",
   );
   const gate = jobs.find((job) => job.name === "openclaw/ci-gate");
-  requireEvidence(gate, "selected failed attempt must contain a CI gate");
+  requireEvidence(
+    secondaryFailure(evidence) ? !gate : gate,
+    "selected failed attempt has an invalid CI gate",
+  );
   const security = jobs.filter((job) => job.name === "security-fast");
   requireEvidence(
-    security.length === 1 && security[0].conclusion === "success",
+    secondaryFailure(evidence) || (security.length === 1 && security[0].conclusion === "success"),
     "security-fast must pass independently",
   );
   const failed = jobs.filter(
@@ -442,6 +458,26 @@ function qualifyPreExistingFailure(evidence, run, jobs, cancelledRoots) {
       sourceObjects,
     };
   });
+  if (secondaryFailure(evidence)) {
+    requireEvidence(
+      run.conclusion === "failure" &&
+        jobs.every((job) => job.conclusion !== "cancelled") &&
+        evidence.aggregate === undefined &&
+        evidence.cancellation === undefined &&
+        positiveInteger(run.workflow_id) &&
+        positiveInteger(run.check_suite_id) &&
+        Number.isFinite(Date.parse(run.created_at)) &&
+        failures.every((failure) => failure.sourcePaths.includes(secondaryWorkflow)),
+      "artifact-build failure requires unchanged workflow inputs and no cancellation or aggregate exception",
+    );
+    return {
+      failures,
+      workflowId: run.workflow_id,
+      workflowPath: secondaryWorkflow,
+      checkSuiteId: run.check_suite_id,
+      runCreatedAt: run.created_at,
+    };
+  }
   const rootIds = failures.map((entry) => entry.jobId).toSorted((a, b) => a - b);
   const causedByRoots = (entry) =>
     references(entry) &&
@@ -473,20 +509,23 @@ async function preparePreExistingFailure(
   repositoryId,
   immutable,
   deferMain,
+  primary,
 ) {
   if (!deferMain) {
     git(["merge-base", "--is-ancestor", evidence.priorHead, main]);
   }
-  const gates = jobs.filter((job) => job.name === "openclaw/ci-gate");
+  const gates = (primary?.jobs ?? jobs).filter((job) => job.name === "openclaw/ci-gate");
   // Completed job data is fixed, but its check-run and annotations remain mutable.
-  const cancelledRoots = await qualifyPriorCiCancelledRoots({
-    evidence,
-    run,
-    jobs,
-    gate: gates[0],
-    git,
-    requireEvidence,
-  });
+  const cancelledRoots = secondaryFailure(evidence)
+    ? new Map()
+    : await qualifyPriorCiCancelledRoots({
+        evidence,
+        run,
+        jobs,
+        gate: gates[0],
+        git,
+        requireEvidence,
+      });
   const fixed = (immutable.failure ??= qualifyPreExistingFailure(
     evidence,
     run,
@@ -503,11 +542,13 @@ async function preparePreExistingFailure(
     requireEvidence(
       gates.length === 1 &&
         current.length === 1 &&
-        ["failure", "cancelled"].includes(gates[0].conclusion) &&
-        ["fail", "cancel"].includes(current[0].bucket) &&
+        (primary
+          ? gates[0].conclusion === "success"
+          : ["failure", "cancelled"].includes(gates[0].conclusion)) &&
+        (primary ? current[0].bucket === "pass" : ["fail", "cancel"].includes(current[0].bucket)) &&
         current[0].publisherId === 15368 &&
-        positiveInteger(run.check_suite_id) &&
-        current[0].checkSuiteId === run.check_suite_id &&
+        positiveInteger((primary?.run ?? run).check_suite_id) &&
+        current[0].checkSuiteId === (primary?.run ?? run).check_suite_id &&
         gates[0].check_run_url ===
           `https://api.github.com/repos/${evidence.repository}/check-runs/${current[0].checkRunId}`,
       "selected failed attempt must own the currently effective CI gate check-run",
@@ -521,8 +562,8 @@ async function preparePreExistingFailure(
       repositoryId,
       pr: evidence.pr,
       head: evidence.head,
-      ciRunId: evidence.runId,
-      ciRunAttempt: evidence.runAttempt,
+      ciRunId: primary?.run.id ?? evidence.runId,
+      ciRunAttempt: primary?.run.run_attempt ?? evidence.runAttempt,
       main: qualifiedMain,
       statusId: combined[0].statusId,
     });
@@ -530,8 +571,9 @@ async function preparePreExistingFailure(
       checks.every(
         (check) =>
           check.bucket === "pass" ||
-          check === current[0] ||
-          (check === combined[0] && check.statusId === securityReview.combinedStatusId),
+          (!primary &&
+            (check === current[0] ||
+              (check === combined[0] && check.statusId === securityReview.combinedStatusId))),
       ),
       "pre-existing CI authority does not waive other required checks, including security",
     );
@@ -775,9 +817,10 @@ async function verifyPriorCiAdmin({
     return review;
   };
   const query =
-    "query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewDecision reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100,after:$cursor){totalCount nodes{__typename ... on CheckRun{name isRequired(pullRequestNumber:$number) checkSuite{app{databaseId}}} ... on StatusContext{context isRequired(pullRequestNumber:$number)}} pageInfo{hasNextPage endCursor}}}}}}}}}";
+    "query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewDecision reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100,after:$cursor){totalCount nodes{__typename ... on CheckRun{databaseId name status conclusion isRequired(pullRequestNumber:$number) checkSuite{databaseId app{databaseId} workflowRun{databaseId event createdAt runAttempt workflow{databaseId}}}} ... on StatusContext{context state isRequired(pullRequestNumber:$number)}} pageInfo{hasNextPage endCursor}}}}}}}}}";
   const readReview = async () => {
     const requirements = new Map();
+    const secondaryChecks = [];
     const cursors = new Set();
     let cursor;
     let count = 0;
@@ -831,6 +874,9 @@ async function verifyPriorCiAdmin({
             typeof node.isRequired === "boolean",
           "per-PR required check marker is unavailable",
         );
+        if (secondaryFailure(evidence)) {
+          secondaryChecks.push(node);
+        }
         if (!node.isRequired) {
           continue;
         }
@@ -857,6 +903,63 @@ async function verifyPriorCiAdmin({
       cursors.add(cursor);
     } while (cursor);
     requireEvidence(count === total, "per-PR required check inventory is incomplete");
+    if (secondaryFailure(evidence)) {
+      const expected = evidence.failures.map((failure) => {
+        const job = immutable.jobs.find((candidate) => candidate.id === failure.jobId);
+        const id = Number(job?.check_run_url?.match(/\/check-runs\/([1-9][0-9]*)$/u)?.[1]);
+        requireEvidence(
+          positiveInteger(id) &&
+            job.check_run_url === `https://api.github.com/repos/${repository}/check-runs/${id}`,
+          "artifact-build failed job must bind its exact check-run",
+        );
+        return { id, job };
+      });
+      for (const node of secondaryChecks) {
+        const workflowRun = node.checkSuite?.workflowRun;
+        if (
+          workflowRun?.workflow?.databaseId === immutable.failure.workflowId &&
+          workflowRun.event === "pull_request" &&
+          workflowRun.databaseId !== evidence.runId
+        ) {
+          requireEvidence(
+            Number.isFinite(Date.parse(workflowRun.createdAt)) &&
+              Date.parse(workflowRun.createdAt) < Date.parse(immutable.failure.runCreatedAt),
+            "a newer artifact-build workflow run invalidates the selected failure",
+          );
+        }
+        const match = expected.find(({ id }) => id === node.databaseId);
+        if (match) {
+          requireEvidence(
+            node.__typename === "CheckRun" &&
+              node.isRequired === false &&
+              node.name === match.job.name &&
+              node.status === "COMPLETED" &&
+              node.conclusion === match.job.conclusion.toUpperCase() &&
+              node.checkSuite?.databaseId === immutable.failure.checkSuiteId &&
+              node.checkSuite?.app?.databaseId === 15368 &&
+              node.checkSuite?.workflowRun?.databaseId === evidence.runId &&
+              node.checkSuite.workflowRun.event === "pull_request" &&
+              node.checkSuite.workflowRun.runAttempt === evidence.runAttempt &&
+              node.checkSuite.workflowRun.workflow?.databaseId === immutable.failure.workflowId,
+            "artifact-build failed check must be optional and match the exact job, suite, workflow, and publisher",
+          );
+        } else {
+          requireEvidence(
+            node.__typename === "CheckRun"
+              ? node.status === "COMPLETED" &&
+                  ["SUCCESS", "SKIPPED", "NEUTRAL"].includes(node.conclusion)
+              : node.state === "SUCCESS",
+            "artifact-build failure admission does not waive other failed or unfinished checks",
+          );
+        }
+      }
+      requireEvidence(
+        expected.every(
+          ({ id }) => secondaryChecks.filter((node) => node.databaseId === id).length === 1,
+        ),
+        "every artifact-build failure needs one current native optional-check marker",
+      );
+    }
     const known = policy.rules
       .filter((rule) => rule.type === "required_status_checks")
       .flatMap((rule) => rule.parameters.required_status_checks);
@@ -885,7 +988,7 @@ async function verifyPriorCiAdmin({
   const authorityRead = readWriterAuthority(repository, actor, evidence, policy, writerRead);
   const [writer, , run, latest, pages] = await readAll([
     authorityRead,
-    deferFinalAuthority ? null : readReview(),
+    deferFinalAuthority || secondaryFailure(evidence) ? null : readReview(),
     read(`repos/${repository}/actions/runs/${evidence.runId}/attempts/${evidence.runAttempt}`),
     preExisting(evidence) ? read(`repos/${repository}/actions/runs/${evidence.runId}`) : null,
     immutable.jobs
@@ -957,11 +1060,15 @@ async function verifyPriorCiAdmin({
       run.run_attempt === evidence.runAttempt &&
       run.head_sha === runHead &&
       run.repository?.full_name === repository &&
-      /^\.github\/workflows\/ci\.yml(?:@.+)?$/u.test(run.path ?? "") &&
+      (secondaryFailure(evidence)
+        ? run.path === secondaryWorkflow && run.event === "pull_request"
+        : /^\.github\/workflows\/ci\.yml(?:@.+)?$/u.test(run.path ?? "")) &&
       ["pull_request", "workflow_dispatch"].includes(run.event) &&
       run.status === "completed" &&
       (preExisting(evidence)
-        ? ["failure", "cancelled"].includes(run.conclusion)
+        ? secondaryFailure(evidence)
+          ? run.conclusion === "failure"
+          : ["failure", "cancelled"].includes(run.conclusion)
         : run.conclusion === "success") &&
       samePullRequest,
     "selected CI attempt must have the expected conclusion and belong to this PR and tested head",
@@ -986,6 +1093,72 @@ async function verifyPriorCiAdmin({
   );
   const jobs = pages.flatMap((page) => page.jobs);
   immutable.jobs = jobs;
+  let primary;
+  if (secondaryFailure(evidence)) {
+    const prefix = `repos/${repository}/actions/runs/${evidence.primaryCi.runId}`;
+    const [selected, latestPrimary, primaryPages] = await readAll([
+      read(`${prefix}/attempts/${evidence.primaryCi.runAttempt}`),
+      read(prefix),
+      read(`${prefix}/attempts/${evidence.primaryCi.runAttempt}/jobs?per_page=20`, true),
+    ]);
+    requireEvidence(
+      selected?.id === evidence.primaryCi.runId &&
+        selected.run_attempt === evidence.primaryCi.runAttempt &&
+        selected.head_sha === head &&
+        selected.repository?.full_name === repository &&
+        selected.path === ".github/workflows/ci.yml" &&
+        selected.event === "pull_request" &&
+        selected.status === "completed" &&
+        selected.conclusion === "success" &&
+        positiveInteger(selected.head_repository?.id) &&
+        selected.head_repository.id === run.head_repository?.id &&
+        selected.head_branch === run.head_branch &&
+        Array.isArray(selected.pull_requests) &&
+        runBelongsToPullRequest(
+          selected,
+          pr,
+          new Set([head]),
+          run.head_branch,
+          run.head_repository.full_name,
+        ) &&
+        latestPrimary?.id === selected.id &&
+        latestPrimary.run_attempt === selected.run_attempt &&
+        latestPrimary.head_sha === head &&
+        latestPrimary.status === "completed" &&
+        latestPrimary.conclusion === "success" &&
+        positiveInteger(selected.workflow_id) &&
+        positiveInteger(selected.check_suite_id),
+      "artifact-build failure requires the current successful primary CI attempt on the same PR source",
+    );
+    requireEvidence(
+      Array.isArray(primaryPages) &&
+        primaryPages.length > 0 &&
+        primaryPages.every(
+          (page) => Array.isArray(page.jobs) && page.total_count === primaryPages[0].total_count,
+        ) &&
+        primaryPages.flatMap((page) => page.jobs).length === primaryPages[0].total_count,
+      "primary CI job evidence is incomplete",
+    );
+    const primaryJobs = primaryPages.flatMap((page) => page.jobs);
+    requireEvidence(
+      new Set(primaryJobs.map((job) => job.id)).size === primaryJobs.length &&
+        primaryJobs.every(
+          (job) =>
+            positiveInteger(job.id) &&
+            job.run_id === selected.id &&
+            job.head_sha === head &&
+            job.status === "completed" &&
+            ["success", "skipped"].includes(job.conclusion),
+        ) &&
+        ["openclaw/ci-gate", "security-fast"].every(
+          (name) =>
+            primaryJobs.filter((job) => job.name === name).length === 1 &&
+            primaryJobs.find((job) => job.name === name).conclusion === "success",
+        ),
+      "primary CI gate and security-fast must pass with complete terminal coverage",
+    );
+    primary = { run: selected, jobs: primaryJobs };
+  }
   const gate = jobs.filter((job) => job.name === "openclaw/ci-gate");
   if (!preExisting(evidence)) {
     requireEvidence(
@@ -1011,6 +1184,7 @@ async function verifyPriorCiAdmin({
         authority.id,
         immutable,
         Boolean(sharedSnapshot),
+        primary,
       )
     : undefined;
   const failureProof =
@@ -1039,7 +1213,7 @@ async function verifyPriorCiAdmin({
     // Historical proof precedes the final observation; mutable reviews and
     // security follow it, with writer authority last and no duplicate inventory.
     const [, finalFailureProof] = await readAll([
-      deferFinalAuthority ? readReview() : null,
+      deferFinalAuthority || secondaryFailure(evidence) ? readReview() : null,
       deferFinalAuthority && finishFailureProof
         ? finishFailureProof(currentChecks, qualifiedMain)
         : failureProof,

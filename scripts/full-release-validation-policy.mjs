@@ -1489,72 +1489,6 @@ export function terminalPolicyPass(child, targetVersion) {
   );
 }
 
-const INSTALL_SMOKE_JOB_PREFIX = "install_smoke_release_checks / ";
-const INSTALL_SMOKE_PAYLOAD_PRODUCER = `${INSTALL_SMOKE_JOB_PREFIX}installer_smoke_candidate_payload`;
-// `needs` of .github/workflows/install-smoke-reusable.yml; frv.test.ts pins it to the workflow.
-export const INSTALL_SMOKE_JOB_NEEDS = {
-  preflight: [],
-  "install-smoke-fast": ["preflight"],
-  root_dockerfile_image: ["preflight"],
-  root_dockerfile_image_ready: ["preflight", "root_dockerfile_image"],
-  qr_package_install_smoke: ["preflight"],
-  root_dockerfile_smokes: ["preflight", "root_dockerfile_image", "root_dockerfile_image_ready"],
-  installer_smoke_candidate_payload: ["preflight"],
-  installer_smoke_update_image: ["preflight"],
-  installer_smoke_nonroot_image: ["preflight"],
-  installer_smoke_update: [
-    "preflight",
-    "installer_smoke_candidate_payload",
-    "installer_smoke_update_image",
-  ],
-  installer_smoke_nonroot: [
-    "preflight",
-    "installer_smoke_candidate_payload",
-    "installer_smoke_nonroot_image",
-  ],
-  installer_smoke: [
-    "preflight",
-    "root_dockerfile_image",
-    "root_dockerfile_image_ready",
-    "installer_smoke_candidate_payload",
-    "installer_smoke_update_image",
-    "installer_smoke_update",
-    "installer_smoke_nonroot_image",
-    "installer_smoke_nonroot",
-  ],
-  bun_global_install_smoke: ["preflight", "installer_smoke_candidate_payload"],
-  bun_only_runtime_smoke: ["preflight", "installer_smoke_candidate_payload"],
-  "docker-e2e-fast": ["preflight"],
-};
-// Consumers whose payload verification binds GITHUB_RUN_ATTEMPT rather than the producer's
-// recorded attempt (#161317); frv.test.ts pins them to the workflow.
-export const INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS = new Set([
-  "installer_smoke_update",
-  "installer_smoke_nonroot",
-]);
-// Release Checks jobs that need install_smoke_release_checks, so a producer job rerun
-// re-executes them too; frv.test.ts pins them to openclaw-release-checks.yml.
-export const INSTALL_SMOKE_CALLER_DEPENDENTS = new Set([
-  "Verify release checks",
-  FULL_RELEASE_CHILD_EVIDENCE_JOB,
-]);
-
-// Seeds plus every job that transitively needs one, as a GitHub rerun re-executes them.
-function installSmokeDependents(seeds) {
-  const closure = new Set(seeds);
-  let grew = true;
-  while (grew) {
-    grew = false;
-    for (const [job, needs] of Object.entries(INSTALL_SMOKE_JOB_NEEDS)) {
-      if (!closure.has(job) && needs.some((need) => closure.has(need))) {
-        closure.add(job);
-        grew = true;
-      }
-    }
-  }
-  return closure;
-}
-
 export function planReleaseChildRerun({ childKey, jobs }) {
   const failed = evaluateReleaseChildPolicy({ child: { key: childKey, jobs } })
     .blockingJobs.map((job) => job.name)
@@ -1566,24 +1500,6 @@ export function planReleaseChildRerun({ childKey, jobs }) {
   // can therefore need only this failed metadata job, never its passing workloads.
   if (failed.length === 1 && failed[0] === FULL_RELEASE_CHILD_EVIDENCE_JOB) {
     return { failed, mode: "receipt", producer: FULL_RELEASE_CHILD_EVIDENCE_JOB };
-  }
-  const producerJob = jobs.find((job) => job.name === INSTALL_SMOKE_PAYLOAD_PRODUCER);
-  if (producerJob?.status === "completed" && producerJob.conclusion === "success") {
-    const local = (name) =>
-      name.startsWith(INSTALL_SMOKE_JOB_PREFIX) ? name.slice(INSTALL_SMOKE_JOB_PREFIX.length) : "";
-    const failedJobsRerun = installSmokeDependents(failed.map(local).filter(Boolean));
-    // A failed-jobs rerun that re-executes an attempt-bound consumer without the
-    // producer stays red, whether the consumer or an upstream image job failed.
-    if ([...failedJobsRerun].some((name) => INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS.has(name))) {
-      // A job rerun only re-executes the producer and its dependents; failures outside
-      // that closure (for example an upstream image build) need the whole run.
-      const producerDependents = installSmokeDependents([local(INSTALL_SMOKE_PAYLOAD_PRODUCER)]);
-      return failed.every(
-        (name) => producerDependents.has(local(name)) || INSTALL_SMOKE_CALLER_DEPENDENTS.has(name),
-      )
-        ? { failed, mode: "producer", producer: INSTALL_SMOKE_PAYLOAD_PRODUCER }
-        : { failed, mode: "all-jobs" };
-    }
   }
   return { failed, mode: "failed-jobs" };
 }

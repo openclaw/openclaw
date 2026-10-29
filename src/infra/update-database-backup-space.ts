@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import type { measureUpdateStateFiles } from "./update-candidate-io.js";
@@ -9,6 +13,7 @@ import { UpdateCaptureSpaceError } from "./update-capture-space.js";
 export async function checkUpdateDatabaseBackupSpace(
   directory: string,
   { bytes, largest, families }: Awaited<ReturnType<typeof measureUpdateStateFiles>>,
+  context: { stateDir: string; config: OpenClawConfig },
 ) {
   const warnings: string[] = [];
   const diagnostics: string[] = [];
@@ -30,8 +35,26 @@ export async function checkUpdateDatabaseBackupSpace(
     }
   };
   const reserve = 64 * 1024 * 1024;
-  // This volume holds snapshots, same-volume rollback copies, and acquisition/publication scratch.
-  check(directory, bytes === 0 ? 0 : 2 * bytes + 3 * largest + reserve, "Update database backup");
+  const sharedPath = resolvePathViaExistingAncestorSync(
+    resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: context.stateDir }),
+  );
+  const sharedBytes = Object.values(resolveDatabaseFamilyEngines(context.config)).every(
+    (engine) => engine === "sqlite",
+  )
+    ? families.find((family) => family.path === sharedPath)?.bytes
+    : undefined;
+  // S retains the backups and another S prepares independent writable rollback
+  // outputs. Only shared state overlays current update history: its prepared
+  // image can contain baseline H plus current history up to L. Keeping that
+  // image alongside all outputs costs at most 2S - H + 2(H + L).
+  // Capture's sequential S + L scratch also fits. Preserve the old allowance
+  // when shared ownership or a SQLite-only configuration is not established.
+  const historyBytes = sharedBytes || largest;
+  check(
+    directory,
+    bytes === 0 ? 0 : 2 * bytes + 2 * largest + historyBytes + reserve,
+    "Update database backup",
+  );
   // Preflight runs before the backup directory exists; inspect its existing ancestor.
   let ancestor = directory;
   let backupDevice: bigint;

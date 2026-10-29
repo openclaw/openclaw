@@ -238,10 +238,10 @@ The page also shows this account's estimated X API spend for today and the
 current billing cycle against its limits. Select **Refresh** to update the
 read-only totals. The same spend snapshot is included in `x.allowlist.list`.
 
-A locally linked installation uses the [Custom plugin UI setting](/plugins/feature-plugins#enable-custom-plugin-ui).
-Enable **Settings → Labs → Custom plugin UI**, then use the Control UI served by
-the Gateway over HTTPS or trusted loopback. Bundled installations do not need
-that setting.
+A locally linked installation can use native UI by default once the plugin is
+enabled. Open the Control UI served by the Gateway over HTTPS or trusted
+loopback. An existing advanced native UI opt-out still applies to separately
+installed plugins; see [Custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui).
 
 The Gateway methods `x.allowlist.list`, `x.allowlist.add`, and
 `x.allowlist.remove` require `operator.admin`. Authorize senders by numeric ID,

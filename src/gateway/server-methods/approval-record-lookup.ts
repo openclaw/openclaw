@@ -10,10 +10,7 @@ import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
-import type {
-  PreparedSessionMutationFacts,
-  SessionSharingTarget,
-} from "../session-sharing-policy.js";
+import type { PreparedSessionMutationFacts } from "../session-sharing-policy.js";
 import {
   prepareSessionMutationFacts,
   type SessionFactsRead,
@@ -42,9 +39,10 @@ export function canAccessApprovalSession(params: {
   sessionKey?: string | null;
   agentId?: string | null;
   prepared?: Parameters<typeof canReceiveSessionEvent>[0]["prepared"];
-  readTarget?: (sessionKey: string, agentId?: string) => SessionSharingTarget | null;
+  readFacts?: (sessionKey: string, agentId?: string) => PreparedSessionMutationFacts | undefined;
 }): boolean {
-  if (operatorSessionCap(params.client, params.cfg) !== "none") {
+  const cap = operatorSessionCap(params.client, params.cfg);
+  if (cap !== "none" && cap !== "invited") {
     return true;
   }
   const visibilityFilter = params.prepared
@@ -58,10 +56,18 @@ export function canAccessApprovalSession(params: {
     return false;
   }
   const agentId = normalizeOptionalString(params.agentId);
-  const target = params.prepared
-    ? params.prepared.target(sessionKey, agentId)
-    : params.readTarget?.(sessionKey, agentId);
-  return Boolean(target && visibilityFilter(target.storeKey, target.entry));
+  const facts = params.readFacts?.(sessionKey, agentId);
+  const target = params.prepared ? params.prepared.target(sessionKey, agentId) : facts?.target;
+  return Boolean(
+    target &&
+    (params.prepared
+      ? params.prepared.sharing.canReadTarget(target)
+      : createSessionListEntryFilter({
+          client: params.client,
+          cfg: params.cfg,
+          membership: facts?.membership,
+        })?.(target.storeKey, target.entry) !== false),
+  );
 }
 
 type ApprovalSessionSource = { sessionKey?: string | null; agentId?: string | null };
@@ -83,7 +89,7 @@ export async function prepareApprovalSessionAccess(params: {
   };
   try {
     const cfg = params.getCfg?.() ?? params.cfg;
-    if (cfg && operatorSessionCap(params.client, cfg) === "none") {
+    if (cfg && ["none", "invited"].includes(operatorSessionCap(params.client, cfg) ?? "")) {
       for (const source of params.sources) {
         const sessionKey = normalizeOptionalString(source.sessionKey);
         const requestedAgentId = normalizeOptionalString(source.agentId);
@@ -110,8 +116,8 @@ export async function prepareApprovalSessionAccess(params: {
             cfg: currentCfg,
             client: params.client,
             ...source,
-            readTarget: (sessionKey, agentId) =>
-              reads.get(sourceKey(sessionKey, agentId))?.readCurrent(currentCfg).target ?? null,
+            readFacts: (sessionKey, agentId) =>
+              reads.get(sourceKey(sessionKey, agentId))?.readCurrent(currentCfg),
           })
         );
       },
