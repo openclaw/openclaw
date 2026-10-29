@@ -79,4 +79,40 @@ describe("matrix directory live", () => {
       /non-object JSON response/,
     );
   });
+
+  it("matches a decomposed room name with a composed query", async () => {
+    const nfdName = "Café chatter";
+    requestJsonMock.mockImplementation((params: { endpoint: string }) => {
+      if (params.endpoint === "/_matrix/client/v3/joined_rooms") {
+        return Promise.resolve({ joined_rooms: ["!room:example.org"] });
+      }
+      if (params.endpoint.includes("/state/m.room.name")) {
+        return Promise.resolve({ name: nfdName });
+      }
+      return Promise.resolve({});
+    });
+
+    const results = await listMatrixDirectoryGroupsLive({ ...scoped, query: "café" });
+    expect(results).toEqual([
+      { kind: "group", id: "!room:example.org", name: nfdName, handle: `#${nfdName}` },
+    ]);
+  });
+
+  it("matches a composed room name with a decomposed query", async () => {
+    const nfcName = "Café chatter";
+    requestJsonMock.mockImplementation((params: { endpoint: string }) => {
+      if (params.endpoint === "/_matrix/client/v3/joined_rooms") {
+        return Promise.resolve({ joined_rooms: ["!room:example.org"] });
+      }
+      if (params.endpoint.includes("/state/m.room.name")) {
+        return Promise.resolve({ name: nfcName });
+      }
+      return Promise.resolve({});
+    });
+
+    const results = await listMatrixDirectoryGroupsLive({ ...scoped, query: "café" });
+    expect(results).toEqual([
+      { kind: "group", id: "!room:example.org", name: nfcName, handle: `#${nfcName}` },
+    ]);
+  });
 });
