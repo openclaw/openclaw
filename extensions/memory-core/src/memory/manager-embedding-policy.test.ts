@@ -553,9 +553,9 @@ describe("memory embedding policy", () => {
           '{"timestamp":"2026-10-27T13:06:41.768+08:00","status":400,"error":"com.openai.errors.BadRequestException: 400: HTTP请求失败: response=Response{protocol=h2, code=400, message=, url=https://gateway.example/v1/embeddings}, body={\\"error\\":{\\"message\\":\\"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents\\"}}","path":"/v1/embeddings"}',
       },
     );
-    const items = ["a", "b", "c"];
+    const items = Array.from({ length: 33 }, (_, index) => `input-${index}`);
     const run = vi.fn(async (batch: string[]) => {
-      if (batch.length > 1) {
+      if (batch.length > 10) {
         throw failure;
       }
       return batch;
@@ -566,7 +566,7 @@ describe("memory embedding policy", () => {
     await expect(
       runMemoryEmbeddingBatchRetryWithSplit({ items, run, waitForRetry: async () => {} }),
     ).resolves.toEqual(items);
-    expect(run.mock.calls.map(([batch]) => batch.length)).toEqual([3, 2, 1, 1, 1]);
+    expect(run.mock.calls.map(([batch]) => batch.length)).toEqual([33, 10, 10, 10, 3]);
   });
 
   it.each([

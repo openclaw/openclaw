@@ -198,11 +198,8 @@ function isInvalidEmbeddingResponse(error: unknown): boolean {
 function embeddingRetryMessage(error: unknown): string {
   const fields = asOptionalRecord(error);
   const message = fields?.embeddingErrorMessage;
-  // Gateways that wrap upstream provider errors can push the recognizable
-  // batch-limit text past the truncated message preview while the preserved,
-  // bounded raw-body preview still carries it (for example a Java gateway
-  // reporting its own exception string for an upstream Alibaba DashScope
-  // batch-size rejection).
+  // Wrapped provider errors can put the item cap beyond the message preview.
+  // The bounded raw-body preview may still contain it.
   const errorBody = typeof fields?.errorBody === "string" ? fields.errorBody : undefined;
   return [typeof message === "string" ? message : formatErrorMessage(error), errorBody]
     .filter((part): part is string => Boolean(part))
