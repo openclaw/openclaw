@@ -50,6 +50,14 @@ async function requestManualCronRun(
           reason: tracking.terminalTracker.emitted ? "ownerless" : "already-running",
         } as const);
   });
+  if ("requested" in result) {
+    // A committed request stays queued when this drain fails, and a later drain
+    // runs it. Rejecting here would read as "not accepted" and invite a replay.
+    await drainCronRunQueue(state).catch((error: unknown) => {
+      state.deps.log.warn({ jobId: id, err: String(error) }, "cron: queue drain delayed");
+    });
+    return result;
+  }
   await drainCronRunQueue(state);
   return result;
 }
