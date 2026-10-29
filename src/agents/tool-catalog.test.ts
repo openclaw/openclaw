@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  CORE_WORKER_LAUNCH_TOOL_NAMES,
+  isKnownCoreToolId,
+  resolveCoreToolExecutionLocation,
+  resolveCoreToolFacts,
+} from "./core-tool-facts.js";
+import {
   listCoreToolSections,
   resolveCoreToolProfilePolicy,
   resolveCoreToolProfiles,
@@ -19,6 +25,53 @@ function expectAccess(
 }
 
 describe("tool-catalog", () => {
+  it("keeps exact catalog membership separate from runtime-only facts", () => {
+    for (const id of [
+      "search",
+      "find",
+      "grep",
+      "glob",
+      "tool_search",
+      "tool_describe",
+      "structured_output",
+    ]) {
+      expect(resolveCoreToolFacts(id)).toBeDefined();
+      expect(isKnownCoreToolId(id)).toBe(false);
+    }
+    for (const id of [
+      "cron",
+      "Browser",
+      " browser",
+      "browser ",
+      "mcp__notes__browser",
+      "toString",
+      "__proto__",
+      "constructor",
+    ]) {
+      expect(isKnownCoreToolId(id), id).toBe(false);
+    }
+    for (const id of ["browser", "canvas", "agents_wait", "personal_instructions"]) {
+      expect(isKnownCoreToolId(id), id).toBe(true);
+    }
+  });
+
+  it("preserves explicit execution and factory facts without applying lookup defaults", () => {
+    expect(CORE_WORKER_LAUNCH_TOOL_NAMES).toContain("sessions_send");
+    expect(CORE_WORKER_LAUNCH_TOOL_NAMES).not.toContain("gateway");
+    expect(resolveCoreToolExecutionLocation("gateway")).toBe("gateway");
+    expect(resolveCoreToolExecutionLocation("unknown")).toBe("gateway");
+    expect(resolveCoreToolFacts("browser")?.factoryFamily).toBeUndefined();
+    expect(resolveCoreToolFacts("canvas")?.factoryFamily).toBeUndefined();
+    expect(resolveCoreToolFacts("pdf")?.replay).toBe("recorded");
+    expect(resolveCoreToolFacts("skills_search")?.replay).toBe("blind");
+    const policy = resolveCoreToolProfilePolicy("coding");
+    const profiles = resolveCoreToolProfiles("read");
+    policy?.allow?.push("test-only");
+    profiles.push("full");
+    expect(resolveCoreToolProfilePolicy("coding")?.allow).not.toContain("test-only");
+    expect(resolveCoreToolProfiles("read")).toEqual(["coding"]);
+  });
+
   it.each([
     ["personal_instructions", { personalInstructionsEnabled: true }],
     ["agents_wait", { swarmEnabled: true }],
