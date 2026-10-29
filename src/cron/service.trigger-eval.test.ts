@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
@@ -11,6 +12,7 @@ import { createCronServiceState, type CronServiceDeps } from "./service/state.js
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
+import { createCronScriptRuntime } from "./trigger-script.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-trigger-eval-" });
@@ -661,6 +663,86 @@ describe("cron trigger cadence", () => {
     expect(evaluate).toHaveBeenCalledTimes(2);
     expect(h.runSessionEvent).toHaveBeenCalledOnce();
     expect(h.cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
+  });
+
+  it("retries a busy cron occurrence before its next natural slot", async () => {
+    const dueAt = Date.UTC(2026, 9, 30, 7);
+    vi.setSystemTime(dueAt - 60_000);
+    const entered = createDeferred<void>();
+    const release = createDeferred<CodeModeHeadlessResult>();
+    const config = {};
+    let headlessCalls = 0;
+    const runHeadless = vi.fn(async () => {
+      headlessCalls += 1;
+      if (headlessCalls === 3) {
+        entered.resolve();
+      }
+      return await release.promise;
+    });
+    const triggerRuntime = createCronScriptRuntime({
+      config,
+      runHeadless,
+      prepareRuntime: async ({ jobId }) => ({
+        createTools: async () => [],
+        context: { config, agentId: "main", sessionKey: `cron:${jobId}:trigger` },
+        scheduledToolPolicy: undefined,
+      }),
+    });
+    const h = await createHarness({
+      evaluateCronTrigger: triggerRuntime.evaluateTrigger,
+      cronConfig: undefined,
+    });
+    h.cron.pauseScheduling();
+    const jobs = await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        h.cron.add(
+          mainWatcher(`busy retry ${index}`, {
+            schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC", staggerMs: 0 },
+          }),
+        ),
+      ),
+    );
+    const [first, second, third, fourth] = jobs;
+    if (!first || !second || !third || !fourth) {
+      throw new Error("expected four scheduled cron jobs");
+    }
+    expect(new Set(jobs.map((job) => job.state.nextRunAtMs)).size).toBe(1);
+    expect(first.state.nextRunAtMs).toBe(dueAt);
+
+    vi.setSystemTime(dueAt);
+    const running = [first, second, third].map((job) => h.cron.run(job.id, "due"));
+    try {
+      await entered.promise;
+      expect(runHeadless).toHaveBeenCalledTimes(3);
+      expect(await h.cron.run(fourth.id, "due")).toEqual({ ok: true, ran: true });
+      const retryAt = h.cron.getJob(fourth.id)?.state.nextRunAtMs;
+      expect(retryAt).toBe(dueAt + 30_000);
+      expectUnevaluated(h.cron.getJob(fourth.id));
+
+      release.resolve({
+        status: "completed",
+        value: { fire: false },
+        output: [],
+        toolCallCount: 0,
+      });
+      await Promise.all(running);
+      expect(
+        [first, second, third].every((job) => h.cron.getJob(job.id)?.state.triggerEvalCount === 1),
+      ).toBe(true);
+
+      vi.setSystemTime(retryAt!);
+      expect(await h.cron.run(fourth.id, "due")).toEqual({ ok: true, ran: true });
+      expect(runHeadless).toHaveBeenCalledTimes(4);
+      expect(h.cron.getJob(fourth.id)?.state.triggerEvalCount).toBe(1);
+    } finally {
+      release.resolve({
+        status: "completed",
+        value: { fire: false },
+        output: [],
+        toolCallCount: 0,
+      });
+      await Promise.all(running);
+    }
   });
 
   it.each([

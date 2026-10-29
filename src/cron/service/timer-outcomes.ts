@@ -658,17 +658,21 @@ export function applyTriggerNoFireResult(
   try {
     // Job-level computation keeps per-job cron staggering intact on quiet
     // ticks; raw schedule math would collapse watchers onto exact boundaries.
-    const naturalNext = computeJobNextRunAtMs(job, result.endedAt);
     const floorMs = Math.max(MIN_REFIRE_GAP_MS, resolveCronTriggerMinIntervalMs());
-    // Quiet ticks still advance the schedule; the floor prevents scripts from
-    // becoming a headless hot loop even when cron resolves inside the window.
-    job.state.nextRunAtMs = naturalNext;
-    if (naturalNext !== undefined || job.schedule.kind === "every") {
+    const busyRetryAtMs = result.triggerEval.busy ? result.endedAt + floorMs : undefined;
+    const naturalNext =
+      busyRetryAtMs === undefined ? computeJobNextRunAtMs(job, result.endedAt) : undefined;
+    // Busy checks never evaluated their due occurrence, so retry after the
+    // existing trigger floor instead of consuming the next natural cron slot.
+    // Quiet ticks advance normally; the same floor prevents a headless hot loop.
+    job.state.nextRunAtMs = busyRetryAtMs ?? naturalNext;
+    if (busyRetryAtMs !== undefined || naturalNext !== undefined || job.schedule.kind === "every") {
       assignNextRunAtMs({
         state,
         job,
         candidate:
-          naturalNext === undefined ? undefined : Math.max(naturalNext, result.endedAt + floorMs),
+          busyRetryAtMs ??
+          (naturalNext === undefined ? undefined : Math.max(naturalNext, result.endedAt + floorMs)),
         deferredNotifications: opts.deferredNotifications,
       });
     }
