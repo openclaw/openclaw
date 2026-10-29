@@ -121,6 +121,29 @@ it("skips cleared bindings without warnings", async () => {
   state.expectState();
 });
 
+it.each(["current", "stale session", "stale connection"])(
+  "checks both-absent lifecycle revisions against %s identity",
+  async (mode) => {
+    getSessionEntryByIdAsync.mockResolvedValue(sessionEntry());
+    const pending = task({
+      lifecycleRevision: undefined,
+      ...(mode === "stale session" ? { sessionId: "retired-session" } : {}),
+      ...(mode === "stale connection" ? { connectionFingerprint: "0".repeat(64) } : {}),
+    });
+    const state = fixture([pending]);
+    const result = await migration.migrateLegacyState(state);
+    expect(result.warnings).toEqual([]);
+    if (mode === "current") {
+      expect(result).toEqual(unchanged);
+      expect(await migration.detectLegacyState(state)).toBeNull();
+      state.expectState();
+    } else {
+      expect(result.changes).toHaveLength(1);
+      state.expectState({ nativeSubagentAssignments: undefined });
+    }
+  },
+);
+
 it.each(
   Object.entries({
     undecodable: () => fixture(duplicateAssignments, { binding: { ...binding, cwd: undefined } }),

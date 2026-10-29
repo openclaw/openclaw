@@ -98,7 +98,14 @@ function withDatabase<T>(pathname: string, readOnly: boolean, run: (db: Database
 
 function captureBytes(files: string[]) {
   const before = files.map((file) => fs.readFileSync(file));
-  return () => expect(files.map((file) => fs.readFileSync(file))).toEqual(before);
+  return () => {
+    const after = files.map((file) => fs.readFileSync(file));
+    expect(after).toHaveLength(before.length);
+    // Keep large file buffers out of the matcher's iterable-entry expansion.
+    for (const [index, bytes] of before.entries()) {
+      expect(after[index]?.equals(bytes)).toBe(true);
+    }
+  };
 }
 
 function repairOptions(f: AgentFixture, assertCurrent = () => {}) {
@@ -395,6 +402,13 @@ it.each<AdmissionCase>([
 it("retains a verified canonical backup before permitting the normal schema migration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const f = await legacyAgentFixture(true);
+    const config = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
+    config.agents = {
+      ...config.agents,
+      defaults: { ...config.agents?.defaults, heartbeat: { every: "30m" } },
+    };
+    writeFixtureJsonSync(state.configPath, config);
+    const configBytes = fs.readFileSync(state.configPath);
     const logs = runtime();
     const create = vi.spyOn(backupCreate, "createBackupArchive");
     const verify = vi.spyOn(backupVerify, "verifyBackupArchive");
@@ -412,6 +426,7 @@ it("retains a verified canonical backup before permitting the normal schema migr
             onVerifiedBackup,
           });
           expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
+          expect(fs.readFileSync(state.configPath)).toEqual(configBytes);
           expect(verify).toHaveBeenCalledTimes(1);
           const identity = fs.statSync(f.pathname, { bigint: true });
           expect(onVerifiedBackup).toHaveBeenCalledExactlyOnceWith([
@@ -445,6 +460,14 @@ it("retains a verified canonical backup before permitting the normal schema migr
     const backup = await expectDefined(create.mock.results[0], "canonical backup creation result")
       .value;
     expect(fs.existsSync(backup.archivePath)).toBe(true);
+    const restoredRoot = state.path("restored");
+    await backupRestoreCommand(runtime(), { archive: backup.archivePath, target: restoredRoot });
+    expect(
+      fs.readFileSync(
+        path.join(restoredRoot, buildBackupArchivePath(backup.archiveRoot, state.configPath)),
+      ),
+    ).toEqual(configBytes);
+    expect(fs.readFileSync(state.configPath)).toEqual(configBytes);
     const facts = expectDefined(verify.mock.calls[0]?.[1], "verified archive coverage");
     const expectUnchanged = captureBytes([f.pathname]);
     await expect(

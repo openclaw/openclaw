@@ -51,7 +51,7 @@ async function inspectUnchanged(input: DatabaseStoreInspection) {
   expect(fs.readFileSync(input.path!)).toEqual(before);
   return result;
 }
-async function stateStore(version: number) {
+async function stateStore(version: number, contentVersion = version) {
   const input = fixture();
   input.family = "state";
   input.descriptor = await loadStatePortDescriptor();
@@ -65,7 +65,7 @@ async function stateStore(version: number) {
   }
   db.exec(`PRAGMA user_version = ${version};
     INSERT INTO schema_meta VALUES ('primary', 'global', ${version}, NULL, NULL, 1, 1);
-    INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${version}', 1)`);
+    INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${contentVersion}', 1)`);
   return input;
 }
 
@@ -287,6 +287,93 @@ describe("physical store diagnostics", () => {
       expect(result.nextSteps.join(" ")).toContain("doctor --fix");
     },
   );
+
+  it("admits current state content while its published header still fences an older updater", async () => {
+    const input = await stateStore(15, OPENCLAW_STATE_SCHEMA_VERSION);
+    const stateDescriptor = input.descriptor;
+    if (!stateDescriptor) {
+      throw new Error("State port descriptor is required");
+    }
+    {
+      using db = openNodeSqliteDatabase(input.path!, { readOnly: true });
+      expect(() => stateDescriptor.inspectSqliteSource!(db)).toThrow(
+        "Shared-state port requires the current schema",
+      );
+    }
+    const result = await inspectUnchanged(input);
+    expect(result.schema).toEqual({
+      versioning: "versioned",
+      version: OPENCLAW_STATE_SCHEMA_VERSION,
+      expectedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      pending: 0,
+    });
+    expect(result.issues).toEqual([]);
+  });
+
+  it("admits a current published state without a redundant content marker", async () => {
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
+    {
+      using db = openNodeSqliteDatabase(input.path!);
+      db.exec("DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'");
+    }
+    const result = await inspectUnchanged(input);
+    expect(result.schema).toMatchObject({ version: OPENCLAW_STATE_SCHEMA_VERSION, pending: 0 });
+    expect(result.issues).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "missing content marker",
+      sql: "DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
+      version: 15,
+    },
+    {
+      name: "malformed content marker",
+      sql: "UPDATE config_machine_state SET value_json = '{malformed' WHERE state_key = 'state.schema.contentVersion'",
+      version: 15,
+    },
+    {
+      name: "newer content marker",
+      sql: `UPDATE config_machine_state SET value_json = '${OPENCLAW_STATE_SCHEMA_VERSION + 1}' WHERE state_key = 'state.schema.contentVersion'`,
+      version: OPENCLAW_STATE_SCHEMA_VERSION + 1,
+    },
+    {
+      name: "mismatched metadata version",
+      sql: `UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`,
+      version: OPENCLAW_STATE_SCHEMA_VERSION,
+    },
+    {
+      name: "wrong state owner",
+      sql: "UPDATE schema_meta SET role = 'agent'",
+      version: OPENCLAW_STATE_SCHEMA_VERSION,
+    },
+    {
+      name: "incomplete current catalog",
+      sql: "DROP TABLE audit_events",
+      version: OPENCLAW_STATE_SCHEMA_VERSION,
+    },
+  ])("refuses state with $name without repairing its bytes", async ({ sql, version }) => {
+    const input = await stateStore(15, OPENCLAW_STATE_SCHEMA_VERSION);
+    {
+      using db = openNodeSqliteDatabase(input.path!);
+      db.exec(sql);
+    }
+    const result = await inspectUnchanged(input);
+    expect(result.schema).toEqual({
+      versioning: "versioned",
+      version,
+      expectedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      pending: Math.max(0, OPENCLAW_STATE_SCHEMA_VERSION - version),
+    });
+    expect(result.issues).toContain("The SQLite schema could not be admitted by its store owner.");
+    if (version !== OPENCLAW_STATE_SCHEMA_VERSION) {
+      expect(result.issues.join(" ")).toContain(
+        version < OPENCLAW_STATE_SCHEMA_VERSION
+          ? "Schema migrations pending"
+          : "newer than supported",
+      );
+    }
+  });
 
   it("admits retained legacy state without requiring first-use schema migrations", async () => {
     const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
