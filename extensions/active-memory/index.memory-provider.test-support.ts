@@ -1,7 +1,9 @@
 import type { MemorySearchHit } from "openclaw/plugin-sdk/memory-host-search";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { expect, it, vi, type Mock } from "vitest";
 
 type MemoryProviderTestParams = {
+  logger: OpenClawPluginApi["logger"];
   memoryCapability: {
     deterministicRecallToolName: string | undefined;
     recallToolNames: readonly string[] | undefined;
@@ -49,6 +51,31 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
     params.getActiveMemoryProvider.mockResolvedValue(lookup);
     return lookup.provider.search;
   }
+  it.each([
+    { kind: "group", policy: {}, reason: "not-private-destination" },
+    { kind: "direct", policy: { allowedChatIds: ["someone-else"] }, reason: "chat-id-not-allowed" },
+    { kind: "direct", policy: { deniedChatIds: ["owner"] }, reason: "chat-id-not-allowed" },
+  ])(
+    "explains $reason at debug level with logging disabled ($policy)",
+    async ({ kind, policy, reason }) => {
+      params.registerPluginConfig({ agents: ["main"], mode: "off", logging: false, ...policy });
+      const result = await params.runPromptBuild(
+        { prompt: "Help when booking a flight" },
+        {
+          sessionKey: `agent:main:telegram:${kind}:owner`,
+          messageProvider: "telegram",
+          channelId: "owner",
+        },
+      );
+      expect(result).toBeUndefined();
+      const line = `active-memory: lane-1 skipped reason=${reason}`;
+      expect(params.logger.debug).toHaveBeenCalledWith(line);
+      expect(params.logger.info).not.toHaveBeenCalledWith(line);
+      expect(params.getActiveMemorySearchManager).not.toHaveBeenCalled();
+      expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps native and deep recall scoped to the live audience", async () => {
     const search = nativeProvider({ mode: "always", cacheTtlMs: 1_000 }, [
       {
@@ -183,6 +210,12 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
       },
     );
     expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
+    expect(params.logger.debug).toHaveBeenCalledWith(
+      "active-memory: lane-1 skipped reason=recall-tool-not-allowed tool=record_find",
+    );
+    expect(params.logger.info).toHaveBeenCalledWith(
+      "active-memory: lane-1 skipped reason=recall-tool-not-allowed tool=record_find",
+    );
   });
 
   it.each([["denies the deterministic recall tool", "memory_search", "memory_search"]])(
@@ -205,6 +238,12 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
       );
       expect(params.getActiveMemorySearchManager).not.toHaveBeenCalled();
       expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
+      expect(params.logger.debug).toHaveBeenCalledWith(
+        "active-memory: lane-1 skipped reason=recall-tool-not-allowed tool=memory_search",
+      );
+      expect(params.logger.info).toHaveBeenCalledWith(
+        "active-memory: lane-1 skipped reason=recall-tool-not-allowed tool=memory_search",
+      );
     },
   );
 }
