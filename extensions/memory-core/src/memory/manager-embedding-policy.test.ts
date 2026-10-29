@@ -538,6 +538,37 @@ describe("memory embedding policy", () => {
     }
   });
 
+  it("splits when the item cap only appears in the preserved provider error body", async () => {
+    // Java gateways wrapping upstream providers (e.g. Alibaba DashScope) report
+    // their own exception string. The normalized message preview truncates
+    // before the batch-limit text, while the bounded raw-body preview keeps it.
+    const failure = Object.assign(
+      new Error(
+        'openai embeddings failed (400): com.openai.errors.BadRequestException: 400: HTTP请求失败: response=Response{protocol=h2, code=400, message=, url=https://gateway.example/v1/embeddings}, body={"error":{"messa… [request_id=fixture]',
+      ),
+      {
+        status: 400,
+        statusCode: 400,
+        errorBody:
+          '{"timestamp":"2026-10-27T13:06:41.768+08:00","status":400,"error":"com.openai.errors.BadRequestException: 400: HTTP请求失败: response=Response{protocol=h2, code=400, message=, url=https://gateway.example/v1/embeddings}, body={\\"error\\":{\\"message\\":\\"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents\\"}}","path":"/v1/embeddings"}',
+      },
+    );
+    const items = ["a", "b", "c"];
+    const run = vi.fn(async (batch: string[]) => {
+      if (batch.length > 1) {
+        throw failure;
+      }
+      return batch;
+    });
+
+    // The message alone carries no item cap, so the split must cap at the
+    // limit parsed from the error body rather than fail terminally.
+    await expect(
+      runMemoryEmbeddingBatchRetryWithSplit({ items, run, waitForRetry: async () => {} }),
+    ).resolves.toEqual(items);
+    expect(run.mock.calls.map(([batch]) => batch.length)).toEqual([3, 2, 1, 1, 1]);
+  });
+
   it.each([
     { declared: undefined, requests: [33, 10, 10, 10, 3] },
     { declared: 10, requests: [10, 10, 10, 3] },
