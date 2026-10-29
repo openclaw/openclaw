@@ -4,6 +4,76 @@ import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
 const loadI18n = useLazyEnglishTest();
 
+it.each([
+  [
+    "chat.sessionSharing.copyPublicLink",
+    "Copy public link",
+    () => import("../pages/chat/components/chat-session-sharing-content.tsx"),
+  ],
+  [
+    "chat.sessionSharing.publishDraft",
+    "Publish draft",
+    () => import("../pages/chat/components/chat-session-sharing-menu.tsx"),
+  ],
+  [
+    "chat.sessionSharing.noPeople",
+    "No paired people found.",
+    () => import("../pages/chat/components/chat-session-sharing-mobile.tsx"),
+  ],
+  [
+    "chat.sessionSharing.publicConfirmEnable",
+    "Make public",
+    () => import("../pages/chat/chat-pane-sharing-operations.ts"),
+  ],
+  [
+    "chat.subagentsPanel.empty",
+    "No subagents in this conversation.",
+    () => import("../pages/chat/components/chat-subagents-panel.tsx"),
+  ],
+  [
+    "chat.subagentsPanel.desktopFor",
+    "for",
+    () => import("../pages/chat/components/chat-subagents-panel-desktop.tsx"),
+  ],
+  [
+    "chat.subagentsPanel.nativeTitle",
+    "Live native agents",
+    () => import("../pages/chat/components/chat-subagents-native.tsx"),
+  ],
+  [
+    "chat.subagentsPanel.workingFor",
+    "Working for",
+    () => import("../pages/chat/components/chat-subagents-mobile.tsx"),
+  ],
+  [
+    "chat.sessionHeader.continueInTerminal.title",
+    "Continue in terminal",
+    () => import("../pages/chat/components/continue-in-terminal-dialog.tsx"),
+  ],
+] as const)("loads cold owner copy only with its consumer: %s", async (key, copy, load) => {
+  const { en, manager } = await loadI18n({ common: { health: "Gesundheit" } });
+  const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
+  const { registerChatSessionEnglish } = await import("./locales/en-chat-session.ts");
+  registerEnglishCatalog(registerChatSessionEnglish);
+  const sharing = en.chat.sessionSharing;
+  const subagents = en.chat.subagentsPanel;
+  const terminal = en.chat.sessionHeader.continueInTerminal;
+  await manager.setLocale("de");
+  expect(manager.t(key)).toBe(key);
+
+  await load();
+
+  expect(manager.t(key)).toBe(copy);
+  expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
+  expect(manager.t("chat.subagentsPanel.stop", { name: "Build" })).toBe("Stop Build");
+  expect(manager.t("chat.sessionHeader.continueInTerminal.action")).toBe("Continue in terminal…");
+  expect(manager.t("common.health")).toBe("Gesundheit");
+  expect(manager.getLocale()).toBe("de");
+  expect(en.chat.sessionSharing).toBe(sharing);
+  expect(en.chat.subagentsPanel).toBe(subagents);
+  expect(en.chat.sessionHeader.continueInTerminal).toBe(terminal);
+});
+
 it.each([false, true])(
   "merges conflict notice copy without replacing transcript copy (optional first=%s)",
   async (optionalFirst) => {
