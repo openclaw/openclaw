@@ -76,8 +76,8 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         if (controls.constructorError) {
           throw controls.constructorError;
         }
-        const { databaseAdmissionPort, ...data } = workerOptions.workerData;
-        this.data = { ...structuredClone(data), databaseAdmissionPort };
+        const { databaseAdmissionPort, lossPort, ...data } = workerOptions.workerData;
+        this.data = { ...structuredClone(data), databaseAdmissionPort, lossPort };
         this.shared = new BigInt64Array(this.data.shared);
         controls.workers.push(this);
       }
@@ -347,7 +347,7 @@ describe("state lease heartbeat lifetime", () => {
       errcode: 266,
     });
     Atomics.store(worker.shared, state.status, state.lost);
-    worker.emit("message", { loss: { path: "activation", outcome: "operation-error" } });
+    worker.data.lossPort.postMessage({ path: "activation", outcome: "operation-error" }, []);
     expect(params.onLost).not.toHaveBeenCalled();
     worker.emit("error", error);
     worker.finishExit();

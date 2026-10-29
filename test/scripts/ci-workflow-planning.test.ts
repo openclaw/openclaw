@@ -3971,7 +3971,7 @@ describe("ci workflow guards", () => {
     { file: "scripts/test-built-source-verifiers.mts", selected: true },
     { file: "scripts/run-vitest.mjs", selected: false },
   ])("selects shared source verifier ownership for $file", ({ file, selected }) => {
-    const boundary = "test/extension-import-boundaries.test.ts";
+    const boundary = "test/extension-test-boundary.test.ts";
     const planner = pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href;
     const manifest = runCiManifestFixture({
       bundledPlanner: true,

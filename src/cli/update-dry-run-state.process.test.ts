@@ -230,33 +230,72 @@ setLoggerOverride({ file: ${JSON.stringify(path.join(logs, "openclaw.log"))} });
   );
 
   it.each([
-    { name: "malformed", command: "update", config: "{ definitely-not-json\n" },
-    {
-      name: "migration-pending",
-      command: "--update",
-      config:
-        '{ "heartbeat": { "model": "anthropic/claude-3-5-haiku-20241022", "every": "30m" } }\n',
+    { initialized: false, json: false },
+    { initialized: false, json: true },
+    { initialized: true, json: false },
+    { initialized: true, json: true },
+  ])(
+    "keeps malformed previews artifact-free (DB=$initialized, JSON=$json)",
+    async ({ initialized, json }) => {
+      const { root, stateDir } = await createStateFixture(
+        "openclaw-update-malformed-",
+        "{ definitely-not-json\n",
+      );
+      await fs.mkdir(path.join(root, "cache"));
+      await fs.mkdir(path.join(root, "tmp"));
+      if (initialized) {
+        openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
+        await closeOpenClawStateDatabaseAsync();
+      }
+      const preload = path.join(root, "observe.mjs");
+      await fs.writeFile(
+        preload,
+        `import { channel } from "node:diagnostics_channel";
+channel("openclaw.database.statement").subscribe(() => process.stderr.write("DATABASE_INSPECTION\\n"));
+// The launcher probes SQLite capabilities in memory before loading configuration.
+channel("sqlite.db.query").subscribe(({ database }) => {
+  if (database.location()) process.stderr.write("DATABASE_INSPECTION\\n");
+});
+`,
+      );
+      const before = await snapshotTree(root);
+      const result = await runUpdateProcess(
+        root,
+        ["update", "--dry-run", "--no-restart", "--timeout", "1", ...(json ? ["--json"] : [])],
+        { XDG_CACHE_HOME: path.join(root, "cache"), TMPDIR: path.join(root, "tmp") },
+        preload,
+      );
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Would refuse update:");
+      if (json) {
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          dryRun: true,
+          runId: expect.any(String),
+          actions: expect.arrayContaining([expect.any(String)]),
+        });
+      }
+      expect(result.stderr).not.toContain("DATABASE_INSPECTION");
+      for (const artifact of ["update-reports", "logs/support"]) {
+        expect(await fs.stat(path.join(stateDir, artifact)).catch(() => undefined)).toBeUndefined();
+      }
+      expect(await snapshotTree(root)).toEqual(before);
     },
-  ])("keeps $name config and state immutable during preview", async ({ name, command, config }) => {
-    const { root, stateDir } = await createStateFixture(`openclaw-update-${name}-`, config);
-    if (command === "--update") {
-      const legacyStore = path.join(stateDir, "tasks", "runs.sqlite");
-      await writeFixture(`${legacyStore}.migrated`, "legacy migration marker\n");
-      await writeFixture(`${legacyStore}-wal`, "legacy WAL marker\n");
-    } else {
-      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
-      await closeOpenClawStateDatabaseAsync();
-    }
+  );
+
+  it("keeps migration-pending config and state immutable during preview", async () => {
+    const { root, stateDir } = await createStateFixture(
+      "openclaw-update-migration-pending-",
+      '{ "heartbeat": { "model": "anthropic/claude-3-5-haiku-20241022", "every": "30m" } }\n',
+    );
+    const legacyStore = path.join(stateDir, "tasks", "runs.sqlite");
+    await writeFixture(`${legacyStore}.migrated`, "legacy migration marker\n");
+    await writeFixture(`${legacyStore}-wal`, "legacy WAL marker\n");
     const treeBefore = await snapshotTree(root);
-    const result = await runPreview(root, command);
+    const result = await runPreview(root, "--update");
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       runId: expect.any(String),
       dryRun: true,
-      ...(name === "malformed" && {
-        notes: expect.arrayContaining([expect.stringContaining("Would refuse update:")]),
-      }),
-      ...(command === "update" ? { actions: expect.arrayContaining([expect.any(String)]) } : {}),
     });
     await expectUnrecordedPreview(root, treeBefore);
   });

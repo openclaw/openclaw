@@ -328,6 +328,45 @@ function Test-NodeSqliteSupported {
     )
 }
 
+function Test-NodePackageEngine {
+    param([string]$Version, [string]$Engine = $script:NodePackageEngine)
+
+    # Fallback covers latest and extended-stable until both publish relaxed engines.
+    if ([string]::IsNullOrWhiteSpace($Engine)) { $Engine = ">=24.22.1 <25 || >=26.12.1" }
+    $versionMatch = [regex]::Match($Version, '^v?(\d+\.\d+\.\d+)')
+    if (-not $versionMatch.Success) { return $false }
+    $current = [version]$versionMatch.Groups[1].Value
+    $satisfied = $false
+    foreach ($clause in ($Engine -split '\|\|')) {
+        # Same >=floor [<ceiling] subset as the package preinstall guard.
+        $match = [regex]::Match($clause, '^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$')
+        if (-not $match.Success) { return $null }
+        $lower = [version]$match.Groups[1].Value
+        $upper = $match.Groups[2].Value
+        if ($upper -and -not $upper.Contains('.')) { $upper += '.0.0' }
+        if ($current -ge $lower -and (-not $upper -or $current -lt [version]$upper)) { $satisfied = $true }
+    }
+    return $satisfied
+}
+
+function Resolve-NodePackageEngine {
+    if ($InstallMethod -ne 'npm') { return }
+    $script:NodePackageEngine = ">=24.22.1 <25 || >=26.12.1"
+    try {
+        $target = Resolve-NpmOpenClawInstallSpec -PackageName 'openclaw' -RequestedTag $Tag
+        $output = @(Invoke-NpmCommand -Arguments @('view', $target, 'engines.node', '--fetch-timeout=5000', '--fetch-retries=0') 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $output.Count -eq 1) {
+            $engine = $output[0].ToString().Trim()
+            $verdict = Test-NodePackageEngine -Version '0.0.0' -Engine $engine
+            if ($engine -and $null -ne $verdict) {
+                $script:NodePackageEngine = $engine
+                return
+            }
+        }
+    } catch { }
+    Write-Host "[!] Could not resolve target Node requirement; using $script:NodePackageEngine" -ForegroundColor Yellow
+}
+
 function Check-Node {
     param([string]$NodePath)
 
@@ -373,11 +412,15 @@ process.stdout.write(JSON.stringify(result));
         if ($nodeVersion) {
             if (
                 (Test-NodeVersionSupported -Version $nodeVersion) -and
+                (Test-NodePackageEngine -Version $nodeVersion) -and
                 (Test-NodeSqliteSupported -Version $sqliteVersion) -and
                 $sqlite.text -and $sqlite.blob -and $sqlite.json -and -not $sqlite.error
             ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
                 return $true
+            } elseif (-not (Test-NodePackageEngine -Version $nodeVersion)) {
+                Write-Host "[!] Node.js $nodeVersion does not satisfy the target package; upgrading Node.js" -ForegroundColor Yellow
+                return $false
             } elseif ($sqlite.available -and -not $sqlite.text -and -not $sqlite.error) {
                 Write-Host "[!] Node $nodeVersion`: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix" -ForegroundColor Yellow
                 return $false
@@ -2389,6 +2432,7 @@ function Main {
     $isUpgrade = Check-ExistingOpenClaw
 
     # Step 1: Node.js
+    Resolve-NodePackageEngine
     if (-not (Check-Node)) {
         if (-not (Install-Node)) {
             Fail-Install

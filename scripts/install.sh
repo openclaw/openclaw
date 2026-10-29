@@ -77,7 +77,7 @@ NODE_24_MIN_MINOR=16
 NODE_24_MIN_PATCH=0
 NODE_26_MIN_MINOR=1
 NODE_26_MIN_PATCH=0
-NODE_SUPPORTED_VERSION_LABEL="24.16.0+ or 26.1.0+"
+NODE_SUPPORTED_VERSION_LABEL="24.22.1+ or 26.12.1+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -1601,6 +1601,54 @@ node_version_is_supported() {
     node_version_components_are_supported "$major" "$minor" "$patch"
 }
 
+# Fallback covers latest and extended-stable until both defaults publish relaxed engines.
+NODE_PACKAGE_ENGINE=">=24.22.1 <25 || >=26.12.1"
+
+node_components_satisfy_package_engine() {
+    local major="$1" minor="$2" patch="$3" range="$4"
+    local clause lower_major lower_minor lower_patch upper_major upper_minor upper_patch matched=1
+    # Match the same >=floor [<ceiling] alternatives as the package preinstall guard.
+    local pattern='^[[:space:]]*>=[[:space:]]*v?([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]+<[[:space:]]*v?([0-9]+)(\.([0-9]+)\.([0-9]+))?)?[[:space:]]*$'
+    while :; do
+        clause="${range%%||*}"
+        [[ "$clause" =~ $pattern ]] || return 2
+        lower_major="${BASH_REMATCH[1]}" lower_minor="${BASH_REMATCH[2]}" lower_patch="${BASH_REMATCH[3]}"
+        upper_major="${BASH_REMATCH[5]}" upper_minor="${BASH_REMATCH[7]:-0}" upper_patch="${BASH_REMATCH[8]:-0}"
+        if ((major > lower_major || (major == lower_major && minor > lower_minor) || (major == lower_major && minor == lower_minor && patch >= lower_patch))) &&
+            { [[ -z "$upper_major" ]] || ((major < upper_major || (major == upper_major && minor < upper_minor) || (major == upper_major && minor == upper_minor && patch < upper_patch))); }; then
+            matched=0
+        fi
+        [[ "$range" == *'||'* ]] || break
+        range="${range#*||}"
+    done
+    return "$matched"
+}
+
+resolve_node_package_engine() {
+    [[ "$INSTALL_METHOD" == npm ]] || return 0
+    # Consume --beta here so admission and installation use the same selected target.
+    if [[ "$USE_BETA" == 1 ]]; then
+        OPENCLAW_VERSION="$(bounded_probe_output 'beta tag' resolve_beta_version || true)"
+        OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
+        USE_BETA=0
+    fi
+    local engine="" verdict=0
+    if can_resolve_registry_package_version "$OPENCLAW_VERSION"; then
+        if ! engine="$(bounded_probe_output 'package Node requirement' npm view "openclaw@${OPENCLAW_VERSION}" engines.node --fetch-timeout=5000 --fetch-retries=0)"; then
+            engine=""
+        fi
+    fi
+    if [[ -n "$engine" ]]; then
+        node_components_satisfy_package_engine 0 0 0 "$engine" || verdict=$?
+        if [[ "$verdict" != 2 ]]; then
+            NODE_PACKAGE_ENGINE="$engine"
+            NODE_SUPPORTED_VERSION_LABEL="$engine"
+            return 0
+        fi
+    fi
+    ui_warn "Could not resolve target Node requirement; using ${NODE_PACKAGE_ENGINE}"
+}
+
 node_binary_is_supported() {
     local node_bin="$1"
     local version_components major minor patch
@@ -1610,6 +1658,7 @@ node_binary_is_supported() {
         return 1
     fi
     node_version_components_are_supported "$major" "$minor" "$patch" &&
+        node_components_satisfy_package_engine "$major" "$minor" "$patch" "$NODE_PACKAGE_ENGINE" &&
         node_binary_has_safe_sqlite "$node_bin"
 }
 
@@ -3800,6 +3849,7 @@ main() {
     # Step 1: Node.js. macOS package-manager branches install Homebrew lazily
     # only when they are about to call brew.
     load_nvm_for_node_detection || exit 1
+    resolve_node_package_engine
     if ! node_binary_is_supported node; then
         use_supported_nvm_node || promote_supported_node_binary || true
     fi

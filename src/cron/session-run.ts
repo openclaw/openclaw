@@ -23,7 +23,7 @@ import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.j
 import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
 import type { CronServiceDeps } from "./service/state.js";
-import { resolveCronJobsStorePathFromConfig } from "./store.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "./store.js";
 import type { CronResolvedDeliveryState } from "./types.js";
 
 type SessionRun = NonNullable<CronServiceDeps["runSessionEvent"]>;
@@ -140,7 +140,7 @@ export async function runCronSessionTurn(
       params.sessionPreparation?.scratch ??
       (
         await readCronScratchSnapshot(
-          resolveCronJobsStorePathFromConfig(params.cfg),
+          await resolveCronJobsStorePathFromConfigAsync(params.cfg),
           { kind: "job", jobId: job.id, createdAtMsFallback: job.createdAtMs },
           {},
           { assertCurrent, signal: params.abortSignal },

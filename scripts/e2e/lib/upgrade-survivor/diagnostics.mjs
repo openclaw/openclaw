@@ -1985,6 +1985,85 @@ function publishedNativePluginUi(snapshot, sanitize) {
   };
 }
 
+function publishedDeferredSchemaDoctor(snapshot, sanitize) {
+  const proof = snapshot.deferredSchemaDoctor;
+  if (proof === null || proof === undefined) {
+    return null;
+  }
+  const schema = (value) =>
+    value &&
+    [value.userVersion, value.metadataVersion, value.contentVersion].every(
+      (version) => Number.isSafeInteger(version) && version >= 0,
+    );
+  if (
+    snapshot.scenario !== "legacy-operator-state" ||
+    snapshot.updateRestartMode !== "manual" ||
+    proof.relativePath !== "state/openclaw.sqlite" ||
+    proof.baselineVersion !== snapshot.baseline.version ||
+    proof.baselineVersion !== "2026.9.2" ||
+    proof.candidateVersion !== snapshot.candidate.version ||
+    !/^[a-f0-9]{64}$/u.test(proof.candidateSha256) ||
+    !/^[a-f0-9]{40}$/u.test(proof.sourceSha) ||
+    !Number.isSafeInteger(proof.expectedContentVersion) ||
+    proof.expectedContentVersion < 0 ||
+    !Number.isSafeInteger(proof.baselinePublishedVersion) ||
+    proof.baselinePublishedVersion < 0 ||
+    !schema(proof.before) ||
+    !["passed", "not-observed"].includes(proof.status)
+  ) {
+    throw new Error("Invalid deferred-schema Doctor proof");
+  }
+  const tuple = (value) => ({
+    userVersion: value.userVersion,
+    metadataVersion: value.metadataVersion,
+    contentVersion: value.contentVersion,
+  });
+  const result = {
+    status: proof.status,
+    relativePath: proof.relativePath,
+    baselineVersion: proof.baselineVersion,
+    candidateVersion: sanitize(proof.candidateVersion, "summary"),
+    candidateSha256: proof.candidateSha256,
+    sourceSha: proof.sourceSha,
+    expectedContentVersion: proof.expectedContentVersion,
+    before: tuple(proof.before),
+    baselinePublishedVersion: proof.baselinePublishedVersion,
+  };
+  if (proof.status === "passed") {
+    if (
+      !schema(proof.after) ||
+      JSON.stringify(tuple(proof.after)) !== JSON.stringify(tuple(proof.before)) ||
+      proof.before.userVersion !== 15 ||
+      proof.before.userVersion !== proof.baselinePublishedVersion ||
+      proof.before.userVersion !== proof.before.metadataVersion ||
+      proof.before.userVersion >= proof.before.contentVersion ||
+      proof.before.contentVersion !== proof.expectedContentVersion ||
+      proof.doctorExitCode !== 1 ||
+      proof.diagnosticVersion !== proof.expectedContentVersion ||
+      proof.pendingMigrations !== 0 ||
+      proof.sameDatabase !== true ||
+      [
+        proof.beforeObserverFamilyUnchanged,
+        proof.cliFamilyUnchanged,
+        proof.afterObserverFamilyUnchanged,
+      ].some((value) => typeof value !== "boolean")
+    ) {
+      throw new Error("Invalid deferred-schema Doctor result");
+    }
+    Object.assign(result, {
+      after: tuple(proof.after),
+      doctorExitCode: 1,
+      diagnosticVersion: proof.diagnosticVersion,
+      pendingMigrations: 0,
+      sameDatabase: true,
+      beforeObserverFamilyUnchanged: proof.beforeObserverFamilyUnchanged,
+      cliFamilyUnchanged: proof.cliFamilyUnchanged,
+      afterObserverFamilyUnchanged: proof.afterObserverFamilyUnchanged,
+    });
+  }
+  return result;
+}
+
 function publishedSuccessSummary(artifactRoot, sanitize) {
   const raw = readOwned(artifactRoot, "summary.json", "summary");
   if (raw === null) {
@@ -1997,6 +2076,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
   const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
   const nativeAssignments = publishedNativeAssignments(snapshot);
   const nativePluginUi = publishedNativePluginUi(snapshot, sanitize);
+  const deferredSchemaDoctor = publishedDeferredSchemaDoctor(snapshot, sanitize);
   let packageActivationRecovery;
   if (
     ["package-publication-recovery", "package-verification-recovery"].includes(snapshot.scenario)
@@ -2122,6 +2202,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     ...(pluginPolicy ? { pluginPolicy } : {}),
     ...(nativeAssignments ? { nativeAssignments } : {}),
     ...(nativePluginUi ? { nativePluginUi } : {}),
+    ...(deferredSchemaDoctor ? { deferredSchemaDoctor } : {}),
     ...(packageActivationRecovery ? { packageActivationRecovery } : {}),
     timings,
     // Preserve the full start/completion journal within the summary's input/output
