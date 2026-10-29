@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resolveProviderAuths } from "./provider-usage.auth.js";
 
 const {
@@ -109,6 +114,42 @@ describe("provider usage auth boundary", () => {
     resolveKey.mockReset().mockResolvedValue(null);
     resolvePlugin.mockReset().mockResolvedValue(undefined);
   });
+
+  afterEach(() => clearRuntimeConfigSnapshot());
+
+  it.each([
+    ["openrouter", "exec"],
+    ["zai", "store"],
+  ] as const)(
+    "uses the managed %s %s key only for its captured runtime config",
+    async (provider, source) => {
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            [provider]: {
+              baseUrl: "https://provider.example/api",
+              models: [],
+              apiKey: { source, provider: "default", id: "USAGE_KEY" },
+            },
+          },
+        },
+      };
+      const prepared = structuredClone(config);
+      prepared.models!.providers![provider]!.apiKey = "managed-usage-key";
+      setRuntimeConfigSnapshot(prepared, config);
+      resolvePlugin.mockImplementation(async ({ context }) => {
+        const token = (await context.resolveApiKeyCandidatesFromConfigAndStore?.())?.[0];
+        return token ? { token } : undefined;
+      });
+      const input = { providers: [provider], env: {}, agentDir: "/tmp/openclaw-agent" };
+      expect(await resolveProviderAuths({ ...input, config: prepared })).toEqual([
+        { provider, token: "managed-usage-key" },
+      ]);
+      const unrelated = structuredClone(config);
+      unrelated.models!.providers![provider]!.baseUrl = "https://other.example/api";
+      expect(await resolveProviderAuths({ ...input, config: unrelated })).toEqual([]);
+    },
+  );
 
   it("normalizes direct plugin candidates ahead of provider environment credentials", async () => {
     resolvePlugin.mockImplementationOnce(async ({ context }) => {

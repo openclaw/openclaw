@@ -11,6 +11,7 @@ import {
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
@@ -81,6 +82,13 @@ function resolveProviderApiKeyFromConfig(params: {
     const envKey = resolveEnvApiKey(providerId, params.state.env)?.apiKey;
     if (envKey) {
       return envKey;
+    }
+    const runtimeKey = resolveManagedSecretRefRuntimeProviderAuth({
+      cfg: params.state.cfg,
+      provider: providerId,
+    })?.apiKey;
+    if (runtimeKey) {
+      return runtimeKey;
     }
     const key = resolveUsableCustomProviderApiKey({
       cfg: params.state.cfg,

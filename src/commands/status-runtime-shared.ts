@@ -275,6 +275,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   gatewayProbeDeadlineMs: number;
   agentId?: string;
   usage?: boolean;
+  onSecretDiagnostics?: StatusUsageSummaryOptions["onSecretDiagnostics"];
   deep?: boolean;
   gatewayReachable: boolean;
   gatewayStartupPhase?: string;
@@ -308,6 +309,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
         gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
         config: params.config,
         ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.onSecretDiagnostics ? { onSecretDiagnostics: params.onSecretDiagnostics } : {}),
       })
     : undefined;
   // JSON status remains nonthrowing, but requested probe failures must stay visible.

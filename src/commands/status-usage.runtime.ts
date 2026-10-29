@@ -23,6 +23,7 @@ export type StatusUsageSummaryOptions = {
   gatewayProbeDeadlineMs: number;
   agentId?: string;
   agentDir?: string;
+  onSecretDiagnostics?: (diagnostics: string[]) => void;
 };
 
 /** Loads provider usage for status output from an explicit or ambient system-agent scope. */
@@ -45,12 +46,21 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     });
     agentDir = resolveAgentDir(params.config, resolvedAgentId);
   }
+  const { resolveCommandConfigWithSecrets } = await import("../cli/command-config-resolution.js");
+  const { resolvedConfig: config, diagnostics } = await resolveCommandConfigWithSecrets({
+    config: params.config,
+    commandName: "status --usage",
+    targetIds: new Set(["models.providers.*.apiKey"]),
+    mode: "read_only_status",
+    gatewaySecretResolveTimeoutMs: resolveStatusGatewayProbeTimeoutMs(params),
+    ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
+  });
+  params.onSecretDiagnostics?.(diagnostics);
   const usage = await loadProviderUsageSummary({
     timeoutMs: resolveStatusGatewayProbeTimeoutMs(params),
-    config: params.config,
+    config,
     agentDir,
   });
-  const config = params.config;
   const configuredDefault = resolveDefaultModelForAgent({
     cfg: config,
     agentId: resolvedAgentId,
@@ -83,7 +93,7 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     timeoutMs: resolveStatusGatewayProbeTimeoutMs(params),
     providers: ["openai"],
     auth: [buildCodexSyntheticUsageAuth()],
-    config: params.config,
+    config,
     agentDir,
   });
   return mergeUsageSummaries(usage, codexUsage);

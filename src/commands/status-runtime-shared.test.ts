@@ -12,6 +12,7 @@ import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js
 
 const mocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn(),
+  resolveCommandConfigWithSecrets: vi.fn(),
   runSecurityAudit: vi.fn(),
   callGateway: vi.fn(),
   resolveGatewayService: vi.fn(),
@@ -21,6 +22,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../infra/provider-usage.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+}));
+
+// mock-isolation: Command preparation returns explicit fixture configs without executing local providers.
+vi.mock("../cli/command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
 }));
 
 // mock-isolation: Usage status uses fixture auth labels without loading host profiles or CLI keys.
@@ -126,6 +132,10 @@ describe("status-runtime-shared", () => {
     vi.clearAllMocks();
     vi.spyOn(performance, "now").mockReturnValue(0);
     mocks.loadProviderUsageSummary.mockResolvedValue({ providers: [] });
+    mocks.resolveCommandConfigWithSecrets.mockImplementation(async ({ config }) => ({
+      resolvedConfig: config,
+      diagnostics: [],
+    }));
     mocks.runSecurityAudit.mockResolvedValue({ summary: { critical: 0 }, findings: [] });
     mocks.callGateway.mockResolvedValue({ ok: true });
     mocks.resolveGatewayService.mockReturnValue(createMockGatewayService());
@@ -165,6 +175,57 @@ describe("status-runtime-shared", () => {
       }),
     ).rejects.toThrow(error);
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+  });
+
+  it("prepares only usage API keys, preserves diagnostics, and spends the existing deadline", async () => {
+    const params = usageParams("openclaw");
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openrouter/fixture" } } },
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            models: [],
+            apiKey: { source: "exec", provider: "fixture", id: "key" },
+          },
+        },
+      },
+    };
+    const prepared = structuredClone(config);
+    prepared.models!.providers!.openrouter!.apiKey = "prepared-usage-key";
+    const diagnostics = ["status --usage: resolved command secrets locally."];
+    const reportDiagnostics = vi.fn();
+    mocks.resolveCommandConfigWithSecrets.mockImplementationOnce(async () => {
+      vi.spyOn(performance, "now").mockReturnValue(456);
+      return { resolvedConfig: prepared, diagnostics };
+    });
+    mocks.loadProviderUsageSummary.mockImplementationOnce(async ({ config: cfg }) =>
+      usageSummary(
+        1,
+        typeof cfg.models?.providers?.openrouter?.apiKey === "string" ? [openaiUsage(12)] : [],
+      ),
+    );
+    await expect(
+      resolveStatusUsageSummary({ ...params, config, onSecretDiagnostics: reportDiagnostics }),
+    ).resolves.toEqual(usageSummary(1, [openaiUsage(12)]));
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledExactlyOnceWith({
+      config,
+      commandName: "status --usage",
+      targetIds: new Set(["models.providers.*.apiKey"]),
+      mode: "read_only_status",
+      gatewaySecretResolveTimeoutMs: 3456,
+    });
+    expect(reportDiagnostics).toHaveBeenCalledExactlyOnceWith(diagnostics);
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledExactlyOnceWith({
+      timeoutMs: 3000,
+      config: prepared,
+      agentDir: params.agentDir,
+    });
+    expect(config.models?.providers?.openrouter?.apiKey).toEqual({
+      source: "exec",
+      provider: "fixture",
+      id: "key",
+    });
   });
 
   it("shares the usage deadline with Codex synthetic usage", async () => {
