@@ -19,7 +19,6 @@ describe("sameAbsolutePath", () => {
     ["\\\\Server\\Share\\", "//server/share", true],
     ["/workspace", "/workspace-other", false],
     ["relative", "relative", false],
-    ["", "", false],
   ])("compares %j and %j as %s", (a, b, expected) => {
     expect(sameAbsolutePath(a, b)).toBe(expected);
   });

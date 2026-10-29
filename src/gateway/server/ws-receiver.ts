@@ -1,6 +1,6 @@
 import type { WebSocket } from "ws";
+import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import type { GatewayRole } from "../role-policy.types.js";
-import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import type { PrepareGatewayAuthenticatedReceive } from "./connection-transport.js";
 
 type PayloadLimited = { _maxPayload?: number };
@@ -15,7 +15,7 @@ function hasWritablePayloadLimit(target: PayloadLimited | undefined): target is 
   );
 }
 
-function gatewayReceiver(socket: WebSocket): GatewayReceiver | null {
+export function gatewayReceiver(socket: WebSocket): GatewayReceiver | null {
   // SAFETY: ws owns these private per-frame fields; validate each before the handoff.
   const receiver = (socket as WebSocket & { _receiver?: GatewayReceiver })["_receiver"];
   return hasWritablePayloadLimit(receiver) ? receiver : null;

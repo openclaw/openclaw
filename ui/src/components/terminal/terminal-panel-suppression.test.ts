@@ -1,149 +1,70 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../i18n/index.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
+import { expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import { mountPanel, panelTestStorage } from "./terminal-panel-lifecycle.test-support.ts";
 import {
   createTerminalController,
+  createTerminalGatewayClient,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
-const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
-const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
+const createTerminal: CreateGhosttyTerminalMock = vi.fn();
+const tag = defineTestTerminalPanelElement(createTerminal);
+const storageKey = "openclaw.terminal.panel.v1";
+panelTestStorage(createTerminal);
 
-describe("OpenClawTerminalPanel dock suppression", () => {
-  beforeEach(async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    await i18n.setLocale("en");
-  });
+function savePlacement(dock = "bottom") {
+  localStorage.setItem(storageKey, JSON.stringify({ open: true, dock, height: 320, width: 520 }));
+}
 
-  afterEach(async () => {
-    document.body.replaceChildren();
-    localStorage.clear();
-    sessionStorage.clear();
-    createGhosttyTerminalMock.mockReset();
-    vi.unstubAllGlobals();
-    await i18n.setLocale("en");
-  });
-
-  it("suppresses an open dock without overwriting its persisted preference", async () => {
-    localStorage.setItem(
-      "openclaw.terminal.panel.v1",
-      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
-    );
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.available = true;
-    document.body.append(panel);
+it.each(["bottom", "main"])(
+  "suppresses and restores %s without overwriting its preference",
+  async (dock) => {
+    savePlacement(dock);
+    const panel = mountPanel(tag, { available: true }, false);
     await panel.updateComplete;
-
-    expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
+    const selector = dock === "main" ? ".tp--main" : ".tp";
+    expect(panel.querySelector(selector)).not.toBeNull();
     panel.suppressed = true;
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp")).toBeNull());
-
+    await waitForFast(() => expect(panel.querySelector(".tp")).toBeNull());
     expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-bottom")).toBe(
       "0px",
     );
-    expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
+    expect(JSON.parse(localStorage.getItem(storageKey) ?? "{}")).toMatchObject({
       open: true,
+      dock,
     });
-
     panel.suppressed = false;
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp")).not.toBeNull());
+    await waitForFast(() => expect(panel.querySelector(selector)).not.toBeNull());
+  },
+);
 
-    expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
-  });
-
-  it("restores a suppressed main placement", async () => {
-    localStorage.setItem(
-      "openclaw.terminal.panel.v1",
-      JSON.stringify({ open: true, dock: "main", height: 320, width: 520 }),
-    );
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.available = true;
-    document.body.append(panel);
-    await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp--main")).not.toBeNull();
-
-    panel.suppressed = true;
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp")).toBeNull());
-    expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
-      open: true,
-      dock: "main",
-    });
-
-    panel.suppressed = false;
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp--main")).not.toBeNull());
-  });
-
-  it("defers availability restore until suppression ends", async () => {
-    localStorage.setItem(
-      "openclaw.terminal.panel.v1",
-      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
-    );
-    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
+it.each([false, true])(
+  "defers suppressed startup until available (initially available=%s)",
+  async (available) => {
+    savePlacement();
+    createTerminal.mockResolvedValue(createTerminalController());
     const requests: string[] = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string) => {
-        requests.push(method);
-        return (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.suppressed = true;
-    document.body.append(panel);
+    const client: TerminalGatewayClient = createTerminalGatewayClient(async <T>(method: string) => {
+      requests.push(method);
+      return (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T;
+    });
+    const panel = mountPanel(tag, { client, available, suppressed: true }, false);
     await panel.updateComplete;
-
-    panel.available = true;
-    await panel.updateComplete;
+    if (!available) {
+      panel.available = true;
+      await panel.updateComplete;
+    }
     await Promise.resolve();
-
     expect(panel.terminalPanelOpen).toBe(false);
     expect(requests).not.toContain("terminal.open");
-
     panel.suppressed = false;
     await panel.updateComplete;
     await waitForFast(() => expect(requests).toContain("terminal.open"));
-
     expect(panel.terminalPanelOpen).toBe(true);
-  });
-
-  it("mounts closed inside a takeover instead of booting a hidden session", async () => {
-    localStorage.setItem(
-      "openclaw.terminal.panel.v1",
-      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
-    );
-    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
-    const requests: string[] = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string) => {
-        requests.push(method);
-        return (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.available = true;
-    panel.suppressed = true;
-    document.body.append(panel);
-    await panel.updateComplete;
-    await Promise.resolve();
-
-    expect(panel.terminalPanelOpen).toBe(false);
-    expect(requests).not.toContain("terminal.open");
-
-    panel.suppressed = false;
-    await panel.updateComplete;
-    await waitForFast(() => expect(requests).toContain("terminal.open"));
-  });
-});
+  },
+);

@@ -29,6 +29,12 @@ export function createPluginReloadChannels({
 }) {
   const channelTargets = new Set<ChannelId>();
   let releaseChannelStarts: ReturnType<ChannelManager["pauseChannelStarts"]> | undefined;
+  const stopChannel = (channelId: ChannelId) =>
+    channelManager.stopChannel(channelId, undefined, {
+      manual: false,
+      strict: true,
+      routeHandoff: true,
+    });
   const attempt = async (errors: unknown[], run: () => void | Promise<void>) => {
     try {
       await run();
@@ -48,6 +54,7 @@ export function createPluginReloadChannels({
       await attempt(errors, async () => {
         // Whole-channel targets include preparation that had not reserved an account at drain.
         const result = await channelManager.startChannel(plugin.id, undefined, {
+          reason: "plugin-reload",
           manual: false,
           preserveManualStop: true,
           skipUnavailableAccounts: true,
@@ -117,11 +124,7 @@ export function createPluginReloadChannels({
         releaseAdditional(outcome, selected);
       };
       for (const channelId of additionalChannels) {
-        await channelManager.stopChannel(channelId, undefined, {
-          manual: false,
-          strict: true,
-          routeHandoff: true,
-        });
+        await stopChannel(channelId);
       }
     }
   };
@@ -134,12 +137,7 @@ export function createPluginReloadChannels({
       if (!channelTargets.has(plugin.id)) {
         continue;
       }
-      const stop = () =>
-        channelManager.stopChannel(plugin.id, undefined, {
-          manual: false,
-          strict: true,
-          routeHandoff: true,
-        });
+      const stop = () => stopChannel(plugin.id);
       if (resourceHandoffIds.has(pluginId)) {
         await attempt(errors, stop);
       } else {

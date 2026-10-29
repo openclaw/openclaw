@@ -13,7 +13,7 @@ if grep -qx 'matrix' /tmp/openclaw-selected-plugin-dirs; then
     if find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q .; then
       exit 0
     fi
-    echo "matrix-sdk-crypto native addon missing; retrying download (${attempt}/5)"
+    echo "::warning::matrix-sdk-crypto native addon missing; retrying download (${attempt}/5)"
     node /app/node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js || true
     sleep $((attempt * 2))
   done

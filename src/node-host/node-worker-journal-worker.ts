@@ -2,13 +2,19 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
+  observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type { WorkerOperations } from "../state/worker-operation-registry.js";
 import type { NodeWorkerJournalAuthority } from "./node-worker-journal.types.js";
-import type { NodeWorkerJournalWorkerOperations } from "./node-worker-journal.worker-contract.js";
+import type { nodeWorkerJournalOperations } from "./node-worker-journal.worker.js";
+import { nodePreparedWorkspacePublication } from "./node-worker-prepared-workspace-publication.js";
+
+type NodeWorkerJournalWorkerOperations = WorkerOperations<typeof nodeWorkerJournalOperations>;
 
 type JournalScope = {
   execute<Key extends keyof NodeWorkerJournalWorkerOperations>(command: {
@@ -20,11 +26,16 @@ type JournalScope = {
 /** Host custody lasts through delivery and native transaction settlement. */
 export class NodeWorkerJournalWorker {
   private readonly pending = new Set<Promise<unknown>>();
+  private readonly trackPending = createPendingPromiseTracker(this.pending);
   private readonly settlements = new Set<Promise<unknown>>();
   private accepting = true;
   private uncertain: SqliteWorkerError | undefined;
 
   constructor(private readonly options: { env?: NodeJS.ProcessEnv; path?: string }) {}
+
+  operation<Key extends keyof NodeWorkerJournalWorkerOperations>(type: Key) {
+    return (...input: OpenClawStateWorkerOperations[Key]["input"]) => this.execute({ type, input });
+  }
 
   execute<Key extends keyof NodeWorkerJournalWorkerOperations>(
     command: {
@@ -34,6 +45,19 @@ export class NodeWorkerJournalWorker {
     authority?: NodeWorkerJournalAuthority,
   ): Promise<OpenClawStateWorkerOperations[Key]["output"]> {
     const prepared = structuredClone(command);
+    if (
+      prepared.type === "nodeWorker.prepared.register" ||
+      prepared.type === "nodeWorker.prepared.bind" ||
+      prepared.type === "nodeWorker.prepared.retire" ||
+      prepared.type === "nodeWorker.prepared.completeMutation"
+    ) {
+      if (!this.accepting) {
+        return Promise.reject(
+          this.uncertain ?? new Error("Node worker journal admission is closed"),
+        );
+      }
+      return this.runAdmitted((scope) => scope.execute(prepared), authority, undefined, true);
+    }
     // Orderly shutdown seals mutations, but durable receipts remain queryable.
     if (
       prepared.type === "nodeWorker.turn.get" ||
@@ -70,27 +94,27 @@ export class NodeWorkerJournalWorker {
     operation: (scope: JournalScope) => Promise<T>,
     authority: NodeWorkerJournalAuthority | undefined,
     options: { existingOnly: true },
+    preparedMutation?: boolean,
   ): Promise<T | undefined>;
   private runAdmitted<T>(
     operation: (scope: JournalScope) => Promise<T>,
     authority?: NodeWorkerJournalAuthority,
+    options?: undefined,
+    preparedMutation?: boolean,
   ): Promise<T>;
   private runAdmitted<T>(
     operation: (scope: JournalScope) => Promise<T>,
     authority?: NodeWorkerJournalAuthority,
     options?: { existingOnly: true },
+    preparedMutation?: boolean,
   ): Promise<T | undefined> {
     if (this.uncertain) {
       return Promise.reject(this.uncertain);
     }
     const context = captureOpenClawStateWorkerContext(this.options);
-    let active = true;
     const assertCurrent = () => {
       if (this.uncertain) {
         throw this.uncertain;
-      }
-      if (!active) {
-        throw new Error("Node worker journal operation has settled");
       }
       authority?.assertCurrent();
     };
@@ -110,19 +134,32 @@ export class NodeWorkerJournalWorker {
         }
         this.settlements.delete(retained.settled);
       });
+      const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
+        assertCurrent();
+        grant();
+      });
+      const publication = preparedMutation
+        ? nodePreparedWorkspacePublication.begin({
+            get identity() {
+              return context.admission.identity.key;
+            },
+            assertCurrent: context.assertPublicationCurrent ?? context.admission.assertCurrent,
+          })
+        : undefined;
+      observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
+        if (publication) {
+          if (!isRecord(facts) || facts.kind !== "node-prepared-workspace") {
+            throw new Error("Prepared workspace has no committed receipt");
+          }
+          publication.committed(facts.receipt);
+        }
+      });
+      void retained.settled.then((settlement) =>
+        publication?.finish(settlement.kind === "completed"),
+      );
       return {
         nativeLocations: [context.admission.databasePath],
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          assertCurrent();
-          if (
-            request.stage !== "transaction" ||
-            !isRecord(request.facts) ||
-            request.facts.kind !== "node-worker-journal"
-          ) {
-            throw new Error("Node worker journal transaction admission was refused");
-          }
-          grant();
-        }),
+        admission,
       };
     };
     const admitted = options?.existingOnly
@@ -132,15 +169,7 @@ export class NodeWorkerJournalWorker {
           existingOnly: true,
         })
       : runOpenClawStateWorkerOperation(context, operation, { assertCurrent, createAdmission });
-    const result = admitted.finally(() => {
-      active = false;
-    });
-    this.pending.add(result);
-    void result.then(
-      () => this.pending.delete(result),
-      () => this.pending.delete(result),
-    );
-    return result;
+    return this.trackPending(admitted);
   }
 
   async drain(options: { close?: boolean } = {}): Promise<void> {

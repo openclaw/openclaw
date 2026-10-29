@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDoctorConfigSnapshot } from "../commands/doctor-config-snapshot.test-helpers.js";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
-import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
 import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
@@ -46,7 +45,7 @@ describe("Doctor install-source write ownership", () => {
   it.each(["root", "include"] as const)(
     "refuses %s source records added before the locked write snapshot",
     async (source) => {
-      const initialConfig = { plugins: { installs: {} } };
+      const initialConfig = { plugins: {} };
       const changedConfig = {
         plugins: { installs: { added: { source: "path" as const, installPath: "/new-plugin" } } },
       };
@@ -72,11 +71,6 @@ describe("Doctor install-source write ownership", () => {
           cfg,
           shouldWriteConfig: true,
           confirmedConfigSource: { path: initial.path, hash: initial.hash },
-          pluginInstallConfigImport: {
-            source: { path: initial.path, hash: initial.hash, sourceConfig: initial.sourceConfig },
-            databasePath: resolveInstalledPluginIndexStorePath(),
-            pluginInventoryChanged: false,
-          },
         },
         cfg,
         cfgForPersistence: initialConfig,

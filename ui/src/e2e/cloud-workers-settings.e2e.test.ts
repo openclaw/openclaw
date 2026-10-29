@@ -1,11 +1,17 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import type { Locator, Page } from "playwright";
+import { assert, expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   installMockGateway,
   type MockGatewayRequest,
   waitForConfirmModal,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  configSchema,
+  configSnapshot,
+  objectSchema,
+} from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForSettledFormControls } from "./settle.test-support.ts";
 
@@ -15,15 +21,75 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
+const editorPageOptions = {
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 1_000, width: 1_440 },
+} as const;
+const exactButton = (root: Page | Locator, name: string) =>
+  root.getByRole("button", { name, exact: true });
+const pendingRow = (page: Page) =>
+  page.locator(".settings-row").filter({ has: page.locator("code", { hasText: /^pending$/ }) });
+type FormStep = [Locator, string, "select"?] | [Locator, boolean];
+async function fillForm(page: Page, steps: FormStep[]) {
+  const expected = new Map<Locator, Parameters<typeof waitForSettledFormControls>[1][number]>();
+  for (const [locator, value, kind] of steps) {
+    if (typeof value === "boolean") {
+      await locator.click();
+      expected.set(locator, { locator, checked: value });
+    } else {
+      if (kind === "select") {
+        await locator.selectOption(value);
+      } else {
+        await locator.fill(value);
+      }
+      expected.set(locator, { locator, value });
+    }
+  }
+  await waitForSettledFormControls(page, [...expected.values()]);
+}
+const profilesConfig = (profiles: Record<string, unknown>) => ({ cloudWorkers: { profiles } });
+function profilePatch(backend: string, machineClass: string) {
+  const profile = configuredCloudWorkerProfile(backend);
+  return {
+    ...profile,
+    readyWorkers: null,
+    suspendAfter: null,
+    settings: {
+      ...profile.settings,
+      class: machineClass,
+      target: null,
+      setup: null,
+      setupEnv: null,
+      warmImage: null,
+      desktop: null,
+      binary: null,
+    },
+  };
+}
+
+type Scenario = NonNullable<Parameters<typeof installMockGateway>[1]>;
+function workerGateway(
+  page: Page,
+  hash: string,
+  config: Record<string, unknown> = {},
+  extra: Scenario = {},
+) {
+  return installMockGateway(page, {
+    featureMethods: ["config.patch", "environments.list"],
+    ...extra,
+    methodResponses: {
+      "config.get": configResponse(config, hash),
+      "environments.list": { environments: [], profiles: [] },
+      ...extra.methodResponses,
+    },
+  });
+}
 function configResponse(config: Record<string, unknown>, hash: string) {
   return {
+    ...configSnapshot(config, hash),
     appliedConfigHash: hash,
-    config,
     sourceConfig: config,
-    hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    valid: true,
   };
 }
 
@@ -41,14 +107,23 @@ function configuredCloudWorkerProfile(backend = "aws") {
 }
 
 function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
-  if (!isRecord(request.params) || typeof request.params.raw !== "string") {
-    throw new Error("Expected config.patch params");
-  }
+  assert(
+    isRecord(request.params) && typeof request.params.raw === "string",
+    "Expected config.patch params",
+  );
   const parsed: unknown = JSON.parse(request.params.raw);
-  if (!isRecord(parsed)) {
-    throw new Error("Expected config.patch raw object");
-  }
+  assert(isRecord(parsed), "Expected config.patch raw object");
   return parsed;
+}
+
+async function publishProfiles(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  profiles: Record<string, unknown>,
+  hash: string,
+) {
+  const config = profilesConfig(profiles);
+  await gateway.setMethodResponse("config.get", configResponse(config, hash));
+  await gateway.resolveDeferred("config.patch", { ok: true, hash, config });
 }
 
 async function waitForConfigPatch(
@@ -57,37 +132,24 @@ async function waitForConfigPatch(
 ): Promise<Record<string, unknown>> {
   await expect.poll(() => gateway.getRequests("config.patch")).toHaveLength(previousCount + 1);
   const request = (await gateway.getRequests("config.patch"))[previousCount];
-  if (!request) {
-    throw new Error("Expected next config.patch request");
-  }
+  assert(request, "Expected next config.patch request");
   return requestRaw(request);
 }
 
 suite.define(() => {
-  it("adds advanced profiles and repository defaults while refreshing live availability", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1_000, width: 1_440 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["config.patch", "environments.list"],
-      methodResponses: {
-        "config.get": configResponse({}, "cloud-workers-1"),
-        "environments.list": { environments: [], profiles: [] },
-      },
-    });
+  it("adds and edits advanced machine profiles while refreshing live availability", async () => {
+    await suite.withPage(editorPageOptions, async ({ page }) => {
+      const gateway = await workerGateway(page, "initial");
 
-    try {
       expect((await page.goto(`${suite.server.baseUrl}settings/cloud-workers`))?.status()).toBe(
         200,
       );
-      const docsLink = page.getByRole("link", { name: "Learn more", exact: true });
+      const docsLink = page.getByRole("link", { name: "Docs", exact: true });
       await docsLink.waitFor();
       expect(await docsLink.getAttribute("href")).toBe(
         "https://docs.openclaw.ai/gateway/cloud-workers",
       );
+      await page.locator(".cloud-environments__advanced > summary").click();
       await gateway.waitForRequest("environments.list");
       const socketCount = await gateway.getSocketCount();
       await page.getByText("No cloud worker profiles are configured.", { exact: true }).waitFor();
@@ -96,228 +158,136 @@ suite.define(() => {
       expect(await page.getByRole("combobox", { name: "Machine class", exact: true }).count()).toBe(
         0,
       );
-      await page.getByLabel("Profile ID").fill("build-fleet");
-      await page.getByLabel("Crabbox backend").fill("hetzner");
-      await waitForSettledFormControls(page, [
-        { locator: page.getByLabel("Profile ID"), value: "build-fleet" },
-        { locator: page.getByLabel("Crabbox backend"), value: "hetzner" },
+      await fillForm(page, [
+        [page.getByLabel("Profile ID"), "build-fleet"],
+        [page.getByLabel("Crabbox backend"), "hetzner"],
       ]);
       const machineClass = page.getByRole("textbox", { name: "Machine class", exact: true });
       await expect.poll(() => machineClass.inputValue()).toBe("");
       expect(await machineClass.getAttribute("list")).toBeNull();
       expect(await page.locator("openclaw-cloud-workers-page datalist").count()).toBe(0);
       for (const invalidClass of ["", " ", "x".repeat(129)]) {
-        await machineClass.fill(invalidClass);
-        await waitForSettledFormControls(page, [{ locator: machineClass, value: invalidClass }]);
-        await page.getByRole("button", { name: "Save", exact: true }).click();
+        await fillForm(page, [[machineClass, invalidClass]]);
+        await exactButton(page, "Save").click();
         await expect
           .poll(() => page.getByRole("alert").textContent())
           .toBe("Enter a machine class of 1 to 128 characters.");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       }
-      await machineClass.fill("standard");
-      await waitForSettledFormControls(page, [{ locator: machineClass, value: "standard" }]);
+      await fillForm(page, [[machineClass, "standard"]]);
       await gateway.deferNext("config.patch");
       const addRequestCount = (await gateway.getRequests("config.patch")).length;
-      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await exactButton(page, "Save").click();
       const addPatch = await waitForConfigPatch(gateway, addRequestCount);
-      expect(addPatch).toEqual({
-        cloudWorkers: {
-          profiles: {
-            "build-fleet": {
-              provider: "crabbox",
-              install: "bundle",
-              readyWorkers: null,
-              suspendAfter: null,
-              settings: {
-                provider: "hetzner",
-                target: null,
-                class: "standard",
-                ttl: "8h",
-                idleTimeout: "45m",
-                setup: null,
-                setupEnv: null,
-                warmImage: null,
-                desktop: null,
-                binary: null,
-              },
-            },
-          },
-        },
-      });
+      expect(addPatch).toEqual(
+        profilesConfig({ "build-fleet": profilePatch("hetzner", "standard") }),
+      );
       // The saved snapshot includes provider-owned fields absent from this editor.
+      const baseFleet = configuredCloudWorkerProfile("hetzner");
       const buildFleet = {
-        provider: "crabbox",
-        install: "bundle",
+        ...baseFleet,
         suspendAfter: "30m",
         settings: {
-          provider: "hetzner",
-          class: "standard",
-          ttl: "8h",
-          idleTimeout: "45m",
+          ...baseFleet.settings,
           region: "eu-west-1",
           resources: { cpu: 6, memoryGiB: 12 },
           providerOptions: { image: "qa-base" },
         },
       };
-      // Keep the mocked config.get consistent with the patch response: the
-      // config store may reconcile with a refetch, and a stale empty config
-      // would flap the snapshot and silently drop the next save.
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse(
-          { cloudWorkers: { profiles: { "build-fleet": buildFleet } } },
-          "cloud-workers-2",
-        ),
-      );
       await gateway.setMethodResponse("environments.list", {
         environments: [],
         profiles: [{ id: "build-fleet", providerId: "crabbox" }],
       });
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        hash: "cloud-workers-2",
-        config: { cloudWorkers: { profiles: { "build-fleet": buildFleet } } },
-      });
+      await publishProfiles(gateway, { "build-fleet": buildFleet }, "added");
 
       await page.getByText("Advertised", { exact: true }).waitFor();
-      await page
-        .getByText("Profile saved. Build a snapshot from the Snapshots view.", { exact: true })
-        .waitFor();
+      await page.getByText("Profile saved.", { exact: true }).waitFor();
       expect(await gateway.getSocketCount()).toBe(socketCount);
 
-      await page.getByRole("button", { name: "Edit: build-fleet", exact: true }).click();
+      await exactButton(page, "Edit: build-fleet").click();
       await expect.poll(() => machineClass.inputValue()).toBe("standard");
-      await machineClass.fill("batch/ARM64.v2");
-      await page.getByLabel("Crabbox backend").fill("daytona");
-      await page.getByLabel("Max lifetime").fill("12h");
-      await page
-        .locator(".settings-row")
-        .filter({ hasText: "Desktop" })
-        .locator("wa-switch")
-        .click();
-      await page.getByLabel("Crabbox binary").fill("/opt/bin/crabbox-draft");
-      await page.getByLabel("Warm images", { exact: true }).selectOption("off");
-      await page.getByLabel("Setup command", { exact: true }).fill("install-node");
-      await page
-        .getByLabel("Setup environment names", { exact: true })
-        .fill("BUILD_TAG, CACHE_DIR");
-      await page.getByLabel("Setup command", { exact: true }).fill("");
-      await page.getByLabel("Setup command", { exact: true }).fill("install-node");
-      await page.getByLabel("Ready workers", { exact: true }).fill("2");
-      await page.getByLabel("Suspend after", { exact: true }).fill("2h");
-      await waitForSettledFormControls(page, [
-        { locator: machineClass, value: "batch/ARM64.v2" },
-        { locator: page.getByLabel("Crabbox backend"), value: "daytona" },
-        { locator: page.getByLabel("Max lifetime"), value: "12h" },
-        {
-          locator: page.getByRole("switch", { name: "Desktop", exact: true }),
-          checked: true,
-        },
-        { locator: page.getByLabel("Crabbox binary"), value: "/opt/bin/crabbox-draft" },
-        { locator: page.getByLabel("Warm images", { exact: true }), value: "off" },
-        { locator: page.getByLabel("Setup command", { exact: true }), value: "install-node" },
-        { locator: page.getByLabel("Setup environment names"), value: "BUILD_TAG, CACHE_DIR" },
-        { locator: page.getByLabel("Ready workers", { exact: true }), value: "2" },
-        { locator: page.getByLabel("Suspend after", { exact: true }), value: "2h" },
+      const setup = page.getByLabel("Setup command", { exact: true });
+      await fillForm(page, [
+        [machineClass, "batch/ARM64.v2"],
+        [page.getByLabel("Crabbox backend"), "daytona"],
+        [page.getByLabel("Max lifetime"), "12h"],
+        [page.getByRole("switch", { name: "Desktop", exact: true }), true],
+        [page.getByLabel("Crabbox binary"), "/opt/bin/crabbox-draft"],
+        [page.getByLabel("Warm images", { exact: true }), "off", "select"],
+        [setup, "install-node"],
+        [page.getByLabel("Setup environment names", { exact: true }), "BUILD_TAG, CACHE_DIR"],
+        [setup, ""],
+        [setup, "install-node"],
+        [page.getByLabel("Ready workers", { exact: true }), "2"],
+        [page.getByLabel("Suspend after", { exact: true }), "2h"],
       ]);
       expect(await page.getByRole("combobox", { name: "Machine class", exact: true }).count()).toBe(
         0,
       );
       expect(await machineClass.getAttribute("list")).toBeNull();
-      const saveButton = page.getByRole("button", { name: "Save", exact: true });
-      // Saved temporarily hides Apply changes; wait for the applied revision so
-      // its background config.get cannot consume the foreground refresh gate.
+      const saveButton = exactButton(page, "Save");
+      // Wait for the applied revision so its background config.get cannot
+      // consume the notification refresh gate.
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as
-              | (HTMLElement & { runtime?: { context: ApplicationContext } })
-              | null;
-            return app?.runtime?.context.runtimeConfig.state.configSnapshot?.appliedConfigHash;
-          }),
+          evaluateControlUiContext(
+            page,
+            (application) => application.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+          ),
         )
-        .toBe("cloud-workers-2");
+        .toBe("added");
       const configGetCount = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.get");
+      await saveButton.focus();
       await gateway.emitGatewayEvent("config.changed", {
         path: "/tmp/openclaw.json",
-        hash: "cloud-workers-2",
+        hash: "added",
         ts: Date.now(),
       });
       await gateway.waitForRequest("config.get", { after: configGetCount });
-      await expect.poll(() => saveButton.isDisabled()).toBe(true);
+      expect(await saveButton.isEnabled()).toBe(true);
+      expect(await saveButton.evaluate((button) => button === document.activeElement)).toBe(true);
+      expect(await machineClass.inputValue()).toBe("batch/ARM64.v2");
       await gateway.resolveDeferred(
         "config.get",
-        configResponse(
-          { cloudWorkers: { profiles: { "build-fleet": buildFleet } } },
-          "cloud-workers-2",
-        ),
+        configResponse(profilesConfig({ "build-fleet": buildFleet }), "added"),
       );
       await expect.poll(() => saveButton.isEnabled()).toBe(true);
       await gateway.deferNext("config.patch");
       const editRequestCount = (await gateway.getRequests("config.patch")).length;
       await saveButton.click();
       const editPatch = await waitForConfigPatch(gateway, editRequestCount);
-      expect(editPatch).toEqual({
-        cloudWorkers: {
-          profiles: {
-            "build-fleet": {
-              provider: "crabbox",
-              install: "bundle",
-              readyWorkers: 2,
-              suspendAfter: "2h",
-              settings: {
-                provider: "daytona",
-                target: null,
-                class: "batch/ARM64.v2",
-                ttl: "12h",
-                idleTimeout: "45m",
-                setup: "install-node",
-                setupEnv: ["BUILD_TAG", "CACHE_DIR"],
-                warmImage: false,
-                desktop: true,
-                binary: "/opt/bin/crabbox-draft",
-              },
-            },
-          },
-        },
-      });
-      const editedFleet = {
-        ...buildFleet,
+      const editedSettings = {
+        provider: "daytona",
+        class: "batch/ARM64.v2",
+        ttl: "12h",
+        idleTimeout: "45m",
+        setup: "install-node",
+        setupEnv: ["BUILD_TAG", "CACHE_DIR"],
+        warmImage: false,
+        desktop: true,
+        binary: "/opt/bin/crabbox-draft",
+      };
+      const editedProfile = {
+        ...configuredCloudWorkerProfile("daytona"),
         readyWorkers: 2,
         suspendAfter: "2h",
-        settings: {
-          ...buildFleet.settings,
-          provider: "daytona",
-          class: "batch/ARM64.v2",
-          ttl: "12h",
-          idleTimeout: "45m",
-          setup: "install-node",
-          setupEnv: ["BUILD_TAG", "CACHE_DIR"],
-          warmImage: false,
-          desktop: true,
-          binary: "/opt/bin/crabbox-draft",
-        },
+        settings: editedSettings,
       };
-      // Keep the mocked config.get consistent with the patch response: the
-      // config store may reconcile with a refetch, and a stale empty config
-      // would flap the snapshot and silently drop the next save.
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse(
-          { cloudWorkers: { profiles: { "build-fleet": editedFleet } } },
-          "cloud-workers-3",
-        ),
+      expect(editPatch).toEqual(
+        profilesConfig({
+          "build-fleet": { ...editedProfile, settings: { ...editedSettings, target: null } },
+        }),
       );
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        hash: "cloud-workers-3",
-        config: { cloudWorkers: { profiles: { "build-fleet": editedFleet } } },
-      });
+      const editedFleet = {
+        ...buildFleet,
+        ...editedProfile,
+        settings: { ...buildFleet.settings, ...editedSettings },
+      };
+      await publishProfiles(gateway, { "build-fleet": editedFleet }, "edited");
 
       await page.getByText("Class: batch/ARM64.v2", { exact: false }).waitFor();
-      await page.getByRole("button", { name: "Edit: build-fleet", exact: true }).click();
+      await exactButton(page, "Edit: build-fleet").click();
       await waitForSettledFormControls(page, [
         { locator: machineClass, value: "batch/ARM64.v2" },
         { locator: page.getByLabel("Crabbox backend"), value: "daytona" },
@@ -326,159 +296,52 @@ suite.define(() => {
       await page.getByRole("button", { name: "Cancel" }).click();
 
       await page.getByRole("button", { name: "Add profile" }).click();
-      await page.getByLabel("Profile ID").fill("pending");
-      await page.getByLabel("Crabbox backend").fill("aws");
-      await machineClass.fill("custom");
-      await waitForSettledFormControls(page, [
-        { locator: page.getByLabel("Profile ID"), value: "pending" },
-        { locator: page.getByLabel("Crabbox backend"), value: "aws" },
-        { locator: machineClass, value: "custom" },
+      await fillForm(page, [
+        [page.getByLabel("Profile ID"), "pending"],
+        [page.getByLabel("Crabbox backend"), "aws"],
+        [machineClass, "custom"],
       ]);
       await gateway.deferNext("config.patch");
       const pendingRequestCount = (await gateway.getRequests("config.patch")).length;
-      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await exactButton(page, "Save").click();
       const pendingPatch = await waitForConfigPatch(gateway, pendingRequestCount);
-      expect(pendingPatch).toEqual({
-        cloudWorkers: {
-          profiles: {
-            pending: {
-              provider: "crabbox",
-              install: "bundle",
-              readyWorkers: null,
-              suspendAfter: null,
-              settings: {
-                provider: "aws",
-                target: null,
-                class: "custom",
-                ttl: "8h",
-                idleTimeout: "45m",
-                setup: null,
-                setupEnv: null,
-                warmImage: null,
-                desktop: null,
-                binary: null,
-              },
-            },
-          },
-        },
-      });
-      const pending = {
-        provider: "crabbox",
-        install: "bundle",
-        settings: {
-          provider: "aws",
-          class: "custom",
-          ttl: "8h",
-          idleTimeout: "45m",
-        },
-      };
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse(
-          { cloudWorkers: { profiles: { "build-fleet": editedFleet, pending } } },
-          "cloud-workers-4",
-        ),
-      );
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        hash: "cloud-workers-4",
-        config: {
-          cloudWorkers: { profiles: { "build-fleet": editedFleet, pending } },
-        },
-      });
+      expect(pendingPatch).toEqual(profilesConfig({ pending: profilePatch("aws", "custom") }));
+      const pending = configuredCloudWorkerProfile();
+      pending.settings.class = "custom";
+      await publishProfiles(gateway, { "build-fleet": editedFleet, pending }, "pending");
       await page.getByText("Unavailable", { exact: true }).waitFor();
-      await page
-        .locator(".settings-row")
-        .filter({
-          has: page.locator("code", { hasText: /^pending$/ }),
-        })
-        .getByRole("button", { name: "Edit: pending", exact: true })
-        .click();
+      await exactButton(pendingRow(page), "Edit: pending").click();
       await expect.poll(() => machineClass.inputValue()).toBe("custom");
-      await page.getByRole("button", { name: "Cancel", exact: true }).click();
-      await page.getByRole("button", { name: "Add repository", exact: true }).click();
-      const repository = page.getByLabel("Repository identity", { exact: true });
-      const defaultProfile = page.getByLabel("Default profile", { exact: true });
-      await repository.fill("GitHub.com/Acme/App.git");
-      await defaultProfile.selectOption("build-fleet");
-      await waitForSettledFormControls(page, [
-        { locator: repository, value: "GitHub.com/Acme/App.git" },
-        { locator: defaultProfile, value: "build-fleet" },
-      ]);
-      await gateway.deferNext("config.patch");
-      const repositoryRequestCount = (await gateway.getRequests("config.patch")).length;
-      await page.getByRole("button", { name: "Save repository", exact: true }).click();
-      expect(await waitForConfigPatch(gateway, repositoryRequestCount)).toEqual({
-        cloudWorkers: { projectProfiles: { "github.com/acme/app": "build-fleet" } },
-      });
-      const repositoryConfig = {
-        cloudWorkers: {
-          profiles: { "build-fleet": editedFleet, pending },
-          projectProfiles: { "github.com/acme/app": "build-fleet" },
-        },
-      };
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse(repositoryConfig, "cloud-workers-5"),
-      );
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        hash: "cloud-workers-5",
-        config: repositoryConfig,
-      });
-      await page.getByText("github.com/acme/app", { exact: true }).waitFor();
-      await page
-        .locator("openclaw-cloud-worker-repositories")
-        .getByText("Saved. Changes apply without restarting the Gateway.", { exact: true })
-        .waitFor();
-    } finally {
-      await context.close();
-    }
+      await exactButton(page, "Cancel").click();
+    });
   });
 
   it("releases a retired profile save after reconnect while preserving the draft", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1_000, width: 1_440 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["config.patch", "environments.list"],
-      methodResponses: {
-        "config.get": configResponse({}, "cloud-workers-reconnect-1"),
-        "environments.list": { environments: [], profiles: [] },
-      },
-    });
+    await suite.withPage(editorPageOptions, async ({ page }) => {
+      const gateway = await workerGateway(page, "retry-initial");
 
-    try {
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.locator(".cloud-environments__advanced > summary").click();
       await page.getByRole("button", { name: "Add profile" }).click();
       const editor = page.locator(".settings-section", {
         has: page.getByRole("heading", { name: "Add profile", exact: true }),
       });
       const profileId = page.getByLabel("Profile ID");
       const backend = page.getByLabel("Crabbox backend");
-      await profileId.fill("reconnect-proof");
-      await backend.fill("hetzner");
-      await page.getByLabel("Machine class", { exact: true }).fill("standard");
-      await waitForSettledFormControls(page, [
-        { locator: profileId, value: "reconnect-proof" },
-        { locator: backend, value: "hetzner" },
-        { locator: page.getByLabel("Machine class", { exact: true }), value: "standard" },
+      await fillForm(page, [
+        [profileId, "reconnect-proof"],
+        [backend, "hetzner"],
+        [page.getByLabel("Machine class", { exact: true }), "standard"],
       ]);
 
       await gateway.deferNext("config.patch");
-      await editor.getByRole("button", { name: "Save", exact: true }).click();
+      await exactButton(editor, "Save").click();
       await gateway.waitForRequest("config.patch");
       await expect.poll(() => profileId.isDisabled()).toBe(true);
 
       const socketCount = await gateway.getSocketCount();
       const configGetCount = (await gateway.getRequests("config.get")).length;
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse({}, "cloud-workers-reconnect-2"),
-      );
+      await gateway.setMethodResponse("config.get", configResponse({}, "retry-refreshed"));
       await gateway.closeLatest(1012, "cloud worker save reconnect proof");
       await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
       await expect
@@ -489,16 +352,12 @@ suite.define(() => {
       await expect.poll(() => backend.isEnabled()).toBe(true);
       await expect.poll(() => profileId.inputValue()).toBe("reconnect-proof");
       await expect.poll(() => backend.inputValue()).toBe("hetzner");
-      await expect
-        .poll(() => editor.getByRole("button", { name: "Save", exact: true }).isEnabled())
-        .toBe(true);
-      await expect
-        .poll(() => editor.getByRole("button", { name: "Cancel" }).isEnabled())
-        .toBe(true);
+      await expect.poll(() => exactButton(editor, "Save").isEnabled()).toBe(true);
+      await expect.poll(() => exactButton(editor, "Cancel").isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("config.patch", {
         ok: true,
-        hash: "retired-cloud-workers-save",
+        hash: "retired-save",
         config: {},
       });
       await expect.poll(() => profileId.inputValue()).toBe("reconnect-proof");
@@ -507,47 +366,18 @@ suite.define(() => {
 
       await gateway.deferNext("config.patch");
       const retryRequestCount = (await gateway.getRequests("config.patch")).length;
-      await editor.getByRole("button", { name: "Save", exact: true }).click();
+      await exactButton(editor, "Save").click();
       const retryPatch = await waitForConfigPatch(gateway, retryRequestCount);
-      expect(retryPatch).toMatchObject({
-        cloudWorkers: {
-          profiles: {
-            "reconnect-proof": {
-              provider: "crabbox",
-              settings: { provider: "hetzner" },
-            },
-          },
-        },
-      });
-      const savedProfile = {
-        provider: "crabbox",
-        install: "bundle",
-        settings: {
-          provider: "hetzner",
-          class: "standard",
-          ttl: "8h",
-          idleTimeout: "45m",
-        },
-      };
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse(
-          { cloudWorkers: { profiles: { "reconnect-proof": savedProfile } } },
-          "cloud-workers-reconnect-3",
-        ),
+      expect(retryPatch).toMatchObject(
+        profilesConfig({
+          "reconnect-proof": { provider: "crabbox", settings: { provider: "hetzner" } },
+        }),
       );
-      await gateway.resolveDeferred("config.patch", {
-        ok: true,
-        hash: "cloud-workers-reconnect-3",
-        config: { cloudWorkers: { profiles: { "reconnect-proof": savedProfile } } },
-      });
-      await page
-        .getByText("Profile saved. Build a snapshot from the Snapshots view.", { exact: true })
-        .waitFor();
+      const savedProfile = configuredCloudWorkerProfile("hetzner");
+      await publishProfiles(gateway, { "reconnect-proof": savedProfile }, "retry-saved");
+      await page.getByText("Profile saved.", { exact: true }).waitFor();
       await expect.poll(() => page.getByLabel("Profile ID").count()).toBe(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it.each([
@@ -585,61 +415,40 @@ suite.define(() => {
   ])(
     "config.set preserves Advanced edits after $name and deletes project defaults",
     async ({ replacement, description, replacePaths }) => {
-      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-      const page = await context.newPage();
-      const pending = configuredCloudWorkerProfile();
-      const retained = configuredCloudWorkerProfile("hetzner");
-      const retainedProjectProfiles = { "github.com/acme/retained": "retained" };
-      const initialConfig = {
-        cloudWorkers: {
-          profiles: { pending, retained },
-          projectProfiles: {
-            "github.com/acme/app": "pending",
-            "github.com/acme/docs": "pending",
-            ...retainedProjectProfiles,
-          },
-        },
-      };
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["config.patch", "config.set", "config.schema", "environments.list"],
-        methodResponses: {
-          "config.get": configResponse(initialConfig, "cloud-workers-delete-1"),
-          "config.schema": {
-            version: "e2e",
-            generatedAt: "2026-08-25T00:00:00.000Z",
-            uiHints: {},
-            schema: {
-              type: "object",
-              properties: {
-                cloudWorkers: {
-                  type: "object",
-                  properties: {
-                    profiles: {
-                      type: "object",
-                      additionalProperties: { type: "object" },
-                    },
-                  },
-                },
-              },
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const pending = configuredCloudWorkerProfile();
+        const retained = configuredCloudWorkerProfile("hetzner");
+        const retainedProjectProfiles = { "github.com/acme/retained": "retained" };
+        const initialConfig = {
+          cloudWorkers: {
+            profiles: { pending, retained },
+            projectProfiles: {
+              "github.com/acme/app": "pending",
+              "github.com/acme/docs": "pending",
+              ...retainedProjectProfiles,
             },
           },
-          "config.patch": {
-            ok: true,
-            hash: "cloud-workers-delete-2",
-            config: {
-              cloudWorkers: { profiles: { retained }, projectProfiles: retainedProjectProfiles },
-            },
+        };
+        const deletedConfig = {
+          cloudWorkers: { profiles: { retained }, projectProfiles: retainedProjectProfiles },
+        };
+        const gateway = await workerGateway(page, "before-delete", initialConfig, {
+          featureMethods: ["config.patch", "config.set", "config.schema", "environments.list"],
+          methodResponses: {
+            "config.schema": configSchema(
+              objectSchema("", {
+                cloudWorkers: objectSchema("", {
+                  profiles: { type: "object", additionalProperties: { type: "object" } },
+                }),
+              }),
+            ),
           },
-          "environments.list": { environments: [], profiles: [] },
-        },
-      });
-
-      try {
-        await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-        const pendingRow = page.locator(".settings-row").filter({
-          has: page.locator("code", { hasText: /^pending$/ }),
         });
-        await pendingRow.getByRole("button", { name: "Edit: pending", exact: true }).click();
+
+        await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+        await page.locator(".cloud-environments__advanced > summary").click();
+        const row = pendingRow(page);
+        await exactButton(row, "Edit: pending").click();
         const editor = page.locator(".settings-section", {
           has: page.getByRole("heading", { name: "Edit profile", exact: true }),
         });
@@ -654,16 +463,16 @@ suite.define(() => {
         const configGetCount = (await gateway.getRequests("config.get")).length;
         await gateway.setMethodResponse(
           "config.get",
-          configResponse(replacedConfig, "cloud-workers-provider-replaced"),
+          configResponse(replacedConfig, "provider-replaced"),
         );
         await gateway.emitGatewayEvent("config.changed", {
           path: "/tmp/openclaw.json",
-          hash: "cloud-workers-provider-replaced",
+          hash: "provider-replaced",
           ts: Date.now(),
         });
         await gateway.waitForRequest("config.get", { after: configGetCount });
-        await pendingRow.getByText(description, { exact: false }).waitFor();
-        const saveButton = editor.getByRole("button", { name: "Save", exact: true });
+        await row.getByText(description, { exact: false }).waitFor();
+        const saveButton = exactButton(editor, "Save");
         await expect.poll(() => saveButton.isEnabled()).toBe(true);
         await saveButton.click();
         await expect
@@ -672,7 +481,7 @@ suite.define(() => {
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         await editor.getByRole("button", { name: "Cancel" }).click();
 
-        await pendingRow.getByRole("button", { name: "Edit: pending", exact: true }).click();
+        await exactButton(row, "Edit: pending").click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/advanced");
         await expect
           .poll(() => new URL(page.url()).searchParams.get("section"))
@@ -680,7 +489,7 @@ suite.define(() => {
         await gateway.waitForRequest("config.schema");
         await page.locator(".page-title").getByText("Advanced", { exact: true }).waitFor();
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-        await page.getByRole("button", { name: "Raw", exact: true }).click();
+        await exactButton(page, "Raw").click();
         const rawEditor = page.locator(".config-raw-field textarea");
         const savedConfig = {
           cloudWorkers: {
@@ -689,37 +498,36 @@ suite.define(() => {
           },
         };
         await rawEditor.fill(JSON.stringify(savedConfig, null, 2));
-        const rawSave = page.getByRole("button", { name: "Save", exact: true });
+        const rawSave = exactButton(page, "Save");
         await expect.poll(() => rawSave.isEnabled()).toBe(true);
         await gateway.deferNext("config.set");
         await rawSave.click();
         expect(requestRaw(await gateway.waitForRequest("config.set"))).toEqual(savedConfig);
-        await gateway.setMethodResponse(
-          "config.get",
-          configResponse(savedConfig, "cloud-workers-raw-saved"),
-        );
+        await gateway.setMethodResponse("config.get", configResponse(savedConfig, "raw-saved"));
         await gateway.resolveDeferred("config.set", {
           ok: true,
-          hash: "cloud-workers-raw-saved",
+          hash: "raw-saved",
           config: savedConfig,
         });
         await expect.poll(() => rawSave.isDisabled()).toBe(true);
         expect(await gateway.getRequests("config.set")).toHaveLength(1);
         await page.reload();
-        await page.getByRole("button", { name: "Raw", exact: true }).click();
+        await exactButton(page, "Raw").click();
         await expect
           .poll(async () => JSON.parse(await rawEditor.inputValue()))
           .toEqual(savedConfig);
         expect(await gateway.getRequests("config.set")).toHaveLength(0);
         await page.goBack();
-        await pendingRow.getByText(description, { exact: false }).waitFor();
+        await page.locator(".cloud-environments__advanced > summary").click();
+        await row.getByText(description, { exact: false }).waitFor();
 
-        await pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).click();
+        await exactButton(row, "Delete: pending").click();
         const confirmation = await waitForConfirmModal(page);
         await expect.poll(() => confirmation.textContent()).toContain("Delete profile pending?");
         await expect.poll(() => confirmation.textContent()).toContain("Repository defaults");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-        await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+        await gateway.deferNext("config.patch");
+        await exactButton(confirmation, "Delete").click();
         await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(1);
         const deleteRequest = (await gateway.getRequests("config.patch"))[0];
         if (!deleteRequest) {
@@ -734,236 +542,123 @@ suite.define(() => {
         expect(isRecord(deleteRequest.params) && deleteRequest.params.replacePaths).toEqual(
           replacePaths,
         );
-        await expect.poll(() => pendingRow.count()).toBe(0);
+        await gateway.setMethodResponse("config.get", configResponse(deletedConfig, "deleted"));
+        await gateway.resolveDeferred("config.patch", {
+          ok: true,
+          hash: "deleted",
+          config: deletedConfig,
+        });
+        await expect.poll(() => row.count()).toBe(0);
         await page.locator(".settings-row code", { hasText: /^retained$/ }).waitFor();
-      } finally {
-        await context.close();
-      }
+      });
     },
   );
 
-  it("deletes a confirmed profile after the Gateway reconnects during confirmation", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const pending = configuredCloudWorkerProfile();
-    const initialConfig = { cloudWorkers: { profiles: { pending } } };
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["config.patch", "environments.list"],
-      methodResponses: {
-        "config.get": configResponse(initialConfig, "cloud-workers-delete-reconnect-1"),
-        "config.patch": {
-          ok: true,
-          hash: "cloud-workers-delete-reconnect-3",
-          config: { cloudWorkers: { profiles: {} } },
-        },
-        "environments.list": { environments: [], profiles: [] },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-      const pendingRow = page.locator(".settings-row").filter({
-        has: page.locator("code", { hasText: /^pending$/ }),
-      });
-      await pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).click();
-      const confirmation = await waitForConfirmModal(page);
-      const socketCount = await gateway.getSocketCount();
-      const configGetCount = (await gateway.getRequests("config.get")).length;
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse(initialConfig, "cloud-workers-delete-reconnect-2"),
-      );
-      await gateway.closeLatest(1012, "cloud worker delete confirmation reconnect proof");
-      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-      await expect
-        .poll(async () => (await gateway.getRequests("config.get")).length)
-        .toBeGreaterThan(configGetCount);
-      await expect
-        .poll(() =>
-          pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).isEnabled(),
-        )
-        .toBe(true);
-
-      await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
-
-      await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(1);
-      await expect.poll(() => pendingRow.count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("rejects a confirmed deletion after same-URL Gateway credentials replace its client", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const initialConfig = {
-      cloudWorkers: { profiles: { pending: configuredCloudWorkerProfile() } },
-    };
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["config.patch", "environments.list"],
-      methodResponses: {
-        "config.get": configResponse(initialConfig, "cloud-workers-delete-client-replacement-1"),
-        "config.patch": {
-          ok: true,
-          hash: "cloud-workers-delete-client-replacement-2",
-          config: { cloudWorkers: { profiles: {} } },
-        },
-        "environments.list": { environments: [], profiles: [] },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-      const pendingRow = page.locator(".settings-row").filter({
-        has: page.locator("code", { hasText: /^pending$/ }),
-      });
-      await pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).click();
-      const confirmation = await waitForConfirmModal(page);
-      const socketCount = await gateway.getSocketCount();
-      const configGetCount = (await gateway.getRequests("config.get")).length;
-      const originalGateway = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              gateway: {
-                connection: { gatewayUrl: string };
-                connect: (options: { token: string }) => void;
-                snapshot: { client: { instanceId: string } | null };
-              };
-            };
-          };
-        };
-        const activeGateway = app.runtime?.context.gateway;
-        const client = activeGateway?.snapshot.client;
-        if (!activeGateway || !client) {
-          throw new Error("Expected a connected Gateway client before confirmation");
+  it.each(["reconnect", "credentials", "offline"] as const)(
+    "revalidates a confirmed profile deletion after %s",
+    async (mode) => {
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const initialConfig = profilesConfig({ pending: configuredCloudWorkerProfile() });
+        const gateway = await workerGateway(page, "delete-1", initialConfig, {
+          methodResponses:
+            mode === "offline"
+              ? {}
+              : {
+                  "config.patch": { ok: true, hash: "delete-3", config: profilesConfig({}) },
+                },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+        await page.locator(".cloud-environments__advanced > summary").click();
+        const row = pendingRow(page);
+        await exactButton(row, "Delete: pending").click();
+        const confirmation = await waitForConfirmModal(page);
+        const socketCount = await gateway.getSocketCount();
+        const configGetCount = (await gateway.getRequests("config.get")).length;
+        if (mode === "offline") {
+          await gateway.deferNext("config.get");
+        } else if (mode === "reconnect") {
+          await gateway.setMethodResponse("config.get", configResponse(initialConfig, "delete-2"));
         }
-        const identity = {
-          clientInstanceId: client.instanceId,
-          gatewayUrl: activeGateway.connection.gatewayUrl,
-        };
-        activeGateway.connect({ token: "replacement-credential-proof" });
-        return identity;
-      });
-      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-      await expect
-        .poll(async () => (await gateway.getRequests("config.get")).length)
-        .toBeGreaterThan(configGetCount);
-      await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: {
-                context: {
-                  gateway: {
-                    connection: { gatewayUrl: string };
-                    snapshot: { client: { instanceId: string } | null; phase: string };
-                  };
-                };
-              };
+        if (mode === "credentials") {
+          const original = await evaluateControlUiContext(page, (application) => {
+            const active = application.gateway;
+            const client = active.snapshot.client;
+            if (!client) {
+              throw new Error("Expected a connected Gateway client before confirmation");
+            }
+            const identity = {
+              clientInstanceId: client.instanceId,
+              gatewayUrl: active.connection.gatewayUrl,
             };
-            const activeGateway = app.runtime?.context.gateway;
-            return {
-              clientInstanceId: activeGateway?.snapshot.client?.instanceId,
-              gatewayUrl: activeGateway?.connection.gatewayUrl,
-              phase: activeGateway?.snapshot.phase,
-            };
-          }),
-        )
-        .toMatchObject({ gatewayUrl: originalGateway.gatewayUrl, phase: "connected" });
-      const replacementClientInstanceId = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: { gateway: { snapshot: { client: { instanceId: string } } } } };
-        };
-        return app.runtime?.context.gateway.snapshot.client.instanceId;
+            active.connect({ token: "replacement-credential-proof" });
+            return identity;
+          });
+          await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+          await expect
+            .poll(async () => (await gateway.getRequests("config.get")).length)
+            .toBeGreaterThan(configGetCount);
+          await expect
+            .poll(() =>
+              evaluateControlUiContext(page, (application) => ({
+                clientInstanceId: application.gateway.snapshot.client?.instanceId,
+                gatewayUrl: application.gateway.connection.gatewayUrl,
+                phase: application.gateway.snapshot.phase,
+              })),
+            )
+            .toMatchObject({ gatewayUrl: original.gatewayUrl, phase: "connected" });
+          expect(
+            await evaluateControlUiContext(
+              page,
+              (application) => application.gateway.snapshot.client?.instanceId,
+            ),
+          ).not.toBe(original.clientInstanceId);
+        } else {
+          await gateway.closeLatest(1012, "cloud worker delete confirmation reconnect proof");
+          if (mode === "reconnect") {
+            await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+          }
+          await expect
+            .poll(async () => (await gateway.getRequests("config.get")).length)
+            .toBeGreaterThan(configGetCount);
+        }
+        if (mode !== "offline") {
+          await expect.poll(() => exactButton(row, "Delete: pending").isEnabled()).toBe(true);
+        }
+        await exactButton(confirmation, "Delete").click();
+        if (mode === "reconnect") {
+          await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(1);
+          await expect.poll(() => row.count()).toBe(0);
+        } else {
+          if (mode === "credentials") {
+            await expect
+              .poll(async () => ({
+                alerts: await page.getByRole("alert").count(),
+                patches: (await gateway.getRequests("config.patch")).length,
+              }))
+              .not.toEqual({ alerts: 0, patches: 0 });
+          }
+          await expect
+            .poll(() => page.getByRole("alert").textContent())
+            .toBe("The profile was not deleted. Reload the config and try again.");
+          expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+          await row.waitFor();
+        }
       });
-      expect(replacementClientInstanceId).not.toBe(originalGateway.clientInstanceId);
-      await expect
-        .poll(() =>
-          pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).isEnabled(),
-        )
-        .toBe(true);
-
-      await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
-
-      await expect
-        .poll(async () => ({
-          alerts: await page.getByRole("alert").count(),
-          patches: (await gateway.getRequests("config.patch")).length,
-        }))
-        .not.toEqual({ alerts: 0, patches: 0 });
-      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-      await expect
-        .poll(async () => page.getByRole("alert").textContent())
-        .toBe("The profile was not deleted. Reload the config and try again.");
-      await pendingRow.waitFor();
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("reports a confirmed deletion that cannot run while Gateway config is reconnecting", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const initialConfig = {
-      cloudWorkers: { profiles: { pending: configuredCloudWorkerProfile() } },
-    };
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["config.patch", "environments.list"],
-      methodResponses: {
-        "config.get": configResponse(initialConfig, "cloud-workers-delete-offline-1"),
-        "environments.list": { environments: [], profiles: [] },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-      const pendingRow = page.locator(".settings-row").filter({
-        has: page.locator("code", { hasText: /^pending$/ }),
-      });
-      await pendingRow.getByRole("button", { name: "Delete: pending", exact: true }).click();
-      const confirmation = await waitForConfirmModal(page);
-      const configGetCount = (await gateway.getRequests("config.get")).length;
-      await gateway.deferNext("config.get");
-      await gateway.closeLatest(1012, "cloud worker delete unavailable reconnect proof");
-      await expect
-        .poll(async () => (await gateway.getRequests("config.get")).length)
-        .toBeGreaterThan(configGetCount);
-
-      await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
-
-      await expect
-        .poll(async () => page.getByRole("alert").textContent())
-        .toBe("The profile was not deleted. Reload the config and try again.");
-      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-      await pendingRow.waitFor();
-    } finally {
-      await context.close();
-    }
-  });
+    },
+  );
 
   it("keeps profile mutations admin-scoped", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      operatorScopes: ["operator.read"],
-      featureMethods: ["config.patch", "environments.list"],
-      methodResponses: {
-        "config.get": configResponse({}, "cloud-workers-read-only"),
-        "environments.list": { environments: [], profiles: [] },
-      },
-    });
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      await workerGateway(page, "read-only", {}, { operatorScopes: ["operator.read"] });
 
-    try {
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.locator(".cloud-environments__advanced > summary").click();
       await page
         .getByText("Administrator access is required to manage cloud worker profiles.", {
           exact: true,
         })
         .waitFor();
       expect(await page.getByRole("button", { name: "Add profile" }).count()).toBe(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

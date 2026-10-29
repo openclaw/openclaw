@@ -1,10 +1,23 @@
-import type { DatabaseSync } from "node:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 
+export type GitHubPublicationChange = { sessionKey: string; agentId: string };
+const workerChanges = new AsyncLocalStorage<GitHubPublicationChange[]>();
+
+/** A worker carries the native owner's exact notifications with its commit receipt. */
+export function captureGitHubPublicationChanges<T>(operation: () => T): {
+  value: T;
+  changes: GitHubPublicationChange[];
+} {
+  const changes: GitHubPublicationChange[] = [];
+  return { value: workerChanges.run(changes, operation), changes };
+}
+
 /** The existing transaction owner discards these observers on rollback, including savepoints. */
 export function deferSharedGitHubPublicationChanged(
-  db: DatabaseSync,
+  db: EngineConnection,
   row: {
     session_key: string;
     agent_id: string;
@@ -13,6 +26,11 @@ export function deferSharedGitHubPublicationChanged(
   },
 ): void {
   if (row.identity_source === "personal" || row.owner_profile_id != null) {
+    return;
+  }
+  const captured = workerChanges.getStore();
+  if (captured) {
+    captured.push({ sessionKey: row.session_key, agentId: row.agent_id });
     return;
   }
   deferSqlitePostCommitPublication(db, () => {

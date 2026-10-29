@@ -1,17 +1,10 @@
 // Matrix tests cover device health plugin behavior.
 import { describe, expect, it } from "vitest";
-import { isOpenClawManagedMatrixDevice, summarizeMatrixDeviceHealth } from "./device-health.js";
+import { listStaleOpenClawMatrixDevices } from "./device-health.js";
 
 describe("matrix device health", () => {
-  it("detects OpenClaw-managed device names", () => {
-    expect(isOpenClawManagedMatrixDevice("OpenClaw Gateway")).toBe(true);
-    expect(isOpenClawManagedMatrixDevice("OpenClaw Debug")).toBe(true);
-    expect(isOpenClawManagedMatrixDevice("Element iPhone")).toBe(false);
-    expect(isOpenClawManagedMatrixDevice(null)).toBe(false);
-  });
-
   it("summarizes stale OpenClaw-managed devices separately from the current device", () => {
-    const summary = summarizeMatrixDeviceHealth([
+    const devices = [
       {
         deviceId: "du314Zpw3A",
         displayName: "OpenClaw Gateway",
@@ -32,29 +25,9 @@ describe("matrix device health", () => {
         displayName: "Element iPhone",
         current: false,
       },
-    ]);
+      { deviceId: "unnamed", displayName: null, current: false },
+    ];
 
-    expect(summary).toEqual({
-      currentDeviceId: "du314Zpw3A",
-      currentOpenClawDevices: [
-        {
-          deviceId: "du314Zpw3A",
-          displayName: "OpenClaw Gateway",
-          current: true,
-        },
-      ],
-      staleOpenClawDevices: [
-        {
-          deviceId: "BritdXC6iL",
-          displayName: "OpenClaw Gateway",
-          current: false,
-        },
-        {
-          deviceId: "G6NJU9cTgs",
-          displayName: "OpenClaw Debug",
-          current: false,
-        },
-      ],
-    });
+    expect(listStaleOpenClawMatrixDevices(devices)).toEqual([devices[1], devices[2]]);
   });
 });

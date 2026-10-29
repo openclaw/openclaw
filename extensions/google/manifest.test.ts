@@ -134,7 +134,14 @@ describe("google manifest model catalog", () => {
       api: "google-generative-ai",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
-    expect(modelIds).toHaveLength(10);
+    expect(modelIds).toHaveLength(12);
+    expect(modelIds[0]).toBe("gemini-4-argon");
+    expect(
+      modelIds.slice(
+        modelIds.indexOf("gemini-3.7-flash"),
+        modelIds.indexOf("gemini-3.7-flash") + 2,
+      ),
+    ).toEqual(["gemini-3.7-flash", "gemini-3.8-flash"]);
     expect(modelIds).not.toContain(undefined);
     expect(new Set(modelIds).size).toBe(modelIds.length);
   });
@@ -206,6 +213,14 @@ describe("google manifest model catalog", () => {
       expect(aliases?.["gemini-3-pro"]).toBe("gemini-3.1-pro-preview");
       expect(aliases?.["gemini-3-pro-preview"]).toBe("gemini-3.1-pro-preview");
     }
+  });
+
+  it("normalizes the Gemini 4 shorthand only for API providers", () => {
+    const providers = loadManifest().modelIdNormalization?.providers;
+
+    expect(providers?.google?.aliases?.["gemini-4"]).toBe("gemini-4-argon");
+    expect(providers?.["google-vertex"]?.aliases?.["gemini-4"]).toBe("gemini-4-argon");
+    expect(providers?.["google-gemini-cli"]?.aliases?.["gemini-4"]).toBeUndefined();
   });
 });
 

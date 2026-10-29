@@ -13,9 +13,6 @@ public enum TailscaleNetwork {
     }
 
     public static func detectTailnetIPv4() -> String? {
-        for entry in NetworkInterfaceIPv4.addresses() where self.isTailnetIPv4(entry.ip) {
-            return entry.ip
-        }
-        return nil
+        NetworkInterfaceIPv4.addresses().first { self.isTailnetIPv4($0.ip) }?.ip
     }
 }

@@ -16,7 +16,7 @@ it("detects Teams feedback files without loading session storage", async () => {
     throw new Error("detection must not open plugin state");
   });
   const params = {
-    config: { agents: { list: [{ id: "work" }] } },
+    config: { agents: { entries: { work: {} } } },
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     stateDir,
     oauthDir: path.join(stateDir, "oauth"),
@@ -27,6 +27,14 @@ it("detects Teams feedback files without loading session storage", async () => {
   )!;
   try {
     await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    const sessionFile = path.join(root, "sessions.json");
+    await fs.writeFile(sessionFile, "{}");
+    await expect(
+      migration.detectLegacyState({
+        ...params,
+        config: { ...params.config, session: { store: sessionFile } },
+      }),
+    ).resolves.toBeNull();
     const storeDir = path.join(root, "import", "work");
     await fs.mkdir(storeDir, { recursive: true });
     const source = path.join(
@@ -42,7 +50,7 @@ it("detects Teams feedback files without loading session storage", async () => {
           session: { store: path.join(root, "import", "{agentId}") },
         },
       }),
-    ).resolves.toMatchObject({ preview: [expect.stringContaining("1 file")] });
+    ).resolves.toMatchObject({ preview: [expect.stringContaining("2026.9.5")] });
     expect(openStore).not.toHaveBeenCalled();
     await expect(fs.readFile(source, "utf8")).resolves.toBe('["Use concise replies"]');
     await expect(fs.readdir(stateDir)).rejects.toMatchObject({ code: "ENOENT" });

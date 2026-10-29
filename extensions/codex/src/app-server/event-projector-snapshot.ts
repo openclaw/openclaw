@@ -25,14 +25,6 @@ export function buildCodexMessagesSnapshot(params: {
   turnTainted?: boolean;
 }): AgentMessage[] {
   const messages = promptSnapshot(params.runParams, params.turnId, params.upstreamUserText);
-  if (params.reasoningText) {
-    messages.push(
-      attachCodexMirrorIdentity(
-        createAssistantReasoningMessage(params.runParams, params.reasoningText),
-        `${params.turnId}:reasoning`,
-      ),
-    );
-  }
   const commentaryMessages =
     params.runParams.config?.ui?.prefs?.chatPersistCommentary === false
       ? []
@@ -55,6 +47,14 @@ export function buildCodexMessagesSnapshot(params: {
       (asDateTimestampMs(left.timestamp) ?? 0) - (asDateTimestampMs(right.timestamp) ?? 0),
   );
   messages.push(...visibleWorkMessages);
+  if (params.reasoningText) {
+    messages.push(
+      attachCodexMirrorIdentity(
+        createAssistantReasoningMessage(params.runParams, params.reasoningText),
+        `${params.turnId}:reasoning`,
+      ),
+    );
+  }
   if (params.lastAssistant) {
     const assistant = applyCodexTranscriptTaint(params.lastAssistant, {
       tainted: params.turnTainted === true,
@@ -64,7 +64,7 @@ export function buildCodexMessagesSnapshot(params: {
   const taint = { tainted: false };
   return messages.map((message) =>
     projectAgentHarnessTranscriptMessageForDisplay({
-      hidden: params.runParams.trigger === "memory",
+      hidden: params.runParams.privateCompletion === true || params.runParams.trigger === "memory",
       inputProvenance: params.runParams.inputProvenance,
       message: applyCodexTranscriptTaint(message, taint),
     }),
@@ -78,18 +78,18 @@ export function buildCodexSteeringMessagesSnapshot(params: {
   completedItemIds: ReadonlySet<string>;
   assistantProjection: CodexAssistantProjection;
   toolMessages: readonly AgentMessage[];
-}): { messages: AgentMessage[]; assistantBoundaryItemId?: string } {
+}): AgentMessage[] {
   const asyncMessages = params.assistantProjection
     .collectAsyncMessages()
     .filter(({ itemId }) => params.completedItemIds.has(itemId));
   const commentaryMessages = params.assistantProjection
     .collectCommentaryMessages()
     .filter(({ itemId }) => params.completedItemIds.has(itemId));
-  const assistantMessages = params.assistantProjection.collectCompletedAssistantMessages(
+  const assistantMessages = params.assistantProjection.collectSteeringAssistantMessages(
     params.completedItemIds,
     { tokenUsage: undefined, aborted: false, promptError: undefined },
   );
-  const messages = buildCodexMessagesSnapshot({
+  return buildCodexMessagesSnapshot({
     runParams: params.runParams,
     turnId: params.turnId,
     upstreamUserText: params.upstreamUserText,
@@ -100,8 +100,4 @@ export function buildCodexSteeringMessagesSnapshot(params: {
     toolMessages: params.toolMessages,
     lastAssistant: undefined,
   }).filter((message) => message.role !== "user");
-  return {
-    messages,
-    assistantBoundaryItemId: assistantMessages.at(-1)?.itemId,
-  };
 }

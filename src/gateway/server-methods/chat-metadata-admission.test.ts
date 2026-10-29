@@ -4,7 +4,7 @@ import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.
 
 test("prepares chat metadata for healthy agents while reporting a refused agent", async () => {
   const harness = createChatMetadataHarness({
-    agents: { entries: { main: { default: true }, cleaner: {} } },
+    agents: { entries: { main: {}, cleaner: {} } },
   });
   const owner = harness.getPreparedOwner();
   harness.getPreparedOwner.mockImplementation((params) =>

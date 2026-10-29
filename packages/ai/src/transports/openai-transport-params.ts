@@ -1,4 +1,4 @@
-import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
+import type { CacheRetention, Context, Model, ModelRequestHeaders } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
@@ -9,7 +9,7 @@ import {
   findOpenAIStrictToolProjectionDiagnostics,
   resolveOpenAIProjectedToolsStrictToolFlag,
 } from "../providers/openai-tool-schema.js";
-import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from "./host-policy.js";
+import { resolveModelRequestTimeoutMs } from "./host-policy.js";
 import {
   resolveOpenAICompletionsCompat,
   usesNativeOpenAICodexResponsesBackend,
@@ -301,11 +301,11 @@ export function resolveOpenAIStrictToolFlagWithDiagnostics(
 export function buildOpenAIClientHeaders(
   model: Model,
   context: Context,
-  optionHeaders?: Record<string, string>,
-  turnHeaders?: Record<string, string>,
+  optionHeaders?: ModelRequestHeaders,
+  turnHeaders?: ModelRequestHeaders,
   sessionId?: string,
   cacheRetention?: CacheRetention,
-): Record<string, string> {
+): ModelRequestHeaders {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
     Object.assign(
@@ -332,16 +332,15 @@ export function buildOpenAIClientHeaders(
     }
   }
   const callerHeaders = { ...optionHeaders, ...turnHeaders };
-  const headers = resolveProviderRequestPolicyConfig(model, {
+  const headers = getAiTransportHost().resolveProviderRequestHeaders({
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
     providerHeaders,
     callerHeaders: Object.keys(callerHeaders).length > 0 ? callerHeaders : undefined,
     precedence: "caller-wins",
-  }).headers;
+    model,
+  });
   const resolvedHeaders = headers ?? {};
   const configuredSessionHeaderPolicy =
     OPENAI_RESPONSES_APIS.has(model.api) && model.compat && "sendSessionIdHeader" in model.compat
@@ -408,10 +407,8 @@ export function getCompat(model: OpenAIModeModel) {
   const compat = model.compat ?? {};
   return {
     ...resolved,
-    cacheControlFormat: resolved.cacheControlFormat,
     reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, {}),
     openRouterRouting: (resolved.openRouterRouting as Record<string, unknown> | undefined) ?? {},
-    vercelGatewayRouting: resolved.vercelGatewayRouting as Record<string, unknown>,
     requiresStringContent: compat.requiresStringContent ?? false,
     strictMessageKeys: compat.strictMessageKeys === true,
   };

@@ -1,4 +1,5 @@
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -52,10 +53,6 @@ type PreviewCache = {
   previews: ChatSourcePreview[];
 };
 const previewsByAnswer = new WeakMap<object, PreviewCache>();
-
-function webToolName(value: unknown): WebToolName | undefined {
-  return value === "web_search" || value === "web_fetch" ? value : undefined;
-}
 
 function sourceUrl(value: unknown): URL | null {
   if (typeof value !== "string" || value.length > 2_048 || !isHttpUrl(value)) {
@@ -123,36 +120,24 @@ function sourceExcerpt(value: unknown, name: WebToolName): string | undefined {
     return undefined;
   }
   const tokens = markdownTokens(prose);
-  const paragraphs = tokens.flatMap((token, index) =>
-    token.type === "inline" &&
-    tokens[index - 1]?.type === "paragraph_open" &&
-    (name === "web_search" || tokens[index - 1]?.level === 0)
-      ? [inlineText(token.children ?? [])]
-      : [],
-  );
   // A page heading or navigation label is not a useful excerpt. Search snippets
   // may legitimately be short; page previews need a readable paragraph.
-  const text = paragraphs.find((paragraph) => paragraph.length >= (name === "web_fetch" ? 60 : 1));
-  if (!text) {
-    return undefined;
+  for (const [index, token] of tokens.entries()) {
+    if (
+      token.type !== "inline" ||
+      tokens[index - 1]?.type !== "paragraph_open" ||
+      (name === "web_fetch" && tokens[index - 1]?.level !== 0)
+    ) {
+      continue;
+    }
+    const text = inlineText(token.children ?? []);
+    if (text.length >= (name === "web_fetch" ? 60 : 1)) {
+      return text.length > MAX_EXCERPT_CHARS
+        ? `${truncateUtf16Safe(text, MAX_EXCERPT_CHARS - 1).trimEnd()}…`
+        : text;
+    }
   }
-  return text.length > MAX_EXCERPT_CHARS
-    ? `${truncateUtf16Safe(text, MAX_EXCERPT_CHARS - 1).trimEnd()}…`
-    : text;
-}
-
-function readPayload(card: ToolCard): Record<string, unknown> | null {
-  if (card.details !== undefined) {
-    return asNullableRecord(card.details);
-  }
-  if (!card.outputText || card.outputText.length > 100_000) {
-    return null;
-  }
-  try {
-    return asNullableRecord(JSON.parse(card.outputText));
-  } catch {
-    return null;
-  }
+  return undefined;
 }
 
 function readSourceCandidates(
@@ -160,7 +145,12 @@ function readSourceCandidates(
   name: WebToolName,
   cited: ReadonlySet<string>,
 ): Array<{ candidate: SourceCandidate; keys: string[] }> {
-  const payload = readPayload(card);
+  const payload =
+    card.details !== undefined
+      ? asNullableRecord(card.details)
+      : !card.outputText || card.outputText.length > 100_000
+        ? null
+        : (safeParseJsonRecord(card.outputText) ?? null);
   const external = asNullableRecord(payload?.externalContent);
   if (
     !payload ||
@@ -220,21 +210,6 @@ function readSourceCandidates(
     : [];
 }
 
-function renderSourcePreview(candidates: SourceCandidates): ChatSourcePreview {
-  const source = candidates.source;
-  const pageExcerpt = candidates.page && sourceExcerpt(candidates.page.excerpt, "web_fetch");
-  const excerpt =
-    pageExcerpt || (candidates.search && sourceExcerpt(candidates.search.excerpt, "web_search"));
-  return {
-    url: source.url.href,
-    title: sourceTitle(source.title, source.name) ?? source.url.hostname,
-    domain: source.url.hostname,
-    ...(excerpt
-      ? { excerpt, excerptKind: pageExcerpt ? ("page" as const) : ("search" as const) }
-      : {}),
-  };
-}
-
 /** Projects completed web results from one existing run frame; never fetches source content. */
 export function extractChatSourcePreviews(params: {
   groups: readonly MessageGroup[];
@@ -267,8 +242,7 @@ export function extractChatSourcePreviews(params: {
   if (links.length === 0) {
     return [];
   }
-  // Message/text caches treat messages as immutable. Tool cards can receive
-  // projected outcomes, so snapshot their display fields as well as identity.
+  // Message and tool-card owners publish immutable snapshots; identity is enough.
   const basePath = params.basePath ?? resolveControlUiPaths(globalThis.location.pathname)[0];
   const inputs: unknown[] = [
     params.runId,
@@ -283,9 +257,9 @@ export function extractChatSourcePreviews(params: {
     if (group.runId !== params.runId) {
       continue;
     }
-    for (const { message } of group.messages) {
-      inputs.push(message);
-      if (message === answer) {
+    for (const { message, actionMessage, presentationOwnsFooter } of group.messages) {
+      inputs.push(message, actionMessage, presentationOwnsFooter);
+      if (message === answer || (actionMessage === answer && presentationOwnsFooter !== false)) {
         inFrame = true;
         break frameInputs;
       }
@@ -294,26 +268,6 @@ export function extractChatSourcePreviews(params: {
         continue;
       }
       messages.push(record);
-      inputs.push(
-        record.role,
-        record.toolName,
-        record.tool_name,
-        record.content,
-        transcriptRunId(record),
-      );
-      for (const card of extractToolCardsCached(record)) {
-        inputs.push(
-          card,
-          card.callId,
-          card.runId,
-          card.name,
-          card.completed,
-          card.live,
-          card.isError,
-          card.outputText,
-          card.details,
-        );
-      }
     }
   }
   if (!inFrame) {
@@ -370,7 +324,8 @@ export function extractChatSourcePreviews(params: {
       const callName = card.callId
         ? callNames.get(buildToolStreamIdentity(params.runId, card.callId))
         : undefined;
-      const name = webToolName(callName ?? envelopeName);
+      const rawName = callName ?? envelopeName;
+      const name = rawName === "web_search" || rawName === "web_fetch" ? rawName : undefined;
       if (!name || card.name !== name || (envelopeName && envelopeName !== name)) {
         continue;
       }
@@ -417,7 +372,18 @@ export function extractChatSourcePreviews(params: {
     }
     const source = sources.get(canonicalKey);
     if (source && !previews.has(canonicalKey) && !hasDedicatedCard(canonicalKey)) {
-      previews.set(canonicalKey, renderSourcePreview(source));
+      const previewSource = source.source;
+      const pageExcerpt = source.page && sourceExcerpt(source.page.excerpt, "web_fetch");
+      const excerpt =
+        pageExcerpt || (source.search && sourceExcerpt(source.search.excerpt, "web_search"));
+      previews.set(canonicalKey, {
+        url: previewSource.url.href,
+        title: sourceTitle(previewSource.title, previewSource.name) ?? previewSource.url.hostname,
+        domain: previewSource.url.hostname,
+        ...(excerpt
+          ? { excerpt, excerptKind: pageExcerpt ? ("page" as const) : ("search" as const) }
+          : {}),
+      });
     }
     if (previews.size >= MAX_SOURCES) {
       break;

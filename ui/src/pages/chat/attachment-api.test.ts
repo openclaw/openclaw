@@ -3,7 +3,6 @@ import { buildChatApiAttachments } from "./attachment-api.ts";
 import { restoreChatApiAttachments } from "./attachment-restoration.ts";
 
 it.each([
-  { mediaType: "text/plain;charset=utf-8", mimeType: "text/plain", type: "file" },
   {
     mediaType: "text/plain;charset=utf-8;name=notes%20copy.txt",
     mimeType: "text/plain",

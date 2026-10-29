@@ -10,7 +10,7 @@ doc-schema-version: 1
 
 The macOS app includes a native panel for presenting hosted widget documents.
 The Canvas plugin owns this presentation path. It is not a standalone visual
-workspace or an A2UI push target.
+workspace.
 
 The recommended agent path is [`show_widget`](/tools/show-widget) with
 `presentation.target: "node_panel"`. OpenClaw stores the widget as a hosted
@@ -79,16 +79,6 @@ openclaw-canvas://<session>/<path>
 Files addressed by that scheme must remain inside the session's Canvas root in
 Application Support. Directory traversal is blocked.
 
-## A2UI belongs on session dashboards
-
-A2UI widgets render on [session dashboards](/web/dashboards), where they share
-the same pinning, layout, approval, and interaction model as other dashboard
-widgets. Their renderer bundles continue to load from the Gateway's
-`/__openclaw__/a2ui/` asset route.
-
-The macOS panel does not accept A2UI push/reset commands and does not
-automatically navigate to an A2UI page.
-
 ## Migrating documents from a custom root
 
 Run `openclaw doctor --fix` to move documents from the retired
@@ -98,10 +88,10 @@ precedence over the older setting. Doctor removes the root setting only after no
 legacy documents remain. If directory access or a document copy fails, doctor
 warns and retains the source locator for retry. It may move the older setting
 into the plugin config while preserving the path. A root that already points to
-canonical storage, including through a symlink, needs no copy.
+the default storage folder, including through a symlink, needs no copy.
 
 Fix the reported permissions or target conflict, then rerun the command. Do not
-remove the root setting yourself. Hosted routes serve only the canonical folder,
+remove the root setting yourself. Hosted routes serve only the default storage folder,
 so remaining legacy documents are unavailable until migration completes.
 
 ## Related

@@ -1,28 +1,34 @@
 import path from "node:path";
-import { expect, it, vi } from "vitest";
-import type { runExec } from "../process/exec.js";
+import { afterEach, expect, it, vi } from "vitest";
+import * as systemBin from "../infra/resolve-system-bin.js";
+import * as exec from "../process/exec.js";
 import { createPrivateWindowsPlanFile } from "./private-plan-file.js";
+import * as trustedPlanPath from "./trusted-plan-path.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 it("resolves trusted PowerShell and passes private plan content through stdin", async () => {
   let observedInput: string | Uint8Array | undefined;
-  const run = vi.fn<typeof runExec>(async (_command, _args, options) => {
+  const run = vi.spyOn(exec, "runExec").mockImplementation(async (_command, _args, options) => {
     observedInput = typeof options === "object" ? options.input : undefined;
     return { stdout: "", stderr: "" };
   });
   const powershell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
-  const resolveTrustedExecutable = vi.fn(async () => powershell);
+  const tempDir = "C:\\Users\\me\\AppData\\Local\\Temp";
+  vi.spyOn(systemBin, "resolveSystemBin").mockReturnValue(powershell);
+  const resolveTrustedExecutable = vi
+    .spyOn(trustedPlanPath, "resolveTrustedWindowsSystemExecutablePath")
+    .mockResolvedValue(powershell);
+  const resolveTrustedDirectory = vi
+    .spyOn(trustedPlanPath, "resolveTrustedPlanDirectoryPath")
+    .mockResolvedValue(tempDir);
   const content = '{"version":1}\n';
-  await createPrivateWindowsPlanFile(
-    "C:\\plans\\plan.json",
-    content,
-    { SYSTEMROOT: "C:\\Windows" },
-    {
-      resolveCompilerTempDir: async () => "C:\\Users\\me\\AppData\\Local\\Temp",
-      resolveTrustedExecutable,
-      run,
-    },
-  );
+  await createPrivateWindowsPlanFile("C:\\plans\\plan.json", content, {
+    SYSTEMROOT: "C:\\Windows",
+    TEMP: tempDir,
+  });
   expect(resolveTrustedExecutable).toHaveBeenCalledWith(powershell);
+  expect(resolveTrustedDirectory).toHaveBeenCalledWith(tempDir);
   expect(run).toHaveBeenCalledOnce();
   expect(run).toHaveBeenCalledWith(
     powershell,

@@ -1,62 +1,109 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type {
   AcpSessionRuntimeOptions,
   SessionAcpIdentity,
   SessionAcpMeta,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   executeExistingOpenClawStateRead,
+  getActiveOpenClawStateDatabaseReadSnapshot,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
-  type AcpSessionEntryBinding,
-  type AcpSessionRow,
   buildAcpDatabaseSessionKey,
-  legacyAcpDatabaseSessionKeys,
-  resolveLegacyFreeAcpSessionKey,
+  readPublishedAcpSessionRows,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
+import type { AcpSessionEntryBinding, AcpSessionRow } from "./session-meta-read.types.js";
 
 /** Each result stays bound to the entry lifecycle captured by the row reader. */
-export async function readAcpSessionMetaForEntries(params: {
-  entries: readonly { sessionKey: string; agentId: string; entry: AcpSessionEntryBinding }[];
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-}): Promise<Array<SessionAcpMeta | null>> {
+export async function readAcpSessionMetaForEntries(
+  params: {
+    entries: readonly {
+      sessionKey: string;
+      agentId?: string;
+      entry: AcpSessionEntryBinding | undefined;
+    }[];
+    cfg?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    databasePath?: string;
+  },
+  options: { current?: true; signal?: AbortSignal } = {},
+): Promise<Array<SessionAcpMeta | null>> {
   if (params.entries.length === 0) {
     return [];
   }
+  const entries = params.entries.map((item) => ({
+    keys: [
+      buildAcpDatabaseSessionKey(
+        normalizeStoreSessionKey(item.sessionKey),
+        item.agentId ?? parseAgentSessionKey(item.sessionKey)?.agentId,
+      ),
+    ],
+    entry: item.entry
+      ? {
+          lifecycleRevision: item.entry.lifecycleRevision,
+          sessionId: item.entry.sessionId,
+          sessionStartedAt: item.entry.sessionStartedAt,
+        }
+      : undefined,
+  }));
+  const database = {
+    env: params.env,
+    path: params.databasePath ?? resolveOpenClawStateSqlitePath(params.env),
+  };
+  const context =
+    options.current || !getActiveOpenClawStateDatabaseReadSnapshot(database)
+      ? captureOpenClawStateReadWorkerContext(database)
+      : undefined;
+  if (context) {
+    const published = readPublishedAcpSessionRows(database.path, entries);
+    if (published) {
+      options.signal?.throwIfAborted();
+      context.maintenanceScope?.assertAdmission();
+      context.admission.assertCurrent();
+      return published.map((row) => (row ? rowToAcpSessionMeta(row) : null));
+    }
+  }
   const result = await executeExistingOpenClawStateRead(
-    { env: params.env, path: params.databasePath },
+    database,
     {
       type: "acpSessions.metadata",
-      entries: params.entries.map(({ sessionKey, agentId, entry }) => ({
-        keys: [
-          buildAcpDatabaseSessionKey(sessionKey, agentId),
-          ...legacyAcpDatabaseSessionKeys(sessionKey, agentId, params.cfg),
-        ],
-        legacyKey: resolveLegacyFreeAcpSessionKey(sessionKey),
-        entry: {
-          lifecycleRevision: entry.lifecycleRevision,
-          sessionId: entry.sessionId,
-          sessionStartedAt: entry.sessionStartedAt,
-        },
-      })),
+      entries,
     },
+    { ...options, context },
   );
   if (result === undefined) {
-    return params.entries.map(() => null);
+    return entries.map(() => null);
   }
-  if (result.ok && result.type === "acpSessions.metadata") {
-    return result.rows.map((row) => (row ? rowToAcpSessionMeta(row) : null));
-  }
-  throw new Error("Unexpected ACP session metadata read result");
+  return result.rows.map((row) => (row ? rowToAcpSessionMeta(row) : null));
 }
 
-export function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
+/** Read metadata for an already selected entry without loading its session row again. */
+export async function readAcpSessionMetaForEntryAsync(params: {
+  sessionKey: string;
+  agentId?: string;
+  cfg?: OpenClawConfig;
+  entry: AcpSessionEntryBinding | undefined;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+}): Promise<SessionAcpMeta | undefined> {
+  if (!params.sessionKey.trim()) {
+    return undefined;
+  }
+  const [metadata] = await readAcpSessionMetaForEntries({ ...params, entries: [params] });
+  return metadata ?? undefined;
+}
+
+export function rowToAcpSessionMeta(
+  row: Omit<AcpSessionRow, "resume_agent_session_id" | "resume_acpx_session_id">,
+): SessionAcpMeta {
   // SAFETY: These JSON columns are written from the typed ACP metadata by its storage owner.
   const identity = safeParseJsonRecord(row.identity_json ?? "") as SessionAcpIdentity | undefined;
   // SAFETY: Runtime options share the same typed persisted metadata contract.
@@ -77,14 +124,9 @@ export function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
   };
 }
 
-export function readAcpSessionMetaForEntry(params: {
-  sessionKey: string;
-  agentId?: string;
-  cfg?: OpenClawConfig;
-  entry: AcpSessionEntryBinding | undefined;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-}): SessionAcpMeta | undefined {
+export function readAcpSessionMetaForEntry(
+  params: Parameters<typeof readAcpSessionMetaForEntryAsync>[0],
+): SessionAcpMeta | undefined {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return undefined;
@@ -92,13 +134,7 @@ export function readAcpSessionMetaForEntry(params: {
   const row = withExistingOpenClawStateDatabaseReadOnly(
     ({ db }) =>
       resolveReadableAcpSessionRow({
-        row: selectAcpSessionRowForStoreEntry(
-          db,
-          sessionKey,
-          params.agentId,
-          params.cfg,
-          params.entry,
-        ),
+        row: selectAcpSessionRowForStoreEntry(db, sessionKey, params.agentId, params.entry),
         entry: params.entry,
       }),
     { env: params.env, path: params.databasePath },

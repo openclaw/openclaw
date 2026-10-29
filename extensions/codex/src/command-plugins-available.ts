@@ -1,8 +1,8 @@
-import { renderMessagePresentationFallbackText } from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   buildCodexCommandPickerPresentation,
+  buildCodexPresentationReply,
   type CodexCommandPickerButton,
 } from "./command-presentation.js";
 import {
@@ -78,14 +78,7 @@ export function formatCodexAvailablePlugins(
     buttons.push({ label: "Browse all plugins", command: "/codex plugins available" });
   }
   buttons.push({ label: "Plugin controls", command: "/codex plugins menu" });
-  const presentation = buildCodexCommandPickerPresentation(
-    "Discoverable Codex plugins",
-    lines.join("\n"),
-    buttons,
+  return buildCodexPresentationReply(
+    buildCodexCommandPickerPresentation("Discoverable Codex plugins", lines.join("\n"), buttons),
   );
-  return {
-    text: renderMessagePresentationFallbackText({ presentation }),
-    presentation,
-    presentationTextMode: "fallback",
-  };
 }

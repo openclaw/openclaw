@@ -1,33 +1,28 @@
 import fs from "node:fs";
 import path from "node:path";
-import type {
-  OpenAsyncKeyedStoreOptions,
-  OpenKeyedStoreOptions,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import {
   base64url,
-  composeOutbound,
+  seal,
   generateIdentity,
   type GuardAdapter,
   type SignedReceipt,
+  type ReplayStore,
   type Verdict,
 } from "../protocol/index.js";
-import { MemoryAuditStore } from "../protocol/memory-stores.test-support.js";
+import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { openReefAuditStore } from "./audit-state.js";
 import { ReefChannelConfigSchema, type ReefChannelConfig } from "./config-schema.js";
+import { ReefMessageFlow } from "./flow.js";
 import type { ReefPeerTrust } from "./friend-types.js";
 import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
+import { createRuntime } from "./state.test-support.js";
 import type { ReefTransportClient } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
-import type { ReefKeys } from "./types.js";
+import type { InboxEntry, ReefKeys } from "./types.js";
 
 const model = "mock-2026-07-12";
 const stateDirs: string[] = [];
@@ -41,29 +36,78 @@ export async function resetFlowStoresForTests(): Promise<void> {
   }
 }
 
-export function flowStores(deliveredMaxEntries?: number) {
+export function flowStores(deliveredMaxEntries?: number, reviewsMaxEntries?: number) {
   const stateDir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "reef-flow-"));
   stateDirs.push(stateDir);
-  const runtime = createPluginRuntimeMock();
-  runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
+  const runtime = createRuntime(stateDir);
   return {
     runtime,
     stateDir,
-    reviews: new ReviewApprovalStore(runtime),
+    reviews: new ReviewApprovalStore(runtime, reviewsMaxEntries),
     delivered:
       deliveredMaxEntries === undefined
         ? new ReefDeliveredStore(runtime)
         : new ReefDeliveredStore(runtime, deliveredMaxEntries),
   };
+}
+
+export async function workerFlowStores(
+  cfg: ReefChannelConfig,
+  peers: Record<string, ReefPeerTrust>,
+  options: { deliveredMaxEntries?: number } = {},
+) {
+  const stores = flowStores(options.deliveredMaxEntries);
+  const trusted = openReefTrustStore(stores.runtime, cfg);
+  for (const [peer, value] of Object.entries(peers)) {
+    await trusted.set(peer, value);
+  }
+  return {
+    ...stores,
+    trusted,
+    audit: openReefAuditStore(stores.runtime, new Uint8Array(32).fill(10)),
+  };
+}
+
+export async function createFlow({
+  handle = "bob",
+  peer = "alice",
+  verdicts = [allow],
+  replay = new MemoryReplayStore(),
+  onOwnerNotice = async () => {},
+}: {
+  handle?: string;
+  peer?: string;
+  verdicts?: Verdict[];
+  replay?: ReplayStore;
+  onOwnerNotice?: ConstructorParameters<typeof ReefMessageFlow>[0]["onOwnerNotice"];
+} = {}) {
+  const keys = reefKeys();
+  const peerKeys = generateIdentity();
+  const cfg = { ...config(), handle };
+  const { trusted, audit, ...stores } = await workerFlowStores(cfg, {
+    [peer]: peerTrust(peerKeys),
+  });
+  const relay = transport();
+  const classifier = guard(...verdicts);
+  const onIngress = vi.fn<ConstructorParameters<typeof ReefMessageFlow>[0]["onIngress"]>(
+    async () => {},
+  );
+  const flow = new ReefMessageFlow({
+    config: cfg,
+    trust: trusted,
+    keys,
+    transport: relay as unknown as ReefTransportClient,
+    guard: classifier,
+    audit,
+    replay,
+    ...stores,
+    onIngress: async (message, assertCurrent) => {
+      assertCurrent();
+      await onIngress(message, assertCurrent);
+    },
+    onOwnerNotice,
+  });
+  return { keys, peerKeys, trusted, relay, stores, classifier, audit, onIngress, flow };
 }
 
 export const allow: Verdict = {
@@ -76,8 +120,10 @@ export const allow: Verdict = {
 
 export function guard(
   ...verdicts: Verdict[]
-): GuardAdapter & { classify: ReturnType<typeof vi.fn> } {
-  const classify = vi.fn(async () => verdicts[classify.mock.calls.length - 1] ?? verdicts.at(-1)!);
+): GuardAdapter & { classify: ReturnType<typeof vi.fn<GuardAdapter["classify"]>> } {
+  const classify = vi.fn<GuardAdapter["classify"]>(
+    async (): Promise<Verdict> => verdicts[classify.mock.calls.length - 1] ?? verdicts.at(-1)!,
+  );
   return { providerId: "mock", pinnedModel: model, classify };
 }
 
@@ -119,18 +165,6 @@ export function peerTrust(
   };
 }
 
-export function trust(
-  runtime: Parameters<typeof openReefTrustStore>[0],
-  cfg: ReefChannelConfig,
-  initial: Record<string, ReefPeerTrust>,
-) {
-  const store = openReefTrustStore(runtime, cfg);
-  for (const [peer, value] of Object.entries(initial)) {
-    store.set(peer, value);
-  }
-  return store;
-}
-
 export function transport() {
   return {
     acknowledge: vi.fn(async (_peer: string, _id: string, _receipt: SignedReceipt) => ({
@@ -151,17 +185,23 @@ export async function envelope(
   id: string,
   text: string,
 ) {
-  return (
-    await composeOutbound({
-      id,
-      from: "alice#1",
-      to: "bob#1",
-      body: { text },
-      senderSigningSecretKey: sender.signing.secretKey,
-      recipientEncryptionPublicKey: recipient.encryption.publicKey,
-      guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(3)),
-      policyVersion: "v1",
-    })
-  ).envelope;
+  return seal({
+    id,
+    from: "alice#1",
+    to: "bob#1",
+    body: { text },
+    senderSigningSecretKey: sender.signing.secretKey,
+    recipientEncryptionPublicKey: recipient.encryption.publicKey,
+  });
+}
+
+export function inbox(message: NonNullable<InboxEntry["envelope"]>, seq = 1): InboxEntry {
+  return {
+    seq,
+    peer: "alice",
+    id: message.id,
+    kind: "message",
+    envelope: message,
+    ts: Math.floor(Date.now() / 1_000),
+  };
 }

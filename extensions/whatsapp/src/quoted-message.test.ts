@@ -1,14 +1,45 @@
 // Whatsapp tests cover quoted message plugin behavior.
 import { generateWAMessageFromContent } from "baileys";
+import { withRegisteredChannelIngress } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { whatsappPlugin } from "./channel.js";
 import {
   buildQuotedMessageOptions,
   cacheInboundMessageMeta,
   lookupInboundMessageMeta,
   lookupInboundMessageMetaForTarget,
 } from "./quoted-message.js";
+import { setWhatsAppRuntime } from "./runtime.js";
 
 describe("quoted message metadata cache", () => {
+  it("keeps quotes with their admitted instance through overlapping registration and retirement", async () => {
+    const registration = {
+      plugin: whatsappPlugin,
+      config: {},
+      setRuntime: setWhatsAppRuntime,
+    };
+    const accountId = "instance-quotes";
+    const remoteJid = "15550000001@s.whatsapp.net";
+    const messageId = "same-message";
+    const read = () => lookupInboundMessageMeta(accountId, remoteJid, messageId);
+    await withRegisteredChannelIngress(registration, async (_runtime, retire) => {
+      cacheInboundMessageMeta(accountId, remoteJid, messageId, { body: "Old instance quote" });
+      await withRegisteredChannelIngress(registration, async () => {
+        expect(read()).toBeUndefined();
+        cacheInboundMessageMeta(accountId, remoteJid, messageId, { body: "Candidate quote" });
+        expect(read()?.body).toBe("Candidate quote");
+      });
+      // Disposing a rejected candidate must not clear the still-admitted owner.
+      expect(read()?.body).toBe("Old instance quote");
+      retire();
+      await Promise.resolve();
+      expect(read()?.body).toBe("Old instance quote");
+    });
+    await withRegisteredChannelIngress(registration, async () => {
+      expect(read()).toBeUndefined();
+    });
+  });
+
   it("scopes cached metadata by account id", () => {
     cacheInboundMessageMeta("account-a", "1555@s.whatsapp.net", "msg-1", {
       participant: "111@s.whatsapp.net",
@@ -31,6 +62,28 @@ describe("quoted message metadata cache", () => {
       body: "hello from b",
       fromMe: false,
     });
+  });
+
+  it("evicts the oldest quote before replacing an entry in a full cache", () => {
+    const accountId = "quote-capacity";
+    const remoteJid = "15555550123@s.whatsapp.net";
+    for (let index = 0; index < 500; index += 1) {
+      cacheInboundMessageMeta(accountId, remoteJid, `message-${index}`, {
+        body: `Quote ${index}`,
+      });
+    }
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-0")?.body).toBe("Quote 0");
+
+    cacheInboundMessageMeta(accountId, remoteJid, "message-250", { body: "Updated quote" });
+
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-0")).toBeUndefined();
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-1")?.body).toBe("Quote 1");
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-250")?.body).toBe(
+      "Updated quote",
+    );
+
+    cacheInboundMessageMeta(accountId, remoteJid, "message-500", { body: "New quote" });
+    expect(lookupInboundMessageMeta(accountId, remoteJid, "message-1")?.body).toBe("Quote 1");
   });
 
   it("can recover the original remoteJid for a matching direct-chat target", () => {

@@ -3,7 +3,6 @@ export {
   isGoogleGemini3ProModel,
   isGoogleGemini3ThinkingLevelModel,
 } from "openclaw/plugin-sdk/provider-thinking-runtime";
-// Google API module exposes the plugin public contract.
 export {
   createGoogleThinkingPayloadWrapper,
   createGoogleThinkingStreamWrapper,

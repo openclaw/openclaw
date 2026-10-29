@@ -1,4 +1,3 @@
-// Discord plugin module turns selected presence transitions into routed agent events.
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 

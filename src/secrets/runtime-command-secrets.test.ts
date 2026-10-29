@@ -1,68 +1,47 @@
 /** Tests command-scoped secret resolution from active runtime snapshots. */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "./runtime-command-secrets.js";
 import { createEmptyRuntimeWebToolsMetadata } from "./runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshotState } from "./runtime-state.js";
-import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "./runtime.js";
+import { activateSecretsRuntimeSnapshot } from "./runtime.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 
 const firecrawlPath = "plugins.entries.firecrawl.config.webSearch.apiKey";
-const forcedFallbackConfig = {
-  tools: {
-    web: {
-      search: { enabled: false, provider: "brave" },
-      fetch: { provider: "firecrawl" },
-    },
-  },
-  plugins: {
-    entries: {
-      firecrawl: {
-        enabled: true,
-        config: {
-          webSearch: {
-            apiKey: {
-              source: "env",
-              provider: "default",
-              id: "FIRECRAWL_API_KEY",
-            },
+function webConfig(
+  web: NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>,
+  enabled: boolean,
+) {
+  return asConfig({
+    tools: { web },
+    plugins: {
+      entries: {
+        firecrawl: {
+          enabled,
+          config: {
+            webSearch: { apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" } },
           },
         },
       },
     },
+  });
+}
+const forcedFallbackConfig = webConfig(
+  {
+    search: { enabled: false, provider: "brave" },
+    fetch: { provider: "firecrawl" },
   },
-} as OpenClawConfig;
-const forcedWebProviderConfig = {
-  tools: {
-    web: {
-      search: { enabled: true, provider: "exa" },
-    },
-  },
-  plugins: {
-    entries: {
-      firecrawl: {
-        enabled: false,
-        config: {
-          webSearch: {
-            apiKey: {
-              source: "env",
-              provider: "default",
-              id: "FIRECRAWL_API_KEY",
-            },
-          },
-        },
-      },
-    },
-  },
-} as OpenClawConfig;
+  true,
+);
+const forcedWebProviderConfig = webConfig({ search: { enabled: true, provider: "exa" } }, false);
 
 discoverConfigSecretTargetsByIds(forcedFallbackConfig, new Set([firecrawlPath]));
 
@@ -94,82 +73,51 @@ function activateMinimalSecretsRuntimeSnapshot(params: {
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+function activateWebSnapshot(config: OpenClawConfig, key: string) {
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", "extensions");
+  vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+  activateMinimalSecretsRuntimeSnapshot({
+    config,
+    env: {
+      FIRECRAWL_API_KEY: key,
+      HOME: process.env.HOME,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    },
+  });
+}
+
+function expectWebResolution(
+  resolved: Awaited<ReturnType<typeof resolveCommandSecretsFromActiveRuntimeSnapshot>>,
+  value: string,
+) {
+  expect(resolved).toMatchObject({
+    assignments: [{ path: firecrawlPath, value }],
+    diagnostics: [],
+    inactiveRefPaths: [],
+  });
+}
+
 describe("runtime command secrets", () => {
-  const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  const previousTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-
-  afterEach(() => {
-    clearSecretsRuntimeSnapshot();
-    if (previousBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-    }
-    if (previousTrustBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = previousTrustBundledPluginsDir;
-    }
-  });
-
-  it("returns forced fallback assignments from the active gateway snapshot", async () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "extensions";
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-    activateMinimalSecretsRuntimeSnapshot({
-      config: forcedFallbackConfig,
-      env: {
-        FIRECRAWL_API_KEY: "gateway-only-firecrawl-key",
-        HOME: process.env.HOME,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      },
-    });
-
-    const resolved = await resolveCommandSecretsFromActiveRuntimeSnapshot({
-      commandName: "infer web fetch",
-      targetIds: new Set([firecrawlPath]),
-      forcedActivePaths: new Set([firecrawlPath]),
-    });
-
-    expect(resolved.assignments).toMatchObject([
-      {
-        path: "plugins.entries.firecrawl.config.webSearch.apiKey",
-        value: "gateway-only-firecrawl-key",
-      },
-    ]);
-    expect(resolved.diagnostics).toEqual([]);
-    expect(resolved.inactiveRefPaths).toEqual([]);
-  });
-
-  it("re-resolves forced command-selected web provider paths with gateway env", async () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "extensions";
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-    activateMinimalSecretsRuntimeSnapshot({
-      config: forcedWebProviderConfig,
-      env: {
-        FIRECRAWL_API_KEY: "gateway-selected-firecrawl-key",
-        HOME: process.env.HOME,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      },
-    });
-
-    const resolved = await resolveCommandSecretsFromActiveRuntimeSnapshot({
-      commandName: "infer web search",
-      targetIds: new Set([firecrawlPath]),
-      allowedPaths: new Set([firecrawlPath]),
-      forcedActivePaths: new Set([firecrawlPath]),
-    });
-
-    expect(resolved.assignments).toMatchObject([
-      {
-        path: firecrawlPath,
-        value: "gateway-selected-firecrawl-key",
-      },
-    ]);
-    expect(resolved.diagnostics).toEqual([]);
-    expect(resolved.inactiveRefPaths).toEqual([]);
-  });
+  afterEach(() => vi.unstubAllEnvs());
+  it.each([
+    ["fetch", forcedFallbackConfig, "gateway-only-firecrawl-key", undefined],
+    ["search", forcedWebProviderConfig, "gateway-selected-firecrawl-key", new Set([firecrawlPath])],
+  ] as const)(
+    "resolves forced web %s paths with gateway env",
+    async (tool, config, key, allowedPaths) => {
+      activateWebSnapshot(config, key);
+      expectWebResolution(
+        await resolveCommandSecretsFromActiveRuntimeSnapshot({
+          commandName: `infer web ${tool}`,
+          targetIds: new Set([firecrawlPath]),
+          forcedActivePaths: new Set([firecrawlPath]),
+          allowedPaths,
+        }),
+        key,
+      );
+    },
+  );
 
   it("returns authoritative assignments from an incomplete runtime snapshot", async () => {
     const sourceConfig = asConfig({
@@ -208,9 +156,8 @@ describe("runtime command secrets", () => {
 
   it.skipIf(process.platform === "win32")(
     "serves an exec SecretRef materialized during runtime preparation",
-    async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-secret-exec-"));
-      try {
+    () =>
+      withTempDir("openclaw-command-secret-exec-", async (root) => {
         const resolverPath = path.join(root, "resolver.sh");
         await fs.writeFile(
           resolverPath,
@@ -254,9 +201,6 @@ describe("runtime command secrets", () => {
         expect(resolved.assignments).toMatchObject([
           { path: "talk.providers.acme.apiKey", value: "gateway-exec-key" },
         ]);
-      } finally {
-        await fs.rm(root, { recursive: true, force: true });
-      }
-    },
+      }),
   );
 });

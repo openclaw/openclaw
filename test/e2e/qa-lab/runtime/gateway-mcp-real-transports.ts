@@ -6,8 +6,8 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   QA_EVIDENCE_FILENAME,
@@ -335,7 +335,6 @@ async function runMcpPluginToolsClientProof(params: {
         name: FIXTURE_TOOL_NAME,
         arguments: { query: "ORBIT-9 codename", maxResults: 3 },
       },
-      undefined,
       { timeout: MCP_PLUGIN_TOOLS_REQUEST_TIMEOUT_MS },
     ),
   );
@@ -497,7 +496,10 @@ async function connectChannelMcpClient(params: {
     stderr: "pipe",
   });
   transport.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-  const client = new Client({ name: "qa-gateway-mcp-client", version: "1.0.0" });
+  const client = new Client(
+    { name: "qa-gateway-mcp-client", version: "1.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
   let connectTimeout: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
@@ -561,6 +563,7 @@ async function runGatewaySmokeProof(options: ProducerOptions): Promise<string> {
   try {
     const gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
@@ -618,6 +621,7 @@ async function runMcpGatewayStartupRetryProof(options: ProducerOptions): Promise
     };
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
@@ -733,7 +737,10 @@ async function runMcpPluginToolsProof(options: ProducerOptions): Promise<string>
     stderr: "pipe",
   });
   transport.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-  const client = new Client({ name: "qa-plugin-tools-client", version: "1.0.0" });
+  const client = new Client(
+    { name: "qa-plugin-tools-client", version: "1.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
   let details = "";
   let proofError: Error | undefined;
   try {

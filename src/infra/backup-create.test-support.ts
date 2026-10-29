@@ -1,5 +1,35 @@
 import * as tar from "tar";
+import { afterEach, beforeEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
 import type { BackupCreateResult } from "./backup-create.js";
+
+export function useIsolatedBackupTempRoot(): void {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  beforeEach(() => {
+    // Backup maintenance must not inspect another test's in-flight scratch.
+    const tempRoot = tempDirs.make("backup-tests-");
+    vi.stubEnv("TMPDIR", tempRoot);
+    vi.stubEnv("TMP", tempRoot);
+    vi.stubEnv("TEMP", tempRoot);
+  });
+}
+
+export function createBackupClassificationInventory(stateDir: string): BackupResourceInventory {
+  return {
+    stateDir,
+    agentRoots: [],
+    coreDatabases: [],
+    coreDatabaseSourcePaths: [],
+    resolveSqliteSource: () => ({ role: "plugin" }),
+    regenerableRoots: [],
+    isIncludedByOwner: () => true,
+    isIncluded: () => true,
+    isTraversable: () => true,
+    isPackageContent: () => false,
+    isVolatile: () => false,
+  };
+}
 
 export function makeBackupResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
   return {

@@ -9,6 +9,14 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 const log = createSubsystemLogger("session-sqlite");
 const SLOW_RECLAMATION_WORKER_MS = 1_000;
 
+/** A commit guard saw newer inputs; the caller owns the retry, so the Worker did not fail. */
+export class SqliteReclamationInputsChangedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SqliteReclamationInputsChangedError";
+  }
+}
+
 export function logSqliteReclamationWorkerOutcome(params: {
   startedAt: number;
   outcome: "resolved" | "rejected";
@@ -31,10 +39,15 @@ export function logSqliteReclamationWorkerOutcome(params: {
       2_048,
     );
   };
-  log.warn(
-    elapsedMs >= SLOW_RECLAMATION_WORKER_MS
+  const slow = elapsedMs >= SLOW_RECLAMATION_WORKER_MS;
+  const superseded = params.failure instanceof SqliteReclamationInputsChangedError;
+  const level = superseded && !slow ? "debug" : "warn";
+  log[level](
+    slow
       ? "slow SQLite reclamation Worker operation"
-      : "SQLite reclamation Worker failed",
+      : superseded
+        ? "SQLite reclamation Worker superseded by newer inputs"
+        : "SQLite reclamation Worker failed",
     {
       pid: process.pid,
       threadId,

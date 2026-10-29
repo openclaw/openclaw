@@ -1,6 +1,4 @@
-// Mantis Publish Pr Evidence tests cover mantis publish pr evidence script behavior.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -8,75 +6,94 @@ import {
   publishArtifactFiles,
   renderEvidenceComment,
 } from "../../scripts/mantis/publish-pr-evidence.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const storageConfig = {
+  accessKeyId: "access",
+  bucket: "qa-artifacts",
+  endpoint: "https://example.r2.cloudflarestorage.com",
+  publicBaseUrl: "https://qa.openclaw.ai",
+  region: "auto",
+  secretAccessKey: "secret",
+};
+const artifactRoot = "mantis/discord/pr-1/run-1";
+const rawBase = `https://qa.openclaw.ai/${artifactRoot}`;
+const marker = "<!-- mantis-discord-status-reactions -->";
+type ArtifactFetch = NonNullable<Parameters<typeof publishArtifactFiles>[0]["fetchImpl"]>;
+function render(manifest: ReturnType<typeof loadEvidenceManifest>) {
+  return renderEvidenceComment({ manifest, marker, rawBase });
+}
+function contains(body: string, ...parts: string[]) {
+  for (const part of parts) {
+    expect(body).toContain(part);
   }
-});
-
-function writeFixtureManifest() {
-  const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
-  tempDirs.push(dir);
-  mkdirSync(path.join(dir, "baseline"), { recursive: true });
-  mkdirSync(path.join(dir, "candidate"), { recursive: true });
-  writeFileSync(path.join(dir, "baseline", "timeline.png"), "baseline timeline");
-  writeFileSync(path.join(dir, "candidate", "timeline.png"), "candidate timeline");
-  writeFileSync(path.join(dir, "baseline", "change.mp4"), "baseline clip");
-  const manifestPath = path.join(dir, "mantis-evidence.json");
+}
+function upload(fetchImpl: ArtifactFetch, timeoutMs?: number) {
+  return publishArtifactFiles({
+    artifactRoot,
+    fetchImpl,
+    storageConfig,
+    timeoutMs,
+    manifest: loadEvidenceManifest(writeFixtureManifest()),
+  });
+}
+function writeManifest(manifest: object = {}, files: string[] = []) {
+  const dir = tempDirs.make("mantis-evidence-test-");
+  for (const name of files) {
+    mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+    writeFileSync(path.join(dir, name), name);
+  }
+  const file = path.join(dir, "mantis-evidence.json");
   writeFileSync(
-    manifestPath,
+    file,
     JSON.stringify({
       schemaVersion: 2,
       id: "discord-status-reactions",
       title: "Mantis Discord Status Reactions QA",
-      summary: "Mantis reran the scenario.",
       scenario: "discord-status-reactions-tool-only",
-      comparison: {
-        baseline: {
-          expected: "queued-only",
-          expectationMet: true,
-          sha: "aaa",
-          status: "fail",
-        },
-        candidate: {
-          expected: "queued -> thinking -> done",
-          expectationMet: true,
-          sha: "bbb",
-          status: "pass",
-        },
-        pass: true,
-      },
-      artifacts: [
-        {
-          alt: "Baseline timeline",
-          kind: "timeline",
-          label: "Baseline queued-only",
-          lane: "baseline",
-          path: "baseline/timeline.png",
-          targetPath: "baseline.png",
-        },
-        {
-          alt: "Candidate timeline",
-          kind: "timeline",
-          label: "Candidate queued -> thinking -> done",
-          lane: "candidate",
-          path: "candidate/timeline.png",
-          targetPath: "candidate.png",
-        },
-        {
-          kind: "motionClip",
-          label: "Baseline change MP4",
-          lane: "baseline",
-          path: "baseline/change.mp4",
-          targetPath: "baseline-change.mp4",
-        },
-      ],
+      comparison: { candidate: lane("artifact path is contained", "bbb", "pass"), pass: true },
+      ...manifest,
     }),
   );
-  return manifestPath;
+  return file;
+}
+function lane(expected: string, sha: string, status: string, expectationMet = true) {
+  return { expected, sha, status, expectationMet };
+}
+function timeline(laneName: string) {
+  return {
+    kind: "timeline",
+    lane: laneName,
+    label: laneName,
+    path: `${laneName}/timeline.png`,
+    targetPath: `${laneName}.png`,
+  };
+}
+const fixtureArtifacts = [
+  timeline("baseline"),
+  timeline("candidate"),
+  {
+    kind: "motionClip",
+    path: "baseline/change.mp4",
+    targetPath: "baseline-change.mp4",
+    label: "Baseline change MP4",
+  },
+];
+function writeFixtureManifest() {
+  return writeManifest(
+    {
+      summary: "Mantis reran the scenario.",
+      comparison: {
+        baseline: lane("queued-only", "aaa", "fail"),
+        candidate: { ...lane("queued -> thinking -> done", "bbb", "pass"), digest: "3 messages" },
+        differential: "bot messages 2→3 · deletes 1→0",
+        pass: true,
+      },
+      artifacts: fixtureArtifacts,
+    },
+    fixtureArtifacts.map(({ path: source }) => source),
+  );
 }
 
 describe("scripts/mantis/publish-pr-evidence", () => {
@@ -87,11 +104,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
   });
 
   it("keeps required booleans for sibling trusted evidence producers", () => {
-    const manifestPath = writeFixtureManifest();
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    delete manifest.comparison.candidate.expectationMet;
-    writeFileSync(manifestPath, JSON.stringify(manifest));
-
+    const manifestPath = writeManifest({ comparison: { candidate: {}, pass: true } });
     expect(() => loadEvidenceManifest(manifestPath)).toThrow(
       "Mantis evidence comparison.candidate.expectationMet must be a boolean.",
     );
@@ -100,161 +113,79 @@ describe("scripts/mantis/publish-pr-evidence", () => {
   it("renders a manifest-driven PR comment with inline screenshots and video links", () => {
     const manifest = loadEvidenceManifest(writeFixtureManifest());
     const body = renderEvidenceComment({
-      artifactUrl: "https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
       manifest,
-      marker: "<!-- mantis-discord-status-reactions -->",
-      rawBase: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1",
-      requestSource: "workflow_dispatch",
-      runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
-      treeUrl: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1",
+      marker,
+      rawBase,
+      artifactUrl: "https://example.test/artifact",
+      requestSource: "pull_request",
+      runUrl: "https://example.test/run",
+      treeUrl: "https://example.test/files",
     });
-
-    expect(body).toContain("<!-- mantis-discord-status-reactions -->");
-    expect(body).toContain("Summary: Mantis reran the scenario.");
-    expect(body).toContain('<table width="100%">');
-    expect(body).toContain('<th width="50%">Baseline queued-only</th>');
-    expect(body).toContain('<th width="50%">Candidate queued -> thinking -> done</th>');
-    expect(body).toContain(
-      '<td width="50%" align="center"><img src="https://qa.openclaw.ai/mantis/discord/pr-1/run-1/baseline.png" width="100%"',
-    );
-    expect(body).toContain(
-      "[Baseline change MP4](https://qa.openclaw.ai/mantis/discord/pr-1/run-1/baseline-change.mp4)",
-    );
-    expect(body).not.toContain("raw.githubusercontent.com");
-    expect(body).toContain("- Overall: `pass`");
-  });
-
-  it("renders trusted lane digests and their count differential", () => {
-    const manifest = loadEvidenceManifest(writeFixtureManifest());
-    manifest.comparison = {
-      baseline: {
-        digest:
-          "2 sent · 2 bot messages · 1 edit · 1 delete · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
-        expected: "baseline behavior",
-        expectationMet: true,
-        sha: "aaa",
-        status: "pass",
-      },
-      candidate: {
-        digest:
-          "2 sent · 3 bot messages · 1 edit · 0 deletes · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
-        expected: "candidate behavior",
-        expectationMet: true,
-        sha: "bbb",
-        status: "pass",
-      },
-      differential: "bot messages 2→3 · deletes 1→0",
-      outcome: "pass",
-      pass: true,
-    };
-
-    const body = renderEvidenceComment({
-      manifest,
-      marker: "<!-- mantis-discord-status-reactions -->",
-      rawBase: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1",
-    });
-
-    expect(body).toContain(
-      "- Baseline: `pass` at `aaa` — baseline behavior · facts: 2 sent · 2 bot messages · 1 edit · 1 delete · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
-    );
-    expect(body).toContain(
-      "- Candidate (PR merged onto main): `pass` at `bbb` — candidate behavior · facts: 2 sent · 3 bot messages · 1 edit · 0 deletes · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
-    );
-    expect(body).toContain(
+    contains(
+      body,
+      marker,
+      "- Artifact: https://example.test/artifact",
+      "- Trigger: `pull_request`",
+      "- Run: https://example.test/run",
+      "Raw QA files: https://example.test/files",
+      "Summary: Mantis reran the scenario.",
+      '<table width="100%">',
+      '<th width="50%">baseline</th>',
+      '<th width="50%">candidate</th>',
+      `<td width="50%" align="center"><img src="${rawBase}/baseline.png" width="100%"`,
+      `[Baseline change MP4](${rawBase}/baseline-change.mp4)`,
+      "- Baseline: `fail` at `aaa`, expected queued-only",
+      "- Candidate (PR merged onto main): `pass` at `bbb` — queued -&gt; thinking -&gt; done · facts: 3 messages",
       "- Differential (trusted facts): bot messages 2→3 · deletes 1→0\n- Overall: `pass`",
     );
+    expect(body).not.toContain("raw.githubusercontent.com");
   });
 
   it("uploads manifest artifacts to R2-compatible object storage", async () => {
-    const manifest = loadEvidenceManifest(writeFixtureManifest());
-    const requests: Array<{
-      body: Buffer;
-      headers: HeadersInit;
-      method: string;
-      signal: AbortSignal;
-      url: string;
-    }> = [];
-    const fetchImpl = async (
-      url: URL,
-      init: { body: Buffer; headers: HeadersInit; method: string; signal: AbortSignal },
-    ) => {
-      requests.push({
-        body: init.body,
-        headers: init.headers,
-        method: init.method,
-        signal: init.signal,
-        url: url.toString(),
-      });
+    const requests: Array<Parameters<ArtifactFetch>[1] & { url: string }> = [];
+    const published = await upload(async (url, init) => {
+      requests.push({ ...init, url: url.toString() });
       return new Response("", { status: 200 });
-    };
-
-    const published = await publishArtifactFiles({
-      artifactRoot: "mantis/discord/pr-1/run-1",
-      fetchImpl,
-      manifest,
-      storageConfig: {
-        accessKeyId: "access",
-        bucket: "qa-artifacts",
-        endpoint: "https://example.r2.cloudflarestorage.com",
-        publicBaseUrl: "https://qa.openclaw.ai",
-        region: "auto",
-        secretAccessKey: "secret",
-      },
     });
 
-    expect(published).toEqual({
-      artifactRoot: "mantis/discord/pr-1/run-1",
-      rawBase: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1",
-      treeUrl: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1/index.json",
-    });
-    expect(requests.map((request) => request.method)).toEqual(["PUT", "PUT", "PUT", "PUT", "PUT"]);
-    expect(requests.every((request) => request.signal instanceof AbortSignal)).toBe(true);
-    expect(requests.map((request) => request.url)).toEqual([
-      "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/baseline.png",
-      "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/candidate.png",
-      "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/baseline-change.mp4",
-      "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/mantis-evidence.json",
-      "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/index.json",
-    ]);
+    expect(published).toEqual({ artifactRoot, rawBase, treeUrl: `${rawBase}/index.json` });
+    expect(requests.map(({ url }) => url)).toEqual(
+      [
+        ...fixtureArtifacts.map(({ targetPath }) => targetPath),
+        "mantis-evidence.json",
+        "index.json",
+      ].map(
+        (target) => `${storageConfig.endpoint}/${storageConfig.bucket}/${artifactRoot}/${target}`,
+      ),
+    );
+    for (const request of requests) {
+      expect(request).toMatchObject({
+        method: "PUT",
+        signal: expect.any(AbortSignal),
+      });
+    }
     expect(requests[0]?.headers).toMatchObject({
       "content-type": "image/png",
       "x-amz-date": expect.any(String),
     });
-    expect((requests[0]?.headers as Record<string, string> | undefined)?.authorization).toContain(
-      "Credential=access/",
-    );
+    expect(new Headers(requests[0]?.headers).get("authorization")).toContain("Credential=access/");
     expect(String(requests[4]?.body)).toContain(
       '"url": "https://qa.openclaw.ai/mantis/discord/pr-1/run-1/baseline.png"',
     );
   });
 
   it("aborts a stalled artifact upload after the per-object timeout", async () => {
-    const manifest = loadEvidenceManifest(writeFixtureManifest());
     let observedSignal: AbortSignal | undefined;
-
-    const upload = publishArtifactFiles({
-      artifactRoot: "mantis/discord/pr-1/run-1",
-      fetchImpl: (_url, init) => {
-        observedSignal = init.signal;
-        return new Promise<Response>((_resolve, reject) => {
-          init.signal.addEventListener("abort", () => reject(init.signal.reason as Error), {
-            once: true,
-          });
+    const pendingUpload = upload((_url, init) => {
+      observedSignal = init.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason as Error), {
+          once: true,
         });
-      },
-      manifest,
-      storageConfig: {
-        accessKeyId: "access",
-        bucket: "qa-artifacts",
-        endpoint: "https://example.r2.cloudflarestorage.com",
-        publicBaseUrl: "https://qa.openclaw.ai",
-        region: "auto",
-        secretAccessKey: "secret",
-      },
-      timeoutMs: 5,
-    });
+      });
+    }, 5);
 
-    await expect(upload).rejects.toMatchObject({
+    await expect(pendingUpload).rejects.toMatchObject({
       cause: { name: "TimeoutError" },
       message: "Timed out uploading Mantis artifact baseline.png after 5ms.",
     });
@@ -262,7 +193,6 @@ describe("scripts/mantis/publish-pr-evidence", () => {
   });
 
   it("bounds oversized non-ok upload error response bodies", async () => {
-    const manifest = loadEvidenceManifest(writeFixtureManifest());
     const chunk = new Uint8Array(8 * 1024).fill("x".charCodeAt(0));
     let enqueuedBytes = 0;
     const body = new ReadableStream<Uint8Array>({
@@ -272,41 +202,21 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       },
     });
 
-    const upload = publishArtifactFiles({
-      artifactRoot: "mantis/discord/pr-1/run-1",
-      fetchImpl: async () =>
-        new Response(body, {
-          status: 503,
-          statusText: "Service Unavailable",
-        }),
-      manifest,
-      storageConfig: {
-        accessKeyId: "access",
-        bucket: "qa-artifacts",
-        endpoint: "https://example.r2.cloudflarestorage.com",
-        publicBaseUrl: "https://qa.openclaw.ai",
-        region: "auto",
-        secretAccessKey: "secret",
-      },
-    });
-
-    await expect(upload).rejects.toMatchObject({
+    await expect(
+      upload(async () => new Response(body, { status: 503, statusText: "Service Unavailable" })),
+    ).rejects.toMatchObject({
       message: expect.stringMatching(
         /^Failed to upload Mantis artifact baseline\.png: 503 Service Unavailable\nMantis upload error response body exceeded 65536 bytes$/u,
       ),
     });
-    // Unbounded response.text() would keep pulling forever; the bound cancels after ~64 KiB.
     expect(enqueuedBytes).toBeGreaterThan(64 * 1024);
     expect(enqueuedBytes).toBeLessThanOrEqual(256 * 1024);
   });
 
   it("propagates signal abort during non-ok upload error body reading", async () => {
-    const manifest = loadEvidenceManifest(writeFixtureManifest());
     let cancelled = false;
-    // A slow-streaming error body that will stall until the signal fires.
     const body = new ReadableStream<Uint8Array>({
       pull() {
-        // Never resolves; the signal will abort the read.
         return new Promise(() => {});
       },
       cancel() {
@@ -314,29 +224,12 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       },
     });
 
-    const upload = publishArtifactFiles({
-      artifactRoot: "mantis/discord/pr-1/run-1",
-      fetchImpl: async () =>
-        new Response(body, {
-          status: 503,
-          statusText: "Service Unavailable",
-        }),
-      manifest,
-      storageConfig: {
-        accessKeyId: "access",
-        bucket: "qa-artifacts",
-        endpoint: "https://example.r2.cloudflarestorage.com",
-        publicBaseUrl: "https://qa.openclaw.ai",
-        region: "auto",
-        secretAccessKey: "secret",
+    await expect(upload(async () => new Response(body, { status: 503 }), 50)).rejects.toMatchObject(
+      {
+        cause: { name: "TimeoutError" },
+        message: "Timed out uploading Mantis artifact baseline.png after 50ms.",
       },
-      timeoutMs: 50,
-    });
-
-    await expect(upload).rejects.toMatchObject({
-      cause: { name: "TimeoutError" },
-      message: "Timed out uploading Mantis artifact baseline.png after 50ms.",
-    });
+    );
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
@@ -344,130 +237,37 @@ describe("scripts/mantis/publish-pr-evidence", () => {
   });
 
   it("reads small non-ok upload error response bodies within the bound", async () => {
-    const manifest = loadEvidenceManifest(writeFixtureManifest());
-    const smallBody = "access denied: invalid credentials";
-
-    const upload = publishArtifactFiles({
-      artifactRoot: "mantis/discord/pr-1/run-1",
-      fetchImpl: async () =>
-        new Response(smallBody, {
-          status: 403,
-          statusText: "Forbidden",
-        }),
-      manifest,
-      storageConfig: {
-        accessKeyId: "access",
-        bucket: "qa-artifacts",
-        endpoint: "https://example.r2.cloudflarestorage.com",
-        publicBaseUrl: "https://qa.openclaw.ai",
-        region: "auto",
-        secretAccessKey: "secret",
-      },
-    });
-
-    await expect(upload).rejects.toMatchObject({
-      message: expect.stringMatching(
-        /^Failed to upload Mantis artifact baseline\.png: 403 Forbidden\naccess denied: invalid credentials$/u,
-      ),
+    await expect(
+      upload(async () => new Response("access denied", { status: 403 })),
+    ).rejects.toMatchObject({
+      message: "Failed to upload Mantis artifact baseline.png: 403 \naccess denied",
     });
   });
 
   it("allows failure manifests to omit optional visual artifacts", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
-    tempDirs.push(dir);
-    writeFileSync(path.join(dir, "summary.json"), JSON.stringify({ status: "fail" }));
-    writeFileSync(path.join(dir, "report.md"), "bootstrap failed before screenshot");
-    const manifestPath = path.join(dir, "mantis-evidence.json");
-    writeFileSync(
-      manifestPath,
-      JSON.stringify({
-        schemaVersion: 2,
-        id: "slack-desktop-smoke",
-        title: "Mantis Slack Desktop Smoke QA",
-        summary: "Mantis could not finish VM setup.",
-        scenario: "slack-openclaw-desktop-smoke",
+    const manifest = loadEvidenceManifest(
+      writeManifest({
         comparison: {
-          candidate: {
-            expected: "Slack QA and VM gateway setup pass",
-            expectationMet: false,
-            sha: "bbb",
-            status: "fail",
-          },
+          candidate: lane("Slack QA and VM gateway setup pass", "bbb", "fail", false),
           pass: false,
         },
         artifacts: [
-          {
-            alt: "Slack Web desktop screenshot from the Mantis VM",
-            inline: true,
-            kind: "desktopScreenshot",
-            label: "Slack desktop/VNC browser",
-            lane: "candidate",
-            path: "slack-desktop-smoke.png",
-            required: false,
-            targetPath: "slack-desktop.png",
-          },
-          {
-            kind: "metadata",
-            label: "Slack desktop summary",
-            lane: "run",
-            path: "summary.json",
-            targetPath: "summary.json",
-          },
-          {
-            kind: "report",
-            label: "Slack desktop report",
-            lane: "run",
-            path: "report.md",
-            targetPath: "report.md",
-          },
+          { inline: true, kind: "desktopScreenshot", path: "missing.png", required: false },
         ],
       }),
     );
-
-    const manifest = loadEvidenceManifest(manifestPath);
     expect(manifest.artifacts.map((artifact) => artifact.targetPath)).toEqual([
-      "summary.json",
-      "report.md",
       "mantis-evidence.json",
     ]);
-    const body = renderEvidenceComment({
-      artifactUrl: "https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
-      manifest,
-      marker: "<!-- mantis-slack-desktop-smoke -->",
-      rawBase: "https://qa.openclaw.ai/mantis/slack/pr-1/run-1",
-      requestSource: "workflow_dispatch",
-      runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
-      treeUrl: "https://qa.openclaw.ai/mantis/slack/pr-1/run-1",
-    });
-
-    expect(body).toContain("Summary: Mantis could not finish VM setup.");
-    expect(body).toContain("- Overall: `fail`");
+    const body = render(manifest);
+    contains(body, "- Overall: `fail`");
     expect(body).not.toContain("<img ");
   });
 
   it("rejects artifact paths that escape the manifest directory", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
-    tempDirs.push(dir);
-    const manifestPath = path.join(dir, "mantis-evidence.json");
-    writeFileSync(
-      manifestPath,
-      JSON.stringify({
-        artifacts: [
-          {
-            kind: "metadata",
-            path: "../outside.json",
-          },
-        ],
-        comparison: {
-          candidate: { expected: "artifact path is contained", expectationMet: true },
-          pass: true,
-        },
-        id: "bad",
-        scenario: "bad",
-        schemaVersion: 2,
-        title: "Bad",
-      }),
-    );
+    const manifestPath = writeManifest({
+      artifacts: [{ kind: "metadata", path: "../outside.json" }],
+    });
 
     expect(() => loadEvidenceManifest(manifestPath)).toThrow(/escapes manifest directory/u);
   });

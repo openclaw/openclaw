@@ -2,11 +2,41 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { serveCompanion } from "./native-desktop.test-support.ts";
+import { expectControl, nativeForm } from "./native-form.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native desktop appearance E2E" });
 const schemes = ["light", "dark"] as const;
 type Scheme = (typeof schemes)[number];
 type NativeRequest = { command: string; params?: Record<string, unknown> };
+type Native = Awaited<ReturnType<typeof installNative>>;
+
+async function expectRequest(
+  native: Native,
+  command: string,
+  params: Record<string, unknown>,
+  offset = 0,
+) {
+  expect((await native.requests(command)).slice(offset)).toEqual([{ command, params }]);
+}
+
+function withNative(
+  colorScheme: Scheme,
+  [width, height]: [number, number],
+  run: (page: Page, native: Native, form: ReturnType<typeof nativeForm>) => Promise<void>,
+  quickChat = false,
+) {
+  return suite.withPage(
+    {
+      colorScheme,
+      ...(quickChat ? { reducedMotion: "reduce" as const } : {}),
+      viewport: { width, height },
+    },
+    async ({ page }) => run(page, await installNative(page), nativeForm(page)),
+  );
+}
+
+const status = (page: Page, text: string) =>
+  page.getByRole("status").filter({ hasText: text }).waitFor();
 
 async function installNative(page: Page) {
   await serveCompanion(page);
@@ -102,14 +132,16 @@ async function installNative(page: Page) {
                   enabled: true,
                   accelerator: params?.accelerator ?? "Ctrl+Space",
                 };
-              case "quickchat_send":
-                return {
+              case "quickchat_send": {
+                const target = {
                   sessionKey: `agent:${selectedAgent.id}:quickchat`,
                   agentId: selectedAgent.id,
                   gatewayGeneration: 1,
                   runId: "reply-1",
-                  status: "started",
                 };
+                emit("quickchat:send-prepared", target);
+                return { ...target, status: "started" };
+              }
               case "quickchat_activate":
               case "quickchat_hide":
                 return true;
@@ -137,15 +169,15 @@ async function installNative(page: Page) {
       page.evaluate(
         (name) =>
           (Reflect.get(window, "nativeRequests") as NativeRequest[]).filter(
-            (request) => request.command === name,
+            ({ command: requestedCommand }) => requestedCommand === name,
           ),
         command,
       ),
     emit: (name: string, payload: unknown) =>
       page.evaluate(
-        ({ eventName, eventPayload }) =>
+        ([eventName, eventPayload]) =>
           Reflect.get(window, "emitNativeEvent")(eventName, eventPayload),
-        { eventName: name, eventPayload: payload },
+        [name, payload] as const,
       ),
   };
 }
@@ -160,21 +192,14 @@ async function expectAppearance(page: Page, scheme: Scheme, surface = ".panel", 
           if (!components) {
             throw new Error(`Expected opaque RGB color, received ${color}`);
           }
-          const red = Number(components[1]);
-          const green = Number(components[2]);
-          const blue = Number(components[3]);
-          if (
-            [red, green, blue].some(
-              (channel) => !Number.isFinite(channel) || channel < 0 || channel > 255,
-            )
-          ) {
-            throw new Error(`Invalid RGB components: ${color}`);
-          }
-          const linear = (channel: number) => {
-            const value = channel / 255;
+          const linear = (channel: string) => {
+            const value = Number(channel) / 255;
             return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
           };
-          return linear(red) * 0.2126 + linear(green) * 0.7152 + linear(blue) * 0.0722;
+          return [0.2126, 0.7152, 0.0722].reduce(
+            (sum, weight, index) => sum + linear(components[index + 1]!) * weight,
+            0,
+          );
         };
         const background = luminance(
           getComputedStyle(document.querySelector(surfaceSelector)!).backgroundColor,
@@ -210,354 +235,256 @@ async function expectControlsFit(page: Page) {
   ).toEqual([]);
 }
 
+async function openQuickChat(page: Page) {
+  await page.goto(`${suite.server.baseUrl}companion/quickchat.html`);
+  const message = page.getByRole("textbox", { name: "Quick Chat message", exact: true });
+  await expect.poll(() => message.getAttribute("placeholder")).toBe("Message Assistant");
+  return message;
+}
+
+async function deferIdentity(native: Native) {
+  await native.deferIdentity();
+  await native.emit("quickchat:shown", {});
+  await expect.poll(() => native.identityPending()).toBe(true);
+}
+
+async function startReply(native: Native, agentId: string, text: string) {
+  const reply = {
+    gatewayGeneration: 1,
+    runId: "reply-1",
+    sessionKey: `agent:${agentId}:quickchat`,
+    agentId,
+  };
+  await native.emit("quickchat:chat-event", {
+    ...reply,
+    state: "delta",
+    deltaText: text,
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  return reply;
+}
+
 suite.define(() => {
-  it.each(schemes)(
-    "keeps remote setup drafts and authentication usable from %s appearance",
-    async (colorScheme) => {
-      await suite.withPage(
-        { colorScheme, viewport: { width: 560, height: 900 } },
-        async ({ page }) => {
-          const native = await installNative(page);
-          await page.goto(`${suite.server.baseUrl}companion/index.html`);
-          await page.getByRole("heading", { name: "Welcome to OpenClaw" }).waitFor();
-          await expectAppearance(page, colorScheme);
-          await page.getByRole("button", { name: "Get started" }).click();
-          await page.getByRole("button", { name: /On another computer/ }).click();
-          const connect = page.getByRole("button", { name: "Connect to Gateway", exact: true });
-          await connect.click();
-          await page.getByRole("status").filter({ hasText: "Enter a Gateway URL" }).waitFor();
-          expect(await native.requests("connect_remote_gateway")).toEqual([]);
-          const url = page.getByLabel("Gateway URL", { exact: true });
-          const token = page.getByLabel("Gateway token", { exact: true });
-          const password = page.getByLabel("Gateway password", { exact: true });
-          await url.fill("https://gateway.example.test");
-          await token.fill("draft-token");
-          for (const scheme of schemes) {
-            await expectAppearance(page, scheme);
-            expect(await url.inputValue()).toBe("https://gateway.example.test");
-            expect(await token.inputValue()).toBe("draft-token");
-            expect(await token.getAttribute("type")).toBe("password");
-            await expectControlsFit(page);
-          }
-          await page.getByRole("button", { name: "Show credential", exact: true }).click();
-          expect(await token.getAttribute("type")).toBe("text");
-          await page.getByLabel("Authentication", { exact: true }).selectOption("password");
-          expect(await token.inputValue()).toBe("");
-          expect(await token.isDisabled()).toBe(true);
-          expect(await password.getAttribute("type")).toBe("password");
-          await password.fill("draft-password");
-          await connect.click();
-          await page
-            .getByRole("status")
-            .filter({ hasText: "Gateway rejected the credential" })
-            .waitFor();
-          expect(await password.inputValue()).toBe("draft-password");
-          expect(await connect.isEnabled()).toBe(true);
-          expect(await native.requests("connect_remote_gateway")).toEqual([
-            {
-              command: "connect_remote_gateway",
-              params: {
-                transport: "direct",
-                url: "https://gateway.example.test",
-                sshTarget: null,
-                token: null,
-                password: "draft-password",
-                remotePort: null,
-              },
-            },
-          ]);
-          await page.getByRole("button", { name: "SSH tunnel", exact: true }).click();
-          await page
-            .getByLabel("SSH target", { exact: true })
-            .fill("operator@gateway.example.test");
-          await page.getByLabel("Gateway port", { exact: true }).fill("0");
-          await connect.click();
-          await page.getByRole("status").filter({ hasText: "between 1 and 65535" }).waitFor();
-          expect(await native.requests("connect_remote_gateway")).toHaveLength(1);
-          await page.getByLabel("Gateway port", { exact: true }).fill("18789");
-          await page.getByLabel("Gateway port", { exact: true }).press("Enter");
-          await page
-            .getByRole("status")
-            .filter({ hasText: "Opening the remote dashboard" })
-            .waitFor();
-          expect((await native.requests("connect_remote_gateway")).slice(1)).toEqual([
-            {
-              command: "connect_remote_gateway",
-              params: {
-                transport: "ssh",
-                url: null,
-                sshTarget: "operator@gateway.example.test",
-                token: null,
-                password: "draft-password",
-                remotePort: 18789,
-              },
-            },
-          ]);
-          await expectControlsFit(page);
+  it("keeps remote setup drafts and authentication usable across appearance changes", async () => {
+    await withNative("light", [560, 900], async (page, native, form) => {
+      await page.goto(`${suite.server.baseUrl}companion/index.html`);
+      await page.getByRole("heading", { name: "Welcome to OpenClaw" }).waitFor();
+      await expectAppearance(page, "light");
+      await page.getByRole("button", { name: "Get started" }).click();
+      await page.getByRole("button", { name: /On another computer/ }).click();
+      const connect = form.button("Connect to Gateway");
+      const url = form.field("Gateway URL");
+      const token = form.field("Gateway token");
+      const password = form.field("Gateway password");
+      const direct = {
+        transport: "direct",
+        url: "https://gateway.example.test",
+        sshTarget: null,
+        token: null,
+        password: "draft-password",
+        remotePort: null,
+      };
+      await url.fill("https://gateway.example.test");
+      await token.fill("draft-token");
+      for (const scheme of schemes) {
+        await expectAppearance(page, scheme);
+        expect(await url.inputValue()).toBe("https://gateway.example.test");
+        await expectControl(token, { value: "draft-token", type: "password" });
+        await expectControlsFit(page);
+      }
+      await form.button("Show credential").click();
+      expect(await token.getAttribute("type")).toBe("text");
+      await form.field("Authentication").selectOption("password");
+      await expectControl(token, { value: "", disabled: true });
+      expect(await password.getAttribute("type")).toBe("password");
+      await password.fill("draft-password");
+      await connect.click();
+      await status(page, "Gateway rejected the credential");
+      expect(await password.inputValue()).toBe("draft-password");
+      expect(await connect.isEnabled()).toBe(true);
+      await expectRequest(native, "connect_remote_gateway", direct);
+      await form.button("SSH tunnel").click();
+      await form.field("SSH target").fill("operator@gateway.example.test");
+      await form.field("Gateway port").fill("0");
+      await connect.click();
+      await status(page, "between 1 and 65535");
+      expect(await native.requests("connect_remote_gateway")).toHaveLength(1);
+      await form.field("Gateway port").fill("18789");
+      await form.field("Gateway port").press("Enter");
+      await status(page, "Opening the remote dashboard");
+      await expectRequest(
+        native,
+        "connect_remote_gateway",
+        {
+          ...direct,
+          transport: "ssh",
+          url: null,
+          sshTarget: "operator@gateway.example.test",
+          remotePort: 18789,
         },
+        1,
       );
-    },
-  );
+      await expectControlsFit(page);
+    });
+  });
 
   it.each(schemes)(
     "keeps saved-route recovery separate from credential editing in %s mode",
     async (colorScheme) => {
-      await suite.withPage(
-        { colorScheme, viewport: { width: 560, height: 900 } },
-        async ({ page }) => {
-          const native = await installNative(page);
-          await page.goto(`${suite.server.baseUrl}companion/index.html?mode=remoteError`);
-          await page.getByRole("heading", { name: "Connection needs attention" }).waitFor();
-          await expectAppearance(page, colorScheme);
-          await page.getByRole("button", { name: "Retry", exact: true }).click();
-          await page
-            .getByText("The saved Gateway is still unavailable.", { exact: true })
-            .waitFor();
-          expect(await native.requests("bootstrap")).toEqual([
-            { command: "bootstrap", params: { remoteRetry: true } },
-          ]);
-          await page.getByRole("button", { name: "Edit connection", exact: true }).click();
-          await expect
-            .poll(() => page.getByLabel("Gateway URL", { exact: true }).inputValue())
-            .toBe("https://saved.example.test");
-          const credential = page.getByLabel("Gateway token", { exact: true });
-          expect(await credential.inputValue()).toBe("");
-          await credential.fill("replacement-draft");
-          await expectAppearance(page, colorScheme === "light" ? "dark" : "light");
-          expect(await credential.inputValue()).toBe("replacement-draft");
-          expect(await credential.getAttribute("type")).toBe("password");
-          await expectControlsFit(page);
-          await page.getByRole("button", { name: "Back", exact: true }).click();
-          expect(await native.requests("close_connection_settings")).toHaveLength(1);
-          expect(await native.requests("connect_remote_gateway")).toEqual([]);
-          expect(await native.requests("gateway_action")).toEqual([]);
-        },
-      );
+      await withNative(colorScheme, [560, 900], async (page, native, form) => {
+        await page.goto(`${suite.server.baseUrl}companion/index.html?mode=remoteError`);
+        await page.getByRole("heading", { name: "Connection needs attention" }).waitFor();
+        await expectAppearance(page, colorScheme);
+        await form.button("Retry").click();
+        await form.text("The saved Gateway is still unavailable.").waitFor();
+        await expectRequest(native, "bootstrap", { remoteRetry: true });
+        await form.button("Edit connection").click();
+        await expect
+          .poll(() => form.field("Gateway URL").inputValue())
+          .toBe("https://saved.example.test");
+        const credential = form.field("Gateway token");
+        expect(await credential.inputValue()).toBe("");
+        await credential.fill("replacement-draft");
+        await expectAppearance(page, colorScheme === "light" ? "dark" : "light");
+        await expectControl(credential, { value: "replacement-draft", type: "password" });
+        await expectControlsFit(page);
+        await form.button("Back").click();
+        expect(await native.requests("close_connection_settings")).toHaveLength(1);
+        expect(await native.requests("connect_remote_gateway")).toEqual([]);
+        expect(await native.requests("gateway_action")).toEqual([]);
+      });
     },
   );
 
   it.each(schemes)(
     "keeps installation, stopped, reconnecting, and update actions readable in %s mode",
     async (colorScheme) => {
-      await suite.withPage(
-        { colorScheme, viewport: { width: 400, height: 900 } },
-        async ({ page }) => {
-          const native = await installNative(page);
-          await page.goto(`${suite.server.baseUrl}companion/index.html?mode=missingCli`);
-          await page.getByRole("heading", { name: "OpenClaw needs the CLI" }).waitFor();
-          await page.getByLabel("Release channel", { exact: true }).selectOption("beta");
-          await expectAppearance(page, colorScheme);
-          await expectControlsFit(page);
-          await page.getByRole("button", { name: "Install OpenClaw", exact: true }).click();
-          await page.getByRole("heading", { name: "OpenClaw needs attention" }).waitFor();
-          expect(await native.requests("install_cli")).toEqual([
-            { command: "install_cli", params: { channel: "beta" } },
-          ]);
-          expect(await page.getByLabel("Release channel", { exact: true }).inputValue()).toBe(
-            "beta",
-          );
-          expect(
-            await page.getByRole("button", { name: "Install OpenClaw", exact: true }).isEnabled(),
-          ).toBe(true);
-          await expectAppearance(page, colorScheme);
-          await page.goto(`${suite.server.baseUrl}companion/index.html?mode=stopped`);
-          await page.getByRole("button", { name: "Start Gateway", exact: true }).waitFor();
-          await expectAppearance(page, colorScheme);
-          await page.getByRole("button", { name: "Start Gateway", exact: true }).click();
-          expect(await native.requests("gateway_action")).toEqual([
-            { command: "gateway_action", params: { action: "start" } },
-          ]);
-          await page.goto(`${suite.server.baseUrl}companion/index.html?mode=reconnecting`);
-          await page.getByRole("heading", { name: "Reconnecting", exact: true }).waitFor();
-          await native.emit("updater://ready", { version: "1.2.3" });
-          await page.getByRole("button", { name: "Restart to update", exact: true }).waitFor();
-          await expectAppearance(page, colorScheme);
-          await expectControlsFit(page);
-          await page.getByRole("button", { name: "Restart to update", exact: true }).click();
-          expect(await native.requests("relaunch")).toHaveLength(1);
-          await page.getByRole("button", { name: "Dismiss update notice", exact: true }).click();
-          expect(
-            await page.getByRole("button", { name: "Restart to update", exact: true }).isVisible(),
-          ).toBe(false);
-        },
-      );
+      await withNative(colorScheme, [400, 900], async (page, native, form) => {
+        await page.goto(`${suite.server.baseUrl}companion/index.html?mode=missingCli`);
+        await page.getByRole("heading", { name: "OpenClaw needs the CLI" }).waitFor();
+        await form.field("Release channel").selectOption("beta");
+        await expectAppearance(page, colorScheme);
+        await expectControlsFit(page);
+        await form.button("Install OpenClaw").click();
+        await page.getByRole("heading", { name: "OpenClaw needs attention" }).waitFor();
+        await expectRequest(native, "install_cli", { channel: "beta" });
+        expect(await form.field("Release channel").inputValue()).toBe("beta");
+        expect(await form.button("Install OpenClaw").isEnabled()).toBe(true);
+        await expectAppearance(page, colorScheme);
+        await page.goto(`${suite.server.baseUrl}companion/index.html?mode=stopped`);
+        await form.button("Start Gateway").waitFor();
+        await expectAppearance(page, colorScheme);
+        await form.button("Start Gateway").click();
+        await expectRequest(native, "gateway_action", { action: "start" });
+        await page.goto(`${suite.server.baseUrl}companion/index.html?mode=reconnecting`);
+        await form.heading("Reconnecting").waitFor();
+        await native.emit("updater://ready", { version: "1.2.3" });
+        await form.button("Restart to update").waitFor();
+        await expectAppearance(page, colorScheme);
+        await expectControlsFit(page);
+        await form.button("Restart to update").click();
+        expect(await native.requests("relaunch")).toHaveLength(1);
+        await form.button("Dismiss update notice").click();
+        expect(await form.button("Restart to update").isVisible()).toBe(false);
+      });
     },
   );
 
-  it.each(schemes)(
-    "preserves Quick Chat drafts, agent choice, and replies across %s appearance changes",
-    async (colorScheme) => {
-      await suite.withPage(
-        { colorScheme, reducedMotion: "reduce", viewport: { width: 400, height: 560 } },
-        async ({ page }) => {
-          const native = await installNative(page);
-          await page.goto(`${suite.server.baseUrl}companion/quickchat.html`);
-          const message = page.getByRole("textbox", { name: "Quick Chat message", exact: true });
-          await expect.poll(() => message.getAttribute("placeholder")).toBe("Message Assistant");
-          await native.deferIdentity();
-          await native.emit("quickchat:shown", {});
-          await expect.poll(() => native.identityPending()).toBe(true);
-          await message.fill("Please summarize the project notes.");
-          await page.getByRole("button", { name: "Choose agent", exact: true }).click();
-          for (const scheme of schemes) {
-            await expectAppearance(page, scheme, ".composer", "#message");
-            await expectAppearance(page, scheme, "#agent-menu", ".agent-option-name");
-            expect(await message.inputValue()).toBe("Please summarize the project notes.");
-            expect(await page.getByRole("menu").isVisible()).toBe(true);
-            await expectControlsFit(page);
-          }
-          await page.keyboard.press("ArrowDown");
-          await page.keyboard.press("Enter");
-          await expect
-            .poll(() => message.getAttribute("placeholder"))
-            .toBe("Message Writing assistant for long project names");
-          expect(await native.requests("quickchat_select_agent")).toEqual([
-            { command: "quickchat_select_agent", params: { agentId: "writer" } },
-          ]);
-          await page
-            .getByRole("button", { name: "Quick Chat shortcut settings", exact: true })
-            .click();
-          await page.getByRole("button", { name: "Press new shortcut", exact: true }).click();
-          await page.keyboard.press("Control+Shift+K");
-          await expect
-            .poll(() => page.locator("#shortcut-value").textContent())
-            .toBe("Ctrl+Shift+KeyK");
-          expect(await native.requests("quickchat_set_shortcut")).toEqual([
-            { command: "quickchat_set_shortcut", params: { accelerator: "Ctrl+Shift+KeyK" } },
-          ]);
+  it("preserves Quick Chat drafts, agent choice, and replies across appearance changes", async () => {
+    await withNative(
+      "light",
+      [400, 560],
+      async (page, native, form) => {
+        const message = await openQuickChat(page);
+        await deferIdentity(native);
+        await message.fill("Please summarize the project notes.");
+        await form.button("Choose agent").click();
+        for (const scheme of schemes) {
+          await expectAppearance(page, scheme, ".composer", "#message");
+          await expectAppearance(page, scheme, "#agent-menu", ".agent-option-name");
+          expect(await message.inputValue()).toBe("Please summarize the project notes.");
+          expect(await page.getByRole("menu").isVisible()).toBe(true);
           await expectControlsFit(page);
-          await page.keyboard.press("Escape");
-          await page.getByRole("button", { name: "Send message", exact: true }).click();
-          await page.getByRole("region", { name: "Agent reply", exact: true }).waitFor();
-          expect(await native.requests("quickchat_send")).toEqual([
-            {
-              command: "quickchat_send",
-              params: { message: "Please summarize the project notes." },
-            },
-          ]);
-          expect(await message.inputValue()).toBe("");
-          const reply = {
-            gatewayGeneration: 1,
-            runId: "reply-1",
-            sessionKey: "agent:writer:quickchat",
-            agentId: "writer",
-          };
-          await native.emit("quickchat:chat-event", {
-            ...reply,
-            state: "delta",
-            deltaText: "The project is ready.",
-          });
-          await page.getByText("The project is ready.", { exact: true }).waitFor();
-          await native.releaseIdentity();
-          expect(await message.getAttribute("placeholder")).toBe(
-            "Message Writing assistant for long project names",
-          );
-          expect(await page.getByText("The project is ready.", { exact: true }).isVisible()).toBe(
-            true,
-          );
-          await expect.poll(() => message.getAttribute("readonly")).toBeNull();
-          await message.fill("A follow-up draft");
-          await message.press("Shift+Enter");
-          await page.keyboard.type("with another line");
-          expect(
-            await page.getByRole("button", { name: "Choose agent", exact: true }).isDisabled(),
-          ).toBe(true);
-          for (const scheme of schemes) {
-            await expectAppearance(page, scheme, ".composer", "#reply-text");
-            expect(await page.getByText("The project is ready.", { exact: true }).isVisible()).toBe(
-              true,
-            );
-            expect(await message.getAttribute("readonly")).toBeNull();
-            expect(
-              await page.getByRole("button", { name: "Send message", exact: true }).isDisabled(),
-            ).toBe(true);
-          }
-          await page.getByRole("button", { name: "Collapse reply", exact: true }).click();
-          await expect.poll(() => page.locator("#reply").isVisible()).toBe(false);
-          await native.emit("quickchat:chat-event", {
-            ...reply,
-            state: "delta",
-            deltaText: " The next step is review.",
-          });
-          expect(await message.inputValue()).toBe("A follow-up draft\nwith another line");
-          await page.getByRole("button", { name: "Expand reply", exact: true }).click();
-          await page
-            .getByText("The project is ready. The next step is review.", { exact: true })
-            .waitFor();
-          expect(await message.inputValue()).toBe("A follow-up draft\nwith another line");
-          expect(await page.locator("#composer textarea").count()).toBe(1);
-          expect(await native.requests("quickchat_send")).toHaveLength(1);
-          await native.emit("quickchat:chat-event", { ...reply, state: "final" });
-          await expect
-            .poll(() =>
-              page.getByRole("button", { name: "Choose agent", exact: true }).isDisabled(),
-            )
-            .toBe(false);
-          await expect.poll(() => message.getAttribute("readonly")).toBeNull();
-          await message.fill("A follow-up draft");
-          await native.emit("quickchat:gateway-state", {
-            state: "down",
-            gatewayGeneration: 1,
-            notice: "Gateway unavailable. Reconnecting…",
-          });
-          await page.getByRole("alert").filter({ hasText: "Gateway unavailable" }).waitFor();
-          expect(
-            await page.getByRole("button", { name: "Send message", exact: true }).isDisabled(),
-          ).toBe(true);
-          expect(await message.inputValue()).toBe("A follow-up draft");
-          await expectControlsFit(page);
-        },
-      );
-    },
-  );
-  it.each(schemes)(
-    "retains the active Quick Chat reply when an identity refresh fails in %s mode",
-    async (colorScheme) => {
-      await suite.withPage(
-        { colorScheme, reducedMotion: "reduce", viewport: { width: 640, height: 520 } },
-        async ({ page }) => {
-          const native = await installNative(page);
-          await page.goto(`${suite.server.baseUrl}companion/quickchat.html`);
-          const message = page.getByRole("textbox", { name: "Quick Chat message", exact: true });
-          await expect.poll(() => message.getAttribute("placeholder")).toBe("Message Assistant");
-          await native.deferIdentity();
-          await native.emit("quickchat:shown", {});
-          await expect.poll(() => native.identityPending()).toBe(true);
-          await message.fill("Summarize the project.");
-          await page.getByRole("button", { name: "Send message", exact: true }).click();
-          const reply = {
-            gatewayGeneration: 1,
-            runId: "reply-1",
-            sessionKey: "agent:main:quickchat",
-            agentId: "main",
-          };
-          await native.emit("quickchat:chat-event", {
-            ...reply,
-            state: "delta",
-            deltaText: "Ready.",
-          });
-          await page.getByText("Ready.", { exact: true }).waitFor();
-          await expect.poll(() => message.getAttribute("readonly")).toBeNull();
-          await message.fill("Keep this draft.");
-          await native.releaseIdentity(true);
-          await native.emit("quickchat:chat-event", {
-            ...reply,
-            state: "delta",
-            deltaText: " Still connected.",
-          });
-          await page.getByText("Ready. Still connected.", { exact: true }).waitFor();
-          expect(await message.inputValue()).toBe("Keep this draft.");
-          expect(
-            await page.getByRole("button", { name: "Send message", exact: true }).isDisabled(),
-          ).toBe(true);
-          await native.emit("quickchat:chat-event", { ...reply, state: "final" });
-          await expect
-            .poll(() =>
-              page.getByRole("button", { name: "Send message", exact: true }).isDisabled(),
-            )
-            .toBe(false);
-        },
-      );
-    },
-  );
+        }
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("Enter");
+        await expect
+          .poll(() => message.getAttribute("placeholder"))
+          .toBe("Message Writing assistant for long project names");
+        await expectRequest(native, "quickchat_select_agent", { agentId: "writer" });
+        await form.button("Quick Chat shortcut settings").click();
+        await form.button("Press new shortcut").click();
+        await page.keyboard.press("Control+Shift+K");
+        await expect
+          .poll(() => page.locator("#shortcut-value").textContent())
+          .toBe("Ctrl+Shift+KeyK");
+        await expectRequest(native, "quickchat_set_shortcut", { accelerator: "Ctrl+Shift+KeyK" });
+        await expectControlsFit(page);
+        await page.keyboard.press("Escape");
+        await form.button("Send message").click();
+        await page.getByRole("region", { name: "Agent reply", exact: true }).waitFor();
+        await expectRequest(native, "quickchat_send", {
+          message: "Please summarize the project notes.",
+        });
+        expect(await message.inputValue()).toBe("");
+        const reply = await startReply(native, "writer", "The project is ready.");
+        await form.text("The project is ready.").waitFor();
+        await native.releaseIdentity();
+        expect(await message.getAttribute("placeholder")).toBe(
+          "Message Writing assistant for long project names",
+        );
+        expect(await form.text("The project is ready.").isVisible()).toBe(true);
+        await expect.poll(() => message.getAttribute("readonly")).toBeNull();
+        await message.fill("A follow-up draft");
+        await message.press("Shift+Enter");
+        await page.keyboard.type("with another line");
+        for (const scheme of schemes) {
+          await expectAppearance(page, scheme, ".composer", "#reply-text");
+          expect(await form.text("The project is ready.").isVisible()).toBe(true);
+        }
+        expect(await message.inputValue()).toBe("A follow-up draft\nwith another line");
+        expect(await page.locator("#composer textarea").count()).toBe(1);
+        await native.emit("quickchat:chat-event", { ...reply, state: "final" });
+        await message.fill("A follow-up draft");
+        await native.emit("quickchat:gateway-state", {
+          state: "down",
+          gatewayGeneration: 1,
+          notice: "Gateway unavailable. Reconnecting…",
+        });
+        await page.getByRole("alert").filter({ hasText: "Gateway unavailable" }).waitFor();
+        expect(await form.button("Send message").isDisabled()).toBe(true);
+        expect(await message.inputValue()).toBe("A follow-up draft");
+        await expectControlsFit(page);
+      },
+      true,
+    );
+  });
+  it("retains the active Quick Chat reply when an identity refresh fails", async () => {
+    await withNative(
+      "light",
+      [640, 520],
+      async (page, native, form) => {
+        const message = await openQuickChat(page);
+        await deferIdentity(native);
+        await message.fill("Summarize the project.");
+        await form.button("Send message").click();
+        const reply = await startReply(native, "main", "Ready.");
+        await form.text("Ready.").waitFor();
+        await expect.poll(() => message.getAttribute("readonly")).toBeNull();
+        await message.fill("Keep this draft.");
+        await native.releaseIdentity(true);
+        await native.emit("quickchat:chat-event", {
+          ...reply,
+          state: "delta",
+          deltaText: " Still connected.",
+        });
+        await form.text("Ready. Still connected.").waitFor();
+        expect(await message.inputValue()).toBe("Keep this draft.");
+        expect(await form.button("Send message").isDisabled()).toBe(true);
+        await native.emit("quickchat:chat-event", { ...reply, state: "final" });
+        await expect.poll(() => form.button("Send message").isDisabled()).toBe(false);
+      },
+      true,
+    );
+  });
 });

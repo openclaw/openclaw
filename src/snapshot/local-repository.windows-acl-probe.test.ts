@@ -1,199 +1,114 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import type { OwnerAndDaclResult } from "@openclaw/fs-safe/permissions";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
+import { createWindowsAllowEntry as access } from "../test-utils/windows-acl.test-support.js";
 
-const execMocks = vi.hoisted(() => ({
-  runExec: vi.fn(),
+const inspectAcl = vi.hoisted(() =>
+  vi.fn<typeof import("@openclaw/fs-safe/permissions").readOwnerAndDaclBatch>(),
+);
+vi.mock("@openclaw/fs-safe/permissions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/permissions")>()),
+  readOwnerAndDaclBatch: inspectAcl,
 }));
-
-vi.mock("../process/exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../process/exec.js")>()),
-  runExec: execMocks.runExec,
+vi.mock("../process/exec.js", () => ({
+  runExec: () => {
+    throw new Error("Windows ACL policy must not invoke the POSIX inspection command");
+  },
 }));
-vi.mock("../infra/resolve-system-bin.js", () => ({
-  resolveSystemBin: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-}));
-
-import { ensurePrivateSnapshotRepositoryRoot } from "./local-repository.js";
+import { assertTrustedStagingRoot } from "./local-repository-directory-policy.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const CURRENT_USER_SID = "S-1-5-21-1000";
+const CURRENT_USER_SID = "s-1-5-21-1000";
+type Security = Extract<OwnerAndDaclResult, { status: "supported" }>;
 
-type WindowsAclProbeEntry = {
-  accessType: "Allow" | "Deny";
-  inheritanceFlags: string;
-  principal: string;
-  propagationFlags: string;
-  rightsMask: number;
-};
+const fullAccess = access(CURRENT_USER_SID, 0x1f01ff);
+const grant = (mask: number, inheritOnly = false): Partial<Security> => ({
+  aces: [fullAccess, access("s-1-1-0", mask, true, inheritOnly)],
+});
+const volumeGrant = (mask = 0x1301bf, isVolumeRoot = true): Partial<Security> => ({
+  ...grant(mask),
+  isVolumeRoot,
+});
+const inspectionFailure = /Unable to verify private Windows ACL for SQLite staging/;
+const accessFailure = (role: string) =>
+  new RegExp(`untrusted SQLite staging access on ${role}:.*principal=S-1-1-0`);
+const ancestorFailure = accessFailure("ancestor");
+const rootFailure = accessFailure("repository root");
+const ownerFailure = /owned by an untrusted principal:.*principal=S-1-5-21-2000/u;
 
-const CURRENT_USER_FULL_ACCESS: WindowsAclProbeEntry = {
-  principal: CURRENT_USER_SID,
-  accessType: "Allow",
-  rightsMask: 0x1f01ff,
-  inheritanceFlags: "None",
-  propagationFlags: "None",
-};
-
-function mockWindowsPathSecurity(
-  params: {
-    ancestorEntries?: WindowsAclProbeEntry[];
-    rootEntries?: WindowsAclProbeEntry[];
-    rootOwnerSid?: string;
-  } = {},
-): void {
-  execMocks.runExec.mockImplementation(async (_command, args) => {
-    const encodedIndex = args.indexOf("-EncodedCommand");
-    const encoded = args[encodedIndex + 1];
-    if (typeof encoded !== "string") {
-      throw new Error("expected encoded PowerShell command");
-    }
-    const command = Buffer.from(encoded, "base64").toString("utf16le");
-    const pathsPayload = /FromBase64String\('([^']+)'\)/u.exec(command)?.[1];
-    if (!pathsPayload) {
-      throw new Error("expected encoded path payload");
-    }
-    const paths = JSON.parse(Buffer.from(pathsPayload, "base64").toString("utf8")) as string[];
-    return {
-      stdout: Buffer.from(
-        JSON.stringify({
-          currentUserSid: CURRENT_USER_SID,
-          paths: paths.map((entry, index) => ({
-            path: entry,
-            ownerSid: index === 0 ? (params.rootOwnerSid ?? CURRENT_USER_SID) : CURRENT_USER_SID,
-            entries:
-              index === 0
-                ? (params.rootEntries ?? [CURRENT_USER_FULL_ACCESS])
-                : (params.ancestorEntries ?? [CURRENT_USER_FULL_ACCESS]),
-          })),
-        }),
-        "utf8",
-      ).toString("base64"),
-    };
-  });
+function mockSecurity(root: Partial<Security> | null, ancestor: Partial<Security> = {}) {
+  inspectAcl.mockImplementation(async (paths) =>
+    paths.map((_, index) =>
+      root === null
+        ? { status: "unsupported-platform", platform: "linux" }
+        : {
+            status: "supported",
+            currentUserSid: CURRENT_USER_SID,
+            ownerSid: CURRENT_USER_SID,
+            daclPresent: true,
+            isLocal: true,
+            complete: true,
+            unsupportedAceTypes: [],
+            aces: [fullAccess],
+            ...(index === 0 ? root : ancestor),
+          },
+    ),
+  );
 }
 
-describe("fail-closed Windows ACL probe", () => {
-  it("budgets for cold PowerShell startup and sanitizes the spawn failure", async () => {
-    const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-probe-");
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const encodedPayload = Buffer.from("private PowerShell script bytes").toString("base64");
-    const command = `powershell.exe -EncodedCommand ${encodedPayload}`;
-    const spawnError = Object.assign(
-      new Error(`Command timed out after 60000 milliseconds: ${command}`),
-      {
-        code: "ETIMEDOUT",
-        command,
-        escapedCommand: command,
-        killed: true,
-        stderr: "boring stderr line\n-EncodedCommand secret",
-      },
-    );
-    execMocks.runExec.mockRejectedValue(spawnError);
+let tempDir: string;
+const admitRoot = async () => assertTrustedStagingRoot(await fs.lstat(tempDir), tempDir);
+beforeEach(() => {
+  tempDir = tempDirs.make("openclaw-snapshot-windows-acl-");
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+});
 
-    const error = await ensurePrivateSnapshotRepositoryRoot(tempDir).catch(
-      (cause: unknown) => cause,
-    );
-
-    expect(error).toMatchObject({
-      message: expect.stringContaining("Unable to verify private Windows ACL for SQLite staging"),
-    });
-    const causes: Error[] = [];
-    let current: unknown = error;
-    while (current instanceof Error) {
-      causes.push(current);
-      current = (current as Error & { cause?: unknown }).cause;
-    }
-    expect(causes.map((cause) => cause.message).join("\n")).toContain(
-      "Unable to verify private Windows ACL",
-    );
-    expect(causes.at(-1)?.message).toContain("code=ETIMEDOUT, killed=true");
-    expect(causes.at(-1)?.message).toContain("stderr: boring stderr line");
-    expect(causes).not.toContain(spawnError);
-    for (const cause of causes) {
-      const retainedText = Object.getOwnPropertyNames(cause)
-        .map((key) => String((cause as unknown as Record<string, unknown>)[key]))
-        .join("\n");
-      expect(retainedText).not.toMatch(/encodedcommand/iu);
-      expect(retainedText).not.toContain(encodedPayload);
-    }
-    expect(execMocks.runExec).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.any(Array),
-      expect.objectContaining({ timeoutMs: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS }),
-    );
-  });
-
-  it("names the untrusted root principal and rights without weakening rejection", async () => {
-    const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-detail-");
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    mockWindowsPathSecurity({
-      rootEntries: [
-        {
-          principal: "S-1-1-0",
-          accessType: "Allow",
-          rightsMask: 0x120089,
-          inheritanceFlags: "ContainerInherit, ObjectInherit",
-          propagationFlags: "None",
-        },
-      ],
-    });
-
-    await expect(ensurePrivateSnapshotRepositoryRoot(tempDir)).rejects.toThrow(
-      /repository root: path=.* principal=S-1-1-0 rights=.*Remove the untrusted grant/u,
-    );
-  });
-
-  it("accepts a private local Windows repository root", async () => {
-    const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-private-");
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    mockWindowsPathSecurity();
-
-    await expect(ensurePrivateSnapshotRepositoryRoot(tempDir)).resolves.toBe(tempDir);
-  });
-
-  it.each([
-    {
-      label: "a OneDrive-style synced root",
-      params: {
-        rootEntries: [
-          {
-            principal: "S-1-1-0",
-            accessType: "Allow" as const,
-            rightsMask: 0x1f01ff,
-            inheritanceFlags: "ContainerInherit, ObjectInherit",
-            propagationFlags: "None",
-          },
-        ],
-      },
-      expected: /repository root: path=.*principal=S-1-1-0 rights=.*shared or synced root/u,
-    },
-    {
-      label: "a network-share root owned by another principal",
-      params: { rootOwnerSid: "S-1-5-21-2000" },
-      expected:
-        /repository root is owned by an untrusted principal: path=.*principal=S-1-5-21-2000/u,
-    },
-    {
-      label: "an inherited shared ancestor grant",
-      params: {
-        ancestorEntries: [
-          {
-            principal: "S-1-1-0",
-            accessType: "Allow" as const,
-            rightsMask: 0x000040,
-            inheritanceFlags: "ContainerInherit, ObjectInherit",
-            propagationFlags: "None",
-          },
-        ],
-      },
-      expected: /ancestor: path=.*principal=S-1-1-0 rights=.*shared or synced root/u,
-    },
-  ])("rejects $label", async ({ params, expected }) => {
-    const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-matrix-");
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    mockWindowsPathSecurity(params);
-
-    await expect(ensurePrivateSnapshotRepositoryRoot(tempDir)).rejects.toThrow(expected);
+it("reports failed Windows ACL inspection and preserves its diagnostic cause", async () => {
+  const error = new Error("Windows permission inspection timed out after 60000ms");
+  inspectAcl.mockRejectedValue(error);
+  await expect(admitRoot()).rejects.toMatchObject({
+    message: expect.stringContaining(inspectionFailure.source),
+    cause: error,
   });
 });
+
+it.each([
+  ["root synchronize", null, grant(0x100000)],
+  ["ancestor read", null, {}, grant(0x000001)],
+  ["verified volume root DELETE-self", null, {}, volumeGrant()],
+  ["ordinary ancestor DELETE-self", ancestorFailure, {}, volumeGrant(0x1301bf, false)],
+  ["unverified ancestor DELETE-self", ancestorFailure, {}, grant(0x1301bf)],
+  ["private volume root DELETE-self", rootFailure, volumeGrant(0x010000)],
+  ...[0x000040, 0x040000, 0x080000, 0x02000000, 0x10000000, 0x000200].map(
+    (right): [string, RegExp, Partial<Security>, Partial<Security>] => [
+      `verified volume root unsafe right ${right.toString(16)}`,
+      ancestorFailure,
+      {},
+      volumeGrant(0x1301bf | right),
+    ],
+  ),
+  ["remote volume root", inspectionFailure, {}, { ...volumeGrant(), isLocal: false }],
+  ["ancestor write DACL", ancestorFailure, {}, grant(0x040000)],
+  ["ancestor inherit-only write DACL", null, {}, grant(0x040000, true)],
+  ["root inherit-only write DACL", rootFailure, grant(0x040000, true)],
+  ["ancestor unknown rights", ancestorFailure, {}, grant(0x000200)],
+  ["untrusted root read", rootFailure, { aces: [access("s-1-1-0", 0x120089, true)] }],
+  ["untrusted owner", ownerFailure, { ownerSid: "S-1-5-21-2000" }],
+  ["null DACL", inspectionFailure, { daclPresent: false }],
+  ["unknown ACE types", inspectionFailure, { complete: false, unsupportedAceTypes: [5] }],
+  ["remote filesystem", inspectionFailure, { isLocal: false }],
+  ["deny-only DACL", inspectionFailure, { aces: [{ ...fullAccess, aceType: "deny" }] }],
+  ["unsupported inspection", inspectionFailure, null],
+] satisfies [string, RegExp | null, Partial<Security> | null, Partial<Security>?][])(
+  "enforces Windows ACL admission: %s",
+  async (_label, error, root, ancestor: Partial<Security> = {}) => {
+    mockSecurity(root, ancestor);
+    const result = admitRoot();
+    if (error) {
+      await expect(result).rejects.toThrow(error);
+    } else {
+      await expect(result).resolves.toBe(tempDir);
+    }
+  },
+);

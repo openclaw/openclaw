@@ -7,7 +7,13 @@ import type {
 } from "./save.types.js";
 
 export type CronStoreWriteResult<Value> = { committed: boolean } & (
-  | { ok: true; value: Value }
+  | {
+      ok: true;
+      value: Value;
+      jobsFingerprint: string;
+      runtimeFingerprint: string;
+      names: Map<string, string | undefined>;
+    }
   | { ok: false; error: CronSaveError }
 );
 

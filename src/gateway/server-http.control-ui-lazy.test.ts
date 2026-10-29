@@ -33,11 +33,16 @@ describe("Control UI HTTP loading", () => {
         expect(starting.res.statusCode).toBe(503);
         expect(starting.getBody()).toBe("Plugin runtime is starting");
         expect(starting.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+        expect(starting.setHeader).toHaveBeenCalledWith(
+          "Content-Length",
+          String(Buffer.byteLength("Plugin runtime is starting")),
+        );
 
         ready = true;
         const settled = await sendRequest(server, { method, path });
         expect(settled.res.statusCode).toBe(404);
         expect(settled.getBody()).toBe("Not Found");
+        expect(settled.setHeader).toHaveBeenCalledWith("Content-Length", "9");
         expect(handlePluginRequest).toHaveBeenCalledTimes(2);
       },
     });

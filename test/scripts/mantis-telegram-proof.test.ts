@@ -1,17 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { randomUUID, createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import http from "node:http";
-import os from "node:os";
+import { createHash } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTelegramCapture } from "../../scripts/mantis/telegram-capture.ts";
-import { startTelegramProofIngress } from "../../scripts/mantis/telegram-proof-ingress.mts";
-import {
-  parseTelegramProofPlan,
-  type TelegramProofPlan,
-} from "../../scripts/mantis/telegram-proof-plan.ts";
+import { parseTelegramProofPlan } from "../../scripts/mantis/telegram-proof-plan.ts";
 import { prepareTelegramQaDevice } from "../../scripts/mantis/telegram-qa-device.ts";
 import {
   telegramProofIdentitySchema,
@@ -22,44 +16,18 @@ import {
   redeemTelegramReviewProof,
 } from "../../scripts/mantis/telegram-run-admission.ts";
 import { createDeferred } from "../helpers/promise.js";
-const plan: TelegramProofPlan = {
-  claim: "A selected reply is observed",
-  actions: [{ type: "send", atMs: 0, text: "hello" }],
-  modelReplies: ["reply"],
-  settings: { streaming: "off", nativeCommands: false },
-  maxDurationMs: 1000,
-  expectations: ["The bot answers reply"],
-};
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonical).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([k, v]) => JSON.stringify(k) + ":" + canonical(v))
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-const hash = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex");
-const identity = telegramProofIdentitySchema.parse({
-  request_id: "a".repeat(64),
-  plan_sha256: hash(plan),
-  repository: { id: "1", full_name: "openclaw/openclaw" },
-  pull_request: 1,
-  candidate_sha: "b".repeat(40),
-  scenario: "telegram-bot-e2e-proof",
-  workflow: { path: ".github/workflows/mantis-telegram-bot-e2e-proof.yml", sha: "c".repeat(40) },
-  harness: { sha: "c".repeat(40) },
-  run: { id: "2", attempt: 1 },
-});
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { identity, makeIngress, plan } from "./mantis-telegram.test-support.js";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const canonicalPlan =
+  '{"actions":[{"atMs":0,"text":"hello","type":"send"}],"claim":"A selected reply is observed","expectations":["The bot answers reply"],"maxDurationMs":1000,"modelReplies":["reply"],"settings":{"nativeCommands":false,"streaming":"off"}}';
+const planDigest = createHash("sha256").update(canonicalPlan).digest("hex");
 describe("Bounded model-selected plan", () => {
   it("hashes recursively sorted keys while retaining action order", () => {
-    expect(parseTelegramProofPlan(JSON.stringify(plan), hash(plan))).toEqual(plan);
-    expect(parseTelegramProofPlan(canonical(plan), hash(plan))).toEqual(plan);
+    expect(parseTelegramProofPlan(JSON.stringify(plan), planDigest)).toEqual(plan);
+    expect(parseTelegramProofPlan(canonicalPlan, planDigest)).toEqual(plan);
     expect(() =>
-      parseTelegramProofPlan(JSON.stringify({ ...plan, claim: "changed" }), hash(plan)),
+      parseTelegramProofPlan(JSON.stringify({ ...plan, claim: "changed" }), planDigest),
     ).toThrow(/digest/);
   });
   it.each([
@@ -68,41 +36,39 @@ describe("Bounded model-selected plan", () => {
     { ...plan, actions: [{ type: "send", text: "hello", atMs: 1000 }] },
     { ...plan, settings: { ...plan.settings, env: { TOKEN: "x" } } },
   ])("rejects executable or out-of-budget data", (input) => {
-    expect(() => parseTelegramProofPlan(JSON.stringify(input), hash(input))).toThrow();
+    expect(() => parseTelegramProofPlan(JSON.stringify(input), planDigest)).toThrow(
+      /unrecognized_keys|invalid_union|Actions must be ordered/,
+    );
   });
 });
 async function capture(reply = "reply") {
-  const root = await mkdtemp(path.join(os.tmpdir(), "tg-record-"));
-  try {
-    execFileSync(
-      "python3",
-      [
-        "test/fixtures/mantis-telegram-recorder.py",
-        path.resolve(".agents/skills/telegram-e2e-userbot/scripts/user-record.py"),
-        root,
-        "hello",
-        reply,
-      ],
-      { timeout: 10000 },
-    );
-    return {
-      identity,
-      plan,
-      salt: Buffer.alloc(32, 1),
-      sutId: 42,
-      testerId: 43,
-      testDc: true,
-      ready: JSON.parse(await readFile(path.join(root, "ready.json"), "utf8")),
-      summary: JSON.parse(await readFile(path.join(root, "summary.json"), "utf8")),
-      raw: await readFile(path.join(root, "events.ndjson"), "utf8"),
-      provider: [{ user_text: "hello", response_text: "reply", streaming: false }],
-      quiescent: true,
-      leaseHealthy: true,
-      privateValues: ["private-token"],
-    };
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  const root = tempDirs.make("tg-record-");
+  execFileSync(
+    "python3",
+    [
+      "test/fixtures/mantis-telegram-recorder.py",
+      path.resolve(".agents/skills/telegram-e2e-userbot/scripts/user-record.py"),
+      root,
+      "hello",
+      reply,
+    ],
+    { timeout: 10000 },
+  );
+  return {
+    identity,
+    plan,
+    salt: Buffer.alloc(32, 1),
+    sutId: 42,
+    testerId: 43,
+    testDc: true,
+    ready: JSON.parse(await readFile(path.join(root, "ready.json"), "utf8")),
+    summary: JSON.parse(await readFile(path.join(root, "summary.json"), "utf8")),
+    raw: await readFile(path.join(root, "events.ndjson"), "utf8"),
+    provider: [{ user_text: "hello", response_text: "reply", streaming: false }],
+    quiescent: true,
+    leaseHealthy: true,
+    privateValues: ["private-token"],
+  };
 }
 describe("Complete canonical recorder observations", () => {
   it("rejects a Web UI workflow identity relabeled as Telegram", () => {
@@ -141,7 +107,7 @@ describe("Complete canonical recorder observations", () => {
     expect(() => normalizeTelegramCapture({ ...input, leaseHealthy: false })).toThrow();
     expect(() => normalizeTelegramCapture({ ...input, raw: input.raw.repeat(300) })).toThrow();
   });
-  it("retains visible formatting and button labels without exporting callback data", async () => {
+  it("retains formatting and labels, not callback data", async () => {
     const input = await capture();
     const rows = input.raw
       .trim()
@@ -151,16 +117,11 @@ describe("Complete canonical recorder observations", () => {
     message.raw.message.content.text.entities = [
       { offset: 0, length: 5, type: { "@type": "textEntityTypeBold" } },
     ];
-    message.raw.message.reply_markup = {
-      rows: [
-        [
-          {
-            text: "Choose",
-            type: { "@type": "inlineKeyboardButtonTypeCallback", data: "private-token" },
-          },
-        ],
-      ],
+    const button = {
+      text: "Choose",
+      type: { "@type": "inlineKeyboardButtonTypeCallback", data: "private-token" },
     };
+    message.raw.message.reply_markup = { rows: [[button]] };
     const facts = normalizeTelegramCapture({
       ...input,
       raw: rows.map((row) => JSON.stringify(row)).join("\n"),
@@ -174,22 +135,29 @@ describe("Complete canonical recorder observations", () => {
   });
 });
 async function ingressFixture() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "tg-ingress-"));
-  const socket =
-    process.platform === "win32"
-      ? `\\\\.\\pipe\\mantis-${randomUUID()}`
-      : path.join(root, "api.sock");
+  const root = tempDirs.make("sock-");
   const revoked = createDeferred<Error>();
   const forwarded: string[] = [];
-  const responses: unknown[] = [];
   let healthy = true;
-  const ingress = await startTelegramProofIngress({
-    socket,
-    alias: "1:fixture",
-    sutToken: "private-token",
-    testerId: "43",
-    plan,
-    providerLog: path.join(root, "provider.ndjson"),
+  const privateNames = { first_name: "Private tester", last_name: "Private surname" };
+  const message = {
+    message_id: 99,
+    chat: { id: 43, type: "private", first_name: "Private tester" },
+    from: { id: 43, ...privateNames, username: "private_tester" },
+    text: "Unchanged scenario text",
+  };
+  const replies: Record<string, unknown> = {
+    sendMessage: { message_id: 100, chat: { id: 43, type: "private" } },
+    getUpdates: [{ update_id: 1, message }],
+    getMe: {
+      id: 42,
+      ...privateNames,
+      first_name: "Private bot",
+      is_bot: true,
+      username: "selected_bot",
+    },
+  };
+  const fixture = await makeIngress(root, {
     lease: {
       assertHealthy() {
         if (!healthy) {
@@ -202,183 +170,95 @@ async function ingressFixture() {
       const url = new URL(input instanceof Request ? input.url : input);
       forwarded.push(url.pathname);
       const method = url.pathname.split("/").at(-1);
-      return Response.json({
-        ok: true,
-        result:
-          method === "sendMessage"
-            ? { message_id: 100, chat: { id: 43, type: "private" } }
-            : method === "getUpdates"
-              ? [
-                  {
-                    update_id: 1,
-                    message: {
-                      message_id: 99,
-                      chat: { id: 43, type: "private", first_name: "Private tester" },
-                      from: {
-                        id: 43,
-                        first_name: "Private tester",
-                        last_name: "Private surname",
-                        username: "private_tester",
-                      },
-                      text: "Unchanged scenario text",
-                    },
-                  },
-                ]
-              : method === "getMe"
-                ? {
-                    id: 42,
-                    is_bot: true,
-                    first_name: "Private bot",
-                    last_name: "Private surname",
-                    username: "selected_bot",
-                  }
-                : true,
-      });
+      return Response.json({ ok: true, result: replies[method ?? ""] ?? true });
     },
   });
-  const request = (method: string, body: unknown) =>
-    new Promise<number>((resolve, reject) => {
-      const req = http.request(
-        {
-          socketPath: socket,
-          path: `/telegram/bot1:fixture/${method}`,
-          method: "POST",
-          headers: { "content-type": "application/json" },
-        },
-        (response) => {
-          const chunks: Buffer[] = [];
-          response.on("data", (chunk: Buffer) => chunks.push(chunk));
-          response.on("end", () => {
-            responses.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-            resolve(response.statusCode!);
-          });
-        },
-      );
-      req.on("error", reject);
-      req.end(JSON.stringify(body));
-    });
   return {
-    ingress,
-    request,
+    ...fixture,
     forwarded,
-    responses,
     revoke() {
       healthy = false;
       revoked.resolve(new Error("expired"));
     },
-    async close() {
-      await ingress.close();
-      await rm(root, { recursive: true, force: true });
-    },
   };
 }
 describe("Selected DM capability ingress", () => {
-  it("projects private profile names while preserving routing and scenario text", async () => {
-    const fixture = await ingressFixture();
-    try {
-      fixture.ingress.armScenario();
-      expect(await fixture.request("getMe", {})).toBe(200);
-      expect(await fixture.request("getUpdates", { timeout: 0 })).toBe(200);
-      expect(fixture.responses).toEqual([
-        {
-          ok: true,
-          result: { id: 42, is_bot: true, first_name: "Proof user", username: "selected_bot" },
-        },
-        {
-          ok: true,
-          result: [
-            {
-              update_id: 1,
-              message: {
-                message_id: 99,
-                chat: { id: 43, type: "private", first_name: "Proof user" },
-                from: { id: 43, first_name: "Proof user", username: "proof_user" },
-                text: "Unchanged scenario text",
-              },
-            },
-          ],
-        },
-      ]);
-      expect(JSON.stringify(fixture.responses)).not.toContain("Private");
-    } finally {
-      await fixture.close();
-    }
+  let fixture: Awaited<ReturnType<typeof ingressFixture>>;
+  beforeEach(async () => {
+    fixture = await ingressFixture();
+    fixture.ingress.armScenario();
   });
-  it("permits selected multiple replies and edits/deletion of messages created in this run", async () => {
-    const fixture = await ingressFixture();
-    try {
-      fixture.ingress.armScenario();
-      expect(await fixture.request("sendMessage", { chat_id: 43, text: "first" })).toBe(200);
-      expect(await fixture.request("sendMessage", { chat_id: 43, text: "second" })).toBe(200);
-      expect(
-        await fixture.request("editMessageText", { chat_id: 43, message_id: 100, text: "edited" }),
-      ).toBe(200);
-      expect(await fixture.request("deleteMessage", { chat_id: 43, message_id: 100 })).toBe(200);
-      expect(fixture.forwarded).toHaveLength(4);
-    } finally {
-      await fixture.close();
-    }
+  afterEach(async () => {
+    await fixture.close();
+  });
+  it("projects private profiles without changing routing or text", async () => {
+    expect(await fixture.request("getMe", {})).toBe(200);
+    expect(await fixture.request("getUpdates", { timeout: 0 })).toBe(200);
+    const message = {
+      message_id: 99,
+      chat: { id: 43, type: "private", first_name: "Proof user" },
+      from: { id: 43, first_name: "Proof user", username: "proof_user" },
+      text: "Unchanged scenario text",
+    };
+    expect(fixture.responses).toEqual([
+      {
+        ok: true,
+        result: { id: 42, is_bot: true, first_name: "Proof user", username: "selected_bot" },
+      },
+      {
+        ok: true,
+        result: [{ update_id: 1, message }],
+      },
+    ]);
+    expect(JSON.stringify(fixture.responses)).not.toContain("Private");
+  });
+  it("permits multiple replies and mutation of owned messages", async () => {
+    expect(await fixture.request("sendMessage", { chat_id: 43, text: "first" })).toBe(200);
+    expect(await fixture.request("sendMessage", { chat_id: 43, text: "second" })).toBe(200);
+    expect(
+      await fixture.request("editMessageText", { chat_id: 43, message_id: 100, text: "edited" }),
+    ).toBe(200);
+    expect(await fixture.request("deleteMessage", { chat_id: 43, message_id: 100 })).toBe(200);
+    expect(fixture.forwarded).toHaveLength(4);
   });
   it.each([
     ["sendMessage", { chat_id: 44, text: "wrong peer" }],
     ["deleteMessage", { chat_id: 43, message_id: 999 }],
     ["sendDocument", { chat_id: 43, document: "file" }],
   ])("denies out-of-scope %s and terminally fences later sends", async (method, body) => {
-    const fixture = await ingressFixture();
-    try {
-      fixture.ingress.armScenario();
-      expect(await fixture.request(method, body)).toBe(403);
-      expect(await fixture.request("sendMessage", { chat_id: 43, text: "later" })).toBe(403);
-      expect(fixture.forwarded).toEqual([]);
-    } finally {
-      await fixture.close();
-    }
+    expect(await fixture.request(method, body)).toBe(403);
+    expect(await fixture.request("sendMessage", { chat_id: 43, text: "later" })).toBe(403);
+    expect(fixture.forwarded).toEqual([]);
   });
-  it("checks authority synchronously before forwarding after revocation", async () => {
-    const fixture = await ingressFixture();
-    try {
-      fixture.ingress.armScenario();
-      fixture.revoke();
-      expect(await fixture.request("sendMessage", { chat_id: 43, text: "stale" })).toBe(403);
-      expect(fixture.forwarded).toEqual([]);
-    } finally {
-      await fixture.close();
-    }
+  it("rechecks authority before forwarding", async () => {
+    fixture.revoke();
+    expect(await fixture.request("sendMessage", { chat_id: 43, text: "stale" })).toBe(403);
+    expect(fixture.forwarded).toEqual([]);
   });
 });
-describe("Telegram proof isolation and egress", () => {
-  it("prepares fresh, closed pairing state without exporting the observer private identity", async () => {
-    const scratch = await mkdtemp(path.join(os.tmpdir(), "mantis-qa-device-"));
-    try {
-      const deviceIdentity = await prepareTelegramQaDevice(scratch);
-      expect(await readdir(scratch)).toEqual(["candidate-pairing.sqlite"]);
-      const databasePath = path.join(scratch, "candidate-pairing.sqlite");
-      const bytes = await readFile(databasePath);
-      expect(bytes.includes(Buffer.from(deviceIdentity.privateKeyPem))).toBe(false);
-      const database = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(Object.values(database.prepare("PRAGMA integrity_check").get() ?? {})).toEqual([
-          "ok",
-        ]);
-        expect(
-          database.prepare("SELECT count(*) AS count FROM device_pairing_paired").get()?.count,
-        ).toBe(1);
-        expect(
-          database.prepare("SELECT count(*) AS count FROM device_pairing_pending").get()?.count,
-        ).toBe(0);
-        expect(
-          database.prepare("SELECT count(*) AS count FROM device_identities").get()?.count,
-        ).toBe(0);
-      } finally {
-        database.close();
-      }
-    } finally {
-      await rm(scratch, { recursive: true, force: true });
-    }
-  });
+it("prepares closed pairing state without the observer private key", async () => {
+  const scratch = tempDirs.make("mantis-qa-device-");
+  const deviceIdentity = await prepareTelegramQaDevice(scratch);
+  expect(await readdir(scratch)).toEqual(["candidate-pairing.sqlite"]);
+  const databasePath = path.join(scratch, "candidate-pairing.sqlite");
+  const bytes = await readFile(databasePath);
+  expect(bytes.includes(Buffer.from(deviceIdentity.privateKeyPem))).toBe(false);
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    expect(Object.values(database.prepare("PRAGMA integrity_check").get() ?? {})).toEqual(["ok"]);
+    const counts = ["device_pairing_paired", "device_pairing_pending"].map(
+      (table) => database.prepare(`SELECT count(*) AS count FROM ${table}`).get()?.count,
+    );
+    expect(counts).toEqual([1, 0]);
+    expect(
+      database.prepare("SELECT name FROM sqlite_schema WHERE name = 'device_identities'").get(),
+    ).toBeUndefined();
+  } finally {
+    database.close();
+  }
 });
 describe("Telegram live-send admission", () => {
-  it("redeems only the fixed review endpoint with the selected plan and trusted OIDC audience", async () => {
+  it("binds review redemption to its endpoint, plan and OIDC audience", async () => {
     vi.stubEnv(
       "ACTIONS_ID_TOKEN_REQUEST_URL",
       "https://fixture.actions.githubusercontent.com/oidc",
@@ -423,7 +303,6 @@ describe("Telegram live-send admission", () => {
     path: identity.workflow.path,
     head_sha: identity.workflow.sha,
     display_title: title,
-    created_at: "2026-09-05T00:00:00Z",
     repository: { id: 1 },
     head_repository: { id: 1 },
   };
@@ -460,14 +339,14 @@ describe("Telegram live-send admission", () => {
     });
   };
 
-  it("binds attempt one and rechecks the exact PR head after awaited admission reads", async () => {
+  it("binds attempt one and checks the head after awaited reads", async () => {
     await expect(request()).resolves.toBeUndefined();
     await expect(request({ staleRead: 1 })).rejects.toThrow(/no longer current/);
     await expect(request({ staleRead: 2 })).rejects.toThrow(/no longer current/);
     await expect(request({ attempt: 2 })).rejects.toThrow(/expected 1/);
   });
 
-  it("accepts only a plain path or a qualifier matching the trusted workflow branch", async () => {
+  it("binds workflow path qualifiers to the trusted branch", async () => {
     const workflowRef = "refs/heads/qa-proof";
     await expect(request({ workflowRef })).resolves.toBeUndefined();
     await expect(

@@ -1,53 +1,101 @@
 import childProcess, { type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, type TestContext, vi } from "vitest";
+import { hasErrnoCode } from "../../src/infra/errno.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 
-const realSetTimeout = setTimeout;
-const realClearTimeout = clearTimeout;
 const runtimeSmokePath = path.resolve(
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
 );
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(() => receipts.close());
 
-export async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (fs.existsSync(filePath)) {
-      return;
-    }
-    await new Promise((resolve) => {
-      realSetTimeout(resolve, 20);
-    });
-  }
-  throw new Error(`timeout waiting for ${filePath}`);
+export function fixtureReadySource(filePath: string): string {
+  return `${fixtureReceiptClientSource(receipts.endpoint)}
+sendReceipt(${JSON.stringify(filePath)}, "ready");`;
+}
+
+export function registerFixtureCleanup(
+  onTestFinished: TestContext["onTestFinished"],
+  cleanup: () => Promise<void>,
+): () => Promise<void> {
+  let pending: Promise<void> | undefined;
+  const finish = () => (pending ??= cleanup());
+  // Abort resumes finally, but Vitest only joins explicitly registered cleanup.
+  onTestFinished(finish);
+  return finish;
+}
+
+export function childClosed(child: ChildProcess): Promise<void> {
+  return new Promise((resolve, reject) => {
+    child.once("close", () => resolve());
+    child.once("error", reject);
+  });
+}
+
+async function fixtureReadyBeforeSettlement(
+  filePath: string,
+  operation: PromiseLike<unknown>,
+  signal: AbortSignal,
+  ready = () => fs.existsSync(filePath),
+  message = `timeout waiting for ${filePath}`,
+): Promise<void> {
+  // Separate transports may deliver settlement before the receipt. The fixture
+  // commits this record before reporting readiness or allowing its owner to exit.
+  await withinTest(
+    Promise.race([
+      receipts.waitFor(filePath, "ready"),
+      Promise.resolve(operation).then(() => {
+        if (!ready()) {
+          throw new Error(message);
+        }
+      }),
+    ]),
+    signal,
+  );
 }
 
 function parseCompletedPidFile(content: string): number | undefined {
-  const match = /^([1-9]\d*)\n$/u.exec(content);
-  if (!match) {
-    return undefined;
-  }
-  const pid = Number(match[1]);
+  const pid = Number(/^([1-9]\d*)\n$/u.exec(content)?.[1]);
   return Number.isSafeInteger(pid) ? pid : undefined;
 }
 
-export async function waitForPidFile(filePath: string, timeoutMs: number): Promise<number> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const pid = parseCompletedPidFile(fs.readFileSync(filePath, "utf8"));
-      if (pid !== undefined) {
-        return pid;
-      }
-    } catch {
-      // The child creates the file asynchronously; keep polling until its payload is complete.
+export function readCompletedPidFile(filePath: string): number | undefined {
+  try {
+    return parseCompletedPidFile(fs.readFileSync(filePath, "utf8"));
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
     }
-    await new Promise((resolve) => {
-      realSetTimeout(resolve, 20);
-    });
+    throw error;
   }
-  throw new Error(`timeout waiting for pid in ${filePath}`);
+}
+
+export async function waitForPidFile(
+  filePath: string,
+  operation: PromiseLike<unknown>,
+  signal: AbortSignal,
+): Promise<number> {
+  await fixtureReadyBeforeSettlement(
+    filePath,
+    operation,
+    signal,
+    () => readCompletedPidFile(filePath) !== undefined,
+    `timeout waiting for pid in ${filePath}`,
+  );
+  return readOwnedDescendantPid(filePath);
 }
 
 export function pidIsAlive(pid: number): boolean {
@@ -62,28 +110,30 @@ export function pidIsAlive(pid: number): boolean {
   }
 }
 
-export async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!pidIsAlive(pid)) {
-      return;
+// Foreign descendants have no ChildProcess handle here. The runtime sends tree
+// signals but does not join exact-PID extinction, including after stopGateway.
+export async function waitForDead(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (pidIsAlive(pid)) {
+      await waitForProcessTick(20, undefined, { signal });
     }
-    await new Promise((resolve) => {
-      realSetTimeout(resolve, 20);
-    });
+  } catch (cause) {
+    throw new Error(`timeout waiting for pid ${pid} to exit`, { cause });
   }
-  throw new Error(`timeout waiting for pid ${pid} to exit`);
 }
 
 export function killPidIfAlive(pid: number | undefined): void {
-  if (pid === undefined || !pidIsAlive(pid)) {
-    return;
+  if (pid !== undefined && pidIsAlive(pid)) {
+    killOwnedPid(pid);
   }
+}
+
+function killOwnedPid(pid: number): void {
   try {
     process.kill(pid, "SIGKILL");
   } catch (error) {
     // The process can exit after the liveness probe; ESRCH already satisfies cleanup.
-    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ESRCH") {
+    if (!hasErrnoCode(error, "ESRCH")) {
       throw error;
     }
   }
@@ -102,86 +152,34 @@ function killOwnedRuntimeCommand(child: ChildProcess | undefined, detached: bool
     return;
   }
   if (detached) {
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-        throw error;
-      }
-    }
+    killOwnedPid(-child.pid);
   } else if (child.exitCode === null && child.signalCode === null) {
     child.kill("SIGKILL");
   }
 }
 
-async function withRealWatchdog<T>(pending: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      pending,
-      new Promise<never>((_resolve, reject) => {
-        timer = realSetTimeout(
-          () => reject(new Error("runtime command did not settle")),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    realClearTimeout(timer);
-  }
-}
-
 async function observeRuntimeCommandTimeout(params: {
-  run: () => Promise<unknown>;
-  ready: (child: ChildProcess) => Promise<number[]>;
+  args: string[];
+  ready: (child: ChildProcess, operation: Promise<unknown>) => Promise<number[]>;
   timeoutMs: number;
   detached: boolean;
+  runDetached?: boolean;
   root?: string;
   descendantPidPath?: string;
-  exitTimeoutMs?: number;
+  signal: AbortSignal;
+  onTestFinished: TestContext["onTestFinished"];
+  onCleanupRegistered: () => void;
 }): Promise<Error> {
+  const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+  params.signal.throwIfAborted();
   const spawnSpy = vi.spyOn(childProcess, "spawn");
   let child: ChildProcess | undefined;
   let commandResult: Promise<unknown> | undefined;
+  let closed: Promise<void> | undefined;
   let descendantPid: number | undefined;
   let cleanupSignalsSent = false;
   let settled = false;
-  // Freeze only the parent's policy clock. Real subprocess startup, pipe I/O,
-  // readiness and cleanup watchdogs must not consume or depend on that clock.
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    commandResult = params
-      .run()
-      .catch((error: unknown) => error)
-      .finally(() => {
-        settled = true;
-      });
-    const spawned = spawnSpy.mock.results[0];
-    if (spawned?.type !== "return" || !spawned.value.pid) {
-      throw new Error("runtime command did not expose its spawned child");
-    }
-    child = spawned.value;
-    const descendants = await params.ready(child);
-    const assertRunning = () => {
-      expect(pidIsAlive(child!.pid!)).toBe(true);
-      for (const pid of descendants) {
-        expect(pidIsAlive(pid)).toBe(true);
-      }
-      expect(settled).toBe(false);
-    };
-    assertRunning();
-    await vi.advanceTimersByTimeAsync(params.timeoutMs - 1);
-    assertRunning();
-    await vi.advanceTimersByTimeAsync(1);
-    const error = await withRealWatchdog(commandResult, 2000);
-    if (!(error instanceof Error)) {
-      throw new Error("expected runtime command to time out");
-    }
-    for (const pid of [child.pid!, ...descendants]) {
-      await waitForDead(pid, params.exitTimeoutMs ?? 2000);
-    }
-    return error;
-  } finally {
+  const cleanup = registerFixtureCleanup(params.onTestFinished, async () => {
     try {
       try {
         // Recover ownership before fallible joins, including failed readiness.
@@ -192,8 +190,7 @@ async function observeRuntimeCommandTimeout(params: {
         try {
           killOwnedRuntimeCommand(child, params.detached);
         } finally {
-          // A broken group-termination path must still reap the known descendant.
-          // This fallback follows the successful-path death assertions above.
+          // Even broken group termination must reap the descendant after death assertions.
           killPidIfAlive(descendantPid);
         }
       }
@@ -201,157 +198,138 @@ async function observeRuntimeCommandTimeout(params: {
     } finally {
       vi.useRealTimers();
       spawnSpy.mockRestore();
-      if (commandResult) {
-        await withRealWatchdog(commandResult, 2000);
-      }
-      if (child?.pid) {
-        await waitForDead(child.pid, params.exitTimeoutMs ?? 2000);
-      }
-      if (descendantPid !== undefined) {
-        await waitForDead(descendantPid, 2000);
+      await commandResult;
+      await closed;
+      if (descendantPid !== undefined && !params.signal.aborted) {
+        await waitForDead(descendantPid, params.signal);
       }
       if (settled && cleanupSignalsSent && params.root) {
         fs.rmSync(params.root, { force: true, recursive: true });
       }
     }
+  });
+  params.onCleanupRegistered();
+  // Freeze the parent's policy clock, not subprocess startup, I/O, readiness or cleanup.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const command: Promise<unknown> = runtimeSmoke
+      .runCommand(process.execPath, params.args, {
+        detached: params.runDetached,
+        timeoutMs: params.timeoutMs,
+      })
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
+    commandResult = command;
+    const spawned = spawnSpy.mock.results[0];
+    if (spawned?.type !== "return" || !spawned.value.pid) {
+      throw new Error("runtime command did not expose its spawned child");
+    }
+    child = spawned.value;
+    closed = childClosed(child);
+    const descendants = await withinTest(params.ready(child, command), params.signal);
+    const assertRunning = () => {
+      for (const pid of [child!.pid!, ...descendants]) {
+        expect(pidIsAlive(pid)).toBe(true);
+      }
+      expect(settled).toBe(false);
+    };
+    assertRunning();
+    await vi.advanceTimersByTimeAsync(params.timeoutMs - 1);
+    assertRunning();
+    await vi.advanceTimersByTimeAsync(1);
+    const error = await withinTest(command, params.signal);
+    if (!(error instanceof Error)) {
+      throw new Error("expected runtime command to time out");
+    }
+    await withinTest(closed, params.signal);
+    expect(pidIsAlive(child.pid!)).toBe(false);
+    for (const pid of descendants) {
+      await waitForDead(pid, params.signal);
+    }
+    return error;
+  } finally {
+    await cleanup();
   }
 }
 
-export function registerRuntimeCommandTimeoutTests(createPackageRoot: () => string): void {
-  (process.platform !== "win32" ? it : it.skip)(
-    "kills timed-out runtime command groups",
-    async () => {
-      const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+function registerTimeoutCase(
+  detached: boolean,
+  createPackageRoot = () => fs.mkdtempSync(path.join(os.tmpdir(), "runtime-command-")),
+): void {
+  const timeoutMs = detached ? 250 : 200;
+  (detached && process.platform === "win32" ? it.skip : it)(
+    detached
+      ? "kills timed-out runtime command groups"
+      : "bounds non-detached runtime commands and preserves captured output",
+    async ({ signal, onTestFinished }) => {
+      const startedAt = Date.now();
       const root = createPackageRoot();
+      let cleanupRegistered = false;
+      onTestFinished(() => {
+        if (!cleanupRegistered) {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      });
       const commandPath = path.join(root, "timeout-command.mjs");
       const descendantPidPath = path.join(root, "timed-out-descendant.pid");
       const readyPath = path.join(root, "timed-out-descendant.ready");
-      const descendantScript = [
-        "import fs from 'node:fs';",
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1000);",
-        `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
-      ].join("\n");
+      const descendantSource = `import fs from 'node:fs';
+process.on('SIGTERM', () => {});
+setInterval(() => {}, 1000);
+fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");
+${fixtureReadySource(readyPath)}`;
+      const spawnDescendant = `import childProcess from 'node:child_process';
+const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(descendantSource)}], { stdio: "ignore" });`;
       fs.writeFileSync(
         commandPath,
-        [
-          "import childProcess from 'node:child_process';",
-          "import fs from 'node:fs';",
-          `const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
-          )}], { stdio: "ignore" });`,
-          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid) + "\\n");`,
-          "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
+        `import fs from 'node:fs';
+${detached ? spawnDescendant : ""}
+setInterval(() => {}, 1000);
+process.stdout.write('partial\\n');
+process.stderr.write('problem\\n');
+fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(${detached ? "child" : "process"}.pid) + "\\n");
+${fixtureReadySource(descendantPidPath)}
+`,
         "utf8",
       );
-
       const error = await observeRuntimeCommandTimeout({
-        run: () =>
-          runtimeSmoke.runCommand(process.execPath, [commandPath], {
-            detached: undefined,
-            timeoutMs: 250,
-          }),
-        ready: async () => {
-          const pid = await waitForPidFile(descendantPidPath, 1000);
-          await waitForFile(readyPath, 1000);
-          return [pid];
-        },
-        timeoutMs: 250,
-        detached: true,
-        root,
-        descendantPidPath,
-      });
-      expect(error.message).toMatch(/timed out after 250ms/u);
-    },
-  );
-
-  (process.platform !== "win32" ? it : it.skip)(
-    "falls back to direct kills for non-detached command timeouts",
-    async () => {
-      const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
-      const root = createPackageRoot();
-      const commandPath = path.join(root, "non-detached-timeout-command.mjs");
-      const commandPidPath = path.join(root, "non-detached-command.pid");
-      fs.writeFileSync(
-        commandPath,
-        [
-          "import fs from 'node:fs';",
-          "setInterval(() => {}, 1000);",
-          `fs.writeFileSync(${JSON.stringify(commandPidPath)}, String(process.pid) + "\\n");`,
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      const error = await observeRuntimeCommandTimeout({
-        run: () =>
-          runtimeSmoke.runCommand(process.execPath, [commandPath], {
-            detached: false,
-            timeoutMs: 500,
-          }),
-        ready: async (child) => {
-          expect(await waitForPidFile(commandPidPath, 1000)).toBe(child.pid);
+        args: [commandPath],
+        ready: async (child, operation) => {
+          const pid = await waitForPidFile(descendantPidPath, operation, signal);
+          if (detached) {
+            await fixtureReadyBeforeSettlement(readyPath, operation, signal);
+            return [pid];
+          }
+          expect(pid).toBe(child.pid);
           return [];
         },
-        timeoutMs: 500,
-        detached: false,
+        timeoutMs,
+        detached,
+        runDetached: detached ? undefined : false,
         root,
-        exitTimeoutMs: 1000,
+        descendantPidPath: detached ? descendantPidPath : undefined,
+        signal,
+        onTestFinished,
+        onCleanupRegistered: () => {
+          cleanupRegistered = true;
+        },
       });
-      expect(error.message).toMatch(/timed out after 500ms/u);
+      if (detached) {
+        expect(error.message).toMatch(/timed out after 250ms/u);
+      } else {
+        expect(error.message).toMatch(/timed out after 200ms[\s\S]*partial[\s\S]*problem/u);
+        expect(Date.now() - startedAt).toBeLessThan(2_500);
+      }
     },
   );
 }
 
+export function registerRuntimeCommandTimeoutTests(createPackageRoot: () => string): void {
+  registerTimeoutCase(true, createPackageRoot);
+}
+
 export function registerRuntimeCommandOutputTimeoutTest(): void {
-  it("bounds runtime smoke child commands and preserves captured output", async () => {
-    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
-    const startedAt = Date.now();
-    const error = await observeRuntimeCommandTimeout({
-      run: () =>
-        runtimeSmoke.runCommand(
-          process.execPath,
-          [
-            "-e",
-            "setInterval(() => {}, 1000); process.stdout.write('partial\\n'); process.stderr.write('problem\\n');",
-          ],
-          { timeoutMs: 200 },
-        ),
-      ready: async (child) => {
-        let stdout = "",
-          stderr = "";
-        const onStdout = (chunk: string | Buffer) => {
-          stdout += chunk.toString();
-        };
-        const onStderr = (chunk: string | Buffer) => {
-          stderr += chunk.toString();
-        };
-        child.stdout!.on("data", onStdout);
-        child.stderr!.on("data", onStderr);
-        try {
-          const deadline = Date.now() + 1000;
-          while (
-            (!stdout.includes("partial") || !stderr.includes("problem")) &&
-            Date.now() < deadline
-          ) {
-            await new Promise<void>((resolve) => {
-              realSetTimeout(resolve, 20);
-            });
-          }
-          expect(stdout).toContain("partial");
-          expect(stderr).toContain("problem");
-          return [];
-        } finally {
-          child.stdout!.off("data", onStdout);
-          child.stderr!.off("data", onStderr);
-        }
-      },
-      timeoutMs: 200,
-      detached: process.platform !== "win32",
-    });
-    expect(error.message).toMatch(/timed out after 200ms[\s\S]*partial[\s\S]*problem/u);
-    expect(Date.now() - startedAt).toBeLessThan(2_500);
-  });
+  registerTimeoutCase(false);
 }

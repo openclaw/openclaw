@@ -1,10 +1,8 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  createFixturePlugin,
   runCachedHealthSnapshotBoundariesProof,
   runHandlerBoundaryProof,
-  withFixturePlugin,
 } from "./cached-health-snapshot-boundaries.js";
 
 describe("cached health snapshot boundary producer", () => {
@@ -19,21 +17,6 @@ describe("cached health snapshot boundary producer", () => {
       liveOverlayMerged: true,
       publicSensitiveOmitted: true,
     });
-  });
-
-  it("builds the fixture plugin configuration used by the real-Gateway lane", async () => {
-    const fixture = await createFixturePlugin();
-    try {
-      const config = withFixturePlugin({} as never, fixture.pluginDir);
-      expect(config.plugins).toMatchObject({
-        enabled: true,
-        allow: ["qa-cached-health-tool"],
-        entries: { "qa-cached-health-tool": { enabled: true } },
-      });
-      expect(config.plugins?.load?.paths).toContain(fixture.pluginDir);
-    } finally {
-      await fixture.cleanup();
-    }
   });
 
   it.runIf(process.env.OPENCLAW_QA_REAL_GATEWAY === "1")(

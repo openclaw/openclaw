@@ -24,7 +24,7 @@ are a separate case. They register a Gateway question and then wait, and the
 prompt that lets a person answer it is published by whatever runs the tool. A
 harness whose tools go through the embedded tool lifecycle gets that publication
 from its tool-start handler. A harness that dispatches tools itself passes
-`questionPrompt` to `createOpenClawCodingTools` instead, on every path where it
+`questionPrompt` to `hostCapabilities.createToolSurfaceAsync` instead, on every path where it
 builds a tool surface — a side thread is its own such path: `send` is the run's
 `onToolResult`, and `messageChannel` is the conversation the prompt would appear
 in. Leave it out and the question is registered but never shown, so the turn
@@ -124,12 +124,30 @@ whose working directory differs from the attempt may pass
 bounded action fact while keeping identity and policy authority closure-bound. The closure
 binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
-attempt returns. Calls made after attempt settlement fail closed.
+attempt returns. Calls made after attempt settlement are rejected.
+
+When supplied, `assertNativeSubagentSpawnAllowed()` must run at native spawn
+admission. It checks the current incumbent execution's authority. Native delegation
+keeps that execution's requester even after another person steers the turn; it does
+not select a person from the conversation. Bundled native hook admission may return
+a synchronous guard, which the relay rechecks after awaited preparation immediately
+before allow; a returned reason becomes a model-visible refusal.
+
+Native hook availability does not itself restrict collaborative steering. Existing
+model, workspace, cancellation, and source-authority checks still govern native work.
+Explicit participant selection on `sessions_spawn` is separate: it carries the
+selected authenticated requester into a new admission while retaining the parent
+execution as initiator.
+
+Backend handles can declare `supportsCrossProfileSteering: false` when steering
+must stay with the turn owner's operator profile; omitting the field permits
+cross-profile steering. The reply admission owner applies this restriction before
+message injection, including question answers delivered through that path.
 
 For independently retained native work, call the optional
 `retainSourceAuthority()` while the host capability is active. When an operator
-source exists, the returned `assertCurrent`, optional `signal`, and idempotent
-`release` retain that original source independently of foreground completion.
+source exists, the returned `assertCurrent`, optional `signal`, and
+`release` (safe to repeat) retain that original source independently of foreground completion.
 The method returns `undefined` for a run without an operator source. It supplies
 neither new tool permission nor a replacement foreground capability. Bind it to
 the exact resources admitted through the existing native policy path, recheck it
@@ -150,10 +168,19 @@ media policy. Include its returned text and images in the native context budget;
 do not append them as an unbounded suffix. See the
 [runtime media contract](/plugins/sdk-runtime) for limits and older-host behavior.
 
+For transfer into a native environment, optional `resolveInputAttachmentMedia()`
+returns a frozen, detached copy of the current admitted input's original media
+facts, including images removed from `params.media` by inline projection. It
+resolves deferred transcript media under the captured attempt's live authority;
+it does not change transcript content or grant file-reading permission. Keep
+source validation and transfer with the harness's existing attachment owner.
+Older hosts without this capability provide only the current attempt's
+`params.media`; do not reconstruct missing sources from prompt text or history.
+
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
-and `flush()` operations. The host adds session attribution, bounds and redacts
-event data, and persists it through the canonical trajectory store. Treat the
+and `flush()` operations. The host adds session attribution, bounds event data,
+and persists it through the shared trajectory store without secret masking. Treat the
 capability as optional, send only structured non-secret facts, and await
 `flush()` before the attempt settles; do not infer storage paths or create a
 plugin-side fallback when the capability is absent.
@@ -183,6 +210,18 @@ the capability on every selected attempt. Compatibility is type-level only:
 current harness code must not add a runtime path that operates without the
 host capability.
 
+Compaction implementations use `AgentHarnessCompactParams<2>` (and the private
+native bridge's `AgentHarnessNativeCompactionParams<2>`) with a host-created view
+of `assertActive` and `retainSourceAuthority`. Core retains the originating source
+through preparation, queueing, native completion, and cleanup. The registered
+`AgentHarness.compact` and `AgentHarnessV2.compact` callback signatures remain
+unchanged. Validate the supplied capability at that callback boundary before
+loading or calling the version 2 implementation. Omitting the type argument keeps
+the legacy parameter shape; selecting `2` requires the host capability through
+the existing SDK type names. The adapters do not require a new runtime SDK export. An older
+host that omits it receives an actionable failure before native work; absence
+never becomes System authority. The capability's runtime version remains `1`.
+
 Native harnesses that need PI-like compact tool routing should use
 `createAgentHarnessToolSurfaceRuntime(...)` from
 `openclaw/plugin-sdk/agent-harness-tool-runtime`. It owns
@@ -190,6 +229,15 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+Pass the host-supplied attempt's `trigger` to this factory. This optional field
+uses the existing run trigger (`cron`, `event`, `heartbeat`, `manual`, `memory`,
+`overflow`, or `user`); omitting it preserves ordinary tool presentation. A
+`memory` turn keeps the host-selected persistence tools directly available and
+disables Tool Search and Code Mode, including when prepared presentation facts
+are supplied. File-backed saving retains `read` and its restricted append-only
+writer; provider-backed saving retains `read` and the selected plugin's declared
+persistence and lookup tools. See [pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
 
 Native tool adapters may use `runWithAsyncWorkResources(...)` from the same
 subpath to retain operation cleanup through host-owned admitted work without
