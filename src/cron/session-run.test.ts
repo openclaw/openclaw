@@ -10,6 +10,7 @@ import type {
 } from "../auto-reply/reply/session-event-contract.js";
 import type * as SessionHandoff from "../auto-reply/reply/session-event-handoff.js";
 import type { RestoredGatewayOperatorAuthority } from "../gateway/operator-run-recovery.js";
+import { prepareAutomationSystemEvents } from "../infra/system-events.js";
 import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
@@ -198,6 +199,24 @@ describe("scheduled session prompts", () => {
           [],
         );
         expect(fixture.readScratch.mock.calls[0]?.[0]).toBe(storePath);
+        fixture.readScratch.mockClear();
+        const prepared = input();
+        prepared.cfg = params.cfg;
+        prepared.sessionPreparation = {
+          agentId: prepared.agentId,
+          sessionKey: prepared.sessionKey,
+          notices: await prepareAutomationSystemEvents(
+            prepared.sessionKey,
+            prepared.job.id,
+            prepared.job.state.runningAtMs,
+          ),
+          scratch: {
+            currentRevision: 1,
+            scratch: { content: "Prepared proof scratch", revision: 1, updatedAtMs: 1 },
+          },
+        };
+        expect(await prepareLivePrompt(prepared)).toContain("Prepared proof scratch");
+        expect(fixture.readScratch).not.toHaveBeenCalled();
       } finally {
         observation.restore();
       }
