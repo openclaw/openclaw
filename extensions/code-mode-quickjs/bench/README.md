@@ -439,8 +439,8 @@ The coverage audit found three different boundaries:
   cancellation races, sequential exclusion, expiry and shutdown. Host-only
   subscriber cases still run once. Transcript setup awaits the canonical
   persistence API. The initial October 28 CI execution used a Bun host under
-  its infra database-worker owner. The prepared routing correction selects
-  these contracts on both hosts; the refreshed candidate still requires fresh CI.
+  its infra database-worker owner. The October 29 candidate CI below also
+  executed the lifecycle suite on Node while retaining its Bun pass.
 - `scripts/perf/code-mode-engine-measure.ts` invokes the executors directly with
   a synthetic bridge. It can measure successful execution and checkpoint cost,
   but bypasses the public execution owner, transcript projection and bridge
@@ -595,9 +595,30 @@ The three deterministic probe cleanup regressions also passed on Node.
 These observations identify a test-policy mismatch on the measured source;
 they do not isolate which part of cold admission consumed the budget or prove
 a production timeout regression. The subsequent PR baseline refresh changed
-the execution owner. The earlier results do not qualify that refreshed owner;
-it requires fresh candidate CI. Its focused Testbox attempt was stopped while
-queued and supplied no runtime execution proof.
+the execution owner. The earlier results do not qualify that refreshed owner.
+Its focused Testbox attempt was stopped while queued and supplied no runtime
+execution proof.
+
+Fresh [candidate CI](https://github.com/openclaw/openclaw/actions/runs/40807505089),
+attempt 1, passed for published head
+`5a022cae0a8328ed7566d1ca7d201096533c60ff`. Its actual checkout was merge
+`5ce6a28a2d92f26c3afc414b316dc8ae8f7fd9e9`, tree
+`93ab079bd3a429aa3ff94d6a086d7062d99869d8`, with ordered parents
+`7e75d4900ebea39e593b12680875b38fdc6e84de` and
+`5a022cae0a8328ed7566d1ca7d201096533c60ff`.
+The [real lifecycle shard](https://github.com/openclaw/openclaw/actions/runs/40807505089/job/123230380823)
+completed 22/22 cases on Node, then 22/22 on Bun, retaining both guest executors
+and the original cold order. The same job passed TTS-delivery 4/4 and
+source-reply-loop 8/8 on Bun. The
+[host-denial shard](https://github.com/openclaw/openclaw/actions/runs/40807505089/job/123230380752)
+passed 21/21 on Bun, including the explicit late-settlement deadline.
+Fresh runtime-planner tests, 57 shard-runner cases, tooling-test types and the
+CI types/lint/ratchet lanes also passed.
+
+This changed-file CI did not select parity/failure-origin or rerun all seven
+fixture callers on both hosts. Their broader results remain historical; this
+is fresh integrated lifecycle proof, not a full current-owner sweep. The
+separate macOS tooling workflow and packaged qualification remain distinct.
 
 ## Reproduction and remaining qualification
 
@@ -671,6 +692,13 @@ answer QuickJS-versus-Node. A future ShellBench comparison needs matched source,
 model/provider, task subset and seed, concurrency, retry policy and auditable
 traces, including accuracy, total calls/tokens and end-to-end latency. Fewer
 visible model turns alone is not a win.
+
+Before timing, verify the applied global Code Mode configuration and the selected
+agent/model overrides, including their absence. Record the actual worker engine
+separately from the requested executor. Count worker legs separately from public
+executions and resumes; a failure before dispatch does not prove guest execution.
+Missing observations, dropped records and incomplete observer settlement must stay
+explicit rather than becoming inferred engine use.
 
 The parked ShellBench campaign remains a separate qualification boundary. The policy-test
 runtime archive from `scripts/macos-native-runtime-artifact.mjs` deliberately
