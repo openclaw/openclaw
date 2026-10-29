@@ -8,6 +8,7 @@ import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabelAsync } from "../agents/model-auth-label.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   buildCodexSyntheticUsageAuth,
@@ -15,6 +16,7 @@ import {
   shouldUseCodexSyntheticUsageForRuntime,
   resolveUsageCredentialType,
 } from "../status/codex-synthetic-usage.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
 
 export type StatusUsageSummaryOptions = {
@@ -47,20 +49,34 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     agentDir = resolveAgentDir(params.config, resolvedAgentId);
   }
   const { resolveCommandConfigWithSecrets } = await import("../cli/command-config-resolution.js");
-  const { resolvedConfig: config, diagnostics } = await resolveCommandConfigWithSecrets({
-    config: params.config,
-    commandName: "status --usage",
-    targetIds: new Set(["models.providers.*.apiKey"]),
-    mode: "read_only_status",
-    gatewaySecretResolveTimeoutMs: resolveStatusGatewayProbeTimeoutMs(params),
-    ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
-  });
-  params.onSecretDiagnostics?.(diagnostics);
+  // The status budget includes local fallback and joins any exec provider it owns.
+  const prepared = await withCommandProcessScope(() =>
+    awaitWithinDeadline(
+      () =>
+        resolveCommandConfigWithSecrets({
+          config: params.config,
+          commandName: "status --usage",
+          targetIds: new Set(["models.providers.*.apiKey"]),
+          mode: "read_only_status",
+          gatewaySecretResolveTimeoutMs: resolveStatusGatewayProbeTimeoutMs(params),
+          ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
+        }),
+      params.gatewayProbeDeadlineMs,
+      () => performance.now(),
+    ),
+  );
+  const config = prepared === ABSOLUTE_DEADLINE_EXPIRED ? params.config : prepared.resolvedConfig;
+  if (prepared !== ABSOLUTE_DEADLINE_EXPIRED) {
+    params.onSecretDiagnostics?.(prepared.diagnostics);
+  }
   const usage = await loadProviderUsageSummary({
     timeoutMs: resolveStatusGatewayProbeTimeoutMs(params),
     config,
     agentDir,
   });
+  if (resolveStatusGatewayProbeTimeoutMs(params) === 0) {
+    return usage;
+  }
   const configuredDefault = resolveDefaultModelForAgent({
     cfg: config,
     agentId: resolvedAgentId,

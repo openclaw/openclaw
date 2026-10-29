@@ -2,6 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
@@ -228,25 +229,52 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("does not start credential preparation after the usage deadline", async () => {
+    const params = usageParams();
+    vi.spyOn(performance, "now").mockReturnValue(params.gatewayProbeDeadlineMs);
+    await resolveStatusUsageSummary(params);
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(mocks.resolveModelAuthLabelAsync).not.toHaveBeenCalled();
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledExactlyOnceWith({
+      timeoutMs: 0,
+      config: params.config,
+      agentDir: params.agentDir,
+    });
+  });
+
+  it("cancels credential subprocess ownership when the usage deadline expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const entered = Promise.withResolvers<AbortSignal | undefined>();
+      mocks.resolveCommandConfigWithSecrets.mockImplementationOnce(() => {
+        entered.resolve(resolveCommandProcessSignal());
+        return new Promise(() => {});
+      });
+      const pending = resolveStatusUsageSummary(usageParams());
+      const signal = await entered.promise;
+      expect(signal).toBeDefined();
+      vi.spyOn(performance, "now").mockReturnValue(3456);
+      await vi.advanceTimersByTimeAsync(3456);
+      await pending;
+      expect(signal?.aborted).toBe(true);
+      expect(mocks.resolveModelAuthLabelAsync).not.toHaveBeenCalled();
+      expect(mocks.loadProviderUsageSummary.mock.calls[0]?.[0].timeoutMs).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shares the usage deadline with Codex synthetic usage", async () => {
-    mocks.loadProviderUsageSummary
-      .mockImplementationOnce(async () => {
-        vi.spyOn(performance, "now").mockReturnValue(3456);
-        return usageSummary(1, [anthropicUsage()]);
-      })
-      .mockResolvedValueOnce(usageSummary(2, [openaiUsage(9)]));
+    mocks.loadProviderUsageSummary.mockImplementationOnce(async () => {
+      vi.spyOn(performance, "now").mockReturnValue(3456);
+      return usageSummary(1, [anthropicUsage()]);
+    });
 
     await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual(
-      usageSummary(1, [anthropicUsage(), openaiUsage(9)]),
+      usageSummary(1, [anthropicUsage()]),
     );
-
-    expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
-      timeoutMs: 0,
-      providers: ["openai"],
-      auth: [{ provider: "openai", token: "codex-app-server", hookProvider: "codex" }],
-      config: expect.any(Object),
-      agentDir: "/tmp/status-agent",
-    });
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
+    expect(mocks.resolveModelAuthLabelAsync).not.toHaveBeenCalled();
   });
 
   it("keeps existing OpenAI usage when Codex synthetic usage has no windows", async () => {
