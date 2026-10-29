@@ -15,6 +15,15 @@ The timeout budgets around a Codex turn, and how OpenClaw settles a completed tu
 Client startup and app-server control-request budgets measure elapsed time, so
 system-clock adjustments do not shorten or extend them.
 
+Shared app-server startup has its own budget of ten times
+`appServer.requestTimeoutMs` (ten minutes by default). A shared discovery or
+control scope starts its request budget once the client is ready. A caller
+that cancels or exhausts a separate acquisition deadline stops waiting without
+closing the initializing client. Later calls can join that startup, including
+after all earlier waiters have left. The five-minute idle grace starts after the client is ready.
+Isolated clients remain owned by their caller's deadline, and Gateway shutdown
+still cancels shared startup.
+
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`. Ordinary Codex `item/tool/call` requests use the
 first available timeout in this order:
@@ -53,6 +62,15 @@ watchdog adds 30000 ms for setup and completion; the app-server watchdog receive
 that same resolved budget and adds another 30000 ms for response delivery.
 Stop, turn deadlines, lifecycle cancellation, and expired approval authority
 still end the affected work.
+
+`autoreview` follows the admitted initiating run's execution lifetime for its
+whole preparation, planned passes, and report completion. Its per-pass timeout
+arguments do not become a whole-call cap. The original parent deadline keeps
+running, including when a pending tool request is replayed; a tool call cannot
+restart it. An unlimited parent adds no execution or response watchdog, while
+Stop and authority revocation still cancel the operation. Canonical helper
+settings and the existing 600-second `openclaw agent exec` default per pass are
+unchanged. Reviews in `/btw` remain within that side question's ten-minute deadline.
 
 On timeout, OpenClaw aborts the tool signal where supported and returns a failed
 dynamic-tool response to Codex so the turn can continue instead of leaving the

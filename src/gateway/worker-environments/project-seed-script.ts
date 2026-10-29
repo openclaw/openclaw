@@ -1,13 +1,19 @@
+import { gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import {
   WORKSPACE_SEED_RETENTION,
   WORKSPACE_SEED_RETENTION_JS,
 } from "../../worker/workspace-seed-retention.js";
-import { PREPARE_PROJECT_WORKSPACE_JS } from "./project-setup-script.js";
+import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
+import {
+  PREPARE_PROJECT_WORKSPACE_JS,
+  type PreparedProjectVerification,
+} from "./project-setup-script.js";
 
 type ProjectSeedScriptInput = {
   namespace: string;
   seedKey: string;
   baseCommit: string;
+  verifiedRetained?: PreparedProjectVerification | null;
   preparation?: {
     preparationKey: string;
     cacheKey: string;
@@ -26,10 +32,15 @@ type ProjectSeedScriptInput = {
 
 /** Only immutable Git content and non-secret preparation metadata enter the machine image. */
 export function createProjectSeedScript(input: ProjectSeedScriptInput): string {
+  // Bootstrap can install a toolchain before Node performs the full seed-path admission.
   return `set -eu
+if [ -n "\${HOME:-}" ] && { [ -L "$HOME/.openclaw-worker" ] || [ -L "$HOME/.openclaw-worker/git-seeds" ]; }; then
+  echo 'Project seed directory escaped its owner' >&2
+  exit 1
+fi
+${DEFAULT_NODE_TOOLCHAIN_SETUP_SH}
 node <<'PROJECT_SEED_SCRIPT'
 const fs = require("node:fs");
-const fsp = fs.promises;
 const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
@@ -40,6 +51,7 @@ ${WORKSPACE_SEED_RETENTION_JS}
 const prepareWorkspace = ${input.preparation ? PREPARE_PROJECT_WORKSPACE_JS : "undefined"};
 process.umask(0o077);
 const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key))), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
+Object.assign(env, ${JSON.stringify(gitMaintenanceEnvironment())});
 const git = (root, args, stdin, networkEnv) => {
   const result = spawnSync("git", ["-c", "core.hooksPath=" + os.devNull, "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "core.askPass=", "-c", "init.templateDir=", "-C", root, ...args], { env: networkEnv ?? env, encoding: "utf8", timeout: 600000, maxBuffer: 262144, stdio: [stdin ?? "ignore", "pipe", "pipe"] });
   if (result.status !== 0) throw new Error(networkEnv ? "Project repository fetch failed" : "Project Git preparation failed: " + (result.stderr?.trim() || result.error?.message || "exit " + result.status));
@@ -81,6 +93,7 @@ const ownedDirectory = (parent, target) => {
   }
   try {
     const retained = input.preparation && await prepareWorkspace({ ...input, ...input.preparation }, true);
+    const retainedWorkspace = input.preparation ? { retainedWorkspace: retained ?? null } : {};
     if (!transport) {
       if (fs.existsSync(seed)) {
         ownedDirectory(namespace, seed);
@@ -88,7 +101,7 @@ const ownedDirectory = (parent, target) => {
         const preparedWorkspace = retained?.baseCommit === input.baseCommit ? retained : undefined;
         if (git(seed, ["rev-parse", "--verify", "HEAD"]) !== input.baseCommit || git(seed, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project seed is not pristine");
         prune();
-        process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace }));
+        process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace, ...retainedWorkspace }));
         return;
       }
       // Provisioning serializes this lease. Discard only this project's abandoned staging.
@@ -99,7 +112,7 @@ const ownedDirectory = (parent, target) => {
         fs.rmSync(stale, { recursive: true });
       }
       const directory = fs.mkdtempSync(path.join(namespace, stagingPrefix));
-      process.stdout.write(JSON.stringify({ ready: false, directory, retainedCommit: retained?.baseCommit }));
+      process.stdout.write(JSON.stringify({ ready: false, directory, ...retainedWorkspace }));
       return;
     }
     const repository = path.join(directory, "repository");
@@ -109,7 +122,7 @@ const ownedDirectory = (parent, target) => {
     if (repositoryUrl !== undefined) {
       const url = new URL(repositoryUrl);
       const segments = url.pathname.slice(1).split("/");
-      if (url.origin !== "https://github.com" || url.href !== repositoryUrl || url.username || url.password || url.search || url.hash || segments.length !== 2 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/.test(segment)) || !segments[1].endsWith(".git") || !/^[a-f0-9]{40}$/.test(input.baseCommit)) throw new Error("Project repository source is invalid");
+      if (url.protocol !== "https:" || (input.repository && url.origin !== "https://github.com") || url.href !== repositoryUrl || url.username || url.password || url.search || url.hash || segments.length !== 2 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/.test(segment)) || !segments[1].endsWith(".git") || !/^[a-f0-9]{40}$/.test(input.baseCommit)) throw new Error("Project repository source is invalid");
     }
     if (input.repository) {
       // Public fetches cannot use ambient credentials, helpers, or redirects.
@@ -142,7 +155,12 @@ const ownedDirectory = (parent, target) => {
     if (git(repository, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project checkout is not pristine");
     fs.renameSync(repository, seed);
     prune();
-    process.stdout.write(JSON.stringify({ ready: true }));
+    // Repository code keeps its separate Gateway authority check. A checkout that
+    // cannot run setup can complete under this seed command's existing owner.
+    const preparedWorkspace = input.preparation && (!input.preparation.setupRecipe || input.preparation.runSetupScript === false)
+      ? await prepareWorkspace({ ...input, ...input.preparation, runSetupScript: false })
+      : undefined;
+    process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace }));
   } finally { if (directory !== undefined) fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch((error) => { console.error(error.message); process.exitCode = 1; });
 PROJECT_SEED_SCRIPT`;

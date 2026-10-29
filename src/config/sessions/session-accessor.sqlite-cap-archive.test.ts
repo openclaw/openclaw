@@ -15,21 +15,11 @@ import type { InternalSessionEntry } from "./types.js";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const fixture = useTempSessionsFixture("openclaw-sqlite-cap-archive-");
 
-async function replaceWithoutMaintenance(
-  scope: { sessionKey: string; storePath: string },
-  entry: InternalSessionEntry,
-): Promise<void> {
-  await patchSessionEntryCore(scope, () => entry, {
-    fallbackEntry: entry,
-    replaceEntry: true,
-    skipMaintenance: true,
-  });
-}
-
 it("persists reasons and caps the least-recently-touched active row after dashboard archival", async () => {
   const storePath = fixture.storePath();
   const now = Date.now();
-  const agedKey = "agent:main:ordinary:aged";
+  const scope = (key: string) => ({ sessionKey: `agent:main:${key}`, storePath });
+  const load = (key: string) => loadSessionEntry(scope(key));
   const preservedMetadata = {
     sandbox: "required",
     createdVia: "operator",
@@ -38,45 +28,33 @@ it("persists reasons and caps the least-recently-touched active row after dashbo
     publicShare: { id: "a".repeat(48), sessionId: "ordinary-aged", createdAt: now - DAY_MS },
     skillsSnapshot: { prompt: "Preserve the complete saved prompt", skills: [] },
   } satisfies Partial<InternalSessionEntry>;
-  await replaceWithoutMaintenance(
-    { sessionKey: agedKey, storePath },
-    {
+  const entries = {
+    "ordinary:aged": {
       sessionId: "ordinary-aged",
       updatedAt: now - 40 * DAY_MS,
       archivedBy: { type: "human", id: "previous-archiver" },
       ...preservedMetadata,
     },
-  );
-  const dashboardKey = "agent:main:dashboard:stale";
-  const recentlyTouchedKey = "agent:main:ordinary:recently-touched";
-  const leastRecentlyTouchedKey = "agent:main:ordinary:least-recently-touched";
-  const triggerKey = "agent:main:ordinary:trigger";
-
-  await replaceWithoutMaintenance(
-    { sessionKey: dashboardKey, storePath },
-    { sessionId: "dashboard-stale", updatedAt: now - 40 * DAY_MS },
-  );
-  await replaceWithoutMaintenance(
-    { sessionKey: recentlyTouchedKey, storePath },
-    {
+    "dashboard:stale": { sessionId: "dashboard-stale", updatedAt: now - 40 * DAY_MS },
+    "ordinary:recently-touched": {
       sessionId: "recently-touched",
       updatedAt: now - 20 * DAY_MS,
       lastInteractionAt: now - DAY_MS,
     },
-  );
-  await replaceWithoutMaintenance(
-    { sessionKey: leastRecentlyTouchedKey, storePath },
-    {
+    "ordinary:least-recently-touched": {
       sessionId: "least-recently-touched",
       updatedAt: now - 10 * DAY_MS,
       lastActivityAt: now - 30 * DAY_MS,
     },
-  );
-  await replaceWithoutMaintenance(
-    { sessionKey: triggerKey, storePath },
-    { sessionId: "trigger", updatedAt: now },
-  );
-
+    "ordinary:trigger": { sessionId: "trigger", updatedAt: now },
+  } satisfies Record<string, InternalSessionEntry>;
+  for (const [key, entry] of Object.entries(entries)) {
+    await patchSessionEntryCore(scope(key), () => entry, {
+      fallbackEntry: entry,
+      replaceEntry: true,
+      skipMaintenance: true,
+    });
+  }
   const result = await applySessionEntryLifecycleMutation({
     storePath,
     maintenanceOverride: {
@@ -86,7 +64,6 @@ it("persists reasons and caps the least-recently-touched active row after dashbo
       pruneAfterMs: 30 * DAY_MS,
     },
   });
-
   const database = openOpenClawAgentDatabase({
     agentId: "main",
     path: resolveSqliteTargetFromSessionStorePath(storePath).path,
@@ -100,24 +77,22 @@ it("persists reasons and caps the least-recently-touched active row after dashbo
     }
   });
   expect(result).toMatchObject({ archived: 3, capArchived: 1, capped: 1, pruned: 0 });
-  expect(loadSessionEntry({ sessionKey: agedKey, storePath })).toMatchObject({
+  expect(load("ordinary:aged")).toMatchObject({
     ...preservedMetadata,
     sessionId: "ordinary-aged",
     updatedAt: now - 40 * DAY_MS,
     archivedAt: expect.any(Number),
     archiveReason: "age-retention",
   });
-  expect(loadSessionEntry({ sessionKey: agedKey, storePath })?.archivedBy).toBeUndefined();
-  expect(loadSessionEntry({ sessionKey: dashboardKey, storePath })).toMatchObject({
+  expect(load("ordinary:aged")?.archivedBy).toBeUndefined();
+  expect(load("dashboard:stale")).toMatchObject({
     archivedAt: expect.any(Number),
     archiveReason: "stale-dashboard",
   });
-  expect(loadSessionEntry({ sessionKey: leastRecentlyTouchedKey, storePath })).toMatchObject({
+  expect(load("ordinary:least-recently-touched")).toMatchObject({
     archivedAt: expect.any(Number),
     archiveReason: "active-session-cap",
   });
-  expect(
-    loadSessionEntry({ sessionKey: recentlyTouchedKey, storePath })?.archivedAt,
-  ).toBeUndefined();
-  expect(loadSessionEntry({ sessionKey: triggerKey, storePath })?.archivedAt).toBeUndefined();
+  expect(load("ordinary:recently-touched")?.archivedAt).toBeUndefined();
+  expect(load("ordinary:trigger")?.archivedAt).toBeUndefined();
 });

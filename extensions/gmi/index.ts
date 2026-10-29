@@ -1,11 +1,24 @@
-// Gmi plugin entrypoint registers its OpenClaw integration.
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  applyOpenAICompletionsToolReasoning,
+  createPayloadPatchStreamWrapper,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_ID = "gmi";
+
+function wrapGmiOpenAIToolReasoning(ctx: ProviderWrapStreamFnContext) {
+  const wrapped = createPayloadPatchStreamWrapper(ctx.streamFn, ({ model, payload }) => {
+    if ((ctx.sourceApi ?? model.api) === "openai-completions" && model.id.startsWith("openai/")) {
+      applyOpenAICompletionsToolReasoning(payload, { id: model.id.slice("openai/".length) });
+    }
+  });
+  return Object.assign(wrapped, { preservesGenericCompatibility: true });
+}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -35,5 +48,7 @@ export default defineSingleProviderPluginEntry({
       dropReasoningFromHistory: false,
     }),
     ...buildProviderToolCompatFamilyHooks("openai"),
+    wrapStreamFn: wrapGmiOpenAIToolReasoning,
+    wrapSimpleCompletionStreamFn: wrapGmiOpenAIToolReasoning,
   },
 });

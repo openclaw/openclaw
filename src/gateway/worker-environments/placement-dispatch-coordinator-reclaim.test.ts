@@ -1,292 +1,123 @@
-import { setImmediate as setImmediatePromise } from "node:timers/promises";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   ACTIVE_PLACEMENT,
-  admittedRecovery,
-  createCoordinatorTestService,
+  createOperationGate,
+  coordinate as createCoordinatedService,
   LOCAL_PLACEMENT,
   MOVE_REQUEST,
-  PROVISIONING_PLACEMENT,
   REQUEST,
 } from "./placement-dispatch-coordinator.test-support.js";
 
-it.each(["full sweep", "targeted sweep", "recovery"] as const)(
-  "reclaims an independent session before %s waiting for an unrelated dispatch",
-  async (maintenance) => {
-    const dispatchEntered = createDeferredCore();
-    const dispatchRelease = createDeferredCore();
-    const reclaimRelease = createDeferredCore();
-    const events: string[] = [];
-    const stopped = {
-      sessionId: "stopped-session",
-      sessionKey: "agent:main:stopped-session",
-      agentId: "main",
-    };
-    const service = createCoordinatorTestService({
-      dispatch: async (request) => {
-        events.push(`dispatch:${request.sessionId}`);
+it("reclaims an independent session while another Stop is blocked", async () => {
+  const gate = createOperationGate(undefined);
+  const coordinated = createCoordinatedService({
+    reclaim: async (request, _authorize, _beforeDrain, serialize) =>
+      serialize!(async () => {
         if (request.sessionId === REQUEST.sessionId) {
-          dispatchEntered.resolve();
-          await dispatchRelease.promise;
+          await gate.run();
         }
-        return { ...ACTIVE_PLACEMENT, ...request };
-      },
-      reconcile: async () => {
-        events.push("maintenance");
-      },
-      reconcileActive: async () => {
-        events.push("maintenance");
-      },
-      resumeProvisioning: admittedRecovery(async (_placement, core) => {
-        events.push("maintenance");
-        await core();
+        return { ...LOCAL_PLACEMENT, ...request };
       }),
-      reclaim: async (request, _authorize, _beforeDrain, serialize, pending) => {
-        await pending?.settled;
-        if (!serialize) {
-          throw new Error("Reclaim fixture requires serialization");
-        }
-        return await serialize(async () => {
-          events.push(`reclaim:${request.sessionId}`);
-          if (request.sessionId === stopped.sessionId) {
-            await reclaimRelease.promise;
-          }
-          return { ...LOCAL_PLACEMENT, ...request };
-        });
-      },
+  });
+  const stopping = coordinated.reclaim(REQUEST);
+  await gate.entered;
+  try {
+    await expect(coordinated.reclaim({ ...REQUEST, sessionId: "other" })).resolves.toMatchObject({
+      sessionId: "other",
     });
-    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
-    const dispatch = coordinated.dispatch(REQUEST);
-    await dispatchEntered.promise;
-    const pendingMaintenance =
-      maintenance === "full sweep"
-        ? coordinated.reconcile()
-        : maintenance === "targeted sweep"
-          ? coordinated.reconcileActive("worker-other")
-          : coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {});
-    const firstStop = coordinated.reclaim(stopped);
-    const secondStop = coordinated.reclaim({
-      ...stopped,
-      sessionId: "another-stopped-session",
-      sessionKey: "agent:main:another-stopped-session",
-    });
-    let laterDispatch: Promise<unknown> | undefined;
-    let laterStop: Promise<unknown> | undefined;
-    try {
-      await setImmediatePromise();
-      expect([...events]).toEqual([
-        `dispatch:${REQUEST.sessionId}`,
-        `reclaim:${stopped.sessionId}`,
-      ]);
-      dispatchRelease.resolve();
-      await dispatch;
-      await setImmediatePromise();
-      // Maintenance and the later Stop cannot overtake the first Stop's effects.
-      expect([...events]).toEqual([
-        `dispatch:${REQUEST.sessionId}`,
-        `reclaim:${stopped.sessionId}`,
-      ]);
-      laterStop = coordinated.reclaim({
-        ...stopped,
-        sessionId: "late-stopped-session",
-        sessionKey: "agent:main:late-stopped-session",
-      });
-      laterDispatch = coordinated.dispatch({
-        ...REQUEST,
-        sessionId: "later-session",
-        sessionKey: "agent:main:later-session",
-      });
-      reclaimRelease.resolve();
-    } finally {
-      dispatchRelease.resolve();
-      reclaimRelease.resolve();
-      await Promise.all([
-        dispatch,
-        pendingMaintenance,
-        firstStop,
-        secondStop,
-        laterStop,
-        laterDispatch,
-      ]);
-    }
-    expect(events).toEqual([
-      `dispatch:${REQUEST.sessionId}`,
-      `reclaim:${stopped.sessionId}`,
-      "reclaim:another-stopped-session",
-      "maintenance",
-      "reclaim:late-stopped-session",
-      "dispatch:later-session",
-    ]);
-  },
-);
+  } finally {
+    gate.release();
+    await stopping;
+  }
+});
 
-it.each([false, true])(
-  "joined provisioning recovery waits for an admitted reclaim to settle (reclaim fails=%s)",
-  async (reclaimFails) => {
-    const dispatchEntered = createDeferredCore();
-    const dispatchRelease = createDeferredCore();
-    const reclaimRelease = createDeferredCore();
-    const events: string[] = [];
-    const failure = new Error("provider cleanup pending");
-    const service = createCoordinatorTestService({
-      dispatch: async () => {
-        dispatchEntered.resolve();
-        await dispatchRelease.promise;
-        return ACTIVE_PLACEMENT;
-      },
-      reconcile: async () => {
-        events.push("sweep");
-      },
-      reclaim: async (_request, _authorize, _beforeDrain, serialize) => {
-        if (!serialize) {
-          throw new Error("Reclaim fixture requires serialization");
-        }
-        return await serialize(async () => {
-          events.push("reclaim:start");
-          await reclaimRelease.promise;
-          events.push("reclaim:finish");
-          if (reclaimFails) {
-            throw failure;
-          }
-          return LOCAL_PLACEMENT;
-        });
-      },
-      resumeProvisioning: admittedRecovery(async (_placement, core) => {
-        events.push("recovery");
-        await core();
-      }),
-    });
-    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
-    const dispatch = coordinated.dispatch({
-      ...REQUEST,
-      sessionId: "other-dispatch",
-      sessionKey: "agent:main:other-dispatch",
-    });
-    await dispatchEntered.promise;
-    const sweep = coordinated.reconcile();
-    const reclaim = coordinated.reclaim(REQUEST).catch((error: unknown) => error);
-    const recovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {});
-    try {
-      await setImmediatePromise();
-      expect([...events]).toEqual(["reclaim:start"]);
-      dispatchRelease.resolve();
-      await dispatch;
-      await setImmediatePromise();
-      expect([...events]).toEqual(["reclaim:start"]);
-    } finally {
-      dispatchRelease.resolve();
-      reclaimRelease.resolve();
-      await Promise.all([dispatch, sweep, reclaim, recovery]);
-    }
-    if (reclaimFails) {
-      expect(await reclaim).toBe(failure);
-    }
-    expect(events.slice(0, 2)).toEqual(["reclaim:start", "reclaim:finish"]);
-    expect(events.slice(2).toSorted()).toEqual(["recovery", "sweep"]);
-  },
-);
-
-it("preserves a queued move ahead of reclaim even when maintenance has not started", async () => {
-  const dispatchEntered = createDeferredCore();
-  const dispatchRelease = createDeferredCore();
-  const exclusiveEntered = createDeferredCore();
-  const exclusiveRelease = createDeferredCore();
+it("preserves a registered Move before the same session's Stop preparation finishes", async () => {
+  const dispatchGate = createOperationGate(undefined);
+  const moveGate = createOperationGate(undefined);
+  const prepared = createDeferredCore();
   const events: string[] = [];
-  const runExclusive = async () => {
-    events.push("exclusive:start");
-    exclusiveEntered.resolve();
-    await exclusiveRelease.promise;
-    events.push("exclusive:finish");
-    return LOCAL_PLACEMENT;
-  };
-  const service = createCoordinatorTestService({
-    dispatch: async () => {
-      dispatchEntered.resolve();
-      await dispatchRelease.promise;
-      return ACTIVE_PLACEMENT;
-    },
-    reconcile: async () => {
-      events.push("sweep");
-    },
-    move: runExclusive,
-    reclaim: async (_request, _authorize, _beforeDrain, serialize) => {
-      if (!serialize) {
-        throw new Error("Reclaim fixture requires serialization");
+  const coordinated = createCoordinatedService({
+    dispatch: async (request) => {
+      if (request.sessionId === REQUEST.sessionId) {
+        await dispatchGate.run();
       }
-      return await serialize(async () => {
+      return { ...ACTIVE_PLACEMENT, ...request };
+    },
+    move: async () => {
+      events.push("move:start");
+      await moveGate.run();
+      events.push("move:finish");
+      return LOCAL_PLACEMENT;
+    },
+    reclaim: async (_request, _authorize, _beforeDrain, serialize, pending) => {
+      prepared.resolve();
+      await pending?.settled;
+      return await serialize!(async () => {
         events.push("reclaim");
         return LOCAL_PLACEMENT;
       });
     },
   });
-  const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
   const dispatch = coordinated.dispatch(REQUEST);
-  await dispatchEntered.promise;
-  const sweep = coordinated.reconcile();
-  const previous = coordinated.move(MOVE_REQUEST);
-  // Move reserves its fence after session admission.
-  await setImmediatePromise();
-  const reclaim = coordinated.reclaim({
-    ...REQUEST,
-    sessionId: "other-session",
-    sessionKey: "agent:main:other-session",
-  });
-  try {
-    await setImmediatePromise();
-    expect([...events]).toEqual([]);
-    dispatchRelease.resolve();
-    await exclusiveEntered.promise;
-    await setImmediatePromise();
-    expect([...events]).toEqual(["sweep", "exclusive:start"]);
-  } finally {
-    dispatchRelease.resolve();
-    exclusiveRelease.resolve();
-    await Promise.all([dispatch, sweep, previous, reclaim]);
-  }
-  expect(events).toEqual(["sweep", "exclusive:start", "exclusive:finish", "reclaim"]);
+  await dispatchGate.entered;
+  const moving = coordinated.move(MOVE_REQUEST);
+  const reclaim = coordinated.reclaim(REQUEST);
+  await prepared.promise;
+  expect(events).toEqual([]);
+  dispatchGate.release();
+  await moveGate.entered;
+  await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+  expect(events).toEqual(["move:start"]);
+  moveGate.release();
+  await Promise.all([dispatch, moving, reclaim]);
+  expect(events).toEqual(["move:start", "move:finish", "reclaim"]);
 });
 
-it.each(["sweep", "recovery"] as const)(
-  "preserves admitted %s effects before a later reclaim",
-  async (maintenance) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const events: string[] = [];
-    const maintain = async () => {
-      events.push("maintenance:start");
-      entered.resolve();
-      await release.promise;
-      events.push("maintenance:finish");
-    };
-    const service = createCoordinatorTestService({
-      reconcile: maintain,
-      resumeProvisioning: admittedRecovery(maintain),
-      reclaim: async (_request, _authorize, _beforeDrain, serialize) => {
-        if (!serialize) {
-          throw new Error("Reclaim fixture requires serialization");
-        }
-        return await serialize(async () => {
-          events.push("reclaim");
-          return LOCAL_PLACEMENT;
-        });
-      },
-    });
-    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
-    const maintaining =
-      maintenance === "sweep"
-        ? coordinated.reconcile()
-        : coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {});
-    await entered.promise;
-    const stopping = coordinated.reclaim(REQUEST);
-    try {
-      await setImmediatePromise();
-      expect([...events]).toEqual(["maintenance:start"]);
-    } finally {
-      release.resolve();
-      await Promise.all([maintaining, stopping]);
-    }
-    expect(events).toEqual(["maintenance:start", "maintenance:finish", "reclaim"]);
-  },
-);
+it("retains admitted sweep effects before same-session cleanup while other sessions proceed", async () => {
+  const recoveryGate = createOperationGate(undefined);
+  const reclaimGate = createOperationGate(undefined);
+  const prepared = createDeferredCore();
+  const events: string[] = [];
+  const dispatch = vi.fn(async (request: typeof REQUEST) => ({
+    ...ACTIVE_PLACEMENT,
+    ...request,
+  }));
+  const recover = async () => {
+    events.push("recovery:start");
+    await recoveryGate.run();
+    events.push("recovery:finish");
+  };
+  const coordinated = createCoordinatedService({
+    dispatch,
+    reconcile: async (_mode, admit) => {
+      await admit!([REQUEST.sessionId], recover);
+    },
+    reclaim: async (_request, _authorize, _beforeDrain, serialize) => {
+      prepared.resolve();
+      return await serialize!(async () => {
+        events.push("reclaim:start");
+        await reclaimGate.run();
+        events.push("reclaim:finish");
+        return LOCAL_PLACEMENT;
+      });
+    },
+  });
+  const recovering = coordinated.reconcile();
+  await recoveryGate.entered;
+  const stopping = coordinated.reclaim(REQUEST);
+  await prepared.promise;
+  const same = coordinated.dispatch(REQUEST);
+  await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+  expect(events).toEqual(["recovery:start"]);
+  expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(["unrelated"]);
+  recoveryGate.release();
+  await reclaimGate.entered;
+  expect(events).toEqual(["recovery:start", "recovery:finish", "reclaim:start"]);
+  reclaimGate.release();
+  await Promise.all([recovering, stopping, same]);
+  expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual([
+    "unrelated",
+    REQUEST.sessionId,
+  ]);
+});

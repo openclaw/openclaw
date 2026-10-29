@@ -8,6 +8,9 @@ export type SqliteSessionFileMarker = {
 };
 
 const SQLITE_SESSION_FILE_MARKER_RE = /^sqlite:([^:]+):([^:]+):(.*)$/;
+// Match the formatter's native absolute paths; a POSIX ID ending in :x is not a drive.
+const SQLITE_POSIX_SESSION_FILE_MARKER_RE = /^sqlite:([^:]+):(.+?):(\/.*)$/;
+const SQLITE_WINDOWS_SESSION_FILE_MARKER_RE = /^sqlite:([^:]+):(.+):([a-zA-Z]:[/\\].*|\\\\.*)$/;
 
 export function formatSqliteSessionFileMarker(marker: SqliteSessionFileMarker): string {
   return `sqlite:${marker.agentId}:${marker.sessionId}:${path.resolve(marker.storePath)}`;
@@ -20,7 +23,11 @@ export function parseSqliteSessionFileMarker(
   if (!marker?.startsWith("sqlite:")) {
     return undefined;
   }
-  const match = SQLITE_SESSION_FILE_MARKER_RE.exec(marker);
+  const absoluteMarker =
+    process.platform === "win32"
+      ? SQLITE_WINDOWS_SESSION_FILE_MARKER_RE
+      : SQLITE_POSIX_SESSION_FILE_MARKER_RE;
+  const match = absoluteMarker.exec(marker) ?? SQLITE_SESSION_FILE_MARKER_RE.exec(marker);
   if (!match?.[1] || !match[2] || !match[3]) {
     return undefined;
   }

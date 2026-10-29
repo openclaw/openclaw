@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { createHookRunner } from "../plugins/hooks.js";
@@ -7,18 +8,25 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
-/** The tracked startup tail owns both observers until their original work settles. */
+type SubagentRegistryActivation = (resolveGatewayContext: GatewayContextResolver) => Promise<void>;
+
+/** Resume explicit graceful-shutdown markers through ordinary input admission. */
 export async function runGatewayStartupObservers(params: {
   registry: PluginRegistry;
+  resolveGatewayContext: GatewayContextResolver;
+  loadSubagentRegistryActivation: () =>
+    | SubagentRegistryActivation
+    | Promise<SubagentRegistryActivation>;
   signal: AbortSignal;
   port: number;
   config: OpenClawConfig;
   workspaceDir: string;
   getCron: () => PluginHookGatewayCronService | undefined;
   isClosing?: () => boolean;
-  waitForPostReadyWork?: () => Promise<void>;
+  unlockStartupMethods?: () => void;
   startupTrace?: GatewayStartupTrace;
   log: { warn: (message: string) => void };
   logHooks: {
@@ -31,14 +39,45 @@ export async function runGatewayStartupObservers(params: {
   ) => ReturnType<typeof createHookRunner> | Promise<ReturnType<typeof createHookRunner>>;
   refreshLatestUpdateRestartSentinel: () => Promise<unknown>;
 }): Promise<void> {
-  await params.waitForPostReadyWork?.();
-  if (params.isClosing?.()) {
+  if (params.signal.aborted || params.isClosing?.()) {
     return;
   }
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-  if (params.isClosing?.()) {
+  await nextTurn();
+  if (params.signal.aborted || params.isClosing?.()) {
+    return;
+  }
+  await runWithGatewayIndependentRootWorkAdmission(
+    async () => {
+      const context = params.resolveGatewayContext();
+      if (!context || params.signal.aborted || params.isClosing?.()) {
+        return;
+      }
+      const { resumeAgentDeletions } = await import("./server-agent-deletion-recovery.js");
+      await resumeAgentDeletions(context, params.signal);
+      const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
+      if (params.signal.aborted || params.isClosing?.()) {
+        return;
+      }
+      await activateSubagentRegistry(params.resolveGatewayContext);
+      if (params.signal.aborted || params.isClosing?.()) {
+        return;
+      }
+      const { resumeMarkedSessions } = await import("./session-restart-resume.js");
+      try {
+        await resumeMarkedSessions({ context, signal: params.signal, log: params.log });
+      } catch (error) {
+        params.signal.throwIfAborted();
+        params.log.warn(`Restart resume discovery failed: ${String(error)}`);
+      }
+      if (!params.signal.aborted && !params.isClosing?.()) {
+        // Retained FIFO inputs must own their ordinary queue slots before reconnecting sends.
+        params.unlockStartupMethods?.();
+      }
+    },
+    "startup:session-resume",
+    params.signal,
+  );
+  if (params.signal.aborted || params.isClosing?.()) {
     return;
   }
   const sentinelRefresh = runWithGatewayIndependentRootWorkAdmission(
@@ -55,7 +94,7 @@ export async function runGatewayStartupObservers(params: {
     params.log.warn(`restart sentinel refresh failed: ${String(err)}`);
   });
   try {
-    sweepSessionStateWatchNotices();
+    await sweepSessionStateWatchNotices();
     const hookRunner = await params.createHookRunner(params.registry, { logger: params.logHooks });
     if (params.isClosing?.() || !hookRunner.hasHooks("gateway_start")) {
       return;
@@ -88,7 +127,7 @@ export async function runGatewayStartupObservers(params: {
       params.log.warn(`gateway_start hook failed: ${String(err)}`);
     });
   } finally {
-    // Refresh and hooks run concurrently; failed hook loading still owns the refresh.
+    // Independent observers overlap, but shutdown joins all accepted startup work.
     await sentinelRefresh;
   }
 }

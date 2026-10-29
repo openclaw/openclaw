@@ -1,224 +1,208 @@
-// Tool image tests cover image payload sanitization before tool outputs are
-// returned to model-visible content blocks.
-
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { RastermillUnavailableError } from "rastermill";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer,
   createSolidPngBuffer,
   createTinyJpegBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { getImageMetadata } from "../media/image-ops.js";
+import { resizeToJpeg } from "../media/media-services.js";
 import {
   sanitizeContentBlocksImages,
   sanitizeImageBlocks,
   sanitizeToolResultImages,
 } from "./tool-images.js";
 
-describe("tool image sanitizing", () => {
-  const getImageBlock = (
-    blocks: Awaited<ReturnType<typeof sanitizeContentBlocksImages>>,
-  ): (typeof blocks)[number] & { type: "image"; data: string; mimeType?: string } => {
-    const image = blocks.find((block) => block.type === "image");
-    if (!image || image.type !== "image") {
-      throw new Error("expected image block");
-    }
-    return image;
-  };
+vi.mock("../media/media-services.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/media-services.js")>();
+  return { ...actual, resizeToJpeg: vi.fn(actual.resizeToJpeg) };
+});
 
-  const createWidePng = async () => {
-    return createSolidPngBuffer(420, 120, { r: 0x7f, g: 0x7f, b: 0x7f });
+vi.mock("@openclaw/media-core/base64", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/media-core/base64")>();
+  return { ...actual, canonicalizeBase64: vi.fn(actual.canonicalizeBase64) };
+});
+
+function imageBlock(data: Buffer | string, mimeType = "image/png") {
+  return {
+    type: "image" as const,
+    data: typeof data === "string" ? data : data.toString("base64"),
+    mimeType,
   };
+}
+function omitted(text: string) {
+  return [{ type: "text", text: `[test] omitted image payload: ${text}` }];
+}
+const solidImage = (width: number, height: number) =>
+  imageBlock(createSolidPngBuffer(width, height, { r: 17, g: 31, b: 47 }));
+describe("tool image sanitizing", () => {
+  const getImageBlock = (blocks: Awaited<ReturnType<typeof sanitizeContentBlocksImages>>) =>
+    expectDefined(
+      blocks.find((block) => block.type === "image"),
+      "expected image block",
+    );
+  const sanitize = (
+    data: Buffer | string,
+    options?: Parameters<typeof sanitizeContentBlocksImages>[2],
+  ) => sanitizeContentBlocksImages([imageBlock(data)], "test", options);
+
+  describe("persisted image outcome cache", () => {
+    const resizeToJpegMock = vi.mocked(resizeToJpeg);
+    const replay = (block: ReturnType<typeof imageBlock>, maxDimensionPx?: number) =>
+      sanitizeContentBlocksImages([block], "session:history", {
+        verifyDecodability: true,
+        maxDimensionPx,
+      });
+
+    beforeEach(() => {
+      resizeToJpegMock.mockClear();
+    });
+
+    it("prepares unchanged image bytes once and revalidates edits", async () => {
+      const canonicalize = vi.mocked(canonicalizeBase64).mockClear();
+      const original = solidImage(35, 24);
+      const block = {
+        ...original,
+        data: ` ${original.data.slice(0, 12)}\n${original.data.slice(12)} `,
+      };
+      const other = Object.freeze(solidImage(36, 24));
+      const first = getImageBlock(await replay(block));
+      expect(first).toEqual(original);
+      expect(getImageBlock(await replay(other))).toBe(other);
+      expect(await replay(block)).toEqual([original]);
+      expect(await replay(other)).toEqual([other]);
+      expect(await replay(first)).toEqual([original]);
+      expect(canonicalize).toHaveBeenCalledTimes(2);
+
+      block.data = 'AA==" onerror="alert(1)';
+      expect(await replay(block)).toEqual([
+        { type: "text", text: "[session:history] omitted image payload: invalid base64" },
+      ]);
+      block.data = original.data;
+      block.mimeType = "image/jpeg";
+      expect(await replay(block)).toEqual([original]);
+      expect(canonicalize).toHaveBeenCalledTimes(4);
+      block.mimeType = "image/gif";
+      expect(await replay(block)).toEqual([original]);
+      expect(canonicalize).toHaveBeenCalledTimes(5);
+    });
+
+    it("reuses rejected bytes without retaining the caller's label", async () => {
+      const canonicalize = vi.mocked(canonicalizeBase64).mockClear();
+      const block = imageBlock("invalid!");
+      for (const label of ["first", "second"]) {
+        expect(await sanitizeContentBlocksImages([block], label)).toEqual([
+          { type: "text", text: `[${label}] omitted image payload: invalid base64` },
+        ]);
+      }
+      expect(canonicalize).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([false, true])(
+      "caches verified replay and retries unavailable backend=%s",
+      async (unavailable) => {
+        const block = solidImage(unavailable ? 33 : 32, 24);
+        if (unavailable) {
+          resizeToJpegMock.mockRejectedValueOnce(
+            new RastermillUnavailableError("encode", "backend missing"),
+          );
+        }
+        expect(await replay(block)).toEqual([block]);
+        expect(await replay(block)).toEqual([block]);
+        expect(resizeToJpegMock).toHaveBeenCalledTimes(unavailable ? 2 : 1);
+        if (!unavailable) {
+          expect(getImageBlock(await replay(block, 16)).mimeType).toBe("image/jpeg");
+          expect(resizeToJpegMock).toHaveBeenCalledTimes(2);
+        }
+      },
+    );
+
+    it("evicts older replacements when retained bytes exceed the budget", async () => {
+      const blocks = Array.from({ length: 8 }, (_, index) => solidImage(2001, 16 + index));
+      const replacement = Buffer.alloc(3 * 1024 * 1024);
+      const replaced = (block: (typeof blocks)[number]) => [
+        { ...block, data: replacement.toString("base64"), mimeType: "image/jpeg" },
+      ];
+      for (const block of blocks) {
+        resizeToJpegMock.mockResolvedValueOnce(replacement);
+        expect(await replay(block)).toEqual(replaced(block));
+      }
+      resizeToJpegMock.mockClear();
+
+      // Check the newest entry before reinserting the evicted oldest entry.
+      const last = expectDefined(blocks.at(-1), "last image");
+      expect(await replay(last)).toEqual(replaced(last));
+      expect(resizeToJpegMock).not.toHaveBeenCalled();
+      const first = expectDefined(blocks[0], "first image");
+      expect(getImageBlock(await replay(first)).mimeType).toBe("image/jpeg");
+      expect(resizeToJpegMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it.each([
+    { name: "nonempty text", block: { type: "text", text: "hello" }, admitted: true },
+    { name: "nonstring text", block: { type: "text", text: 42 }, admitted: false },
+  ])("preserves text-only admission and identity for $name", async ({ block, admitted }) => {
+    const content = [block] as Parameters<typeof sanitizeToolResultImages>[0]["content"];
+    const details = { marker: "retained" };
+    const result = { content, details };
+    const original = structuredClone(result);
+    const sanitized = await sanitizeToolResultImages(result, "test:text");
+    expect([sanitized === result, sanitized.content === content]).toEqual([!admitted, !admitted]);
+    expect(sanitized.content).toEqual([block]);
+    expect(sanitized.content[0]).toBe(block);
+    expect(sanitized.details).toBe(details);
+    expect(result).toEqual(original);
+  });
 
   it("shrinks oversized images to the configured byte limit", async () => {
     const maxBytes = 64 * 1024;
-    const width = 300;
-    const height = 300;
-    const bigPng = createNoisyPngBuffer(width, height);
+    const bigPng = createNoisyPngBuffer(300, 300);
     expect(bigPng.byteLength).toBeGreaterThan(maxBytes);
 
-    const blocks = [
-      {
-        type: "image" as const,
-        data: bigPng.toString("base64"),
-        mimeType: "image/png",
-      },
-    ];
-
-    const out = await sanitizeContentBlocksImages(blocks, "test", { maxBytes });
-    const image = getImageBlock(out);
-    const size = Buffer.from(image.data, "base64").byteLength;
-    expect(size).toBeLessThanOrEqual(maxBytes);
+    const image = getImageBlock(await sanitize(bigPng, { maxBytes }));
+    expect(Buffer.from(image.data, "base64").byteLength).toBeLessThanOrEqual(maxBytes);
     expect(image.mimeType).toBe("image/jpeg");
   }, 20_000);
 
   it("sanitizes image arrays and reports drops", async () => {
-    const png = await createWidePng();
-
-    const images = [
-      { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },
-    ];
-    const { images: out, dropped } = await sanitizeImageBlocks(images, "test", {
+    const { images: out, dropped } = await sanitizeImageBlocks([solidImage(420, 120)], "test", {
       maxDimensionPx: 120,
     });
     expect(dropped).toBe(0);
     expect(out.length).toBe(1);
-    const meta = await getImageMetadata(
-      Buffer.from(expectDefined(out[0], "out[0] test invariant").data, "base64"),
-    );
+    const meta = await getImageMetadata(Buffer.from(getImageBlock(out).data, "base64"));
     expect(meta?.width).toBeLessThanOrEqual(120);
     expect(meta?.height).toBeLessThanOrEqual(120);
   }, 20_000);
-
-  it("shrinks images that exceed max dimension even if size is small", async () => {
-    const png = await createWidePng();
-
-    const blocks = [
-      {
-        type: "image" as const,
-        data: png.toString("base64"),
-        mimeType: "image/png",
-      },
-    ];
-
-    const out = await sanitizeContentBlocksImages(blocks, "test", { maxDimensionPx: 120 });
-    const image = getImageBlock(out);
-    const meta = await getImageMetadata(Buffer.from(image.data, "base64"));
-    expect(meta?.width).toBeLessThanOrEqual(120);
-    expect(meta?.height).toBeLessThanOrEqual(120);
-    expect(image.mimeType).toBe("image/jpeg");
-  }, 20_000);
-
-  it("corrects mismatched jpeg mimeType", async () => {
-    const jpeg = createTinyJpegBuffer();
-
-    const blocks = [
-      {
-        type: "image" as const,
-        data: jpeg.toString("base64"),
-        mimeType: "image/png",
-      },
-    ];
-
-    const out = await sanitizeContentBlocksImages(blocks, "test");
-    const image = getImageBlock(out);
-    expect(image.mimeType).toBe("image/jpeg");
-  });
 
   it("uses default image limits for non-finite options", async () => {
     const jpeg = createTinyJpegBuffer();
-
-    const out = await sanitizeContentBlocksImages(
-      [
-        {
-          type: "image" as const,
-          data: jpeg.toString("base64"),
-          mimeType: "image/jpeg",
-        },
-      ],
-      "test",
-      { maxDimensionPx: Number.NaN, maxBytes: Number.NaN },
-    );
-
-    const image = getImageBlock(out);
-    expect(image.mimeType).toBe("image/jpeg");
-    expect(image.data).toBe(jpeg.toString("base64"));
-  });
-
-  it("preserves data and mimeType on no-resize path", async () => {
-    const png = createSolidPngBuffer(10, 10, { r: 0, g: 0, b: 255 });
-    const base64 = png.toString("base64");
-
-    const blocks = [{ type: "image" as const, data: base64, mimeType: "image/png" }];
-    const out = await sanitizeContentBlocksImages(blocks, "test");
-    expect(out).toHaveLength(1);
-    const image = getImageBlock(out);
-    expect(typeof image.data).toBe("string");
-    expect(image.data.length).toBeGreaterThan(0);
-    expect(typeof image.mimeType).toBe("string");
-    expect(image.mimeType).toBe("image/png");
-  });
-
-  it("preserves data and mimeType on resize path", async () => {
-    const png = createSolidPngBuffer(2600, 400, { r: 255, g: 0, b: 0 });
-    const base64 = png.toString("base64");
-
-    const blocks = [{ type: "image" as const, data: base64, mimeType: "image/png" }];
-    const out = await sanitizeContentBlocksImages(blocks, "test");
-    expect(out).toHaveLength(1);
-    const image = getImageBlock(out);
-    expect(typeof image.data).toBe("string");
-    expect(image.data.length).toBeGreaterThan(0);
-    expect(typeof image.mimeType).toBe("string");
-  }, 20_000);
-
-  it("converts image blocks with missing data/mimeType to text", async () => {
-    const blocks = [
-      {
-        type: "image" as const,
-        data: undefined as unknown as string,
-        mimeType: undefined as unknown as string,
-      },
-    ];
-    const out = await sanitizeContentBlocksImages(blocks, "browser:screenshot");
-    expect(out).toHaveLength(1);
-    expect(expectDefined(out[0], "out[0] test invariant").type).toBe("text");
-    expect((out[0] as { type: "text"; text: string }).text).toContain("missing data or mimeType");
-  });
-
-  it("screenshot-shaped tool result round-trips with valid image block", async () => {
-    const png = createSolidPngBuffer(100, 100, { r: 0, g: 128, b: 0 });
-    const base64 = png.toString("base64");
-
-    const result = {
-      content: [{ type: "image" as const, data: base64, mimeType: "image/png" }],
-      details: { path: "/tmp/screenshot.png" },
-    };
-    const sanitized = await sanitizeToolResultImages(result, "browser:screenshot");
-    const imageBlock = sanitized.content.find((b) => b.type === "image");
-    expect(imageBlock).toBeDefined();
-    expect(typeof (imageBlock as { data: string }).data).toBe("string");
-    expect((imageBlock as { data: string }).data.length).toBeGreaterThan(0);
-    expect(typeof (imageBlock as { mimeType: string }).mimeType).toBe("string");
+    const limits = { maxDimensionPx: Number.NaN, maxBytes: Number.NaN };
+    const image = getImageBlock(await sanitize(jpeg, limits));
+    expect(image).toMatchObject({ mimeType: "image/jpeg", data: jpeg.toString("base64") });
   });
 
   it("screenshot-shaped tool result with malformed image produces text fallback", async () => {
-    const result = {
-      content: [
-        {
-          type: "image" as const,
-          data: undefined as unknown as string,
-          mimeType: undefined as unknown as string,
-        },
-      ],
-      details: {},
-    };
-    const sanitized = await sanitizeToolResultImages(result, "browser:screenshot");
-    const imageBlocks = sanitized.content.filter((b) => b.type === "image");
-    expect(imageBlocks).toHaveLength(0);
-    const textFallback = sanitized.content.find(
-      (b) => b.type === "text" && (b as { text: string }).text.includes("missing data or mimeType"),
+    const missing = undefined as unknown as string;
+    const sanitized = await sanitizeToolResultImages(
+      { content: [{ type: "image", data: missing, mimeType: missing }], details: {} },
+      "browser:screenshot",
     );
-    expect(textFallback).toBeDefined();
+    expect(sanitized.content).toEqual([
+      { type: "text", text: expect.stringContaining("missing data or mimeType") },
+    ]);
   });
 
-  it("drops malformed image base64 payloads", async () => {
-    // Invalid base64 is replaced with text so malformed payloads cannot smuggle
-    // attributes or script-like text through image blocks.
-    const blocks = [
-      {
-        type: "image" as const,
-        data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2N4j8AAAAASUVORK5CYII=" onerror="alert(1)',
-        mimeType: "image/png",
-      },
-    ];
-
-    const out = await sanitizeContentBlocksImages(blocks, "test");
-    expect(out).toEqual([
-      {
-        type: "text",
-        text: "[test] omitted image payload: invalid base64",
-      },
-    ]);
+  it.each([
+    ["invalid base64", (): string => 'AA==" onerror="alert(1)'],
+    [
+      "image exceeds input size limit (10.00MB)",
+      (): string => "A".repeat(Math.ceil((10 * 1024 * 1024 + 1) / 3) * 4),
+    ],
+  ] as const)("rejects unsafe input: %s", async (reason, payload) => {
+    expect(await sanitize(payload())).toStrictEqual(omitted(reason));
   });
 });

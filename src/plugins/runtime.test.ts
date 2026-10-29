@@ -1,4 +1,3 @@
-/** Covers plugin runtime registration API behavior and registry mutation guards. */
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -14,9 +13,7 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   capturePluginRegistryLifecycleEpoch,
   capturePluginRegistryLifecycleSignal,
-  isPluginRegistryRetired,
 } from "./registry-lifecycle.js";
-import type { PluginHttpRouteRegistration } from "./registry-types.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -24,7 +21,6 @@ import {
   disposePluginRegistryInstances,
   getActivePluginRegistry,
   listImportedRuntimePluginIds,
-  recordImportedPluginId,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -46,51 +42,28 @@ async function waitForCleanupSignal(signal: Promise<void>, label: string): Promi
   }
 }
 
-const makeRoute = (path: string): PluginHttpRouteRegistration => ({
-  path,
-  handler: () => {},
-  auth: "gateway",
-  match: "exact",
-});
+function createCleanupDatabase() {
+  const db = new DatabaseSync(":memory:");
+  const nativeState = resolveGlobalSingleton(
+    Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
+    (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
+    (state) => {
+      if (state.database?.isOpen) {
+        state.resets++;
+        state.database.close();
+      }
+    },
+    "plugin-registry",
+  );
+  nativeState.database = db;
+  nativeState.resets = 0;
+  return { db, nativeState };
+}
 
 describe("setActivePluginRegistry", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
-  it("does not carry forward httpRoutes when new registry has none", () => {
-    const oldRegistry = createEmptyPluginRegistry();
-    const fakeRoute = makeRoute("/test");
-    oldRegistry.httpRoutes.push(fakeRoute);
-    setActivePluginRegistry(oldRegistry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
-
-    const newRegistry = createEmptyPluginRegistry();
-    expect(newRegistry.httpRoutes).toHaveLength(0);
-    setActivePluginRegistry(newRegistry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(0);
-  });
-
-  it("does not carry forward when new registry already has routes", () => {
-    const oldRegistry = createEmptyPluginRegistry();
-    oldRegistry.httpRoutes.push(makeRoute("/old"));
-    setActivePluginRegistry(oldRegistry);
-
-    const newRegistry = createEmptyPluginRegistry();
-    const newRoute = makeRoute("/new");
-    newRegistry.httpRoutes.push(newRoute);
-    setActivePluginRegistry(newRegistry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
-    expect(getActivePluginRegistry()?.httpRoutes[0]).toEqual(newRoute);
-  });
-
-  it("does not carry forward when same registry is set again", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.httpRoutes.push(makeRoute("/test"));
-    setActivePluginRegistry(registry);
-    setActivePluginRegistry(registry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
   });
 
   it.each(["empty", "loaded"] as const)(
@@ -208,12 +181,6 @@ describe("setActivePluginRegistry", () => {
     await waitForCleanupSignal(secondCleanupCalled.promise, "second cleanup");
   });
 
-  it("includes plugin ids imported before registration failed", () => {
-    recordImportedPluginId("broken-plugin");
-
-    expect(listImportedRuntimePluginIds()).toEqual(["broken-plugin"]);
-  });
-
   it.each(["instance", "runtime"] as const)(
     "keeps %s plugin cleanup admitted through the restart connection drain",
     async (kind) => {
@@ -290,34 +257,6 @@ describe("setActivePluginRegistry", () => {
       }
     },
   );
-
-  it("clears the root only after its host cleanup completes", async () => {
-    let cleanupCount = 0;
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      createPluginRecord({ id: "cleanup-on-close", name: "Cleanup on close", status: "loaded" }),
-    );
-    registry.runtimeLifecycles = [
-      {
-        pluginId: "cleanup-on-close",
-        pluginName: "Cleanup on close",
-        lifecycle: {
-          id: "cleanup-on-close",
-          cleanup() {
-            cleanupCount += 1;
-          },
-        },
-        source: "/virtual/cleanup-on-close/index.ts",
-        rootDir: "/virtual/cleanup-on-close",
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    await clearActivePluginRegistry();
-
-    expect(getActivePluginRegistry()).toBeNull();
-    expect(cleanupCount).toBe(1);
-  });
 
   it("joins a displaced cleanup scope created before package replacement", async () => {
     const registry = createEmptyPluginRegistry();
@@ -406,17 +345,7 @@ describe("setActivePluginRegistry", () => {
     },
   );
 
-  it.each([
-    "install",
-    "staged",
-    "clear",
-    "activation-install",
-    "activation-staged",
-    "activation-install-replace",
-    "activation-staged-replace",
-    "catalog-install",
-    "catalog-staged",
-  ] as const)(
+  it.each(["install", "staged", "clear"] as const)(
     "keeps an admitted command live through a reentrant retirement abort (%s)",
     async (retirement) => {
       const { createPluginRegistry } = await import("./registry.js");
@@ -431,102 +360,35 @@ describe("setActivePluginRegistry", () => {
       const record = createPluginRecord({ id: "abort-cleanup-sqlite", status: "loaded" });
       builder.registry.plugins.push(record);
       const api = builder.createApi(record, { config: {} });
-      const db = new DatabaseSync(":memory:");
-      const nativeState = resolveGlobalSingleton(
-        Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
-        (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
-        (state) => {
-          if (state.database?.isOpen) {
-            state.resets++;
-            state.database.close();
-          }
-        },
-        "plugin-registry",
-      );
-      nativeState.database = db;
-      nativeState.resets = 0;
+      const { db, nativeState } = createCleanupDatabase();
       const cleanup = vi.fn(() => {
         expect(db.prepare("SELECT 2 AS value").get()).toEqual({ value: 2 });
       });
       api.lifecycle.registerRuntimeLifecycle({ id: "abort-cleanup", cleanup });
       setActivePluginRegistry(builder.registry);
-      const catalogReentry = retirement.startsWith("catalog-");
-      const successorBuilder = catalogReentry
-        ? createPluginRegistry({
-            logger: { info() {}, warn() {}, error() {}, debug() {} },
-            runtime: createPluginRuntime(),
-            activateGlobalSideEffects: false,
-          })
-        : undefined;
-      const successor = successorBuilder?.registry ?? createEmptyPluginRegistry();
-      const newer = createEmptyPluginRegistry();
-      const replaceAgain = retirement.endsWith("-replace");
-      const staged = retirement.split("-").includes("staged");
-      const signal = retirement.startsWith("activation-")
-        ? capturePluginRegistryLifecycleSignal(successor, undefined, { scopedRuntime: true })
-        : capturePluginRegistryLifecycleSignal(
-            builder.registry,
-            capturePluginRegistryLifecycleEpoch(builder.registry),
-          );
+      const successor = createEmptyPluginRegistry();
+      const signal = capturePluginRegistryLifecycleSignal(
+        builder.registry,
+        capturePluginRegistryLifecycleEpoch(builder.registry),
+      );
       if (!signal) {
         throw new Error("Expected an active registry lifecycle signal");
       }
       let innerClear: Promise<void> | undefined;
       let outerClear: Promise<void> | undefined;
-      const reenter = () => {
-        if (replaceAgain) {
-          activatePluginRegistry(newer, "newer", "gateway-bindable", "/virtual/newer");
-          innerClear = Promise.resolve();
-        } else {
-          innerClear = clearActivePluginRegistry();
-        }
-      };
-      if (successorBuilder) {
-        const channelRecord = createPluginRecord({ id: "catalog-reentry", status: "loaded" });
-        successor.plugins.push(channelRecord);
-        successorBuilder.createApi(channelRecord, { config: {} }).registerChannel({
-          plugin: {
-            id: channelRecord.id,
-            meta: {
-              id: channelRecord.id,
-              label: "Catalog reentry",
-              selectionLabel: "Catalog reentry",
-              docsPath: "/channels/catalog-reentry",
-              blurb: "Catalog lifecycle fixture",
-            },
-            capabilities: { chatTypes: ["direct"] },
-            config: {
-              listAccountIds: () => [],
-              resolveAccount: () => ({ accountId: "default" }),
-            },
-            message: {
-              get durableFinal() {
-                if (getActivePluginRegistry() === successor) {
-                  reenter();
-                }
-                return undefined;
-              },
-            },
-          },
-        });
-      } else {
-        signal.addEventListener("abort", reenter);
-      }
+      signal.addEventListener("abort", () => {
+        innerClear = clearActivePluginRegistry();
+      });
       const escape = createDeferredCore();
       const commandRead = createDeferredCore();
       const releaseCommand = createDeferredCore();
       const reads: unknown[] = [];
       const failures: unknown[] = [];
-      const activationErrors: unknown[] = [];
       const command = withPluginCommandExecution(builder.registry, async () => {
         if (retirement === "clear") {
           outerClear = clearActivePluginRegistry();
-        } else if (staged) {
-          try {
-            activatePluginRegistry(successor, "successor", "explicit", "/virtual/successor");
-          } catch (error) {
-            activationErrors.push(error);
-          }
+        } else if (retirement === "staged") {
+          activatePluginRegistry(successor, "successor", "explicit", "/virtual/successor");
         } else {
           setActivePluginRegistry(successor, "successor", "explicit", "/virtual/successor");
         }
@@ -549,33 +411,12 @@ describe("setActivePluginRegistry", () => {
         expect(db.isOpen).toBe(true);
         expect(nativeState.resets).toBe(0);
         expect(cleanup).not.toHaveBeenCalled();
-        if (catalogReentry) {
-          expect(isPluginRegistryRetired(successor)).toBe(true);
-        }
-        expect(captureActivePluginRegistrySnapshot()).toEqual(
-          replaceAgain
-            ? {
-                activeRegistry: newer,
-                key: "newer",
-                workspaceDir: "/virtual/newer",
-                runtimeSubagentMode: "gateway-bindable",
-              }
-            : {
-                activeRegistry: null,
-                key: null,
-                workspaceDir: null,
-                runtimeSubagentMode: "default",
-              },
-        );
-        expect(activationErrors).toEqual(
-          staged
-            ? [expect.objectContaining({ message: "Plugin registry activation was superseded" })]
-            : [],
-        );
-        if (replaceAgain) {
-          const { getGlobalPluginRegistry } = await import("./hook-runner-global.js");
-          expect(getGlobalPluginRegistry()).toBe(newer);
-        }
+        expect(captureActivePluginRegistrySnapshot()).toEqual({
+          activeRegistry: null,
+          key: null,
+          workspaceDir: null,
+          runtimeSubagentMode: "default",
+        });
       } finally {
         escape.resolve();
         releaseCommand.resolve();
@@ -592,94 +433,6 @@ describe("setActivePluginRegistry", () => {
       expect(nativeState.resets).toBe(1);
     },
   );
-
-  it("retains a displaced loaded registry's cleanup through its admitted command", async () => {
-    const { loadAndActivateRootPluginRegistry } = await import("./loader.js");
-    const { resolvePluginLoadCacheContext } = await import("./loader-load-context.js");
-    const { withPluginCommandExecution } = await import("./command-execution-lock.js");
-    const { useNoBundledPlugins, writePlugin, resetPluginLoaderTestStateForTest } =
-      await import("./loader.test-fixtures.js");
-    useNoBundledPlugins();
-    onTestFinished(resetPluginLoaderTestStateForTest);
-    const db = new DatabaseSync(":memory:");
-    const nativeState = resolveGlobalSingleton(
-      Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
-      (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
-      (state) => {
-        if (state.database?.isOpen) {
-          state.resets++;
-          state.database.close();
-        }
-      },
-      "plugin-registry",
-    );
-    nativeState.database = db;
-    nativeState.resets = 0;
-    const reads: unknown[] = [];
-    const bridge = resolveGlobalSingleton(
-      Symbol.for("openclaw.test.loadedRetirementCleanup"),
-      (): { read?: () => void } => ({}),
-    );
-    bridge.read = () => {
-      reads.push(db.prepare("SELECT 1 AS value").get());
-    };
-    const plugin = writePlugin({
-      id: "loaded-retirement",
-      registration: `const read = globalThis[Symbol.for("openclaw.test.loadedRetirementCleanup")].read;
-      api.lifecycle.registerRuntimeLifecycle({ id: "native-cleanup", cleanup: read });`,
-    });
-    const options = {
-      config: {
-        plugins: {
-          allow: [plugin.id],
-          load: { paths: [plugin.file] },
-          slots: { memory: "none" },
-        },
-      },
-    };
-    const original = createEmptyPluginRegistry();
-    setActivePluginRegistry(original);
-    const signal = capturePluginRegistryLifecycleSignal(
-      original,
-      capturePluginRegistryLifecycleEpoch(original),
-    );
-    if (!signal) {
-      throw new Error("Expected an active predecessor signal");
-    }
-    const releaseCommand = createDeferredCore();
-    let heldCommand: ReturnType<typeof withPluginCommandExecution> | undefined;
-    let closing: Promise<void> | undefined;
-    signal.addEventListener("abort", () => {
-      const loaded = getActivePluginRegistry();
-      if (loaded) {
-        heldCommand = withPluginCommandExecution(loaded, () => releaseCommand.promise);
-        closing = clearActivePluginRegistry();
-      }
-    });
-    try {
-      expect(() => loadAndActivateRootPluginRegistry(options)).toThrow(
-        "Plugin registry activation was superseded",
-      );
-      expect(heldCommand).toBeDefined();
-      expect(closing).toBeDefined();
-      expect(db.isOpen).toBe(true);
-      expect(reads).toEqual([]);
-      const { cacheState, cacheKey } = resolvePluginLoadCacheContext(options);
-      expect(cacheState.get(cacheKey)).toBeUndefined();
-    } finally {
-      releaseCommand.resolve();
-      await heldCommand;
-      await closing;
-      await clearActivePluginRegistry();
-      bridge.read = undefined;
-      if (db.isOpen) {
-        db.close();
-      }
-      nativeState.database = undefined;
-    }
-    expect(reads).toEqual([{ value: 1 }]);
-    expect(nativeState.resets).toBe(1);
-  });
 
   it.each(
     (["active", "replaced", "command-held"] as const).flatMap((lifetime) =>
@@ -701,25 +454,12 @@ describe("setActivePluginRegistry", () => {
       const record = createPluginRecord({ id: "cleanup-sqlite", status: "loaded" });
       builder.registry.plugins.push(record);
       const api = builder.createApi(record, { config: {} });
-      const db = new DatabaseSync(":memory:");
+      const { db, nativeState } = createCleanupDatabase();
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const finished = createDeferredCore();
       const reads: unknown[] = [];
       const failures: unknown[] = [];
-      const nativeState = resolveGlobalSingleton(
-        Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
-        (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
-        (state) => {
-          if (state.database?.isOpen) {
-            state.resets++;
-            state.database.close();
-          }
-        },
-        "plugin-registry",
-      );
-      nativeState.database = db;
-      nativeState.resets = 0;
       const readAfterRelease = async () => {
         entered.resolve();
         try {

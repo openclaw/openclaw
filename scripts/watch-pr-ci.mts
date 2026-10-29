@@ -12,10 +12,11 @@ import {
   type RollupPayload,
   type RollupPage,
 } from "./lib/watch-pr-ci-rollup.mts";
+import { createCiRunReader } from "./lib/watch-pr-ci-run.mts";
 import { createPrMetadataReader } from "./pr-lib/github.mjs";
 
 const USAGE =
-  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run]";
+  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run] [--once]";
 
 const optional = <T,>(schema: z.ZodType<T>) => schema.optional().catch(undefined);
 const optionalNullable = <T,>(schema: z.ZodType<T>) => optional(schema.nullable());
@@ -129,6 +130,7 @@ export function parseArgs(argv: string[]) {
         timeout: { type: "string", default: "3600" },
         interval: { type: "string", default: "120" },
         completion: { type: "string", default: "rollup" },
+        once: { type: "boolean", default: false },
       },
     });
   } catch {
@@ -153,6 +155,7 @@ export function parseArgs(argv: string[]) {
     timeout: positiveInteger(parsed.values.timeout, "--timeout"),
     interval: positiveInteger(parsed.values.interval, "--interval"),
     completion,
+    once: parsed.values.once,
   };
   if (!/^[0-9a-f]{40}$/u.test(args.headSha)) {
     throw new Error("head-sha must be a full 40-character commit SHA");
@@ -165,7 +168,7 @@ export function parseArgs(argv: string[]) {
 
 const checkName = (check: RollupCheck) =>
   check.kind === "StatusContext" ? check.context : check.name;
-export const sanitizeCheckName = (name: string) =>
+const sanitizeCheckName = (name: string) =>
   name.replaceAll(ANSI_ESCAPE_SEQUENCE, "\u0000").replaceAll(UNSAFE_CHECK_NAME_RUN, "?");
 const isAutoResponse = (check: RollupCheck) =>
   checkName(check)
@@ -359,11 +362,12 @@ function readPr(
 ) {
   // Repository resolution and metadata share one read budget, including diagnostics.
   const readDeadline = Date.now() + ghReadOptions(deadline).timeout;
-  return RollupPageSchema.parse(
-    readMetadata(pr, ["state", "mergeable", "headRefOid"], () => ghReadOptions(readDeadline)),
+  const metadata = readMetadata(pr, ["state", "mergeable", "headRefOid", "url"], () =>
+    ghReadOptions(readDeadline),
   );
+  return { ...RollupPageSchema.parse(metadata), url: metadata.url };
 }
-export const buildFindRunArgs = (repo: string, sha: string) =>
+const buildFindRunArgs = (repo: string, sha: string) =>
   workflowRunsApiArgs(repo, sha, "pull_request", 20);
 export const selectRunAfter = (runs: RunListItem[], after?: number) =>
   runs.find((run) => run.conclusion !== "skipped" && (after === undefined || run.id > after));
@@ -383,18 +387,13 @@ function findRun(repo: string, sha: string, after?: number, pr?: number) {
   }
   return { run, runs: new Map(runs.map((item) => [item.id, item])) };
 }
-const readRun = (repo: string, runId: number, deadline?: number, includeJobs = false) =>
+const readRun = (repo: string, runId: number, deadline?: number) =>
   RunStatusSchema.parse(
-    execGhJson(
-      `run view ${runId} --repo ${repo} --json status,conclusion${includeJobs ? ",jobs" : ""}`.split(
-        " ",
-      ),
-      {
-        ...ghReadOptions(deadline),
-        // Revalidate changing run status instead of reusing a cached snapshot.
-        env: { ...process.env, OCTOPOOL_FRESH: "1" },
-      },
-    ),
+    execGhJson(`run view ${runId} --repo ${repo} --json status,conclusion`.split(" "), {
+      ...ghReadOptions(deadline),
+      // Revalidate changing run status instead of reusing a cached snapshot.
+      env: { ...process.env, OCTOPOOL_FRESH: "1" },
+    }),
   );
 
 function formatRunJobs(run: RunStatus) {
@@ -552,7 +551,7 @@ export function classifyRunAttachment(runId: number, run: RunStatus, after?: num
   };
 }
 
-export function classifyAttachedCiRun(run: RunStatus) {
+function classifyAttachedCiRun(run: RunStatus) {
   if (run.status !== "completed") {
     return { verdict: "PENDING" };
   }
@@ -671,18 +670,21 @@ export async function pollUntilDeadline<T>({
   deadline,
   interval,
   poll,
+  once = false,
   now = Date.now,
   wait = sleep,
 }: {
   deadline: number;
   interval: number;
   poll: () => T | undefined | Promise<T | undefined>;
+  // One-shot callers keep the deadline as the evidence-read budget, not a wait.
+  once?: boolean;
   now?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
 }): Promise<T | undefined> {
   while (true) {
     const result = await poll();
-    if (result !== undefined) {
+    if (result !== undefined || once) {
       return result;
     }
     const remaining = deadline - now();
@@ -726,6 +728,7 @@ function precheck(pr: RollupPage, sha: string, midWait = false) {
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const readMetadata = createPrMetadataReader(args.repo);
+  const readCiRun = createCiRunReader(args.repo, args.headSha, ghReadOptions);
   const readRollup = createPrRollupReader(
     args.pr,
     args.repo,
@@ -736,6 +739,7 @@ async function main(argv = process.argv.slice(2)) {
   const attachment = await pollUntilDeadline({
     deadline: attachDeadline,
     interval: args.interval,
+    once: args.once,
     poll: () => {
       try {
         const blocked = precheck(readPr(args.pr, readMetadata), args.headSha);
@@ -789,18 +793,16 @@ async function main(argv = process.argv.slice(2)) {
   const watchResult = await pollUntilDeadline({
     deadline: watchDeadline,
     interval: args.interval,
+    once: args.once,
     poll: () => {
       try {
         if (args.completion === "ci-run") {
-          const blocked = precheck(
-            readPr(args.pr, readMetadata, watchDeadline),
-            args.headSha,
-            true,
-          );
+          const currentPr = readPr(args.pr, readMetadata, watchDeadline);
+          const blocked = precheck(currentPr, args.headSha, true);
           if (blocked !== null) {
             return blocked;
           }
-          const run = readRun(args.repo, runId, watchDeadline, true);
+          const run = RunStatusSchema.parse(readCiRun(runId, currentPr.url, watchDeadline));
           const result = classifyAttachedCiRun(run);
           const runStatus = run.status ?? "undefined";
           const runConclusion = run.conclusion ?? "pending";

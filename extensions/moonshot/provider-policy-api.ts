@@ -6,12 +6,17 @@ export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 
 export const KIMI_K2_7_CODE_MODEL_ID = "kimi-k2.7-code";
 export const KIMI_K2_7_CODE_HIGHSPEED_MODEL_ID = "kimi-k2.7-code-highspeed";
-export const KIMI_K3_MODEL_ID = "kimi-k3";
-const ALWAYS_THINKING_PROFILES = {
-  [KIMI_K3_MODEL_ID]: { id: "max", label: "max" },
+// K3.1 Pro shares K3's API contract: always-on thinking, reasoning_effort and native video.
+const KIMI_K3_MODEL_IDS: readonly string[] = [
+  "kimi-k3",
+  "kimi-k3.1-pro",
+  "kimi-k3.1-pro-highspeed",
+];
+const ALWAYS_THINKING_PROFILES: Readonly<Record<string, { id: "low" | "max"; label: string }>> = {
+  ...Object.fromEntries(KIMI_K3_MODEL_IDS.map((id) => [id, { id: "max", label: "max" }])),
   [KIMI_K2_7_CODE_MODEL_ID]: { id: "low", label: "on" },
   [KIMI_K2_7_CODE_HIGHSPEED_MODEL_ID]: { id: "low", label: "on" },
-} as const;
+};
 
 export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
   return [MOONSHOT_BASE_URL, MOONSHOT_CN_BASE_URL].some(
@@ -27,19 +32,21 @@ export function isMoonshotK3NativeVideoRoute(route: {
 }): boolean {
   return (
     route.provider === "moonshot" &&
-    route.modelId === KIMI_K3_MODEL_ID &&
+    KIMI_K3_MODEL_IDS.includes(route.modelId ?? "") &&
     route.api === "openai-completions" &&
     isNativeMoonshotBaseUrl(route.baseUrl)
   );
 }
 
 export function isMoonshotAlwaysThinkingModelId(modelId: string): boolean {
-  return modelId.trim().toLowerCase() in ALWAYS_THINKING_PROFILES;
+  return Object.hasOwn(ALWAYS_THINKING_PROFILES, modelId.trim().toLowerCase());
 }
 
 export function resolveThinkingProfile(context: ProviderDefaultThinkingPolicyContext) {
   const modelId = context.modelId.trim().toLowerCase();
-  const profile = ALWAYS_THINKING_PROFILES[modelId as keyof typeof ALWAYS_THINKING_PROFILES];
+  const profile = Object.hasOwn(ALWAYS_THINKING_PROFILES, modelId)
+    ? ALWAYS_THINKING_PROFILES[modelId]
+    : undefined;
   if (profile) {
     return {
       levels: [profile],

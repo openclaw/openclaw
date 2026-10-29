@@ -3,8 +3,9 @@
 
 self-hosted-runner:
   labels:
-    # GitHub's hosted preview label is not yet in actionlint's built-in inventory.
+    # GitHub's hosted Xcode labels are not yet in actionlint's built-in inventory.
     - xcode-27
+    - xcode-27-xlarge
     # Blacksmith CI runners
     - blacksmith-4vcpu-ubuntu-2404
     - blacksmith-8vcpu-ubuntu-2404
@@ -14,12 +15,6 @@ self-hosted-runner:
     - blacksmith-16vcpu-windows-2025
     - blacksmith-32vcpu-windows-2025
     - blacksmith-16vcpu-ubuntu-2404-arm
-    - blacksmith-6vcpu-macos-latest
-    - blacksmith-12vcpu-macos-latest
-    - blacksmith-6vcpu-macos-15
-    - blacksmith-12vcpu-macos-15
-    - blacksmith-6vcpu-macos-26
-    - blacksmith-12vcpu-macos-26
 
 # Ignore patterns for known issues
 paths:
@@ -32,6 +27,12 @@ paths:
       # actionlint's built-in runner label allowlist lags Blacksmith additions.
       - 'label "blacksmith-16vcpu-[^"]+" is unknown\.'
   # GitHub Actions supports concurrency.queue, but actionlint does not yet model it.
+  .github/workflows/ios-store-release.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/android-store-release.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/qa-live-transports-convex.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
@@ -44,6 +45,9 @@ paths:
   .github/workflows/docker-channel-promote.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/linux-app-mirror.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/linux-app-release.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
@@ -51,5 +55,29 @@ paths:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/openclaw-release-promote.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/ci-check-testbox.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/ci-check-high-memory-testbox.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/ci-check-arm-testbox.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/ci-build-artifacts-testbox.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/windows-blacksmith-testbox.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/ci-check-focused-testbox.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/ci-android-focused-testbox.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/ci-check-routine-testbox.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'

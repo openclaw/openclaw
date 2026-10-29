@@ -1,7 +1,7 @@
 import {
   attachInternalToolResultProvenance,
   getInternalToolResultProvenance,
-} from "../runtime/internal-hooks.js";
+} from "../../../packages/agent-core/src/internal-hooks.js";
 
 const coreTtsMediaByProvenance = new WeakMap<object, readonly string[]>();
 // Attempt attestation stays on the exact result and operational run instance.
@@ -31,10 +31,10 @@ export function markCoreTtsAttemptResult<T extends object>(
   mediaUrls: readonly string[],
   operationalRunInstance: object,
 ): T {
-  coreTtsProvenanceByAttemptResult.set(
-    result,
-    Object.freeze({ mediaUrls: Object.freeze([...mediaUrls]), operationalRunInstance }),
-  );
+  coreTtsProvenanceByAttemptResult.set(result, {
+    mediaUrls: [...mediaUrls],
+    operationalRunInstance,
+  });
   return result;
 }
 

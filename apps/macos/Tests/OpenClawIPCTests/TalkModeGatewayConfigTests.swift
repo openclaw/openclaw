@@ -127,14 +127,22 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.snapshot.realtime.speakerVoice == "cedar")
     }
 
-    @Test func `fallback has no realtime selection`() {
-        let parsed = TalkModeGatewayConfigParser.fallback(
+    @Test func `missing gateway config uses speech defaults without a realtime selection`() {
+        let parsed = TalkModeGatewayConfigParser.parse(
             defaultModelIdFallback: "eleven_v3",
             defaultSilenceTimeoutMs: TalkDefaults.silenceTimeoutMs,
-            envVoice: nil,
-            sagVoice: nil,
-            envApiKey: nil)
+            envVoice: "",
+            sagVoice: "fallback-voice",
+            envApiKey: "synthetic-key")
 
+        #expect(parsed.snapshot.activeProvider == "elevenlabs")
+        #expect(parsed.modelId == "eleven_v3")
+        #expect(parsed.voiceId == "fallback-voice")
+        #expect(parsed.apiKey == "synthetic-key")
+        #expect(parsed.outputFormat == nil)
+        #expect(parsed.referenceAudioPath == nil)
+        #expect(parsed.referenceText == nil)
+        #expect(parsed.seamColorHex == nil)
         #expect(parsed.snapshot.realtime.provider == nil)
         #expect(parsed.snapshot.realtime.modelId == nil)
         #expect(parsed.snapshot.realtime.speakerVoice == nil)

@@ -11,7 +11,9 @@
 .settings-row__control .btn,
 .settings-section__actions .btn,
 .settings-section__actions .agent-select__trigger,
-.settings-group .data-table-search input {
+.settings-group .data-table-search input,
+input.settings-input,
+select.settings-select:not([multiple]) {
   height: var(--settings-control-height);
   padding-block: 0;
   box-sizing: border-box;
@@ -74,34 +76,10 @@
   background: var(--bg-elevated);
 }
 
-:root[data-theme-mode="light"] .settings-segmented--primary {
-  background: white;
-}
-
 .settings-segmented--compact {
   --settings-control-height: 24px;
 
   flex-wrap: nowrap;
-}
-
-.settings-control__sr-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-wa-radio-group.settings-segmented::part(form-control-label) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
 }
 
 /* The parent selector also wins over the shared .btn hover/active chrome. */
@@ -154,7 +132,8 @@ wa-radio-group.settings-segmented::part(form-control-label) {
   font-size: 10px;
 }
 
-.settings-segmented > .settings-segmented__btn--active {
+.settings-segmented > .settings-segmented__btn--active,
+.settings-segmented > .settings-segmented__btn:has(> input:checked) {
   background: var(--bg-elevated);
   color: var(--text-strong);
   box-shadow: var(--shadow-sm);
@@ -191,26 +170,32 @@ wa-radio-group.settings-segmented::part(form-control-label) {
 }
 
 :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
-  > .settings-segmented__btn:focus-visible {
+  > .settings-segmented__btn:focus-visible,
+.settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
   outline: none;
   color: var(--text);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-:where(.settings-segmented:not(.settings-segmented--primary)) > .settings-segmented__btn:disabled {
+:where(.settings-segmented:not(.settings-segmented--primary))
+  > .settings-segmented__btn:is(:disabled, [aria-disabled="true"]),
+.settings-toggle:has(input:is(:disabled, [aria-disabled="true"])),
+.settings-segmented > .settings-segmented__btn:has(> input:is(:disabled, [aria-disabled="true"])) {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 @media (forced-colors: active) {
   :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
-    > .settings-segmented__btn--active {
+    > .settings-segmented__btn--active,
+  .settings-segmented > .settings-segmented__btn:has(> input:checked) {
     text-decoration: underline 2px;
     text-underline-offset: 3px;
   }
 
   :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
-    > .settings-segmented__btn:focus-visible {
+    > .settings-segmented__btn:focus-visible,
+  .settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
@@ -225,13 +210,6 @@ wa-radio-group.settings-segmented::part(form-control-label) {
     content: attr(data-compact-label);
     font-size: var(--control-ui-text-sm);
   }
-}
-
-input.settings-input,
-select.settings-select:not([multiple]) {
-  height: var(--settings-control-height);
-  padding-block: 0;
-  box-sizing: border-box;
 }
 
 .settings-input,
@@ -253,14 +231,7 @@ select.settings-select:not([multiple]) {
   font-size: var(--control-ui-text-sm);
 }
 
-@media (pointer: coarse) {
-  wa-select.settings-select {
-    font-size: max(16px, var(--control-ui-touch-input-size));
-  }
-}
-
-/* Native controls own their box. Web Awesome selects are styled by their
-   component-owned stylesheet. */
+/* Native controls own their box. */
 .settings-input,
 select.settings-select {
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
@@ -269,15 +240,6 @@ select.settings-select {
   color: var(--text);
   padding: 7px 10px;
   transition: border-color var(--duration-fast) var(--ease-out);
-}
-
-select.settings-select:not([multiple]) {
-  appearance: none;
-  -webkit-appearance: none;
-  padding-right: 36px;
-  background-image: var(--select-chevron);
-  background-repeat: no-repeat;
-  background-position: right 10px center;
 }
 
 .settings-input::placeholder {
@@ -310,16 +272,7 @@ select.settings-select:focus-visible {
 .settings-secret__toggle {
   position: absolute;
   right: 5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
   cursor: var(--cursor-action);
   transition: color var(--duration-fast) var(--ease-out);
 }
@@ -338,14 +291,18 @@ select.settings-select:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+@media (forced-colors: active) {
+  /* Forced colors suppress the shadow that marks keyboard focus above. */
+  .settings-secret__toggle:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
 .settings-secret__toggle svg {
   width: 16px;
   height: 16px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* Quiet count badge used by settings pages and the Skill Workshop. */

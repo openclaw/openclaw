@@ -1,12 +1,13 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expect, it, vi, type MockInstance } from "vitest";
+import { createMockSubsystemLogger } from "../../../test/helpers/mock-subsystem-logger.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
@@ -14,32 +15,28 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import type { SubsystemLogger } from "../../logging/subsystem.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { gatewayOwnerPayload } from "../../infra/gateway-owner-payload.test-support.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { heartbeatNotifications } from "../../infra/heartbeat-events.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
-import {
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { startGatewayEventSubscriptions } from "../server-runtime-subscriptions.js";
+import { createSubscriptionTestFixture } from "../server-runtime-subscriptions.test-support.js";
 import * as lifecycleState from "../session-lifecycle-state.js";
-import { sessionAbortHandlers } from "./sessions-abort.js";
+import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
+import { stopSession } from "./sessions.abort-lifecycle.test-support.js";
 import type { RespondFn } from "./types.js";
 
-const log: SubsystemLogger = {
-  subsystem: "sessions-abort-durability-test",
-  isEnabled: () => false,
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  fatal: vi.fn(),
-  raw: vi.fn(),
-  child: () => log,
-};
+const log = createMockSubsystemLogger("sessions-abort-durability-test");
 
 it.each([
   { mode: "controller", outcome: "persisted" },
@@ -53,6 +50,14 @@ it.each([
   "sessions.abort keeps $mode acknowledgement behind its $outcome writer outcome",
   async ({ mode, outcome }) => {
     await withOpenClawTestState({ label: "abort-durability" }, async (state) => {
+      // Subscriptions and session writers share the serving Gateway's state custody.
+      const stateOwner = acquireGatewayStateOwner({
+        databasePath: resolveOpenClawStateSqlitePath(state.env),
+        payload: gatewayOwnerPayload(state, readGatewayLockProcessNamespace),
+      });
+      await using _ = {
+        [Symbol.asyncDispose]: () => state.restoreEnv().finally(stateOwner.release),
+      };
       const cfg = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg, cfg);
       const target = {
@@ -62,6 +67,7 @@ it.each([
       };
       const sessionId = "abort-durability-session";
       const runId = "abort-durability-run";
+      const identity = { sessionKey: target.sessionKey, sessionId, agentId: target.agentId };
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       const aborted = createDeferred();
       const embeddedState = {
@@ -73,41 +79,68 @@ it.each([
         },
       };
       const embedded = createEmbeddedRunHandle(embeddedState);
+      const controllerTarget = captureSessionTarget({
+        storeScope: target.storePath,
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        incarnation: sessionId,
+      });
       const registration = mode.startsWith("controller")
         ? registerChatAbortController({
-            chatAbortControllers: context.chatAbortControllers,
-            sessionKey: target.sessionKey,
-            sessionId,
-            agentId: target.agentId,
+            target: controllerTarget,
+            ...identity,
             runId,
             kind: "agent",
             timeoutMs: 60_000,
-            isAbortable: () => embeddedState.isAbortable,
           })
         : undefined;
-      registration?.markExecutionStarted();
-      registration?.controller.signal.addEventListener("abort", () => embeddedState.abort(), {
-        once: true,
+      const releaseController = registration?.entry
+        ? await claimRpcSourceForTest(registration.entry)
+        : undefined;
+      registration?.entry?.input.claim?.operation?.attachBackend({
+        kind: "embedded",
+        cancel: vi.fn(),
+        isAbortable: () => embeddedState.isAbortable,
       });
+      registration?.controller.signal.addEventListener(
+        "abort",
+        () => {
+          embeddedState.abort();
+          releaseController?.();
+        },
+        { once: true },
+      );
+      const nativeOperation = mode.startsWith("controller")
+        ? registration?.entry?.input.claim?.operation
+        : createReplyOperation({
+            target: controllerTarget,
+            ...identity,
+            resetTriggered: false,
+          });
       if (mode !== "controller") {
-        setActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
+        setActiveEmbeddedRun(
+          sessionId,
+          embedded,
+          target.sessionKey,
+          undefined,
+          target.agentId,
+          nativeOperation,
+        );
+        void aborted.promise.then(() => {
+          clearActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
+          nativeOperation?.complete();
+        });
       }
       const subscriptions = startGatewayEventSubscriptions({
-        signal: new AbortController().signal,
+        ...createSubscriptionTestFixture().createParams(),
         log,
         broadcast: context.broadcast,
         broadcastToConnIds: context.broadcastToConnIds,
-        nodeHasSessionSubscribers: () => false,
         nodeSendToSession: context.nodeSendToSession,
         agentRunSeq: context.agentRunSeq,
         chatRunState: context.chatRunState,
         toolEventRecipients: context.chatRunState.toolEventRecipients,
-        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        chatAbortControllers: context.chatAbortControllers,
-        restartRecoveryCandidates: new Map(),
-        terminalSessions: { closeTaskSessions: vi.fn() },
-        refreshConnectedUserProfiles: vi.fn(),
+        resolveGatewayContext: context.resolveGatewayContext,
       });
       const writerEntered = createDeferred();
       const releaseWriter = createDeferred();
@@ -116,12 +149,16 @@ it.each([
       let replacement: Promise<void> | undefined;
       const writeFailure = new Error("terminal session write failed");
       let persistenceSpy:
-        | MockInstance<typeof lifecycleState.persistGatewaySessionLifecycleEvent>
+        | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
         | undefined;
       const responseRows: Array<ReturnType<typeof loadSessionEntry>> = [];
       const respond = vi.fn<RespondFn>(() => {
         responseRows.push(loadSessionEntry(target));
       });
+      const expectActiveRow = (lifecycleRunId = runId) => {
+        expect(loadSessionEntry(target)).toMatchObject({ lifecycleRunId, abortedLastRun: false });
+        expect(loadSessionEntry(target)?.status).toBeUndefined();
+      };
       try {
         await replaceSessionEntry(target, { sessionId, updatedAt: 1_000 });
         const startEvent = {
@@ -136,11 +173,7 @@ it.each([
           agentId: target.agentId,
           event: startEvent,
         });
-        expect(loadSessionEntry(target)).toMatchObject({
-          status: "running",
-          lifecycleRunId: runId,
-          abortedLastRun: false,
-        });
+        expectActiveRow();
         heldWriter = patchSessionEntryCore(target, async () => {
           writerEntered.resolve();
           await releaseWriter.promise;
@@ -156,38 +189,35 @@ it.each([
         }
         if (outcome === "write-failed") {
           persistenceSpy = vi
-            .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
-            .mockRejectedValueOnce(writeFailure);
+            .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+            .mockReturnValueOnce(async () => {
+              throw writeFailure;
+            });
         }
         request = Promise.resolve(
-          sessionAbortHandlers["sessions.abort"]!({
-            req: { type: "req", id: "abort-durability", method: "sessions.abort" },
-            params: {
-              key: target.sessionKey,
-              ...(mode.endsWith("session") ? {} : { runId }),
-            },
+          stopSession(
+            target.sessionKey,
             respond,
             context,
-            client: null,
-            isWebchatConnect: () => false,
-          }),
+            mode.endsWith("session") ? {} : { runId },
+            null,
+          ),
         );
         void request.catch(() => {});
         await aborted.promise;
+        if (mode === "embedded-run") {
+          clearActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
+        }
         await setImmediate();
         expect.soft(respond).not.toHaveBeenCalled();
-        expect(loadSessionEntry(target)?.status).toBe("running");
+        expect(loadSessionEntry(target)?.status).toBeUndefined();
         releaseWriter.resolve();
         await heldWriter;
         await replacement;
         if (outcome === "write-failed") {
           await expect(request).rejects.toThrow(writeFailure);
           expect(respond).not.toHaveBeenCalled();
-          expect(loadSessionEntry(target)).toMatchObject({
-            status: "running",
-            lifecycleRunId: runId,
-            abortedLastRun: false,
-          });
+          expectActiveRow();
           return;
         }
         await request;
@@ -196,15 +226,12 @@ it.each([
           expect.objectContaining({ ok: true, status: "aborted" }),
         ]);
         if (outcome === "replacement") {
-          expect(loadSessionEntry(target)).toMatchObject({
-            status: "running",
-            lifecycleRunId: "replacement-run",
-            abortedLastRun: false,
-          });
+          expectActiveRow("replacement-run");
           return;
         }
         expect(responseRows[0]).toMatchObject({ status: "killed", abortedLastRun: true });
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(state.root);
+        closeOpenClawAgentDatabasesForTest(state.root);
         expect(loadSessionEntry({ ...target, readConsistency: "latest" })).toMatchObject({
           status: "killed",
           abortedLastRun: true,
@@ -217,12 +244,13 @@ it.each([
         await replacement;
         await request?.catch(() => {});
         clearActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
+        nativeOperation?.complete();
+        releaseController?.();
         registration?.cleanup();
         await subscriptions.agentUnsub();
-        subscriptions.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscriptions.transcriptUnsub();
         subscriptions.lifecycleUnsub();
-        await subscriptions.taskUnsub();
         persistenceSpy?.mockRestore();
       }
     });

@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { hasSameContextEngineInstance } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
@@ -61,18 +60,17 @@ export async function disposeDeferredMaintenanceContextEngine(
   maintenance: Pick<ReturnType<typeof createSessionMaintenanceOwner>, "run" | "signal">,
 ): Promise<void> {
   const failures: unknown[] = [];
+  const settle = async (work: Promise<unknown>[]) => {
+    for (const outcome of await Promise.allSettled(work)) {
+      if (outcome.status === "rejected") {
+        failures.push(outcome.reason);
+      }
+    }
+  };
   const resources = [...(params.factoryResourceOwners ?? [])];
   let releasing: Promise<void> | undefined;
   const releaseResources = () =>
-    (releasing ??= Promise.allSettled(resources.map(async (owner) => await owner.release())).then(
-      (outcomes) => {
-        for (const outcome of outcomes) {
-          if (outcome.status === "rejected") {
-            failures.push(outcome.reason);
-          }
-        }
-      },
-    ));
+    (releasing ??= settle(resources.map(async (owner) => await owner.release())));
   try {
     await params.runInContext(() =>
       maintenance.run(() =>
@@ -84,12 +82,7 @@ export async function disposeDeferredMaintenanceContextEngine(
             const factoryWork = resources.map(({ closeFactoryWork }) =>
               trackAsyncWork(closeFactoryWork),
             );
-            const outcomes = await Promise.allSettled([disposal, ...factoryWork]);
-            for (const outcome of outcomes) {
-              if (outcome.status === "rejected") {
-                failures.push(outcome.reason);
-              }
-            }
+            await settle([disposal, ...factoryWork]);
           },
           maintenance.signal,
           releaseResources,
@@ -106,30 +99,4 @@ export async function disposeDeferredMaintenanceContextEngine(
       errorMessage: formatErrorMessage(error),
     });
   }
-}
-
-type ContextEngineFactoryWork = {
-  contextEngine: ContextEngine;
-  factoryResourceOwners: Set<ContextEngineMaintenanceResources>;
-};
-
-/** Shared engine instances retain every factory lifetime until their final disposer starts. */
-export function mergeContextEngineFactoryWork(
-  params: ContextEngineFactoryWork,
-  activeEngine: ContextEngine,
-  activeResources: Set<ContextEngineMaintenanceResources>,
-  superseded?: ContextEngineFactoryWork,
-): Set<ContextEngineMaintenanceResources> {
-  if (superseded && hasSameContextEngineInstance(superseded.contextEngine, params.contextEngine)) {
-    for (const resources of superseded.factoryResourceOwners) {
-      params.factoryResourceOwners.add(resources);
-    }
-  }
-  if (hasSameContextEngineInstance(params.contextEngine, activeEngine)) {
-    for (const resources of params.factoryResourceOwners) {
-      activeResources.add(resources);
-    }
-    return activeResources;
-  }
-  return params.factoryResourceOwners;
 }

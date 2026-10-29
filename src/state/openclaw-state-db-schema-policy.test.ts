@@ -1,24 +1,48 @@
 import assert from "node:assert/strict";
-import { existsSync, symlinkSync } from "node:fs";
+import { copyFileSync, existsSync, renameSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { constants, DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { constants, DatabaseSync, StatementSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { captureConfigHealthStateStore } from "../config/io.health-state.js";
+import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import { readClientCredentialFileIdentity } from "../infra/client-credential-receipt.js";
+import { rebindRehearsalClientCredentials } from "../infra/client-credential-restore.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import {
+  captureSqliteWorkerStateContext,
+  runWithSqliteWorkerStateContext,
+} from "../infra/sqlite-worker-state-context.js";
 import { NodeWorkerPreparedWorkspaceStore } from "../node-host/node-worker-prepared-workspace-store.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
 import { readConfigMachineState } from "./config-machine-state.js";
+import { createOpenClawStateDatabaseAsyncLifecycle } from "./openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
+import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import { markCurrentStateSchemaVersion } from "./openclaw-state-db-maintenance.js";
+import {
+  closeRetainedOpenClawStateReadConnections,
+  withOpenClawStateReadOnlyLocation,
+} from "./openclaw-state-db-read-connection.js";
 import {
   getExistingOpenClawStateSchemaPath,
   withExistingOpenClawStateSchema,
 } from "./openclaw-state-db-schema-policy.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
+import { runManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   initializeNativeOpenClawStateDatabase,
+  openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseReadabilityForDoctor,
   repairOpenClawStateDatabaseSchema,
@@ -27,6 +51,8 @@ import {
   runWithOpenClawStateBusyTimeout,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
+import { captureOpenClawStateReadWorkerContextWithAdmission } from "./openclaw-state-worker-context.capture.js";
+import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -36,8 +62,19 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 const previousAppVersion = "synthetic-previous-build";
+const previousVersion = OPENCLAW_STATE_SCHEMA_VERSION - 1;
 
-function readSchemaState(db: DatabaseSync) {
+function observeReads() {
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  return {
+    ...observation,
+    count: (...patterns: RegExp[]) =>
+      observation.queries.filter((sql) => patterns.every((pattern) => pattern.test(sql))).length,
+    [Symbol.dispose]: () => observation.restore(),
+  };
+}
+
+function readSchemaState(db: EngineConnection) {
   return {
     version: db.prepare("PRAGMA user_version").get(),
     metadata: db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
@@ -47,24 +84,29 @@ function readSchemaState(db: DatabaseSync) {
   };
 }
 
+function readMeta(db: EngineConnection, column: "app_version" | "schema_version") {
+  return db.prepare(`SELECT ${column} FROM schema_meta WHERE meta_key = 'primary'`).get();
+}
+
 function readPersistedSchema(pathname: string) {
-  const db = new DatabaseSync(pathname, { readOnly: true });
-  try {
-    return {
-      ...readSchemaState(db),
-      schema: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
-    };
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(pathname, { readOnly: true });
+  return {
+    ...readSchemaState(db),
+    schema: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
+  };
 }
 
 function createExistingState(mutate?: (db: DatabaseSync) => void) {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-existing-schema-") };
   const pathname = openOpenClawStateDatabase({ env }).path;
   closeOpenClawStateDatabase();
-  const db = new DatabaseSync(pathname);
+  const sourceSharedFile = readClientCredentialFileIdentity(pathname);
+  assert(sourceSharedFile);
+  const seedPath = `${pathname}.seed`;
+  renameSync(pathname, seedPath);
+  copyFileSync(seedPath, pathname);
   try {
+    using db = new DatabaseSync(pathname);
     db.prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'").run(
       previousAppVersion,
     );
@@ -75,15 +117,436 @@ function createExistingState(mutate?: (db: DatabaseSync) => void) {
                 'synthetic-startup-checkpoint', 10, 20);
     `);
     mutate?.(db);
-    return { options: { env, path: pathname }, before: readSchemaState(db) };
+    return { options: { env, path: pathname }, before: readSchemaState(db), sourceSharedFile };
   } finally {
-    db.close();
+    // Model bytes from an earlier process, not a raw edit of this process's admitted inode.
+    const replacement = `${pathname}.fixture`;
+    copyFileSync(pathname, replacement);
+    renameSync(replacement, pathname);
   }
 }
 
+function insertForeignKeyCorruption(db: DatabaseSync) {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    INSERT INTO acp_replay_events
+      (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
+      VALUES ('missing-session', 1, 10, 'session', NULL, '{}', 0);
+  `);
+}
+
+function createPreviousState() {
+  return createExistingState((database) => {
+    database.exec(`PRAGMA user_version = ${previousVersion};
+      UPDATE schema_meta SET schema_version = ${previousVersion} WHERE meta_key = 'primary';`);
+  });
+}
+
+describe("ordinary shared-state reader admission", () => {
+  it("reuses cold schema facts without adding a warm freshness probe", () => {
+    const { options } = createExistingState();
+    const read = () =>
+      withOpenClawStateReadOnlyLocation(
+        ({ db }) => readMeta(db, "app_version"),
+        options.path,
+        options.path,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+    using cleanup = new DisposableStack();
+    cleanup.defer(closeRetainedOpenClawStateReadConnections);
+    using reads = observeReads();
+    expect(read()).toEqual({ app_version: previousAppVersion });
+    const coldVersionReads = reads.count(/^PRAGMA user_version\b/iu);
+    const coldContentReads = reads.count(/\bconfig_machine_state\b/iu);
+    reads.queries.length = 0;
+    expect(read()).toEqual({ app_version: previousAppVersion });
+    expect({
+      coldPublishedVersion: coldVersionReads,
+      coldContentVersion: coldContentReads,
+      warmPublishedVersion: reads.count(/^PRAGMA user_version\b/iu),
+      warmContentVersion: reads.count(/\bconfig_machine_state\b/iu),
+      warmFreshness: reads.count(
+        /(?:^PRAGMA data_version\b|\bFROM main\.pragma_data_version\(\))/iu,
+      ),
+    }).toEqual({
+      coldPublishedVersion: 1,
+      coldContentVersion: 1,
+      warmPublishedVersion: 0,
+      warmContentVersion: 0,
+      warmFreshness: 0,
+    });
+  });
+
+  it("observes an owned migration committed during first reader admission", () => {
+    const { options } = createPreviousState();
+    using peer = openTrackedStateDatabase(options.path);
+    let upgraded = false;
+    // oxlint-disable-next-line typescript/unbound-method -- The proxy retains the native statement receiver.
+    const nativeGet = StatementSync.prototype.get;
+    using observer = vi.spyOn(StatementSync.prototype, "get");
+    observer.mockImplementation(
+      new Proxy(nativeGet, {
+        apply(target, receiver: StatementSync, args) {
+          const publishedVersion = /^PRAGMA user_version\b/iu.test(receiver.sourceSQL);
+          const result = Reflect.apply(target, receiver, args);
+          if (publishedVersion && !upgraded) {
+            upgraded = true;
+            runManagedStateTransaction(peer, () => markCurrentStateSchemaVersion(peer), {
+              operationLabel: "state.version.admission.fixture",
+            });
+          }
+          return result;
+        },
+      }),
+    );
+    const read = vi.fn(({ db }: { db: EngineConnection }) => ({
+      version: readStateSchemaContentVersion(db),
+      metadata: readMeta(db, "schema_version"),
+    }));
+    expect(withOpenClawStateReadOnlyLocation(read, options.path, options.path)).toEqual({
+      version: OPENCLAW_STATE_SCHEMA_VERSION,
+      metadata: { schema_version: OPENCLAW_STATE_SCHEMA_VERSION },
+    });
+    expect(upgraded).toBe(true);
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it("publishes migration-owned content versions across rollback and sibling settlement", () => {
+    const { options } = createPreviousState();
+    using db = openTrackedStateDatabase(options.path);
+    using peer = openTrackedStateDatabase(options.path);
+    const read = () => runSqliteReadOperationSync(db, () => readStateSchemaContentVersion(db));
+    admitSqliteSchema(db);
+    expect(read()).toBe(previousVersion);
+    expect(() =>
+      runManagedStateTransaction(
+        db,
+        () => {
+          markCurrentStateSchemaVersion(db);
+          expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+          throw new Error("synthetic version rollback");
+        },
+        { operationLabel: "state.version.rollback.fixture" },
+      ),
+    ).toThrow("synthetic version rollback");
+    expect(read()).toBe(previousVersion);
+    runManagedStateTransaction(peer, () => markCurrentStateSchemaVersion(peer), {
+      operationLabel: "state.version.publish.fixture",
+    });
+    expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    db.exec("DROP TABLE config_machine_state");
+    expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+  });
+
+  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function").each([false, true])(
+    "rechecks content-marker authorization after a successful read (admitted=%s)",
+    (admitted) => {
+      const { options } = createExistingState();
+      using db = openTrackedStateDatabase(options.path);
+      const read = () => runSqliteReadOperationSync(db, () => readStateSchemaContentVersion(db));
+      if (admitted) {
+        admitSqliteSchema(db);
+      }
+      expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+      let allow = true;
+      db.setAuthorizer((action, table) =>
+        !allow && action === constants.SQLITE_READ && table === "config_machine_state"
+          ? constants.SQLITE_DENY
+          : constants.SQLITE_OK,
+      );
+      expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+      allow = false;
+      expect(read).toThrow(/not authorized|prohibited/iu);
+      allow = true;
+      expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    },
+  );
+});
+
 describe("existing shared-state schema admission", () => {
+  it.each(["ordinary", "required", "existing"] as const)(
+    "checks read-only integrity once per %s admission and refuses later corruption",
+    async (policy) => {
+      const { options, before } = createExistingState();
+      const open = () => {
+        const read = () =>
+          openExistingOpenClawStateDatabaseReadOnly({
+            ...options,
+            requireCanonicalSchema: policy === "required",
+          });
+        return policy === "existing" ? withExistingOpenClawStateSchema(options, read) : read();
+      };
+      {
+        using reads = observeReads();
+        const database = await open();
+        assert(database);
+        using cleanup = new DisposableStack();
+        cleanup.defer(() => database.walMaintenance.close());
+        expect(reads.count(/^PRAGMA integrity_check\b/iu)).toBe(1);
+        expect(reads.count(/^PRAGMA foreign_key_check\b/iu)).toBe(1);
+        expect(readSchemaState(database.db)).toEqual(before);
+      }
+
+      {
+        using corrupted = new DatabaseSync(options.path);
+        insertForeignKeyCorruption(corrupted);
+      }
+      await expect(open()).rejects.toThrow(/foreign_key_check/i);
+    },
+  );
+
+  it.each(["schema rollback", "canonical close", "replacement"] as const)(
+    "shares physical integrity proof through %s and validates replacement files",
+    async (change) => {
+      const replacement =
+        change === "replacement" ? createExistingState(insertForeignKeyCorruption) : undefined;
+      const { options, before } = createExistingState();
+      await withExistingOpenClawStateSchema(options, async () => {
+        using sibling = openTrackedStateDatabase(options.path, { readOnly: true });
+        admitSqliteSchema(sibling);
+        const capture = () =>
+          captureSqliteWorkerStateContext(captureOpenClawStateReadWorkerContext(options));
+        const context = capture();
+        const read = (source = context) =>
+          runWithSqliteWorkerStateContext(structuredClone(source), () =>
+            withOpenClawStateReadOnlyLocation(
+              ({ db }) => readSchemaState(db),
+              options.path,
+              options.path,
+            ),
+          );
+        using reads = observeReads();
+        const checkCount = () => reads.count(/^PRAGMA integrity_check\b/iu);
+        expect(read()).toEqual(before);
+        expect(read()).toEqual(before);
+        expect(checkCount()).toBe(1);
+        expect(reads.count(/^PRAGMA foreign_key_check\b/iu)).toBe(1);
+        if (change === "schema rollback") {
+          const database = openOpenClawStateDatabase(options);
+          const cookie = database.db.prepare("PRAGMA schema_version").get();
+          database.db.exec("BEGIN; CREATE TABLE runtime_admission_probe (id INTEGER); ROLLBACK");
+          expect(database.db.prepare("PRAGMA schema_version").get()).toEqual(cookie);
+          const fresh = capture();
+          expect(read(fresh)).toEqual(before);
+          expect(read(fresh)).toEqual(before);
+          expect(checkCount()).toBe(1);
+          expect(read()).toEqual(before);
+        } else if (replacement) {
+          renameSync(options.path, `${options.path}.previous`);
+          copyFileSync(replacement.options.path, options.path);
+          expect(() => read()).toThrow(/foreign_key_check/i);
+        } else {
+          sibling.close();
+          await closeOpenClawStateDatabaseAsync();
+          expect(read(capture())).toEqual(before);
+        }
+        expect(checkCount()).toBe(change === "replacement" ? 2 : 1);
+      });
+    },
+  );
+
+  it.each(["managed commit", "managed rollback", "raw rollback"] as const)(
+    "publishes shared integrity proof only after outer transaction settlement (%s)",
+    (settlement) => {
+      const { options, before } = createExistingState();
+      withExistingOpenClawStateSchema(options, () => {
+        const context = captureSqliteWorkerStateContext(
+          captureOpenClawStateReadWorkerContext(options),
+        );
+        using database = openTrackedStateDatabase(options.path);
+        using reads = observeReads();
+        const admit = () =>
+          assertExistingOpenClawStateRuntimeSchema(database, options.path, context.stateIntegrity);
+        if (settlement === "raw rollback") {
+          database.exec("BEGIN");
+          admit();
+          database.exec("ROLLBACK");
+        } else {
+          const run = () =>
+            runManagedStateTransaction(
+              database,
+              () => {
+                admit();
+                if (settlement === "managed rollback") {
+                  throw new Error("synthetic rollback");
+                }
+              },
+              { operationLabel: "state.admission.fixture" },
+            );
+          if (settlement === "managed rollback") {
+            expect(run).toThrow("synthetic rollback");
+          } else {
+            run();
+          }
+        }
+        const result = runWithSqliteWorkerStateContext(structuredClone(context), () =>
+          withOpenClawStateReadOnlyLocation(
+            ({ db }) => readSchemaState(db),
+            options.path,
+            options.path,
+          ),
+        );
+        expect(result).toEqual(before);
+        expect(reads.count(/^PRAGMA integrity_check\b/iu)).toBe(
+          settlement === "managed commit" ? 1 : 2,
+        );
+      });
+    },
+  );
+
+  it.each(["reader", "writer", "closed reader", "module graph"] as const)(
+    "revokes transported integrity proof after %s corruption",
+    async (kind) => {
+      const { options, before } = createExistingState();
+      const host = createOpenClawStateDatabaseAsyncLifecycle();
+      await withExistingOpenClawStateSchema(options, async () => {
+        using sibling = openTrackedStateDatabase(options.path, { readOnly: true });
+        admitSqliteSchema(sibling);
+        const context = captureSqliteWorkerStateContext(
+          captureOpenClawStateReadWorkerContextWithAdmission(options, host.capture),
+        );
+        const lifetime = context.stateIntegrity?.lifetime;
+        assert(lifetime);
+        const run = <T>(operation: () => T) =>
+          runWithSqliteWorkerStateContext(structuredClone(context), operation);
+        const read = () =>
+          run(() =>
+            withOpenClawStateReadOnlyLocation(
+              ({ db }) => readSchemaState(db),
+              options.path,
+              options.path,
+            ),
+          );
+        using reads = observeReads();
+        expect(read()).toEqual(before);
+        expect(read()).toEqual(before);
+        expect(Atomics.load(new BigInt64Array(lifetime.revision), 0)).toBe(lifetime.epoch);
+        expect(reads.count(/^PRAGMA integrity_check\b/iu)).toBe(1);
+        const corruption = Object.assign(new Error("synthetic SQLite corruption"), {
+          errcode: 11,
+        });
+        if (kind === "module graph") {
+          const database = run(() => openOpenClawStateDatabase(options));
+          vi.resetModules();
+          const { openClawStateDatabaseCache } = await import("./openclaw-state-db-cache.js");
+          expect(
+            openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(
+              database,
+              corruption,
+            ),
+          ).toBe(true);
+        } else {
+          expect(() =>
+            run(() => {
+              if (kind !== "writer") {
+                return withOpenClawStateReadOnlyLocation(
+                  ({ db }) => {
+                    if (kind === "closed reader") {
+                      db.close();
+                    }
+                    throw corruption;
+                  },
+                  options.path,
+                  options.path,
+                );
+              }
+              return runOpenClawStateWriteTransaction(() => {
+                throw corruption;
+              }, options);
+            }),
+          ).toThrow(corruption);
+        }
+        expect(Atomics.load(new BigInt64Array(lifetime.revision), 0)).not.toBe(lifetime.epoch);
+        {
+          using db = new DatabaseSync(options.path);
+          insertForeignKeyCorruption(db);
+        }
+        expect(read).toThrow(/foreign_key_check/i);
+      });
+    },
+  );
+
+  it("refuses pre-July agent registry primary keys without migrating them", () => {
+    const { options } = createExistingState((db) => {
+      db.exec(`
+        DROP TABLE agent_databases;
+        CREATE TABLE agent_databases (
+          agent_id TEXT NOT NULL PRIMARY KEY,
+          path TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          size_bytes INTEGER
+        );
+        INSERT INTO agent_databases VALUES ('main', 'legacy.sqlite', 1, 10, 20);
+      `);
+    });
+    const before = readPersistedSchema(options.path);
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      "Upgrades from pre-July-2026 state are no longer migrated",
+    );
+    expect(repairOpenClawStateDatabaseSchema(options)).toMatchObject({
+      changes: [],
+      warnings: [expect.stringContaining("unsupported agent database registry schema")],
+    });
+    expect(readPersistedSchema(options.path)).toEqual(before);
+    using preserved = new DatabaseSync(options.path, { readOnly: true });
+    expect(preserved.prepare("SELECT * FROM agent_databases").all()).toEqual([
+      {
+        agent_id: "main",
+        path: "legacy.sqlite",
+        schema_version: 1,
+        last_seen_at: 10,
+        size_bytes: 20,
+      },
+    ]);
+  });
+
+  it.each(["transaction", "implicit pin"] as const)(
+    "observes an owned migration after its %s read snapshot ends",
+    (snapshot) => {
+      const { options } = createPreviousState();
+      using db = openTrackedStateDatabase(options.path);
+      using peer = openTrackedStateDatabase(options.path);
+      admitSqliteSchema(db);
+      const read = () => runSqliteReadOperationSync(db, () => readStateSchemaContentVersion(db));
+      expect(read()).toBe(previousVersion);
+      const reads = observeReads();
+      const readSnapshot = () => {
+        expect(readMeta(db, "schema_version")).toEqual({ schema_version: previousVersion });
+        expect(read()).toBe(previousVersion);
+        runManagedStateTransaction(peer, () => markCurrentStateSchemaVersion(peer), {
+          operationLabel: "state.version.snapshot.fixture",
+        });
+        expect(read()).toBe(previousVersion);
+        expect(readMeta(db, "schema_version")).toEqual({ schema_version: previousVersion });
+      };
+      try {
+        if (snapshot === "transaction") {
+          db.exec("BEGIN");
+          readSnapshot();
+          db.exec("COMMIT");
+        } else {
+          runSqliteSchemaReadSnapshotSync(db, readSnapshot);
+        }
+        expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        expect(readMeta(db, "schema_version")).toEqual({
+          schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+        });
+        expect(reads.count(/data_version/iu)).toBe(0);
+      } finally {
+        reads.restore();
+        if (db.isTransaction) {
+          db.exec("ROLLBACK");
+        }
+      }
+    },
+  );
+
   it("writes node state and initializes its lazy store without taking over release repair", async () => {
-    const { options, before } = createExistingState((db) => {
+    const { options, before, sourceSharedFile } = createExistingState((db) => {
       db.exec(`
         PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
         UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}
@@ -94,6 +557,13 @@ describe("existing shared-state schema admission", () => {
           (session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes)
           VALUES ('retained', 'session', '/workspace', 1, 10, 20, 1, 0);
       `);
+    });
+
+    rebindRehearsalClientCredentials({
+      sourceSharedFile,
+      sourceStateRoot: options.env.OPENCLAW_STATE_DIR,
+      sharedPath: options.path,
+      localPath: resolveClientCredentialStorePath(options.env),
     });
 
     await withExistingOpenClawStateSchema(options, async () => {
@@ -131,9 +601,7 @@ describe("existing shared-state schema admission", () => {
     expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
-    expect(
-      reopened.db.prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-    ).toEqual({ app_version: previousAppVersion });
+    expect(readMeta(reopened.db, "app_version")).toEqual({ app_version: previousAppVersion });
     expect(
       reopened.db.prepare("SELECT estimated_bytes FROM acp_replay_sessions").get()?.estimated_bytes,
     ).toBe(0);
@@ -150,9 +618,7 @@ describe("existing shared-state schema admission", () => {
     await closeOpenClawStateDatabaseAsync();
     expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
     const repaired = openOpenClawStateDatabase(options);
-    expect(
-      repaired.db.prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-    ).toEqual({ app_version: previousAppVersion });
+    expect(readMeta(repaired.db, "app_version")).toEqual({ app_version: previousAppVersion });
     expect(
       repaired.db.prepare("SELECT estimated_bytes FROM acp_replay_sessions").get()?.estimated_bytes,
     ).toBeGreaterThan(0);
@@ -172,6 +638,15 @@ describe("existing shared-state schema admission", () => {
 
   it.each([
     {
+      name: "forward migration by a newer CLI than the managed service",
+      sql: `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
+            UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}
+              WHERE meta_key = 'primary';`,
+      serviceVersion: "2026.10.3",
+      expectedError:
+        /this CLI is 2026\.10\.8 but the Gateway service runs 2026\.10\.3.*run openclaw update/u,
+    },
+    {
       name: "older migration content",
       sql: `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
             UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}
@@ -184,17 +659,17 @@ describe("existing shared-state schema admission", () => {
               WHERE meta_key = 'primary';`,
     },
     {
-      name: "newer unpublished content",
-      sql: `INSERT INTO config_machine_state VALUES
-              ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION + 1}', 1);`,
-    },
-    {
       name: "mismatched published metadata",
       sql: "UPDATE schema_meta SET schema_version = schema_version - 1 WHERE meta_key = 'primary';",
     },
     {
       name: "non-global ownership",
       sql: "UPDATE schema_meta SET role = 'agent', agent_id = 'main' WHERE meta_key = 'primary';",
+    },
+    {
+      name: "missing metadata role column",
+      sql: "ALTER TABLE schema_meta RENAME COLUMN role TO retired_role;",
+      expectedError: SqliteSchemaMismatchError,
     },
     {
       name: "missing startup column",
@@ -229,14 +704,46 @@ describe("existing shared-state schema admission", () => {
               (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
               VALUES ('missing-session', 1, 10, 'session', NULL, '{}', 0);`,
     },
-  ])("refuses $name without migrating or repairing the file", ({ sql }) => {
-    const { options } = createExistingState((db) => db.exec(sql));
-    const before = readPersistedSchema(options.path);
-    expect(() =>
-      withExistingOpenClawStateSchema(options, () => openOpenClawStateDatabase(options)),
-    ).toThrow(/schema|foreign_key_check/i);
-    expect(readPersistedSchema(options.path)).toEqual(before);
-  });
+  ])(
+    "refuses $name without migrating or repairing the file",
+    async ({ sql, serviceVersion, expectedError = /schema|foreign_key_check/i }) => {
+      const { options } = createExistingState((db) => db.exec(sql));
+      const before = readPersistedSchema(options.path);
+      if (serviceVersion) {
+        assert(expectedError instanceof RegExp);
+        const context = {
+          environment: options.env,
+          gatewayServiceInstallation: {
+            root: "/fixture/old-install",
+            version: serviceVersion,
+            cliVersion: "2026.10.8",
+            databasePath: options.path,
+          },
+        };
+        const refusal = await runWithSqliteWorkerStateContext(context, async () => {
+          const health = captureConfigHealthStateStore(
+            {
+              env: options.env,
+              homedir: () => options.env.OPENCLAW_STATE_DIR,
+              logger: console,
+            },
+            path.join(options.env.OPENCLAW_STATE_DIR, "openclaw.json"),
+          );
+          await health.update(
+            { lastObservedSuspiciousSignature: "skew" },
+            { state: {}, basis: null },
+          );
+        }).catch((error: unknown) => error);
+        expect(readPersistedSchema(options.path)).toEqual(before);
+        expect(refusal).toMatchObject({ message: expect.stringMatching(expectedError) });
+      } else {
+        expect(() =>
+          withExistingOpenClawStateSchema(options, () => openOpenClawStateDatabase(options)),
+        ).toThrow(expectedError);
+      }
+      expect(readPersistedSchema(options.path)).toEqual(before);
+    },
+  );
 
   it("refuses global repair and startup-checkpoint entry points inside the node scope", async () => {
     const { options, before } = createExistingState();
@@ -298,21 +805,19 @@ describe("existing shared-state schema admission", () => {
       closeOpenClawStateDatabase();
       expect(database.db.isOpen).toBe(false);
       const reopened = openOpenClawStateDatabase(aliasOptions);
-      expect(
-        reopened.db.prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-      ).toEqual({ app_version: previousAppVersion });
+      expect(readMeta(reopened.db, "app_version")).toEqual({ app_version: previousAppVersion });
     },
   );
 
-  it("revalidates same-version schema changes before reusing a cached handle", () => {
+  it("inspects schema indexes once and observes managed same-version changes before handle reuse", () => {
     const { options } = createExistingState();
+    using reads = observeReads();
     withExistingOpenClawStateSchema(options, () => {
       const database = openOpenClawStateDatabase(options);
-      const external = new DatabaseSync(options.path);
-      try {
+      expect(reads.count(/index_xinfo/, /idx_plugin_state_listing/)).toBeLessThanOrEqual(1);
+      {
+        using external = openTrackedStateDatabase(options.path);
         external.exec("ALTER TABLE worker_environments DROP COLUMN preparation_purpose");
-      } finally {
-        external.close();
       }
       expect(() => openOpenClawStateDatabase(options)).toThrow(/schema|repair/i);
       expect(() =>
@@ -355,25 +860,21 @@ describe("existing shared-state schema admission", () => {
     (action) => {
       const { options } = createExistingState();
       // Allow this fixture to reuse the native cookie across different schema generations.
-      const database = new DatabaseSync(options.path, { defensive: false });
-      try {
-        assertExistingOpenClawStateRuntimeSchema(database, options.path);
-        const cookie = database.prepare("PRAGMA schema_version").get()?.schema_version;
-        assert(typeof cookie === "number");
-        if (action === "close") {
-          database.close();
-        } else {
-          database[Symbol.dispose]();
-        }
-        database.open();
-        database.exec(`DROP INDEX idx_plugin_state_listing; PRAGMA schema_version = ${cookie}`);
-        expect(database.prepare("PRAGMA schema_version").get()?.schema_version).toBe(cookie);
-        expect(() => assertExistingOpenClawStateRuntimeSchema(database, options.path)).toThrow(
-          /idx_plugin_state_listing/,
-        );
-      } finally {
+      using database = new DatabaseSync(options.path, { defensive: false });
+      assertExistingOpenClawStateRuntimeSchema(database, options.path);
+      const cookie = database.prepare("PRAGMA schema_version").get()?.schema_version;
+      assert(typeof cookie === "number");
+      if (action === "close") {
         database.close();
+      } else {
+        database[Symbol.dispose]();
       }
+      database.open();
+      database.exec(`DROP INDEX idx_plugin_state_listing; PRAGMA schema_version = ${cookie}`);
+      expect(database.prepare("PRAGMA schema_version").get()?.schema_version).toBe(cookie);
+      expect(() => assertExistingOpenClawStateRuntimeSchema(database, options.path)).toThrow(
+        /idx_plugin_state_listing/,
+      );
     },
   );
 
@@ -381,7 +882,7 @@ describe("existing shared-state schema admission", () => {
     const { options } = createExistingState();
     withExistingOpenClawStateSchema(options, () => {
       const database = openOpenClawStateDatabase(options);
-      database.db.setAuthorizer((action, name) =>
+      requireNativeSqliteDatabase(database.db).setAuthorizer((action, name) =>
         action === constants.SQLITE_PRAGMA && name === "schema_version"
           ? constants.SQLITE_IGNORE
           : constants.SQLITE_OK,
@@ -389,7 +890,7 @@ describe("existing shared-state schema admission", () => {
       try {
         expect(() => openOpenClawStateDatabase(options)).toThrow(/schema version is unavailable/i);
       } finally {
-        database.db.setAuthorizer(null);
+        requireNativeSqliteDatabase(database.db).setAuthorizer(null);
       }
     });
   });

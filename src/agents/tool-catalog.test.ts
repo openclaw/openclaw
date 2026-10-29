@@ -1,180 +1,89 @@
-/**
- * Regression coverage for core tool catalog profile defaults.
- * Verifies built-in profile allowlists include expected core tool groups.
- */
 import { describe, expect, it } from "vitest";
 import {
   listCoreToolSections,
   resolveCoreToolProfilePolicy,
   resolveCoreToolProfiles,
 } from "./tool-catalog.js";
-import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import {
+  filterToolsByPolicy,
+  isToolAllowedByPolicies,
+  isToolAllowedByPolicyName,
+} from "./tool-policy-match.js";
 
-function requireCoreToolProfilePolicy(profile: Parameters<typeof resolveCoreToolProfilePolicy>[0]) {
-  const policy = resolveCoreToolProfilePolicy(profile);
-  if (!policy) {
-    throw new Error(`expected ${profile} tool profile policy`);
-  }
-  return policy;
-}
-
-function requirePolicyAllow(profile: Parameters<typeof resolveCoreToolProfilePolicy>[0]) {
-  const allow = requireCoreToolProfilePolicy(profile).allow;
-  if (!allow) {
-    throw new Error(`expected ${profile} tool profile allow list`);
-  }
-  return allow;
+function expectAccess(
+  tool: string,
+  policies: Parameters<typeof isToolAllowedByPolicies>[1],
+  allowed = true,
+) {
+  expect(isToolAllowedByPolicies(tool, policies), tool).toBe(allowed);
 }
 
 describe("tool-catalog", () => {
-  it("lists the setup helper once in Automation without adding restricted profile membership", () => {
-    const sections = listCoreToolSections();
+  it.each([
+    ["personal_instructions", { personalInstructionsEnabled: true }],
+    ["agents_wait", { swarmEnabled: true }],
+  ] as const)("lists %s only with its capability enabled", (id, config) => {
+    const ids = (options?: Parameters<typeof listCoreToolSections>[0]) =>
+      listCoreToolSections(options).flatMap((section) => section.tools.map((tool) => tool.id));
+    expect(ids()).not.toContain(id);
+    expect(ids({ personalInstructionsEnabled: false })).not.toContain(id);
+    expect(ids(config)).toContain(id);
+  });
+
+  it.each(["group:automation", "group:openclaw"])("respects %s helper policy", (group) => {
     expect(
-      sections.flatMap((section) => section.tools).filter((tool) => tool.id === "openclaw"),
-    ).toEqual([
-      {
-        id: "openclaw",
-        label: "openclaw",
-        description: "Delegate OpenClaw setup and repair",
-      },
-    ]);
-    expect(
-      sections.find((section) => section.id === "automation")?.tools.map((tool) => tool.id),
-    ).toContain("openclaw");
-    expect(resolveCoreToolProfiles("openclaw")).toEqual([]);
+      [
+        { allow: [group] },
+        { allow: [group], deny: ["openclaw"] },
+        { allow: ["openclaw"], deny: [group] },
+      ].map((policy) => isToolAllowedByPolicyName("openclaw", policy)),
+    ).toEqual([true, false, false]);
+    for (const profile of [undefined, "full"]) {
+      const policy = resolveCoreToolProfilePolicy(profile);
+      expectAccess("openclaw", [policy]);
+      expectAccess("message", [policy]);
+      expectAccess("openclaw", [policy, { deny: [group] }], false);
+      expectAccess("exec", [policy, { deny: ["exec"] }], false);
+    }
   });
 
-  it.each(["group:automation", "group:openclaw"])(
-    "includes the helper in %s allows and denies",
-    (group) => {
-      expect(isToolAllowedByPolicyName("openclaw", { allow: [group] })).toBe(true);
-      expect(isToolAllowedByPolicyName("openclaw", { allow: [group], deny: ["openclaw"] })).toBe(
-        false,
-      );
-      expect(isToolAllowedByPolicyName("openclaw", { allow: ["openclaw"], deny: [group] })).toBe(
-        false,
-      );
-      for (const profile of [undefined, "full"]) {
-        const policy = resolveCoreToolProfilePolicy(profile);
-        expect(isToolAllowedByPolicies("openclaw", [policy])).toBe(true);
-        expect(isToolAllowedByPolicies("message", [policy])).toBe(true);
-        expect(isToolAllowedByPolicies("openclaw", [policy, { deny: [group] }])).toBe(false);
-        expect(isToolAllowedByPolicies("exec", [policy, { deny: ["exec"] }])).toBe(false);
-      }
-    },
-  );
-
-  it("lists agents_wait only for a Swarm-enabled catalog", () => {
-    const ids = (config?: Parameters<typeof listCoreToolSections>[0]) =>
-      listCoreToolSections(config).flatMap((section) => section.tools.map((tool) => tool.id));
-
-    expect(ids()).not.toContain("agents_wait");
-    expect(ids({ swarmEnabled: true })).toContain("agents_wait");
+  it("lets operators configure run-dependent tools without granting restricted profiles", () => {
+    const ids = listCoreToolSections().flatMap((section) => section.tools.map((tool) => tool.id));
+    expect(ids).toEqual(
+      expect.arrayContaining(["github_publish", "github_identity_status", "transcripts"]),
+    );
+    expect(resolveCoreToolProfiles("transcripts")).toEqual([]);
   });
 
-  it("lists GitHub publication only with a prepared session capability", () => {
-    const ids = (config?: Parameters<typeof listCoreToolSections>[0]) =>
-      listCoreToolSections(config).flatMap((section) => section.tools.map((tool) => tool.id));
-
-    expect(ids()).not.toContain("github_publish");
-    expect(ids()).not.toContain("github_identity_status");
-    expect(ids({ githubPublicationAvailable: false })).toContain("github_identity_status");
-    expect(ids({ githubPublicationAvailable: true })).toContain("github_publish");
+  it.each(["group:media", "group:openclaw"])("preserves saved %s transcript policy", (group) => {
+    const transcript = { name: "transcripts" },
+      pdf = { name: "pdf" };
+    const tools = [{ ...transcript }, { ...pdf }];
+    expect(filterToolsByPolicy(tools, { allow: [group] })).toEqual([pdf]);
+    for (const allow of [["*"], ["transcripts"]]) {
+      expect(filterToolsByPolicy(tools, { allow, deny: [group] })).toEqual([transcript]);
+    }
+    expect(filterToolsByPolicy(tools, { allow: ["*"], deny: ["transcripts"] })).toEqual([pdf]);
   });
 
-  it("includes code execution, web tools, and progress_card in the coding profile policy", () => {
-    const policy = requireCoreToolProfilePolicy("coding");
-    expect(policy.allow).toEqual([
-      "decision_evaluate",
-      "ls",
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "exec",
-      "process",
-      "code_execution",
-      "secrets",
-      "web_search",
-      "web_fetch",
-      "x_search",
-      "memory_search",
-      "memory_get",
-      "sessions",
-      "sessions_list",
-      "sessions_history",
-      "sessions_search",
-      "conversations_list",
-      "conversations_send",
-      "conversations_turn",
-      "sessions_send",
-      "sessions_spawn",
-      "github_identity_status",
-      "github_publish",
-      "agents_wait",
-      "sessions_yield",
-      "subagents",
-      "session_status",
-      "suggest_task",
-      "dismiss_task",
-      "screen",
-      "theme",
-      "dashboard",
-      "terminal",
-      "portal",
-      "automations",
-      "gateway",
-      "plugins",
-      "get_goal",
-      "create_goal",
-      "update_goal",
-      "progress_card",
-      "ask_user",
-      "skill_workshop",
-      "view_image",
-      "image_generate",
-      "music_generate",
-      "video_generate",
-      "bundle-mcp",
-    ]);
-  });
-
-  it("includes bundle MCP tools in coding and messaging profile policies", () => {
-    expect(requirePolicyAllow("coding").at(-1)).toBe("bundle-mcp");
-    expect(requirePolicyAllow("messaging")).toEqual([
-      "decision_evaluate",
-      "secrets",
-      "sessions",
-      "sessions_list",
-      "sessions_history",
-      "sessions_search",
-      "conversations_list",
-      "conversations_send",
-      "conversations_turn",
-      "sessions_send",
-      "sessions_spawn",
-      "sessions_yield",
-      "subagents",
-      "session_status",
-      "theme",
-      "message",
-      "gateway",
-      "ask_user",
-      "bundle-mcp",
-    ]);
-    expect(requirePolicyAllow("minimal")).toEqual(["session_status", "gateway"]);
-  });
-
-  it("treats pdf as a known media core tool, not a plugin id", () => {
-    const mediaIds = listCoreToolSections()
-      .find((section) => section.id === "media")
-      ?.tools.map((tool) => tool.id);
-    expect(mediaIds).toContain("pdf");
-    expect(mediaIds).toContain("tts");
+  it.each([
+    ["minimal", ["presence", "session_status", "gateway"], ["exec", "message", "sessions_create"]],
+    ["coding", ["read", "exec", "bundle-mcp", "sessions_create"], ["browser", "message"]],
+    ["messaging", ["message", "bundle-mcp", "sessions_create"], ["exec", "process", "write"]],
+  ] as const)("keeps the %s capability boundary", (profile, allowed, denied) => {
+    const policy = resolveCoreToolProfilePolicy(profile);
+    if (profile === "minimal") {
+      expect(policy?.allow).toEqual(["presence", "session_status", "gateway"]);
+    }
+    for (const tool of allowed) {
+      expectAccess(tool, [policy]);
+    }
+    for (const tool of [...denied, "tts", "openclaw"]) {
+      expectAccess(tool, [policy], false);
+    }
   });
 
   it("full profile uses wildcard to grant all tools (#76507)", () => {
-    const policy = requireCoreToolProfilePolicy("full");
-    expect(policy.allow).toEqual(["*"]);
+    expect(resolveCoreToolProfilePolicy("full")?.allow).toEqual(["*"]);
   });
 });

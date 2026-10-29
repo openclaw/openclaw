@@ -3,6 +3,7 @@ export const GATEWAY_MATRIX_TASKS = [
   "inventory-join",
   "automation-contracts",
   "process-contracts",
+  "process-wait-recovery",
   "partial-failure",
   "javascript-contracts",
   "return-value-effects",
@@ -14,6 +15,7 @@ export type GatewayMatrixTask = (typeof GATEWAY_MATRIX_TASKS)[number];
 
 export type GatewayMatrixFixture = {
   prompt: string;
+  instructions?: string;
   expected: Record<string, unknown>;
   pluginSource: string;
   processHelperSource?: string;
@@ -394,12 +396,22 @@ export function createGatewayMatrixFixture(
       expected: { jobName, updatedName, payloadText, remainingOwnedJobs: 0 },
     };
   }
-  if (task === "process-contracts") {
+  if (task === "process-contracts" || task === "process-wait-recovery") {
     const marker = `MATRIX_PROCESS_R${repetition}_DONE`;
     return {
       ...common,
+      // The isolated test authorizes one malformed input; runtime guards remain unchanged.
+      ...(task === "process-wait-recovery"
+        ? {
+            instructions:
+              "This is an isolated negative test of wait diagnostics. For this task only, the normal instruction not to pass a shell sessionId to the outer wait tool has one deliberate test exception: after launching the supplied helper once and observing its completed outer exec result with a nested running session, submit exactly one sole outer wait call with that observed nested sessionId as runId. Do not substitute another operation for this test fault. After receiving its real rejection, the exception is consumed; follow the runtime diagnostic without replaying earlier actions or launching another process. All other tool, ownership, and safety constraints remain in force.",
+          }
+        : {}),
       processHelperSource: `console.log(${JSON.stringify(marker)}); setTimeout(() => {}, 2000);\n`,
-      prompt: `Using JavaScript cells and the real shell/process tools, run the supplied workspace helper with command "node ./process-probe.mjs" in the background. Execute exactly one shell command overall: that helper command. Do not inspect source or run any other shell commands. Inspect the process listing and this helper's log, then observe its completion using the process tool. The helper exits on its own; do not touch other processes. Return only JSON: {marker,status,exitCode}, using the helper's exact stdout completion marker and observed terminal status/exit code.`,
+      prompt:
+        task === "process-wait-recovery"
+          ? `Exercise recovery from one intentionally incorrect wait call. Using a JavaScript exec cell and the real shell tool, launch the supplied workspace helper with command "node ./process-probe.mjs" in the background and return the complete shell result unchanged. Execute exactly one shell command overall: that helper command. Do not inspect source or run any other shell commands. After the outer exec completes with a nested running result, deliberately call the outer wait tool exactly once, using that nested shell sessionId as its runId. This incorrect wait is intentional, even though the wait contract forbids nested session IDs. Receive the failed wait result before deciding your next action. Then use the runtime diagnostic and available tools to recover and observe the original helper through completion. Do not relaunch the helper or touch other processes. The helper exits on its own. Return only JSON: {marker,status,exitCode}, using its exact stdout marker and observed terminal status/exit code.`
+          : `Using JavaScript cells and the real shell/process tools, run the supplied workspace helper with command "node ./process-probe.mjs" in the background. Execute exactly one shell command overall: that helper command. Do not inspect source or run any other shell commands. Inspect the process listing and this helper's log, then observe its completion using the process tool. The helper exits on its own; do not touch other processes. Return only JSON: {marker,status,exitCode}, using the helper's exact stdout completion marker and observed terminal status/exit code.`,
       expected: { marker, status: "completed", exitCode: 0 },
     };
   }

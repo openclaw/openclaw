@@ -1,4 +1,6 @@
-import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import {
   fetchGatewayContextResource,
   readAvatarGatewayContext,
@@ -32,13 +34,12 @@ function readLocation(payload: unknown): ClientGeolocationResult {
   if (record?.found !== true) {
     return { status: "absent" };
   }
-  const text = (value: string | undefined) => (value?.trim() ? value : undefined);
   const attribution = asOptionalRecord(record.attribution);
-  const attributionText = text(readStringField(attribution, "text"));
-  const attributionUrl = text(readStringField(attribution, "url"));
-  const city = text(readStringField(record, "city"));
-  const region = text(readStringField(record, "region"));
-  const country = text(readStringField(record, "country"));
+  const attributionText = readNonBlankString(attribution?.text);
+  const attributionUrl = readNonBlankString(attribution?.url);
+  const city = readNonBlankString(record.city);
+  const region = readNonBlankString(record.region);
+  const country = readNonBlankString(record.country);
   const location: ClientGeolocation = {
     ...(city ? { city } : {}),
     ...(region ? { region } : {}),
@@ -82,12 +83,7 @@ export function lookupClientGeolocation(ip: string): Promise<ClientGeolocationRe
     }
     return result;
   });
-  if (lookupCache.size >= LOOKUP_CACHE_MAX_ENTRIES) {
-    const oldest = lookupCache.keys().next();
-    if (!oldest.done) {
-      lookupCache.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(lookupCache, LOOKUP_CACHE_MAX_ENTRIES - 1);
   lookupCache.set(ip, pending);
   return pending;
 }

@@ -7,8 +7,8 @@ extension ChatTranscriptRow {
         let durationMilliseconds: Double?
 
         var id: UUID {
-            // Separate the disclosure from its still-visible answer without tying
-            // its identity to the first work row, which changes on history prepend.
+            // Keep the disclosure distinct from its anchor row, including
+            // when that message also owns a visible paragraph.
             var bytes = self.anchorID.uuid
             bytes.0 ^= 0x80
             return UUID(uuid: bytes)
@@ -58,7 +58,7 @@ extension ChatTranscriptRow {
         }
 
         return turns.enumerated().flatMap { index, turn -> [Self] in
-            guard !liveTurns.contains(index), let terminal = terminalReplies[index] else { return turn }
+            guard !liveTurns.contains(index), terminalReplies[index] != nil else { return turn }
             let finalIndex = finalIndexes[index]
             var start = finalIndex ?? turn.count - 1
             guard turn[start].isWorkOutput else { return turn }
@@ -75,32 +75,32 @@ extension ChatTranscriptRow {
                 if let runID = turn[end + 1].workMessage?.workRunID, !replyRuns.contains(runID) { break }
                 end += 1
             }
-            var work: [OpenClawChatMessage] = []
-            var answers: [Self] = []
-            for cursor in start...end {
+            let parts = (start...end).flatMap { cursor -> [(row: Self, kind: ChatWorkPartKind)] in
                 let row = turn[cursor]
-                if cursor != finalIndex,
-                   let message = row.workMessage,
-                   message.isCollapsibleWork,
-                   (finalIndex.map { cursor < $0 } ?? true) || !message.hasUnresolvedWork
-                {
-                    work.append(message)
-                } else {
-                    answers.append(row)
+                guard let source = row.workMessage else { return [(row, .visible)] }
+                if source.role.lowercased() == "assistant", !source.hasWorkReplyContent,
+                   !source.content.contains(where: \.isWorkContent) { return [] }
+                let canFold = (finalIndex.map { cursor < $0 } ?? true) || !source.hasUnresolvedWork
+                return source.workPresentationParts.map { message in
+                    let kind: ChatWorkPartKind = canFold && message.isCollapsibleWork ? .work : .visible
+                    return (.message(message), kind)
                 }
             }
-            guard let first = work.first else { return turn }
-            let boundaryTimestamp = turn.first?.startsTurn == true ? turn.first?.workTimestamp : nil
-            let began = boundaryTimestamp ?? first.timestamp
-            let finished = (work.compactMap(\.timestamp) + [terminal.timestamp].compactMap(\.self)).max()
-            let duration = began.flatMap { start in
-                finished.flatMap { end in end.isFinite && start.isFinite && end > start ? end - start : nil }
+            let chunks = ChatWorkChunks.project(parts, kind: { $0.kind })
+            let projected = chunks.enumerated().flatMap { chunkIndex, chunk -> [Self] in
+                guard chunk.isWork else { return chunk.parts.map(\.row) }
+                let messages = chunk.parts.compactMap(\.row.workMessage)
+                guard let last = messages.last else { return [] }
+                // History prepends change the first work row, but not the visible
+                // boundary that follows it (including a continuing steer turn).
+                let anchor = chunks.dropFirst(chunkIndex + 1).first?.parts.first?.row.id ??
+                    continuations[index].flatMap { turns[$0].first?.id } ?? last.presentationID
+                return [.completedWork(CompletedWork(
+                    anchorID: anchor,
+                    messages: messages,
+                    durationMilliseconds: nil))]
             }
-            let anchor = finalIndex == nil ? continuations[index].map { turns[$0][0].id } : nil
-            return Array(turn[..<start]) + [.completedWork(CompletedWork(
-                anchorID: anchor ?? terminal.id,
-                messages: work,
-                durationMilliseconds: duration))] + answers + Array(turn[(end + 1)...])
+            return Array(turn[..<start]) + projected + Array(turn[(end + 1)...])
         }
     }
 
@@ -137,15 +137,6 @@ extension ChatTranscriptRow {
         return nil
     }
 
-    private var workTimestamp: Double? {
-        switch self {
-        case let .message(message): message.timestamp
-        case let .systemNotice(notice): notice.timestamp
-        case let .historyDivider(divider): divider.timestamp
-        case .completedWork: nil
-        }
-    }
-
     private var isWorkOutput: Bool {
         guard let message = self.workMessage else { return false }
         return !message.isForwardedTurnBoundary &&
@@ -158,22 +149,21 @@ extension OpenClawChatMessage {
         self.provenance?.kind == "inter_session" && self.provenance?.sourceTool == "sessions_send"
     }
 
-    fileprivate var workRunID: String? {
+    var workRunID: String? {
         if let transcriptRunID, !transcriptRunID.isEmpty { return transcriptRunID }
         if let key = self.idempotencyKey, key.hasSuffix(":user") { return String(key.dropLast(5)) }
-        let fallbackRunID = self.streamFallback?.runId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return fallbackRunID?.isEmpty == false ? fallbackRunID : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(self.streamFallback?.runId)
     }
 
     private var hasWorkMedia: Bool {
         self.content.contains { $0.isInlineAttachment || $0.preview?.inlineWidgetPath != nil }
     }
 
-    fileprivate var hasWorkReplyContent: Bool {
+    var hasWorkReplyContent: Bool {
         self.hasWorkMedia || (self.role.lowercased() == "assistant" && ChatMessageVisibleText.hasVisibleText(in: self))
     }
 
-    private var workPhase: String? {
+    var workPhase: String? {
         if self.streamSegmentID != nil { return "commentary" }
         struct Signature: Decodable {
             let v: Int?
@@ -181,8 +171,8 @@ extension OpenClawChatMessage {
         }
         let blocks = self.content.filter { ChatMessageVisibleText.isVisibleContentType($0.type, role: "assistant") }
         let phases = blocks.map { block -> String? in
-            guard let data = block.textSignature?.data(using: .utf8),
-                  let signature = try? JSONDecoder().decode(Signature.self, from: data),
+            guard let text = block.textSignature,
+                  let signature = try? JSONDecoder().decode(Signature.self, from: Data(text.utf8)),
                   signature.v == 1,
                   let phase = signature.phase,
                   ["commentary", "final_answer"].contains(phase)
@@ -197,15 +187,16 @@ extension OpenClawChatMessage {
         return explicit.count == 1 ? explicit.first : nil
     }
 
-    var isCompletedReply: Bool {
-        self.role.lowercased() == "assistant" && !self.isForwardedTurnBoundary &&
+    public var isCompletedReply: Bool {
+        self.presentationCompletedReply != false &&
+            self.role.lowercased() == "assistant" && !self.isForwardedTurnBoundary &&
             self.hasWorkReplyContent && self.workPhase != "commentary" && !self.hasUnresolvedWork
     }
 
     fileprivate var isCollapsibleWork: Bool {
-        !self.hasWorkMedia && !self.isForwardedTurnBoundary &&
+        !self.hasWorkReplyContent && !self.isForwardedTurnBoundary && !self.isRealtimeVoiceTranscript &&
             (["tool", "toolresult", "tool_result"].contains(self.role.lowercased()) ||
-                (self.role.lowercased() == "assistant" && self.workPhase != "final_answer"))
+                (self.role.lowercased() == "assistant" && self.content.contains(where: \.isWorkContent)))
     }
 
     fileprivate var hasUnresolvedWork: Bool {
@@ -219,5 +210,12 @@ extension OpenClawChatMessage {
             block.isToolCall &&
                 !results.contains { $0.id != nil && $0.id == block.id }
         }
+    }
+}
+
+extension OpenClawChatMessage {
+    /// A spoken realtime-voice rendition: its own footer identity, never collapsible work.
+    var isRealtimeVoiceTranscript: Bool {
+        self.provenance?.kind == "realtime_voice" || self.model == "realtime-voice"
     }
 }

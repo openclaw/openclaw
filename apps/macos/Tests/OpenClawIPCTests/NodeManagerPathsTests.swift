@@ -8,9 +8,9 @@ struct NodeManagerPathsTests {
         defer { try? FileManager.default.removeItem(at: home) }
 
         let v24Node = home
-            .appendingPathComponent(".local/share/fnm/node-versions/v24.16.0/installation/bin/node")
+            .appendingPathComponent(".local/share/fnm/node-versions/v24.22.1/installation/bin/node")
         let v26Node = home
-            .appendingPathComponent(".local/share/fnm/node-versions/v26.1.0/installation/bin/node")
+            .appendingPathComponent(".local/share/fnm/node-versions/v26.12.1/installation/bin/node")
         try makeExecutableForTests(at: v24Node)
         try makeExecutableForTests(at: v26Node)
 
@@ -31,7 +31,7 @@ struct NodeManagerPathsTests {
     {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
-        let versions = ["v26.0.0", "v24.16.0", "v25.9.0", "v22.23.2"]
+        let versions = ["v26.0.0", "v24.22.1", "v25.9.0", "v22.23.2"]
 
         for version in versions {
             let node = home
@@ -50,7 +50,7 @@ struct NodeManagerPathsTests {
             .appendingPathComponent(binarySuffix)
         let expectedNode = home
             .appendingPathComponent(managerRoot)
-            .appendingPathComponent("v24.16.0")
+            .appendingPathComponent("v24.22.1")
             .appendingPathComponent(binarySuffix)
             .appendingPathComponent("node")
         let searchPaths = CommandResolver.preferredPaths(
@@ -65,7 +65,7 @@ struct NodeManagerPathsTests {
             return
         }
         #expect(runtime.path == expectedNode.path)
-        #expect(runtime.version == RuntimeVersion(major: 24, minor: 16, patch: 0))
+        #expect(runtime.version == Semver(major: 24, minor: 22, patch: 1))
     }
 
     @Test func `ignores entries without node executable`() throws {

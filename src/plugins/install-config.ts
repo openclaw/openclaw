@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { PluginsInstallParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +17,7 @@ import {
   type ConfigSnapshotForInstallPersist,
 } from "./install-config-mutation.js";
 import {
+  isBareNpmPackageName,
   parseNpmPrefixSpec,
   resolveBundledInstallPlanBeforeNpm,
   resolveFileNpmSpecToLocalPath,
@@ -257,10 +257,8 @@ export async function loadConfigForInstall(
     hookMutation,
     pluginMutation,
   };
-  if (!snapshot.valid || request.installKind === "plugin") {
-    if (pluginMutation.mode === "blocked") {
-      throw new PluginInstallConfigError(pluginMutation.reason, resolved);
-    }
+  if ((!snapshot.valid || request.installKind === "plugin") && pluginMutation.mode === "blocked") {
+    throw new PluginInstallConfigError(pluginMutation.reason, resolved);
   }
   return resolved;
 }
@@ -306,6 +304,7 @@ function readPluginInstallRecoveryMetadata(rootDir: string): {
 function resolvePluginInstallRecoveryMetadata(
   rawSpec: string,
   localPath: string | undefined,
+  source: PluginsInstallParams["source"] | undefined,
 ): {
   pluginId?: string;
   allowInvalidConfigRecovery?: boolean;
@@ -316,24 +315,33 @@ function resolvePluginInstallRecoveryMetadata(
     return direct.pluginId || direct.allowInvalidConfigRecovery ? direct : {};
   }
   const npmPrefixSpec = parseNpmPrefixSpec(rawSpec);
-  const values = new Set(
-    normalizeStringEntries([
-      rawSpec,
-      npmPrefixSpec ?? "",
-      parseRegistryNpmSpec(rawSpec)?.name ?? "",
-      npmPrefixSpec ? parseRegistryNpmSpec(npmPrefixSpec)?.name : "",
-    ]),
-  );
-  if (values.size === 0) {
+  const requestedNpmSpec =
+    source === "npm"
+      ? (npmPrefixSpec ?? rawSpec.trim())
+      : source === undefined
+        ? npmPrefixSpec
+        : null;
+  const canonicalPluginId =
+    (source === undefined || source === "official") && isBareNpmPackageName(rawSpec)
+      ? rawSpec.trim()
+      : undefined;
+  // ClawHub package names cannot borrow recovery authority from npm catalog identities.
+  if (!requestedNpmSpec && !canonicalPluginId) {
     return {};
   }
+  const requestedNpmName = requestedNpmSpec
+    ? parseRegistryNpmSpec(requestedNpmSpec)?.name
+    : undefined;
   for (const entry of listOfficialExternalPluginCatalogEntries()) {
     const install = resolveOfficialExternalPluginInstall(entry);
-    const npmSpec = install?.npmSpec?.trim() || entry.name?.trim();
-    if (!npmSpec || !values.has(npmSpec)) {
+    const pluginId = resolveOfficialExternalPluginId(entry);
+    const npmSpec = install?.npmSpec?.trim();
+    const matches = requestedNpmSpec
+      ? npmSpec && (npmSpec === requestedNpmSpec || npmSpec === requestedNpmName)
+      : pluginId === canonicalPluginId;
+    if (!install || !matches) {
       continue;
     }
-    const pluginId = resolveOfficialExternalPluginId(entry);
     // An official descriptor owns this decision even when recovery is explicitly disabled.
     return {
       ...(pluginId ? { pluginId } : {}),
@@ -363,12 +371,9 @@ export function resolvePluginInstallRequestContext(params: {
   }
   const fileSpec = resolveFileNpmSpecToLocalPath(params.rawSpec);
   if (fileSpec && !fileSpec.ok) {
-    return {
-      ok: false,
-      error: fileSpec.error,
-    };
+    return fileSpec;
   }
-  const normalizedSpec = fileSpec && fileSpec.ok ? fileSpec.path : params.rawSpec;
+  const normalizedSpec = fileSpec?.path ?? params.rawSpec;
   const resolvedPath = resolveUserPath(params.localPath ?? normalizedSpec);
   const localPath = params.source
     ? params.source === "local" || params.source === "bundled"
@@ -380,7 +385,7 @@ export function resolvePluginInstallRequestContext(params: {
           rawSpec: params.rawSpec,
           findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
         })?.bundledSource.localPath;
-  const recovered = resolvePluginInstallRecoveryMetadata(params.rawSpec, localPath);
+  const recovered = resolvePluginInstallRecoveryMetadata(params.rawSpec, localPath, params.source);
   return {
     ok: true,
     request: {
@@ -398,8 +403,5 @@ export function resolvePluginInstallRequestContext(params: {
 export function resolvePluginInstallInvalidConfigPolicy(
   request: PluginInstallRequestContext | null,
 ): PluginInstallInvalidConfigPolicy {
-  if (!request) {
-    return "deny";
-  }
-  return request.allowInvalidConfigRecovery === true ? "allow-plugin-recovery" : "deny";
+  return request?.allowInvalidConfigRecovery === true ? "allow-plugin-recovery" : "deny";
 }

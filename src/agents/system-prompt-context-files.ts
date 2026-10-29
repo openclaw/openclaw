@@ -1,5 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
+
+export const PERSONAL_USER_CONTEXT_INSTRUCTIONS =
+  "The personal users/<profile-id>/USER.md belongs to this session's selected person (assigned human owner, otherwise human creator). It supplements shared USER.md and overrides conflicting shared preferences, not higher-priority rules. Other participants do not change this personal context.";
 
 const CONTEXT_FILE_ORDER = new Map<string, number>([
   ["agents.md", 10],
@@ -22,21 +25,31 @@ export function isBootstrapContextFile(pathValue: string): boolean {
 }
 
 function sanitizeContextFileContentForPrompt(content: string): string {
-  // Old workspace templates otherwise route Claude subscriptions to paid extra
-  // usage; heartbeat behavior remains in the actual scheduled user turn.
+  // Old workspace templates otherwise route Claude subscriptions to paid extra usage.
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
-export function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[]) {
+export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
+  contextFiles: readonly T[],
+  options: {
+    order?: ReadonlyMap<string, number>;
+    caseInsensitivePathOrder?: boolean;
+    trimBasename?: boolean;
+  } = {},
+) {
   return contextFiles
     .map((file) => {
       const path = normalizeContextFilePath(file.path);
-      const basename = normalizeLowercaseStringOrEmpty(path.slice(path.lastIndexOf("/") + 1));
+      const rawBasename = path.slice(path.lastIndexOf("/") + 1);
+      const basename =
+        options.trimBasename === false
+          ? rawBasename.toLowerCase()
+          : normalizeLowercaseStringOrEmpty(rawBasename);
       return {
         file,
         path,
         basename,
-        order: CONTEXT_FILE_ORDER.get(basename) ?? Number.MAX_SAFE_INTEGER,
+        order: (options.order ?? CONTEXT_FILE_ORDER).get(basename) ?? Number.MAX_SAFE_INTEGER,
       };
     })
     .toSorted((a, b) => {
@@ -47,7 +60,12 @@ export function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[]
         return a.basename.localeCompare(b.basename);
       }
       // Preserve loader precedence for shared USER defaults and the personal overlay.
-      return a.basename === "user.md" ? 0 : a.path.localeCompare(b.path);
+      if (a.basename === "user.md") {
+        return 0;
+      }
+      return options.caseInsensitivePathOrder
+        ? a.path.toLowerCase().localeCompare(b.path.toLowerCase())
+        : a.path.localeCompare(b.path);
     });
 }
 
@@ -56,27 +74,20 @@ export function buildProjectContextSection(files: ReturnType<typeof prepareConte
     return [];
   }
   const lines = ["# Project Context", ""];
-  const hasSoulFile = files.some((file) => file.basename === "soul.md");
-  const hasMemoryFile = files.some((file) => file.basename === "memory.md");
-  const hasUserFile = files.some((file) => file.basename === "user.md");
   lines.push("Loaded project context:");
-  if (hasSoulFile) {
-    lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
-  }
-  if (hasMemoryFile) {
-    lines.push(
+  for (const [basename, guidance] of Object.entries({
+    "soul.md": "SOUL.md: persona/tone. Follow it unless higher-priority instructions override.",
+    "memory.md":
       "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
-    );
-  }
-  if (hasUserFile) {
-    lines.push(
+    "user.md":
       "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
-    );
+  })) {
+    if (files.some((file) => file.basename === basename)) {
+      lines.push(guidance);
+    }
   }
   if (files.some(({ file }) => file.personalUser)) {
-    lines.push(
-      "The personal users/<profile-id>/USER.md belongs to this session's selected person (assigned human owner, otherwise human creator). It supplements shared USER.md and overrides conflicting shared preferences, not higher-priority rules. Other participants do not change this personal context.",
-    );
+    lines.push(PERSONAL_USER_CONTEXT_INSTRUCTIONS);
   }
   lines.push("");
   for (const { file } of files) {

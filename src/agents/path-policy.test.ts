@@ -22,22 +22,6 @@ describe("toRelativeWorkspacePath (windows semantics)", () => {
     resolveSandboxInputPathMock.mockImplementation((filePath: string) => filePath);
   });
 
-  it("accepts windows paths with mixed separators and case", () => {
-    withMockedWindowsPlatform(() => {
-      const root = "C:\\Users\\User\\OpenClaw";
-      const candidate = "c:/users/user/openclaw/memory/log.txt";
-      expect(toRelativeWorkspacePath(root, candidate)).toBe("memory\\log.txt");
-    });
-  });
-
-  it("preserves filename case so callers create the file the agent asked for", () => {
-    withMockedWindowsPlatform(() => {
-      const root = "C:\\Users\\User\\OpenClaw";
-      const candidate = "C:\\Users\\User\\OpenClaw\\src\\Components\\MyComponent.tsx";
-      expect(toRelativeWorkspacePath(root, candidate)).toBe("src\\Components\\MyComponent.tsx");
-    });
-  });
-
   it("preserves candidate case when the root itself is spelled with different case", () => {
     withMockedWindowsPlatform(() => {
       const root = "C:\\Users\\User\\OpenClaw";

@@ -41,8 +41,7 @@ export class DiscordRealtimePlayer {
       if (request && !force && !request.onRetiring()) {
         return false;
       }
-      const stopped = stop(force);
-      return stopped;
+      return stop(force);
     };
     player.on(loadDiscordVoiceSdk().AudioPlayerStatus.Idle, this.onIdle);
   }

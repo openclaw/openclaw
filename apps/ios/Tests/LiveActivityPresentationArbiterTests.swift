@@ -4,7 +4,12 @@ import Testing
 
 struct LiveActivityPresentationArbiterTests {
     @Test func `voice sample buffer quantizes clamps and stays bounded`() {
-        var buffer = LiveActivityVoiceSampleBuffer(capacity: 3)
+        var buffer = LiveActivityVoiceSampleBuffer()
+
+        for sample in UInt8(0)..<24 {
+            buffer.append(sample)
+        }
+        #expect(buffer.payload == Array(UInt8(0)..<24))
 
         for level in [-1.0, 0.25, 0.5, 2.0] {
             if let sample = LiveActivityVoiceSampleBuffer.quantize(level) {
@@ -12,7 +17,7 @@ struct LiveActivityPresentationArbiterTests {
             }
         }
 
-        #expect(buffer.payload == [64, 128, 255])
+        #expect(buffer.payload == Array(UInt8(4)..<24) + [0, 64, 128, 255])
         #expect(LiveActivityVoiceSampleBuffer.quantize(.infinity) == nil)
         buffer.reset()
         #expect(buffer.payload == nil)
@@ -50,11 +55,73 @@ struct LiveActivityPresentationArbiterTests {
         #expect(arbiter.activeToolCount == 2)
         #expect(arbiter.current?.state.verbatimDetail == "second")
 
+        let staleDate = now.addingTimeInterval(600)
+        arbiter.refreshTools(staleDate: staleDate)
+        arbiter.refreshVoice(staleDate: staleDate)
+        #expect(arbiter.current?.staleDate == staleDate)
+
         arbiter.endTool(id: "tool-2", sessionKey: "main")
         #expect(arbiter.current?.state.verbatimDetail == "first")
+        #expect(arbiter.current?.staleDate == staleDate)
 
         arbiter.endTool(id: "tool-1", sessionKey: "main")
         #expect(arbiter.current?.state.status == .voiceActive)
+        #expect(arbiter.current?.staleDate == staleDate)
+
+        arbiter.startTool(
+            id: "tool-3",
+            request: Self.request(status: .toolRunning, detail: "third", startedAt: now))
+        arbiter.setVoice(nil)
+        arbiter.refreshTools(staleDate: staleDate)
+        arbiter.refreshVoice(staleDate: staleDate)
+        #expect(arbiter.current?.state.verbatimDetail == "third")
+        #expect(arbiter.current?.staleDate == staleDate)
+    }
+
+    @Test
+    func `tool updates preserve start order without duplicating the tool`() {
+        let now = Date(timeIntervalSince1970: 100)
+        var arbiter = LiveActivityPresentationArbiter()
+        arbiter.startTool(
+            id: "first",
+            request: Self.request(status: .toolRunning, detail: "first", startedAt: now))
+        arbiter.startTool(
+            id: "second",
+            request: Self.request(status: .toolRunning, detail: "second", startedAt: now))
+        arbiter.startTool(
+            id: "first",
+            request: Self.request(status: .toolRunning, detail: "updated", startedAt: now))
+
+        #expect(arbiter.activeToolCount == 2)
+        #expect(arbiter.current?.state.verbatimDetail == "second")
+        arbiter.endTool(id: "second", sessionKey: "main")
+        #expect(arbiter.current?.state.verbatimDetail == "updated")
+    }
+
+    @Test
+    func `tool heartbeats do not renew a voice card restored after restart`() {
+        let now = Date(timeIntervalSince1970: 100)
+        let voice = Self.request(status: .voiceActive, detail: nil, startedAt: now)
+        let refreshedDeadline = now.addingTimeInterval(600)
+        var arbiter = LiveActivityPresentationArbiter()
+        arbiter.adoptInitialHydratedVoice(voice)
+        arbiter.startTool(
+            id: "tool-1",
+            request: Self.request(status: .toolRunning, detail: "first", startedAt: now))
+        arbiter.refreshTools(staleDate: refreshedDeadline)
+        arbiter.refreshVoice(staleDate: refreshedDeadline)
+        #expect(arbiter.current?.staleDate == refreshedDeadline)
+
+        arbiter.endTool(id: "tool-1", sessionKey: "main")
+        #expect(arbiter.current == voice)
+        #expect(!arbiter.hasLiveVoice)
+
+        arbiter.setVoice(voice)
+        arbiter.refreshVoice(staleDate: refreshedDeadline)
+        #expect(arbiter.current?.staleDate == refreshedDeadline)
+        #expect(arbiter.hasLiveVoice)
+        arbiter.clearAll()
+        #expect(!arbiter.hasLiveVoice)
     }
 
     @Test
@@ -114,14 +181,6 @@ struct LiveActivityPresentationArbiterTests {
         #expect(LiveActivityPresentationArbiter.voiceStatus(isListening: false, isSpeaking: false) == .voiceActive)
         #expect(LiveActivityPresentationArbiter.voiceStatus(isListening: true, isSpeaking: false) == .voiceListening)
         #expect(LiveActivityPresentationArbiter.voiceStatus(isListening: true, isSpeaking: true) == .voiceSpeaking)
-    }
-
-    @Test
-    func `voice sample history survives active phase changes`() {
-        #expect(LiveActivityManager.shouldResetVoiceSamples(previousStatus: nil))
-        #expect(!LiveActivityManager.shouldResetVoiceSamples(previousStatus: .voiceActive))
-        #expect(!LiveActivityManager.shouldResetVoiceSamples(previousStatus: .voiceListening))
-        #expect(!LiveActivityManager.shouldResetVoiceSamples(previousStatus: .voiceSpeaking))
     }
 
     @Test

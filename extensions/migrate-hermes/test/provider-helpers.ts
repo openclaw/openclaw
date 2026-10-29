@@ -13,6 +13,18 @@ const logger: MigrationProviderContext["logger"] = {
   warn: noop,
 };
 
+export function makeHermesPaths(root: string, sourceName = "hermes") {
+  const stateDir = path.join(root, "state");
+  return {
+    root,
+    source: path.join(root, sourceName),
+    workspaceDir: path.join(root, "workspace"),
+    stateDir,
+    reportDir: path.join(root, "report"),
+    agentDir: path.join(stateDir, "agents", "main", "agent"),
+  };
+}
+
 export async function writeFile(filePath: string, content: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf8");

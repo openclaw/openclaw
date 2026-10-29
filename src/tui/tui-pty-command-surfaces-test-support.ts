@@ -18,6 +18,7 @@ export async function exerciseTuiCommandSurface(
   startFixture: StartTuiPtyFixture,
   surface: "slash-commands" | "pickers" | "settings",
   startupTimeoutMs: number,
+  signal: AbortSignal,
 ) {
   const fixture = await startFixture({
     env: {
@@ -44,13 +45,13 @@ export async function exerciseTuiCommandSurface(
       const calls = await readFixtureLog(fixture.logPath);
       expect(calls.some((entry) => entry.method === "sendChat")).toBe(false);
       await fixture.run.write("/gateway-status\r", { delay: false });
-      await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus");
+      await fixture.waitForLogEntry((entry) => entry.method === "getGatewayStatus", signal);
       await waitForRows((rows) => rows.some((row) => row.trim() === "fixture gateway ok"));
       return;
     }
     if (surface === "pickers") {
       await fixture.run.write("/models\r", { delay: false });
-      await fixture.waitForLogEntry((entry) => entry.method === "listModels");
+      await fixture.waitForLogEntry((entry) => entry.method === "listModels", signal);
       const pickerRows = await waitForRows((rows) => rows.some((row) => row.includes("Fixture 2")));
       expect(pickerRows.some((row) => row.includes("loading models..."))).toBe(false);
       await fixture.run.write("fixture m", { delay: false });
@@ -64,10 +65,12 @@ export async function exerciseTuiCommandSurface(
         (entry) =>
           entry.method === "patchSession" &&
           objectFieldEquals(entry, "model", "fixture-provider/fixture-model-2"),
+        signal,
       );
       await fixture.run.write("/sessions\r", { delay: false });
       await fixture.waitForLogEntry(
         (entry) => entry.method === "listSessions" && objectFieldEquals(entry, "purpose", "picker"),
+        signal,
       );
       await waitForRows((rows) => rows.some((row) => row.includes("Picker target")));
       await fixture.run.write("\x1b[B\r", { delay: false });
@@ -75,12 +78,14 @@ export async function exerciseTuiCommandSurface(
         (entry) =>
           entry.method === "loadHistory" &&
           objectFieldEquals(entry, "sessionKey", "agent:main:picker-target"),
+        signal,
       );
       await fixture.run.write("picker selection proof\r", { delay: false });
       const sent = await fixture.waitForLogEntry(
         (entry) =>
           entry.method === "sendChat" &&
           objectFieldEquals(entry, "message", "picker selection proof"),
+        signal,
       );
       expect(sent.payload).toMatchObject({ sessionKey: "agent:main:picker-target" });
       await waitForRows((rows) => rowsInclude(rows, "PTY_RESPONSE: picker selection proof"));
@@ -95,11 +100,14 @@ export async function exerciseTuiCommandSurface(
     await fixture.run.write("\r", { delay: false });
     await waitForRows((rows) => rowsInclude(rows, "Tool output", "expanded"));
     expect(await countHistoryLoads(fixture.logPath)).toBe(initialHistoryLoads);
+    const logOffset = (await readFixtureLog(fixture.logPath)).length;
     await fixture.run.write("\x1b[B\r", { delay: false });
     await waitForRows((rows) => rowsInclude(rows, "Show thinking", "on"));
-    await expect
-      .poll(() => countHistoryLoads(fixture.logPath), { timeout: startupTimeoutMs })
-      .toBe(initialHistoryLoads + 1);
+    await fixture.waitForLogEntry(
+      (entry, index) => index >= logOffset && entry.method === "loadHistory",
+      signal,
+    );
+    expect(await countHistoryLoads(fixture.logPath)).toBe(initialHistoryLoads + 1);
   } finally {
     await fixture.cleanup();
   }

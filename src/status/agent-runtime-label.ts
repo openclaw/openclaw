@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Agent runtime label helpers format provider, model, and runtime labels.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -24,7 +23,14 @@ const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
   "google-gemini-cli": "Gemini CLI",
 };
 
-type AgentRuntimeLabelArgs = {
+/** Operator-facing name for a runtime id; a plugin-declared label wins over the raw id. */
+export function formatAgentRuntimeName(runtime: string, pluginLabel?: string): string {
+  const id = runtime.trim().toLowerCase();
+  const label = normalizeOptionalString(pluginLabel);
+  return AGENT_RUNTIME_LABELS[id] ?? sanitizeTerminalText(label ?? runtime.trim());
+}
+
+export function resolveAgentRuntimeLabel(args: {
   config?: OpenClawConfig;
   sessionEntry?: Pick<
     SessionEntry,
@@ -39,9 +45,7 @@ type AgentRuntimeLabelArgs = {
   resolvedHarness?: string;
   fallbackProvider?: string;
   classifyCliProvider?: CliProviderClassifier;
-};
-
-export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
+}): string {
   const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
   const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
   // ACP sessions own their displayed runtime because the backend can differ
@@ -56,7 +60,7 @@ export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
   const runtime = normalizeOptionalLowercaseString(runtimeRaw);
   let label: string;
   if (runtime && runtime !== "auto" && runtime !== "default") {
-    label = AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
+    label = formatAgentRuntimeName(runtimeRaw ?? runtime);
   } else {
     const providerRaw =
       normalizeOptionalString(args.sessionEntry?.modelProvider) ??
@@ -76,9 +80,7 @@ export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
 
   const recordedRuntime = normalizeOptionalAgentRuntimeId(args.sessionEntry?.agentHarnessId);
   // Unlocked harness ids describe transcript history; locked ids describe an active pin.
-  const recordedLabel = recordedRuntime
-    ? (AGENT_RUNTIME_LABELS[recordedRuntime] ?? sanitizeTerminalText(recordedRuntime))
-    : undefined;
+  const recordedLabel = recordedRuntime ? formatAgentRuntimeName(recordedRuntime) : undefined;
   if (!recordedRuntime || isDefaultAgentRuntimeId(recordedRuntime) || recordedLabel === label) {
     return label;
   }

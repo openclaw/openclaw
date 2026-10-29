@@ -1,5 +1,6 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
@@ -36,6 +37,7 @@ type BackupGitCreateOptions = {
 type BackupGitScopeOptions = {
   global?: boolean;
   agent?: string;
+  store?: string;
 };
 
 export const GIT_BACKUP_PUSH_CREDENTIAL_WARNING =
@@ -60,9 +62,13 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
   if (!options.all && !explicit) {
     throw new Error("Choose at least one Git backup scope: --all, --global, or --agent <id>.");
   }
+  const globalPath = options.all || options.global ? resolveOpenClawStateSqlitePath() : undefined;
+  if (globalPath) {
+    assertNotUpdateCapturePath(globalPath, resolveStateDir());
+  }
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   let agents: Array<{ agentId: string; databasePath: string }> = [];
   if (options.all || normalizedAgents.length > 0) {
-    const config = getRuntimeConfig({ skipPluginValidation: true });
     const agentIds = options.all
       ? listAgentIds(config).toSorted()
       : normalizedAgents.map((agent) => resolveConfiguredAgentId(config, agent));
@@ -72,11 +78,9 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
     path: string;
     identity: GitBackupIdentity;
   }> = [];
-  if (options.all || options.global) {
-    const selectedPath = resolveOpenClawStateSqlitePath();
-    assertNotUpdateCapturePath(selectedPath, resolveStateDir());
+  if (globalPath) {
     databases.push({
-      path: selectedPath,
+      path: globalPath,
       identity: { role: "global" },
     });
   }
@@ -91,11 +95,21 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
 
 function resolveOneIdentity(options: BackupGitScopeOptions): GitBackupIdentity {
   const agent = options.agent?.trim();
-  if (options.global === true && agent) {
-    throw new Error("Choose exactly one Git backup scope: --global or --agent <id>.");
+  const store = options.store?.trim();
+  if (options.store !== undefined && !store) {
+    throw new Error("--store must not be blank");
   }
-  if (options.global !== true && !agent) {
-    throw new Error("Choose a Git backup scope: --global or --agent <id>.");
+  const scopes = Number(options.global === true) + Number(Boolean(agent)) + Number(Boolean(store));
+  if (scopes > 1) {
+    throw new Error(
+      "Choose exactly one Git backup scope: --global, --agent <id>, or --store <id>.",
+    );
+  }
+  if (scopes === 0) {
+    throw new Error("Choose a Git backup scope: --global, --agent <id>, or --store <id>.");
+  }
+  if (store) {
+    return { role: "generic", id: store };
   }
   return options.global === true
     ? { role: "global" }
@@ -114,13 +128,16 @@ export async function backupGitInitCommand(
   if (options.json) {
     writeRuntimeJson(runtime, result);
   } else {
-    runtime.log(`Git backup repository ready: ${shortenHomePath(result.repositoryPath)}`);
+    runtime.log(
+      terminalText`Git backup repository ready: ${shortenHomePath(result.repositoryPath)}`,
+    );
   }
   return result;
 }
 
 export async function backupGitCreateCommand(runtime: RuntimeEnv, options: BackupGitCreateOptions) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
+  const databases = await resolveCreateDatabases(options);
   if (options.push && !options.excludeSecrets) {
     runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
   }
@@ -131,7 +148,7 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
       createGitBackup({
         repositoryPath,
         stateDir: resolveStateDir(),
-        databases: await resolveCreateDatabases(options),
+        databases,
         all: options.all,
         excludeSecrets: options.excludeSecrets,
         push: options.push,
@@ -152,15 +169,17 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     if (options.json) {
       writeRuntimeJson(runtime, result);
     } else if (result.noChanges) {
-      runtime.log(`Git backup: no changes (${shortenHomePath(repositoryPath)})`);
+      runtime.log(terminalText`Git backup: no changes (${shortenHomePath(repositoryPath)})`);
     } else {
-      runtime.log(`Git backup committed: ${result.commit}`);
+      runtime.log(terminalText`Git backup committed: ${result.commit}`);
     }
     if (result.pushWarning) {
-      runtime.error(`Warning: Git backup committed, but push failed: ${result.pushWarning}`);
+      // Keep escaped line breaks outside URL query values during console redaction.
+      const warning = result.pushWarning.split("\n").join(" \\n ");
+      runtime.error(terminalText`Warning: Git backup committed, but push failed: ${warning}`);
     }
     for (const warning of result.warnings) {
-      runtime.error(`Warning: ${warning}`);
+      runtime.error(terminalText`Warning: ${warning}`);
     }
     return result;
   } catch (error) {
@@ -182,18 +201,16 @@ export async function backupGitLogCommand(
   options: { repository?: string; limit?: number; json?: boolean },
 ) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
-  const limit = options.limit ?? 20;
-  if (!Number.isSafeInteger(limit) || limit < 1) {
-    throw new Error("--limit must be a positive integer.");
-  }
-  const entries = await readGitBackupLog({ repositoryPath, limit });
+  const entries = await readGitBackupLog({ repositoryPath, limit: options.limit ?? 20 });
   if (options.json) {
     writeRuntimeJson(runtime, { repositoryPath, entries });
   } else if (entries.length === 0) {
-    runtime.log(`No Git backup commits in ${shortenHomePath(repositoryPath)}.`);
+    runtime.log(terminalText`No Git backup commits in ${shortenHomePath(repositoryPath)}.`);
   } else {
     runtime.log(
-      entries.map((entry) => `${entry.commit}\t${entry.date}\t${entry.message}`).join("\n"),
+      entries
+        .map((entry) => terminalText`${entry.commit}\t${entry.date}\t${entry.message}`)
+        .join("\n"),
     );
   }
   return entries;
@@ -212,9 +229,11 @@ export async function backupGitVerifyCommand(
     writeRuntimeJson(runtime, result);
   } else {
     for (const table of result.tables) {
-      runtime.log(`${table.ok ? "ok" : "failed"}\t${table.table}\t${table.rows}\t${table.sha256}`);
+      runtime.log(
+        terminalText`${table.ok ? "ok" : "failed"}\t${table.table}\t${table.rows}\t${table.sha256}`,
+      );
     }
-    runtime.log(`Git backup verified: ${result.commit}`);
+    runtime.log(terminalText`Git backup verified: ${result.commit}`);
   }
   return result;
 }
@@ -237,15 +256,17 @@ export async function backupGitRestoreCommand(
   if (options.json) {
     writeRuntimeJson(runtime, result);
   } else {
-    runtime.log(`Git backup restored: ${shortenHomePath(result.targetPath)} (${result.commit})`);
+    runtime.log(
+      terminalText`Git backup restored: ${shortenHomePath(result.targetPath)} (${result.commit})`,
+    );
     if (result.excludedTables.length > 0) {
       runtime.error(
-        `Warning: this redacted backup omits tables: ${result.excludedTables.join(", ")}`,
+        terminalText`Warning: this redacted backup omits tables: ${result.excludedTables.join(", ")}`,
       );
     }
     if (result.excludedConfigStateKeyPrefixes.length > 0) {
       runtime.error(
-        `Warning: this redacted backup omits machine-state values under: ${result.excludedConfigStateKeyPrefixes.join(", ")}`,
+        terminalText`Warning: this redacted backup omits machine-state values under: ${result.excludedConfigStateKeyPrefixes.join(", ")}`,
       );
     }
   }
