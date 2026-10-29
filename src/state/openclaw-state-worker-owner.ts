@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isDeepStrictEqual } from "node:util";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
@@ -68,9 +69,7 @@ function createSharedStateWorkerOwner() {
   const matches = (entry: Entry, identity?: DatabasePathIdentity) =>
     identity === undefined || entry.context.admission.identity.key === identity.key;
   const hasActiveActorOperations = (entry: Entry) =>
-    [...activeEntries].some((active) =>
-      entry.actor ? active.actor === entry.actor : active === entry,
-    );
+    [...activeEntries].some((peer) => (entry.actor ? peer.actor === entry.actor : peer === entry));
   const clearIdleRetirement = (entry: Entry) => {
     if (entry.idleTimer) {
       clearTimeout(entry.idleTimer);
@@ -238,8 +237,7 @@ function createSharedStateWorkerOwner() {
         !isSqliteWorkerStoreAvailable(store) &&
         !hasActiveActorOperations(entry)
       ) {
-        // Co-users may await each other's callbacks across maintenance scopes.
-        // Only their final release can join actor-wide client closure.
+        // Cross-scope co-users may await callbacks; only final release joins actor closure.
         const pending = entry.actor
           ? retireActor(entry.actor, entry.context.admission.identity)
           : retire(entry);
@@ -294,8 +292,7 @@ function createSharedStateWorkerOwner() {
     };
     const pending = retireSqliteWorkerActor(actor).then(complete, (error: unknown) => {
       current.pending = undefined;
-      // Broker settlement has joined all client references and native cleanup.
-      // Keep its old operation failure from rejecting a completed custody join.
+      // Completed broker custody includes cleanup, even if its old operation failed.
       if (
         current.entries.size > 0 &&
         [...current.entries].every((entry) => entry.cleanup?.pending === false)
@@ -314,9 +311,7 @@ function createSharedStateWorkerOwner() {
     }
     await attempt.pending;
   };
-  const inspectInvalidEntry = (
-    entry: Entry,
-  ): { kind: "actor" | "client"; error: unknown } | undefined => {
+  const inspectInvalidEntry = (entry: Entry) => {
     const actor = entry.actor;
     let kind: "actor" | "client" = "actor";
     try {
@@ -397,8 +392,7 @@ function createSharedStateWorkerOwner() {
   registerOpenClawStateDatabaseAsyncResource({ phase: "after-resources", close });
   registerOpenClawStateDatabaseLifecycleListener((event) => {
     if (event.kind !== "opened") {
-      // Synchronous error eviction cannot await, but actor retirement remains
-      // owned and every subsequent open or canonical drain joins it.
+      // Synchronous eviction cannot await; later opens and canonical drains join retirement.
       if (!event.identity) {
         return;
       }
@@ -497,7 +491,7 @@ function createSharedStateWorkerOwner() {
       options: Omit<OperationOptions, "createAdmission"> = {},
     ): Promise<Store | undefined> {
       const { existingOnly = false, assertCurrent, preparation, signal } = options;
-      const { admission } = context;
+      const { admission, gatewayServiceInstallation: installation } = context;
       const wait = <T>(pending: Promise<T>) => racePromiseWithAbortSignal(pending, signal);
       const source = captureRuntimeWorkerSource(moduleUrl);
       const assertAdmission = () => {
@@ -510,11 +504,11 @@ function createSharedStateWorkerOwner() {
       let entry: Entry | undefined;
       let ownsOpening = false;
       for (;;) {
-        for (const candidate of new Set([...stores, ...retiring.keys()])) {
-          if (!matches(candidate, admission.identity)) {
+        for (const prior of new Set([...stores, ...retiring.keys()])) {
+          if (!matches(prior, admission.identity)) {
             continue;
           }
-          const retirement = retireInvalidEntry(candidate);
+          const retirement = retireInvalidEntry(prior);
           if (retirement) {
             if (retirement.pending) {
               await wait(retirement.pending);
@@ -522,11 +516,17 @@ function createSharedStateWorkerOwner() {
             return this.open(context, options);
           }
           if (
-            stores.has(candidate) &&
-            (candidate.context.existingSchemaPath !== context.existingSchemaPath ||
-              candidate.source.moduleUrl.href !== source.moduleUrl.href)
+            stores.has(prior) &&
+            (prior.context.existingSchemaPath !== context.existingSchemaPath ||
+              !isDeepStrictEqual(prior.context.gatewayServiceInstallation, installation) ||
+              prior.source.moduleUrl.href !== source.moduleUrl.href)
           ) {
-            await wait(retire(candidate));
+            // A nested caller must not join closure of the actor retaining its outer operation.
+            if (hasActiveActorOperations(prior)) {
+              throw new Error("Worker policy changed during active use; close its leases first");
+            }
+            // Cleanup clients can retain this actor after its regular client closes.
+            await wait(prior.actor ? retireActor(prior.actor, admission.identity) : retire(prior));
             assertAdmission();
           }
         }
@@ -570,7 +570,8 @@ function createSharedStateWorkerOwner() {
           (candidate) =>
             matches(candidate, admission.identity) &&
             candidate.context.maintenanceScope === context.maintenanceScope &&
-            candidate.context.existingSchemaPath === context.existingSchemaPath,
+            candidate.context.existingSchemaPath === context.existingSchemaPath &&
+            isDeepStrictEqual(candidate.context.gatewayServiceInstallation, installation),
         );
         if (
           !entry ||
@@ -598,8 +599,7 @@ function createSharedStateWorkerOwner() {
       if (!entry) {
         ownsOpening = true;
         assertAdmission();
-        // Retain the database generation separately from the caller's lexical
-        // schema scope, which may end while this actor remains reusable.
+        // The reusable generation outlives the caller's lexical schema scope.
         const databaseAdmission = captureOpenClawStateDatabaseReadAdmission(admission.databasePath);
         assertAdmission();
         const openingGuard = captureOpenClawStateWorkerOpeningGuard(context, assertCurrent, signal);
@@ -634,8 +634,7 @@ function createSharedStateWorkerOwner() {
           existingOnly,
           nativeLostListeners,
           activeOperations: 0,
-          // Maintenance may already be draining an accepted callback; its native
-          // opening must retain that callback's live admission through settlement.
+          // Draining maintenance callbacks retain live admission through native open settlement.
           opening: context.maintenanceScope ? open() : runInDetachedAsyncContext(open),
         };
         entry = admitted;
@@ -714,8 +713,7 @@ function createSharedStateWorkerOwner() {
 }
 
 export function getOpenClawStateWorkerOwner() {
-  // The owner registers with and publishes into the cache that created it. A
-  // retired generation must neither install its owner nor drive the current one.
+  // Only the creating cache generation may register this owner or drive its publications.
   assertPublishedOpenClawStateDatabaseLifecycle();
   return resolveGlobalSingleton(
     Symbol.for("openclaw.sharedStateWorkerOwner"),

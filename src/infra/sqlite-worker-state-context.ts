@@ -3,6 +3,10 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import type { OpenClawStateIntegrityAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
+import {
+  withGatewayServiceInstallation,
+  type GatewayServiceInstallation,
+} from "./gateway-service-installation-context.js";
 
 /** Resolved host facts for the canonical shared-state owner, never authority. */
 export type SqliteWorkerStateContext = {
@@ -15,6 +19,7 @@ export type SqliteWorkerStateContext = {
   /** Known agent paths preserve deletion-history uncertainty during native initialization. */
   initializationAgentPaths?: readonly string[];
   existingSchemaPath?: string;
+  gatewayServiceInstallation?: GatewayServiceInstallation;
   stateIntegrity?: OpenClawStateIntegrityAdmission;
   artifactPreservingReads?: true;
   /** Actor-owned exclusion for autonomous WAL work, never write authority. */
@@ -33,6 +38,7 @@ export function captureSqliteWorkerStateContext(
       ? { initializationAgentPaths: [...context.initializationAgentPaths] }
       : {}),
     existingSchemaPath: context.existingSchemaPath,
+    gatewayServiceInstallation: context.gatewayServiceInstallation,
     stateIntegrity: context.stateIntegrity,
     artifactPreservingReads: context.artifactPreservingReads,
     scheduledMaintenanceSuspension: context.scheduledMaintenanceSuspension,
@@ -58,6 +64,7 @@ export function sqliteWorkerRequestBytes(
         bytes,
       ),
     input.byteLength +
+      Buffer.byteLength(JSON.stringify(context?.gatewayServiceInstallation) ?? "", "utf8") +
       (preparation?.byteLength ?? 0) +
       agentPathBytes +
       (context?.scheduledMaintenanceSuspension?.byteLength ?? 0),
@@ -117,10 +124,12 @@ export function runWithSqliteWorkerStateContext<T>(
   operation: () => T,
 ): T {
   const run = () =>
-    stateContexts.run(context, () =>
-      context.existingSchemaPath === undefined
-        ? operation()
-        : withExistingOpenClawStateSchema({ path: context.existingSchemaPath }, operation),
+    withGatewayServiceInstallation({ installation: context.gatewayServiceInstallation }, () =>
+      stateContexts.run(context, () =>
+        context.existingSchemaPath === undefined
+          ? operation()
+          : withExistingOpenClawStateSchema({ path: context.existingSchemaPath }, operation),
+      ),
     );
   return context.artifactPreservingReads
     ? withArtifactPreservingStateReads(run, { agentDatabases: true })

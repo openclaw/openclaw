@@ -76,7 +76,9 @@ export async function createSystemdCommandQuery(
         ? await openSystemdUserManager(transport.address, deadlineAt).catch(privateInspectionFailed)
         : undefined;
     const managerUid = scope === "system" ? 0 : inspection?.managerUid;
-    let remainingCalls = managerUid !== undefined ? 6 : 3;
+    let remainingCalls =
+      (managerUid !== undefined ? 6 : 3) +
+      (scope === "system" && opts?.inspectStateIdentity ? 2 : 0);
     let legacyOutput = false;
     // All manager D-Bus calls share one deadline so wedged reads reach local fallback promptly.
     const query = async (args: string[], signatures: string[]): Promise<unknown[] | null> => {

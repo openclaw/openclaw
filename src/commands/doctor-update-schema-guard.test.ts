@@ -11,13 +11,19 @@ import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-upd
 import { waitForCliSignalExit, waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { resolveStateDir } from "../config/paths.js";
 import * as backupCreate from "../infra/backup-create.js";
+import { withGatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as packageRoot from "../infra/openclaw-root.js";
+import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
-import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
+import {
+  adoptUpdateRun,
+  createUpdateRun,
+  recordUpdateRunStep,
+} from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { migrateOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
@@ -34,8 +40,11 @@ import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
@@ -45,7 +54,10 @@ import * as backupVerify from "./backup-verify.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
-import { guardUpdateDoctorSchemaUpgrade } from "./doctor-update-schema-guard.js";
+import {
+  guardUpdateDoctorSchemaUpgrade,
+  preflightUpdateDoctorCli,
+} from "./doctor-update-schema-guard.js";
 
 beforeEach(() => {
   // Exact 2026.9.2 package caller arguments; plugin deferral does not identify the schema phase.
@@ -68,7 +80,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function legacyAgentFixture(postCore: boolean) {
+async function legacyAgentFixture(postCore: boolean, version = "2026.9.2") {
   const privateRoot = fs.realpathSync(resolveStateDir());
   const handoff = createManagedHandoffTestBinding(privateRoot);
   installPrivateUpdateHandoffStore(privateRoot);
@@ -87,7 +99,7 @@ async function legacyAgentFixture(postCore: boolean) {
   vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
   const agent = openOpenClawAgentDatabase({ agentId: "main" });
   const pathname = agent.path;
-  const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+  const run = createUpdateRun({ trigger: "cli", before: { version } });
   recordUpdateRunStep(run.runId, {
     step: "openclaw doctor",
     status: postCore ? "completed" : "in_progress",
@@ -806,3 +818,60 @@ it("retains disposable coverage through the real migration of a mixed backed-up 
     expect(fs.readFileSync(external)).toEqual(beforeExternal);
   });
 });
+
+it.each(["ordinary", "flag-only", "candidate", "rehearsal"] as const)(
+  "protects older service state while admitting authorized %s Doctor migration",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = await legacyAgentFixture(true, VERSION);
+      if (mode === "candidate") {
+        adoptUpdateRun(f.runId);
+      }
+      const { db, path: pathname } = openOpenClawStateDatabase();
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
+        UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}
+          WHERE meta_key = 'primary';
+        DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
+      revokeSqliteDatabaseAdmissions(requireNativeSqliteDatabase(db));
+      await closeStateDatabaseForTest();
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", mode === "candidate" ? f.runId : undefined);
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", mode === "ordinary" ? undefined : "1");
+      if (mode === "rehearsal") {
+        for (const [key, value] of Object.entries(
+          buildUpdateRehearsalPathEnv(fs.realpathSync(resolveStateDir())),
+        )) {
+          vi.stubEnv(key, value);
+        }
+        vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", undefined);
+      }
+      const before = fs.readFileSync(pathname);
+      const installation = {
+        root: "/old",
+        version: "2026.10.3",
+        cliVersion: VERSION,
+        databasePath: pathname,
+      };
+      const doctor = withGatewayServiceInstallation({ installation }, async () => {
+        await preflightUpdateDoctorCli({});
+        await withDoctorMaintenance({}, async (maintenance) => {
+          maintenance.run(() => openOpenClawStateDatabase());
+        });
+      });
+      if (mode === "ordinary" || mode === "flag-only") {
+        await expect(doctor).rejects.toThrow(/Gateway service runs 2026\.10\.3/u);
+        expect(fs.readFileSync(pathname)).toEqual(before);
+        expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
+      } else {
+        await doctor;
+        const migrated = new DatabaseSync(pathname, { readOnly: true });
+        try {
+          expect(migrated.prepare("PRAGMA user_version").get()).toEqual({
+            user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          });
+        } finally {
+          migrated.close();
+        }
+      }
+    });
+  },
+);

@@ -17,7 +17,14 @@ type SystemdCommandSnapshotParams = SystemdEnvironmentFilesParams & {
 export async function buildSystemdCommandSnapshot(
   params: SystemdCommandSnapshotParams,
 ): Promise<GatewayServiceCommandSnapshot> {
-  const fileEnvironment = await resolveSystemdEnvironmentFiles(params);
+  let stateIdentityUnverified = false;
+  const fileEnvironment = await resolveSystemdEnvironmentFiles({
+    ...params,
+    onUnavailable: () => {
+      stateIdentityUnverified = true;
+      params.onUnavailable?.();
+    },
+  });
   const environment = { ...params.inlineEnvironment, ...fileEnvironment };
   const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> =
     Object.fromEntries(Object.keys(params.inlineEnvironment).map((key) => [key, "inline"]));
@@ -35,6 +42,7 @@ export async function buildSystemdCommandSnapshot(
     }
   }
   return {
+    ...(stateIdentityUnverified ? { stateIdentityUnverified: true } : {}),
     programArguments: params.programArguments,
     ...(params.workingDirectory ? { workingDirectory: params.workingDirectory } : {}),
     ...(Object.keys(environment).length > 0 ? { environment, environmentValueSources } : {}),

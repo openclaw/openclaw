@@ -15,6 +15,12 @@ batch related work so ordinary requests do not repeat database calls.
 
 ## Choose the execution owner
 
+Shared-state worker contexts carry installed-service migration restrictions only
+for the admitted database. An unrelated older installation does not change an
+isolated Gateway's active worker policy. The admission owner's known physical
+aliases supply this decision without repeated filesystem reads; matching-service
+restrictions and refusal to replace workers with active operations remain intact.
+
 Actor-backed session managers serialize append preparation and committed view
 adoption on their manager queue. Only each actor storage command reserves the
 agent database writer, so unrelated sessions can write between commands. Native

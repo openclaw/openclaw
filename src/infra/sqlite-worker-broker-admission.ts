@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { serialize } from "node:v8";
 import { getChildLogger } from "../logging/logger.js";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
@@ -283,7 +284,12 @@ function assertSqliteWorkerActorStateContext(
   actor: Actor,
   stateContext: SqliteWorkerStateContext | undefined,
 ): void {
-  if (actor.stateContext?.existingSchemaPath !== stateContext?.existingSchemaPath) {
+  const suppliedInstallation = stateContext?.gatewayServiceInstallation;
+  if (
+    actor.stateContext?.existingSchemaPath !== stateContext?.existingSchemaPath ||
+    (suppliedInstallation !== undefined &&
+      !isDeepStrictEqual(actor.stateContext?.gatewayServiceInstallation, suppliedInstallation))
+  ) {
     throw new Error("Shared-state worker schema policy changed; close its actor first");
   }
 }
@@ -311,6 +317,8 @@ export function prepareSqliteWorkerActorContext(actor: Actor | undefined, job: J
     request.stateDatabasePath = actor.stateDatabasePath ?? actor.databasePath;
     request.stateContext = {
       ...stateContext,
+      // Environment-only requests retain the facts bound when this actor opened.
+      gatewayServiceInstallation: actor.stateContext?.gatewayServiceInstallation,
       scheduledMaintenanceSuspension: actor.stateContext?.scheduledMaintenanceSuspension,
     };
   }

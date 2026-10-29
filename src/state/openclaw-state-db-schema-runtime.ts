@@ -62,9 +62,11 @@ import { migrateSessionWatchCursorProvenance } from "./openclaw-state-db-session
 import { isUninitializedNativeStartupDatabase } from "./openclaw-state-db-startup-checkpoint.js";
 import * as retirements from "./openclaw-state-db-table-retirements.js";
 import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-state-db.paths.js";
+import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { assertGatewayServiceSchemaMigrationAllowed } from "./openclaw-state-service-installation.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
 
@@ -113,6 +115,17 @@ export function ensureOpenClawStateRuntimeSchema(
           return [];
         }
         const previousVersion = readStateSchemaContentVersion(db);
+        // Admitted Doctor/update repair already owns offline schema maintenance.
+        const maintenance = getOpenClawDatabaseMaintenanceScope();
+        if (maintenance?.ownsSchemaMaintenance) {
+          maintenance.assertAdmission();
+        } else {
+          assertGatewayServiceSchemaMigrationAllowed(
+            pathname,
+            previousVersion,
+            OPENCLAW_STATE_SCHEMA_VERSION,
+          );
+        }
         const schema = getAdmittedSqliteSchemaFacts(db);
         if (previousVersion === 0 && schema?.tables.size === 0 && schema.views.size === 0) {
           // The admitted empty catalog has no history to migrate or indexes to repair.

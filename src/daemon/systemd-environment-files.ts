@@ -1,5 +1,6 @@
 /** Native systemd environment-file serialization, reading, and effective file overlays. */
 import fs from "node:fs/promises";
+import { hasErrnoCode } from "../infra/errno.js";
 import { parseSystemdEnvironmentFileLine } from "./systemd-environment-file-parser.js";
 import { expandSystemdEnvironmentFilePattern } from "./systemd-environment-file-pattern.js";
 
@@ -7,6 +8,7 @@ export type SystemdEnvironmentFileSpec = [pathname: string, optional: boolean];
 export type SystemdEnvironmentFilesParams = {
   environmentFileSpecs: SystemdEnvironmentFileSpec[];
   failOnUnavailable?: boolean;
+  onUnavailable?: () => void;
 };
 
 function serializeSystemdEnvironmentFileValue(value: string): string {
@@ -52,6 +54,9 @@ export async function resolveSystemdEnvironmentFiles(
 ): Promise<Record<string, string>> {
   const resolved: Record<string, string> = {};
   const failIfUnavailable = (error: unknown, optional: boolean) => {
+    if (!optional || !hasErrnoCode(error, "ENOENT")) {
+      params.onUnavailable?.();
+    }
     if (params.failOnUnavailable && !optional) {
       throw error;
     }
@@ -65,8 +70,8 @@ export async function resolveSystemdEnvironmentFiles(
       continue;
     }
     pathnames.sort();
-    if (params.failOnUnavailable && !optional && pathnames.length === 0) {
-      throw new Error("Missing systemd environment file");
+    if (!optional && pathnames.length === 0) {
+      failIfUnavailable(new Error("Missing systemd environment file"), optional);
     }
     for (const filePath of pathnames) {
       try {

@@ -12,6 +12,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { normalizeEnv } from "../infra/env.js";
+import {
+  withGatewayServiceInstallation,
+  type GatewayServiceInstallationContext,
+} from "../infra/gateway-service-installation-context.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { getPluginCache } from "../plugins/plugin-cache.js";
@@ -659,18 +663,22 @@ export async function runCli(
       originalArgv,
       () => {
         const run = async (harnessCleanup?: CliHarnessCleanup) => {
+          const serviceInstallation: GatewayServiceInstallationContext = {};
           let gatewayCleanup: "drained" | "retained" | undefined;
           try {
             const invokeCommand = () =>
-              runCliWithPreparedOutputMode(originalArgv, {
-                ...options,
-                runtimeRecoveryEnv,
-                builtInMachineOutput,
-                harnessCleanup,
-                onGatewayResourcesSettled: (outcome) => {
-                  gatewayCleanup = outcome;
-                },
-              });
+              withGatewayServiceInstallation(serviceInstallation, () =>
+                runCliWithPreparedOutputMode(originalArgv, {
+                  ...options,
+                  runtimeRecoveryEnv,
+                  builtInMachineOutput,
+                  harnessCleanup,
+                  serviceInstallation,
+                  onGatewayResourcesSettled: (outcome) => {
+                    gatewayCleanup = outcome;
+                  },
+                }),
+              );
             const resources = harnessCleanup?.pluginResources;
             return await (resources ? resources.run(invokeCommand) : invokeCommand());
           } catch (error) {
@@ -733,6 +741,7 @@ async function runCliWithPreparedOutputMode(
     harnessCleanup?: CliHarnessCleanup;
     onGatewayResourcesSettled: (outcome: "drained" | "retained") => void;
     runtimeRecoveryEnv: NodeJS.ProcessEnv;
+    serviceInstallation: GatewayServiceInstallationContext;
   },
 ) {
   const startupTrace = createGatewayDispatchStartupTrace(originalArgv, "cli.main");
@@ -857,6 +866,13 @@ async function runCliWithPreparedOutputMode(
         loadCliDotEnv({ loadGlobalEnv, quiet: true });
       }
     });
+  }
+  if (!isHelpOrVersionInvocation) {
+    const { inspectCliGatewayServiceInstallation } =
+      await import("./run-main-service-installation.js");
+    options.serviceInstallation.installation = await inspectCliGatewayServiceInstallation(
+      process.env,
+    );
   }
   let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
   if (!isHelpOrVersionInvocation && normalizedInvocation.primary === "doctor") {

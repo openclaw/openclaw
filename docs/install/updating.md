@@ -33,6 +33,21 @@ backup.
 
 ## Update implementation contract
 
+A newer CLI refuses to forward-migrate an existing shared-state database when a
+provably older installed Gateway service uses that same database. This protects
+services left on another Node or npm prefix after a manual package install. Use
+`openclaw update` to coordinate the package and service, or use the CLI from the
+service installation. New databases and databases affirmatively identified as
+separate are not blocked. Hard links and host-visible bind-mount aliases remain
+protected. A known older service with uncertain account, environment, or filesystem
+mapping retains the restriction; restore inspection access or run as the service
+account. Service inspection is best effort; an unknown installation is not treated
+as an older one. The inspecting CLI must contain this guard.
+
+Admitted Doctor and update repair retain their existing schema-maintenance
+authority, including candidate and private rehearsal repair. Update phase flags
+alone do not grant that authority.
+
 Pre-update config copies publish through a temporary file and same-directory
 rename. An interrupted write preserves the previous `.pre-update` copy, and a
 later snapshot attempt can retry. This repair must be present in the updater

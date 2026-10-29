@@ -28,7 +28,9 @@ vi.mock("../state/openclaw-state-db.js", () => ({
   openOpenClawStateDatabase: mocks.native,
   runOpenClawStateWriteTransaction: mocks.native,
 }));
+// mock-isolation: Synthetic APNs admission must not inspect the real shared-state cache.
 vi.mock("../state/openclaw-state-db-cache.js", () => ({
+  openClawStateDatabaseCache: { getKnownOpenClawStateDatabaseIdentity: () => undefined },
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
     databasePath,
     identity: { key: `path:${databasePath}`, canonicalPath: databasePath },

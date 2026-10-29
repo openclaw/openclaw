@@ -205,6 +205,8 @@ export type SystemdGatewayInstallation =
 
 /** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */
 export type GatewayServiceReadOptions = {
+  /** Inspect state selectors and filesystem mapping before claiming separate state. */
+  inspectStateIdentity?: boolean;
   systemdReadTarget?: SystemdServiceReadTarget;
   systemdReadBinding?: SystemdServiceReadBinding;
   timeoutMs?: number;
@@ -296,6 +298,8 @@ export function assertServiceDefinitionWritable(capability: ServiceDefinitionMut
 }
 
 export type GatewayServiceCommandSnapshot = {
+  /** Missing environment or namespace facts cannot prove separate state. */
+  stateIdentityUnverified?: true;
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;

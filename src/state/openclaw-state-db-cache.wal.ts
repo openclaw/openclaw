@@ -79,6 +79,7 @@ export function createStateDatabaseWalOwner(
       const capturedContext = captureOpenClawStateWorkerContextWithAdmission(
         { path: database.path, env },
         () => admission,
+        asyncResources.knownIdentity,
       );
       const controller = new AbortController();
       let pending: Promise<SqliteWalPeriodicResult | undefined> | undefined;

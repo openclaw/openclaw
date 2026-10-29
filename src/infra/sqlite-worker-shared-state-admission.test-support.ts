@@ -33,6 +33,12 @@ export function registerSharedStateWorkerAdmissionTests(
 ): void {
   it("requires the exact live maintenance owner through the worker commit grant", async () => {
     const captured = createContext();
+    captured.gatewayServiceInstallation = {
+      root: "/fixture/old",
+      version: "2026.10.3",
+      cliVersion: "2026.11.4",
+      databasePath: captured.admission.databasePath,
+    };
     await executeOpenClawStateWorker(captured, { type: "deviceAuth.prepare", input: undefined });
     const store = await openSharedStateSqliteWorkerStore<OpenClawStateWorkerOperations>(
       {
@@ -74,7 +80,8 @@ export function registerSharedStateWorkerAdmissionTests(
             type: "deviceAuth.store",
             input: { deviceId, role: "operator", token: "synthetic-owner-token" },
           }),
-        captured,
+        // Environment-only maintenance calls retain the prepared actor's service facts.
+        { ...captured, gatewayServiceInstallation: undefined },
         () => captured.admission.assertCurrent(),
         () => ({
           nativeLocations: [database.path],
