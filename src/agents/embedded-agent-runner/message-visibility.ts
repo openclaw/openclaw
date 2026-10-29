@@ -15,7 +15,7 @@ import {
 } from "../../shared/chat-message-content.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 
-export function collectMediaUrlsFromRecord(
+function collectMediaUrlsFromRecord(
   record: Record<string, unknown>,
   output: Set<string>,
   // Payloads arrive as in-process `unknown` objects, so a malformed
