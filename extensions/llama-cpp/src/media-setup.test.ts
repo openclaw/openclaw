@@ -146,7 +146,7 @@ beforeEach(async () => {
     config: {},
   });
   plugin.register(captured.api);
-  const provider = captured.providers.at(-1);
+  const provider = captured.providers.find(({ id }) => id === "llama-cpp");
   const media = captured.mediaUnderstandingProviders.at(-1);
   const method = provider?.auth.find((entry) => entry.id === "local-media");
   const ordinary = provider?.auth.find((entry) => entry.id === "local");

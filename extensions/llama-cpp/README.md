@@ -1,6 +1,6 @@
 # @openclaw/llama-cpp-provider
 
-Official llama.cpp provider for managed and external OpenClaw model servers.
+Official provider for Llama (llama.app) and managed or external llama.cpp servers.
 
 The `llama-cpp` provider either installs a pinned, integrity-verified
 `llama-server` under OpenClaw's `localService` supervisor or connects to a
@@ -39,6 +39,15 @@ the managed router preset.
 See the [llama.cpp provider guide](https://docs.openclaw.ai/plugins/llama-cpp)
 for platform requirements, custom GGUF configuration, diagnostics, and repair.
 
+## Connect to Llama
+
+Install [Llama](https://llama.app), choose a model, and enable its API server.
+Choose **Llama** in setup to connect to `http://127.0.0.1:9931`, or enter another
+endpoint and optional API key. Model references use `llama-app/<model>`.
+This separate provider can coexist with managed llama.cpp chat and embeddings;
+passive discovery never launches the app or downloads or loads a model.
+See the [Llama setup guide](https://docs.openclaw.ai/plugins/llama-cpp#llama-llamaapp).
+
 ## Connect to an existing server
 
 Choose **Existing llama-server** during setup and enter the endpoint and
@@ -57,6 +66,6 @@ the managed server's `/v1/embeddings` endpoint.
 ## Package
 
 - Plugin id: `llama-cpp`
-- Provider id: `llama-cpp`
+- Provider ids: `llama-app`, `llama-cpp`
 - Package: `@openclaw/llama-cpp-provider`
 - Minimum OpenClaw host: `2026.6.2`

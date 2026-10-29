@@ -9,6 +9,7 @@ import {
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { LLAMA_CPP_PROVIDER_ID } from "./src/defaults.js";
 import { llamaCppEmbeddingProviderAdapter } from "./src/embedding-provider.js";
+import { registerLlamaAppProvider } from "./src/llama-app-provider.js";
 import { registerLlamaCppProvider } from "./src/managed-provider.js";
 import {
   LLAMA_CPP_MEDIA_MAX_BYTES,
@@ -23,7 +24,8 @@ import { createLlamaCppMediaProvider } from "./src/media-provider.js";
 export default definePluginEntry({
   id: "llama-cpp",
   name: "llama.cpp Provider",
-  description: "Managed and external llama.cpp servers for GGUF chat, embeddings and local images",
+  description:
+    "Llama (llama.app), managed and external llama.cpp chat, embeddings, and local images",
   register(api: OpenClawPluginApi) {
     const mediaProvider = createLlamaCppMediaProvider();
     api.registerEmbeddingProvider(llamaCppEmbeddingProviderAdapter);
@@ -192,5 +194,6 @@ export default definePluginEntry({
       { name: "local_image" },
     );
     registerLlamaCppProvider(api, mediaProvider);
+    registerLlamaAppProvider(api);
   },
 });

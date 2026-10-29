@@ -10,14 +10,58 @@ title: "llama.cpp Provider"
 sidebarTitle: "llama.cpp Provider"
 ---
 
-The `llama-cpp` plugin provides one `llama-cpp` model provider. OpenClaw can
-manage a local `llama-server` or connect to one that you operate. Both choices
-use `llama-cpp/<model>` references and the OpenAI-compatible transport.
+The `llama-cpp` plugin provides the **Llama** (`llama-app`) and **llama.cpp**
+(`llama-cpp`) model providers. Llama connects to [llama.app](https://llama.app).
+For llama.cpp, OpenClaw can manage a local `llama-server` or connect to one that
+you operate. Both providers use the OpenAI-compatible transport.
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
 openclaw onboard
 ```
+
+## Llama (llama.app)
+
+Install [Llama](https://llama.app), choose or download a model there, and start
+its API server before connecting OpenClaw. The default endpoint is
+
+`http://127.0.0.1:9931` (`/v1` is added for inference).
+
+Choose **Llama** in model setup, or run:
+
+```bash
+openclaw models auth login --provider llama-app --method existing-server
+```
+
+Setup accepts an alternate HTTP or HTTPS endpoint, with an optional API key.
+For non-interactive setup, use `--auth-choice llama-app` with the existing
+`--custom-base-url`, `--custom-model-id`, and `--custom-api-key` options as needed.
+`LLAMA_APP_API_KEY` is the provider-specific key environment variable;
+`LLAMA_SERVER_API_KEY` remains exclusive to `llama-cpp`.
+Configured API-key and header SecretRefs use the normal provider credential
+resolver under `models.providers.llama-app`. Keyless servers require no
+placeholder key in configuration.
+
+Model references use `llama-app/<model-id>`, including model IDs with slashes.
+Llama and managed llama.cpp can coexist: connecting Llama does not replace
+`models.providers.llama-cpp`, its managed process, or local memory embeddings.
+Passive detection and catalog refresh do not change an existing primary model.
+Explicit setup and model activation retain the usual model-selection behavior.
+
+Discovery reads `/health`, `/models` (falling back to `/v1/models`), and
+available models' `/props?model=...&autoload=false`. It never downloads models,
+launches Llama, or loads, wakes, or unloads a model. An empty or unreachable
+server is not a completed setup: select a model and enable the API in Llama,
+then retry. Inference may load a model through Llama's own router policy.
+Context, tool support, and image input come from advertised server metadata;
+missing runtime properties are not proof that a model supports those features.
+
+The server runs on the **Gateway host**, or the host named by your configured
+endpoint, not necessarily on the computer displaying OpenClaw. Private-network
+requests use the existing local-server policy, including an explicit
+`request.allowPrivateNetwork: false` denial. See Llama's
+[serving guide](https://llama.app/docs/serve) and
+[API reference](https://llama.app/docs/api).
 
 ## Choose server ownership
 

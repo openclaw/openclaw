@@ -8,6 +8,7 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
 import { normalizeLlamaServerProviderConfig, resolveLlamaServerEndpoint } from "./endpoint.js";
 
 type LlamaServerModelStatus =
@@ -134,10 +135,14 @@ export function mapLlamaServerModel(
 }
 
 export function buildLlamaServerProviderConfig(params: {
+  server?: LlamaServerIdentity;
   configured?: ModelProviderConfig;
   discoveredModels: readonly LlamaServerDiscoveredModel[];
 }): ModelProviderConfig {
-  const baseUrl = resolveLlamaServerEndpoint(params.configured?.baseUrl).inferenceBaseUrl;
+  const baseUrl = resolveLlamaServerEndpoint(
+    params.configured?.baseUrl,
+    params.server ?? LLAMA_CPP_SERVER,
+  ).inferenceBaseUrl;
   const discoveredById = new Map(params.discoveredModels.map(({ config }) => [config.id, config]));
   const models = (params.configured?.models ?? []).map((configured) => {
     const discovered = discoveredById.get(configured.id);
@@ -155,9 +160,12 @@ export function buildLlamaServerProviderConfig(params: {
       : configured;
   });
   models.push(...discoveredById.values());
-  return normalizeLlamaServerProviderConfig({
-    ...params.configured,
-    baseUrl,
-    models,
-  });
+  return normalizeLlamaServerProviderConfig(
+    {
+      ...params.configured,
+      baseUrl,
+      models,
+    },
+    params.server ?? LLAMA_CPP_SERVER,
+  );
 }

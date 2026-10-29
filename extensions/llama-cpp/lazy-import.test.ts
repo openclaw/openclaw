@@ -42,6 +42,23 @@ describe("llama.cpp registration", () => {
       }),
     );
     const provider = expectDefined(providers[0], "text provider");
+    const app = expectDefined(
+      providers.find(({ id }) => id === "llama-app"),
+      "Llama provider",
+    );
+    expect(app.auth.map(({ id }) => id)).toEqual(["existing-server"]);
+    expect(app.reconcileLocalService).toBeUndefined();
+    await expect(app.staticCatalog?.run({} as never)).resolves.toMatchObject({
+      provider: { baseUrl: "http://127.0.0.1:9931/v1", models: [] },
+    });
+    for (const apiKey of ["llama-cpp-local", "llama-app-local", "custom-local"]) {
+      expect(
+        app.resolveSyntheticAuth?.({
+          providerConfig: { baseUrl: "http://127.0.0.1:9931", models: [], apiKey },
+        } as never),
+      ).toMatchObject({ apiKey: "llama-app-local" });
+      expect(app.shouldDeferSyntheticProfileAuth?.({ resolvedApiKey: apiKey } as never)).toBe(true);
+    }
     const embedding = expectDefined(embeddings[0], "embedding provider");
     const image = expectDefined(media[0], "image provider");
     expect(provider.auth.map(({ id }) => id)).toEqual(["local", "existing-server", "local-media"]);
@@ -69,6 +86,7 @@ describe("llama.cpp registration", () => {
       Promise.resolve(wrapped({} as never, { messages: [] }, {})),
       "./src/external-server/stream.js",
     );
+    await expectRuntimeImport(app.auth[0]!.run({} as never), "./src/external-server/setup.js");
     await expectRuntimeImport(provider.auth[0]!.run({} as never), "./src/setup.js");
     await expectRuntimeImport(provider.auth[1]!.run({} as never), "./src/external-server/setup.js");
     await expectRuntimeImport(

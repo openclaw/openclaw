@@ -1,5 +1,5 @@
 ---
-summary: "Managed and external llama.cpp servers for GGUF chat, embeddings and local images."
+summary: "Llama (llama.app), managed and external llama.cpp chat, embeddings, and local images."
 read_when:
   - You are installing, configuring, or auditing the llama-cpp plugin
 title: "Llama Cpp plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Managed and external llama.cpp servers for GGUF chat, embeddings and local images.
+Llama (llama.app), managed and external llama.cpp chat, embeddings, and local images.
 
 ## Distribution
 
@@ -19,7 +19,7 @@ Managed and external llama.cpp servers for GGUF chat, embeddings and local image
 
 ## Surface
 
-- Providers: `llama-cpp`
+- Providers: `llama-cpp`, `llama-app`
 - Contracts: `embeddingProviders`, `mediaUnderstandingProviders`, `tools`
 
 <!-- openclaw-plugin-reference:manual-start -->
