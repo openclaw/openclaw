@@ -193,7 +193,6 @@ export async function runGatewayConversationList(params: {
     ));
   const currentConfig = params.readCurrentConfig?.() ?? params.config;
   const normalizedQuery = query?.toLowerCase() ?? "";
-  // Canonically equivalent labels/targets may arrive in either Unicode form; compare on NFC.
   const searchQuery =
     normalizedQuery.startsWith("@") && normalizedQuery.length > 1
       ? normalizedQuery.slice(1).normalize("NFC")

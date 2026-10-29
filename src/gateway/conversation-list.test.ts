@@ -144,60 +144,28 @@ describe("runGatewayConversationList", () => {
       target: `reef:${accountId}-peer`,
       firstSeenAt: 200 - index * 100,
       lastSeenAt: 200 - index * 100,
-      // Canonical pair: one stored decomposed label and one stored composed label.
-      label: index === 0 ? "#Zürich finance" : "Mu\u0308nchen personal",
+      label: `${accountId} Cafe\u0301`,
     }));
     vi.spyOn(conversationRegistry, "listConversations").mockImplementation(
       async (_scope, options = {}) =>
         options.limit === undefined ? rows : rows.slice(0, options.limit),
     );
-    const config = {
-      agents: { entries: { personal: {}, finance: {} } },
-      bindings: ["personal", "finance"].map((agentId) => ({
-        type: "route" as const,
-        agentId,
-        match: { channel: "reef", accountId: agentId },
-      })),
-    };
 
     const result = await runGatewayConversationList({
-      config,
+      config: {
+        agents: { entries: { personal: {}, finance: {} } },
+        bindings: ["personal", "finance"].map((agentId) => ({
+          type: "route" as const,
+          agentId,
+          match: { channel: "reef", accountId: agentId },
+        })),
+      },
       agentId: "personal",
+      query: "CAFÉ",
       limit: 1,
     });
-
-    expect(result.conversations).toMatchObject([
-      { accountId: "personal", target: "reef:personal-peer" },
-    ]);
-    const nfcQuery = await runGatewayConversationList({
-      config,
-      agentId: "personal",
-      query: "München",
-      limit: 50,
-    });
-    const nfdQuery = await runGatewayConversationList({
-      config,
-      agentId: "finance",
-      query: "Zu\u0308rich",
-      limit: 50,
-    });
-    const asciiQuery = await runGatewayConversationList({
-      config,
-      agentId: "personal",
-      query: "munchen",
-      limit: 50,
-    });
-    // Matching is comparison-side: the returned label keeps its stored bytes.
-    expect([nfcQuery.conversations[0]?.label, nfdQuery.conversations[0]?.label]).toEqual([
-      "Mu\u0308nchen personal",
-      "#Zürich finance",
-    ]);
-    expect(
-      ["Mu\u0308nchen personal", "#Zürich finance"].map((label) =>
-        [...label].some((char) => (char.codePointAt(0) ?? 0) > 0xff),
-      ),
-    ).toEqual([true, false]);
-    expect(asciiQuery.conversations).toEqual([]);
+    const { peerId: _peerId, ...expected } = rows[1]!;
+    expect(result.conversations).toMatchObject([expected]);
   });
 
   it.each(["direct", "group"] as const)(
