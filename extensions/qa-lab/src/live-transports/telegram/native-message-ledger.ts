@@ -25,6 +25,11 @@ export function createTelegramNativeMessageLedger() {
         update,
       });
     },
+    // TDLib edit updates can omit reply_to; keep the reply target recorded at send time.
+    edit(entry: { update?: TelegramUserbotUpdate }, update: TelegramUserbotUpdate) {
+      const replyToMessageId = update.replyToMessageId ?? entry.update?.replyToMessageId;
+      entry.update = replyToMessageId === undefined ? update : { ...update, replyToMessageId };
+    },
     retire: (observer: number, chatId: number, messageId: number) =>
       retiredNativeKeys.add(nativeKey(observer, chatId, messageId)),
     isRetired: (update: TelegramUserbotUpdate, observer: number) =>

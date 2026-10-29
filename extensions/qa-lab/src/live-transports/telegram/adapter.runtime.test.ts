@@ -542,7 +542,9 @@ Synthetic terminal recovery`;
       await onUpdate?.({ ...update, kind: "edit", messageId: 12, text: recovery });
       const currentUpdate = { ...update, messageId: 21, replyToMessageId: 20 };
       await onUpdate?.(currentUpdate);
-      await onUpdate?.({ ...currentUpdate, kind: "edit", text: recovery });
+      // TDLib edit updates can omit reply_to; correlation must keep the original target.
+      const { replyToMessageId: _omitted, ...recoveryEdit } = currentUpdate;
+      await onUpdate?.({ ...recoveryEdit, kind: "edit", text: recovery });
       expect(readMessages()).toEqual([{ ...currentUpdate, kind: "edit", text: recovery }]);
       expect(readMessages(current.id)).toEqual(readMessages());
       expect(readMessages("unknown-inbound")).toEqual([]);

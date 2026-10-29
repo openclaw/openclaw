@@ -218,7 +218,7 @@ export async function createTelegramQaTransportAdapter(
         text: update.text,
         timestamp: update.timestamp,
       });
-      existing.update = update;
+      ledger.edit(existing, update);
       return;
     }
     const route = routes.get(routeKey(observer, update.chatId, update.forumTopicId));
