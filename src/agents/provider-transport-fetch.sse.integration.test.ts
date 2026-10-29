@@ -276,7 +276,7 @@ const anthropicEnd =
 describe.each(anthropicTransports)("guarded Anthropic $name observations", (transport) => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each(["success", "421 replay", "refusal", "abort after headers"])(
+  it.for(["success", "421 replay", "refusal", "abort after headers"])(
     "%s keeps request identities separate from peer receipts",
     async (scenario, { signal }) => {
       vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
