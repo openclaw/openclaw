@@ -186,6 +186,19 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     });
   });
 
+  it("matches the agent key prefix literally, not as a pattern", async () => {
+    await append("underscore", "underscore-hit", "quay signal", "user", "dev_ops");
+    await append("lookalike", "lookalike-hit", "quay signal", "user", "devxops");
+    const { env, storePath } = scope("underscore", "dev_ops");
+    const result = await searchSessionTranscripts({
+      agentId: "dev_ops",
+      env,
+      storePath,
+      query: "quay signal",
+    });
+    expect(result.hits.map((hit) => hit.messageId)).toEqual(["underscore-hit"]);
+  });
+
   it("folds diacritics, completes prefixes, ranks proximity and treats operators literally", async () => {
     const ranked = await search("cafe copper lantern");
     expect(ranked.hits.map((hit) => hit.messageId)).toEqual(["phrase-hit", "scattered-hit"]);
