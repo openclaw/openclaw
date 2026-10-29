@@ -196,10 +196,12 @@ function stepReasons(
   return uniqueStrings(reasons);
 }
 
+// `$[...]` is legacy Bash arithmetic: like `$((...))`, it re-evaluates its decoded text, so
+// array subscripts built from ANSI-C escapes can run command substitution.
 function isShellExpansionDynamicArgument(risk: CommandRisk): boolean {
   return (
     risk.kind === "dynamic-argument" &&
-    /(?:\$[A-Za-z0-9_@*?#$!-]|\$\{|`|\$\(|[<>]\()/u.test(risk.text)
+    /(?:\$[A-Za-z0-9_@*?#$!-]|\$\{|`|\$\(|\$\[|[<>]\()/u.test(risk.text)
   );
 }
 
