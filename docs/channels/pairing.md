@@ -65,7 +65,11 @@ Unlike the Control UI's explicit checkbox, the CLI automatically bootstraps
 `commands.ownerAllowFrom` when no command owner is configured, using an entry
 such as `telegram:123456789`. This gives first-time setups an explicit owner for
 privileged commands and exec approval prompts. After an owner exists, later
-pairing approvals only grant DM access; they do not add more owners.
+pairing approvals only grant DM access; they do not add more owners. An owner
+entry takes precedence over a
+[channel identity link](/concepts/user-model#channel-identity-links) for the same
+sender: its new channel requests keep owner access but not the linked person's
+operator authority.
 
 Manually allowlisted senders are not automatically command owners. If an
 authorized sender has no owner access, owner-only commands reply with the exact

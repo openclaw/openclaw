@@ -74,7 +74,7 @@ Options: `--channel <channel>`, `--account <accountId>`, `--notify` (send a conf
 
 ### Owner bootstrap
 
-If `commands.ownerAllowFrom` is empty when you approve a pairing code, the CLI also records the approved sender as the command owner. It writes a channel-scoped entry such as `telegram:123456789`. This only bootstraps the first owner - later pairing approvals never replace or expand `commands.ownerAllowFrom`. The Control UI presents this elevation as a separate `operator.admin`-protected checkbox instead of applying it automatically.
+If `commands.ownerAllowFrom` is empty when you approve a pairing code, the CLI also records the approved sender as the command owner. It writes a channel-scoped entry such as `telegram:123456789`. This only bootstraps the first owner - later pairing approvals never replace or expand `commands.ownerAllowFrom`. The Control UI presents this elevation as a separate `operator.admin`-protected checkbox instead of applying it automatically. The owner entry takes precedence over a [channel identity link](/concepts/user-model#channel-identity-links) for the same sender: its new channel requests keep owner access but not the linked person's operator authority.
 
 The CLI performs this config bootstrap and optional `--notify` only after an
 acknowledged approval. They retain their existing local config/reload and channel

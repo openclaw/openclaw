@@ -31,8 +31,9 @@ channel invalidates that turn; send a new request after access is restored.
 
 The tool remains owner-only: linking an ordinary member identifies the requester
 without granting assignment access. Unlinked or asserted senders receive no
-requester profile or operator authority. Configured command owners without a linked
-administrator profile keep their existing command access. See
+requester profile or operator authority. A sender that matches a `commands.ownerAllowFrom`
+entry keeps its configured owner authority, which takes precedence over a link: its new
+requests carry no operator authority, even when it is linked to an administrator. See
 [Channel identity links](/concepts/user-model#channel-identity-links).
 
 ## Actions and gates
