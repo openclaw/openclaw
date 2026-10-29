@@ -1027,6 +1027,13 @@ describe("generate-npm-package-lock", () => {
         tarball,
       };
     };
+    const registryVersions = (entries: Array<[string, ReturnType<typeof packPackage>]>) =>
+      Object.fromEntries(
+        entries.map(([version, { artifact, manifest, tarball }]) => [
+          version,
+          { integrity: artifact.integrity, manifest, tarball },
+        ]),
+      );
     const writeParent = (
       name: string,
       dependencies: Record<string, string>,
@@ -1122,71 +1129,17 @@ describe("generate-npm-package-lock", () => {
     writeFileSync(
       registryConfig,
       JSON.stringify({
-        parent: {
-          "1.0.0": {
-            integrity: parent.artifact.integrity,
-            manifest: parent.manifest,
-            tarball: parent.tarball,
-          },
-        },
-        overlap: {
-          "1.0.0": {
-            integrity: overlap.artifact.integrity,
-            manifest: overlap.manifest,
-            tarball: overlap.tarball,
-          },
-        },
-        modern: {
-          "1.0.0": {
-            integrity: modern.artifact.integrity,
-            manifest: modern.manifest,
-            tarball: modern.tarball,
-          },
-        },
-        broad: {
-          "1.0.0": {
-            integrity: broad.artifact.integrity,
-            manifest: broad.manifest,
-            tarball: broad.tarball,
-          },
-        },
-        unrelated: {
-          "1.0.0": {
-            integrity: unrelated.artifact.integrity,
-            manifest: unrelated.manifest,
-            tarball: unrelated.tarball,
-          },
-        },
-        violator: {
-          "1.0.0": {
-            integrity: violator.artifact.integrity,
-            manifest: violator.manifest,
-            tarball: violator.tarball,
-          },
-        },
-        forked: Object.fromEntries(
-          forkedPackages.map(({ artifact, manifest, tarball }) => [
-            artifact.version,
-            { integrity: artifact.integrity, manifest, tarball },
-          ]),
-        ),
-        leaf: Object.fromEntries(
-          leafPackages.map(({ artifact, manifest, tarball }) => [
-            artifact.version,
-            { integrity: artifact.integrity, manifest, tarball },
-          ]),
-        ),
-        blocked: Object.fromEntries(
-          blockedPackages.map(({ artifact, manifest, tarball }) => [
-            artifact.version,
-            { integrity: artifact.integrity, manifest, tarball },
-          ]),
-        ),
-        replacement: Object.fromEntries(
-          replacementPackages.map(({ artifact, manifest, tarball }) => [
-            artifact.version,
-            { integrity: artifact.integrity, manifest, tarball },
-          ]),
+        parent: registryVersions([["1.0.0", parent]]),
+        overlap: registryVersions([["1.0.0", overlap]]),
+        modern: registryVersions([["1.0.0", modern]]),
+        broad: registryVersions([["1.0.0", broad]]),
+        unrelated: registryVersions([["1.0.0", unrelated]]),
+        violator: registryVersions([["1.0.0", violator]]),
+        forked: registryVersions(forkedPackages.map((entry) => [entry.artifact.version, entry])),
+        leaf: registryVersions(leafPackages.map((entry) => [entry.artifact.version, entry])),
+        blocked: registryVersions(blockedPackages.map((entry) => [entry.artifact.version, entry])),
+        replacement: registryVersions(
+          replacementPackages.map((entry) => [entry.artifact.version, entry]),
         ),
       }),
     );
