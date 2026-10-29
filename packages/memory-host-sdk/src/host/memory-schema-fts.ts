@@ -1,5 +1,9 @@
 // Memory Host SDK module owns derived FTS schema and rebuild behavior.
 import type { DatabaseSync } from "node:sqlite";
+import {
+  buildSqliteMemoryBodyFtsSchema,
+  buildSqliteMemoryPathFtsSchema,
+} from "../../../../src/infra/database-engine/sqlite-memory-search-fragments.js";
 
 export const MEMORY_INDEX_SOURCES_TABLE = "memory_index_sources";
 export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
@@ -228,15 +232,10 @@ export function ensureMemoryChunkFtsSchema(params: {
       tokenizeClause: params.tokenizeClause,
     });
     params.db.exec(
-      `CREATE VIRTUAL TABLE IF NOT EXISTS ${params.ftsTable} USING fts5(\n` +
-        `  text,\n` +
-        `  id UNINDEXED,\n` +
-        `  path UNINDEXED,\n` +
-        `  source UNINDEXED,\n` +
-        `  model UNINDEXED,\n` +
-        `  start_line UNINDEXED,\n` +
-        `  end_line UNINDEXED\n` +
-        `${params.tokenizeClause});`,
+      buildSqliteMemoryBodyFtsSchema({
+        tableName: params.ftsTable,
+        tokenizeClause: params.tokenizeClause,
+      }),
     );
     // FTS is fully derived. A cardinality mismatch proves that an ordinary
     // schema ensure cannot leave the populated index untouched.
@@ -306,13 +305,7 @@ export function ensureMemoryPathFtsSchema(params: {
       expectedColumns: ["path", "source"],
       tokenizeClause: params.tokenizeClause,
     });
-    params.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE} USING fts5(
-        path,
-        source UNINDEXED
-        ${params.tokenizeClause}
-      );
-    `);
+    params.db.exec(buildSqliteMemoryPathFtsSchema({ tokenizeClause: params.tokenizeClause }));
     // The initial copy and trigger installation share this savepoint. Once
     // populated, the triggers own completeness; per-row FTS probes are too costly.
     backfillMemoryPathFtsRows(params.db);

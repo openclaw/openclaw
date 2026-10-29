@@ -4,7 +4,10 @@ type TextFragment = {
   tableName: string;
   tokenizer: "unicode61" | "trigram";
 };
-function buildTextSchema(fragment: TextFragment, tokenizeClause: string): string {
+function buildTextSchema(
+  fragment: Pick<TextFragment, "kind" | "tableName">,
+  tokenizeClause: string,
+): string {
   if (fragment.kind === "body-fts") {
     return (
       `CREATE VIRTUAL TABLE IF NOT EXISTS ${fragment.tableName} USING fts5(\n` +
@@ -29,6 +32,21 @@ function buildTextSchema(fragment: TextFragment, tokenizeClause: string): string
 
 function tokenizerClause(tokenizer: TextFragment["tokenizer"]): string {
   return tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
+}
+
+/** Canonical DDL shared by lazy creation and deployed-schema recovery. */
+export function buildSqliteMemoryBodyFtsSchema(params: {
+  tableName: string;
+  tokenizeClause: string;
+}): string {
+  return buildTextSchema({ kind: "body-fts", tableName: params.tableName }, params.tokenizeClause);
+}
+
+export function buildSqliteMemoryPathFtsSchema(params: { tokenizeClause: string }): string {
+  return buildTextSchema(
+    { kind: "path-fts", tableName: "memory_index_paths_fts" },
+    params.tokenizeClause,
+  );
 }
 
 export function getSqliteMemorySearchFtsSchemas(): string[] {
