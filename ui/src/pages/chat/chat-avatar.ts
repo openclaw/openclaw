@@ -34,6 +34,7 @@ type ChatAvatarHost = {
   connectionEpoch?: number;
   hello: GatewayHelloOk | null;
   sessionKey: string;
+  cacheChatAvatarSource?: (agentId: string, source: string | null) => void;
 };
 
 const chatAvatarRequestVersions = new WeakMap<object, number>();
@@ -149,6 +150,7 @@ async function loadChatAvatarSnapshot(host: ChatAvatarHost, agentId: string) {
     }
     return {
       release,
+      source: hasImage ? avatar : null,
       status: identity.avatarStatus ?? null,
       reason: identity.avatarReason ?? null,
       url,
@@ -233,6 +235,7 @@ export async function refreshSenderAgentAvatars(
       const snapshot = snapshots[index];
       if (snapshot) {
         rememberChatAvatarReference(host, id, snapshot.release);
+        host.cacheChatAvatarSource?.(id, snapshot.source);
       }
       return [id, snapshot ? snapshot.url : (previousAvatars?.get(id) ?? null)];
     }),
@@ -275,6 +278,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
     host.chatAvatarReason = snapshot.reason;
     host.chatAvatarUrl = snapshot.url;
     chatAvatarDisplayedAgents.set(host, agentId);
+    host.cacheChatAvatarSource?.(agentId, snapshot.source);
   } else if (!showingSameAgent) {
     clearChatAvatarState(host);
   }

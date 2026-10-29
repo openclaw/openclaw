@@ -1207,15 +1207,27 @@ private actor LocalFixtureChatStore {
                     text: "Prepare a detailed project review.",
                     timestamp: now,
                     transcriptMessageID: "fixture-long-prompt"),
-                self.message(
+                OpenClawChatMessage(
                     role: "assistant",
-                    text: String(repeating: "Earlier response context. ", count: 120),
+                    content: [.init(
+                        type: "toolCall",
+                        id: "fixture-long-review",
+                        name: "read",
+                        arguments: AnyCodable(["path": "project-review.txt"]))],
                     timestamp: now + 1,
-                    transcriptMessageID: "fixture-long-answer"),
+                    transcriptMessageID: "fixture-long-call",
+                    stopReason: "toolUse"),
+                OpenClawChatMessage(
+                    role: "toolResult",
+                    content: [.init(type: "text", text: String(repeating: "Earlier response context. ", count: 120))],
+                    timestamp: now + 2,
+                    transcriptMessageID: "fixture-long-result",
+                    toolCallId: "fixture-long-review",
+                    toolName: "read"),
                 self.message(
                     role: "assistant",
                     text: "OPENCLAW_LONG_CHAT_LATEST",
-                    timestamp: now + 2,
+                    timestamp: now + 3,
                     transcriptMessageID: "fixture-long-latest"),
             ]
         }
