@@ -38,7 +38,7 @@ import {
 } from "./chat-thread.ts";
 import { coalesceStreamRuns, collapseCompletedTurnWork } from "./chat-turn-presentation.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
-import { createSnapshotRecord } from "./session-snapshot-projection.ts";
+import { createSnapshotRecord } from "./session-snapshot-record.ts";
 import {
   normalizeFinalAssistantMessage,
   readLiveTerminalRevision,

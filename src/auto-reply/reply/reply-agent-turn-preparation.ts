@@ -53,10 +53,7 @@ import {
   resolveFollowupAbortSignal,
   type FollowupRun,
 } from "./queue/types.js";
-import {
-  prepareReplySourceAdmission,
-  prepareReplySystemPrincipalAuthority,
-} from "./reply-source-admission.js";
+import { prepareReplySourceAdmission } from "./reply-source-admission.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import type { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
@@ -147,19 +144,18 @@ export function prepareReplyAgentTurn(
 export async function prepareReplyAgentTurn<TConfigured>(
   params: PrepareReplyAgentTurnParams<TConfigured>,
 ): Promise<PreparedReplyAgentTurn<TConfigured | undefined>> {
-  let source = params.queued;
-  const assertOperatorCurrent = () => source.operatorAuthority?.assertCurrent();
+  const assertOperatorCurrent = () => params.queued.operatorAuthority?.assertCurrent();
   assertOperatorCurrent();
   const readAdmissionConfig = () =>
-    source.readAdmissionConfig?.() ?? selectLiveRuntimeConfig(source.run.config);
-  let config = captureRuntimeConfig(source.run.config);
-  const existingClaim = source.controllerInput?.claim;
+    params.queued.readAdmissionConfig?.() ?? selectLiveRuntimeConfig(params.queued.run.config);
+  let config = captureRuntimeConfig(params.queued.run.config);
+  const existingClaim = params.queued.controllerInput?.claim;
   const claimQueuedFirst = !params.providedReplyOperation && !params.claimSource;
   let mailboxClaim: SessionControllerMailboxClaim | undefined;
   try {
     // Queued sources become selectable by Stop before asynchronous preparation.
     if (claimQueuedFirst) {
-      mailboxClaim = await claimSessionControllerInput(source);
+      mailboxClaim = await claimSessionControllerInput(params.queued);
     }
     if (!claimQueuedFirst && !params.providedReplyOperation) {
       mailboxClaim = await params.claimSource?.();
@@ -167,21 +163,21 @@ export async function prepareReplyAgentTurn<TConfigured>(
     if (!mailboxClaim && !params.providedReplyOperation) {
       return {
         kind: "skipped",
-        reason: resolveFollowupAbortSignal(source)?.aborted ? "aborted" : "active-run",
+        reason: resolveFollowupAbortSignal(params.queued)?.aborted ? "aborted" : "active-run",
       } as const;
     }
-    const replySessionKey = source.run.sessionKey ?? params.defaults.sessionKey;
+    const replySessionKey = params.queued.run.sessionKey ?? params.defaults.sessionKey;
     const initialStoredEntry = replySessionKey
       ? params.defaults.sessionStore?.[replySessionKey]
       : undefined;
     const initialEntry =
       initialStoredEntry ??
       (replySessionKey === params.defaults.sessionKey ? params.defaults.sessionEntry : undefined);
-    let run = { ...source.run, config };
-    const resolveRunSessionFile = (runSource: FollowupRun["run"]) =>
-      normalizeOptionalString(replySessionKey) ?? runSource.sessionFile;
+    let run = { ...params.queued.run, config };
+    const resolveRunSessionFile = (source: FollowupRun["run"]) =>
+      normalizeOptionalString(replySessionKey) ?? source.sessionFile;
     const kind = params.kind ?? "queued_followup";
-    const sourceSignal = resolveFollowupAbortSignal(source);
+    const sourceSignal = resolveFollowupAbortSignal(params.queued);
     const admission = params.providedReplyOperation
       ? {
           status: "owned" as const,
@@ -191,12 +187,12 @@ export async function prepareReplyAgentTurn<TConfigured>(
       : await admitReplyTurn({
           mailboxClaim,
           rotationEvidence: params.rotationEvidence,
-          runId: source.controllerInput?.protocolRunId,
+          runId: params.queued.controllerInput?.protocolRunId,
           onDatabaseRegistration: params.defaults.opts?.onDatabaseRegistration,
           providerReviewAcknowledgment: params.defaults.opts?.providerReviewAcknowledgment,
           agentId: run.agentId,
           resolveGatewayContext: params.defaults.resolveGatewayContext,
-          sessionId: source.admissionSessionId ?? run.sessionId,
+          sessionId: params.queued.admissionSessionId ?? run.sessionId,
           sessionKey: replySessionKey ?? "",
           expectedSessionId: initialEntry?.sessionId,
           storePath: params.defaults.storePath,
@@ -206,7 +202,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
           // source-adoption await. Session identity and authority keep their original
           // bindings; later preference edits cannot alter this detached turn selection.
           captureRunSelection: () => {
-            const selected = source.run;
+            const selected = params.queued.run;
             config = captureRuntimeConfig(readAdmissionConfig());
             run = {
               ...run,
@@ -237,8 +233,8 @@ export async function prepareReplyAgentTurn<TConfigured>(
             };
           },
           resetTriggered: params.resetTriggered === true,
-          routeThreadId: params.routeThreadId ?? source.originatingThreadId,
-          originatingLeafEntryId: source.turnAdoptionLifecycle?.originatingLeafEntryId,
+          routeThreadId: params.routeThreadId ?? params.queued.originatingThreadId,
+          originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
           upstreamAbortSignal:
             sourceSignal && mailboxClaim
               ? AbortSignal.any([sourceSignal, mailboxClaim.abortController.signal])
@@ -246,7 +242,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         });
     if (admission.status === "skipped") {
       if (admission.error) {
-        source.run.internalEventExecution?.onFailed?.(admission.error);
+        params.queued.run.internalEventExecution?.onFailed?.(admission.error);
       }
       if (!existingClaim && mailboxClaim) {
         releaseSessionControllerClaim(mailboxClaim);
@@ -260,20 +256,17 @@ export async function prepareReplyAgentTurn<TConfigured>(
       } as const;
     }
     const operation = admission.operation;
-    const assertOperationCurrent = () => {
+    const assertAdmissionCurrent = () => {
+      assertOperatorCurrent();
       operation.abortSignal.throwIfAborted();
       if (operation.result) {
         throw new Error("Reply execution is no longer current");
       }
     };
-    const assertAdmissionCurrent = () => {
-      assertOperatorCurrent();
-      assertOperationCurrent();
-    };
     if (params.providedReplyOperation) {
-      attachSessionControllerInputOperation(source, operation);
+      attachSessionControllerInputOperation(params.queued, operation);
     } else {
-      bindSessionControllerInputOperation(source, operation);
+      bindSessionControllerInputOperation(params.queued, operation);
     }
     const selectionEntry = admission.sessionEntry ?? initialEntry;
     const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
@@ -285,11 +278,10 @@ export async function prepareReplyAgentTurn<TConfigured>(
     let admissionFailed = false;
     let callerOwnsOperation = false;
     let releaseSourceAdmission: (() => Promise<void>) | undefined;
-    let principalAuthority: Awaited<ReturnType<typeof prepareReplySystemPrincipalAuthority>>;
     try {
       callerOwnsOperation = params.onOperationOwned?.(operation) === true;
-      source.run.onOperationAdmitted?.(operation);
-      if (isFollowupRunAborted(source)) {
+      params.queued.run.onOperationAdmitted?.(operation);
+      if (isFollowupRunAborted(params.queued)) {
         return { kind: "skipped", reason: "aborted", operation } as const;
       }
 
@@ -299,29 +291,15 @@ export async function prepareReplyAgentTurn<TConfigured>(
         await params.defaults.opts?.onQueuedFollowupAdmitted?.();
       }
       config = await resolveQueuedReplyExecutionConfig(config, {
-        originatingChannel: source.originatingChannel,
+        originatingChannel: params.queued.originatingChannel,
         messageProvider: run.messageProvider,
-        originatingAccountId: source.originatingAccountId,
+        originatingAccountId: params.queued.originatingAccountId,
         agentAccountId: run.agentAccountId,
       });
       assertAdmissionCurrent();
       run = { ...run, config };
-      principalAuthority = await prepareReplySystemPrincipalAuthority({
-        followupRun: { ...source, run },
-        sessionKey: replySessionKey,
-        sessionId: operation.sessionId,
-        storePath: params.defaults.storePath,
-        resolveGatewayContext: params.defaults.resolveGatewayContext,
-        assertCurrent: assertOperationCurrent,
-      });
-      assertAdmissionCurrent();
-      source = {
-        ...source,
-        operatorAuthority: principalAuthority?.authority ?? source.operatorAuthority,
-      };
       const origin = run.requesterOrigin;
       if (
-        !principalAuthority &&
         !params.providedReplyOperation &&
         origin?.messageProvider &&
         !origin.operatorProfileId &&
@@ -356,7 +334,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
       let activeEntry =
         admissionEntry ??
         (initialEntry?.sessionId === operation.sessionId ? initialEntry : undefined);
-      const goalContinuation = source.goalContinuation;
+      const goalContinuation = params.queued.goalContinuation;
       if (goalContinuation) {
         const goalEntry =
           replySessionKey && params.defaults.storePath
@@ -374,7 +352,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         }
       }
       const lifecycleRevisionChanged =
-        operation.sessionId === source.run.sessionId &&
+        operation.sessionId === params.queued.run.sessionId &&
         activeEntry?.sessionId === operation.sessionId &&
         activeEntry.lifecycleRevision !==
           (initialEntry?.sessionId === operation.sessionId
@@ -401,7 +379,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         entry: admittedSelectionEntry,
         sessionKey: replySessionKey,
       });
-      const queued: FollowupRun = { ...source, run };
+      const queued: FollowupRun = { ...params.queued, run };
       const sessionEntryHandle = createReplySessionEntryHandle({
         sessionEntry: activeEntry,
         sessionKey: replySessionKey,
@@ -419,18 +397,18 @@ export async function prepareReplyAgentTurn<TConfigured>(
         : params.defaults.sessionStore;
       const resolveTurnSendPolicy = (
         entry: SessionEntry | undefined,
-        policySource: FollowupRun = queued,
+        source: FollowupRun = queued,
       ) =>
         resolveSendPolicy({
           cfg: config,
           entry,
-          sessionKey: policySource.run.runtimePolicySessionKey ?? replySessionKey,
+          sessionKey: source.run.runtimePolicySessionKey ?? replySessionKey,
           channel:
-            policySource.originatingChannel ??
-            policySource.run.messageProvider ??
+            source.originatingChannel ??
+            source.run.messageProvider ??
             sessionDeliveryChannel(entry),
           chatType: normalizeChatType(
-            policySource.originatingChatType ?? policySource.run.chatType ?? entry?.chatType,
+            source.originatingChatType ?? source.run.chatType ?? entry?.chatType,
           ),
         });
       const currentInboundContext = refreshActiveGoalContext(
@@ -441,7 +419,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
       // execution owns registration and cleanup under this same id.
       const turn: AdmittedFollowupTurn = {
         runId:
-          source.controllerInput?.protocolRunId ??
+          params.queued.controllerInput?.protocolRunId ??
           (kind !== "queued_followup" ? params.defaults.opts?.runId : undefined) ??
           crypto.randomUUID(),
         queued: { ...queued, currentInboundContext },
@@ -481,7 +459,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
           };
         }
         const refreshedInboundContext = refreshActiveGoalContext(
-          source.currentInboundContext,
+          params.queued.currentInboundContext,
           entry,
         );
         turn.sendPolicy = resolveTurnSendPolicy(entry, turn.queued);
@@ -517,21 +495,12 @@ export async function prepareReplyAgentTurn<TConfigured>(
               await params.onCompactionNotice?.(phase, text, turn);
             }
           : undefined;
-      const releaseInput = await prepareReplySourceAdmission({
+      releaseSourceAdmission = await prepareReplySourceAdmission({
         operation,
         followupRun: turn.queued,
         recorder: turn.queued.userTurnTranscriptRecorder,
         runId: turn.runId,
       });
-      const principal = principalAuthority;
-      releaseSourceAdmission = async () => {
-        try {
-          await releaseInput?.();
-        } finally {
-          principal?.release();
-        }
-      };
-      principalAuthority = undefined;
       turn.releaseSourceAdmission = releaseSourceAdmission;
       const preflightEntry = session.current();
       try {
@@ -670,7 +639,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
           continuation: goalContinuation,
           agentId: run.agentId,
           sessionKey: replySessionKey ?? "",
-          hasOperatorAuthority: Boolean(source.operatorAuthority),
+          hasOperatorAuthority: Boolean(params.queued.operatorAuthority),
           requiresWorker: Boolean(run.config?.cloudWorkers?.requiredProfile),
         });
         assertOperatorCurrent();
@@ -701,11 +670,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         }
       } finally {
         try {
-          try {
-            await releaseSourceAdmission?.();
-          } finally {
-            principalAuthority?.release();
-          }
+          await releaseSourceAdmission?.();
         } finally {
           if (admissionFailed && !callerOwnsOperation) {
             operation.complete();

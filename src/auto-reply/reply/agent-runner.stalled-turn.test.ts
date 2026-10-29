@@ -477,7 +477,7 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([]);
   });
 
-  it("leaves a revoked source behind when admitting a new recovery turn", async () => {
+  it("falls back to the notice once the stalled turn's authority is revoked", async () => {
     let revoked = false;
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "operator",
@@ -492,12 +492,11 @@ describe("runReplyAgent stalled turn continuation", () => {
     await stallBeforeOutput(stalled);
     revoked = true;
 
-    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
-    expect(getFollowupQueueDepth(queueKey)).toBe(1);
+    expect(stalled.runState.continueStalledTurn?.()).toBe(false);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
 
     await settleStalledOwner(stalled);
-    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
-    expect(drainedRuns.mock.calls[0]?.[0].operatorAuthority).toBeUndefined();
+    expect(drainedRuns).not.toHaveBeenCalled();
   });
 
   it("sends the Web UI notice, not a second recovery, when the recovery also stalls", async () => {

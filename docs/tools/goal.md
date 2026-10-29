@@ -221,8 +221,9 @@ The goal and session are checked again at admission, so a stale queued nudge
 cannot pursue a cleared, replaced, completed, blocked, paused, or limited goal.
 
 **Stop** cancels the current work and pending follow-ups; it does not mark an
-unfinished goal complete. Pause prevents further goal turns. Terminal errors
-and timeouts pause the goal as described above. Resuming a paused or limited
+unfinished goal complete. Once the stopped work has fully settled, **Resume**
+can pursue the same goal again without clearing its history. Pause prevents further
+goal turns. Terminal errors and timeouts pause the goal as described above. Resuming a paused or limited
 goal remains an explicit operator action, not something the continuation does.
 
 Each settled automatic Goal turn increments `continuationTurns` once, including

@@ -17,6 +17,7 @@ export function applySessionEntryWritePolicy(
     profileInvolvement?: SessionEntry["profileInvolvement"];
     previousEntry?: SessionEntry | null;
     consumePendingReset?: boolean;
+    preserveVisibility?: boolean;
   },
 ): { entry: SessionEntry; previousEntry: SessionEntry | undefined } {
   let normalizedEntry = initialEntry;
@@ -114,9 +115,13 @@ export function applySessionEntryWritePolicy(
     // Same-lifecycle bookkeeping cannot cancel the one-time reset owed by legacy state.
     normalizedEntry.updatedAt = 0;
   }
-  // The lifecycle-selected entry owns visibility copy-forward semantics.
+  // Fresh child installation can retain its current audience; other replacements clear it.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
-    delete normalizedEntry.visibility;
+    if (options.preserveVisibility && canonicalPreviousEntry?.visibility !== undefined) {
+      normalizedEntry.visibility = canonicalPreviousEntry.visibility;
+    } else {
+      delete normalizedEntry.visibility;
+    }
   }
   return { entry: normalizedEntry, previousEntry };
 }

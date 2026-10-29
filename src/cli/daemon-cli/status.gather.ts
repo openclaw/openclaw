@@ -11,7 +11,10 @@ import { inspectGatewayHeapLimit } from "../../daemon/gateway-heap.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import { formatServiceLabel } from "../../daemon/runtime-format.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
-import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
+import {
+  inspectGatewayServiceInstallationDrift,
+  summarizeGatewayServiceLayout,
+} from "../../daemon/service-layout.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
 import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
@@ -22,6 +25,7 @@ import {
 } from "../../gateway/secret-input-paths.js";
 import { readGatewayLastShutdownAsync } from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
+import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import { inspectPortConnections } from "../../infra/ports-inspect.js";
 import type { PortConnection } from "../../infra/ports-types.js";
@@ -39,7 +43,7 @@ import {
 import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import { normalizeListenerAddress } from "./shared.js";
+import { formatGatewayServiceInstallationDrift, normalizeListenerAddress } from "./shared.js";
 import { readDaemonStatusConfig } from "./status.config.js";
 import { inspectDaemonPortStatuses, resolveGatewayStatusSummary } from "./status.gateway.js";
 import { projectDaemonRuntimeStatus } from "./status.projection.js";
@@ -172,6 +176,17 @@ async function gatherDaemonStatusImpl(
   // renderer instead of leaving it dependent on Gateway metadata.
   const serviceLayout = command
     ? await summarizeGatewayServiceLayout(command).catch(() => undefined)
+    : undefined;
+  const activePackageRoot = serviceLayout?.packageRootReal
+    ? await resolveOpenClawPackageRoot({
+        moduleUrl: import.meta.url,
+        argv1: process.argv[1],
+      }).catch(() => null)
+    : null;
+  const installationDrift = activePackageRoot
+    ? await inspectGatewayServiceInstallationDrift(serviceLayout, activePackageRoot).catch(
+        () => undefined,
+      )
     : undefined;
   if (opts.deep && !trimToUndefined(opts.rpc.url)) {
     const { preflightOpenClawDatabaseSchemas, OpenClawDatabaseSchemaPreflightError } =
@@ -509,6 +524,9 @@ async function gatherDaemonStatusImpl(
       command,
       ...projection.runtimeIntent,
       ...(serviceLayout ? { layout: serviceLayout } : {}),
+      ...(installationDrift
+        ? { installationDrift: formatGatewayServiceInstallationDrift(installationDrift) }
+        : {}),
       runtime: runtime?.inspectionFailure
         ? {
             ...runtime,

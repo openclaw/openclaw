@@ -22,7 +22,6 @@ import {
   type ChatAbortSessionSnapshot,
 } from "./server-methods/chat-aborted-partial.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 import { formatForLog } from "./ws-log.js";
 
 type OperatorRunCancellationContext = Pick<
@@ -42,62 +41,51 @@ export async function retainGatewayOperatorRun(
     spawnedBy?: string;
     entry?: RpcSourceRef;
     abortSession?: Extract<ChatAbortSessionSnapshot, { ok: true }>["value"];
-    /** Present only for a trusted host-originated input with no explicit human requester. */
-    systemTurn?: Parameters<typeof prepareSessionSystemTurnAuthority>[0];
   },
 ) {
-  const captured = params.systemTurn
-    ? await prepareSessionSystemTurnAuthority(params.systemTurn)
-    : await captureGatewayOperatorRunAuthority({
-        ...params,
-        // Every child owns its accepted work beyond the requester's recovery turn.
-        independentContinuation: params.spawnedBy ? true : undefined,
-      });
+  const captured = await captureGatewayOperatorRunAuthority({
+    ...params,
+    // Every child owns its accepted work beyond the requester's recovery turn.
+    independentContinuation: params.spawnedBy ? true : undefined,
+  });
   const releaseSource =
     captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
   const signal = captured?.authority.signal;
-  let partialSession: ReturnType<typeof retainChatAbortSessionSnapshot> | undefined;
-  try {
-    partialSession =
-      signal && params.entry
-        ? retainChatAbortSessionSnapshot(
-            params.abortSession
-              ? { ok: true, value: params.abortSession }
-              : await prepareChatAbortSessionSnapshot({
-                  cfg: params.context.getRuntimeConfig(),
-                  key: getRpcSourceIdentity(params.entry).sessionKey,
-                  agentId: getRpcSourceIdentity(params.entry).agentId,
-                }),
-          )
-        : undefined;
-    const cancellation =
-      signal && params.entry && partialSession
-        ? createGatewayOperatorRunCancellation({
-            signal,
-            runId: params.runId,
-            entry: params.entry,
-            context: params.context,
-            session: partialSession.read,
-          })
-        : undefined;
-    return {
-      authority: captured?.authority,
-      armCancellation: () => cancellation?.arm(),
-      retireCancellation: () => {
-        cancellation?.release();
-        partialSession?.release();
-      },
-      release: () => {
-        cancellation?.release();
-        partialSession?.release();
-        releaseSource?.();
-      },
-    };
-  } catch (error) {
-    partialSession?.release();
-    releaseSource?.();
-    throw error;
-  }
+  const partialSession =
+    signal && params.entry
+      ? retainChatAbortSessionSnapshot(
+          params.abortSession
+            ? { ok: true, value: params.abortSession }
+            : await prepareChatAbortSessionSnapshot({
+                cfg: params.context.getRuntimeConfig(),
+                key: getRpcSourceIdentity(params.entry).sessionKey,
+                agentId: getRpcSourceIdentity(params.entry).agentId,
+              }),
+        )
+      : undefined;
+  const cancellation =
+    signal && params.entry && partialSession
+      ? createGatewayOperatorRunCancellation({
+          signal,
+          runId: params.runId,
+          entry: params.entry,
+          context: params.context,
+          session: partialSession.read,
+        })
+      : undefined;
+  return {
+    authority: captured?.authority,
+    armCancellation: () => cancellation?.arm(),
+    retireCancellation: () => {
+      cancellation?.release();
+      partialSession?.release();
+    },
+    release: () => {
+      cancellation?.release();
+      partialSession?.release();
+      releaseSource?.();
+    },
+  };
 }
 
 /** Queue retirement detaches cancellation while the original authority can still settle work. */

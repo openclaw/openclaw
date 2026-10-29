@@ -14,9 +14,9 @@ export function resolveSessionCreateVisibility(
   parentEntry?: SessionEntry,
 ): Result<SessionVisibility | undefined, ErrorShape> {
   const inheritedDraft =
-    params.fork === true &&
-    params.creation?.via === "operator" &&
-    parentEntry?.visibility === "draft";
+    parentEntry?.visibility === "draft" &&
+    (params.creation?.via === "spawn" ||
+      (params.fork === true && params.creation?.via === "operator"));
   const visibility =
     params.visibility ??
     (existingEntry ? undefined : inheritedDraft ? "draft" : params.defaultVisibility);

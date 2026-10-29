@@ -3,6 +3,7 @@ import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { getGatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
@@ -22,6 +23,7 @@ export function captureOpenClawStateReadContextWithAdmission(
   | "databaseEngineSelection"
   | "maintenanceScope"
   | "existingSchemaPath"
+  | "gatewayServiceInstallation"
   | "runInCapturedSchemaScope"
   | "stateIntegrity"
   | "artifactPreservingReads"
@@ -58,6 +60,7 @@ export function captureOpenClawStateReadContextWithAdmission(
     admission,
     assertPublicationCurrent,
     existingSchemaPath: schema?.path,
+    gatewayServiceInstallation: getGatewayServiceInstallation(),
     stateIntegrity: integrity,
     runInCapturedSchemaScope,
     artifactPreservingReads: isArtifactPreservingStateRead("agent", pathname) || undefined,

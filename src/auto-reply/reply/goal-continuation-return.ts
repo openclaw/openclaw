@@ -11,7 +11,6 @@ import { runAfterReplyOperationClear } from "../../sessions/session-controller.s
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
 import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
-import { resolveTranscriptFollowupOperatorAuthority } from "./transcript-followup-run.js";
 
 type GoalReturnParams = {
   base: FollowupRun;
@@ -76,15 +75,8 @@ function closeGoalReturn(owner: GoalReturn): void {
 
 /** Preserve the admitted chat route independently of the expiring settle capability. */
 export function createGoalContinuationReturnScope(
-  source: GoalReturnParams,
+  params: GoalReturnParams,
 ): <T>(run: () => T) => T {
-  const params = {
-    ...source,
-    base: {
-      ...source.base,
-      operatorAuthority: resolveTranscriptFollowupOperatorAuthority(source.base),
-    },
-  };
   const sourceSignal = resolveFollowupAbortSignal(params.base);
   const owner: GoalReturn = {
     params,

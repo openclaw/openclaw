@@ -4,7 +4,10 @@ import type { SessionGitHubPublicationResult } from "../../../packages/gateway-p
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
-import { readSessionEventTargetOperatorAuthority } from "../../auto-reply/reply/session-event-target.js";
+import {
+  readSessionEventTargetOperatorAuthority,
+  readSessionEventTargetOwnerContinuation,
+} from "../../auto-reply/reply/session-event-target.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -284,6 +287,7 @@ it.for([
               options.expectedTarget &&
               readSessionEventTargetOperatorAuthority(options.expectedTarget);
             expect(authority).toMatchObject({ profileId, scopes });
+            expect(readSessionEventTargetOwnerContinuation(options.expectedTarget!)).toBe(false);
             expect(text.length).toBeLessThan(4096);
             expect(
               getSessionControllerEntryForOperation(operation).successorBarrier,

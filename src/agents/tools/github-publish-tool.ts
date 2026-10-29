@@ -249,6 +249,7 @@ export function createGitHubPublishTool(
           requestOwners,
           onYield: options.onYield,
           signal,
+          senderIsOwner: options.senderIsOwner,
           fenceSuccessors: true,
           run: ({ assertCurrent, signal: handoffSignal }) =>
             withGatewayToolCallerIdentity(
