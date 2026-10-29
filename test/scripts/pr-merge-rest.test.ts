@@ -85,13 +85,25 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       sha256: createHash("sha256").update(bytes).digest("hex"),
     };
     const envelope: Record<string, unknown> = { bodySnapshot, expectedObservation: {} };
-    if (fault === "missing") delete envelope.expectedObservation;
-    if (fault === "extra") envelope.unexpected = true;
-    if (fault === "array") envelope.expectedObservation = [];
-    if (fault === "checksum") bodySnapshot.sha256 = "0".repeat(64);
-    if (fault === "base64") bodySnapshot.base64 += "=";
+    if (fault === "missing") {
+      delete envelope.expectedObservation;
+    }
+    if (fault === "extra") {
+      envelope.unexpected = true;
+    }
+    if (fault === "array") {
+      envelope.expectedObservation = [];
+    }
+    if (fault === "checksum") {
+      bodySnapshot.sha256 = "0".repeat(64);
+    }
+    if (fault === "base64") {
+      bodySnapshot.base64 += "=";
+    }
     const args = ["merge", JSON.stringify(f.state().repo), "123", f.head];
-    if (fault === "legacy") args.push(JSON.stringify(bodySnapshot), "{}");
+    if (fault === "legacy") {
+      args.push(JSON.stringify(bodySnapshot), "{}");
+    }
     const result = f.rest(
       args,
       fault === "empty" ? "" : fault === "malformed" ? "{" : JSON.stringify(envelope),

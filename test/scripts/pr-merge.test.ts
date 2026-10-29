@@ -339,7 +339,7 @@ describePosix("native squash attribution", () => {
       const prose = 'Résumé 漢字 "quoted" \\ path; literal $(no-command)\n'.repeat(24_000);
       const credit = 'Co-authored-by: Élodie "Quoted" <elodie@example.com>';
       let scenario: BodyScenario = { restPreview: true, previewBody: "Reviewed repair" };
-      let expected = "";
+      let expected: string;
       if (field === "source") {
         const trailers = (credit + "\n").repeat(24_000);
         expect(Buffer.byteLength(trailers)).toBeGreaterThan(1.1 * 1024 ** 2);

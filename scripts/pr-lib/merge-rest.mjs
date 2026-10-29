@@ -900,8 +900,8 @@ async function main([
   );
   const repo = parseMergeRepository(repository);
   const pr = Number(prValue);
+  let envelope;
   if (mode === "merge") {
-    let envelope;
     try {
       envelope = JSON.parse(readFileSync(0, "utf8"));
     } catch {
@@ -919,9 +919,8 @@ async function main([
         !Array.isArray(envelope.expectedObservation),
       "invalid merge dispatch envelope",
     );
-    ({ bodySnapshot, expectedObservation } = envelope);
   }
-  const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
+  const body = mode === "merge" ? mergeBody(envelope.bodySnapshot) : undefined;
   if (mode === "projection") {
     const response = parseGithubResponse(
       execPrGh(apiArgs(repo, `/pulls/${pr}`, ["--include"]), { encoding: "utf8" }, "plain"),
@@ -1031,7 +1030,7 @@ async function main([
         nonemptyString(current.title),
       "immediate squash requires the prepared open, non-draft, clean PR head",
     );
-    const { main: _main, ...expectedFacts } = expectedObservation;
+    const { main: _main, ...expectedFacts } = envelope.expectedObservation;
     requireEvidence(
       JSON.stringify(
         canonical({
