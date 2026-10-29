@@ -7,6 +7,7 @@ import {
 import type { CronJob, CronStoredJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
+import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
@@ -25,11 +26,17 @@ const MAX_BUFFERED_OUTPUT_SEGMENTS = 64;
 // lose complete lines to OS chunk boundaries, while a stalled owner queue
 // still cannot buffer unbounded output.
 const INTAKE_CAP_MULTIPLIER = 4;
+// A fire that rejects because the state database stayed locked past its busy
+// timeout did not run, so the batch is retried instead of counted as lost.
+// Lock storms under host I/O stalls last tens of seconds: back off 5s, 10s, 20s.
+const LOCKED_FIRE_RETRY_LIMIT = 3;
+const LOCKED_FIRE_RETRY_BASE_MS = 5_000;
 
 type InFlightBatch = {
   batch: string;
   promise: Promise<CronStreamFireDisposition>;
   handled: boolean;
+  lockedRetries: number;
 };
 
 type Log = (obj: unknown, msg?: string) => void;
@@ -75,6 +82,15 @@ type CronStreamOutputParams = {
   isDesiredRunning: () => boolean;
   logger: CronStreamLogger;
 };
+
+function isLockedDatabaseFailure(error: unknown): boolean {
+  try {
+    const failure = classifyGatewayStorageFailure(error);
+    return failure === "SQLITE_BUSY" || failure === "SQLITE_LOCKED";
+  } catch {
+    return false;
+  }
+}
 
 function appendBatch(left: string | undefined, right: string, maxBytes: number): string {
   return left === undefined ? right : truncateCronStreamBatch(`${left}\n${right}`, maxBytes);
@@ -122,6 +138,8 @@ export class CronStreamOutput {
   };
   private batch?: string;
   private pendingBatch?: string;
+  // Locked-database retries already spent on the batch held in pendingBatch.
+  private pendingLockedRetries = 0;
   private firing?: InFlightBatch;
   private nextEligibleAttemptAtMs: number;
 
@@ -252,6 +270,7 @@ export class CronStreamOutput {
       pendingBatchLost: this.pendingBatch !== undefined,
     };
     this.pendingBatch = undefined;
+    this.pendingLockedRetries = 0;
     this.resetSourceBuffers();
     return state;
   }
@@ -287,6 +306,7 @@ export class CronStreamOutput {
       return;
     }
     this.pendingBatch = undefined;
+    this.pendingLockedRetries = 0;
     await this.params.recordLoss("not-running");
   }
 
@@ -452,7 +472,7 @@ export class CronStreamOutput {
     this.startFire(batch);
   }
 
-  private startFire(batch: string): void {
+  private startFire(batch: string, lockedRetries = 0): void {
     if (!this.params.isDesiredRunning()) {
       void this.params.recordLoss("not-running");
       return;
@@ -463,6 +483,7 @@ export class CronStreamOutput {
       batch,
       promise: this.params.fireBatch(this.job, batch, this.scheduleKey, this.sourceIdentity),
       handled: false,
+      lockedRetries,
     };
     this.firing = firing;
     void firing.promise.then(
@@ -494,6 +515,36 @@ export class CronStreamOutput {
       return;
     }
     if ("error" in outcome) {
+      if (
+        !stopping &&
+        firing.lockedRetries < LOCKED_FIRE_RETRY_LIMIT &&
+        isLockedDatabaseFailure(outcome.error) &&
+        this.params.isDesiredRunning() &&
+        this.params.getState() !== "stopped"
+      ) {
+        const delayMs = LOCKED_FIRE_RETRY_BASE_MS * 2 ** firing.lockedRetries;
+        this.params.logger.warn(
+          {
+            jobId: this.job.id,
+            err: String(outcome.error),
+            attempt: firing.lockedRetries + 1,
+            delayMs,
+          },
+          "cron-stream: batch fire hit a locked database; retrying",
+        );
+        const { maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
+        this.pendingBatch =
+          this.pendingBatch === undefined
+            ? firing.batch
+            : appendBatch(firing.batch, this.pendingBatch, maxBatchBytes);
+        this.pendingLockedRetries = firing.lockedRetries + 1;
+        this.nextEligibleAttemptAtMs = Math.max(
+          this.nextEligibleAttemptAtMs,
+          this.scheduler.now() + delayMs,
+        );
+        firing.handled = true;
+        return;
+      }
       this.params.logger.warn(
         { jobId: this.job.id, err: String(outcome.error) },
         `cron-stream: batch fire failed${stopping ? " during stop" : ""}`,
@@ -552,6 +603,7 @@ export class CronStreamOutput {
       }
       if (!this.params.isDesiredRunning()) {
         this.pendingBatch = undefined;
+        this.pendingLockedRetries = 0;
         if (state !== "stopped") {
           await this.params.recordLoss("not-running");
         }
@@ -560,6 +612,7 @@ export class CronStreamOutput {
       if (state !== "running") {
         if (state !== "stopped") {
           this.pendingBatch = undefined;
+          this.pendingLockedRetries = 0;
           await this.params.recordLoss("not-running");
         }
         return;
@@ -573,8 +626,10 @@ export class CronStreamOutput {
         return;
       }
       const pending = this.pendingBatch;
+      const lockedRetries = this.pendingLockedRetries;
       this.pendingBatch = undefined;
-      this.startFire(pending);
+      this.pendingLockedRetries = 0;
+      this.startFire(pending, lockedRetries);
     });
   }
 
