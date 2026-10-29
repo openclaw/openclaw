@@ -38,6 +38,22 @@ describe("tool schema runtime diagnostics", () => {
     expect(mocks.log.warn).not.toHaveBeenCalled();
   });
 
+  it("inspects provider-normalized tools so handled violations stay quiet", () => {
+    const raw = [{ name: "exec", parameters: { title: { minLength: 1, pattern: "^x$" } } }];
+    const normalized = [{ name: "exec", parameters: { type: "object", properties: {} } }];
+    mocks.normalizeProviderToolSchemasWithPlugin.mockReturnValueOnce(normalized);
+    mocks.inspectProviderToolSchemasWithPlugin.mockImplementationOnce(
+      (params: { context: { tools: unknown } }) => {
+        expect(params.context.tools).toBe(normalized);
+        return [];
+      },
+    );
+
+    logProviderToolSchemaDiagnostics({ provider: "google", tools: raw as never });
+
+    expect(mocks.log.warn).not.toHaveBeenCalled();
+  });
+
   it("passes through provider runtime loading policy for normalization", () => {
     const tools = [{ name: "alpha" }] as never;
     const runtimeHandle = { provider: "example", plugin: { id: "example-plugin" } } as never;
