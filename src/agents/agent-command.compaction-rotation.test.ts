@@ -736,12 +736,13 @@ describe("agentCommand compaction transcript rotation", () => {
   });
 
   it.each([
-    ["empty payloads", "empty"],
-    ["an intentional silent final", "silent"],
+    ["empty payloads", "empty", "openai"],
+    ["an intentional silent final", "silent", "openai"],
+    ["a failed CLI turn whose winner was cleared", "empty", undefined],
   ] as const)(
     "preserves compaction failure after %s without manufacturing delivery state",
-    async (_label, sessionSuffix) => {
-      const sessionId = `no-reply-compaction-failure-${sessionSuffix}`;
+    async (_label, sessionSuffix, winnerProvider) => {
+      const sessionId = `no-reply-compaction-failure-${sessionSuffix}-${winnerProvider ?? "failed"}`;
       const sessionKey = `agent:main:explicit:${sessionId}`;
       state.runAgentAttemptMock.mockResolvedValueOnce({
         payloads: [],
@@ -749,11 +750,20 @@ describe("agentCommand compaction transcript rotation", () => {
           durationMs: 1,
           stopReason: "end_turn",
           terminalReply: { disposition: sessionSuffix },
+          ...(winnerProvider
+            ? {}
+            : {
+                error: {
+                  kind: "incomplete_turn",
+                  message: "CLI backend returned an empty response.",
+                },
+              }),
           executionTrace: {
             runner: "cli",
             fallbackUsed: false,
-            winnerProvider: "openai",
-            winnerModel: "gpt-5.5",
+            winnerProvider,
+            winnerModel: winnerProvider && "gpt-5.5",
+            attempts: [{ provider: "claude-cli", model: "gpt-5.5", result: "candidate_failed" }],
           },
           agentMeta: {
             sessionId,
@@ -771,6 +781,9 @@ describe("agentCommand compaction transcript rotation", () => {
       await expect(command).rejects.toThrow("Summarization failed: Connection error");
 
       expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
+      expect(state.runCliTurnCompactionLifecycleMock.mock.calls[0]?.[0].cliBackendId).toBe(
+        winnerProvider ?? "claude-cli",
+      );
       expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
       const storedEntry = findStoredSessionEntry(sessionKey);
       expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
