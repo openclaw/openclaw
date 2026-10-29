@@ -344,8 +344,12 @@ function isDynamicStandaloneAssignment(node: TreeSitterNode): boolean {
   if (parentType === "command" || parentType === "declaration_command") {
     return false;
   }
+  // The parser flattens keyed compound entries, whose semantics depend on prior array state.
+  const value = node.childForFieldName("value");
   return (
     node.childForFieldName("name")?.type === "subscript" ||
+    (value?.type === "array" &&
+      value.namedChildren.some((entry) => /^\s*\[[\s\S]*\]=/u.test(entry.text))) ||
     node.descendantsOfType(["arithmetic_expansion", "expansion"]).length > 0
   );
 }

@@ -87,8 +87,8 @@ remain unsupported in allowlist mode. Command substitution (`$()` / backticks) i
 rejected during allowlist parsing, including inside double quotes; use single
 quotes if you need literal `$()` text. Standalone variable assignments whose
 value uses arithmetic (`$((...))`) or braced (`${...}`) expansion, or whose name
-has an array subscript, are also rejected because bash can evaluate them
-recursively; plain `x=$HOME` is still allowed. Leading environment assignments
+or compound-array value has a subscript, are also rejected because bash can evaluate
+them recursively; plain `x=$HOME` and unkeyed arrays are still allowed. Leading environment assignments
 (`NAME=value cmd` and `NAME+=value cmd`) are never satisfied by the allowlist
 alone.
 

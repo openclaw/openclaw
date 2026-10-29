@@ -142,16 +142,27 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     expect(review).not.toHaveBeenCalled();
     expect(callGatewayTool).not.toHaveBeenCalled();
 
-    boundary.spawn.mockClear();
-    const marker = path.join(root, "recursive-assignment-ran");
-    const command = `y='a[$(touch ${JSON.stringify(marker)})]'; x=$((y)); ${echoPath} unsafe`;
-
-    const denied = await tool(review, "ask").execute("recursive-assignment", { command });
-    expect(denied.details.status).toBe("failed");
-    expect(boundary.spawn).not.toHaveBeenCalled();
-    expect(fs.existsSync(marker)).toBe(false);
-    expect(review).not.toHaveBeenCalled();
-    expect(callGatewayTool).not.toHaveBeenCalled();
+    const expectBlocked = async (id: string, command: string, marker: string) => {
+      boundary.spawn.mockClear();
+      const denied = await tool(review, "ask").execute(id, { command });
+      expect(denied.details.status).toBe("failed");
+      expect(boundary.spawn).not.toHaveBeenCalled();
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(review).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    };
+    const scalarMarker = path.join(root, "recursive-scalar-assignment-ran");
+    await expectBlocked(
+      "recursive-scalar-assignment",
+      `y='a[$(touch ${JSON.stringify(scalarMarker)})]'; x=$((y)); ${echoPath} unsafe`,
+      scalarMarker,
+    );
+    const compoundMarker = path.join(root, "recursive-compound-assignment-ran");
+    await expectBlocked(
+      "recursive-compound-assignment",
+      `y='a[$(touch ${JSON.stringify(compoundMarker)})]'; x=([y]=1); ${echoPath} unsafe`,
+      compoundMarker,
+    );
   });
 
   for (const shell of ["/bin/bash", "/bin/zsh"]) {
