@@ -31,25 +31,24 @@ function resolveSubmittedReceipt(
   receipt: unknown,
   submitted: ReadonlyMap<string, string> | undefined,
 ): unknown {
-  if (!submitted || !isRecord(receipt) || !(receipt.facts instanceof Map)) {
+  if (!isRecord(receipt) || !(receipt.facts instanceof Map)) {
     return receipt;
   }
   const facts: ReadonlyMap<unknown, unknown> = receipt.facts;
-  return {
-    ...receipt,
-    facts: new Map(
-      [...facts].map(([key, fact]) => {
-        if (!isRecord(fact) || fact.kind !== "submitted") {
-          return [key, fact];
-        }
-        const valueJson = typeof key === "string" ? submitted.get(key) : undefined;
-        if (valueJson === undefined || !isRecord(fact.value)) {
-          throw new Error("Plugin state receipt has no submitted value");
-        }
-        return [key, { kind: "postimage", value: { ...fact.value, value_json: valueJson } }];
-      }),
-    ),
-  };
+  let resolved: Map<unknown, unknown> | undefined;
+  for (const [key, fact] of facts) {
+    if (!isRecord(fact) || fact.kind !== "submitted") {
+      continue;
+    }
+    const valueJson = typeof key === "string" ? submitted?.get(key) : undefined;
+    if (valueJson === undefined || !isRecord(fact.value)) {
+      // Finished admissions release their inputs; late references cannot publish partial rows.
+      return undefined;
+    }
+    resolved ??= new Map(facts);
+    resolved.set(key, { kind: "postimage", value: { ...fact.value, value_json: valueJson } });
+  }
+  return resolved ? { ...receipt, facts: resolved } : receipt;
 }
 
 export type PluginStatePublicationScope = {
@@ -434,6 +433,10 @@ export function withPluginStatePublication(
     });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       const resolved = resolveSubmittedReceipt(facts, submitted);
+      if (resolved === undefined) {
+        pending.finish("unknown");
+        return;
+      }
       pending.install(resolved);
       installed = true;
       onCommitted?.(resolved);

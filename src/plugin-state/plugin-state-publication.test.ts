@@ -904,39 +904,63 @@ describe("plugin state committed facts", () => {
     });
   });
 
-  it("preserves native deletions before delayed worker receipt installation", async () => {
-    await withOpenClawTestState({ label: "plugin-state-receipt-supersession" }, async ({ env }) => {
-      const options = { namespace: "receipts", maxEntries: 2, env };
-      const native = createPluginStateSyncKeyedStore("receipt-test", options);
-      const worker = createPluginStateKeyedStore("receipt-test", options);
-      native.register("key", "before");
-      await worker.entries();
-      const reads = observePluginStateReads();
-      const seen = observe();
-      const original = admission.observeSqliteWorkerCommittedFacts;
-      vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation(
-        (owner, listener) => {
-          original(owner, (receipt) => {
-            native.delete("key");
-            listener(receipt);
-          });
+  it.each(["native deletion", "admission finish"] as const)(
+    "handles %s before delayed worker receipt installation",
+    async (beforeReceipt) => {
+      await withOpenClawTestState(
+        { label: "plugin-state-receipt-supersession" },
+        async ({ env }) => {
+          const options = { namespace: "receipts", maxEntries: 2, env };
+          const native = createPluginStateSyncKeyedStore("receipt-test", options);
+          const worker = createPluginStateKeyedStore("receipt-test", options);
+          native.register("key", "before");
+          await worker.entries();
+          const reads = observePluginStateReads();
+          const seen = observe();
+          let deliver: (() => void) | undefined;
+          const original = admission.observeSqliteWorkerCommittedFacts;
+          vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation(
+            (owner, listener) => {
+              original(owner, (receipt) => {
+                if (beforeReceipt === "native deletion") {
+                  native.delete("key");
+                  listener(receipt);
+                } else {
+                  deliver = () => listener(receipt);
+                }
+              });
+            },
+          );
+          try {
+            await worker.register("key", "late");
+            if (beforeReceipt === "admission finish") {
+              expect(deliver).toBeTypeOf("function");
+              expect(deliver).not.toThrow();
+            }
+            const expected = beforeReceipt === "native deletion" ? undefined : "late";
+            expect(native.lookup("key")).toBe(expected);
+            expect((await worker.entries()).map(({ value }) => value)).toEqual(
+              expected === undefined ? [] : [expected],
+            );
+            expect(reads).toHaveBeenCalledOnce();
+            reads.mockClear();
+            expect(await worker.lookup("key")).toBe(expected);
+            expect(reads).not.toHaveBeenCalled();
+            expect(seen.fact("key")).toEqual(
+              beforeReceipt === "native deletion" ? { kind: "unknown" } : undefined,
+            );
+            const committed = seen.changes.filter((change) => change.kind === "committed");
+            expect(committed).toHaveLength(beforeReceipt === "native deletion" ? 2 : 0);
+            if (beforeReceipt === "native deletion") {
+              expect([...committed[0]!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
+            } else {
+              expect(seen.changes).toContainEqual(expect.objectContaining({ kind: "unknown" }));
+            }
+          } finally {
+            seen.unsubscribe();
+          }
         },
       );
-      try {
-        await worker.register("key", "late");
-        expect(native.lookup("key")).toBeUndefined();
-        expect(await worker.entries()).toEqual([]);
-        expect(reads).toHaveBeenCalledOnce();
-        reads.mockClear();
-        expect(await worker.lookup("key")).toBeUndefined();
-        expect(reads).not.toHaveBeenCalled();
-        expect(seen.fact("key")).toEqual({ kind: "unknown" });
-        const committed = seen.changes.filter((change) => change.kind === "committed");
-        expect(committed).toHaveLength(2);
-        expect([...committed[0]!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
-      } finally {
-        seen.unsubscribe();
-      }
-    });
-  });
+    },
+  );
 });
