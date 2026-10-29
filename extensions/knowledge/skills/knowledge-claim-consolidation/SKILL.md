@@ -194,9 +194,14 @@ The **Knowledge Consolidation** scribe runs this review unattended over the
 unlinked residue, on the schedule in its prompt. Its prompt checks access and
 sets up its automation; this section is only the work of one run.
 
-- Run step 1 for the unlinked residue. When the residue is empty, stop there
-  and report zero claims examined.
+- Run step 1 for the unlinked residue. When the residue is empty, report zero
+  claims examined and go on to the written Timelines below.
 - Otherwise work through steps 2 to 6, and check the residue again before
   stopping, since claims saved during the run are part of the same backlog.
+- Then retire up to 10 written `## Timeline` sections, largest first
+  ([retire a written Timeline](references/profiles.md#retire-a-written-timeline)).
+  Find them with `knowledge_grep` for `Timeline` and confirm the heading in the
+  page body. Count the sections retired and the pages still carrying one.
 - Do not ask questions. Give the step 6 report; the closing status line counts
-  claims examined, linked, superseded, withdrawn and left.
+  claims examined, linked, superseded, withdrawn and left, then Timelines
+  retired and left.

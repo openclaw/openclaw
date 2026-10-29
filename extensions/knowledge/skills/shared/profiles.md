@@ -54,9 +54,10 @@ it keeps its own row.
 
 ## Retire a written Timeline
 
-Older pages may still have a `## Timeline` section. When you edit such a page, or
-a write to it is rejected for its size budget, retire the section in the same
-run:
+Older pages may still have a `## Timeline` section. Retire it in the same run
+when you edit such a page, write a source note for its entity, or a write to it
+is rejected for its size budget. An ingestion retires at most three sections per
+run, largest first; the Knowledge Consolidation scribe retires the rest.
 
 1. Read the derived rows with `knowledge_timeline({entity, group: "source"})`,
    following `nextOffset`.
