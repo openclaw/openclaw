@@ -93,7 +93,7 @@ final class DashboardNativeBrowserHost {
             return DashboardBrowserTabState(
                 id: tab.id,
                 sessionKey: tab.sessionKey,
-                url: browser.representedURL?.absoluteString ?? browser.requestedURL.absoluteString,
+                url: (browser.failedURL ?? browser.representedURL ?? browser.requestedURL).absoluteString,
                 title: browser.title ?? "",
                 loading: browser.webView.isLoading,
                 canGoBack: browser.webView.canGoBack,
@@ -171,7 +171,12 @@ final class DashboardNativeBrowserHost {
         switch action {
         case .back: webView.goBack()
         case .forward: webView.goForward()
-        case .reload: webView.reload()
+        case .reload:
+            if let url = self.browserTab(for: webView)?.failedURL {
+                webView.load(URLRequest(url: url))
+            } else {
+                webView.reload()
+            }
         case .stop: webView.stopLoading()
         case .close: try self.close(tabId: tabId)
         case .snapshot, .download: throw DashboardBrowserError.invalidRequest
@@ -230,8 +235,10 @@ final class DashboardNativeBrowserHost {
     }
 
     func navigationDidStart(_ navigation: WKNavigation?, in webView: WKWebView) {
+        let browser = self.browserTab(for: webView)
+        browser?.clearFailure()
         if let navigation {
-            self.tabs.first { $0.browser.webView === webView }?.browser.startNavigation(navigation)
+            browser?.startNavigation(navigation)
         }
         self.scheduleStatePush()
     }
@@ -266,9 +273,33 @@ final class DashboardNativeBrowserHost {
         }
     }
 
-    func navigationDidFail(for webView: WKWebView) {
-        self.tabs.first { $0.browser.webView === webView }?.browser.failNavigation()
+    func navigationDidFail(for webView: WKWebView, error: Error) {
+        guard let tab = self.tabs.first(where: { $0.browser.webView === webView }) else { return }
+        let browser = tab.browser
+        browser.failNavigation()
+        let nsError = error as NSError
+        // Stop, replacement navigations, and response-policy handoffs (downloads,
+        // external browser) cancel deliberately and keep the current page.
+        if !Self.isDeliberateInterruption(nsError) {
+            let url = nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL ??
+                browser.representedURL ?? browser.requestedURL
+            browser.showFailure(
+                at: url,
+                title: String(localized: "This page couldn't be opened"),
+                message: nsError.localizedDescription,
+                reload: self.reloadAction(tabId: tab.id))
+        }
         self.scheduleStatePush()
+    }
+
+    nonisolated static func isDeliberateInterruption(_ error: NSError) -> Bool {
+        // WKError.Code has no case for the legacy policy interruption (102).
+        (error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled) ||
+            (error.domain == "WebKitErrorDomain" && error.code == 102)
+    }
+
+    private func reloadAction(tabId: String) -> @MainActor () -> Void {
+        { [weak self] in try? self?.perform(.reload, tabId: tabId) }
     }
 
     func dispose() {
