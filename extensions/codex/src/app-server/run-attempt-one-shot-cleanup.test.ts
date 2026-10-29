@@ -131,6 +131,9 @@ describe("Codex one-shot cleanup receipts", () => {
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
     const run = runCodexAppServerAttempt(params, { bindingStore: testCodexAppServerBindingStore });
     try {
+      // Cold startup can outlast the 5s request poll; the auto-responding harness
+      // has recorded thread/start once the turn is accepted.
+      await run.waitForTurnAccepted();
       const start = await waitForHarnessRequest(harness, "thread/start");
       expect(start.params).toMatchObject({ config: { "features.code_mode": false } });
       const { dynamicTools } = start.params as { dynamicTools: CodexDynamicToolSpec[] };
