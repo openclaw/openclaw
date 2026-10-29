@@ -8,6 +8,7 @@ const native = vi.hoisted(() => ({
   versions: { node: "26.6.0", bun: undefined as string | undefined },
   conflict: vi.fn(() => false),
   mainThread: true,
+  platform: "linux" as NodeJS.Platform,
 }));
 vi.mock("node:v8", async (original) => ({
   ...(await original<typeof import("node:v8")>()),
@@ -16,6 +17,9 @@ vi.mock("node:v8", async (original) => ({
 vi.mock("node:process", async (original) => ({
   ...(await original<typeof import("node:process")>()),
   versions: native.versions,
+  get platform() {
+    return native.platform;
+  },
 }));
 vi.mock("node:worker_threads", async (original) => ({
   ...(await original<typeof import("node:worker_threads")>()),
@@ -41,6 +45,7 @@ beforeEach(() => {
   native.conflict.mockReset().mockReturnValue(false);
   native.versions.node = "26.6.0";
   native.mainThread = true;
+  native.platform = "linux";
   vi.spyOn(process, "getBuiltinModule").mockImplementation((id) =>
     id === "inspector"
       ? { url: () => undefined }
@@ -72,37 +77,33 @@ function fixture(firstProfile?: string) {
     handles[0]!.stop.mockReturnValue(firstProfile);
   }
   recorders.push(recorder);
-  const sampleAt = (
-    value: number,
-    stall: { startedAt: number; endedAt: number } | null = {
-      startedAt: value - 1_500,
-      endedAt: value,
-    },
-  ) => {
+  const sampleAt = (value: number, stall?: Parameters<typeof recorder.sample>[0] | null) => {
     time = value;
-    return recorder.sample(stall ?? undefined);
+    return recorder.sample(
+      stall === null ? undefined : (stall ?? { startedAt: value - 1_500, endedAt: value }),
+    );
   };
   return { recorder, handles, warn, sampleAt, elapse: (ms: number) => (time += ms) };
 }
-function capture(json: string) {
-  const fixtureState = fixture(json);
-  return { ...fixtureState, result: fixtureState.sampleAt(1_500) };
-}
-it("rotates without a sampling gap and reports only the recent stall's inclusive frames", () => {
-  const { recorder, handles, sampleAt } = fixture();
-  expect(sampleAt(5_000, null)).toBeUndefined();
-  expect(native.start.mock.invocationCallOrder[1]).toBeLessThan(
-    handles[0]!.stop.mock.invocationCallOrder[0]!,
-  );
-  const result = sampleAt(6_500);
-  expect(result).toContain('inclusive=[["work1@node:timers:10",2]]');
-  expect(result).toContain("samples=2 intervalMs=25 truncated=false");
-  expect(result).not.toContain("work0");
-  recorder.stop();
-  expect(handles[2]![Symbol.dispose]).toHaveBeenCalledOnce();
-  expect(sampleAt(12_000)).toBeUndefined();
-  expect(native.start).toHaveBeenCalledTimes(3);
-});
+it.each(["linux", "win32"] as const)(
+  "rotates without a sampling gap and reports recent stall frames on %s",
+  (platform) => {
+    native.platform = platform;
+    const { recorder, handles, sampleAt } = fixture();
+    expect(sampleAt(5_000, null)).toBeUndefined();
+    expect(native.start.mock.invocationCallOrder[1]).toBeLessThan(
+      handles[0]!.stop.mock.invocationCallOrder[0]!,
+    );
+    const result = sampleAt(6_500);
+    expect(result).toContain('inclusive=[["work1@node:timers:10",2]]');
+    expect(result).toContain("samples=2 intervalMs=25 truncated=false");
+    expect(result).not.toContain("work0");
+    recorder.stop();
+    expect(handles[2]![Symbol.dispose]).toHaveBeenCalledOnce();
+    expect(sampleAt(12_000)).toBeUndefined();
+    expect(native.start).toHaveBeenCalledTimes(3);
+  },
+);
 
 function sampledProfile(start: number, end: number, samples: Array<{ at: number; name: string }>) {
   // Native profile timestamps have a different origin from performance.now().
@@ -136,7 +137,10 @@ function sampleWindow(earlier: number[], block: number[], later: number[]) {
   );
 }
 
-it.skipIf(typeof getBuiltinModule("v8").startCpuProfile !== "function")(
+// This test uses the real sampler; do not bypass the macOS safety exclusion with a mock.
+it.skipIf(
+  process.platform === "darwin" || typeof getBuiltinModule("v8").startCpuProfile !== "function",
+)(
   "profiles a real 1,200 ms synchronous block without the unrelated work before its report",
   async () => {
     native.start.mockImplementation(getBuiltinModule("v8").startCpuProfile);
@@ -233,35 +237,32 @@ it.each([
     profile(0, "placeholder").replace('"placeholder"', '"private"name\\with\ncontrols"'),
     'inclusive=[["[redacted]@node:timers:10",2]]',
   ],
-])("redacts %s without losing safe frames", (_kind, json, expected) => {
-  const { result, warn } = capture(json);
-  expect(result).toContain(expected);
-  expect(result).not.toMatch(/secretAccount|private|person/);
-  expect(warn).not.toHaveBeenCalled();
-});
-
-it.each([
-  'quoted"file.js',
-  String.raw`windows\file.js`,
-  "line\nbreak.js",
-  'json-{"key":"value"}-file.js',
-])("keeps trusted caller attribution when native script names contain %j", (filename) => {
-  // V8's native serializer writes these strings verbatim, without JSON escaping.
-  const { result, warn, sampleAt } = capture(
+  ...[
+    'quoted"file.js',
+    String.raw`windows\file.js`,
+    "line\nbreak.js",
+    'json-{"key":"value"}-file.js',
+  ].map((filename) => [
+    filename,
+    // V8's native serializer writes these strings verbatim, without JSON escaping.
     profile(0, "secretAccount")
       .replace('"functionName":"(root)"', '"functionName":"trustedCaller"')
       .replace('"url":"node:timers"', `"url":"file:///private/${filename}"`)
       .replace('"url":""', '"url":"node:timers"'),
-  );
-  expect(result).toContain('inclusive=[["trustedCaller@node:timers:0",2]]');
-  expect(result).not.toMatch(/secretAccount|private|quoted|windows|break/);
+    'inclusive=[["trustedCaller@node:timers:0",2]]',
+  ]),
+])("redacts %s without losing safe frames or later samples", (_kind, json, expected) => {
+  const { warn, sampleAt } = fixture(json);
+  const result = sampleAt(1_500);
+  expect(result).toContain(expected);
+  expect(result).not.toMatch(/secretAccount|private|person|quoted|windows|break/);
   expect(warn).not.toHaveBeenCalled();
   expect(sampleAt(6_500)).toContain("work1@node:timers:10");
 });
 
 it("caps oversized windows and disables failed capture without failing the sampler", () => {
-  const { recorder, handles, warn, result } = capture(" ".repeat(1_048_577));
-  expect(result).toContain("truncated=true inclusive=[]");
+  const { recorder, handles, warn, sampleAt } = fixture(" ".repeat(1_048_577));
+  expect(sampleAt(1_500)).toContain("truncated=true inclusive=[]");
   native.start.mockImplementation(() => {
     throw new Error("native failure");
   });
@@ -271,14 +272,20 @@ it("caps oversized windows and disables failed capture without failing the sampl
   expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
 });
 
-it.each(["runtime", "profiler", "worker"])(
-  "leaves an unsupported or conflicting %s alone",
-  (kind) => {
-    native.versions.node = kind === "runtime" ? "24.19.0" : "26.6.0";
-    native.conflict.mockReturnValue(kind === "profiler");
-    native.mainThread = kind !== "worker";
-    const { recorder } = fixture();
-    expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
-    expect(native.start).not.toHaveBeenCalled();
-  },
-);
+it.each(["runtime", "profiler", "worker", "macOS"])("never starts the sampler for %s", (kind) => {
+  native.versions.node = kind === "runtime" ? "24.19.0" : "26.6.0";
+  native.conflict.mockReturnValue(kind === "profiler");
+  native.mainThread = kind !== "worker";
+  native.platform = kind === "macOS" ? "darwin" : "linux";
+  const { recorder, sampleAt, warn } = fixture();
+  expect(sampleAt(5_000, null)).toBeUndefined();
+  expect(sampleAt(6_500)).toBeUndefined();
+  recorder.stop();
+  expect(sampleAt(12_000)).toBeUndefined();
+  expect(native.start).not.toHaveBeenCalled();
+  expect(warn.mock.calls).toEqual(
+    kind === "macOS"
+      ? [["stall flight recorder unavailable: macos-native-profiler-deadlock-risk"]]
+      : [],
+  );
+});

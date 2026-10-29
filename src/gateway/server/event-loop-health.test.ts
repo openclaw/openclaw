@@ -29,8 +29,6 @@ import {
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayEventLoopHealthMonitor } from "./event-loop-health.js";
 
-type CpuUsage = ReturnType<typeof process.cpuUsage>;
-type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 const monitors: ReturnType<typeof createGatewayEventLoopHealthMonitor>[] = [];
 const subscriptions: (() => void)[] = [];
 const nativeDelay = vi.hoisted(() => ({ max: 20_000_000 }));
@@ -79,22 +77,18 @@ function createMonitorHarness(params?: {
   const scheduler = createTestGatewayScheduler(clock.clock);
   const cpuMsPerWallMs = params?.cpuMsPerWallMs ?? 0.1;
   const utilization = params?.utilization ?? 0.2;
-  const cpuUsage = vi.fn((previous?: CpuUsage) => {
+  const cpuUsage = vi.spyOn(process, "cpuUsage").mockImplementation((previous) => {
     const current = { user: Math.round(nowMs * cpuMsPerWallMs * 1_000), system: 0 };
     return previous
       ? { user: current.user - previous.user, system: current.system - previous.system }
       : current;
   });
-  const eventLoopUtilization = vi.fn(
-    (current?: EventLoopUtilization, previous?: EventLoopUtilization) => ({
-      idle: 0,
-      active: current && previous ? current.active - previous.active : nowMs,
-      utilization,
-    }),
-  );
+  vi.spyOn(performance, "eventLoopUtilization").mockImplementation((current, previous) => ({
+    idle: 0,
+    active: current && previous ? current.active - previous.active : nowMs,
+    utilization,
+  }));
   vi.spyOn(performance, "now").mockImplementation(() => nowMs);
-  vi.spyOn(process, "cpuUsage").mockImplementation(cpuUsage);
-  vi.spyOn(performance, "eventLoopUtilization").mockImplementation(eventLoopUtilization);
   const monitor = createGatewayEventLoopHealthMonitor({
     scheduler,
     isIdle: params?.isIdle,
@@ -195,6 +189,8 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     loggingState.rawConsole = { ...console, warn };
     try {
       const harness = createMonitorHarness();
+      // Count stall reports, not platform-specific recorder startup warnings.
+      warn.mockClear();
       harness.stall(1_200, false);
       await harness.samples(3);
       expect(harness.monitor.snapshot()?.delayMaxMs).toBeGreaterThanOrEqual(1_200);
@@ -362,10 +358,7 @@ describe("event-loop measurement telemetry", () => {
     expect(events.map((event) => event.trace)).toEqual([undefined, undefined]);
   });
 
-  it.each<{
-    name: string;
-    subscribe: () => () => void | Promise<void>;
-  }>([
+  it.each<{ name: string; subscribe: () => () => void | Promise<void> }>([
     {
       name: "diagnostics disabled",
       subscribe: () => {
