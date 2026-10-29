@@ -31,18 +31,16 @@ suite.define(() => {
           {
             role: "assistant",
             content: [
-              { type: "text", text: "Files for the release checklist." },
               {
                 type: "attachment",
                 attachment: {
                   kind: "document",
-                  label: "release-checklist.txt",
+                  label: "Cafe\u0301-checklist.txt",
                   mimeType: "text/plain",
                   url: "https://example.com/release-checklist.txt",
-                  sizeBytes: 64,
                 },
               },
-              { type: "image", url: "https://example.com/layout.png", alt: "layout.png" },
+              { type: "image", url: "https://example.com/layout.png", alt: "Cafe\u0301.png" },
             ],
           },
         ],
@@ -94,8 +92,7 @@ suite.define(() => {
           });
           for (const icon of bounds.icons) {
             expect(icon.width).toBeGreaterThan(0);
-            expect(icon.width).toBeLessThanOrEqual(20);
-            expect(icon.height).toBeLessThanOrEqual(20);
+            expect(Math.max(icon.width, icon.height)).toBeLessThanOrEqual(20);
           }
           expect(bounds.icons).toHaveLength(mobile ? 2 : 1);
           expect(bounds.rowHeight).toBeLessThanOrEqual(mobile ? 48 : 32);
@@ -109,6 +106,8 @@ suite.define(() => {
         await projectFile.waitFor();
         expect((await projectFile.boundingBox())!.height).toBeLessThanOrEqual(mobile ? 48 : 32);
       }
+      await page.getByRole("searchbox", { name: "Search files", exact: true }).fill("CAFÉ");
+      await page.getByText("Cafe\u0301-checklist", { exact: true }).waitFor();
     });
   });
 

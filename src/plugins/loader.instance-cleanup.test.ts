@@ -7,6 +7,7 @@ import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-run
 import { ownPreparedPluginGeneration } from "../agents/prepared-model-runtime.plugin-lifetime.js";
 import { collectErrorGraphCandidates } from "../infra/errors.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import {
   acquirePluginRegistryForInspection,
   clearPluginRegistryLoadCache,
@@ -38,14 +39,11 @@ import {
 function writeToolPlugin(params: Parameters<typeof writePlugin>[0] & { tool: string }) {
   const { tool, ...definition } = params;
   const plugin = writePlugin(definition);
-  writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: plugin.id,
-      configSchema: { type: "object", properties: {} },
-      contracts: { tools: [tool] },
-    }),
-  );
+  writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+    id: plugin.id,
+    configSchema: { type: "object", properties: {} },
+    contracts: { tools: [tool] },
+  });
   return plugin;
 }
 

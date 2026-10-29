@@ -2850,6 +2850,17 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           expect(authority).toContain("github.event_name == 'workflow_dispatch'");
           continue;
         }
+        if (step.with?.path === "${{ runner.temp }}/openclaw-watch-rtc-release-libraries") {
+          expect(file).toBe(".github/workflows/ios-store-release.yml");
+          expect(jobId).toBe("release");
+          expectIncludes(jobCondition, [
+            "github.repository == 'openclaw/openclaw'",
+            "github.ref == 'refs/heads/main'",
+          ]);
+          expect(step.if).toBe("steps.watch-rtc-cache.outputs.cache-hit != 'true'");
+          expect(step.with.key).toBe("${{ steps.watch-rtc-cache.outputs.cache-primary-key }}");
+          continue;
+        }
         if (step.with?.path === ".artifacts/ci-sdk-declarations/sdk.json.gz") {
           expect(file).toBe(".github/actions/sdk-declarations/action.yml");
           const action = readWorkflow(file);

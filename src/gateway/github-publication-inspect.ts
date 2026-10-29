@@ -16,7 +16,6 @@ import {
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
   prepareGitHubPublicationSession,
-  type PublicationSessionIdentity,
 } from "./github-publication-availability.js";
 import {
   githubPublicationApiArgs,
@@ -27,6 +26,7 @@ import {
   prepareGitHubPublicationRequesterV2,
   type GitHubPublicationRequesterPolicyV2,
 } from "./github-publication-requester.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
