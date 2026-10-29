@@ -1230,6 +1230,33 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("sends a progress final with media as one captioned media event", async () => {
+    vi.useFakeTimers();
+    const { opts, deliver, finish, redactEventMock } = await progressHarness({
+      toolProgress: true,
+      label: false,
+    });
+    try {
+      await toolStarted(opts, "call-1", "render_mermaid");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(sendDraftMock).toHaveBeenCalledTimes(1);
+      sendMock.mockClear();
+      await deliver(
+        { text: "Here is the diagram", mediaUrl: "https://example.com/image.png" },
+        { kind: "final" },
+      );
+      const draftEdits = mockCalls(editMock, "draft edits");
+      expect(draftEdits.some(([, , text]) => text === "Here is the diagram")).toBe(false);
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      expect(callArg(sendMock, 0, 1)).toBe("Here is the diagram");
+      expect(callArg(sendMock, 0, 2)).toMatchObject({ mediaUrl: "https://example.com/image.png" });
+      expect(redactEventMock).toHaveBeenCalledWith(ROOM, "$draft1");
+    } finally {
+      await finish();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["mentions", "event limit"] as const)(
     "replaces previews with one durable final for %s",
     async (reason) => {
