@@ -25,6 +25,59 @@ const auditMaintenance = vi.hoisted(() => ({
   gate: undefined as { entered: () => void; release: Promise<void> } | undefined,
 }));
 
+// Temporary diagnosis only: observe the installed fake clock without changing its deadlines.
+function traceAcquisitionTimeouts(phase: string) {
+  const schedule = globalThis.setTimeout;
+  const cancel = globalThis.clearTimeout;
+  const pending = new Map<
+    Parameters<typeof clearTimeout>[0],
+    { id: number; delay: number | undefined; stack: string | undefined }
+  >();
+  const events: Array<{ event: string; id?: number; stack?: string }> = [];
+  let sequence = 0;
+  const scheduled = vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementation((callback, delay, ...args) => {
+      const record = { id: ++sequence, delay, stack: new Error("timeout created").stack };
+      const timer = schedule(
+        function (this: unknown, ...values) {
+          pending.delete(timer);
+          events.push({ event: "fired", id: record.id, stack: new Error("timeout fired").stack });
+          callback.apply(this, values);
+        },
+        delay,
+        ...args,
+      );
+      pending.set(timer, record);
+      events.push({ event: "created", id: record.id, stack: record.stack });
+      return timer;
+    });
+  const cleared = vi.spyOn(globalThis, "clearTimeout").mockImplementation((timer) => {
+    const record = pending.get(timer);
+    events.push({ event: "cleared", id: record?.id, stack: new Error("timeout cleared").stack });
+    pending.delete(timer);
+    return cancel(timer);
+  });
+  return {
+    snapshot(checkpoint: string) {
+      console.error(
+        "ACQUISITION_TIMER_TRACE",
+        JSON.stringify({
+          phase,
+          checkpoint,
+          timerCount: vi.getTimerCount(),
+          pending: [...pending.values()],
+          events,
+        }),
+      );
+    },
+    restore() {
+      cleared.mockRestore();
+      scheduled.mockRestore();
+    },
+  };
+}
+
 it.each(["final Gateway", "live sibling", "closing sibling"] as const)(
   "joins managed reload acquisition during close with a %s",
   async (scope) => {
@@ -324,6 +377,7 @@ it.each(["static catalog", "synthetic auth"] as const)(
     });
     let closing: Promise<void> | undefined;
     let publication: Promise<void> | undefined;
+    let timeoutTrace: ReturnType<typeof traceAcquisitionTimeouts> | undefined;
     const logFile = fixture.state.path("shutdown.log");
     setLoggerOverride({ file: logFile, level: "debug", consoleLevel: "silent" });
     try {
@@ -345,6 +399,7 @@ it.each(["static catalog", "synthetic auth"] as const)(
       });
       expect(process.listenerCount(fixture.event)).toBe(fixture.listeners + 1);
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      timeoutTrace = traceAcquisitionTimeouts(phase);
       publication = publishConfiguredModelRuntimeSnapshots({ cfg: fixture.config });
       await Promise.race([
         entered.promise,
@@ -354,11 +409,14 @@ it.each(["static catalog", "synthetic auth"] as const)(
       ]);
       await vi.advanceTimersByTimeAsync(120_000);
       await publication;
+      timeoutTrace?.snapshot("publication-resolved");
       expect(getPreparedModelRuntimeStartupStatus()).toMatchObject({
         degraded: true,
         pendingAgents: ["late"],
       });
       expect(vi.getTimerCount()).toBe(0);
+      timeoutTrace?.restore();
+      timeoutTrace = undefined;
       vi.useRealTimers();
       expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
       const startedAt = performance.now();
@@ -408,6 +466,8 @@ it.each(["static catalog", "synthetic auth"] as const)(
       expect(getPreparedModelRuntimeStartupStatus()?.degraded).not.toBe(false);
       await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
     } finally {
+      timeoutTrace?.snapshot("finally-before-real-timers");
+      timeoutTrace?.restore();
       vi.useRealTimers();
       release.resolve();
       finishAcquisition.resolve();
