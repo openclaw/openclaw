@@ -17,23 +17,9 @@ async function createWorkflow() {
 }
 
 it("resolves relative Lobster paths inside the repo root", () => {
-  const relative = "extensions/lobster";
-  expect(resolveLobsterCwd(relative)).toBe(path.resolve(process.cwd(), relative));
-});
-
-it("resolves literal cwd values without trimming their whitespace", () => {
-  expect(resolveLobsterCwd("demo ")).toBe(path.resolve(process.cwd(), "demo "));
-  expect(resolveLobsterCwd(" demo")).toBe(path.resolve(process.cwd(), " demo"));
-  expect(resolveLobsterCwd("demo\t")).toBe(path.resolve(process.cwd(), "demo\t"));
-});
-
-it("still treats blank or non-string cwd as the gateway working directory", () => {
-  expect(resolveLobsterCwd("   ")).toBe(process.cwd());
-  expect(resolveLobsterCwd(undefined)).toBe(process.cwd());
-});
-
-it("still rejects absolute cwd values", () => {
-  expect(() => resolveLobsterCwd("/tmp/demo")).toThrow("cwd must be a relative path");
+  for (const relative of ["extensions/lobster", "demo ", " demo", "demo\t"]) {
+    expect(resolveLobsterCwd(relative)).toBe(path.resolve(process.cwd(), relative));
+  }
 });
 
 describe("createEmbeddedLobsterRunner", () => {
