@@ -13,6 +13,7 @@ import { createGatewayBrowserClientFixture } from "../chat-application-context.t
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import {
+  clearSessionWorkspacePreviews,
   openSessionWorkspacePreview,
   pinSessionWorkspacePreview,
   requestCloseSessionWorkspacePreview,
@@ -477,6 +478,95 @@ describe("workspace file tabs", () => {
       await open("fourth.txt", false);
     },
   );
+
+  it("restores catalog navigation on retirement without reading until Files is presented", async () => {
+    const state = createSessionWorkspaceHost({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+    });
+    const workspace = getSessionWorkspace(state);
+    const listing = {
+      sessionKey: state.sessionKey,
+      files: [],
+      browser: { path: "other", entries: [] },
+    };
+    const listFiles = vi.fn().mockResolvedValue(listing);
+    state.sessions.listFiles = listFiles;
+    workspace.browserPath = "catalog";
+    workspace.browserSearch = "needle";
+    workspace.filter = "read";
+    Object.assign(workspace.tree!, {
+      expandedPaths: ["", "catalog"],
+      searchOpen: true,
+      treeScroll: 40,
+    });
+    openPreview(state, "file:preview.md");
+    createSessionWorkspaceProps(state).onBrowsePath("other");
+    await workspace.readResult;
+    listFiles.mockClear();
+
+    clearSessionWorkspacePreviews(state);
+    const hidden = createSessionWorkspaceProps(state, { presented: false, expanded: true });
+    expect(hidden.navigation).toMatchObject({
+      browserPath: "catalog",
+      browserSearch: "needle",
+      filter: "read",
+      expandedPaths: ["", "catalog"],
+      searchOpen: true,
+      treeVisible: true,
+      treeScroll: 40,
+    });
+    expect(workspace.previews).toEqual([]);
+    expect(hidden.activeId).toBeNull();
+    expect(listFiles).not.toHaveBeenCalled();
+    createSessionWorkspaceProps(state, { presented: true, expanded: false });
+    expect(listFiles).not.toHaveBeenCalled();
+    createSessionWorkspaceProps(state, { presented: true, expanded: true });
+    await workspace.readResult;
+    expect(listFiles).toHaveBeenCalledWith(state.sessionKey, {
+      path: "",
+      search: "needle",
+      agentId: "main",
+    });
+
+    // With no selected preview, the current catalog is newer than the saved snapshot.
+    createSessionWorkspaceProps(state).onBrowsePath("newer");
+    await workspace.readResult;
+    createSessionWorkspaceProps(state).onSetFilter("changed");
+    listFiles.mockClear();
+    clearSessionWorkspacePreviews(state);
+    expect(createSessionWorkspaceProps(state).navigation).toMatchObject({
+      browserPath: "newer",
+      browserSearch: "",
+      filter: "changed",
+      treeVisible: true,
+    });
+    expect(listFiles).not.toHaveBeenCalled();
+
+    openSessionWorkspacePreview(state, "app", "Workspace app", {
+      kind: "mcp-app",
+      title: "Workspace app",
+      observeRetirement: () => () => {},
+      launch: {
+        owner: state.client!,
+        sessionKey: state.sessionKey,
+        serverName: "workspace",
+        entrypoint: {
+          title: "Workspace app",
+          toolName: "browse",
+          resourceUri: "ui://workspace/browse",
+          entrypoint: { type: "thread" },
+        },
+      },
+    });
+    clearSessionWorkspacePreviews(state);
+    expect(createSessionWorkspaceProps(state).navigation).toMatchObject({
+      browserPath: "newer",
+      browserSearch: "",
+      filter: "changed",
+      treeVisible: true,
+    });
+    expect(listFiles).not.toHaveBeenCalled();
+  });
 
   it("closes only the selected preview and scopes tabs to reconnect", async () => {
     const state = createSessionWorkspaceHost();
