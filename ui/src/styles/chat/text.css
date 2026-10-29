@@ -102,14 +102,15 @@
   padding: 2px 8px;
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--secondary) 78%, transparent);
-  color: var(--muted);
+  background: var(--surface-selected);
+  color: var(--text);
   font: inherit;
   font-size: var(--control-ui-text-sm);
   cursor: var(--cursor-action);
 }
 
 .chat-message-load-error__retry:hover {
+  background: var(--surface-selected-hover);
   border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
   color: var(--text);
 }
@@ -581,7 +582,7 @@
 }
 
 :is(.chat-text, .chat-thinking) :where(details > summary:hover) {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 :is(.chat-text, .chat-thinking) :where(details > summary:focus-visible) {
@@ -650,7 +651,7 @@
   margin: 0;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: var(--input);
   opacity: 1;
 }
 
