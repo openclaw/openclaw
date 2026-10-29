@@ -12,6 +12,7 @@ import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
   readSqliteWriterAppVersion,
+  type SqliteSchemaErrorContext,
 } from "../infra/sqlite-user-version.js";
 import {
   getStateSchemaVersionAdmission,
@@ -103,7 +104,11 @@ function parseContentVersion(valueJson: string | null | undefined): number {
 export type { StateSchemaVersionFacts } from "./openclaw-state-db-admission.js";
 
 /** Refuse newer headers before catalog inspection, then share one physical schema capture. */
-export function admitStateSchemaFacts(database: EngineConnection, pathname: string): void {
+export function admitStateSchemaFacts(
+  database: EngineConnection,
+  pathname: string,
+  context: SqliteSchemaErrorContext = "runtime",
+): void {
   if (isPostgresSqlConnection(database)) {
     if (!getPostgresPhysicalFacts(database)) {
       throw new PostgresSchemaAdmissionUnavailableError(
@@ -114,10 +119,13 @@ export function admitStateSchemaFacts(database: EngineConnection, pathname: stri
   }
   try {
     admitSqliteSchema(database, (userVersion) =>
-      assertSupportedStateSchemaVersion(database, pathname, {
-        userVersion,
-        contentVersion: userVersion,
-      }),
+      assertSupportedStateSchemaVersion(
+        database,
+        pathname,
+        { userVersion, contentVersion: userVersion },
+        undefined,
+        context,
+      ),
     );
   } catch (error) {
     // An unreadable newer catalog must not be mistaken for a repair this build can perform.
@@ -134,6 +142,7 @@ export function admitStateSchemaFacts(database: EngineConnection, pathname: stri
         version,
         OPENCLAW_STATE_SCHEMA_VERSION,
         readSqliteWriterAppVersion(database),
+        context,
       );
     }
     throw normalizeOpenClawStateSchemaReadError(error, pathname);
@@ -145,6 +154,7 @@ export function assertSupportedStateSchemaVersion(
   pathname: string,
   prepared?: StateSchemaVersionFacts,
   readRow?: StateSchemaContentVersionRowReader,
+  context: SqliteSchemaErrorContext = "runtime",
 ): number {
   if (isPostgresSqlConnection(db)) {
     return readStateSchemaContentVersion(db);
@@ -167,6 +177,7 @@ export function assertSupportedStateSchemaVersion(
         contentVersion,
         OPENCLAW_STATE_SCHEMA_VERSION,
         readSqliteWriterAppVersion(db),
+        context,
       );
     }
     return userVersion;

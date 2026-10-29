@@ -8,6 +8,7 @@ import type { EngineConnection } from "./sql-connection.js";
 import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 const SQLITE_SCHEMA_VERSION_ERROR_NAME = "SqliteSchemaVersionError";
+export type SqliteSchemaErrorContext = "runtime" | "doctor-maintenance";
 
 export class SqliteSchemaVersionError extends StartupMaintenanceRequiredError {
   override name = SQLITE_SCHEMA_VERSION_ERROR_NAME;
@@ -76,13 +77,19 @@ export function createNewerSqliteSchemaVersionError(
   schemaVersion: number,
   supportedVersion: number,
   writerAppVersion?: string,
+  context: SqliteSchemaErrorContext = "runtime",
 ): Error {
   const newerWriter = isNewerSqliteWriterVersion(writerAppVersion);
+  const writerDetail = newerWriter
+    ? `; it is newer than this Gateway (${VERSION}).`
+    : context === "runtime"
+      ? "; run openclaw doctor --fix to inspect this database."
+      : ".";
   return new SqliteSchemaVersionError(
     "This OpenClaw build cannot open your existing data.\n" +
       `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}.\n` +
-      (writerAppVersion
-        ? `It was written by OpenClaw ${writerAppVersion}; ${newerWriter ? `it is newer than this Gateway (${VERSION}).` : "run openclaw doctor --fix to inspect this database."}\n`
+      (writerAppVersion && (context === "runtime" || writerAppVersion !== VERSION)
+        ? `It was written by OpenClaw ${writerAppVersion}${writerDetail}\n`
         : "") +
       `Refused by ${describeRunningOpenClawBuild()}.\n` +
       (newerWriter
