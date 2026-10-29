@@ -181,11 +181,9 @@ it("requires package-bound proof before publishing a successful retirement cell"
       "Invalid native assignment preservation",
     );
   }
-  for (const invalid of [
-    undefined,
-    {},
-    phases.map((event, index) => (index === 131 ? { ...event, status: "omitted" } : event)),
-  ]) {
+  const invalidPhases = [...phases];
+  invalidPhases[131] = { ...invalidPhases[131]!, status: "omitted" };
+  for (const invalid of [undefined, {}, invalidPhases]) {
     expect(() => publish({ ...snapshot, phases: invalid })).toThrow();
   }
   expect(() => publish({ ...snapshot, padding: "x".repeat(256 * 1024) })).toThrow();
