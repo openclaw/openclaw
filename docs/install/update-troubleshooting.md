@@ -114,6 +114,11 @@ it: `expired`, `replaced`, or `missing`. Expiry diagnostics include the recorded
 deadline, time since expiry, and age of the last heartbeat. A delayed native renewal
 timer also reports its measured lateness; a large delay can indicate event-loop
 starvation, but does not establish its cause. Replacement owners are redacted.
+Heartbeat renewal and verification failures also distinguish `storage-failed`
+from `admission-failed`. The heartbeat publishes its first observed cause before
+marking itself lost, so Doctor can retain that cause even when synchronous
+migration work delays worker message callbacks. This candidate-side diagnostic
+repair does not establish why an earlier update lost its lease.
 These diagnostics do not change lease duration or ownership checks. If state cannot
 be inspected safely, the original generic lease-loss error is preserved.
 

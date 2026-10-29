@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   publishFileExclusive,
   requireDirectorySync,
@@ -42,11 +43,26 @@ export type MigrationArtifactVerification = Map<
   { stat: fs.BigIntStats; content: ReturnType<typeof hashFileDescriptorSync> }
 >;
 
-export function statMigrationPath(filePath: string): fs.Stats | undefined {
+export function statMigrationPath(filePath: string): fs.Stats | undefined;
+export function statMigrationPath(
+  filePath: string,
+  options: { bigint: true },
+): fs.BigIntStats | undefined;
+export function statMigrationPath(
+  filePath: string,
+  options?: { bigint: true },
+): fs.Stats | fs.BigIntStats | undefined {
   try {
-    return fs.lstatSync(filePath);
+    return options ? fs.lstatSync(filePath, options) : fs.lstatSync(filePath);
   } catch (error) {
-    if ((isRecord(error) ? error.code : undefined) === "ENOENT") {
+    const code = isRecord(error) ? error.code : undefined;
+    // Older receipts can name an impossible destination; the original never moved there.
+    if (code === "ENOENT" || code === "ENAMETOOLONG") {
+      if (code === "ENAMETOOLONG") {
+        createSubsystemLogger("doctor").warn(
+          `Ignoring an overlong migration path as absent; original files and receipts are preserved: ${filePath}`,
+        );
+      }
       return undefined;
     }
     throw error;

@@ -3,6 +3,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
+import { getScopedDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { readPackageName } from "../../infra/package-json.js";
 import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
@@ -182,9 +183,8 @@ export async function previewUpdateCommand(params: {
       );
     }
 
-    const run = params.malformedConfig
-      ? undefined
-      : getUpdateRun(params.runId, { env: opts.run?.env });
+    const canReadHistory = !params.malformedConfig && Boolean(getScopedDatabaseEngineSelection());
+    const run = canReadHistory ? getUpdateRun(params.runId, { env: opts.run?.env }) : undefined;
     const targetVersionReason = target.targetVersion
       ? undefined
       : target.updateInstallKind === "git"
@@ -259,7 +259,11 @@ export async function previewUpdateCommand(params: {
           durationMs: 0,
         },
         opts,
-        params.malformedConfig ? { readHistory: false, writeArtifacts: false } : undefined,
+        {
+          record: run,
+          ...(!canReadHistory ? { readHistory: false } : {}),
+          ...(params.malformedConfig ? { writeArtifacts: false } : {}),
+        },
       );
     }
   }

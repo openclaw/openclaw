@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -24,14 +24,15 @@ import {
   persistSessionTranscriptTurn,
   readActiveTranscriptEntryAnchor as readAnchor,
 } from "./session-accessor.js";
+import { readSessionTranscriptBoundedActiveContextCore as readContext } from "./session-accessor.sqlite-active-context.js";
 import {
-  everySessionTranscriptUserInputFrom as everyUserInput,
   readLatestSessionTranscriptMessageEvent as readLatest,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActivePathEntryRelation as entryRelation,
   readSessionTranscriptBoundedMessageTailPage as readTailPage,
   readSessionTranscriptMessageEventPage as readPage,
   readSessionTranscriptMessageEvents,
+  readSessionTranscriptVisibleMessageDeltaCore as readVisible,
   SessionTranscriptProjectionUnavailableError as ProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 import {
@@ -130,7 +131,11 @@ describe("SQLite active transcript event projection", () => {
     }
     return { ...anchor, logicalTurnId, role: "user" as const };
   };
-  const accept = () => everyUserInput(scope, "source:user", () => true);
+  const resetWindow = (limits: Parameters<typeof readVisible>[1] = {}) => {
+    const page = readVisible(scope, { start: "reset-window", ...limits });
+    assert(page.kind === "page", `expected a reset-window page, got ${page.kind}`);
+    return page;
+  };
   const admissionReset = (id: string, parent: string, kept?: string) =>
     reset(id, parent, "2026-09-14T00:00:00.000Z", kept);
 
@@ -246,14 +251,25 @@ describe("SQLite active transcript event projection", () => {
     },
   );
 
-  it("rejects a retained completion source reset before admission", async () => {
+  it("retains display history and the context reset boundary before admission", async () => {
     await persistMessages([userMessage("source", null, "completed child")]);
-    expect(accept()).toBe(true);
+    expect(eventIds(resetWindow().events)).toEqual(["source"]);
     await admissionReset("before-admission-reset", "source", "source");
     await persistMessages([userMessage("admitted", "before-admission-reset")]);
     expect(eventIds(readSessionTranscriptMessageEvents(scope))).toContain("source");
-    expect(accept()).toBe(false);
-    expect(withReadFence(admission("recovery"), accept)).toBe(false);
+    const context = withReadFence(admission("recovery"), () =>
+      readContext(scope, { maxBytes: 10_000, maxEvents: 10 }),
+    );
+    expect(context.boundaryCount).toBe(1);
+    expect(context.events).toContainEqual(
+      expect.objectContaining({
+        type: "reset",
+        id: "before-admission-reset",
+        firstKeptEntryId: "source",
+      }),
+    );
+    expect(context.firstKeptRanges.has("before-admission-reset")).toBe(true);
+    expect(eventIds(withReadFence(admission("recovery"), resetWindow).events)).toEqual(["source"]);
   });
 
   it("accepts an admission store path that aliases the same database", async () => {
@@ -268,13 +284,13 @@ describe("SQLite active transcript event projection", () => {
     expect(
       withReadFence(
         { ...anchor, storePath: path.join(aliasDir, path.basename(anchor.storePath)) },
-        accept,
-      ),
-    ).toBe(true);
+        () => readLatest(scope),
+      )?.event,
+    ).toMatchObject({ id: "source" });
   });
 
   it.each([false, true])(
-    "keeps pre-fence control facts through a later reset (human=%s)",
+    "keeps the pre-fence snapshot through a later reset (human=%s)",
     async (human) => {
       await persistMessages([
         userMessage("source", null, `result ${"x".repeat(20_000)}`),
@@ -287,17 +303,13 @@ describe("SQLite active transcript event projection", () => {
       expect(activeStats(scope)).toMatchObject({ eventCount: 1 });
       expect(activeStats(scope).sizeBytes).toBeLessThan(1_000);
       expect(readLatest(scope)?.event).toMatchObject({ id: "after-reset" });
-      expect(accept()).toBe(false);
-      const seen: unknown[] = [];
-      const result = withReadFence(anchor, () =>
-        everyUserInput(scope, "source:user", (message) => {
-          seen.push(message);
-          return (message as { idempotencyKey?: string }).idempotencyKey !== "human:user";
-        }),
-      );
-      expect(result).toBe(!human);
+      expect(eventIds(resetWindow().events)).toEqual(["after-reset"]);
+      const fenced = withReadFence(anchor, resetWindow);
+      expect(eventIds(fenced.events)).toEqual(human ? ["source", "human"] : ["source"]);
       expect(
-        seen.map((message) => (message as { idempotencyKey?: string }).idempotencyKey),
+        fenced.events.map(
+          ({ event }) => (event as { message: { idempotencyKey?: string } }).message.idempotencyKey,
+        ),
       ).toEqual(human ? ["source:user", "human:user"] : ["source:user"]);
     },
   );
@@ -333,7 +345,7 @@ describe("SQLite active transcript event projection", () => {
     expect(readPrevious(scope, latest!.eventSeq + 1)?.event).toMatchObject({ id: "prior" });
   });
 
-  it("streams only user control facts from an exact visible input within the read fence", async () => {
+  it("preserves legacy message identities, read fences and bounded reset-window payloads", async () => {
     const provenance = {
       kind: "internal_system",
       sourceTool: "main_session_restart_recovery",
@@ -367,45 +379,49 @@ describe("SQLite active transcript event projection", () => {
       },
       { agentId: scope.agentId, env: scope.env },
     );
-    const facts: unknown[] = [];
-    expect(
-      everyUserInput(scope, "source:user", (message) => {
-        facts.push(message);
-        return true;
-      }),
-    ).toBe(true);
-    expect(facts).toEqual([
-      { role: "user", idempotencyKey: "source:user", __openclaw: { runId: "source" }, provenance },
-      { role: "user", idempotencyKey: "later:user", __openclaw: { runId: null }, provenance: null },
-    ]);
-    expect(JSON.stringify(facts).length).toBeLessThan(500);
+    const page = resetWindow();
+    expect(eventIds(page.events)).toEqual(["source", "tool-output", "later-human"]);
+    expect(page.events[0]?.event).toMatchObject({
+      message: {
+        role: "user",
+        idempotencyKey: "source:user",
+        __openclaw: { runId: "source" },
+        provenance,
+      },
+    });
+    expect(page.events[2]?.event).toMatchObject({
+      message: { role: "user", idempotencyKey: "later:user" },
+    });
+    const bounded = resetWindow({ maxBytes: 500 });
+    expect(bounded).toMatchObject({ events: [], serializedBytes: 0, hasMore: true });
+    expect(bounded.requiredBytes).toBeGreaterThan(100_000);
     const anchor = readAnchor({ ...scope, entryId: "later-human" });
     if (!anchor) {
       throw new Error("missing later admission anchor");
     }
-    const fenced: unknown[] = [];
-    expect(
-      withReadFence({ ...anchor, logicalTurnId: "fenced-turn", role: "user" }, () =>
-        everyUserInput(scope, "source:user", (message) => {
-          fenced.push(message);
-          return true;
-        }),
-      ),
-    ).toBe(true);
-    expect(fenced).toEqual([facts[0]]);
-    expect(
-      withReadFence({ ...anchor, logicalTurnId: "fenced-turn", role: "user" }, () =>
-        everyUserInput(scope, "later:user", () => true),
-      ),
-    ).toBe(false);
-    let visited = 0;
-    expect(
-      everyUserInput(scope, "source:user", () => {
-        visited++;
-        return false;
-      }),
-    ).toBe(false);
-    expect(visited).toBe(1);
+    const fenced = withReadFence(
+      { ...anchor, logicalTurnId: "fenced-turn", role: "user" },
+      resetWindow,
+    );
+    expect(eventIds(fenced.events)).toEqual(["source", "tool-output"]);
+    expect(fenced.events[0]?.event).toMatchObject({
+      message: {
+        role: "user",
+        idempotencyKey: "source:user",
+        __openclaw: { runId: "source" },
+        provenance,
+      },
+    });
+    expect(fenced.hasMore).toBe(false);
+    const context = withReadFence({ ...anchor, logicalTurnId: "fenced-turn", role: "user" }, () =>
+      readContext(scope, { maxBytes: 300_000, maxEvents: 10 }),
+    );
+    expect(context.events).toMatchObject([
+      { type: "session" },
+      { id: "source", message: { idempotencyKey: "source:user" } },
+      { id: "tool-output" },
+    ]);
+    expect(context.activeLeafEntryId).toBe("tool-output");
 
     await reset("reset", "later-human", "2026-09-13T00:00:00.000Z");
     await persistMessages([
@@ -415,8 +431,11 @@ describe("SQLite active transcript event projection", () => {
         idempotencyKey: "fresh:user",
       }),
     ]);
-    expect(everyUserInput(scope, "source:user", () => true)).toBe(false);
-    expect(everyUserInput(scope, "fresh:user", () => true)).toBe(true);
+    const current = resetWindow();
+    expect(eventIds(current.events)).toEqual(["fresh"]);
+    expect(current.events[0]?.event).toMatchObject({
+      message: { role: "user", idempotencyKey: "fresh:user" },
+    });
   });
 
   it("bounds oversized tail rows and reuses page sizes for omission checks", async () => {

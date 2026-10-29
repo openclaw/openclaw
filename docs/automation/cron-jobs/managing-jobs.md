@@ -107,6 +107,15 @@ Automations created before owner attribution have no recorded owner. Chat can
 still enable, disable, reschedule or remove them, but only a Gateway owner or an
 operator can change their prompt or tools.
 
+Operator-created automations that name an owner conversation run with operator
+authority. That conversation can list, enable, disable, reschedule, run
+or remove them; other conversations cannot see them. Enabling, disabling and
+schedule or timing changes keep operator authority. Any other change
+from the owner conversation, such as the name, prompt, tools, trigger, delivery,
+failure alerts or session target, drops the job to that conversation's own authority. If its owner record has no account, those
+changes need a Gateway owner or an operator, or a new automation. Only a Gateway
+owner or an operator can write its scratch.
+
 ```bash
 # List enabled jobs
 openclaw automations list

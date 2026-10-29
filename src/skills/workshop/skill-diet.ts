@@ -427,7 +427,7 @@ async function publishDiet(params: {
 }
 
 /** Diets one learned skill. Returns the change, or undefined when the diet was not safe to apply. */
-export async function dietWorkshopSkill(params: {
+async function dietWorkshopSkill(params: {
   config: OpenClawConfig;
   agentId: string;
   name: string;
@@ -513,7 +513,7 @@ export async function dietWorkshopSkill(params: {
  * from blocking the rest: it costs one attempt every N days, where N is the number of oversized
  * skills.
  */
-export async function selectSkillForDiet(
+async function selectSkillForDiet(
   config: OpenClawConfig,
   agentId: string,
   nowMs: number,

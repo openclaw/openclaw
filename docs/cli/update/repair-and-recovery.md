@@ -1112,6 +1112,10 @@ are refused. Unmanifested copies are never added to automatic retirement. A
 filename alone does not authorize deletion; the exact path and normal consent
 are both required.
 
+Cleanup compares file contents again before removal. An in-place edit is retained
+even when the file's size and modification time match the confirmed selection;
+preview cleanup again before retrying.
+
 While applying cleanup, stderr reports each original being verified or retired
 and each capture being removed, with its path, logical bytes, and position in the
 selection. Large files can take time between these messages. With `--json`,

@@ -221,6 +221,7 @@ export async function resolveUpdateCommandTarget(
             })
           : readUpdateChannelConfig(Boolean(opts.channel), {
               tolerateReadFailure: usesCandidateUpdateAdmission(opts, installKind),
+              dryRun: opts.dryRun,
             });
       let channelConfig: Awaited<ReturnType<typeof readUpdateChannelConfig>>;
       let inspectionWarning: string | undefined;

@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
+import { retirementCuts } from "./installed-recovery-observations.mjs";
 import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
 import { assertPackageRecoveryEvidence } from "./package-activation-recovery.mjs";
 import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
@@ -186,6 +187,207 @@ const reasons = [
   "SQLite journal state requires an artifact-preserving reader; omitted before native open",
 ];
 const omissions = {};
+const installedRecoveryLabels = [
+  "installed recovery",
+  "installed recovery install",
+  "installed recovery stdout",
+  "installed recovery stderr",
+  "installed recovery driver error",
+  "installed recovery checkpoint",
+];
+
+function installedRecoveryCurrent(value, sanitize) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const names =
+    value.cut === null
+      ? ["next-update", "next-update-status"]
+      : [
+          "displacement",
+          "missing-status",
+          "repair",
+          "repeat-repair",
+          "retirement",
+          "resume-retirement",
+          "completed-status",
+          "archive-completed",
+        ];
+  if (
+    (value.cut !== null && !retirementCuts.includes(value.cut)) ||
+    !names.includes(value.name) ||
+    !["running", "completed", "rejected"].includes(value.state)
+  ) {
+    throw new Error();
+  }
+  const prefix = value.cut === null ? "" : `${value.cut}/`;
+  for (const [stream, extension] of [
+    ["stdout", "out"],
+    ["stderr", "err"],
+  ]) {
+    if (value[stream] !== `${prefix}${value.name}.${extension}`) {
+      throw new Error();
+    }
+  }
+  const current = {
+    cut: value.cut,
+    name: value.name,
+    state: value.state,
+    stdout: value.stdout,
+    stderr: value.stderr,
+  };
+  for (const field of ["startedAt", "elapsedMs"]) {
+    if (value[field] !== undefined) {
+      if (!Number.isSafeInteger(value[field]) || value[field] < 0) {
+        throw new Error();
+      }
+      current[field] = value[field];
+    }
+  }
+  if (value.state === "completed") {
+    if (
+      !Number.isInteger(value.status) ||
+      value.status < 0 ||
+      value.status > 255 ||
+      value.treeJoined !== true
+    ) {
+      throw new Error();
+    }
+    Object.assign(current, { status: value.status, treeJoined: true });
+  } else if (value.state === "rejected") {
+    if (typeof value.error !== "string") {
+      throw new Error();
+    }
+    current.error = sanitize(value.error, "installed recovery");
+  }
+  return current;
+}
+
+function installedRecoveryProjection(value, sanitize = (text) => text) {
+  if (value?.availability !== "captured") {
+    return { availability: "unavailable" };
+  }
+  if (
+    !/^installed-recovery-[A-Za-z0-9]+$/.test(value.runDirectory) ||
+    !["running", "passed"].includes(value.status)
+  ) {
+    throw new Error();
+  }
+  const current = installedRecoveryCurrent(value.current, sanitize);
+  const checkpoint = { availability: "unavailable" };
+  if (value.checkpoint?.availability === "captured") {
+    const observed = value.checkpoint;
+    const expectedCut =
+      current?.name === "displacement"
+        ? "displaced"
+        : current?.name === "retirement"
+          ? current.cut
+          : null;
+    if (
+      !expectedCut ||
+      observed.cut !== expectedCut ||
+      typeof observed.phase !== "string" ||
+      typeof observed.intent !== "string" ||
+      typeof observed.synced !== "boolean"
+    ) {
+      throw new Error();
+    }
+    Object.assign(checkpoint, {
+      availability: "captured",
+      cut: observed.cut,
+      phase: sanitize(observed.phase, "installed recovery checkpoint"),
+      intent: sanitize(observed.intent, "installed recovery checkpoint"),
+      synced: observed.synced,
+    });
+  }
+  return {
+    availability: "captured",
+    runDirectory: value.runDirectory,
+    status: value.status,
+    current,
+    checkpoint,
+    driverError: {
+      availability: value.driverError?.availability === "captured" ? "captured" : "unavailable",
+    },
+    logs: Object.fromEntries(
+      ["install", "stdout", "stderr"].map((name) => [
+        name,
+        sanitize(value.logs?.[name] ?? null, `installed recovery ${name}`),
+      ]),
+    ),
+  };
+}
+
+function captureInstalledRecovery(artifactRoot, observationRoot) {
+  if (!observationRoot) {
+    return { availability: "unavailable" };
+  }
+  try {
+    const summary = JSON.parse(
+      readOwned(artifactRoot, "installed-recovery.json", "installed recovery"),
+    );
+    if (
+      !/^installed-recovery-[A-Za-z0-9]+$/.test(summary?.runDirectory) ||
+      ownedPath(artifactRoot, summary.runDirectory) !== fs.realpathSync(observationRoot)
+    ) {
+      throw new Error();
+    }
+    const current = installedRecoveryCurrent(summary.current, (text) => text);
+    const snapshot = {
+      availability: "captured",
+      runDirectory: summary.runDirectory,
+      status: summary.status,
+      current,
+      checkpoint: { availability: "unavailable" },
+      // Error snippets and encoded assertion values are not text-redactor input.
+      // Validate the owned private file, but publish only its availability.
+      driverError: {
+        availability: readOwned(observationRoot, "driver.err", "installed recovery driver error")
+          ? "captured"
+          : "unavailable",
+      },
+      logs: {
+        install: readOwned(observationRoot, "install.log", "installed recovery install"),
+      },
+    };
+    if (current) {
+      for (const stream of ["stdout", "stderr"]) {
+        snapshot.logs[stream] = readOwned(
+          observationRoot,
+          current[stream],
+          `installed recovery ${stream}`,
+        );
+      }
+      if (current.name === "displacement" || current.name === "retirement") {
+        const relative = `${current.cut}/${current.name}.fault.json.observed`;
+        const raw = readOwned(observationRoot, relative, "installed recovery checkpoint");
+        if (raw !== null) {
+          try {
+            const observed = JSON.parse(raw);
+            const checkpoint = {
+              availability: "captured",
+              cut: observed.cut,
+              phase: observed.row?.phase,
+              intent: JSON.parse(observed.row?.intent_json).kind,
+              synced: observed.synced,
+            };
+            snapshot.checkpoint = installedRecoveryProjection({
+              ...snapshot,
+              checkpoint,
+            }).checkpoint;
+          } catch {
+            // A partially written checkpoint must not hide the command's captured logs.
+            omissions["installed recovery checkpoint"] = reasons[3];
+          }
+        }
+      }
+    }
+    return installedRecoveryProjection(snapshot);
+  } catch {
+    omissions["installed recovery"] = reasons[3];
+    return { availability: "unavailable" };
+  }
+}
 
 function ownedPath(root, relative) {
   if (!root || fs.lstatSync(root).isSymbolicLink()) {
@@ -1578,6 +1780,7 @@ async function capture(artifactRoot, phase, exitStatus, signal = "", observation
         : readOwned(artifactRoot, name, name);
   }
   const stateRoot = process.env.OPENCLAW_STATE_DIR;
+  report.installedRecovery = captureInstalledRecovery(artifactRoot, observationRoot);
   report.packageIntegrity = capturePackageIntegrity(observationRoot);
   report.pluginIdentity = await pluginIdentities(stateRoot, artifactRoot);
   report.migration = captureMigrationEvidence(stateRoot, artifactRoot, observationRoot);
@@ -1788,7 +1991,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     throw new Error();
   }
   const snapshot = JSON.parse(raw);
-  if (snapshot.status !== "passed") {
+  if (snapshot.status !== "passed" || !Array.isArray(snapshot.phases)) {
     throw new Error();
   }
   const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
@@ -1921,7 +2124,9 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     ...(nativePluginUi ? { nativePluginUi } : {}),
     ...(packageActivationRecovery ? { packageActivationRecovery } : {}),
     timings,
-    phases: boundedList(snapshot.phases).map((event) => {
+    // Preserve the full start/completion journal within the summary's input/output
+    // byte limits; generic collection counts reject valid long-running proofs.
+    phases: snapshot.phases.map((event) => {
       if (
         !["started", "passed", "failed"].includes(event?.status) ||
         typeof event.phase !== "string" ||
@@ -2102,6 +2307,7 @@ export function publishDiagnostics(
     "successful update plugins",
     "plugin identity",
     "package integrity",
+    ...installedRecoveryLabels,
     ...["doctor", "sessions", "archives", "sibling"].map((section) => `migration-${section}`),
     "session migration",
     ...Object.values(migrationLabels),
@@ -2146,6 +2352,12 @@ export function publishDiagnostics(
   }
   for (const name of logNames) {
     report.logs[name] = sanitize(snapshot.logs?.[name], name);
+  }
+  report.installedRecovery = { availability: "unavailable" };
+  try {
+    report.installedRecovery = installedRecoveryProjection(snapshot.installedRecovery, sanitize);
+  } catch {
+    omissions["installed recovery"] = reasons[3];
   }
   for (const field of ["ExecStart", "WorkingDirectory", "supervisorWorkingDirectory"]) {
     report.service[field] = sanitize(snapshot.service?.[field], field);
