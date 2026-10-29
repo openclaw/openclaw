@@ -21,6 +21,11 @@ export class CodexReasoningProjection {
   private turnPlanText: string | undefined;
   private reasoningStarted = false;
   private reasoningEnded = false;
+  // Rebuilding every section on each delta is quadratic in the reasoning length.
+  // Cache the delivered snapshot plus the item that produced it, and extend it
+  // only when the section write proves the previous text survived unchanged.
+  private lastReasoningText: string | undefined;
+  private lastReasoningItemId: string | undefined;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -44,10 +49,11 @@ export class CodexReasoningProjection {
     const index = params[method === "item/reasoning/textDelta" ? "contentIndex" : "summaryIndex"];
     const groupIndex =
       typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : 0;
-    const sections = method === "item/reasoning/textDelta" ? item.content : item.summary;
-    sections.set(groupIndex, `${sections.get(groupIndex) ?? ""}${delta}`);
+    const deliveredText = this.extendReasoningText(method, item, groupIndex, delta);
+    this.lastReasoningItemId = itemId;
+    this.lastReasoningText = deliveredText;
     await this.params.onReasoningStream?.({
-      text: this.reasoningText(),
+      text: deliveredText,
       isReasoningSnapshot: true,
     });
   }
@@ -104,6 +110,45 @@ export class CodexReasoningProjection {
     );
   }
 
+  /**
+   * Applies one delta and returns the delivered reasoning snapshot.
+   *
+   * `reasoningText()` re-flattens and re-sorts every section, so calling it per
+   * delta is quadratic in the reasoning length. Reuse the cached snapshot only
+   * when the section write proves the previous text survived unchanged: a stable
+   * section index does not imply append-only, because a completed item or a
+   * redaction can replace a section wholesale. In that case the snapshot is
+   * rebuilt, which also re-establishes the cache for the next delta.
+   */
+  private extendReasoningText(
+    method: ReasoningDeltaMethod,
+    item: ReasoningItemText,
+    groupIndex: number,
+    delta: string,
+  ): string {
+    const sections = method === "item/reasoning/textDelta" ? item.content : item.summary;
+    const previousText = this.lastReasoningText;
+    const lastItemId = this.lastReasoningItemId;
+    const priorSection = sections.get(groupIndex);
+    sections.set(groupIndex, `${priorSection ?? ""}${delta}`);
+    // The snapshot joins summary then content per item, each section in index
+    // order. A delta extends it in place only when the touched section is the
+    // final emitted part — otherwise later content would have to be re-joined.
+    if (
+      previousText !== undefined &&
+      lastItemId !== undefined &&
+      sections === item.content &&
+      priorSection !== undefined &&
+      item.content.size > 0 &&
+      groupIndex === Math.max(...item.content.keys()) &&
+      this.reasoningTextByItem.get(lastItemId) === item &&
+      priorSection.trim().length > 0
+    ) {
+      return `${previousText}${delta}`;
+    }
+    return this.reasoningText();
+  }
+
   async recordItem(item: CodexThreadItem | undefined): Promise<void> {
     if (item?.type === "reasoning") {
       const previousText = this.reasoningText();
@@ -113,6 +158,8 @@ export class CodexReasoningProjection {
         content: readReasoningSections(item.content),
       });
       const text = this.reasoningText();
+      this.lastReasoningItemId = item.id;
+      this.lastReasoningText = text;
       if (text !== previousText) {
         this.reasoningStarted = true;
         await this.params.onReasoningStream?.({ text, isReasoningSnapshot: true });
