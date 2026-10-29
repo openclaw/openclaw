@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -124,11 +125,10 @@ describe("canonical shared-state worker admission", () => {
       mkdirSync(env.STORE_ROOT);
       const agentPath = path.join(env.STORE_ROOT, "openclaw-agent.sqlite");
       if (retained) {
-        const database = nodeSqlite.openNodeSqliteDatabase(agentPath);
+        using database = nodeSqlite.openNodeSqliteDatabase(agentPath);
         database.exec(
           "CREATE TABLE retained_history (value TEXT); INSERT INTO retained_history VALUES ('kept')",
         );
-        database.close();
       }
       const bytes = retained ? readFileSync(agentPath) : undefined;
       writeFileSync(
@@ -166,11 +166,9 @@ describe("canonical shared-state worker admission", () => {
     async (phase) => {
       const captured = context();
       mkdirSync(path.dirname(captured.admission.databasePath), { recursive: true });
-      const database = nodeSqlite.openNodeSqliteDatabase(captured.admission.databasePath);
-      try {
+      {
+        using database = nodeSqlite.openNodeSqliteDatabase(captured.admission.databasePath);
         database.exec("PRAGMA user_version = 999999");
-      } finally {
-        database.close();
       }
       const current = captureOpenClawStateWorkerContext(databaseOptions(captured));
       if (phase === "execute") {
@@ -550,13 +548,10 @@ describe("canonical shared-state worker admission", () => {
 
   it("opens a fresh actor for the first new call after the previous worker exits", async () => {
     const captured = context();
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    using messages = vi.spyOn(Worker.prototype, "postMessage");
     await readApprovals(captured);
     const worker = messages.mock.contexts[0];
-    messages.mockRestore();
-    if (!(worker instanceof Worker)) {
-      throw new Error("Expected the shared-state worker to receive its open request");
-    }
+    assert(worker instanceof Worker, "Expected the shared-state worker open request");
     await worker.terminate();
     await expect(readApprovals(captured)).resolves.toEqual([]);
     expect(await readApprovals(captured)).toEqual([]);

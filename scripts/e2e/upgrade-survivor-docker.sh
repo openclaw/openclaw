@@ -162,6 +162,8 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/native-assignment-summary.mjs" "$UPGRADE_SCENARIO_STAGE/native-assignment-summary.mjs"
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/plugin-policy-summary.mjs" "$UPGRADE_SCENARIO_STAGE/plugin-policy-summary.mjs"
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/observations.mjs" "$UPGRADE_SCENARIO_STAGE/observations.mjs"
+  cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/installed-recovery-observations.mjs" "$UPGRADE_SCENARIO_STAGE/installed-recovery-observations.mjs"
+  cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs" "$UPGRADE_SCENARIO_STAGE/installed-recovery-cases.mjs"
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs" "$UPGRADE_SCENARIO_STAGE/package-activation-recovery.mjs"
   chmod 0755 "$UPGRADE_SCENARIO_STAGE"
   UPGRADE_SCENARIO_ARGS+=(
@@ -241,6 +243,17 @@ if [ "$SCENARIO" = "abandoned-update" ] && {
   [ "$UPDATE_RESTART_MODE" != "auto-auth" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ];
 }; then
   echo "abandoned-update requires the published baseline, auto-auth service fixture, and no live provider" >&2
+  exit 1
+fi
+
+# Current-writer interruption proof is separate from released baseline coverage.
+# In particular, do not normalize a file tarball into a historical release cell.
+if [ "$SCENARIO" = "package-installed-recovery" ] && {
+  [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "0" ] ||
+  [ -n "$BASELINE_SPEC" ] || [ "$UPDATE_RESTART_MODE" != "manual" ] ||
+  [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ];
+}; then
+  echo "package-installed-recovery requires an isolated current packed writer, manual restart, and no live provider" >&2
   exit 1
 fi
 
@@ -514,7 +527,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
 fi
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
-if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+if [ "$SCENARIO" != "package-installed-recovery" ] && [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
   AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT="$(
     mktemp -d "${TMPDIR:-/tmp}/openclaw-upgrade-survivor-plugin-registry.XXXXXX"
   )"
@@ -537,6 +550,25 @@ prepare_diagnostics_capture
 prepare_limit_summary
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
+if [ "$SCENARIO" = "package-installed-recovery" ]; then
+  docker_e2e_run_with_harness \
+    --init \
+    ${UPGRADE_LIMITS_ARGS[@]+"${UPGRADE_LIMITS_ARGS[@]}"} \
+    -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    -e OPENCLAW_TEST_STATE_FUNCTION_B64="$OPENCLAW_TEST_STATE_FUNCTION_B64" \
+    -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
+    -e OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT="${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" \
+    -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
+    -v "$HARNESS_ROOT_DIR/scripts:/tmp/openclaw-release-harness/scripts:ro" \
+    ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
+    -e OPENCLAW_E2E_COMMAND_TIMEOUT="$COMMAND_TIMEOUT" \
+    ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
+    "$IMAGE_NAME" \
+    timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" \
+    bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/installed-recovery.sh
+  run_completed="1"
+  exit 0
+fi
 if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
   docker_e2e_docker_cmd run --rm --network none --entrypoint true "$IMAGE_NAME"
 fi

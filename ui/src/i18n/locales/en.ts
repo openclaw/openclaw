@@ -1415,7 +1415,6 @@ const startupEnglish = {
     common: {
       emptyValue: "—",
       unknown: "unknown",
-      atLeast: "≥ {value}",
       approx: "≈ {value}",
     },
     loading: {
@@ -1580,9 +1579,9 @@ const startupEnglish = {
     sessionsPaused: "{count} paused",
     sessionPausedNote: "{name} is paused",
     sessionsPausedNote: "{count} sessions are paused",
-    handoffResumed: "Resumed · {duration} later",
-    handoffSessionsOne: "1 session",
-    handoffSessions: "{count} sessions",
+    handoffResumed: "Resumed · {duration} Later",
+    handoffSessionsOne: "1 Session",
+    handoffSessions: "{count} Sessions",
     handoffSessionStatus: {
       attention: "Needs your input",
       paused: "Paused",
@@ -1685,6 +1684,7 @@ const startupEnglish = {
       dismissError: "Dismiss error",
       exitFocusMode: "Exit focus mode",
       scrollToLatest: "Scroll to latest",
+      skipToComposer: "Skip to message composer",
     },
     markdown: {
       truncated: "… truncated ({total} chars, showing first {shown}).",

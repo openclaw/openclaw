@@ -38,7 +38,7 @@ import { createGatewayDiagnosticsConfigurator } from "./server-diagnostics.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
-import type { GatewayCloseOptions } from "./server-public.js";
+import type { GatewayCloseOptions, GatewayServerOptions } from "./server-public.js";
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { resolveGatewayShutdownNotice, runGatewayCloseSteps } from "./server-shutdown.js";
@@ -60,6 +60,7 @@ export async function prepareGatewayLifecycle(params: {
   log: GatewayLogger;
   logCron: GatewayLogger;
   shutdownRuntime: GatewayShutdownRuntime;
+  exitAfterStartupFailure?: GatewayServerOptions["exitAfterStartupFailure"];
 }) {
   const { runtime, port, log, logCron, shutdownRuntime } = params;
   const requestEntryLifetime = new GatewayRequestEntryLifetime();
@@ -645,17 +646,22 @@ export async function prepareGatewayLifecycle(params: {
     sealAndJoinRegisteredSidecarStops,
   };
   let startupFailureClose: Promise<void> | undefined;
-  const closeOnStartupFailure = () =>
-    (startupFailureClose ??= closeStartupFailure().catch((error: unknown) => {
+  const closeOnStartupFailure = (startupError?: unknown) =>
+    (startupFailureClose ??= closeStartupFailure(startupError).catch((error: unknown) => {
       startupFailureClose = undefined;
       throw error;
     }));
-  const closeStartupFailure = async () => {
+  const closeStartupFailure = async (error: unknown) => {
+    const closeOptions = {
+      reason: "gateway startup failed",
+      exitAfterClose: params.exitAfterStartupFailure?.(error) === true,
+    };
     runtime.startupTrace.close();
     await runGatewayCloseSteps({
       owner: closeStepOwner,
+      exitAfterClose: closeOptions.exitAfterClose,
       // Prepare before the plan runs so earlier teardown steps see closed admission.
-      close: await prepareClose({ reason: "gateway startup failed" }),
+      close: await prepareClose(closeOptions),
       onError: (message) => log.error(message),
     });
   };
@@ -704,6 +710,7 @@ export async function prepareGatewayLifecycle(params: {
       const close = await params.sdkResourceHost.run(() => prepareClose(options));
       return () => params.sdkResourceHost.run(close);
     },
-    closeOnStartupFailure: () => params.sdkResourceHost.run(closeOnStartupFailure),
+    closeOnStartupFailure: (error?: unknown) =>
+      params.sdkResourceHost.run(() => closeOnStartupFailure(error)),
   };
 }

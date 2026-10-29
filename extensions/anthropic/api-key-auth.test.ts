@@ -11,7 +11,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { describe, expect, it, vi } from "vitest";
 import { buildAnthropicProvider } from "./register.runtime.js";
 
-const workspaceId = "wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ";
+const workspaceId = "wrkspc_synthetic_workspace_test";
 const apiKey = "sk-ant-api03-workspace-test-not-real";
 const provider: ModelProviderConfig = { baseUrl: "https://api.anthropic.com", models: [] };
 const config: OpenClawConfig = {
@@ -20,7 +20,7 @@ const config: OpenClawConfig = {
 
 async function authenticate(
   cfg = config,
-  text: ProviderAuthContext["prompter"]["text"] = vi.fn(async () => ` ${workspaceId} `),
+  text: ProviderAuthContext["prompter"]["text"] = async () => ` ${workspaceId} `,
 ) {
   const method = buildAnthropicProvider().auth.find((entry) => entry.id === "api-key");
   if (!method) {
@@ -44,7 +44,7 @@ async function authenticate(
 }
 
 describe("Anthropic API-key workspace setup", () => {
-  it("saves the entered provider workspace and preserves existing headers", async () => {
+  it("saves a workspace without replacing configured headers or scoped-key settings", async () => {
     const { result, next } = await authenticate();
     expect(next.models?.providers?.anthropic?.headers).toEqual({
       "X-Route": "preserve",
@@ -52,46 +52,43 @@ describe("Anthropic API-key workspace setup", () => {
     });
     expect(config.models?.providers?.anthropic?.headers).toEqual({ "X-Route": "preserve" });
     expect(result.profiles[0]?.credential).toMatchObject({ type: "api_key", key: apiKey });
-  });
+    const scoped = await authenticate(config, async () => "  ");
+    expect(scoped.next.models?.providers?.anthropic).toEqual(config.models?.providers?.anthropic);
 
-  it("leaves workspace-scoped keys without an explicit workspace override", async () => {
-    const { next } = await authenticate(
-      config,
-      vi.fn(async () => "  "),
-    );
-    expect(next.models?.providers?.anthropic).toEqual(config.models?.providers?.anthropic);
-  });
-
-  const overrides: Array<Pick<ModelProviderConfig, "headers" | "request">> = [
-    { headers: { "Anthropic-Workspace-Id": workspaceId } },
-    { request: { headers: { "anthropic-workspace-id": workspaceId } } },
-    {
-      headers: {
-        "anthropic-workspace-id": {
-          source: "env",
-          provider: "default",
-          id: "ANTHROPIC_WORKSPACE_ID",
+    const overrides: Array<Pick<ModelProviderConfig, "headers" | "request">> = [
+      { headers: { "Anthropic-Workspace-Id": workspaceId } },
+      { request: { headers: { "anthropic-workspace-id": workspaceId } } },
+      {
+        headers: {
+          "anthropic-workspace-id": {
+            source: "env",
+            provider: "default",
+            id: "ANTHROPIC_WORKSPACE_ID",
+          },
         },
       },
-    },
-  ];
-  it.each(overrides)("preserves an existing provider workspace setting: %j", async (override) => {
-    const configured: OpenClawConfig = {
-      models: {
-        providers: { anthropic: { ...config.models!.providers!.anthropic!, ...override } },
-      },
-    };
-    const text = vi.fn(async () => {
-      throw new Error("Existing workspace must not be replaced");
-    });
-    const { next } = await authenticate(configured, text);
-    expect(next.models?.providers?.anthropic).toEqual(configured.models?.providers?.anthropic);
-    expect(text).not.toHaveBeenCalled();
+    ];
+    for (const override of overrides) {
+      const configured: OpenClawConfig = {
+        models: {
+          providers: { anthropic: { ...config.models!.providers!.anthropic!, ...override } },
+        },
+      };
+      const text = async () => {
+        throw new Error("Existing workspace must not be replaced");
+      };
+      const preserved = await authenticate(configured, text);
+      expect(preserved.next.models?.providers?.anthropic).toEqual(
+        configured.models?.providers?.anthropic,
+      );
+    }
   });
 
   it("propagates cancellation before publishing a credential result", async () => {
     const cancelled = new Error("setup cancelled");
-    const text = vi.fn<ProviderAuthContext["prompter"]["text"]>().mockRejectedValue(cancelled);
+    const text: ProviderAuthContext["prompter"]["text"] = async () => {
+      throw cancelled;
+    };
     await expect(authenticate(config, text)).rejects.toBe(cancelled);
   });
 });

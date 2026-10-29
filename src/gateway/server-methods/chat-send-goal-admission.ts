@@ -55,8 +55,7 @@ export function isWorkerGoalChatAdmission(
     placement.state !== "local" &&
     isDirectChatGoalSession({
       entry: current.entry,
-      allowAborted:
-        request.goalOperation?.action === "resume" && request.goalOperation.preserveBudget === true,
+      allowAborted: request.goalOperation?.action === "resume",
       acpMeta,
       requestedSessionId: session.requestedSessionId,
       sessionKey: current.canonicalKey,
@@ -129,8 +128,7 @@ export function isLocalChatInputAdmission(
       acpMeta,
       sessionKey: current.canonicalKey,
       requestedSessionId: session.requestedSessionId,
-      allowAborted:
-        request.goalOperation?.action === "resume" && request.goalOperation.preserveBudget === true,
+      allowAborted: request.goalOperation?.action === "resume",
     }) ||
     (entry.agentHarnessId !== undefined && entry.agentHarnessId !== OPENCLAW_AGENT_RUNTIME_ID)
   ) {

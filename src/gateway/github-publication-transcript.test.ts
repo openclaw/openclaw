@@ -331,7 +331,7 @@ describe("GitHub publication transcript reporting", () => {
         "GitHub publication failed.",
         "Check repository write access and retry.",
       ),
-      visibleText: "Check repository write access and retry.",
+      visibleText: '"text":"GitHub publication failed. Check repository write access and retry.',
     },
   ])(
     "appends one projected assistant message for a $label result",

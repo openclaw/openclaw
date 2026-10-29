@@ -13,6 +13,10 @@ import { applySessionEntryReplacements } from "../config/sessions/session-access
 import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
 import {
+  interruptOrphanedSessionPendingInputs,
+  listOrphanedSessionPendingInputTargets,
+} from "../config/sessions/session-pending-input-withdrawal.js";
+import {
   captureSessionStoreEnvironment,
   captureSessionStoreReadCandidates,
   prepareSessionStoreTargetInventory,
@@ -45,9 +49,9 @@ import {
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
+import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
-export const GATEWAY_RESTART_RESUME_TEXT =
+const GATEWAY_RESTART_RESUME_TEXT =
   "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
 const BACKGROUND_EXEC_STOPPED_TEXT =
   "Background exec processes were stopped; rerun them if still needed.";
@@ -269,13 +273,16 @@ export async function resumeMarkedSessions(params: {
     ),
   );
   const targets = await inventory.withRead(
-    async (snapshot) => snapshot.agents.flatMap(({ reads }) => reads.map(({ target }) => target)),
+    async (snapshot) =>
+      snapshot.agents.flatMap(({ reads }) =>
+        reads.map(({ target, database }) => ({ ...target, storePath: database.path })),
+      ),
     () => signal.throwIfAborted(),
     signal,
   );
   const visited = new Set<string>();
   for (const target of targets) {
-    const targetKey = JSON.stringify([target.agentId, target.storePath]);
+    const targetKey = target.storePath;
     if (visited.has(targetKey)) {
       continue;
     }
@@ -289,11 +296,34 @@ export async function resumeMarkedSessions(params: {
       log.warn(`Skipped restart resume for agent ${target.agentId}: ${String(error)}`);
       continue;
     }
+    try {
+      const orphaned = await listOrphanedSessionPendingInputTargets(
+        target,
+        entries.flatMap(({ entry }) => entry.resumeAfterRestart?.queuedInputIds ?? []),
+      );
+      for (const session of orphaned) {
+        try {
+          await interruptOrphanedSessionPendingInputs({ ...target, ...session }, () =>
+            signal.throwIfAborted(),
+          );
+        } catch (error) {
+          signal.throwIfAborted();
+          log.warn(
+            `Skipped interrupted input settlement for ${session.sessionKey}: ${String(error)}`,
+          );
+        }
+      }
+    } catch (error) {
+      signal.throwIfAborted();
+      log.warn(
+        `Skipped interrupted input settlement for agent ${target.agentId}: ${String(error)}`,
+      );
+    }
     for (const { sessionKey, entry: marked } of entries) {
       if (!marked.resumeAfterRestart) {
         continue;
       }
-      let authority: Awaited<ReturnType<typeof prepareSessionPrincipalRunAuthority>> | undefined;
+      let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       try {
         const resumed = await applySessionEntryReplacements<
           | {
@@ -331,27 +361,14 @@ export async function resumeMarkedSessions(params: {
           continue;
         }
         try {
-          // Assigned humans are validated profile IDs; channel creators carry no profile authority.
-          const actor = entry.owner
-            ? entry.owner.actor
-            : entry.createdActor?.type === "human" && entry.createdActor.source === "profile"
-              ? entry.createdActor
-              : undefined;
-          const profileId = actor?.type === "human" ? actor.id : undefined;
-          if (actor?.type === "human" && !profileId) {
-            throw new Error("Session owner has no current profile identity");
-          }
-          if (profileId) {
-            authority = await prepareSessionPrincipalRunAuthority({
-              context,
-              profileId,
-              ...target,
-              agentId,
-              sessionKey,
-              sessionId: entry.sessionId,
-              assertCurrent: () => signal.throwIfAborted(),
-            });
-          }
+          authority = await prepareSessionSystemTurnAuthority({
+            context,
+            ...target,
+            agentId,
+            sessionKey,
+            sessionId: entry.sessionId,
+            assertCurrent: () => signal.throwIfAborted(),
+          });
           const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
             operatorAuthority: authority?.authority,
             assertCurrent: () => signal.throwIfAborted(),

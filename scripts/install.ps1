@@ -328,6 +328,68 @@ function Test-NodeSqliteSupported {
     )
 }
 
+function Test-NodePackageEngine {
+    param([string]$Version, [string]$Engine = $script:NodePackageEngine)
+
+    # Fallback covers latest and extended-stable until both publish relaxed engines.
+    if ([string]::IsNullOrWhiteSpace($Engine)) { $Engine = ">=24.22.1 <25 || >=26.12.1" }
+    $versionMatch = [regex]::Match($Version, '^v?(\d+\.\d+\.\d+)')
+    if (-not $versionMatch.Success) { return $false }
+    $current = [version]$versionMatch.Groups[1].Value
+    $satisfied = $false
+    foreach ($clause in ($Engine -split '\|\|')) {
+        # Same >=floor [<ceiling] subset as the package preinstall guard.
+        $match = [regex]::Match($clause, '^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$')
+        if (-not $match.Success) { return $null }
+        $lower = [version]$match.Groups[1].Value
+        $upper = $match.Groups[2].Value
+        if ($upper -and -not $upper.Contains('.')) { $upper += '.0.0' }
+        if ($current -ge $lower -and (-not $upper -or $current -lt [version]$upper)) { $satisfied = $true }
+    }
+    return $satisfied
+}
+
+function Resolve-NodePackageEngine {
+    param([string]$RepoDir)
+    $script:NodePackageEngine = ">=24.22.1 <25 || >=26.12.1"
+    try {
+        if ($InstallMethod -eq 'git') {
+            $package = Get-Content -LiteralPath (Join-Path $RepoDir 'package.json') -Raw | ConvertFrom-Json
+            $output = @($package.engines.node)
+            $global:LASTEXITCODE = 0
+        } else {
+            $target = Resolve-NpmOpenClawInstallSpec -PackageName 'openclaw' -RequestedTag $Tag
+            $output = @(Invoke-NpmCommand -Arguments @('view', $target, 'engines.node', '--fetch-timeout=5000', '--fetch-retries=0') 2>$null)
+        }
+        if ($LASTEXITCODE -eq 0 -and $output.Count -eq 1) {
+            $engine = $output[0].ToString().Trim()
+            $verdict = Test-NodePackageEngine -Version '0.0.0' -Engine $engine
+            if ($engine -and $null -ne $verdict) {
+                $script:NodePackageEngine = $engine
+                return
+            }
+        }
+    } catch { }
+    Write-Host "[!] Could not resolve target Node requirement; using $script:NodePackageEngine" -ForegroundColor Yellow
+}
+
+function Ensure-Node {
+    if (-not (Check-Node)) {
+        if (-not (Install-Node)) {
+            return $false
+        }
+
+        # Verify installation
+        if (-not (Check-Node)) {
+            Write-Host ""
+            Write-Host "Error: Node.js installation may require a terminal restart" -ForegroundColor Red
+            Write-Host "Please close this terminal, open a new one, and run this installer again." -ForegroundColor Yellow
+            return $false
+        }
+    }
+    return $true
+}
+
 function Check-Node {
     param([string]$NodePath)
 
@@ -373,11 +435,15 @@ process.stdout.write(JSON.stringify(result));
         if ($nodeVersion) {
             if (
                 (Test-NodeVersionSupported -Version $nodeVersion) -and
+                (Test-NodePackageEngine -Version $nodeVersion) -and
                 (Test-NodeSqliteSupported -Version $sqliteVersion) -and
                 $sqlite.text -and $sqlite.blob -and $sqlite.json -and -not $sqlite.error
             ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
                 return $true
+            } elseif (-not (Test-NodePackageEngine -Version $nodeVersion)) {
+                Write-Host "[!] Node.js $nodeVersion does not satisfy the target package; upgrading Node.js" -ForegroundColor Yellow
+                return $false
             } elseif ($sqlite.available -and -not $sqlite.text -and -not $sqlite.error) {
                 Write-Host "[!] Node $nodeVersion`: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix" -ForegroundColor Yellow
                 return $false
@@ -1118,6 +1184,32 @@ function Invoke-OpenClawCommand {
     }
 }
 
+function Get-TrustedWindowsCmdExe {
+    if ([string]::IsNullOrWhiteSpace($env:SystemRoot)) {
+        return $null
+    }
+
+    $candidate = Join-Path (Join-Path $env:SystemRoot "System32") "cmd.exe"
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return $candidate
+    }
+    return $null
+}
+
+function Write-OpenClawSetupRecovery {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CommandPath,
+        [string[]]$Arguments
+    )
+
+    $shownArgs = (@($Arguments) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join " "
+    $quotedPath = "'" + ($CommandPath.Replace("'", "''")) + "'"
+    $shown = if ([string]::IsNullOrWhiteSpace($shownArgs)) { "& $quotedPath" } else { "& $quotedPath $shownArgs" }
+    Write-Host "Setup did not start. Run:" -ForegroundColor Yellow
+    Write-Host "  $shown" -ForegroundColor Cyan
+}
+
 function Invoke-InteractiveOpenClawCommand {
     param(
         [Parameter(ValueFromRemainingArguments = $true)]
@@ -1129,7 +1221,30 @@ function Invoke-InteractiveOpenClawCommand {
         throw "openclaw command not found on PATH."
     }
 
-    $process = Start-Process -FilePath $commandPath -ArgumentList $Arguments -NoNewWindow -Wait -PassThru
+    $isBatch = [System.IO.Path]::GetExtension($commandPath) -match '^\.(cmd|bat)$'
+    $previousShimPath = $env:OPENCLAW_INSTALLER_SETUP_SHIM
+    try {
+        $launchPath = $commandPath
+        $launchArguments = $Arguments
+        if ($isBatch) {
+            $launchPath = Get-TrustedWindowsCmdExe
+            if (-not $launchPath) {
+                throw "openclaw $($Arguments -join ' ') could not start because cmd.exe was not found."
+            }
+            # Expand the path once inside quotes, preserving literal %, &, and !.
+            # The only caller supplies the fixed onboard command.
+            $env:OPENCLAW_INSTALLER_SETUP_SHIM = $commandPath
+            $launchArguments = '/d /v:off /s /c ""%OPENCLAW_INSTALLER_SETUP_SHIM%" ' + ($Arguments -join ' ') + '"'
+        }
+        $process = Start-Process -FilePath $launchPath -ArgumentList $launchArguments -NoNewWindow -Wait -PassThru
+    } catch {
+        Write-OpenClawSetupRecovery -CommandPath $commandPath -Arguments $Arguments
+        throw
+    } finally {
+        if ($isBatch) {
+            $env:OPENCLAW_INSTALLER_SETUP_SHIM = $previousShimPath
+        }
+    }
     if ($process.ExitCode -ne 0) {
         throw "openclaw $($Arguments -join ' ') failed with exit code $($process.ExitCode)."
     }
@@ -2034,6 +2149,9 @@ function Install-OpenClawFromGit {
         Write-Host "[!] Git update disabled; skipping git pull" -ForegroundColor Yellow
     }
 
+    Resolve-NodePackageEngine -RepoDir $RepoDir
+    if (-not (Ensure-Node)) { return $false }
+
     $prevPnpmChildConcurrency = $env:PNPM_CONFIG_CHILD_CONCURRENCY
     $prevPnpmNetworkConcurrency = $env:PNPM_CONFIG_NETWORK_CONCURRENCY
     $prevPnpmWorkspaceConcurrency = $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY
@@ -2339,27 +2457,21 @@ function Main {
     # Check for existing installation
     $isUpgrade = Check-ExistingOpenClaw
 
-    # Step 1: Node.js
-    if (-not (Check-Node)) {
-        if (-not (Install-Node)) {
-            Fail-Install
-            return
-        }
-
-        # Verify installation
-        if (-not (Check-Node)) {
-            Write-Host ""
-            Write-Host "Error: Node.js installation may require a terminal restart" -ForegroundColor Red
-            Write-Host "Please close this terminal, open a new one, and run this installer again." -ForegroundColor Yellow
-            Fail-Install
-            return
-        }
+    if ($InstallMethod -eq 'npm') {
+        Resolve-NodePackageEngine
+        if (-not (Ensure-Node)) { Fail-Install; return }
     }
 
     $finalGitDir = $null
 
     # Step 2: OpenClaw
     if ($InstallMethod -eq "git") {
+        $finalGitDir = $GitDir
+        $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
+        if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
+            Fail-Install
+            return
+        }
         $hadNpmOwner = $false
         try {
             $npmCommand = Get-NpmCommandPath
@@ -2368,12 +2480,6 @@ function Main {
                 $hadNpmOwner = ($LASTEXITCODE -eq 0)
             }
         } catch { }
-        $finalGitDir = $GitDir
-        $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
-        if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
-            Fail-Install
-            return
-        }
         if ($hadNpmOwner) {
             Remove-PreviousNpmOwner -GitWrapper (Join-Path (Join-Path $env:USERPROFILE ".local\bin") "openclaw.cmd")
         }

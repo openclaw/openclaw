@@ -348,9 +348,6 @@ suite.define(() => {
           toggle: box("[data-child-session-toggle]"),
         };
       });
-    const header = await page
-      .locator(".personal-session-groups__heading")
-      .evaluate((element) => element.getBoundingClientRect().bottom);
     const [idle, legacyOwner, unread, running, artwork, draft] = await Promise.all([
       rowGeometry("idle"),
       rowGeometry("legacy-owner"),
@@ -361,7 +358,11 @@ suite.define(() => {
     ]);
     expect(legacyOwner.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     if (grouping === "Person") {
-      expect(idle.top - header).toBeLessThanOrEqual(12);
+      // The selected owner's rows sit directly below the owner picker.
+      const ownerTitleBottom = await page
+        .locator("#sidebar-session-owner-title")
+        .evaluate((element) => element.getBoundingClientRect().bottom);
+      expect(idle.top - ownerTitleBottom).toBeLessThanOrEqual(12);
     }
     if (width === 1200 || grouping === "Person") {
       const frame = await takeControlUiScreenshotFrame(

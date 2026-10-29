@@ -1,3 +1,4 @@
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
@@ -25,14 +26,25 @@ import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 
+function readYieldReceipt(card: ToolCard): Record<string, unknown> | null {
+  const details = asRecord(card.details);
+  if (details && Object.hasOwn(details, "status")) {
+    return details;
+  }
+  // Plugin result hooks can append text after the receipt; only its leading object is authoritative.
+  const receipt = extractBalancedJsonPrefix((card.outputText ?? "").trimStart(), {
+    openers: ["{"],
+  });
+  return receipt?.startIndex === 0 ? (safeParseJsonRecord(receipt.json) ?? null) : null;
+}
+
 function isConfirmedYield(card: ToolCard): boolean {
   return (
     card.name === "sessions_yield" &&
     Object.hasOwn(card, "args") &&
     card.completed === true &&
     card.isError !== true &&
-    (asRecord(card.details)?.status === "yielded" ||
-      safeParseJsonRecord(card.outputText ?? "")?.status === "yielded")
+    readYieldReceipt(card)?.status === "yielded"
   );
 }
 
@@ -184,7 +196,7 @@ function scanSessionsYieldItems(
       ) {
         handoffRunIds.unshift(handoffRunId);
       }
-      const facts = asRecord(lastYield.details) ?? safeParseJsonRecord(lastYield.outputText ?? "");
+      const facts = readYieldReceipt(lastYield);
       const acknowledgment =
         typeof facts?.acknowledgment === "string" ? facts.acknowledgment.trim() : "";
       if (acknowledgment) {

@@ -202,6 +202,7 @@ export type ExecToolDetails = {
       deadlineAtMs?: number;
       cwd?: string;
       tail?: string;
+      warningText?: string;
       followUp?: string;
     }
   | {

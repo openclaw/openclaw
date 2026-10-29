@@ -63,6 +63,11 @@ A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
 Managed update handoffs keep their own stop handling.
 
+Failed startup uses the same cleanup grace when the CLI will exit. Usage backfill
+cancels pending discovery reads and scans when its sidecar stops; a later startup
+rebuilds any unfinished cache work. Embedded hosts and in-process startup recovery
+still join cleanup before reusing the runtime.
+
 An external stop or restart logs bounded-grace leftovers, such as a service-child
 cleanup deadline, lifetime sidecar, or retained plugin runtime, and returns with
 status `0` unless required persistence failed. A runtime that still owns resources
@@ -328,10 +333,11 @@ The Gateway never substitutes an administrator or restores a saved operator gran
 Sessions with no human principal use ordinary system-event authority; if it lacks
 a needed capability, the agent must ask for an authorized input.
 
-WebChat uses the same session and transcript. Channel sessions use their current
-delivery route so normal replies return to the conversation. The resume input
-inherits no old browser connection, device capability, approval, or requester
-authority snapshot.
+WebChat uses the same session and transcript. An unanswered accepted user prompt
+stays in history as its original entry, separate from the restart input. Channel
+sessions use their current delivery route so normal replies return to the
+conversation. The resume input inherits no old browser connection, device
+capability, approval, or requester authority snapshot.
 
 Only accepted user messages whose IDs were captured in the graceful-shutdown
 marker follow the resume input, in FIFO order. Older queued rows left by a crash

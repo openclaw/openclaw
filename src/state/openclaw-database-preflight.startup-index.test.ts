@@ -1,7 +1,7 @@
 import { deepStrictEqual } from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
@@ -48,7 +48,9 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// The startup FTS-attempt latch outlives each test and keys on dev:ino alone on Linux.
+// Keep every agent file until the suite ends so a freed inode cannot alias a latched one.
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repairMessage = "Rebuilt canonical agent SQLite indexes";
 
 afterEach(async () => {

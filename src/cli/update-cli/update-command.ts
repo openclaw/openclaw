@@ -18,10 +18,14 @@ import {
   resolveGitInstallDir,
   type UpdateCommandOptions,
 } from "./shared.js";
-import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
+import {
+  reportPreMutationUpdateResult,
+  withUpdateAdmissionReporting,
+} from "./update-command-admission-report.js";
 import { runAdmittedUpdate } from "./update-command-admitted.js";
 import { withUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -31,10 +35,7 @@ import type { InitializedUpdate } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
-import {
-  UpdateCommandPendingRecoveryFailure,
-  withUpdateAdmissionReporting,
-} from "./update-command-result.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import {
   createUpdateRunProgress,
   prepareUpdateCommand,
@@ -73,44 +74,6 @@ export async function updateCommand(
   );
 }
 
-async function withUpdateDatabaseEngine<T>(
-  env: NodeJS.ProcessEnv,
-  run: () => Promise<T>,
-): Promise<T> {
-  const [
-    { cloneEnvWithPlatformSemantics },
-    { createConfigIO },
-    { isConfigReadFailure },
-    { resolveDatabaseEngineSelection },
-    { withDatabaseEngineSelection },
-    { loadDotEnvAsync },
-  ] = await Promise.all([
-    import("../../config/env-vars.js"),
-    import("../../config/io.js"),
-    import("../../config/io.invalid-config.js"),
-    import("../../infra/database-engine/config.js"),
-    import("../../infra/database-engine/context.js"),
-    import("../../infra/dotenv.js"),
-  ]);
-  const configEnv = cloneEnvWithPlatformSemantics(env);
-  await loadDotEnvAsync({ env: configEnv });
-  const snapshot = await createConfigIO({
-    env: configEnv,
-    observe: false,
-    pluginValidation: "core-only",
-  }).readConfigFileSnapshot();
-  if (isConfigReadFailure(snapshot)) {
-    throw createUpdateConfigFailure(snapshot);
-  }
-  // Candidate Doctor owns config recovery; admission only needs the authored engine choice.
-  const selection = await resolveDatabaseEngineSelection(snapshot.sourceConfig, configEnv);
-  return await withDatabaseEngineSelection(selection, async () => {
-    const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
-    await preparePostgresPoolForUpdate("openclaw update repair");
-    return await run();
-  });
-}
-
 async function updateCommandWithRuntime(
   inputOpts: UpdateCommandOptions,
   retainRuntime: RetainUpdateRuntime,
@@ -139,67 +102,88 @@ async function updateCommandWithRuntime(
       ),
     );
   }
-  return await withUpdateAdmissionReporting(inputOpts, async () => {
-    const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
-    const serviceRoot = prepared.servicePlan?.serviceRoot;
-    const env = await resolveUpdateCommandAdmissionEnv({
-      opts: inputOpts,
-      root: resolveUpdateCommandAdmissionRoot(prepared),
-      invocationCwd,
-      pkgOwnership: prepared.pkgOwnership,
-      expectedForeground:
-        prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
-    });
-    return await withUpdateDatabaseEngine(env, async () => {
-      if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
-        defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
-      }
-      const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
-      assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
-      const needsInitialization = await updateStateNeedsInitialization(env);
-      const captureOriginal =
-        !inputOpts.dryRun &&
-        !inputOpts.run &&
-        !inputOpts.recovery &&
-        !executorOptions &&
-        !env[UPDATE_RUN_ID_ENV]?.trim() &&
-        env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
-      const execute = (initialization?: InitializedUpdate) =>
-        runAdmittedUpdate(
-          inputOpts,
-          prepared,
-          recoveryState,
-          invocationCwd,
-          (opts, presentation, executor) =>
-            updateCommandInternal(
-              opts,
+  const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};
+  return await withUpdateAdmissionReporting(
+    inputOpts,
+    async () => {
+      const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
+      const serviceRoot = prepared.servicePlan?.serviceRoot;
+      const env = await resolveUpdateCommandAdmissionEnv({
+        opts: inputOpts,
+        root: resolveUpdateCommandAdmissionRoot(prepared),
+        invocationCwd,
+        pkgOwnership: prepared.pkgOwnership,
+        expectedForeground:
+          prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" ||
+          undefined,
+      });
+      return await withUpdateDatabaseEngine(
+        env,
+        async (configReadable, malformedConfig) => {
+          // Late admission refusals retain the captured malformed-source report decision.
+          reportHints.writeArtifacts = !malformedConfig;
+          if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
+            defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
+          }
+          const { updateStateNeedsInitialization } =
+            await import("./update-command-initialization.js");
+          assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
+          // Unreadable previews reach diagnostics before any writable state inspection.
+          const needsInitialization =
+            !configReadable || (await updateStateNeedsInitialization(env));
+          const captureOriginal =
+            !inputOpts.dryRun &&
+            !inputOpts.run &&
+            !inputOpts.recovery &&
+            !executorOptions &&
+            !env[UPDATE_RUN_ID_ENV]?.trim() &&
+            env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
+          const execute = (initialization?: InitializedUpdate) =>
+            runAdmittedUpdate(
+              inputOpts,
+              prepared,
               recoveryState,
               invocationCwd,
-              prepared,
-              presentation,
-              executor,
-              retainRuntime,
+              (opts, presentation, executor) =>
+                updateCommandInternal(
+                  opts,
+                  recoveryState,
+                  invocationCwd,
+                  prepared,
+                  presentation,
+                  executor,
+                  retainRuntime,
+                  initialization,
+                ),
               initialization,
-            ),
-          initialization,
-          executorOptions,
-        );
-      if (needsInitialization || captureOriginal) {
-        const { initializeAndRunUpdate } = await import("./update-command-initialization-run.js");
-        return await initializeAndRunUpdate(
-          inputOpts,
-          prepared,
-          recoveryState,
-          invocationCwd,
-          env,
-          execute,
-          { needsInitialization, captureOriginal },
-          executorOptions,
-        );
-      }
-      return await execute();
-    });
-  });
+              executorOptions,
+            );
+          if (needsInitialization || captureOriginal) {
+            const { initializeAndRunUpdate } =
+              await import("./update-command-initialization-run.js");
+            return await initializeAndRunUpdate(
+              inputOpts,
+              prepared,
+              recoveryState,
+              invocationCwd,
+              env,
+              execute,
+              {
+                needsInitialization,
+                captureOriginal,
+                malformedConfig,
+              },
+              executorOptions,
+            );
+          }
+          return await execute();
+        },
+        inputOpts,
+      );
+    },
+    "unknown",
+    reportHints,
+  );
 }
 
 async function updateCommandInternal(
@@ -571,18 +555,25 @@ async function updateCommandInternal(
         ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords,
       packageUpdateNodeRunner,
     };
-    const rollbackBlockedReason = opts.recovery
-      ? undefined
-      : await inspectActivatedUpdateState({
-          result,
-          root,
-          packageUpdateNodeRunner,
-          schemaVersions: execution.schemaVersions,
-          candidateSchemaVersions: execution.candidateSchemaVersions,
-          config: finalization.configSnapshot.config,
-          env: ownedManagedUpdateContext?.env ?? run.env,
-          timeoutMs: updateStepTimeoutMs,
-        });
+    // Before update mutation, the restored predecessor may already be writing state again.
+    // A post-activation scan would replace the original failure without a mutation to inspect.
+    const failedBeforeMutation =
+      result.status === "error" &&
+      !execution.mutationStarted &&
+      !(result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk);
+    const rollbackBlockedReason =
+      opts.recovery || failedBeforeMutation
+        ? undefined
+        : await inspectActivatedUpdateState({
+            result,
+            root,
+            packageUpdateNodeRunner,
+            schemaVersions: execution.schemaVersions,
+            candidateSchemaVersions: execution.candidateSchemaVersions,
+            config: finalization.configSnapshot.config,
+            env: ownedManagedUpdateContext?.env ?? run.env,
+            timeoutMs: updateStepTimeoutMs,
+          });
     run.executorFence?.assertCurrent();
     if (opts.recovery || rollbackBlockedReason) {
       // Only candidate code may reopen migrated state, including during reporting and cleanup.

@@ -18,6 +18,7 @@ import {
   retainSessionWorkspaceArtifacts,
   refreshSessionWorkspaceState,
 } from "./chat-session-workspace-state.ts";
+import { textFile } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -71,15 +72,7 @@ async function fixture({ loadInitialListing = true } = {}) {
       listFiles,
       getFile: async () => ({
         sessionKey: listing.sessionKey,
-        file: {
-          path: "reports/inventory.csv",
-          name: "inventory.csv",
-          kind: "read",
-          missing: false,
-          previewKind: "text",
-          contentEncoding: "utf8",
-          content: "item,count\nnotebooks,3",
-        },
+        file: textFile("reports/inventory.csv", "item,count\nnotebooks,3"),
       }),
     }),
   };

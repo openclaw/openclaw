@@ -117,7 +117,7 @@ The RPC contract is:
 - `gateway.suspend.resume` — `operator.admin`; params
   `{ "suspensionId": "id-from-prepare" }`
 - `gateway.suspend.handoff` — `operator.admin`; params
-  `{ "suspensionId": "id-from-prepare", "target": { "pid": 123, "processInstanceId": "id-from-system-info" } }`
+  `{ "suspensionId": "id-from-prepare", "target": { "pid": 123, "processInstanceId": "id-from-system-info" }, "commit": true }`
 
 `terminalPolicy` and `drain` are optional. `terminalPolicy` accepts only
 `"preserve"` or `"terminate"` and defaults to `"preserve"`; `drain` defaults
@@ -238,7 +238,15 @@ Terminal commands and scrollback are not recovered after restart; see
 An external deployment controller that explicitly authorizes interrupting
 remaining work can instead call `gateway.suspend.handoff` after its own graceful
 drain budget. The target must match the `pid` and `processInstanceId` obtained from
-`system.info` before suspension. This arms
+`system.info` before suspension. With `commit: true`, the host commits shutdown
+immediately once write custody is clear and returns
+`{ "status": "committed", "suspensionId": "...", "expiresAtMs": ... }`.
+Admission stays closed even after the original lease expires. The controller
+still owns the native service stop and replacement; it must proceed without
+requiring the retired suspension to remain ready or the old process to stay alive.
+
+Omitting `commit` preserves the existing public RPC contract for controllers
+that send their own signal. This arms
 restart cleanup for that exact lease and host iteration's next `SIGTERM`; it
 does not send a signal or create a successor. The controller still owns the
 native service restart. A successful response is

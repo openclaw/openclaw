@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listGoogleMeetCalendarEvents, type GoogleMeetCalendarLookupResult } from "./calendar.js";
 import {
   formatDuration,
@@ -446,7 +447,7 @@ export async function writeMeetExportBundle(params: {
   calendarEvent?: GoogleMeetCalendarLookupResult;
 }): Promise<{ outputDir: string; files: string[]; zipFile?: string }> {
   const outputDir =
-    params.outputDir?.trim() ||
+    readNonBlankString(params.outputDir) ??
     `google-meet-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   await fsp.mkdir(outputDir, { recursive: true });
   let zipOutputDir = outputDir;

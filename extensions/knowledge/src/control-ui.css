@@ -2705,6 +2705,9 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 }
 .knowledge-store-dialog-body {
   display: grid;
+  /* The body scrolls, so rows keep their content height; auto rows would let clipped
+     children such as choice fieldsets shrink to nothing on short screens. */
+  grid-auto-rows: max-content;
   gap: 16px;
   padding: 16px 20px;
   overflow: auto;

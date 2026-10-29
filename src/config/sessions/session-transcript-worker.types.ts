@@ -93,6 +93,8 @@ import type { SessionMembershipFacts } from "./session-membership-facts.types.js
 import type {
   PendingInputHistoryWorkerInput,
   PendingInputHistorySnapshot,
+  PendingInputOrphansWorkerInput,
+  PendingInputOrphanTarget,
 } from "./session-pending-input-history.types.js";
 import type * as PendingInputSourceWorker from "./session-pending-input-source.types.js";
 import type {
@@ -119,6 +121,7 @@ import type {
   SessionStoreProjectionWorkerResult,
 } from "./session-store-projection.types.js";
 import type {
+  SessionStoreTargetPreparationRequest,
   SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
   SessionStoreTargetReadRequest,
@@ -322,6 +325,7 @@ export type SessionHistoryWorkerInput =
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
   | PendingInputHistoryWorkerInput
+  | PendingInputOrphansWorkerInput
   | SessionPendingInputReceiptsWorkerInput
   | PendingInputSourceWorker.Input
   | SessionGoalOperationReceiptWorkerInput
@@ -335,6 +339,7 @@ export type SessionHistoryWorkerInput =
   | SessionStoreSummaryWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
+  | { kind: "session-target-prepare"; request: SessionStoreTargetPreparationRequest }
   | SessionStoreTargetWorkerInput
   | SessionTargetInventoryWorkerInput
   | CombinedSessionStoreTopologyWorkerInput
@@ -456,6 +461,10 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
       kind: "session-pending-input-history";
       snapshot: PendingInputHistorySnapshot;
     };
+    "session-pending-input-orphans": {
+      kind: "session-pending-input-orphans";
+      targets: PendingInputOrphanTarget[];
+    };
     "session-pending-input-receipts": {
       kind: "session-pending-input-receipts";
       receipts: ReturnType<typeof listSessionPendingInputReceipts>;
@@ -479,6 +488,9 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
           kind: "session-store-target";
           readError: import("./session-transcript-worker-error.types.js").SessionTranscriptWorkerReadError;
         };
+    "session-target-prepare": ReturnType<
+      typeof import("./session-store-target-inventory.js").prepareSessionStoreTargetCandidates
+    >;
     "session-target-inventory": SessionStoreTargetInventoryResult;
     "combined-store-topology": CombinedSessionStoreTopologyResult;
     "session-identity-evidence": {
@@ -623,6 +635,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readGoalOperationReceipt: SessionHistoryReader<"goal-operation-receipt", "result">;
     readPendingInputSource: PendingInputSourceWorker.Reader;
     readPendingInputHistory: SessionHistoryReader<"session-pending-input-history", "snapshot">;
+    readPendingInputOrphans: SessionHistoryReader<"session-pending-input-orphans", "targets">;
     readPendingInputReceipts: SessionHistoryReader<"session-pending-input-receipts", "receipts">;
     readVoiceSessions: SessionHistoryReader<"voice-sessions">;
   };

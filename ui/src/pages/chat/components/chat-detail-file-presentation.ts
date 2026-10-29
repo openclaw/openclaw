@@ -1,4 +1,5 @@
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
+import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import type { createAttachmentDownload } from "./chat-attachment-download.ts";
 import type { createFileCopy } from "./chat-file-copy.ts";
@@ -198,6 +199,17 @@ export function createFilePresentationActions(context: {
     context.invalidate();
   };
 
+  const openWorkspaceFile = (target: MarkdownFileLinkTarget) => {
+    if (!target.documentRelative) {
+      context.props.onOpenWorkspaceFile?.(target);
+      return;
+    }
+    const content = context.content();
+    if (content?.kind === "file" && content.sessionFileSource) {
+      context.props.onOpenWorkspaceFile?.({ ...target, relativeTo: content });
+    }
+  };
+
   const handlePanelClick = (event: MouseEvent) => {
     if (
       event.target instanceof Element &&
@@ -205,7 +217,7 @@ export function createFilePresentationActions(context: {
     ) {
       context.interact("link");
     }
-    handleSidebarClick(event, context.props);
+    handleSidebarClick(event, { ...context.props, onOpenWorkspaceFile: openWorkspaceFile });
   };
 
   const handlePanelKeyDown = (event: KeyboardEvent) => {
@@ -232,7 +244,7 @@ export function createFilePresentationActions(context: {
       context.fileCopy.copy("contents");
       return;
     }
-    handleSidebarKeydown(event, context.props);
+    handleSidebarKeydown(event, { ...context.props, onOpenWorkspaceFile: openWorkspaceFile });
   };
 
   function resetFilePresentation(
@@ -402,8 +414,8 @@ export function renderFilePanelPresentation(context: {
     invalidate: () => void;
   };
 }): SidebarPanelProps {
-  const content = context.props.content;
   const state = context.state;
+  const content = state.visibleContent;
   const { presentation } = context;
   const file = context.htmlPreview.file;
   const matches = context.actions.fileSearchMatches();
@@ -449,6 +461,7 @@ export function renderFilePanelPresentation(context: {
                 remoteImages: false,
                 codeBlockInteraction: "interactive",
                 fileLinks: true,
+                documentFileLinks: Boolean(content.sessionFileSource && content.path),
                 sessionLinks: true,
                 interactiveImages: context.props.onOpenImage !== null,
               },
@@ -511,6 +524,7 @@ export function renderFilePanelPresentation(context: {
     fileBack: context.props.fileBack ?? undefined,
     onClose: context.actions.close,
     onOpenImage: context.props.onOpenImage ?? undefined,
+    onBrowseFiles: context.props.onBrowseFiles ?? undefined,
     onViewRawText: context.actions.showRawText,
     onClick: context.actions.handlePanelClick,
     onKeydown: context.actions.handlePanelKeyDown,
@@ -540,6 +554,7 @@ export const chatDetailPanelProperties = {
   allowExternalEmbedUrls: { default: false },
   embedded: { default: false },
   onOpenWorkspaceFile: { default: null, attribute: false },
+  onBrowseFiles: { default: null, attribute: false },
   onOpenSessionLink: { default: null, attribute: false },
   onRevealInWorkspace: { default: null, attribute: false },
   onOpenImage: { default: null, attribute: false },

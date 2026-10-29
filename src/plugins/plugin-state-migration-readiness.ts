@@ -31,6 +31,7 @@ function selectReadiness(options: InstalledPluginIndexStoreOptions) {
     ...resolveInstalledPluginIndexStateDatabaseOptions(options),
     path,
     artifactPreservingReadOnly,
+    includeDeferred: true,
   };
   const receipt =
     !artifactPreservingReadOnly && !context.maintenanceScope && !context.existingSchemaPath
@@ -78,7 +79,11 @@ export async function confirmPluginStateMigrationReadiness(params: {
   warn: (message: string) => void;
 }): Promise<void> {
   const expectedPending = await readDeferredPluginMigrationsAsync({ env: params.env });
-  if (expectedPending.length === 0) {
+  const obligations = await readDeferredPluginMigrationsAsync({
+    env: params.env,
+    includeDeferred: true,
+  });
+  if (obligations.length === 0) {
     return;
   }
   const [{ runPostSessionPluginDoctorStateRepairs }, { withPluginLifecycleLeaseAsync }] =
@@ -92,9 +97,9 @@ export async function confirmPluginStateMigrationReadiness(params: {
       const inspected = await runPostSessionPluginDoctorStateRepairs({
         config: params.config,
         env: params.env,
-        inspectPluginIds: expectedPending.map(({ pluginId }) => pluginId),
+        inspectPluginIds: obligations.map(({ pluginId }) => pluginId),
       });
-      const resolvedPluginIds = expectedPending
+      const resolvedPluginIds = obligations
         .filter(
           ({ pluginId, requiresStateMigration }) =>
             inspected.completedPluginIds?.includes(pluginId) ||
@@ -123,7 +128,7 @@ export async function confirmPluginStateMigrationReadiness(params: {
           });
         }
       }
-      for (const pending of expectedPending) {
+      for (const pending of obligations) {
         if (
           pending.requiresStateMigration &&
           inspected.statelessPluginIds?.includes(pending.pluginId)

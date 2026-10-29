@@ -16,6 +16,14 @@ reports that Doctor finished with plugin load errors. When an updater invokes
 Doctor, the same failures remain recorded warnings so an otherwise safe update
 can continue; rerun Doctor after resolving the reported cause.
 
+`--fix` (alias `--repair`) and `--yes` authorize safe migrations with closed or
+piped stdin, including with `--non-interactive`; a PTY is not required. Ambiguous
+ownership changes still need an operator decision. If config cannot be parsed or
+the database target cannot be resolved, Doctor exits `2` and names the blocker;
+no state migrations ran. Invalid config or required migrations left deferred at
+final validation exit `1`, with the rejected paths and next steps. A successful
+run with no pending work can still exit `0`.
+
 The CLI drains its shared-state database workers before exiting. Scripted callers
 must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
@@ -392,6 +400,18 @@ may request browser profile access. See [browser setup](/tools/browser/setup) an
 [browser troubleshooting](/tools/browser/troubleshooting).
 
 ### Auth migration recovery
+
+Doctor leaves a `models.json` key untouched instead of importing it when the
+shared auth store already provides an effective profile for that provider. The
+warning names the provider and shared profile. This preserves read-through auth
+without creating an agent-local credential that takes precedence over it.
+
+If an existing agent-local `<provider>:models-json` profile takes precedence over
+shared auth, Doctor preserves both credentials and reports the exact
+`openclaw models auth logout <profile-id> --agent <agent-id> --yes` command. Confirm
+the shared account is the one you want before running it. A profile name alone
+does not prove Doctor created the credential, so Doctor does not remove it
+automatically.
 
 Auth imports retain their original warning receipts and recovery copies. The
 final summary distinguishes the remaining work:

@@ -31,7 +31,6 @@ import {
 } from "../../infra/update-failure-facts.js";
 import { normalizeUpdateFailureResult } from "../../infra/update-failure-result.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
-import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
 import {
   getUpdateRun,
   recordUpdateRunDiagnostics,
@@ -412,82 +411,10 @@ export async function resolveMutableUpdateFailure(params: {
   };
 }
 
-/** Report rejected read-only admission without creating a run or recovery diagnostics. */
-export async function withUpdateAdmissionReporting<T>(
-  opts: UpdateCommandOptions,
-  admit: () => Promise<T>,
-  mode: "unknown" | "finalize" = "unknown",
-): Promise<T> {
-  const startedAt = Date.now();
-  try {
-    return await admit();
-  } catch (error) {
-    if (
-      error instanceof UpdateRunAdmissionBusyError ||
-      (error instanceof SystemPackageOwnershipError && error.owned)
-    ) {
-      const result = {
-        status: "skipped",
-        mode,
-        reason: error.reason,
-        steps: [],
-        durationMs: Date.now() - startedAt,
-        ...(opts.dryRun ? { dryRun: true } : {}),
-        notes: [error.message],
-      };
-      if (opts.json) {
-        defaultRuntime.writeJson(result);
-      } else {
-        defaultRuntime.log(theme.warn(error.message));
-      }
-      // Existing parents treat zero as completed convergence, even without reading JSON.
-      return exitCliAfterOutput(defaultRuntime, result.mode === "finalize" ? 1 : 0);
-    }
-    if (error instanceof UpdateCommandPendingRecoveryFailure) {
-      return reportUpdateCommandPendingRecovery(error, opts);
-    }
-    const ownershipFailure = !hasCommandProcessCleanupError(error)
-      ? resolveUpdateOwnershipFailure(error)
-      : undefined;
-    if (
-      !(error instanceof GatewayServiceUpdateOwnershipError) &&
-      !(error instanceof SystemPackageOwnershipError) &&
-      !(
-        error instanceof UpdatePreMutationError &&
-        (error.reason === "config-read-failed" || error.reason === "invalid-config")
-      ) &&
-      !ownershipFailure
-    ) {
-      throw error;
-    }
-    const message =
-      ownershipFailure?.message ??
-      (error instanceof SystemPackageOwnershipError || error instanceof UpdatePreMutationError
-        ? error.message
-        : error instanceof GatewayServiceUpdateOwnershipError
-          ? `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`
-          : undefined);
-    if (opts.json) {
-      defaultRuntime.error(message);
-    }
-    await printResult(
-      createUpdateCommandFailureResult({
-        mode: "unknown",
-        admission: true,
-        failure: { cause: error },
-        durationMs: 0,
-      }),
-      opts,
-      {
-        readHistory: false,
-        nextAction:
-          ownershipFailure?.nextAction ??
-          (error instanceof UpdatePreMutationError ? (error.nextAction ?? message) : message),
-      },
-    );
-    return exitCliAfterOutput(defaultRuntime, 1);
-  }
-}
+type UpdateAdmissionReportHints = Pick<
+  NonNullable<Parameters<typeof printResult>[2]>,
+  "writeArtifacts"
+>;
 
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {
@@ -531,8 +458,13 @@ export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
 export async function reportUpdateCommandPendingRecovery(
   error: UpdateCommandPendingRecoveryFailure,
   opts: Pick<UpdateCommandOptions, "json">,
+  reportHints: UpdateAdmissionReportHints = {},
 ): Promise<never> {
-  await printResult(error.result, opts, { readHistory: false, nextAction: error.detail });
+  await printResult(error.result, opts, {
+    ...reportHints,
+    readHistory: false,
+    nextAction: error.detail,
+  });
   defaultRuntime.error(
     `Update recovery remains pending (${error.result.reason ?? "update-failed"}). Retained state and artifacts were left for the owning updater to reconcile; automatic restart and repair were not attempted.${error.detail ? `\n${error.detail}` : ""}`,
   );
@@ -570,6 +502,7 @@ export function mergeWindowsTaskRecoveryFailure(
 }
 
 export type UpdateAdmissionReportParams = {
+  malformedPreview?: boolean;
   mode?: UpdateRunResult["mode"];
   before?: UpdateRunResult["before"];
   stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;

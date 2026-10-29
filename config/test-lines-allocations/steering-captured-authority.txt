@@ -1,0 +1,2 @@
+77
+# Authenticated sandbox-writer steering, requester isolation, post-acceptance revocation, and captured-grant boundary checks.

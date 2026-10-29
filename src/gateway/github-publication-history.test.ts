@@ -335,7 +335,7 @@ describe("GitHub publication branch history", () => {
     expect(await f.publish("rejected-push")).toMatchObject({
       status: "failed",
       code: "push_rejected",
-      nextAction: expect.stringContaining("openclaw/openclaw; nothing was pushed"),
+      nextAction: expect.stringContaining("openclaw/openclaw. Nothing was pushed as @"),
     });
     expect(await f.remoteHead()).toBe("");
     expect(f.calls.some((args) => args.includes("POST"))).toBe(false);

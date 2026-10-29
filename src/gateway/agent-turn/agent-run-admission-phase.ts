@@ -18,7 +18,11 @@ import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/su
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
-import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
+import { isCronSessionKey } from "../../routing/session-key.js";
+import {
+  isCronExecutionInputProvenance,
+  isSubagentCoordinationInputProvenance,
+} from "../../sessions/input-provenance.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   getRpcSourceIdentity,
@@ -34,6 +38,7 @@ import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { prepareGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../session-subagent-resume.js";
 import { formatForLog } from "../ws-log.js";
+import { createAgentPreacceptRefusal } from "./agent-admission-refusal.js";
 import {
   isPreRegistrationAbortedAgentDedupeEntryForSession,
   readGatewayDedupeEntry,
@@ -330,14 +335,7 @@ export async function prepareAgentRunDispatch(
       });
     }
   };
-  const rejectPreaccept = async (error: ReturnType<typeof errorShape>) => {
-    try {
-      await cleanupPreaccept(false, error.message);
-    } finally {
-      params.io.emitAcceptance([false, undefined, error]);
-    }
-    return undefined;
-  };
+  const rejectPreaccept = createAgentPreacceptRefusal(params, cleanupPreaccept);
   const revalidateAdmission = createAgentRunAdmissionRevalidator({
     source: params,
     activeRunAbort,
@@ -415,6 +413,7 @@ export async function prepareAgentRunDispatch(
     return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, err));
   }
 
+  rejectPreaccept.stage = "subagent-preparation";
   const resolvedThreadId =
     params.delivery.explicitThreadId ?? params.delivery.deliveryPlan.resolvedThreadId;
   let subagentAdmission: Awaited<ReturnType<typeof prepareGatewaySubagentRun>>;
@@ -446,6 +445,7 @@ export async function prepareAgentRunDispatch(
   }
   const { pluginSubagent, reactivateSubagent, adoptParentResume, followupSuccessor } =
     subagentAdmission;
+  rejectPreaccept.stage = "input-preparation";
   let assertInputAdmissionCurrent = params.assertAdmissionCurrent;
   let resumedTaskAdopted = false;
   let userTurn: PreparedAgentRunUserTurn | undefined;
@@ -517,6 +517,7 @@ export async function prepareAgentRunDispatch(
   if (inputAdmission !== true) {
     return inputAdmission;
   }
+  rejectPreaccept.stage = "acceptance";
   const accepted = {
     runId: params.runId,
     sessionKey: params.resolvedSessionKey,
@@ -537,9 +538,38 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
   try {
+    const context = params.context.resolveGatewayContext?.();
+    // Provenance is caller-supplied on public RPC. Only the host's system principal
+    // may resolve a session owner; explicitly requester-bound calls keep that requester.
+    const systemTurn =
+      context &&
+      params.canUseInternalRuntimeHandoff &&
+      params.client?.internal?.syntheticClient === true &&
+      params.client.internal.operatorRoleActor?.kind === "system" &&
+      !params.client.internal.operatorRunAuthority &&
+      !params.client.authenticatedUserProfile &&
+      !params.client.internal.cronRunContinuation &&
+      !params.restoredCronContinuation &&
+      params.resolvedSessionKey &&
+      !isCronSessionKey(params.resolvedSessionKey) &&
+      userTurn.inputProvenance?.kind === "internal_system" &&
+      !isCronExecutionInputProvenance(userTurn.inputProvenance)
+        ? {
+            context,
+            agentId: params.activeSessionAgentId,
+            sessionKey: params.resolvedSessionKey,
+            sessionId: params.getAdmittedSessionId(),
+            storePath: lifecycleStorePath,
+            assertCurrent: () => {
+              assertInputOwnerCurrent();
+              activeRunAbort.controller.signal.throwIfAborted();
+            },
+          }
+        : undefined;
     // Accepted work retains this caller; the shared owner derives continuation from child lineage.
     capturedOperator = await retainGatewayOperatorRun({
       ...params,
+      systemTurn,
       spawnedBy: params.sessionEntry?.spawnedBy,
       entry: activeRunAbort.entry,
       abortSession: params.resolvedSessionKey

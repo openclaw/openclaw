@@ -7,10 +7,21 @@ import { readCiWorkflow } from "./ci-workflow.test-support.js";
 const workflow = readCiWorkflow();
 const job = workflow.jobs["android-access-native"];
 const step = job.steps.find(
-  (entry: { name?: string }) => entry.name === "Run packaged Access crypto on Android",
+  (entry: { name?: string }) =>
+    entry.name === "Run packaged Access crypto and production TLS on Android",
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const invalidReports = ["empty", "wrong-class", "failed", "skipped"];
+const invalidReports = [
+  "empty",
+  "wrong-class",
+  "failed",
+  "skipped",
+  "missing-tls",
+  "duplicate-tls",
+  "wrong-tls-method",
+  "failed-tls",
+  "skipped-tls",
+];
 const invalidApks = ["missing-abi", "wrong-variant", "ambiguous-output", "outside-output"];
 
 function verifyReports(mode: string) {
@@ -28,7 +39,30 @@ reports.mkdir(parents=True)
 name = 'OtherTest' if mode == 'wrong-class' else 'ai.openclaw.app.gateway.CloudflareAccessNativeTest'
 child = '<failure/>' if mode == 'failed' else '<skipped/>' if mode == 'skipped' else ''
 case = '' if mode == 'empty' else f'<testcase classname="{name}" name="vector">{child}</testcase>'
-(reports / 'TEST-device.xml').write_text(f'<testsuite>{case}</testsuite>')
+tls_methods = {
+    'ai.openclaw.app.gateway.GatewaySessionTlsNativeTest': [
+        'platformRootReachesReadyWithMatchingHostname',
+        'platformRootRejectsWrongHostnameBeforeWebSocketUpgrade',
+        'platformRootCannotBypassBlocklistedRawIntermediate',
+        'matchingLeafPinReachesReadyDespiteDiscoveredIpHostnameMismatch',
+        'wrongLeafPinRejectsBeforeWebSocketUpgrade',
+        'matchingLeafPinCannotBypassBlocklistedRawIntermediate'],
+    'ai.openclaw.app.ui.chat.ChatInlineWidgetTlsNativeTest': [
+        'platformRootFetchesDocumentWithMatchingHostname',
+        'platformRootRejectsWrongHostnameWithoutOriginRequest',
+        'platformRootCannotFetchThroughBlocklistedRawIntermediate',
+        'matchingLeafPinFetchesDocumentDespiteDiscoveredIpHostnameMismatch',
+        'wrongLeafPinReturnsUnavailableWithoutOriginRequest',
+        'matchingLeafPinCannotFetchThroughBlocklistedRawIntermediate']}
+tls_cases = [f'<testcase classname="{cls}" name="{method}"/>'
+             for cls, methods in tls_methods.items() for method in methods]
+if mode == 'missing-tls': tls_cases.pop()
+if mode == 'duplicate-tls': tls_cases[-1] = tls_cases[0]
+if mode == 'wrong-tls-method': tls_cases[-1] = tls_cases[-1].replace('matchingLeafPinCannotFetchThroughBlocklistedRawIntermediate', 'notTheRequiredCase')
+if mode in ('failed-tls', 'skipped-tls'):
+    tag = 'failure' if mode == 'failed-tls' else 'skipped'
+    tls_cases[-1] = tls_cases[-1].replace('/>', f'><{tag}/></testcase>')
+(reports / 'TEST-device.xml').write_text(f'<testsuite>{case}{"".join(tls_cases)}</testsuite>')
 apk = Path('apps/android/app/build/outputs/apk/play/debug/openclaw-2099.1.2-play-debug.apk')
 apk.parent.mkdir(parents=True)
 element = {'outputFile': '../outside.apk' if mode == 'outside-output' else apk.name, 'filters': []}
@@ -58,7 +92,7 @@ it("uses read-only permissions and installed alignment tooling", () => {
 it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
   const guard = step.run.slice(
     step.run.indexOf('test "$(adb -s emulator-5554 shell getconf PAGE_SIZE'),
-    step.run.indexOf("node --import ./scripts/tsx.mjs"),
+    step.run.indexOf("bash scripts/android-native-tls-trust.sh prepare"),
   );
   for (const [pageSize, linker, packageManager, passes] of [
     [16384, "false", "true", true],

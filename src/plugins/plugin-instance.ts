@@ -30,7 +30,7 @@ import type {
   PluginRetentionOwner,
   PluginWorkRelease,
 } from "./plugin-instance.types.js";
-import { announcePluginReplacement } from "./plugin-replacement-watchers.js";
+import { createPluginReplacementReservation } from "./plugin-replacement-operation.js";
 import { PluginReferenceDiagnostics } from "./plugin-retention-diagnostics.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { releasePluginInstanceRegistry } from "./registry-lifecycle.js";
@@ -39,6 +39,12 @@ import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 
 const { values: valueInstances } = pluginInstanceState;
+export type {
+  PluginReplacementOperation,
+  PluginReplacementOutcome,
+} from "./plugin-replacement-operation.js";
+export { readPluginReplacementOperation } from "./plugin-replacement-operation.js";
+
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 const log = createSubsystemLogger("plugins/cleanup");
 type PluginInstanceCall = { registry?: PluginRegistry; cleanup: boolean; ownerJoined: boolean };
@@ -94,9 +100,8 @@ export class PluginInstance {
     observed: Promise<PluginInstanceDisposalResult>;
     settled: Promise<PluginInstanceDisposalResult>;
   };
-  // A reload's replacement reservation on one plugin instance.
-  /** Records whether a reload has reserved an instance and when that reload settles. */
-  private replacementSettlement?: ReturnType<typeof createDeferredCore<void>>;
+  private readonly replacement = createPluginReplacementReservation(this);
+  readonly reserveReplacement = this.replacement.reserveReplacement;
   readonly owner?: PluginInstanceOwner;
   private readonly runtimeScope: Parameters<typeof withPluginRuntimePluginScope>[0];
 
@@ -170,7 +175,7 @@ export class PluginInstance {
 
   /** The reload is waiting for this instance's live work. */
   get replacementPending(): boolean {
-    return this.replacementSettlement !== undefined;
+    return this.replacement.settled !== undefined;
   }
 
   holdsPendingReplacement(token: object): boolean {
@@ -287,24 +292,6 @@ export class PluginInstance {
     );
   }
 
-  /** Refuse a caller-dependent reload before stopping its serving instance. */
-  reserveReplacement(): () => void {
-    if (this.hasActiveCall) {
-      throw new Error(
-        `Plugin ${this.pluginId} cannot replace itself from its own active call; retry after the call finishes.`,
-      );
-    }
-    /** Reserve the instance for a reload; any release ends the reservation and settles waiting callers. */
-    announcePluginReplacement(this, this.replacementPending);
-    const settled = (this.replacementSettlement ??= createDeferredCore());
-    return () => {
-      if (this.replacementSettlement === settled) {
-        this.replacementSettlement = undefined;
-        settled.resolve();
-      }
-    };
-  }
-
   /** The refusal for a fresh call, carrying the reload settlement when one is offered. */
   private refuseFreshCall(accepting: boolean): PluginInstanceUnavailableError {
     /**
@@ -314,11 +301,11 @@ export class PluginInstance {
      * the reload could be waiting on that caller.
      */
     const replacement: Promise<void> | undefined =
-      this.replacementSettlement &&
+      this.replacement.settled &&
       !accepting &&
       !invocation.getStore() &&
       !currentPluginWorkHoldsPendingReplacement()
-        ? this.replacementSettlement.promise
+        ? this.replacement.settled
         : undefined;
     return new PluginInstanceUnavailableError(this.pluginId, replacement);
   }

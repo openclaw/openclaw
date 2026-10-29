@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { API } from "typescript/sync";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   countTestTimeoutRaceReferences,
@@ -40,6 +41,81 @@ it("counts references and imported aliases without counting import specifiers or
     expect(count(source), source).toBe(expected);
   }
   expect(() => count("withTestTimeout(", "broken.ts")).toThrow(/^broken.ts:1: /u);
+});
+
+it.each([0, 1, 32, 33])("bounds native snapshot preparation for %i candidate files", (size) => {
+  const root = tempDirs.make("openclaw-timeout-batch-");
+  const { write } = fixtureFiles(root);
+  const entries = Array.from(
+    { length: size },
+    (_, index) => `test/${String(index).padStart(2, "0")}.ts`,
+  );
+  for (const [index, file] of entries.entries()) {
+    write(
+      file,
+      index === 0
+        ? "// withTestTimeout(work)\n"
+        : 'import { withTestTimeout as race } from "./promise.js"; race(work);\n',
+    );
+  }
+  write(
+    "config/test-timeout-race-baseline.txt",
+    entries
+      .slice(1)
+      .map((file) => `${file}\t1\n`)
+      .join(""),
+  );
+  for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
+    git(root, args);
+  }
+  const calls = { createSnapshot: 0, updateSnapshot: 0 };
+  const descriptors = (["createSnapshot", "updateSnapshot"] as const).map((name) => ({
+    name,
+    descriptor: Object.getOwnPropertyDescriptor(API.prototype, name)!,
+  }));
+  try {
+    for (const { name, descriptor } of descriptors) {
+      Object.defineProperty(API.prototype, name, {
+        ...descriptor,
+        get(this: API) {
+          const invoke: API[typeof name] = descriptor.get!.call(this);
+          const counted = new Proxy(invoke, {
+            apply(target, receiver, args) {
+              calls[name] += 1;
+              return Reflect.apply(target, receiver, args);
+            },
+          });
+          // The SDK getter caches its callable on the instance; count subsequent calls too.
+          Object.defineProperty(this, name, { configurable: true, value: counted });
+          return counted;
+        },
+      });
+    }
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    const positive = Math.max(0, size - 1);
+    expect(output.mock.calls).toEqual([
+      [`test timeout race ratchet OK: ${positive} files, ${positive} grandfathered sites.`],
+    ]);
+    expect(errors).not.toHaveBeenCalled();
+    expect(calls).toEqual({
+      createSnapshot: Number(size > 0),
+      updateSnapshot: Math.max(0, Math.ceil(size / 32) - 1),
+    });
+    if (size === 33) {
+      write(entries[0]!, "withTestTimeout(\n");
+      write(entries[32]!, "raceWithTimeoutResult(\n");
+      calls.createSnapshot = calls.updateSnapshot = 0;
+      expect(main(root, ["--base", "HEAD"])).toBe(1);
+      expect(errors.mock.calls).toEqual([[expect.stringMatching(/^test\/00.ts:2: /u)]]);
+      expect(calls).toEqual({ createSnapshot: 1, updateSnapshot: 0 });
+    }
+  } finally {
+    for (const { name, descriptor } of descriptors) {
+      Object.defineProperty(API.prototype, name, descriptor);
+    }
+  }
 });
 
 it("blocks added sites, reads the index, ignores the owner, and demands shrinking removed sites", () => {

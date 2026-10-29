@@ -152,30 +152,41 @@ fs.appendFileSync("builds", "built\\n");`,
   expect(run()).toBe(7);
 });
 
-it("reuses Watch slices across new output directories and rebuilds changed inputs or damaged archives", () => {
-  const { at, put, read, copy, run: exec, builds } = cacheFixture("watch-rtc-cache-");
-  copy("apps/shared/OpenClawWatchRTC/build.sh", "crate/build.sh");
-  for (const file of ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "src/lib.rs"]) {
-    put(`crate/${file}`, "fixture");
-  }
-  const tool = (name: string, body: string) =>
-    put(`bin/${name}`, "#!/bin/sh\nset -eu\n" + body, 0o755);
-  tool("rustup", "echo fixture-rustc\n");
-  tool("xcodebuild", "echo fixture-xcode\n");
-  tool(
-    "xcrun",
-    `if [ "$1" = lipo ]; then
-  cp "$3" "$5"
+it.each([
+  { platform: "watchsimulator", arches: ["arm64"] },
+  { platform: "watchos", arches: ["arm64", "arm64_32"] },
+])(
+  "reuses $platform slices across fresh builds and invalidates changed or damaged inputs",
+  ({ platform, arches }) => {
+    const { at, put, read, copy, run: exec, builds } = cacheFixture("watch-rtc-cache-");
+    copy("apps/shared/OpenClawWatchRTC/build.sh", "crate/build.sh");
+    for (const file of ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "src/lib.rs"]) {
+      put(`crate/${file}`, "fixture");
+    }
+    const tool = (name: string, body: string) =>
+      put(`bin/${name}`, "#!/bin/sh\nset -eu\n" + body, 0o755);
+    tool("rustup", "echo fixture-rustc\n");
+    tool("xcodebuild", "echo fixture-xcode\n");
+    tool(
+      "xcrun",
+      `if [ "$1" = lipo ]; then
+  shift 2
+  archive=""
+  while [ "$1" != -output ]; do
+    archive="$archive$(cat "$1")"
+    shift
+  done
+  printf '%s' "$archive" > "$2"
 elif [ "$3" = --show-sdk-path ]; then
   echo /fixture-sdk
 else
   echo "$FIXTURE_SDK_VERSION"
 fi
 `,
-  );
-  tool(
-    "cargo",
-    `while [ "$#" -gt 0 ]; do
+    );
+    tool(
+      "cargo",
+      `while [ "$#" -gt 0 ]; do
   case "$1" in
     --target-dir) shift; output="$1" ;;
     --target) shift; target="$1" ;;
@@ -186,30 +197,35 @@ mkdir -p "$output/$target/release"
 printf 'static library' > "$output/$target/release/libopenclaw_watch_rtc.a"
 echo built >> "$FIXTURE_BUILDS"
 `,
-  );
-  const cache = at("cache");
-  let invocation = 0;
-  const run = (sdk = "27") => {
-    const output = `output-${++invocation}`;
-    exec("/bin/bash", [at("crate/build.sh"), "watchsimulator", at(output), "arm64"], {
-      PATH: `${at("bin")}:${process.env.PATH}`,
-      OPENCLAW_WATCH_RTC_CACHE_DIR: cache,
-      FIXTURE_BUILDS: at("builds"),
-      FIXTURE_SDK_VERSION: sdk,
-    });
-    expect(read(`${output}/libopenclaw_watch_rtc.a`)).toBe("static library");
-    return builds();
-  };
-  expect(run()).toBe(1);
-  expect(run()).toBe(1);
-  put("crate/src/lib.rs", "changed source");
-  expect(run()).toBe(2);
-  for (const file of fs.readdirSync(cache).filter((entry) => entry.endsWith(".a"))) {
-    fs.writeFileSync(path.join(cache, file), "damaged");
-  }
-  expect(run()).toBe(3);
-  expect(run("28")).toBe(4);
-});
+    );
+    const cache = at("cache");
+    let invocation = 0;
+    const run = (sdk = "27", deploymentTarget = "11.0") => {
+      const output = `output-${++invocation}`;
+      exec("/bin/bash", [at("crate/build.sh"), platform, at(output), ...arches], {
+        PATH: `${at("bin")}:${process.env.PATH}`,
+        OPENCLAW_WATCH_RTC_CACHE_DIR: cache,
+        FIXTURE_BUILDS: at("builds"),
+        FIXTURE_SDK_VERSION: sdk,
+        WATCHOS_DEPLOYMENT_TARGET: deploymentTarget,
+      });
+      expect(read(`${output}/libopenclaw_watch_rtc.a`)).toBe(
+        "static library".repeat(arches.length),
+      );
+      return builds();
+    };
+    expect(run()).toBe(arches.length);
+    expect(run()).toBe(arches.length);
+    put("crate/src/lib.rs", "changed source");
+    expect(run()).toBe(2 * arches.length);
+    for (const file of fs.readdirSync(cache).filter((entry) => entry.endsWith(".a"))) {
+      fs.writeFileSync(path.join(cache, file), "damaged");
+    }
+    expect(run()).toBe(3 * arches.length);
+    expect(run("28")).toBe(4 * arches.length);
+    expect(run("28", "12.0")).toBe(5 * arches.length);
+  },
+);
 
 it("never saves Apple inputs from PRs, dispatches, non-main refs, or frozen targets", () => {
   const job = readCiWorkflow().jobs["ios-build"];
@@ -267,5 +283,30 @@ it("never saves Apple inputs from PRs, dispatches, non-main refs, or frozen targ
         },
       }),
     ).toBe(false);
+  }
+});
+
+it("shares release device libraries only between trusted main release destinations", () => {
+  const job = readWorkflow(".github/workflows/ios-store-release.yml").jobs.release;
+  const restore = job.steps.find((step: WorkflowStep) => step.id === "watch-rtc-cache");
+  const save = job.steps.find((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@"));
+  expect(restore.with.key).toMatch(/^watch-rtc-release-v1-/);
+  expect(restore.with["restore-keys"]).toBeUndefined();
+  expect(save.with.path).toBe(restore.with.path);
+  expect(save.with.key).toBe("${{ steps.watch-rtc-cache.outputs.cache-primary-key }}");
+  for (const operation of ["release", "testflight"]) {
+    for (const ref of ["refs/heads/main", "refs/heads/topic"]) {
+      for (const repository of ["openclaw/openclaw", "fork/openclaw"]) {
+        expect(
+          evaluateWorkflow(`\${{ ${job.if} }}`, {
+            eventName: "workflow_dispatch",
+            inputs: { operation },
+            ref,
+            repository,
+            additionalNeeds: { qualify: { outputs: {}, result: "success" } },
+          }),
+        ).toBe(ref === "refs/heads/main" && repository === "openclaw/openclaw");
+      }
+    }
   }
 });

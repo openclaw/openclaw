@@ -105,7 +105,7 @@ export function createQaChannelTransport(state: QaBusState, transportPolicy?: Qa
             .events.some(
               (event) =>
                 event.kind === "inbound-message" &&
-                state.getAcknowledgedPollCursor(event.accountId) < event.cursor,
+                !state.hasCompletedInboundEvent(event.accountId, event.cursor),
             )
         ) {
           return undefined;

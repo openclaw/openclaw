@@ -5631,9 +5631,12 @@ unchanged.
 
 Lifecycle projections without removals skip deletion-plan preparation. Empty
 automatic maintenance plans use their verified age receipt to schedule the next
-pass without an empty finalization yield or a second deadline request. Changed
-plans retain finalization and its fresh deadline read; cadence and retention
-policy are unchanged.
+pass without an empty finalization yield or a second deadline request. Activity
+acknowledged during result delivery also reuses that deadline when the current
+entry count remains below the capacity trigger; it does not force another empty
+planning pass. Policy changes, invalidated facts, capacity pressure, and due age
+deadlines still resume planning. Changed plans retain finalization and its fresh
+deadline read; cadence and retention policy are unchanged.
 
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each
@@ -7301,6 +7304,14 @@ the existing worker handler. Cold, oversized, or unknown cases retain the whole
 SQL snapshot path. Write-capable operations keep their transaction-local SQL
 view. Synchronous compatibility writes publish committed facts to the same owner;
 transaction-local synchronous reads never use a committed resident view.
+
+Plugin-state write receipts reference the command's immutable submitted JSON when
+it matches the committed postimage. The host resolves that admission-local
+reference before validating and installing the row; timestamps, expiry, and
+eviction tombstones still come from the worker. Settlement recovery uses the same
+reference. Worker-generated values retain full postimages. This changes only
+process-lifetime receipt transport, not the Plugin SDK, stored rows, transactions,
+or write ordering.
 
 Runtime-health cleanup selects from that same complete view. An empty selection
 skips the worker request; positive clears retain their ordered worker operation

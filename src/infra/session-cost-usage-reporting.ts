@@ -33,6 +33,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import { dropInheritedTranscriptEvents } from "./session-cost-usage-inherited.js";
 import {
   createUsageCostResolver,
   parseUsageCostTranscriptEntryAsync,
@@ -208,18 +209,14 @@ export async function loadSessionUsageTimeSeries(
     }
 
     let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
-    let usageUnavailable = false;
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
     const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
 
-    for await (const record of readTranscriptRecords(sessionFile)) {
+    // Copied history stays charted in its source session, as in the usage rollups.
+    for await (const record of readTranscriptRecords(sessionFile, { countedOnly: true })) {
       const entry = await parseUsageCostTranscriptEntryAsync(record, resolveCost, scoped.config);
       const timestamp = entry?.timestamp?.getTime();
       if (!entry?.usage || !timestamp) {
-        continue;
-      }
-      if (entry.usage.usageReport?.state === "unavailable") {
-        usageUnavailable = true;
         continue;
       }
       points.push({
@@ -265,7 +262,6 @@ export async function loadSessionUsageTimeSeries(
     let cumulativeCost = 0;
     return {
       sessionId: scoped.sessionId,
-      ...(usageUnavailable ? { usageReport: { state: "unavailable" as const } } : {}),
       points: points.map((point) => {
         cumulativeTokens += point.totalTokens;
         cumulativeCost += point.cost;
@@ -384,10 +380,7 @@ export async function loadSessionLogs(
       // Logs share pricing and timestamp interpretation with summaries and charts.
       // Recomputing here can turn unknown prices into zero or ignore tiered rates.
       const entry = await parseUsageCostTranscriptEntryAsync(parsed, resolveCost, scoped.config);
-      const usage =
-        role === "assistant" && entry?.usage?.usageReport?.state !== "unavailable"
-          ? entry?.usage
-          : undefined;
+      const usage = role === "assistant" ? entry?.usage : undefined;
 
       logs.push({
         timestamp: entry?.timestamp?.getTime() ?? 0,
@@ -409,7 +402,11 @@ export async function loadSessionLogs(
   });
 }
 
-async function* readTranscriptRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
+/** `countedOnly` drops copied history that its source transcript counts, as usage rollups do. */
+async function* readTranscriptRecords(
+  filePath: string,
+  options: { countedOnly?: boolean } = {},
+): AsyncGenerator<Record<string, unknown>> {
   const marker = parseSqliteSessionFileMarker(filePath);
   if (marker) {
     const signal = getAsyncWorkSignal();
@@ -444,15 +441,14 @@ async function* readTranscriptRecords(filePath: string): AsyncGenerator<Record<s
     } else {
       events = await loadSessionTranscriptEvents(marker);
     }
-    for (const event of selectVisibleTranscriptEvents(events)) {
-      if (isRecord(event)) {
-        yield event;
-      }
-    }
+    const records = events.filter(isRecord);
+    const visible = selectVisibleTranscriptEvents(records);
+    yield* options.countedOnly ? dropInheritedTranscriptEvents(records, visible) : visible;
     return;
   }
   // Durable byte-offset scans own their checkpoint reader. Diagnostic history
   // shares the canonical transcript stream and materializes archive bytes once.
+  // Legacy JSONL transcripts predate the inherited-history marker, as in their rollup scan.
   const transcriptPath = materializeSessionArchiveForRead(filePath);
   for await (const line of streamSessionTranscriptLines(transcriptPath)) {
     try {

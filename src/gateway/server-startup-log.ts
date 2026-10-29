@@ -13,14 +13,22 @@ import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  inspectGatewayServiceInstallationDrift,
+  summarizeGatewayServiceLayout,
+} from "../daemon/service-layout.js";
+import {
   ensureSqliteLibrarySelected,
   getSqliteRuntimeCapabilities,
 } from "../infra/bun-sqlite-library.js";
+import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
 import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "../security/dangerous-config-flags-current.js";
+import { VERSION } from "../version.js";
 
 /** Emit startup summary lines after Gateway bind and plugin loading complete. */
 export async function logGatewayStartup(params: {
@@ -59,6 +67,33 @@ export async function logGatewayStartup(params: {
   params.log.info(
     "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
   );
+  try {
+    const cliPath = resolveExecutableFromPathEnv(
+      "openclaw",
+      resolveEnvironmentValue(params.env, "PATH") ?? "",
+      params.env,
+      { useCache: false },
+    );
+    if (cliPath) {
+      const [gatewayRoot, cli] = await Promise.all([
+        resolveOpenClawPackageRoot({ moduleUrl: import.meta.url }),
+        summarizeGatewayServiceLayout({ programArguments: [cliPath, "gateway"] }),
+      ]);
+      if (
+        gatewayRoot &&
+        cli?.packageRootReal &&
+        cli.packageVersion &&
+        ((await inspectGatewayServiceInstallationDrift(cli, gatewayRoot)) ||
+          cli.packageVersion !== VERSION)
+      ) {
+        params.log.warn(
+          `PATH CLI ${cli.packageVersion} at ${cli.packageRootReal} differs from this Gateway ${VERSION} at ${gatewayRoot}. Run openclaw update or use the CLI from ${gatewayRoot}.`,
+        );
+      }
+    }
+  } catch {
+    // Optional PATH/package inspection must never prevent Gateway startup.
+  }
   const sqliteLibrary = ensureSqliteLibrarySelected();
   params.log.info(
     `native runtime: ${JSON.stringify({

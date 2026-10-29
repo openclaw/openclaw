@@ -287,7 +287,11 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       facts: Fact[];
       bytes: number;
       rawBytes: number;
-      packed?: { row: GatewaySessionRow; keys: string[] };
+      packed?: {
+        row: GatewaySessionRow;
+        keys: string[];
+        prefix?: { json: string; utf8Bytes: number; retainedBytes: number };
+      };
     }
   >();
   const share = (sessions: T[]) => {
@@ -387,16 +391,24 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       ) {
         rows[index] = previous.row;
       } else {
+        let prefix: NonNullable<typeof previous>["prefix"];
         if (sameKeys && row.sharedFacts) {
           // Packing appends numeric fact indexes last. All preceding fields and their
           // order still belong to the same immutable source; only replace that array.
-          const encoded = serializeSessionRow(previous.row);
-          registerSerializedSessionRow(
-            row,
-            encoded.slice(0, encoded.lastIndexOf("[")) + JSON.stringify(row.sharedFacts) + "}",
-          );
+          if (previous.prefix === undefined) {
+            const encoded = serializeSessionRow(previous.row);
+            const json = encoded.slice(0, encoded.lastIndexOf("["));
+            previous.prefix = {
+              json,
+              utf8Bytes: Buffer.byteLength(json),
+              retainedBytes: encoded.length * 2,
+            };
+          }
+          prefix = previous.prefix;
+          const suffix = JSON.stringify(row.sharedFacts) + "}";
+          registerSerializedSessionRow(row, prefix.json + suffix, prefix.utf8Bytes + suffix.length);
         }
-        retained.packed = { row, keys: sameKeys ? previous.keys : Object.keys(row) };
+        retained.packed = { row, keys: sameKeys ? previous.keys : Object.keys(row), prefix };
       }
     }
     return { sessions: rows, sharedFacts };
@@ -408,7 +420,10 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       return retained
         ? retained.bytes +
             Math.max(0, retained.rawBytes - sessionRowEncodingBytes(row)) +
-            (retained.packed ? sessionRowEncodingBytes(retained.packed.row) : 0)
+            (retained.packed
+              ? sessionRowEncodingBytes(retained.packed.row) +
+                (retained.packed.prefix?.retainedBytes ?? 0)
+              : 0)
         : 0;
     },
   };

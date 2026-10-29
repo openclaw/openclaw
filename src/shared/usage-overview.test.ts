@@ -7,7 +7,6 @@ import type { SessionUsageEntry, UsageOverviewOptions } from "./usage-types.js";
 
 const utc: UsageDailyBucket = { mode: "utc-offset", utcOffsetMinutes: 0 };
 const zeroMessages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
-const unavailable = { state: "unavailable" as const };
 const usage = (...parts: Partial<SessionCostSummary>[]): SessionCostSummary =>
   Object.assign(createEmptyCostUsageTotals(), ...parts);
 function overview(rows: SessionUsageEntry[], options: UsageOverviewOptions = {}, compact = true) {
@@ -46,39 +45,29 @@ it("matches wildcard filters without exponential backtracking", () => {
   expect(overview(sessions, { query: "key:*jobX??" }, false).sessions).toEqual([]);
 });
 
-it("keeps incomplete table totals unknown beyond the page and scopes completeness to selected days", () => {
-  const complete = usage({ input: 40, inputCost: 1, totalTokens: 40, totalCost: 1 });
-  const interrupted = usage({
+it("keeps table totals beyond the page and scopes them to selected days", () => {
+  const first = usage({ input: 40, inputCost: 1, totalTokens: 40, totalCost: 1 });
+  const second = usage({
     input: 75,
     inputCost: 2,
     totalTokens: 75,
     totalCost: 2,
-    usageReport: unavailable,
     activityDates: ["2026-05-14", "2026-05-15"],
     dailyBreakdown: [
-      { ...complete, date: "2026-05-14", tokens: 40, cost: 1 },
-      { ...daily("2026-05-15", 0), usageReport: unavailable },
+      { ...first, date: "2026-05-14", tokens: 40, cost: 1 },
+      daily("2026-05-15", 35),
     ],
   });
   const rows = [
-    { key: "complete", updatedAt: 2, usage: complete },
-    { key: "interrupted", updatedAt: 1, usage: interrupted },
+    { key: "first", updatedAt: 2, usage: first },
+    { key: "second", updatedAt: 1, usage: second },
   ];
   const all = overview(rows, { limit: 1 });
-  expect(all.sessions.map((row) => row.key)).toEqual(["complete"]);
-  expect(all.totals.usageReport).toEqual(unavailable);
-  expect(all.overview.tableTotals).toEqual({
-    tokens: 115,
-    cost: 3,
-    errors: 0,
-    usageReport: unavailable,
-  });
+  expect(all.sessions.map((row) => row.key)).toEqual(["first"]);
+  expect(all.overview.tableTotals).toEqual({ tokens: 115, cost: 3, errors: 0 });
   const selected = overview([rows[1]!], { selectedDays: ["2026-05-14"] });
-  expect(selected.overview.usageReport).toEqual(unavailable);
-  expect(selected.totals.usageReport).toBeUndefined();
   expect(selected.overview.tableTotals).toEqual({ tokens: 40, cost: 1, errors: 0 });
-  expect(selected.sessions[0]?.usage).toMatchObject(complete);
-  expect(selected.sessions[0]?.usage?.usageReport).toBeUndefined();
+  expect(selected.sessions[0]?.usage).toMatchObject(first);
 });
 
 it.each([
@@ -445,24 +434,6 @@ it("sorts fresh aggregate arrays without copying them and isolates successive re
   expect(accumulator.finish()).toEqual(expected);
 });
 
-it("retains incomplete daily and model subtotals after merging complete rows", () => {
-  const date = "2026-05-15";
-  const marker = { state: "unavailable" as const };
-  const result = aggregate(
-    ...[marker, undefined].map((usageReport) => ({
-      usageReport,
-      dailyBreakdown: [{ ...usage(), date, tokens: 10, cost: 1, usageReport }],
-      dailyModelUsage: [{ date, model: "local", tokens: 10, cost: 1, count: 1, usageReport }],
-    })),
-  );
-  expect(result.daily).toEqual([
-    { date, tokens: 20, cost: 2, messages: 0, toolCalls: 0, errors: 0, usageReport: marker },
-  ]);
-  expect(result.modelDaily).toEqual([
-    { ...modelDay(date, "local", 20, 2, 2), usageReport: marker },
-  ]);
-});
-
 it("builds collision-free model identities with legacy unknown grouping", () => {
   expect(usageModelIdentity("fixture\0bedrock", "arn")).not.toBe(
     usageModelIdentity("fixture", "bedrock\0arn"),
@@ -795,19 +766,6 @@ it("supports numeric filters like minTokens/maxTokens", () => {
       warnings: [],
     });
   }
-});
-
-it("does not classify unknown usage as zero or as its known subtotal", () => {
-  const interrupted = makeSession("interrupted", {
-    usageReport: { state: "unavailable" },
-    totalTokens: 100,
-    totalCost: 0,
-    messageCounts: { ...zeroMessages, total: 2 },
-  });
-  for (const query of ["minTokens:10", "maxTokens:1000", "minCost:0", "maxCost:1"]) {
-    expect(queryOverview([interrupted], query).sessions).toEqual([]);
-  }
-  expect(queryOverview([interrupted], "minMessages:1").sessions).toEqual([interrupted]);
 });
 
 it("supports every has predicate and warns on unknown values", () => {
