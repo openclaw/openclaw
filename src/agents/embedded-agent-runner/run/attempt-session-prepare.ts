@@ -371,8 +371,11 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
           candidate?.messageEntry.message.provenance,
         );
         // Keep unanswered user input in history through failed internal continuations.
+        // A restart adds a separate system input to this same conversation.
         const preserveUnansweredUser =
-          shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance) &&
+          ((attempt.inputProvenance?.kind === "internal_system" &&
+            attempt.inputProvenance.sourceTool === "restart") ||
+            shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance)) &&
           (!orphanProvenance || orphanProvenance.kind === "external_user");
         if (reconciledCurrentUser || preserveUnansweredUser) {
           return undefined;
