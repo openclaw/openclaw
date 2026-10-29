@@ -266,6 +266,69 @@ describe("assertSqliteSchemaContains", () => {
     }
   });
 
+  it.each([
+    ["table", "records", ""],
+    ["table", "RECORDS", ""],
+    ["table", "records", "CREATE TABLE pragma_index_list (id INTEGER);"],
+    ["table", "RECORDS", "CREATE TABLE pragma_index_list (id INTEGER);"],
+    ["view", "records", ""],
+    ["view", "RECORDS", ""],
+    ["view", "records", "CREATE TABLE pragma_index_list (id INTEGER);"],
+    ["view", "RECORDS", "CREATE TABLE pragma_index_list (id INTEGER);"],
+  ])("checks %s triggers with target casing %s and fallback %s", (kind, target, fallback) => {
+    const event = kind === "table" ? "AFTER INSERT" : "INSTEAD OF INSERT";
+    const schema = `
+      ${kind === "table" ? "CREATE TABLE Records (value INTEGER);" : "CREATE VIEW Records AS SELECT 1 AS value;"}
+      CREATE TRIGGER record_insert ${event} ON ${target} BEGIN SELECT 1; END;
+      ${fallback}
+    `;
+    const database = createDatabase(schema);
+    try {
+      const catalog = readSqliteSchemaCatalog(database);
+      const targetCatalog = kind === "table" ? catalog.tables : catalog.views;
+      expect(targetCatalog.find((object) => object.name === "Records")?.triggers).toMatchObject([
+        { name: "record_insert" },
+      ]);
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+      database.exec("DROP TRIGGER record_insert;");
+      expect(collectSqliteSchemaIssues(database, schema)).toMatchObject([
+        { code: "missing-or-drifted-trigger", objectName: "record_insert" },
+      ]);
+      database.exec(`CREATE TRIGGER record_insert ${event} ON ${target} BEGIN SELECT 2; END;`);
+      expect(collectSqliteSchemaIssues(database, schema)).toMatchObject([
+        { code: "missing-or-drifted-trigger", objectName: "record_insert" },
+        { code: "unexpected-trigger", objectName: "record_insert" },
+      ]);
+      database.exec(`CREATE TRIGGER unexpected_insert ${event} ON ${target} BEGIN SELECT 3; END;`);
+      expect(collectSqliteSchemaIssues(database, schema)).toContainEqual({
+        code: "unexpected-trigger",
+        objectName: "unexpected_insert",
+        message: "unexpected trigger unexpected_insert",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each(["table", "view"])("keeps non-ASCII-distinct %s trigger targets separate", (kind) => {
+    const event = kind === "table" ? "AFTER INSERT" : "INSTEAD OF INSERT";
+    const schema = `
+      ${kind === "table" ? 'CREATE TABLE "ÉRecords" (value INTEGER); CREATE TABLE "éRecords" (value INTEGER);' : 'CREATE VIEW "ÉRecords" AS SELECT 1 AS value; CREATE VIEW "éRecords" AS SELECT 2 AS value;'}
+      CREATE TRIGGER upper_insert ${event} ON "Érecords" BEGIN SELECT 1; END;
+      CREATE TRIGGER lower_insert ${event} ON "érecords" BEGIN SELECT 2; END;
+    `;
+    const database = createDatabase(schema);
+    try {
+      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
+      database.exec("DROP TRIGGER lower_insert;");
+      expect(collectSqliteSchemaIssues(database, schema)).toMatchObject([
+        { code: "missing-or-drifted-trigger", objectName: "lower_insert" },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
   it.each(["CREATE TEMP VIEW pragma_index_xinfo AS SELECT 1 AS id;"])(
     "keeps main index terms separate from temp shadows with fallback %s",
     (fallback) => {

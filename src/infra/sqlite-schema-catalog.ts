@@ -15,7 +15,11 @@ import {
   createSqliteTableContract,
   type SqliteTableContract,
 } from "./sqlite-schema-contract-assembly.js";
-import { normalizeSchemaSql, quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
+import {
+  foldSqliteIdentifierCase,
+  normalizeSchemaSql,
+  quoteSqliteIdentifier,
+} from "./sqlite-schema-sql.js";
 
 export type SqliteTableContractReader = ((tableName: string) => SqliteTableContract | undefined) & {
   readCatalog?: (
@@ -253,7 +257,7 @@ function readSqliteSchemaCatalog(
       );
   const triggers = groupRecords(
     objects.filter((row) => row.type === "trigger"),
-    (row) => row.tbl_name,
+    (row) => foldSqliteIdentifierCase(row.tbl_name),
   );
   const indexSql = new Map(
     objects.filter((row) => row.type === "index").map((row) => [row.name, row.sql]),
@@ -268,7 +272,8 @@ function readSqliteSchemaCatalog(
       : columns
         ? (columns.get(name) ?? []).map(({ table_name: _tableName, ...column }) => column)
         : readSqliteColumnCatalog(database, name);
-  const readTriggers = (name: string) => (triggers.get(name) ?? []).map(normalizedRow);
+  const readTriggers = (name: string) =>
+    (triggers.get(foldSqliteIdentifierCase(name)) ?? []).map(normalizedRow);
   return {
     tables: tables.map((table) => {
       const tableOption = tableOptions.find(
