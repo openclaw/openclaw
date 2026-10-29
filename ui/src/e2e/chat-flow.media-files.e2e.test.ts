@@ -11,6 +11,7 @@ import {
   installPlainHttpClipboardCapture,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { installAssistantMediaCacheMiss } from "./chat-media-http-cache.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -268,6 +269,7 @@ suite.define(() => {
         requestedMediaUrls.filter(
           (url) => !url.searchParams.has("variant") && !url.searchParams.has("meta"),
         );
+      await installAssistantMediaCacheMiss(page);
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const request = route.request();
         const url = new URL(request.url());
@@ -317,6 +319,17 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
+      if (boundedPreview && !previewFails) {
+        await expect
+          .poll(() => page.evaluate(() => document.documentElement.dataset.mediaCacheRead))
+          .toBe(
+            JSON.stringify({
+              cache: "only-if-cached",
+              mode: "same-origin",
+              credentials: "same-origin",
+            }),
+          );
+      }
       if (previewFails) {
         const retry = page.getByRole("button", { name: "Retry", exact: true });
         await retry.waitFor();
@@ -350,6 +363,7 @@ suite.define(() => {
       const image = page.locator("img.chat-message-image");
       await image.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => imageWidths(image)).toEqual([1]);
+      expect(requestedMediaUrls).toHaveLength(2);
       const previewRequest = requestedMediaUrls.find((url) => url.searchParams.get("meta") !== "1");
       expect(previewRequest?.searchParams.get("variant")).toBe(boundedPreview ? "thumbnail" : null);
       const inlineSource = await image.getAttribute("src");

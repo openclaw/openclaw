@@ -16,6 +16,7 @@ import {
   isHostLocalMarkdownFileHref,
   MARKDOWN_FILE_LINK_SCAN_RE,
   parseMarkdownFileLinkTarget,
+  parseMarkdownDocumentFileLinkTarget,
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
@@ -385,7 +386,11 @@ export function createMarkdownParser(): MarkdownItParser {
               // Keep the raw href when malformed percent escapes cannot be decoded.
             }
             if (!decodedHref.includes("://")) {
+              const documentTarget = env.documentFileLinks
+                ? parseMarkdownDocumentFileLinkTarget(href)
+                : null;
               const target =
+                documentTarget ??
                 parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
                 (isHostLocalMarkdownFileHref(decodedHref)
                   ? splitMarkdownFileLineSuffix(decodedHref.trim())
@@ -393,6 +398,9 @@ export function createMarkdownParser(): MarkdownItParser {
               if (target) {
                 token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
                 decorateFileLink(token, target);
+                if (documentTarget) {
+                  token.attrSet("data-file-document-relative", "true");
+                }
                 // Keep authored labels; expose their reference only when different.
                 const reference = decodedHref.trim();
                 if (linkLabelText(children, index) !== reference) {

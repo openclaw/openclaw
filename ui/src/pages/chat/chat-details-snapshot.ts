@@ -1,7 +1,13 @@
-import type { SnapshotValue } from "../../lib/snapshot-json.ts";
-import type { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
+import { i18n } from "../../i18n/index.ts";
+import type { ChatDetailsSnapshot } from "./session-details-snapshot-schema.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  type ChatHistoryCursorHost,
+  type ChatMessageCache,
+} from "./session-message-cache.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
-export type ChatDetailsSnapshot = NonNullable<SnapshotValue<typeof detailsSnapshotSchema>>;
 export type DetailsSubagents = NonNullable<ChatDetailsSnapshot["subagents"]>;
 export type DetailsSubagent = DetailsSubagents["rows"][number];
 export type DetailsAutomation = NonNullable<ChatDetailsSnapshot["automations"]>["rows"][number];
@@ -27,5 +33,53 @@ export function projectDetailsSubagents(rows: readonly DetailsSubagent[], mobile
           .length,
       }))
       .filter((entry) => entry.count > 0),
+  };
+}
+
+/** Display receipts share the transcript's scope and incarnation, never live read authority. */
+export function captureChatDetailsSnapshot(
+  host: ChatHistoryCursorHost & {
+    chatMessagesBySession: ChatMessageCache;
+    connectionEpoch: number;
+  },
+) {
+  const target = { sessionKey: host.sessionKey };
+  const key = resolveChatSnapshotKey(host, target);
+  const snapshot = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
+  if (!snapshot?.sessionId || snapshot.sessionId !== host.currentSessionId) {
+    return undefined;
+  }
+  const client = host.client;
+  const epoch = host.connectionEpoch;
+  const locale = i18n.getLocale();
+  return {
+    snapshot,
+    details: snapshot.details?.locale === locale ? snapshot.details : undefined,
+    write: (patch: DetailsSnapshotPatch) => {
+      if (
+        !host.connected ||
+        host.client !== client ||
+        host.connectionEpoch !== epoch ||
+        host.currentSessionId !== snapshot.sessionId ||
+        resolveChatSnapshotKey(host, target) !== key ||
+        host.sessionKey !== target.sessionKey ||
+        i18n.getLocale() !== locale
+      ) {
+        return;
+      }
+      const current = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
+      if (!current || current.sessionId !== snapshot.sessionId) {
+        return;
+      }
+      const details = {
+        ...(current.details?.locale === locale ? current.details : {}),
+        ...patch,
+        locale,
+      };
+      if (JSON.stringify(details) === JSON.stringify(current.details)) {
+        return;
+      }
+      cacheChatSessionSnapshot(host.chatMessagesBySession, host, target, { ...current, details });
+    },
   };
 }
