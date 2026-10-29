@@ -63,7 +63,6 @@ vi.mock("../process/spawn-broker/relay-integration.js", async (importOriginal) =
 describe.runIf(process.platform !== "win32")("launch policy and construction authority", () => {
   let root: string;
   let supervisor: ReturnType<typeof createProcessSupervisor>;
-  let expectedCleanupFailure: string | undefined;
   const exec = (command: string, usePty: boolean, assertCurrent?: () => void) =>
     runExecFixture({
       command,
@@ -82,18 +81,14 @@ describe.runIf(process.platform !== "win32")("launch policy and construction aut
     boundary.after = () => {};
     boundary.nativeLaunches = 0;
     boundary.retainedLaunchAttempted = false;
-    expectedCleanupFailure = undefined;
     vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
     vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "0");
     vi.stubEnv("SHELL", "/bin/bash");
   });
   afterEach(async () => {
     try {
-      if (expectedCleanupFailure) {
-        await expect(supervisor.shutdown()).rejects.toThrow(expectedCleanupFailure);
-      } else {
-        await supervisor.shutdown();
-      }
+      // A refusal before native launch must not leave cleanup uncertified at close.
+      await supervisor.shutdown();
     } finally {
       resetProcessRegistryForTests();
       vi.unstubAllEnvs();
@@ -153,11 +148,12 @@ describe.runIf(process.platform !== "win32")("launch policy and construction aut
       const command = `'${process.execPath}' '${script}'`;
       const pending = exec(command, route === "Gateway PTY", assertCurrent);
       if (timing === "before") {
-        await expect(pending).rejects.toThrow("exec approval changed before execution");
-        if (boundary.retainedLaunchAttempted) {
-          // The retained owner preserves uncertified cleanup after launch admission fails.
-          expectedCleanupFailure =
-            "service child cleanup identity lost: Error: exec approval changed before execution";
+        await expect(pending).rejects.toThrow(/^exec approval changed before execution$/);
+        if (route === "Gateway retained child") {
+          // The retained relay refuses at its launch frame; its anchor's startup-error
+          // receipt certifies cleanup, so the shutdown join in afterEach stays clean.
+          // Other routes reach the relay only where the host owns their process tree.
+          expect(boundary.retainedLaunchAttempted).toBe(true);
         }
       } else {
         const handle = await pending;

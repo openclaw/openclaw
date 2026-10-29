@@ -405,13 +405,14 @@ function runWithInspectionReadAdmissionTurn<T>(
   operation: () => Promise<T>,
   families: readonly string[] = [],
   signal?: AbortSignal,
-  options: AdmissionOptions = {},
+  options: AdmissionOptions &
+    import("../infra/sqlite-database-admission-turn.js").PreparedSqliteReadAdmission = {},
 ): Promise<T> {
   // Unknown siblings and first creation retain their family ordering and native checks.
   const pendingPaths = refusalsByState.get(stateKey(options))?.refusals.size
     ? paths.filter((pathname) => !isAgentDatabaseStartupReadReady(pathname, options))
     : paths;
-  return runWithSqliteDatabaseAdmissionTurn(pendingPaths, operation, families, signal);
+  return runWithSqliteDatabaseAdmissionTurn(pendingPaths, operation, families, signal, options);
 }
 
 export function assertAgentDatabaseReadAdmitted(

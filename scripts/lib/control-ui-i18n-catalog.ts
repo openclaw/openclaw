@@ -80,6 +80,7 @@ import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-
 import { registerSkillWorkshopEnglish } from "../../ui/src/i18n/locales/en-skill-workshop.ts";
 import { registerSkillsBrowserEnglish } from "../../ui/src/i18n/locales/en-skills-browser.ts";
 import { registerSystemsEnglish } from "../../ui/src/i18n/locales/en-systems.ts";
+import { registerTemplateCreatorEnglish } from "../../ui/src/i18n/locales/en-template-creator.ts";
 import { registerTemplatesEnglish } from "../../ui/src/i18n/locales/en-templates.ts";
 import { registerTerminalEnglish } from "../../ui/src/i18n/locales/en-terminal.ts";
 import { registerToolDiagnosticsEnglish } from "../../ui/src/i18n/locales/en-tool-diagnostics.ts";
@@ -120,6 +121,7 @@ const sourceFiles = [
   "en-agent-creation.ts",
   "en-activity.ts",
   "en-agents-home.ts",
+  "en-template-creator.ts",
   "en-apps.ts",
   "en-logbook.ts",
   "en-logs.ts",
@@ -411,6 +413,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     },
     registerActivityEnglish.catalog,
     registerAgentsHomeEnglish.catalog,
+    registerTemplateCreatorEnglish.catalog,
     registerTemplatesEnglish.catalog,
     registerAppsEnglish.catalog,
     registerLogbookEnglish.catalog,

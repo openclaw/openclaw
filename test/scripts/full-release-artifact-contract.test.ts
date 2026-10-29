@@ -430,6 +430,11 @@ function registryBudgetFixture(warningCount = 0, validationInputs: Record<string
     releaseProfile,
     rerunGroup: "all",
     resolveTargetResult: "success",
+    npmPreparationResult: "success",
+    npmQualificationResult: "success",
+    pluginNpmPreflightRequired: false,
+    pluginNpmPreparationResult: "skipped",
+    dockerPreparationResult: "success",
   };
   const built = buildReleaseExecutionPlan(inputs);
   const plan = buildPlanArtifact({
@@ -806,6 +811,36 @@ it("retains distinct root publication history in the actual reused manifest writ
   expect(() => serializeArtifact(current.record)).not.toThrow();
   expect(() => buildManifest({ plan: combined, context })).toThrow(/size limit/u);
   expect(() => assertBudget(combined, context)).toThrow(/size limit/u);
+});
+
+it("budgets compact retry plans with their revalidated root manifest", () => {
+  const { plan, context } = registryBudgetFixture();
+  const current = registryEvidence("123", 132);
+  const root = registryEvidence("99", 132);
+  const compact = {
+    ...plan,
+    ...current.record,
+    evidenceReuse: {
+      changedPaths: [],
+      evidenceSha: root.source.candidateSha,
+      policy: "exact-target-full-validation-v1",
+      requested: true,
+      rootRunId: "99",
+      runUrl: "https://example.invalid/runs/99",
+      selectedRunId: "99",
+      sourceArtifact: {
+        digest: "d".repeat(64),
+        id: "901",
+        name: "full-release-manifest-99-1",
+        runAttempt: 1,
+        sizeInBytes: 4096,
+      },
+      sourceWorkflow: { ref: "release-ci/test", sha: SHA },
+    },
+  };
+
+  expect(() => serializeArtifact(compact)).not.toThrow();
+  expect(() => assertBudget(compact, context, root.record)).toThrow(/size limit/u);
 });
 
 it("reserves JSON escaping of pending bounded fields without truncating later job evidence", () => {

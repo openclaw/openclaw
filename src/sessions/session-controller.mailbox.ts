@@ -245,7 +245,7 @@ export function reserveSessionControllerSource(
 }
 
 /** Reserves an input or joins the live one with the same reservationId; only the creator may retire it. */
-export function reserveOrJoinSessionControllerSource(
+function reserveOrJoinSessionControllerSource(
   key: string,
   params: SessionControllerSourceReservation,
 ): { input: SessionControllerInput; created: boolean } {

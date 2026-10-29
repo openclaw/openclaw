@@ -228,6 +228,21 @@ jobs:
           test -n "$watch_toolchain"
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
 
+      - name: Identify Watch RTC release cache inputs
+        id: watch-rtc-inputs
+        run: |
+          echo "xcode=$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "OPENCLAW_WATCH_RTC_CACHE_DIR=$RUNNER_TEMP/openclaw-watch-rtc-release-libraries" >> "$GITHUB_ENV"
+
+      - name: Restore Watch RTC release libraries
+        id: watch-rtc-cache
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &watch_rtc_release_cache_path ${{ runner.temp }}/openclaw-watch-rtc-release-libraries
+          key: watch-rtc-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.watch-rtc-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
+
       - name: Create apps-signing read token
         id: apps-signing-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -286,6 +301,15 @@ jobs:
             pnpm ios:release:upload -- \
             --destination "$IOS_RELEASE_DESTINATION" \
             --recovery-dir "$RUNNER_TEMP/ios-release-recovery"
+
+      - name: Save Watch RTC release libraries
+        if: steps.watch-rtc-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *watch_rtc_release_cache_path
+          key: ${{ steps.watch-rtc-cache.outputs.cache-primary-key }}
 
       - name: Retain release plan and notes
         if: always() && steps.release.outcome != 'skipped'

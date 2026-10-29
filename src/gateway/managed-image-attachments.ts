@@ -2,23 +2,17 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { maxBytesForKind, mediaKindFromMime } from "@openclaw/media-core/constants";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  ReplyMediaAttachment,
-  ReplyMediaFailureCode,
-  ReplyPayload,
-} from "../auto-reply/reply-payload.js";
+import type { ReplyMediaFailureCode } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveDeliveryQueueStateEnv } from "../infra/delivery-queue-sqlite.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
-import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -82,6 +76,10 @@ import {
   type ManagedMediaKind,
 } from "./managed-image-attachments.media-kind.js";
 import {
+  toRecordFilename,
+  type PreparedOutgoingMedia,
+} from "./managed-image-attachments.prepare.js";
+import {
   attachManagedImageRecordsToMessage,
   captureManagedImageContext,
   listManagedImageRecordEntries,
@@ -118,6 +116,11 @@ export {
   parseManagedOutgoingArtifactId,
 } from "./managed-outgoing-artifact-id.js";
 
+export {
+  prepareOutgoingMediaFromReplyPayload,
+  type PreparedOutgoingMedia,
+} from "./managed-image-attachments.prepare.js";
+
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
 
 export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
@@ -143,16 +146,6 @@ type ParsedMediaDataUrl = {
 };
 
 type ManagedMediaBlock = Record<string, unknown>;
-
-export type PreparedOutgoingMedia = {
-  url: string;
-  filename?: string;
-  mimeType?: string;
-  trustedLocal: boolean;
-  durationMs?: number;
-  width?: number;
-  height?: number;
-};
 
 type SessionManagedOutgoingAttachmentIndex = {
   messageIds: Set<string>;
@@ -477,57 +470,6 @@ function buildManagedOutgoingAttachmentRefKey(messageId: string, attachmentId: s
   return `${messageId}::${attachmentId}`;
 }
 
-function toRecordFilename(
-  filePath: string,
-  attachmentName?: string,
-  fallbackName?: string,
-  contentType?: string,
-) {
-  const fallback = fallbackName ?? path.basename(filePath).trim();
-  if (!attachmentName?.trim()) {
-    return fallback || null;
-  }
-  const safeName = sanitizeUntrustedFileName(attachmentName, fallback);
-  const extension =
-    contentType === "application/octet-stream" || mimeTypeFromFilePath(safeName) === contentType
-      ? path.extname(safeName)
-      : path.extname(filePath);
-  return `${path.parse(safeName).name}${extension}`;
-}
-
-export function prepareOutgoingMediaFromReplyPayload(
-  payload: ReplyPayload,
-  metadataSource: ReplyPayload = payload,
-): PreparedOutgoingMedia[] {
-  const metadataByUrl = new Map<string, ReplyMediaAttachment>();
-  for (const entry of collectReplyMediaEntries(metadataSource)) {
-    const key = entry.url.trim();
-    if (key && entry.attachment && !metadataByUrl.has(key)) {
-      metadataByUrl.set(key, entry.attachment);
-    }
-  }
-  const seen = new Set<string>();
-  return collectReplyMediaEntries(payload).flatMap((entry) => {
-    const key = entry.url.trim();
-    if (!key || seen.has(key)) {
-      return [];
-    }
-    seen.add(key);
-    const attachment = metadataByUrl.get(key) ?? entry.attachment;
-    return [
-      {
-        url: entry.url,
-        ...(attachment?.name ? { filename: attachment.name } : {}),
-        ...(attachment?.mimeType ? { mimeType: attachment.mimeType } : {}),
-        trustedLocal: attachment?.trustedLocalMedia ?? payload.trustedLocalMedia === true,
-        ...(attachment?.durationMs !== undefined ? { durationMs: attachment.durationMs } : {}),
-        ...(attachment?.width !== undefined ? { width: attachment.width } : {}),
-        ...(attachment?.height !== undefined ? { height: attachment.height } : {}),
-      },
-    ];
-  });
-}
-
 export function parseManagedOutgoingRoute(value: string) {
   try {
     const parsed = new URL(value, "http://localhost");
@@ -744,6 +686,7 @@ async function withManagedOutgoingMediaRead<T>(
   stateDir: string,
   consume: (assertCurrent: () => void) => Promise<T>,
   assertCallerCurrent: () => void = captureChannelReadScope()?.assertCurrent ?? (() => {}),
+  expectedSource?: { sessionId: string; idempotencyKey: string },
 ): Promise<T | null> {
   assertCallerCurrent();
   if (!record.messageId) {
@@ -759,16 +702,62 @@ async function withManagedOutgoingMediaRead<T>(
   return withManagedImageSessionRead(
     { cfg, agentId, sessionKey: record.sessionKey, stateDir, assertCurrent: assertCallerCurrent },
     async (scope, assertCurrent) => {
+      if (expectedSource && scope.sessionId !== expectedSource.sessionId) {
+        return null;
+      }
       const messages = await readSessionMessagesMatchingIdAsync(scope, record.messageId!);
       assertCurrent();
-      const matches = messages.some((message) =>
-        collectManagedOutgoingAttachmentRefs(
-          readAssistantDisplayContent(message),
-          record.sessionKey,
-        ).some((ref) => ref.attachmentId === record.attachmentId),
-      );
+      const matches = messages.some((message) => {
+        const row = asOptionalRecord(message);
+        return (
+          (!expectedSource ||
+            (row?.role === "assistant" && row.idempotencyKey === expectedSource.idempotencyKey)) &&
+          collectManagedOutgoingAttachmentRefs(
+            readAssistantDisplayContent(message),
+            record.sessionKey,
+          ).some((ref) => ref.attachmentId === record.attachmentId)
+        );
+      });
       return matches ? consume(assertCurrent) : null;
     },
+  );
+}
+
+/** Restore an original image only for this retained assistant source in the current session. */
+export async function readManagedOutgoingContextImage(
+  params: ManagedOutgoingMediaArtifactRequest & {
+    agentId: string;
+    sessionId: string;
+    idempotencyKey: string;
+    maxBytes: number;
+    assertCurrent: () => void;
+  },
+): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  params.assertCurrent();
+  const stateDir = params.stateDir ?? resolveStateDir();
+  const record = await resolveManagedOutgoingMediaArtifactRecord({ ...params, stateDir });
+  params.assertCurrent();
+  if (!record || resolveManagedMediaKind(record.original.contentType) !== "image") {
+    return null;
+  }
+  return withManagedOutgoingMediaRead(
+    record,
+    stateDir,
+    async (assertCurrent) => {
+      try {
+        const { buffer } = await readLocalFileSafely({
+          filePath: resolveManagedImageOriginalPath(record),
+          maxBytes: params.maxBytes,
+        });
+        assertCurrent();
+        return { buffer, mimeType: record.original.contentType };
+      } catch {
+        assertCurrent();
+        return null;
+      }
+    },
+    params.assertCurrent,
+    { sessionId: params.sessionId, idempotencyKey: params.idempotencyKey },
   );
 }
 

@@ -340,6 +340,7 @@ suite.define(() => {
         totalMessages: 100,
         hasMore: true,
         nextOffset: 1,
+        olderCursor: "older-outbox-history",
         pendingInputs: { items: [cancelInput], total: 2, nextBefore: 21, queuedCount: 1 },
         inputReceipts: [{ runId: cancelRunId, state: "pending", queued: true }],
       };

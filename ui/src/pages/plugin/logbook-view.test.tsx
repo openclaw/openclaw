@@ -2,6 +2,7 @@ import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
+import { mockDocumentVisibility } from "../../test-helpers/mock-cleanup.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createLogbook } from "./logbook-state.ts";
@@ -145,6 +146,40 @@ describe("Logbook request ownership", () => {
     dispose();
     vi.advanceTimersByTime(30_000);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("pauses background reads while hidden and catches up once on return", async () => {
+    const show = mockDocumentVisibility("hidden");
+    const request = vi.fn(async (method: string) =>
+      method === "logbook.analyze.now"
+        ? { started: true }
+        : dayResponse(method, "2026-07-04", "Current timeline"),
+    );
+    const model = createModel(request);
+    await advance(90_000);
+    expect(request).not.toHaveBeenCalled();
+
+    show("visible");
+    await advance();
+    expect(request).toHaveBeenCalledTimes(2);
+    show("visible");
+    await advance();
+    expect(request).toHaveBeenCalledTimes(2);
+    await advance(30_000);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    show("hidden");
+    await advance(90_000);
+    expect(request).toHaveBeenCalledTimes(4);
+    await model.analyze();
+    await advance();
+    expect(request).toHaveBeenCalledTimes(7);
+    expect(model.state.timeline?.cards[0]?.title).toBe("Current timeline");
+
+    model.dispose();
+    show("visible");
+    await advance(30_000);
+    expect(request).toHaveBeenCalledTimes(7);
   });
 
   it.each(["analysis", "queued analysis", "disposed"] as const)(

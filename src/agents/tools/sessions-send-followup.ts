@@ -55,6 +55,7 @@ export async function startSessionsSendFollowup(
       return {
         start: {
           ...start,
+          selfHeld: undefined,
           result: jsonResult({
             ...start.result.details,
             sentBeforeError: true,
@@ -188,6 +189,7 @@ export async function dispatchSessionsSendFollowup(
               requesterSessionKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
               requesterTurnRunId: registryTurn,
+              requesterRunInstance: instance,
               assertCurrent: assertCompletionCurrent,
             });
           }
@@ -221,6 +223,7 @@ export async function dispatchSessionsSendFollowup(
               assertCurrent: assertCompletionCurrent,
               assertPublicationCurrent: () => request?.custody.assertCurrent(),
               acceptedRunReplay: true,
+              requesterRunInstance: instance,
             },
           );
           accepted = {
@@ -272,6 +275,8 @@ export async function dispatchSessionsSendFollowup(
     return {
       start: {
         ok: false as const,
+        // Only an accepted start reaches this catch, so it is never a retainable refusal.
+        selfHeld: undefined,
         result: jsonResult({
           runId: start.ok ? start.runId : params.runId,
           status: "error",

@@ -379,6 +379,7 @@ export function dispatchAgentRunFromGateway(params: {
           agentId: registeredRunEntry && getRpcSourceIdentity(registeredRunEntry).agentId,
           ownerConnId: registeredRunEntry?.adapter.requester?.connectionId,
           ownerDeviceId: registeredRunEntry?.adapter.requester?.deviceId,
+          initiatingPersonalOperator: registeredRunEntry?.adapter.initiatingPersonalOperator,
           controlUiVisible: registeredRunEntry?.adapter.controlUiVisible,
           turnKind: registeredRunEntry?.adapter.turnKind,
         },

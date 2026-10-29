@@ -36,6 +36,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.branches.list",
   "sessions.get",
   "sessions.github.options",
+  "sessions.github.readiness",
   "sessions.github.status",
   "sessions.resolve",
   "sessions.search",

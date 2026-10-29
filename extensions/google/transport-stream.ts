@@ -50,6 +50,7 @@ import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { isGoogleNativeVideoModelId } from "./provider-models.js";
 import { isOfficialGoogleAiStudioBaseUrl, normalizeGoogleApiBaseUrl } from "./provider-policy.js";
+import { resolveGoogleVertexBaseUrlLocation } from "./src/google-api-base-url.js";
 import {
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
@@ -222,13 +223,17 @@ function resolveGoogleVertexProject(options: GoogleTransportOptions | undefined)
   return project;
 }
 
-function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined): string {
+function resolveGoogleVertexLocation(
+  model: GoogleTransportModel,
+  options: GoogleTransportOptions | undefined,
+): string {
   const location =
     normalizeOptionalString((options as { location?: unknown } | undefined)?.location) ||
+    resolveGoogleVertexBaseUrlLocation(model.baseUrl) ||
     normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION);
   if (!location) {
     throw new Error(
-      "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.",
+      "Vertex AI requires a location. Set a Vertex model baseUrl, GOOGLE_CLOUD_LOCATION, or pass location in options.",
     );
   }
   return location;
@@ -554,7 +559,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         let requestUrl: string;
         if (kind === "google-vertex") {
           const project = encodeURIComponent(resolveGoogleVertexProject(options));
-          const location = encodeURIComponent(resolveGoogleVertexLocation(options));
+          const location = encodeURIComponent(resolveGoogleVertexLocation(model, options));
           // Mirror resolveGoogleModelPath: strip the google/ provider prefix so a
           // provider-qualified id does not become an invalid models/google%2F... path.
           const modelId = encodeURIComponent(stripGoogleProviderPrefix(model.id));

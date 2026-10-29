@@ -121,6 +121,7 @@ const DIRECT_SESSION_READ_METHODS = new Set([
   "sessions.files.list",
   "sessions.files.reveal",
   "sessions.github.options",
+  "sessions.github.readiness",
   "sessions.github.status",
   "sessions.messages.unsubscribe",
   "sessions.setInvolvement",

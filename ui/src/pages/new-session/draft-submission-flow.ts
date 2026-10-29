@@ -122,15 +122,13 @@ export class DraftSubmissionFlow {
         mentions: this.mentionsValue,
         attachments: this.attachmentDraft.attachments,
         incognito: this.visibilityValue === "incognito",
+        permissionMode: this.permissionMode,
       }),
-      (message, attachments, resetVisibility, mentions) => {
+      (state, resetVisibility) =>
         this.restoreDraftState({
-          message,
-          mentions,
-          attachments,
+          ...state,
           visibility: resetVisibility ? "normal" : this.visibilityValue,
-        });
-      },
+        }),
       () => this.setError(CHAT_COMPOSER_DRAFT_STORAGE_ERROR),
     );
     this.attachmentDraft = new NewSessionAttachmentDraft(this.draftChanged, () => {
@@ -229,6 +227,7 @@ export class DraftSubmissionFlow {
   setPermissionMode(permissionMode: SessionCreateParams["permissionMode"]) {
     this.permissionMode = permissionMode;
     this.startedSession.current = null;
+    this.draftPersistence.noteSelectionMutation("permission");
     this.callbacks.changed();
   }
 
@@ -727,6 +726,7 @@ export class DraftSubmissionFlow {
       }
       this.updateMessage("");
       this.mentionsValue = [];
+      this.permissionMode = undefined;
       this.draftPersistence.noteDraftReplaced();
       this.attachmentDraft.clearAfterSubmit(release);
       this.sessionStartup.clear();

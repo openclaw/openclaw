@@ -1,5 +1,4 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { BackupSqliteSnapshotFact } from "../commands/backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
@@ -7,6 +6,7 @@ import * as doctorMode from "../commands/doctor-repair-mode.js";
 import * as updatePhase from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { withSqliteSnapshotFailureScope } from "../infra/sqlite-error-diagnostics.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
@@ -24,7 +24,7 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import { formatUpdateFailureFact } from "../infra/update-failure-facts-format.js";
-import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
+import { createUpdateErrorFact, createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { withPluginLoadDiagnostics } from "../plugins/load-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
@@ -73,7 +73,7 @@ export async function runDoctorHealthFlow(
         const { guardUpdateDoctorSchemaUpgrade, rehearseDeferredUpdateDoctorSchema } =
           await import("../commands/doctor-update-schema-guard.js");
         const guarded = await startup.withDoctorProgress(
-          "Update schema admission",
+          formatDoctorProgressPhase("Update schema admission"),
           () =>
             guardUpdateDoctorSchemaUpgrade({
               schemas: preparedPreflight,
@@ -90,7 +90,7 @@ export async function runDoctorHealthFlow(
         if (!preCaptureRehearsalRoot && preparedPreflight?.updateSchemaRehearsal) {
           const rehearsal = preparedPreflight;
           await startup.withDoctorProgress(
-            "Update schema rehearsal",
+            formatDoctorProgressPhase("Update schema rehearsal"),
             () =>
               rehearseDeferredUpdateDoctorSchema(rehearsal, runtime, options.fullIntegrityCheck),
             options.json !== true,
@@ -140,12 +140,7 @@ async function runDoctorHealthFlowWithResult(
   preCaptureRehearsalRoot?: string,
 ) {
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
-  const measure = <T>(name: string, run: () => T | Promise<T>) =>
-    startup.withDoctorProgress(
-      name.replace(/^doctor\./, "").replaceAll(/[.-]/g, " "),
-      () => measureGatewayBootstrapStep(name, run),
-      options.json !== true,
-    );
+  const measure = startup.createDoctorProgressMeasure(options);
   const { effectiveRuntime, repairRuntime, stateDirExistedAtStart, root } = await measure(
     "doctor.startup",
     () => startup.prepareDoctorHealthFlow(runtime, options, startup.showDoctorIntro),
@@ -164,8 +159,8 @@ async function runDoctorHealthFlowWithResult(
     createDoctorHealthFindingBuffer(effectiveRuntime);
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
-  const recordConfigWriteRefusal = (ctx: DoctorHealthFlowContext): boolean => {
-    const refusal = startup.showDoctorConfigWriteRefusal(ctx);
+  const recordRepairRefusal = (ctx: DoctorHealthFlowContext): boolean => {
+    const refusal = startup.showDoctorRepairRefusal(ctx);
     if (!refusal) {
       return false;
     }
@@ -439,7 +434,7 @@ async function runDoctorHealthFlowWithResult(
       healthContext = ctx;
       const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
       await measure("doctor.contributions", () => runDoctorHealthContributions(ctx));
-      if (recordConfigWriteRefusal(ctx)) {
+      if (recordRepairRefusal(ctx)) {
         return undefined;
       }
       if (maintenance) {
@@ -550,7 +545,7 @@ async function runDoctorHealthFlowWithResult(
       showDoctorHealthSummary(healthContext ?? startupFindings);
       return;
     }
-    if (recordConfigWriteRefusal(ctx)) {
+    if (recordRepairRefusal(ctx)) {
       return;
     }
     const pluginWarnings: string[] = [];
@@ -676,6 +671,7 @@ async function runDoctorHealthFlowWithResult(
           ? refusalFacts
           : [
               createUpdateFailureFact({
+                leaseLoss: createUpdateErrorFact("doctor", error).leaseLoss,
                 check: unsafeConfigWrite
                   ? "config-write"
                   : schemaRefusal
@@ -698,7 +694,6 @@ async function runDoctorHealthFlowWithResult(
     }
     throw error;
   } finally {
-    const startupWarnings = startupFindings.updateWarnings;
     await measure("doctor.maintenance.release", () => resources.disposeAsync());
     if (updateResult) {
       await publishDoctorUpdateResult({
@@ -706,7 +701,7 @@ async function runDoctorHealthFlowWithResult(
         doctorResult,
         healthContext,
         maintenance,
-        startupWarnings,
+        startupWarnings: startupFindings.updateWarnings,
       });
     }
     // The default runtime exits synchronously; finish native recovery and release

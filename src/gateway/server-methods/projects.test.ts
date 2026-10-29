@@ -425,8 +425,8 @@ test("projects.list replies before cold or stale observed Git discovery settles"
           observedProjects: [{ name: "registered", originUrl: "https://example.test/repo.git" }],
         },
       });
-      using clock = vi.spyOn(Date, "now");
-      clock.mockReturnValue(Date.now() + 60_001);
+      using clock = vi.spyOn(performance, "now");
+      clock.mockReturnValue(performance.now() + 60_001);
       const refresh = Promise.withResolvers<Awaited<typeof held.promise>>();
       discovery.mockImplementation((operation, options) =>
         operation.type === "repository.identities" ? refresh.promise : run(operation, options),

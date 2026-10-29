@@ -1,4 +1,6 @@
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, it } from "vitest";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import {
@@ -28,6 +30,119 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     configureMerge(f, { restPolicy: "supported", ...changes });
     return f;
   }
+
+  it("dispatches a large retained body and retains the UUID before polling", () => {
+    const f = restFixture({ restDispatchChange: "policy" });
+    expectExit(f.run(), 1);
+    const original = f.git(["rev-parse", outcomeRef]);
+    expect(f.record()).toMatchObject({
+      phase: "intent",
+      accepted: false,
+      asyncMerge: { status: "submitting" },
+    });
+    configureMerge(f, { restContexts: ["CI"], asyncMergeStatus: "pending" });
+    const body = 'Résumé 漢字 "quoted" \\ path\r\n'.repeat(48_000) + "\r\n \t\r\n";
+    expect(Buffer.byteLength(body)).toBeGreaterThan(1.1 * 1024 ** 2);
+    const path = join(f.root, "large reviewed body.md");
+    writeFileSync(path, body);
+    const dispatched = f.dispatchAsync(path);
+    expectExit(dispatched, 0);
+    expect(f.state().restMergePayload?.commit_message).toBe(body);
+    expect(f.record()).toMatchObject({
+      phase: "intent",
+      accepted: true,
+      asyncMerge: { uuid: "630b9d5e-3f2a-4f7e-8b0c-2d5f9a8c1e42", status: "pending" },
+    });
+    expect(f.state()).toMatchObject({ mutations: 1, asyncPolls: 0 });
+    expect(JSON.parse(f.git(["show", original + ":outcome.json"]))).toMatchObject({
+      accepted: false,
+    });
+    expectExit(f.run(), 0);
+    expect(f.state()).toMatchObject({ mutations: 1, asyncPolls: 1 });
+  });
+
+  it.each([
+    "empty",
+    "malformed",
+    "missing",
+    "extra",
+    "array",
+    "checksum",
+    "base64",
+    "nul",
+    "utf8",
+    "legacy",
+  ])("refuses %s dispatch input before any HTTP request", (fault) => {
+    const f = restFixture();
+    const bytes =
+      fault === "nul"
+        ? Buffer.from([0])
+        : fault === "utf8"
+          ? Buffer.from([255])
+          : Buffer.from("Reviewed\n");
+    const bodySnapshot = {
+      base64: bytes.toString("base64"),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+    const envelope: Record<string, unknown> = { bodySnapshot, expectedObservation: {} };
+    if (fault === "missing") {
+      delete envelope.expectedObservation;
+    }
+    if (fault === "extra") {
+      envelope.unexpected = true;
+    }
+    if (fault === "array") {
+      envelope.expectedObservation = [];
+    }
+    if (fault === "checksum") {
+      bodySnapshot.sha256 = "0".repeat(64);
+    }
+    if (fault === "base64") {
+      bodySnapshot.base64 += "=";
+    }
+    const args = ["merge", JSON.stringify(f.state().repo), "123", f.head];
+    if (fault === "legacy") {
+      args.push(JSON.stringify(bodySnapshot), "{}");
+    }
+    const result = f.rest(
+      args,
+      fault === "empty" ? "" : fault === "malformed" ? "{" : JSON.stringify(envelope),
+    );
+    expect(result.status, result.output).toBe(fault === "utf8" ? 1 : 65);
+    expect(f.state()).toMatchObject({ calls: [], mutations: 0 });
+    expect(result.stderr).toContain(
+      fault === "utf8"
+        ? "The encoded data was not valid for encoding utf-8"
+        : fault === "legacy"
+          ? "invalid command arguments"
+          : ["checksum", "base64", "nul"].includes(fault)
+            ? "merge body snapshot checksum does not match"
+            : "invalid merge dispatch envelope",
+    );
+  });
+
+  it("accepts exactly four merge arguments with an explicit empty body", () => {
+    const f = restFixture({ asyncMergeStatus: "pending" });
+    const repo = JSON.stringify(f.state().repo);
+    const observed = f.rest(["observe", repo, "123"]);
+    expectExit(observed, 0);
+    const bodySnapshot = { base64: "", sha256: createHash("sha256").update("").digest("hex") };
+    const result = f.rest(
+      ["merge", repo, "123", f.head],
+      JSON.stringify({
+        bodySnapshot,
+        expectedObservation: {
+          main: JSON.parse(observed.stdout).data.repository.ref.target.oid,
+          pr: JSON.parse(observed.stdout).data.repository.pullRequest,
+          transport: "rest",
+          restPolicy: JSON.parse(observed.stdout).restPolicy,
+        },
+      }),
+    );
+    expectExit(result, 0);
+    expect(f.state().restMergePayload?.commit_message).toBe("");
+    expect(f.state().mutations).toBe(1);
+  });
 
   const evidenceCase = (state: Parameters<typeof configureMerge>[1], admitted = false) => ({
     state,
@@ -373,6 +488,10 @@ describePosix("native merge with exhausted GraphQL quota", () => {
           ? "immediate squash requires the prepared open, non-draft, clean PR head"
           : "PR or policy changed before merge dispatch",
       );
+      const intent = f.git(["rev-parse", outcomeRef]);
+      expectExit(f.run(), 1);
+      expect(f.git(["rev-parse", outcomeRef])).toBe(intent);
+      expect(f.state().mutations).toBe(0);
     },
   );
 

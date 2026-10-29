@@ -3168,23 +3168,21 @@ describe("doctor health contributions", () => {
       );
     });
 
-    it("skips plugin schema validation for final validation during update doctor runs", async () => {
-      const contribution = requireDoctorContribution("doctor:final-config-validation");
-
-      await contribution.run(
-        createDoctorContext({
-          cfg: {},
-          cfgForPersistence: {},
-          configResult: { cfg: {} },
-          shouldRepair: true,
-          env: {
-            OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          },
+    it("records invalid persisted config as a blocked repair with actionable findings", async () => {
+      mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+        ...createDoctorConfigSnapshot(),
+        valid: false,
+        issues: [{ path: "gateway.port", message: "Expected number" }],
+      });
+      const ctx = createDoctorContext();
+      await requireDoctorContribution("doctor:final-config-validation").run(ctx);
+      expect(ctx.postInstallDoctorResult).toMatchObject({ status: "error" });
+      expect(ctx.healthFindings).toContainEqual(
+        expect.objectContaining({
+          path: "gateway.port",
+          severity: "error",
+          fixHint: expect.stringContaining("openclaw config unset"),
         }),
-      );
-
-      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({ skipPluginValidation: true }),
       );
     });
   });
