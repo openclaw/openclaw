@@ -694,4 +694,35 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     abort.abort();
     await task;
   });
+  it("keeps unresolved name-only allowlists configured so they do not fall back or widen", async () => {
+    const cfg = createConfig();
+    updateMSTeamsConfig(cfg, {
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["Bob Builder"],
+      teams: { Engineering: {} },
+    });
+    resolveAllowlistMocks.resolveMSTeamsTeamsConfig.mockRejectedValueOnce(
+      new Error("Graph unavailable"),
+    );
+
+    const abort = new AbortController();
+    const task = runProvider(abort, cfg);
+    await waitForMSTeamsTestState(() => expect(createMSTeamsActivityHandler).toHaveBeenCalled());
+
+    // The operator's stored configuration keeps its original entries; only the in-memory
+    // projection handed to the handler carries the placeholder.
+    expect(cfg.channels?.msteams?.groupAllowFrom).toEqual(["Bob Builder"]);
+    expect(cfg.channels?.msteams?.teams).toEqual({ Engineering: {} });
+
+    const registered = requireRegisteredMSTeamsConfig().channels?.msteams;
+    expect(registered?.groupAllowFrom).toEqual([
+      "19:openclaw-unresolved-allowlist@thread.unresolved",
+    ]);
+    expect(Object.keys(registered?.teams ?? {})).toHaveLength(1);
+    expect(Object.keys(registered?.teams ?? {})).not.toContain("*");
+    abort.abort();
+    await task;
+  });
 });

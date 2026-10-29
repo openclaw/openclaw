@@ -1,10 +1,15 @@
 // Msteams tests cover message handler.authz plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
+import type { MSTeamsConfig, OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
+import {
+  keepConfiguredMSTeamsAllowlistActive,
+  projectStableMSTeamsGroupAllowlist,
+  projectStableMSTeamsTeamsConfig,
+} from "../resolve-allowlist.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import { createMessageHandlerDeps } from "./message-handler.test-support.js";
 
@@ -191,6 +196,7 @@ describe("msteams monitor handler authz", () => {
   function createAttackerGroupActivity(params?: {
     text?: string;
     channelData?: Record<string, unknown>;
+    conversation?: { id: string; conversationType: "channel" };
   }): HandlerInput {
     return createMessageActivity({
       id: "msg-1",
@@ -200,7 +206,7 @@ describe("msteams monitor handler authz", () => {
         aadObjectId: "attacker-aad",
         name: "Attacker",
       },
-      conversation: {
+      conversation: params?.conversation ?? {
         id: "19:group@thread.tacv2",
         conversationType: "groupChat",
       },
@@ -316,6 +322,113 @@ describe("msteams monitor handler authz", () => {
 
     expect(readAllowFromStore).not.toHaveBeenCalled();
     expect(conversationStore.upsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "name-keyed teams allowlist that did not resolve",
+      raw: {
+        groupPolicy: "open",
+        requireMention: false,
+        teams: { Engineering: {} },
+      } as MSTeamsConfig,
+    },
+    {
+      name: "name-only channels under a conversation-id team",
+      raw: {
+        groupPolicy: "open",
+        requireMention: false,
+        teams: { "19:product@thread.tacv2": { channels: { Roadmap: {} } } },
+      } as MSTeamsConfig,
+      // Probe an unlisted channel inside the configured team so the channel gate decides.
+      probe: { teamId: "19:product@thread.tacv2", channelId: "19:product-random@thread.tacv2" },
+    },
+    {
+      name: "name-only channels under a wildcard team",
+      raw: {
+        groupPolicy: "open",
+        requireMention: false,
+        teams: { "*": { channels: { Roadmap: {} } } },
+      } as MSTeamsConfig,
+    },
+    {
+      name: "names-only groupAllowFrom with open DMs",
+      raw: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupPolicy: "allowlist",
+        requireMention: false,
+        groupAllowFrom: ["Bob Builder"],
+      } as MSTeamsConfig,
+    },
+  ])("does not admit an unlisted channel for a $name", async ({ raw, probe }) => {
+    // Same startup projection monitor.ts applies before the handler sees the config.
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    const projected: MSTeamsConfig = {
+      ...raw,
+      teams: projectStableMSTeamsTeamsConfig(raw.teams),
+      groupAllowFrom: keepConfiguredMSTeamsAllowlistActive(
+        raw.groupAllowFrom,
+        projectStableMSTeamsGroupAllowlist(raw.groupAllowFrom),
+      ),
+    };
+    const { deps, conversationStore } = createDeps({ channels: { msteams: projected } });
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createAttackerGroupActivity({
+        conversation: {
+          id: probe?.channelId ?? "19:outsider-random@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: { team: { id: probe?.teamId ?? "19:outsider-general@thread.tacv2" } },
+      }),
+    );
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("does not let an operator-defined access group grant a names-only groupAllowFrom", async () => {
+    const raw: MSTeamsConfig = {
+      dmPolicy: "allowlist",
+      allowFrom: ["11111111-1111-1111-1111-111111111111"],
+      groupPolicy: "allowlist",
+      requireMention: false,
+      groupAllowFrom: ["Bob Builder"],
+    };
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    const projected: MSTeamsConfig = {
+      ...raw,
+      groupAllowFrom: keepConfiguredMSTeamsAllowlistActive(
+        raw.groupAllowFrom,
+        projectStableMSTeamsGroupAllowlist(raw.groupAllowFrom),
+      ),
+    };
+    // The names the earlier access-group placeholder used; a same-named group must not matter.
+    const { deps, conversationStore } = createDeps({
+      channels: { msteams: projected },
+      accessGroups: {
+        "openclaw-msteams-unresolved-allowlist": {
+          type: "message.senders",
+          members: { msteams: ["22222222-2222-2222-2222-222222222222"] },
+        },
+      },
+    });
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "unresolved-access-group",
+        text: "hello",
+        from: {
+          id: "29:second",
+          aadObjectId: "22222222-2222-2222-2222-222222222222",
+          name: "Second",
+        },
+        conversation: { id: "19:outsider-random@thread.tacv2", conversationType: "channel" },
+        channelData: { team: { id: "19:outsider-general@thread.tacv2" } },
+      }),
+    );
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   it("does not widen sender auth when only a teams route allowlist is configured", async () => {
