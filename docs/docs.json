@@ -2238,6 +2238,7 @@
                       "providers/cerebras",
                       "providers/chutes",
                       "providers/cohere",
+                      "providers/coreweave",
                       "providers/deepinfra",
                       "providers/deepseek",
                       "providers/featherless",

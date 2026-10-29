@@ -316,6 +316,7 @@ describe("provider install catalog", () => {
       choiceId: "codex",
       choiceLabel: "Codex app-server",
       choiceHint: "Use the Codex app-server runtime.",
+      appGuidedSecret: true,
       groupId: "codex",
       groupLabel: "Codex",
       onboardingScopes: ["text-inference" as const],

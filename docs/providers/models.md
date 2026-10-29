@@ -31,6 +31,7 @@ Pick a provider, authenticate, then set the default model as `provider/model`.
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [Cohere](/providers/cohere)
 - [ComfyUI](/providers/comfy)
+- [CoreWeave Inference](/providers/coreweave)
 - [DeepInfra](/providers/deepinfra)
 - [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)

@@ -6,12 +6,14 @@ import type { InferenceBackendCandidate } from "../commands/onboard-inference-am
 import type { detectInferenceBackends } from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import type { ProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 import type { ProviderAppGuidedSetupCandidate, ProviderPlugin } from "../plugins/types.js";
 import { detectSetupInference } from "./setup-inference-detect.js";
 
 const fixture = vi.hoisted(() => ({
   config: {} as OpenClawConfig,
   loadAuthProfileStore: vi.fn<() => AuthProfileStore | Promise<AuthProfileStore>>(),
+  installEntries: vi.fn<() => ProviderInstallCatalogEntry[]>(() => []),
   withSetupProviderAuthMethod: vi.fn(),
   detectInferenceBackends: vi.fn<typeof detectInferenceBackends>(),
   resolveManifestProviderAuthChoices:
@@ -44,8 +46,9 @@ vi.mock("./setup-native-session-catalogs.js", () => ({
   listSetupNativeSessionCatalogs: () => [],
   requiresSetupNativeSessionCatalogConsent: () => false,
 }));
-vi.mock("../plugins/provider-install-catalog.js", () => ({
-  resolveProviderInstallCatalogEntries: () => [],
+vi.mock("../plugins/provider-install-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-install-catalog.js")>()),
+  resolveProviderInstallCatalogEntries: fixture.installEntries,
 }));
 // mock-isolation: Discovery tests simulate enabling plugins without changing installed plugin state.
 vi.mock("../plugins/enable.js", async (importOriginal) => ({

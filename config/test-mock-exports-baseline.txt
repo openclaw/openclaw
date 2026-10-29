@@ -6186,7 +6186,6 @@
 ["src/system-agent/setup-inference-detect.test.ts","./setup-provider-method.js","ef0db5af07d2642d03df9e3f1b8d2cfdd4022094548cd89f13f3cd9f83430f72",1]
 ["src/system-agent/setup-inference-error-reporting.test.ts","../agents/runtime-plugins.js","83f617a06e396a96ddcb6f7b909a475f121f42ad98e957f965dd3cbc31701a82",1]
 ["src/system-agent/setup-inference-turn.test.ts","../agents/runtime-plugins.js","f33c9cc23788f77c9d790be1b53b8006a671bd2772f3ea84b1935963f347cdc5",1]
-["src/system-agent/setup-inference.provider-install-owner.test.ts","../plugins/provider-auth-choice.js","4317d4dbf8564afebef8b46019d84f717457db6a1d4653b2b89b5af9337b6a23",1]
 ["src/system-agent/tui-backend.test.ts","../agents/prepared-model-catalog.js","f97eb654e755515f9f971db6de0d9ef1fadc01282f1e855aa371a2d50b347d20",1]
 ["src/talk/agent-run-control.test.ts","../agents/embedded-agent-runner/runs.js","84749cd68c32bf2807d147720b84a3f012f96ba66893f0a69ba5c26a2a354f61",1]
 ["src/talk/fast-context-runtime.test.ts","../plugins/memory-runtime.js","bf5e72067c79eb8b2db29d1f842538a2f75279069f91605a664b2872b734668b",1]

@@ -1,5 +1,9 @@
 [
   {
+    "source": "CoreWeave Inference",
+    "target": "CoreWeave Inference"
+  },
+  {
     "source": "Get support",
     "target": "获取支持"
   },

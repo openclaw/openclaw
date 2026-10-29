@@ -512,7 +512,9 @@ export async function stageProviderAuthCandidate(
     return roleError;
   }
   assertUtilitySeparation(ctx, choice?.modelTarget ?? installEntry?.modelTarget);
-  if (interactive && authChoice && managedWizardChoice) {
+  const installManualChoice =
+    !interactive && !choice && installEntry && supportsSetupManualSecret(installEntry);
+  if ((interactive || installManualChoice) && authChoice && managedWizardChoice) {
     if (!params.prompter) {
       return { error: "Installing this provider requires an interactive setup session." };
     }
@@ -527,6 +529,16 @@ export async function stageProviderAuthCandidate(
         workspaceDir: ctx.workspace,
         setDefaultModel: false,
         preserveExistingDefaultModel: true,
+        ...(installManualChoice
+          ? {
+              opts: {
+                token: apiKey,
+                tokenProvider: installEntry.providerId,
+                ...(installEntry.optionKey ? { [installEntry.optionKey]: apiKey } : {}),
+                secretInputMode: "plaintext" as const,
+              },
+            }
+          : {}),
         signal: params.signal,
         assertCurrent: () => throwIfSetupInferenceCancelled(params),
         isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
