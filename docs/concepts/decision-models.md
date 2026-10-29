@@ -44,6 +44,10 @@ Explicit `decision_evaluate` remains independent of Labs.
 
 Configure the provider plugin before selecting its model:
 
+- [Cloudflare Clef](/plugins/cloudflare-clef) uses the host Cloudflare CLI login
+  for Clef, Clef Flash, and Clef Omni text/JSON and native V2 image decisions.
+  Install and authenticate `cf` as the Gateway service user. Hosted calls send
+  supplied evidence to Cloudflare and incur Workers AI usage charges.
 - [Liquid AI](/providers/liquid-ai) connects directly to hosted d1 and d1 Ultra.
   Install the plugin candidate from a compatible development checkout and
   configure a Liquid AI API key. Text/JSON and inline image evidence use the
@@ -70,6 +74,9 @@ The current plugins declare these model references:
 
 | Model reference                      | Model                  | Preparation                                            |
 | ------------------------------------ | ---------------------- | ------------------------------------------------------ |
+| `cloudflare-clef/clef`               | Clef                   | Cloudflare CLI login                                   |
+| `cloudflare-clef/clef-flash`         | Clef Flash             | Cloudflare CLI login                                   |
+| `cloudflare-clef/clef-omni`          | Clef Omni              | Cloudflare CLI login                                   |
 | `onnx/deberta-v3-base-zeroshot-v2.0` | DeBERTa Zero-shot v2   | Download pinned ONNX artifacts                         |
 | `onnx/gliclass-base-v3.0`            | GLiClass Base v3       | Download pinned ONNX artifacts                         |
 | `onnx/gliclass-edge-v3.0`            | GLiClass Edge v3       | Download pinned ONNX artifacts                         |

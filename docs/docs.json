@@ -1861,6 +1861,7 @@
                       "plugins/llama-cpp",
                       "plugins/memory-lancedb",
                       "plugins/memory-wiki",
+                      "plugins/cloudflare-clef",
                       "plugins/onnx",
                       "plugins/subq",
                       "plugins/typesafe"
