@@ -803,6 +803,19 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     expectRejected(result, "Fixture reached another artifact poll");
   });
 
+  it("keeps waiting when the raw descriptor appears before its producer completes", () => {
+    const test = fixture();
+    test.jobs[0]!.status = "in_progress";
+    test.jobs[0]!.conclusion = null;
+    test.artifact("openclaw-npm-package-descriptor-81-1", "prepared-npm-bundle.json", test.raw);
+    const result = test.run("wait", {
+      ARTIFACT_OUTPUT: "raw",
+      FIXTURE_STOP_ON_WAIT: "true",
+    });
+    expectRejected(result, "Fixture reached another artifact poll");
+    expect(result.stderr).not.toContain("unique exact completed producer job");
+  });
+
   it.each([
     "successful raw job",
     "failed unrelated qualifier",

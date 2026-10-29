@@ -580,6 +580,18 @@ describe("FRV continuation preflight", () => {
     },
   );
 
+  it("recovers an unconsumed npm producer without a preparation identity", async () => {
+    const fixture = artifactFixture("npm");
+    fixture.producer.conclusion = "failure";
+    fixture.logs.dispatch = fixture.logs.dispatch.split("\n", 1)[0]!;
+
+    await expect(
+      continueFailed(fixture.plan, "77", fixture.client, { dryRun: true }),
+    ).resolves.toMatchObject({ action: "would-rerun" });
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
   it("refuses a consumed producer rerun before mutation and shows authenticated reuse", async () => {
     const fixture = artifactFixture("npm");
     fixture.producer.conclusion = "failure";

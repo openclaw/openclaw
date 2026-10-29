@@ -705,7 +705,7 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       throw new Error(`Original ${stage} dispatch identity is unavailable or ambiguous`);
     }
     let preparation;
-    if (stage === "npm" && recoveryContract === "2") {
+    if (stage === "npm" && recoveryContract === "2" && plan.candidate) {
       const identities = [
         ...log.matchAll(
           /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact preparation npm identity: job ([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
