@@ -27,7 +27,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
-import type { EmbeddingProvider } from "./embeddings.js";
 import { registerCacheHeadroomTests } from "./manager-cache-headroom.test-support.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { resetMemoryDatabase } from "./manager-db.js";
@@ -37,29 +36,10 @@ import {
   observePublishedSql,
   reservePublishedWriter,
 } from "./manager-publication-observer.test-support.js";
+import type { ReindexHarness, SyncArchiveParams } from "./manager-reindex-harness.test-support.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
-import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
-
-type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: string[] };
-
-export type ReindexHarness = {
-  sync: (params: { reason?: string; force?: boolean }) => Promise<void>;
-  syncArchiveFiles: (params: SyncArchiveParams) => Promise<unknown>;
-  db: DatabaseSync;
-  cache: { enabled: boolean; maxEntries?: number };
-  getIndexConcurrency: () => number;
-  syncProviderGeneration: unknown;
-  writeMeta: (meta: MemoryIndexMeta) => Promise<void>;
-  providerKey: string | null;
-  provider: EmbeddingProvider | null;
-  dirty: boolean;
-  memoryFullRetryDirty: boolean;
-  sessionsDirty: boolean;
-  sessionsFullRetryDirty: boolean;
-  sessionsDirtyFiles: Set<string>;
-};
 
 describe("memory manager reindex recovery", () => {
   let fixtureRoot = "";

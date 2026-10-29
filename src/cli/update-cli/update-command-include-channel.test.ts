@@ -144,6 +144,8 @@ it.each(["expired", "revoked", "parent-replaced"] as const)(
       const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
       let reached = false;
       const now = Date.now();
+      let elapsedMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
       const operation = withUpdateCommandExecutor(run.runId, async (executor) => {
         const fence = await executor.enter(root, { activationTimeoutMs: 60_000 });
         const open = fs.open;
@@ -152,6 +154,7 @@ it.each(["expired", "revoked", "parent-replaced"] as const)(
           if (!reached && String(args[0]).includes("openclaw-config-backup")) {
             reached = true;
             if (fault === "expired") {
+              elapsedMs = 120_000;
               vi.spyOn(Date, "now").mockReturnValue(now + 120_000);
             }
             if (fault === "revoked") {

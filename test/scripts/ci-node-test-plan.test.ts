@@ -3919,7 +3919,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(worker.test?.runner).toBe(previous.test?.runner);
       expect(worker.test?.setupFiles).toEqual(previous.test?.setupFiles);
     }
-    expect(listMatchedTestFiles(worker)).toEqual(gatewayDatabaseWorkerTestFiles);
+    const expected = gatewayDatabaseWorkerTestFiles.toSorted((a, b) => a.localeCompare(b));
+    expect(listMatchedTestFiles(worker)).toEqual(expected);
     expect(listMatchedTestFiles(worker)).toEqual(
       expect.arrayContaining([
         "src/gateway/github-publication-transcript.test.ts",
