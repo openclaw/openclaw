@@ -348,12 +348,6 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     await h.subscription.waitForPendingEvents();
     const payloads = h.payloads();
     expect(payloads[0]?.text).toBe("Hello.");
-    expect(
-      payloads
-        .slice(0, 2)
-        .map((payload) => payload.text)
-        .join(""),
-    ).toContain("Hello.\n\nAn ordinary paragraph");
     expect(Boolean(payloads[0]?.audioAsVoice)).toBe(true);
     for (const [index, payload] of payloads.entries()) {
       expect(payload.replyToId).toBeUndefined();

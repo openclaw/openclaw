@@ -142,7 +142,7 @@ export function createBlockReplyDeliveryHandler(params: {
   const deliver = async (
     payload: ReplyPayload,
     options?: BlockReplyContext & { completed?: boolean },
-  ): Promise<{ delivery: Promise<void> } | undefined> => {
+  ) => {
     // Suppressed display lanes must not enter delivery bookkeeping: callers use
     // that evidence to decide whether an otherwise empty turn needs a fallback.
     if (
@@ -150,7 +150,7 @@ export function createBlockReplyDeliveryHandler(params: {
       (payload.isReasoning === true && params.reasoningPayloadsEnabled !== true) ||
       (payload.isCommentary === true && params.commentaryPayloadsEnabled !== true)
     ) {
-      return undefined;
+      return;
     }
     const metadata = getReplyPayloadMetadata(payload);
     const sourceMessage = metadata?.assistantMessageIndex;
@@ -175,7 +175,7 @@ export function createBlockReplyDeliveryHandler(params: {
       !hasOutboundReplyContent({ ...payload, text: undefined }) &&
       !payload.audioAsVoice
     ) {
-      return undefined;
+      return;
     }
 
     // Reply-to-current is implicit for block replies unless per-turn threading disables it.
@@ -199,7 +199,7 @@ export function createBlockReplyDeliveryHandler(params: {
 
     // Let through payloads with audioAsVoice flag even if empty (need to track it).
     if (!isRenderablePayload(normalizedPayload) && !payload.audioAsVoice) {
-      return undefined;
+      return;
     }
 
     const mediaNormalizedPayload = params.normalizeMediaPaths
@@ -222,7 +222,7 @@ export function createBlockReplyDeliveryHandler(params: {
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
     if (!blockPayload.text && !blockHasNonTextContent && !blockPayload.audioAsVoice) {
-      return undefined;
+      return;
     }
 
     if (blockPayload.text) {
@@ -249,7 +249,7 @@ export function createBlockReplyDeliveryHandler(params: {
       if (options?.completed) {
         await params.blockReplyPipeline.flush({ force: true });
       }
-      return undefined;
+      return;
     } else if (
       !params.blockStreamingEnabled &&
       options?.completed !== true &&
@@ -258,7 +258,7 @@ export function createBlockReplyDeliveryHandler(params: {
       blockPayload.isCommentary !== true
     ) {
       // With streaming off, text-only blocks are accumulated in final text.
-      return undefined;
+      return;
     }
     // Enabled display lanes never merge into final text, even with streaming off.
     return {

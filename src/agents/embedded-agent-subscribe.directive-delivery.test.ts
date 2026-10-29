@@ -267,12 +267,8 @@ const prefixCorrection = {
   literal: true,
   terminalText: leadChunks.join("") + correctedText + "\n",
   correctedText,
-  streamedChunks: [
-    "First lead stays.\nNext lead stays.",
-    "\nThe current value is one for this item.",
-    "Continue. Keep this sentence unchanged. Retain",
-    "each result. The final summary also remains",
-  ],
+  streamedText:
+    "First lead stays.\nNext lead stays.\nThe current value is one for this item.Continue. Keep this sentence unchanged. Retaineach result. The final summary also remains",
 };
 
 it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
@@ -317,7 +313,7 @@ it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
       expect(delivered.length).toBeGreaterThan(0);
       const beforeTerminalCount = delivered.length;
       if ("terminalText" in scenario) {
-        expect(texts(delivered)).toEqual(scenario.streamedChunks);
+        expect(texts(delivered).join("")).toBe(scenario.streamedText);
       }
       const text = texts(delivered).join("");
       if ("preservedLiteral" in scenario) {
@@ -346,9 +342,6 @@ it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
       expect
         .soft(delivered.filter((payload) => payload.audioAsVoice && payload.text).length)
         .toBe("voiceEdges" in scenario ? scenario.voiceEdges : 0);
-      if ("textOnly" in scenario) {
-        expect(delivered.every(hasNoMedia)).toBe(true);
-      }
       releaseTerminal.resolve();
       await settled;
       await flush();

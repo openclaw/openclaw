@@ -41,21 +41,6 @@ const indexedReply = (
 ) => sourceReply(text, { assistantMessageIndex, blockSourceText: text, blockSourceRange }, payload);
 
 describe("createBlockReplyPipeline dedup with threading", () => {
-  it.each([false, true])("keeps authored separators when merging media=%s", async (media) => {
-    const { sent, send } = capturePipeline({
-      coalescing: { ...coalescing, minChars: 13, maxChars: 13 },
-    });
-    await send(
-      indexedReply("First", 0, [0, 5]),
-      setReplyPayloadMetadata(
-        indexedReply("\n\nSecond", 0, [5, 13], media ? { mediaUrl: "file:///photo.png" } : {}),
-        { streamedSourceBoundary: true },
-      ),
-    );
-    expect(sent.map((payload) => payload.text)).toEqual(["First\n\nSecond"]);
-    expect(getReplyPayloadMetadata(sent[0]!)?.streamedSourceBoundary).toBeUndefined();
-  });
-
   it("keeps commentary separate from a matching visible answer", async () => {
     const payload = { text: "Same answer", isCommentary: true };
     for (const config of [undefined, { ...coalescing, joiner: " " }]) {

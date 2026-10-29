@@ -100,14 +100,12 @@ function createBlockReplyCoalescer(params: {
     await onFlush(payload);
   };
 
-  const joinText = (text: string) => {
-    const separator = bufferText.endsWith("\n") || text.startsWith("\n") ? "" : joiner;
-    return `${bufferText}${separator}${text}`;
-  };
+  const separatorFor = (text: string) =>
+    bufferText.endsWith("\n") || text.startsWith("\n") ? "" : joiner;
 
   const canMergeBufferedTextWithMedia = (payload: ReplyPayload, text: string) =>
     Boolean(bufferText) &&
-    (!text || joinText(text).length <= maxChars) &&
+    (!text || bufferText.length + separatorFor(text).length + text.length <= maxChars) &&
     bufferedPayload !== undefined &&
     [bufferedPayload, payload].every(
       (part) =>
@@ -135,7 +133,7 @@ function createBlockReplyCoalescer(params: {
   });
 
   const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
-    const mergedText = text ? joinText(text) : bufferText;
+    const mergedText = text ? `${bufferText}${separatorFor(text)}${text}` : bufferText;
     const mergedSource = mergeSource(text, text ? (getReplyPayloadMetadata(payload) ?? {}) : {});
     const mergedPayload: ReplyPayload = {
       ...bufferedPayload,
@@ -204,7 +202,7 @@ function createBlockReplyCoalescer(params: {
       bufferedPayload = payload;
     }
 
-    let nextText = bufferText ? joinText(text) : text;
+    let nextText = bufferText ? `${bufferText}${separatorFor(text)}${text}` : text;
     const replaceSource = nextText.length > maxChars;
     if (replaceSource) {
       if (bufferText) {

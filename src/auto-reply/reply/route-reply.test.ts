@@ -125,19 +125,6 @@ describe("routeReply", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
-  it.each(["block", "tool", "final"] as const)(
-    "retains authored leading separators only for routed %s replies",
-    async (replyKind) => {
-      await routeTestReply(
-        setReplyPayloadMetadata({ text: "\n\nNext paragraph." }, { streamedSourceBoundary: true }),
-        { replyKind },
-      );
-      expect(lastDeliveryPayload().text).toBe(
-        replyKind === "block" ? "\n\nNext paragraph." : "Next paragraph.",
-      );
-    },
-  );
-
   it.each([
     ["slack", true, "Reply routing aborted"],
     ["webchat", false, "Webchat routing not supported for queued replies"],

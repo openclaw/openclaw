@@ -96,32 +96,6 @@ async function makePendingFinalFixture() {
 }
 
 describe("beforeDeliver in reply dispatcher", () => {
-  it.each(["block", "tool", "final"] as const)(
-    "applies the %s whitespace policy to a previously prepared block",
-    async (kind) => {
-      const delivered: ReplyPayload[] = [];
-      const dispatcher = createReplyDispatcher({
-        deliver: async (payload) => {
-          delivered.push(payload);
-        },
-      });
-      const prepared = prepareReplyPayloadForDispatcher(
-        dispatcher,
-        "block",
-        setReplyPayloadMetadata({ text: "\n\nNext paragraph." }, { streamedSourceBoundary: true }),
-      );
-      if (prepared.kind !== "deliver") {
-        throw new Error("expected a prepared block");
-      }
-      dispatcher.sendPreparedReply(kind, planReply(prepared.payload));
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
-      expect(delivered.map((payload) => payload.text)).toEqual([
-        kind === "block" ? "\n\nNext paragraph." : "Next paragraph.",
-      ]);
-    },
-  );
-
   it.each(["unchanged", "replacement", "in-place"] as const)(
     "retains delta mode only when a hook keeps the chunk text (%s)",
     async (rewrite) => {

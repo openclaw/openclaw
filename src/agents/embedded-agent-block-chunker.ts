@@ -39,10 +39,6 @@ type BreakResult = {
   fenceSplit?: FenceSplit;
 };
 
-type ParagraphBreak = {
-  index: number;
-};
-
 export type BlockChunkMetadata = {
   sourceText: string;
   sourceGeneration: number;
@@ -250,7 +246,7 @@ export class EmbeddedBlockChunker {
       // A standalone whitespace message is not deliverable; retain separators
       // with the next content whenever they fit within the transport cap.
       return (params.force && start + length === value.length) || length >= maxChars
-        ? skipLeadingNewlines(value, start + length)
+        ? start + length
         : start;
     };
     this.#tableHeader = resolveTableContinuation(
@@ -394,9 +390,9 @@ export class EmbeddedBlockChunker {
       if (chunking.flushOnParagraph && !force) {
         const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
-        if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
-          const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index)}`;
-          const nextStart = nextTextStart(source, paragraphBreak.index);
+        if (paragraphBreak !== null && paragraphBreak - start <= paragraphLimit) {
+          const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak)}`;
+          const nextStart = nextTextStart(source, paragraphBreak);
           if (chunk.trim().length > 0) {
             emitSourceChunk(chunk, start, nextStart);
           }
@@ -419,22 +415,10 @@ export class EmbeddedBlockChunker {
         start += boundaryLength;
         continue;
       }
-      const minBreak = boundaryLength
-        ? Math.max(force ? 1 : minChars, boundaryLength + 1)
-        : force
-          ? 1
-          : undefined;
+      const minBreak = Math.max(force ? 1 : minChars, boundaryLength + 1);
       const breakResult =
         force && remainingLength <= maxChars && !openFence
-          ? this.#pickPreferredBreakIndex(
-              view,
-              unsafe,
-              chunking,
-              false,
-              minBreak ?? 1,
-              start,
-              openFence,
-            )
+          ? this.#pickPreferredBreakIndex(view, unsafe, chunking, false, minBreak, start, openFence)
           : this.#pickBreakIndex(
               { ...params, force },
               view,
@@ -743,7 +727,7 @@ function findNextParagraphBreak(
   fenceSpans: FenceSpan[],
   startIndex = 0,
   minCharsFromStart = 1,
-): ParagraphBreak | null {
+): number | null {
   const re = /\n[\t ]*\n+/g;
   re.lastIndex = startIndex;
   let match: RegExpExecArray | null;
@@ -757,7 +741,7 @@ function findNextParagraphBreak(
       re.lastIndex = fence.end;
       continue;
     }
-    return { index };
+    return index;
   }
   return null;
 }
