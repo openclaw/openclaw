@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -43,7 +43,9 @@ function databaseFixture(stateDir: string, baseEnv: NodeJS.ProcessEnv) {
   };
 }
 
-const roots = useAutoCleanupTempDirTracker(afterEach);
+// The startup FTS-attempt latch outlives each test and keys on dev:ino alone on Linux.
+// Keep every agent file until the suite ends so a freed inode cannot alias a latched one.
+const roots = useAutoCleanupTempDirTracker(afterAll);
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
