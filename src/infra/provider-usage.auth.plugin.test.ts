@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
@@ -334,9 +335,10 @@ describe("provider usage auth boundary", () => {
         await expect(result).resolves.toEqual([{ provider: "anthropic", token: "working-token" }]);
       }
       await testApi.flushFileLogQueueForTests();
-      const { lines } = await readConfiguredLogTail();
+      const { file, lines } = await readConfiguredLogTail();
       const diagnostics = lines.filter((line) => line.includes("usage auth: skipped auth profile"));
       if (mode === "debug") {
+        expect(await fs.readFile(file, "utf8")).toContain(secret);
         expect(diagnostics).toHaveLength(1);
         expect(diagnostics[0]).toContain("anthropic:broken");
         expect(diagnostics[0]).toContain("missing fixture credential");

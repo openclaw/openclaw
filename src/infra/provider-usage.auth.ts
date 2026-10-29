@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   dedupeProfileIds,
@@ -27,7 +28,6 @@ import type { ProviderUsageAuthToken } from "../plugins/provider-runtime.types.j
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveProviderAuthEnvVarCandidatesCore } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import { formatErrorMessage } from "./errors.js";
 import { isOAuthOnlyUsageProvider } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 

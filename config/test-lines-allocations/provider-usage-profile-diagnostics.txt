@@ -1,2 +1,2 @@
 # Usage profile diagnostics: real redacting log-tail output, fallback selection, default silence and cancellation.
-69
+71
