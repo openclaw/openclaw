@@ -1191,6 +1191,27 @@ describe("Claude session catalog", () => {
     });
   });
 
+  it.each([
+    { title: "Caf\u00e9 catalog", query: "Caf\u00e9", name: "composed title" },
+    { title: "Cafe\u0301 catalog", query: "Caf\u00e9", name: "decomposed title" },
+    { title: "Caf\u00e9 catalog", query: "Cafe\u0301", name: "composed title, decomposed query" },
+    { title: "Cafe\u0301 catalog", query: "Cafe\u0301", name: "decomposed title and query" },
+  ])("matches canonically equivalent $name in search", async ({ title, query }) => {
+    const home = await createHome();
+    await writeProject({
+      home,
+      entries: [{ sessionId: "nfc-session" }],
+      transcripts: {
+        "nfc-session": [
+          sdkCliMessage("nfc-session", "First prompt"),
+          { type: "custom-title", customTitle: title, sessionId: "nfc-session" },
+        ],
+      },
+    });
+    const sessions = (await listPage({ searchTerm: query }, home)).sessions;
+    expect(sessions.map((session) => session.threadId)).toEqual(["nfc-session"]);
+  });
+
   it("reads appended metadata beyond the prefix budget and refreshes the cached tail", async () => {
     const home = await createHome();
     const watches = createClaudeCatalogWatchDriver(home);
