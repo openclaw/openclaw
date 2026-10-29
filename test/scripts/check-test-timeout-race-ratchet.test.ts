@@ -69,40 +69,52 @@ it.each([0, 1, 32, 33])("bounds native snapshot preparation for %i candidate fil
     git(root, args);
   }
   const calls = { createSnapshot: 0, updateSnapshot: 0 };
-  for (const name of ["createSnapshot", "updateSnapshot"] as const) {
-    const get = Object.getOwnPropertyDescriptor(API.prototype, name)!.get!;
-    vi.spyOn(API.prototype, name, "get").mockImplementation(function (this: API) {
-      const invoke: API[typeof name] = get.call(this);
-      const counted = new Proxy(invoke, {
-        apply(target, receiver, args) {
-          calls[name] += 1;
-          return Reflect.apply(target, receiver, args);
+  const descriptors = (["createSnapshot", "updateSnapshot"] as const).map((name) => ({
+    name,
+    descriptor: Object.getOwnPropertyDescriptor(API.prototype, name)!,
+  }));
+  try {
+    for (const { name, descriptor } of descriptors) {
+      Object.defineProperty(API.prototype, name, {
+        ...descriptor,
+        get(this: API) {
+          const invoke: API[typeof name] = descriptor.get!.call(this);
+          const counted = new Proxy(invoke, {
+            apply(target, receiver, args) {
+              calls[name] += 1;
+              return Reflect.apply(target, receiver, args);
+            },
+          });
+          // The SDK getter caches its callable on the instance; count subsequent calls too.
+          Object.defineProperty(this, name, { configurable: true, value: counted });
+          return counted;
         },
       });
-      // The SDK getter caches its callable on the instance; count subsequent calls too.
-      Object.defineProperty(this, name, { configurable: true, value: counted });
-      return counted;
+    }
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    const positive = Math.max(0, size - 1);
+    expect(output.mock.calls).toEqual([
+      [`test timeout race ratchet OK: ${positive} files, ${positive} grandfathered sites.`],
+    ]);
+    expect(errors).not.toHaveBeenCalled();
+    expect(calls).toEqual({
+      createSnapshot: Number(size > 0),
+      updateSnapshot: Math.max(0, Math.ceil(size / 32) - 1),
     });
-  }
-  const output = vi.spyOn(console, "log").mockImplementation(() => {});
-  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-  expect(main(root, ["--base", "HEAD"])).toBe(0);
-  const positive = Math.max(0, size - 1);
-  expect(output.mock.calls).toEqual([
-    [`test timeout race ratchet OK: ${positive} files, ${positive} grandfathered sites.`],
-  ]);
-  expect(errors).not.toHaveBeenCalled();
-  expect(calls).toEqual({
-    createSnapshot: Number(size > 0),
-    updateSnapshot: Math.max(0, Math.ceil(size / 32) - 1),
-  });
-  if (size === 33) {
-    write(entries[0]!, "withTestTimeout(\n");
-    write(entries[32]!, "raceWithTimeoutResult(\n");
-    calls.createSnapshot = calls.updateSnapshot = 0;
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
-    expect(errors.mock.calls).toEqual([[expect.stringMatching(/^test\/00.ts:2: /u)]]);
-    expect(calls).toEqual({ createSnapshot: 1, updateSnapshot: 0 });
+    if (size === 33) {
+      write(entries[0]!, "withTestTimeout(\n");
+      write(entries[32]!, "raceWithTimeoutResult(\n");
+      calls.createSnapshot = calls.updateSnapshot = 0;
+      expect(main(root, ["--base", "HEAD"])).toBe(1);
+      expect(errors.mock.calls).toEqual([[expect.stringMatching(/^test\/00.ts:2: /u)]]);
+      expect(calls).toEqual({ createSnapshot: 1, updateSnapshot: 0 });
+    }
+  } finally {
+    for (const { name, descriptor } of descriptors) {
+      Object.defineProperty(API.prototype, name, descriptor);
+    }
   }
 });
 
