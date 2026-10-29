@@ -261,8 +261,18 @@ export const ChatPendingInputsDismissResultSchema = closedObject({
   missingIds: Type.Array(NonEmptyString, { maxItems: 100 }),
 });
 
+/** Continue the session's latest failed run with Gateway-owned hidden input. */
+export const ChatRetryParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: Type.Optional(NonEmptyString),
+  runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+  idempotencyKey: Type.String({ minLength: 1, maxLength: 128 }),
+});
+
 export type ChatPredictParams = Static<typeof ChatPredictParamsSchema>;
 export type ChatPendingInputsDismissParams = Static<typeof ChatPendingInputsDismissParamsSchema>;
+export type ChatRetryParams = Static<typeof ChatRetryParamsSchema>;
 export type ChatPendingInputsDismissResult = Static<typeof ChatPendingInputsDismissResultSchema>;
 export type ChatPredictResult = Static<typeof ChatPredictResultSchema>;
 

@@ -343,6 +343,7 @@ function sameChatItemsStructuralInput(
     previous.subagentWait?.runId === next.subagentWait?.runId &&
     (previous.subagentWait === undefined) === (next.subagentWait === undefined) &&
     previous.questionPrompts === next.questionPrompts &&
+    previous.retriedRunId === next.retriedRunId &&
     previous.loading === next.loading &&
     sameEntries(previous.replyPeople, next.replyPeople) &&
     previous.replyLocalPerson === next.replyLocalPerson &&

@@ -339,6 +339,7 @@ const runtimeConsumers = [
   ...[
     "src/gateway/server.chat-cli-auth.test.ts",
     "src/gateway/server.chat-recovered-output.test.ts",
+    "src/gateway/server.chat-retry.test.ts",
     "src/gateway/server.chat.canonical-publication.test.ts",
     "src/gateway/server.cli-watchdog.test.ts",
     "src/gateway/server.codex-failure-recovery.test.ts",

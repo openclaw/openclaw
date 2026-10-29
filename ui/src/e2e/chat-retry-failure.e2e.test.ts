@@ -310,14 +310,15 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       const draft = page.locator(".agent-chat__input textarea");
       await draft.fill("Keep this unsent draft");
+      await gateway.setMethodResponse("chat.retry", { runId: "retry-run", status: "started" });
       await notice.getByRole("button", { name: "Try again", exact: true }).click();
-      const retry = await gateway.waitForRequest("chat.send");
-      expect(retry.params).toMatchObject({
-        message:
-          "Continue from where you stopped. Check which actions already completed before retrying anything.",
-      });
+      const retry = await gateway.waitForRequest("chat.retry");
+      expect(retry.params).toMatchObject({ sessionKey, runId });
+      // Try again continues the run in place: the notice leaves and nothing posts as the user.
+      await notice.waitFor({ state: "detached" });
+      expect(await page.locator(".chat-thread").getByText("Continue from where").count()).toBe(0);
       expect(await draft.inputValue()).toBe("Keep this unsent draft");
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
 });

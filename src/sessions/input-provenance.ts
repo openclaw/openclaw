@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
@@ -32,6 +33,22 @@ export const PROGRESS_CARD_REFRESH_SOURCE_TOOL = "progress_card_refresh" as cons
 
 /** Execution input, never a delivered cron announcement or a user-authored prompt. */
 export const CRON_EXECUTION_SOURCE_TOOL = "cron_execution" as const;
+
+/** Hidden continuation admitted by chat.retry; its provenance runId names the failed run. */
+export const RUN_FAILURE_RETRY_SOURCE_TOOL = "run_failure_retry" as const;
+
+/** The failed run a Try again input supersedes, never the retry's own run. */
+export function readRunFailureRetryRunId(message: unknown): string | undefined {
+  const record = asOptionalRecord(message);
+  if (record?.role !== "user") {
+    return undefined;
+  }
+  const provenance = normalizeInputProvenance(record.provenance);
+  return provenance?.kind === "internal_system" &&
+    provenance.sourceTool === RUN_FAILURE_RETRY_SOURCE_TOOL
+    ? provenance.runId
+    : undefined;
+}
 
 export function isCronExecutionInputProvenance(provenance: InputProvenance | undefined): boolean {
   return (

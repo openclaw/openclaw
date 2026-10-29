@@ -425,31 +425,33 @@ describe("SessionParticipationTracker", () => {
 });
 
 describe("failed run recovery actions", () => {
-  it("continues once from the current failed run without replaying the original prompt", () => {
+  it("retries only the current failed run, once", () => {
     const state = {
       sessionKey: "session-a",
       connected: true,
       chatRunId: null as string | null,
       chatSending: false,
-      handleSendChat: vi.fn(async () => {
-        state.chatSending = true;
-      }),
+      chatRetriedRunId: null as string | null,
     };
+    const retryRun = vi.fn((runId: string) => {
+      state.chatRetriedRunId = runId;
+    });
     let current = true;
     const actions = createChatPaneRunRecoveryActions(state, {
       canSend: true,
       isCurrent: () => current,
       latestFailedRunId: () => "run-a",
+      retryRun,
     });
     actions.onRetryRun?.("old-run");
-    expect(state.handleSendChat).not.toHaveBeenCalled();
+    expect(retryRun).not.toHaveBeenCalled();
     actions.onRetryRun?.("run-a");
     actions.onRetryRun?.("run-a");
-    expect(state.handleSendChat).toHaveBeenCalledOnce();
-    state.chatSending = false;
+    expect(retryRun).toHaveBeenCalledExactlyOnceWith("run-a");
+    state.chatRetriedRunId = null;
     current = false;
     actions.onRetryRun?.("run-a");
-    expect(state.handleSendChat).toHaveBeenCalledOnce();
+    expect(retryRun).toHaveBeenCalledOnce();
   });
   it("does not expose actions without their capabilities", () => {
     const state = {
@@ -457,13 +459,13 @@ describe("failed run recovery actions", () => {
       connected: true,
       chatRunId: null,
       chatSending: false,
-      handleSendChat: vi.fn(async () => {}),
     };
     expect(
       createChatPaneRunRecoveryActions(state, {
         canSend: false,
         isCurrent: () => true,
         latestFailedRunId: () => "run-a",
+        retryRun: vi.fn(),
       }),
     ).toEqual({ onRetryRun: undefined });
   });

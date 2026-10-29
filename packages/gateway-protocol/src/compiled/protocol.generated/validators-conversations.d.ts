@@ -58,6 +58,7 @@ export {
   isChatMessageGetParams,
   isChatToolTitlesParams,
   isChatPendingInputsDismissParams,
+  isChatRetryParams,
   isChatPredictParams,
   isChatSendParams,
   isChatAbortParams,

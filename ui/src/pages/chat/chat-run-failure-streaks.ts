@@ -13,8 +13,11 @@ function isRealUserInput(item: ChatItem): boolean {
   return provenance?.kind !== "inter_session" && provenance?.kind !== "internal_system";
 }
 
-/** Keep the latest matching failure without changing transcript or intervening rows. */
-export function projectRunFailureStreaks(items: ChatItem[]): ChatItem[] {
+/**
+ * Keep the latest matching failure without changing transcript or intervening rows.
+ * A notice whose run Try again continued is superseded before history reloads omit it.
+ */
+export function projectRunFailureStreaks(items: ChatItem[], retriedRunId?: string): ChatItem[] {
   // Walk backward so a superseded notice can be skipped without splicing the list.
   const result: ChatItem[] = [];
   result.length = items.length;
@@ -26,6 +29,9 @@ export function projectRunFailureStreaks(items: ChatItem[]): ChatItem[] {
     if (isRealUserInput(item)) {
       latest = undefined;
     } else if (item.kind === "notice" && item.runError) {
+      if (item.runError.runId === retriedRunId) {
+        continue;
+      }
       if (latest?.runError?.summary === item.runError.summary) {
         latest = { ...latest, repeatCount: (latest.repeatCount ?? 1) + (item.repeatCount ?? 1) };
         result[latestIndex] = latest;

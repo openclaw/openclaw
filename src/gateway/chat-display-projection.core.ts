@@ -12,6 +12,7 @@ import {
   type AgentHistoryActivity,
 } from "../infra/agent-activity-events.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
+import { readRunFailureRetryRunId } from "../sessions/input-provenance.js";
 import {
   readNestedToolActivity,
   nestedToolActivityContent,
@@ -453,10 +454,18 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
 function projectRunFailureNotices(
   messages: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
+  // Try again continues the failed run, so its accepted hidden input retires the notice.
+  // A page that ends between the two rows keeps the notice; that rare glitch is harmless.
+  const retriedRunIds = new Set(
+    messages.flatMap((message) => readRunFailureRetryRunId(message) ?? []),
+  );
   return messages.flatMap((message) => {
     if (message.role === "custom" && message.customType === "run-failed-before-reply") {
       const runId =
         readSessionTranscriptFailureRunId(message) ?? readSessionTranscriptRunId(message);
+      if (runId && retriedRunIds.has(runId)) {
+        return [];
+      }
       const summary =
         readRunFailureNotice(message)?.summary ??
         (typeof message.content === "string" ? message.content.trim() : undefined);

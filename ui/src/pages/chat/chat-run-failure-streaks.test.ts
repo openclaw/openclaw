@@ -52,6 +52,13 @@ it("keeps only the latest identical failure across internal updates and interrup
   expect(latest).not.toHaveProperty("repeatCount");
 });
 
+it("omits the notice of a run continued by Try again", () => {
+  const partial = message("partial", { role: "assistant", content: "Partial response" });
+  const items = [failure("other", "Another failure"), partial, failure("retried")];
+  expect(projectRunFailureStreaks(items, "retried")).toEqual(items.slice(0, 2));
+  expect(projectRunFailureStreaks(items)).toEqual(items);
+});
+
 it.each([
   ["real user input", message("user", { role: "USER", content: "Try once more" })],
   ["a changed summary", failure("different", "Rate-limit recovery stopped ")],

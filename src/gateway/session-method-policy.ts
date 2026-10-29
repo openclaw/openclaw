@@ -26,6 +26,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["chat.abort", { fields: ["sessionKey"], required: true }],
   ["chat.inject", { fields: ["sessionKey"], required: true }],
   ["chat.send", { fields: ["sessionKey"], required: true, runStart: true, mayCreate: true }],
+  ["chat.retry", { fields: ["sessionKey"], required: true, runStart: true }],
   ["mcp.app.onboard", { fields: ["sessionKey"], required: true, runStart: true }],
   ["mcp.app.launch", { fields: ["sessionKey"], required: true }],
   ["mcp.app.settings", { fields: ["sessionKey"], required: true }],

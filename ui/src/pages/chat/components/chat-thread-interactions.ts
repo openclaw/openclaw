@@ -146,6 +146,8 @@ export type ChatThreadProps = Omit<
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
     failureActionsRunId?: string;
+    /** Failed run continued by Try again; its notice leaves the thread immediately. */
+    retriedRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];

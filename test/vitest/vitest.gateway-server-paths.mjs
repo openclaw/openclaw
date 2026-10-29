@@ -636,6 +636,7 @@ export const gatewayServerIsolatedTestFiles = [
   // Loads the real plugin runtime that neighboring server tests replace with mocks.
   "src/gateway/server.chat-cli-auth.test.ts",
   "src/gateway/server.chat-recovered-output.test.ts",
+  "src/gateway/server.chat-retry.test.ts",
   "src/gateway/server.cli-watchdog.test.ts",
   "src/gateway/server.codex-failure-recovery.test.ts",
   "src/gateway/server.incomplete-stream.test.ts",

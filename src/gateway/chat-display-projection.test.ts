@@ -7,6 +7,7 @@ import {
   projectLiveSessionMessage,
 } from "../../packages/gateway-client/src/session-projection.js";
 import { getMediaDir } from "../media/store.js";
+import { RUN_FAILURE_RETRY_SOURCE_TOOL } from "../sessions/input-provenance.js";
 import * as assistantDisplay from "../shared/assistant-display-content.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
@@ -637,6 +638,28 @@ it("shows one settled notice while preserving each attempt's partial output", ()
   ]);
   expect(projected.at(-1)).toMatchObject({ role: "custom", content: receipt.content });
   expect(JSON.stringify(projected)).not.toContain("PRIVATE_PROVIDER_ERROR");
+});
+
+it("retires a failure notice once Try again continues its run", () => {
+  const retry = (runId: string) => ({
+    role: "user",
+    content: "Continue from where you stopped.",
+    display: false,
+    provenance: { kind: "internal_system", sourceTool: RUN_FAILURE_RETRY_SOURCE_TOOL, runId },
+    __openclaw: { id: "retry-" + runId, seq: 11, runId: "retry-run" },
+  });
+  const reply = assistant([text("Continued answer")], {
+    stopReason: "stop",
+    __openclaw: { id: "reply", seq: 12, runId: "retry-run" },
+  });
+  expect(projectedIds([user, terminal(), retry("run-a"), reply])).toEqual([
+    user["__openclaw"],
+    reply["__openclaw"],
+  ]);
+  // A retry of another run leaves this run's notice in place.
+  expect(
+    projectChatDisplayMessages([user, terminal(), retry("run-z")]).map(readRunFailureNotice),
+  ).toEqual([undefined, { runId: "run-a", summary: "Recovery exhausted." }]);
 });
 
 it.each([

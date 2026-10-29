@@ -119,6 +119,7 @@ export function projectChatTranscript(
     runActive: Boolean(props.runActive),
     subagentWait: subagents.placedWait,
     questionPrompts: props.questionPrompts,
+    retriedRunId: props.retriedRunId,
     loading: props.loading,
     replyPeople,
     replyLocalPerson: localParticipantIdentityKey(props.userId),

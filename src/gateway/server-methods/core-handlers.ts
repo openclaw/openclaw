@@ -42,6 +42,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./chat-abort-handler.js").then((module) => ({
       "chat.abort": module.handleChatAbortRequest,
     })),
+  "chat-retry": () => import("./chat-retry.js").then((module) => module.chatRetryHandlers),
   commands: () => import("./commands.js").then((module) => module.commandsHandlers),
   computer: () => import("./computer.js").then((module) => module.computerHandlers),
   config: () => import("./config.js").then((module) => module.configHandlers),

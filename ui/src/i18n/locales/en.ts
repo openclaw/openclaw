@@ -1552,8 +1552,6 @@ const startupEnglish = {
       failedRepeatCount: "{count} times",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
-      continuePrompt:
-        "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
     errorBusySummary: "OpenClaw is busy. Check status before trying again.",
     errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",

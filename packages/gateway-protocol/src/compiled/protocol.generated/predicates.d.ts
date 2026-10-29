@@ -752,6 +752,11 @@ export function isChatPendingInputsDismissParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ChatPendingInputsDismissParamsSchema
 >;
+export function isChatRetryParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ChatRetryParamsSchema
+>;
 export function isChatPredictParams(
   value: unknown,
 ): value is import("typebox").Static<

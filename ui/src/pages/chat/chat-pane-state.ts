@@ -20,12 +20,13 @@ registerChatSessionEnglish();
 export function createChatPaneRunRecoveryActions(
   state: Pick<
     ChatPageHost,
-    "sessionKey" | "connected" | "chatRunId" | "chatSending" | "handleSendChat"
+    "sessionKey" | "connected" | "chatRunId" | "chatSending" | "chatRetriedRunId"
   >,
   options: {
     canSend: boolean;
     isCurrent: () => boolean;
     latestFailedRunId: () => string | undefined;
+    retryRun: (runId: string) => void;
   },
 ): Pick<ChatProps, "onRetryRun"> {
   const sessionKey = state.sessionKey;
@@ -35,14 +36,13 @@ export function createChatPaneRunRecoveryActions(
     state.connected &&
     !state.chatRunId &&
     !state.chatSending &&
+    state.chatRetriedRunId !== runId &&
     options.latestFailedRunId() === runId;
   return {
     onRetryRun: options.canSend
       ? (runId) => {
           if (ownsFailure(runId)) {
-            // Continue with the existing history, rather than replaying a prompt
-            // whose tools may already have completed side effects.
-            void state.handleSendChat(t("chat.recovery.continuePrompt"));
+            options.retryRun(runId);
           }
         }
       : undefined,

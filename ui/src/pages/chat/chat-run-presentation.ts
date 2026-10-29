@@ -13,6 +13,7 @@ const RUN_FIELDS = [
   "chatReasoning",
   "chatRunStartup",
   "chatRunError",
+  "chatRetriedRunId",
   "chatToolMessages",
   "guardianNotices",
   "providerPolicyNotice",

@@ -45,6 +45,7 @@ import {
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
+import { retryFailedChatRun } from "./chat-run-retry.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import { refreshChatCommands } from "./chat-state-refresh.ts";
@@ -583,7 +584,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           this.state === state && this.connectionGeneration === selectionConnectionGeneration,
         latestFailedRunId: () =>
           chatFailureRunId(state.chatRunError, selectedChatSessionRow(state)),
+        retryRun: (runId) => void retryFailedChatRun(state, runId),
       }),
+      retriedRunId: catalogKey ? undefined : (state.chatRetriedRunId ?? undefined),
       onUseSystemDefaultMicrophone:
         state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),
