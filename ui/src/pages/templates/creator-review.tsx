@@ -3,8 +3,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import type { TemplateCreatorFlow } from "./creator-flow.ts";
-import { templateCreatorOwner } from "./creator-owner.ts";
+import { templateCreatorOwner, type TemplateCreator } from "./creator-publication.ts";
 import "../../styles/template-creator.css";
 
 const CreatorReviewView = lazy(() => import("./creator-review-view.tsx"), {
@@ -24,7 +23,7 @@ export function TemplateCreatorReview(props: { context: ApplicationContext }) {
 
 function ActiveTemplateCreatorReview(props: {
   context: ApplicationContext;
-  flow: TemplateCreatorFlow;
+  flow: TemplateCreator;
 }) {
   const current = createMemo(() => {
     const flow = props.flow;

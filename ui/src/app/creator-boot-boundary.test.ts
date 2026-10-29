@@ -13,8 +13,8 @@ it("keeps creator construction outside the roster and dormant chat review entrie
   };
   const owners = new Set([
     ...Object.values(entries),
-    ...["creator-flow.ts", "creator-owner.ts", "draft-navigation.ts"].map((file) =>
-      path.join(root, "pages/templates", file),
+    ...["creator-flow.ts", "creator-owner.ts", "creator-publication.ts", "draft-navigation.ts"].map(
+      (file) => path.join(root, "pages/templates", file),
     ),
     ...["en-agents-home.ts", "en-template-creator.ts"].map((file) =>
       path.join(root, "i18n/locales", file),
@@ -79,4 +79,5 @@ it("keeps creator construction outside the roster and dormant chat review entrie
   expect(modules.some((id) => id.endsWith("/pages/templates/creator-flow.ts"))).toBe(false);
   expect(modules.some((id) => id.endsWith("/i18n/locales/en-template-creator.ts"))).toBe(false);
   expect(modules.some((id) => id.endsWith("/pages/templates/creator-owner.ts"))).toBe(true);
+  expect(modules.some((id) => id.endsWith("/pages/templates/creator-publication.ts"))).toBe(true);
 });

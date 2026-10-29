@@ -57,7 +57,8 @@ async function fixture() {
     listeners.add(listener);
     return () => listeners.delete(listener);
   };
-  const { templateCreatorAction, templateCreatorOwner } = await import("./creator-owner.ts");
+  const { templateCreatorAction } = await import("./creator-owner.ts");
+  const { templateCreatorOwner } = await import("./creator-publication.ts");
   const owner = templateCreatorOwner(context);
   return {
     context,

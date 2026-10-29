@@ -22,7 +22,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { templateCreatorOwner } from "./creator-owner.ts";
+import { templateCreatorOwner, type TemplateCreator } from "./creator-publication.ts";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 registerEnglishCatalog(registerTemplateCreatorEnglish);
@@ -51,7 +51,7 @@ function hasCompleteScope(content: string) {
 }
 
 /** Connection-scoped presentation; the Gateway owns draft bytes and publication authority. */
-export class TemplateCreatorFlow {
+export class TemplateCreatorFlow implements TemplateCreator {
   private readonly listeners = createChangeListeners();
   private target: Target | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;

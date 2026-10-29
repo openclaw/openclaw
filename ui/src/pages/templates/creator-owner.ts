@@ -1,34 +1,12 @@
 import { createLazyImportLoader } from "../../../../src/shared/lazy-promise.js";
-import { createChangeListeners } from "../../../../src/shared/listeners.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { showToast } from "../../lib/toast.ts";
-import type { TemplateCreatorFlow } from "./creator-flow.ts";
+import { templateCreatorOwner, type CreatorOwner } from "./creator-publication.ts";
 import { canCreateTemplateDraft } from "./draft-navigation.ts";
 
-type PendingStart = { agentId: string; client: GatewayBrowserClient; revision: number };
-type CreatorOwner = {
-  flow: TemplateCreatorFlow | null;
-  pending: PendingStart | null;
-  loading: boolean;
-  subscribe: (listener: () => void) => () => void;
-  publish: () => void;
-};
-
-const owners = new WeakMap<ApplicationContext, CreatorOwner>();
 const runtime = createLazyImportLoader(() => import("./creator-flow.ts"));
-
-/** Dormant chat observes publication without constructing the optional creator runtime. */
-export function templateCreatorOwner(context: ApplicationContext): CreatorOwner {
-  let owner = owners.get(context);
-  if (!owner) {
-    owner = { flow: null, pending: null, loading: false, ...createChangeListeners() };
-    owners.set(context, owner);
-  }
-  return owner;
-}
 
 async function loadTemplateCreator(context: ApplicationContext, owner: CreatorOwner) {
   // One waiter reads the latest slot after loading; replaced connections must not

@@ -11,7 +11,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createContext } from "../skill-workshop/skill-workshop-page.test-support.ts";
 import { templateCreatorFlow } from "./creator-flow.ts";
-import { templateCreatorOwner } from "./creator-owner.ts";
+import { templateCreatorOwner } from "./creator-publication.ts";
 import { TemplateCreatorReview } from "./creator-review.tsx";
 
 const reviewed: TemplatesDraftsReviewResult = {
