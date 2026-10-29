@@ -21,7 +21,6 @@ import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
-  normalizeAgentIdStrict,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -38,8 +37,7 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import { ToolInputError } from "../tool-input-error.js";
-import type { AnyAgentTool } from "./common.js";
-import { readToolStringParam } from "./common.js";
+import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import {
@@ -80,6 +78,7 @@ import {
   resolveConfiguredAgentMainSessionKey,
 } from "./sessions-send-tool.delivery.js";
 import {
+  readSessionsSendLabelAgent,
   readSessionsSendMessage,
   readSessionsSendMode,
   readSessionsSendTimeout,
@@ -140,16 +139,11 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
 
       const sessionKeyParam = readToolStringParam(params, "sessionKey");
       const labelParam = readToolStringParam(params, "label");
-      const labelAgentIdInput = readToolStringParam(params, "agentId");
-      const normalizedLabelAgentId =
-        labelAgentIdInput === undefined ? null : normalizeAgentIdStrict(labelAgentIdInput);
-      if (normalizedLabelAgentId && !normalizedLabelAgentId.ok) {
-        return sendFailure(
-          "error",
-          `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
-        );
+      const labelAgent = readSessionsSendLabelAgent(params);
+      if (labelAgent.error) {
+        return sendFailure("error", labelAgent.error);
       }
-      const explicitTargetAgentId = normalizedLabelAgentId?.value;
+      const explicitTargetAgentId = labelAgent.agentId;
 
       let sessionKey = sessionKeyParam;
       let resolvedTargetAgentId: string | undefined;
@@ -163,7 +157,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         if (!agentMainKey) {
           return sendFailure(
             "error",
-            `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
+            `Agent "${labelAgent.input}" not found. Run openclaw agents list to see configured agents.`,
           );
         }
         sessionKey = agentMainKey;
@@ -387,8 +381,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       );
       const timeoutMs = finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 0;
       const replyTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
-      const idempotencyKey = opts?.idempotencyKey ?? crypto.randomUUID();
-      const runId: string = idempotencyKey;
+      const runId = opts?.idempotencyKey ?? crypto.randomUUID();
       const sameSession = requesterSessionKey === resolvedKey && targetAgentId === requesterAgentId;
       // Fire-and-forget self-send remains a channel-delivery path. A synchronous
       // self-send would wait behind its own active session lane until timeout.
@@ -573,7 +566,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 inputProvenance,
                 sessionKey: resolvedKey,
                 targetAgentId,
-                idempotencyKey,
+                idempotencyKey: runId,
                 runId,
                 displayKey,
                 assertCurrent: communication.assertCurrent,
@@ -583,7 +576,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               message: dispatchMessage,
               agentId: targetAgentId,
               sessionKey: resolvedKey,
-              idempotencyKey,
+              idempotencyKey: runId,
               deliver: false,
               sourceReplyDeliveryMode: "message_tool_only" as const,
               channel: INTERNAL_MESSAGE_CHANNEL,
@@ -694,6 +687,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               start,
               completion,
               registryCompletion,
+              requesterTurnRunId: opts?.requesterTurnRunId,
               watchField,
               replyContext,
               targetSession,

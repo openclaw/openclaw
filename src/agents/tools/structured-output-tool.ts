@@ -74,7 +74,8 @@ export function createStructuredOutputTool(params: {
             return jsonResult({
               status: "rejected",
               success: false,
-              schemaError: prior.schemaError,
+              reason: "retry_budget_exhausted",
+              error: `structured_output retry budget exhausted: this call was not evaluated and the run completes without a structured result. Last validation error: ${prior.schemaError}`,
             });
           }
           let validation: ReturnType<typeof validateJsonSchemaValue>;

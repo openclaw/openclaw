@@ -19,6 +19,7 @@ import type { GatewayModelCatalogContext } from "./models-list-context.js";
 
 type PreparedAgentFacts = ChatMetadataProjectionFacts & {
   authStoreRevision: string;
+  authCatalogRevision: string;
   catalogRefreshFailed: boolean;
   skillsVersion: number;
 };
@@ -41,6 +42,7 @@ export type ChatMetadataRuntimeDeps = {
     inheritedAuthDir?: string,
   ) => AuthProfileStore | undefined;
   getAuthStoreRevision: (agentDir?: string) => number;
+  getAuthCatalogRevision: (agentDir?: string) => number;
   getSkillsVersion: (workspaceDir?: string) => number;
   getPluginRegistryVersion: () => number;
   buildCommands: (params: {
@@ -112,6 +114,10 @@ export function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedG
                 },
               authModes: fullCatalogAuth?.authModes ?? owner.authModes,
               authStoreRevision: `${deps.getAuthStoreRevision(owner.agentDir)}:${deps.getAuthStoreRevision(owner.inheritedAuthDir)}`,
+              authCatalogRevision:
+                String(deps.getAuthCatalogRevision(owner.agentDir)) +
+                ":" +
+                String(deps.getAuthCatalogRevision(owner.inheritedAuthDir)),
               modelCatalog: catalog,
               // Failure is visible metadata; in-flight discovery does not invalidate usable rows.
               catalogRefreshFailed: catalog.refreshFailed === true,
@@ -132,7 +138,7 @@ export function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedG
 export function generationFactsMatch(
   left: PreparedGenerationFacts,
   right: PreparedGenerationFacts,
-  scope: "metadata" | "catalog" | "auth" | "commands" = "metadata",
+  scope: "metadata" | "catalog" | "catalog-notification" | "auth" | "commands" = "metadata",
 ): boolean {
   if (
     left.configKey !== right.configKey ||
@@ -150,7 +156,9 @@ export function generationFactsMatch(
           candidate.owner.workspaceDir === agent.owner.workspaceDir
         : // Config stamping replaces the reader object without replacing its generation.
           candidate.owner.isCurrent === agent.owner.isCurrent &&
-          candidate.authStoreRevision === agent.authStoreRevision &&
+          (scope === "catalog-notification"
+            ? candidate.authCatalogRevision === agent.authCatalogRevision
+            : candidate.authStoreRevision === agent.authStoreRevision) &&
           // Full catalogs carry their own paired auth generation.
           candidate.modelCatalog === agent.modelCatalog &&
           (scope === "auth" || candidate.catalogRefreshFailed === agent.catalogRefreshFailed) &&

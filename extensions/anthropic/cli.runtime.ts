@@ -67,7 +67,6 @@ type ClaudeCliTurn = {
   foregroundTaskIds: Set<string>;
   foregroundBashToolUseIds: Set<string>;
   pendingBackgroundTaskIds: Set<string>;
-  subagentTaskIds: Set<string>;
   taskNotifications: Map<string, "queued" | "replayed">;
   /** Same-turn inputs written to native, keyed by UUID until their lifecycle completes. */
   injectedInputs: Map<
@@ -92,6 +91,9 @@ type ClaudeCliSession = {
   transportStartup?: ReturnType<typeof createClaudeCliTransport>;
   currentTurn?: ClaudeCliTurn;
   idleTimer?: ReturnType<typeof setTimeout>;
+  taskOwners: Map<string, string | false>;
+  runningDescendants: Map<string, string | undefined>;
+  notifiedTasks: Set<string>;
   hasInputLifecycle: boolean;
   closed: boolean;
 };
@@ -347,6 +349,60 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       Array.isArray(message.capabilities) && message.capabilities.includes("msg_lifecycle_v1");
   }
   const turn = session.currentTurn;
+  let parentRuns = false;
+  let notifiedTaskId: string | undefined;
+  if (message.type === "system") {
+    const inputUuid = activeTurn(session)?.inputUuid ?? "";
+    const tasks =
+      message.subtype === "background_tasks_changed" && Array.isArray(message.tasks)
+        ? message.tasks.filter(isRecord)
+        : message.subtype === "task_started"
+          ? [message]
+          : [];
+    for (const task of tasks) {
+      if (typeof task.task_id !== "string" || !task.task_id) {
+        continue;
+      }
+      const id = task.task_id;
+      session.taskOwners.set(
+        id,
+        task.owned_by_subagent === true ? false : (session.taskOwners.get(id) ?? inputUuid),
+      );
+      if (task.owned_by_subagent === true && turn) {
+        // Ownership may arrive after the process-wide list first exposed this task.
+        turn.pendingBackgroundTaskIds.delete(id);
+        turn.foregroundTaskIds.delete(id);
+        turn.taskNotifications.delete(id);
+      }
+      if (
+        task.task_type === "local_agent" ||
+        task.task_type === "local_workflow" ||
+        task.owned_by_subagent === true ||
+        typeof task.parent_task_id === "string"
+      ) {
+        session.runningDescendants.set(
+          id,
+          typeof task.parent_task_id === "string"
+            ? task.parent_task_id
+            : session.runningDescendants.get(id),
+        );
+      }
+    }
+    if (message.subtype === "task_notification" && typeof message.task_id === "string") {
+      const id = message.task_id;
+      const parent = session.runningDescendants.get(id);
+      parentRuns = parent !== undefined && session.runningDescendants.has(parent);
+      session.runningDescendants.delete(id);
+      if (
+        !session.notifiedTasks.has(id) &&
+        session.taskOwners.get(id) !== false &&
+        (session.taskOwners.get(id) ?? inputUuid) === inputUuid
+      ) {
+        notifiedTaskId = id;
+      }
+      session.notifiedTasks.add(id);
+    }
+  }
   if (!turn) {
     return;
   }
@@ -404,38 +460,53 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   ) {
     return;
   }
-  if (message.type === "system" && message.subtype === "task_started") {
-    if (message.owned_by_subagent === true) {
-      if (typeof message.task_id === "string" && message.task_id) {
-        turn.subagentTaskIds.add(message.task_id);
-      }
-    } else if (typeof message.task_id === "string" && message.task_id) {
-      // task_type is optional here; the background task list names it later.
-      if (message.is_backgrounded === false) {
-        turn.foregroundTaskIds.add(message.task_id);
-      }
-      const foregroundBash =
-        typeof message.tool_use_id === "string" &&
-        turn.foregroundBashToolUseIds.delete(message.tool_use_id);
-      if (foregroundBash && message.is_backgrounded === true) {
-        turn.pendingBackgroundTaskIds.add(message.task_id);
-      }
+  if (
+    message.type === "system" &&
+    message.subtype === "task_started" &&
+    typeof message.task_id === "string" &&
+    session.taskOwners.get(message.task_id) === turn.inputUuid
+  ) {
+    if (message.is_backgrounded === false) {
+      turn.foregroundTaskIds.add(message.task_id);
+    }
+    const foregroundBash =
+      typeof message.tool_use_id === "string" &&
+      turn.foregroundBashToolUseIds.delete(message.tool_use_id);
+    if (foregroundBash && message.is_backgrounded === true) {
+      turn.pendingBackgroundTaskIds.add(message.task_id);
     }
   }
   if (message.type === "system" && message.subtype === "background_tasks_changed") {
-    for (const task of Array.isArray(message.tasks) ? message.tasks : []) {
-      if (!isRecord(task) || typeof task.task_id !== "string" || !task.task_id) {
-        continue;
+    const tasks = Array.isArray(message.tasks) ? message.tasks.filter(isRecord) : [];
+    // Resolve to a fixed point: snapshots can list arbitrarily deep descendants before roots.
+    // Each productive pass acquires a new hold, so cycles without a held ancestor terminate.
+    let acquiredHold: boolean;
+    do {
+      acquiredHold = false;
+      for (const task of tasks) {
+        const id = task.task_id;
+        if (
+          typeof id !== "string" ||
+          session.taskOwners.get(id) !== turn.inputUuid ||
+          session.notifiedTasks.has(id) ||
+          turn.pendingBackgroundTaskIds.has(id)
+        ) {
+          continue;
+        }
+        const parent = session.runningDescendants.get(id);
+        if (parent !== undefined && !turn.pendingBackgroundTaskIds.has(parent)) {
+          continue;
+        }
+        if (
+          task.task_type === "local_agent" ||
+          task.task_type === "local_workflow" ||
+          (task.task_type === "local_bash" && turn.foregroundTaskIds.has(id))
+        ) {
+          turn.pendingBackgroundTaskIds.add(id);
+          acquiredHold = true;
+        }
       }
-      if (
-        task.task_type === "local_agent" ||
-        task.task_type === "local_workflow" ||
-        (task.task_type === "local_bash" && turn.foregroundTaskIds.has(task.task_id))
-      ) {
-        // Leaving the live task list is not acknowledgement of its queued answer.
-        turn.pendingBackgroundTaskIds.add(task.task_id);
-      }
-    }
+    } while (acquiredHold);
   }
   // A replay receipt acknowledges consumption within the current query. Keep its
   // queue slot until that query's result so it cannot acknowledge the next task twice.
@@ -445,16 +516,14 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     turn.foregroundTaskIds.delete(replayedTaskId);
     turn.taskNotifications.set(replayedTaskId, "replayed");
   }
-  if (
-    message.type === "system" &&
-    message.subtype === "task_notification" &&
-    typeof message.task_id === "string" &&
-    message.task_id &&
-    // Subagent completions have no parent result and must not consume its queue slots.
-    !turn.subagentTaskIds.delete(message.task_id)
-  ) {
-    // Include non-held tasks: each queued notification has its own ordered result.
-    turn.taskNotifications.set(message.task_id, "queued");
+  if (message.type === "system" && message.subtype === "task_notification" && notifiedTaskId) {
+    if (parentRuns || message.status === "stopped") {
+      turn.pendingBackgroundTaskIds.delete(notifiedTaskId);
+      turn.foregroundTaskIds.delete(notifiedTaskId);
+      turn.taskNotifications.delete(notifiedTaskId);
+    } else {
+      turn.taskNotifications.set(notifiedTaskId, "queued");
+    }
   }
   if (message.type === "result") {
     // Only another input start or answer supersedes a held result. Idle/status
@@ -523,6 +592,9 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
 function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliSession {
   const session: ClaudeCliSession = {
     capability,
+    taskOwners: new Map(),
+    runningDescendants: new Map(),
+    notifiedTasks: new Set(),
     hasInputLifecycle: false,
     closed: false,
     handle: {
@@ -579,7 +651,6 @@ export async function* executeClaudeCli(
     foregroundBashToolUseIds: new Set(),
     pendingBackgroundTaskIds: new Set(),
     injectedInputs: new Map(),
-    subagentTaskIds: new Set(),
     taskNotifications: new Map(),
   };
   session.currentTurn = turn;

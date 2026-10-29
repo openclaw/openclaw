@@ -86,6 +86,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const authStoreOptions = {
     migrationProvider: params.provider,
     config: runParams.config,
+    inheritedAuthDir: params.preparedModelRuntime?.inheritedAuthDir,
     profileId: runParams.authProfileId,
     allowKeychainPrompt: false,
   };

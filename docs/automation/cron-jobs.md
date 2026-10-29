@@ -161,3 +161,5 @@ This page is an index. Each section below moved to a child page, and every ancho
 - [Standing intents](/concepts/standing-intents) — event-triggered work instead of a schedule
 - [Standing orders](/automation/standing-orders) — the operating authority a scheduled run acts under
 - [Timezone](/concepts/timezone) — timezone configuration
+
+Explicitly disabling a job also cancels its active run, including a manually forced run of an already paused job. Editing its description or other display fields does not cancel that run.

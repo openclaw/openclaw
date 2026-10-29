@@ -242,9 +242,13 @@ bounded batches, yielding between batches while preserving the existing cache ca
 
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
-published index; a failed rebuild leaves that index intact. The embedding cache
-is bounded before publication, not after copying excess entries into the
-shared database.
+published index; a failed rebuild leaves that index intact. Full rebuild cache
+writes may temporarily use up to twice the configured row cap so early misses
+do not evict cached vectors needed by later files. If the rebuild writes cache
+entries, success or abort recounts and trims the cache to its normal cap.
+All-cache-hit rebuilds and preflight failures leave the cache untouched.
+Incremental writes retain their normal pre-insertion cap. A process crash can
+leave temporary excess until the next cache write enforces its capacity budget.
 
 Other agent state, including sessions and transcripts in the same database,
 is retained. Use the [memory index command](/cli/memory#memory-index) for

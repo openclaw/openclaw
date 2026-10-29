@@ -178,9 +178,15 @@ Plugin tools such as remote SSH do not become background jobs automatically.
 
 When Claude Code moves a foreground Bash command to the background after its tool timeout,
 OpenClaw keeps the turn active until Claude processes the completion and returns its final answer.
+Nested Agent and Workflow completions stay within their running parent; if that background parent ends first,
+the turn waits for the forwarded result. Completions from earlier inputs do not acquire newer input holds.
 Follow-up tools still require the current turn's host permissions. Commands started explicitly
 in the background do not hold the turn open. If the turn fails or is cancelled while one of these
 commands still needs a follow-up, OpenClaw closes that subprocess and starts a fresh one for the next turn.
+
+Discarded, semantically attributed Claude child messages use a bounded progress charge rather than
+consuming the parent reply budget. Retained stream deltas, individual JSONL lines, and ordinary
+frame counts remain bounded. Mixed-format records with retained item content keep their full charge.
 
 While native background agents or workflows continue, a completed Claude answer can reach the
 channel through the normal reply pipeline without waiting for the continuation to finish.
@@ -274,7 +280,9 @@ restrictions still override broader global policy. OpenClaw-owned MCP tools
 remain authorized by the Gateway rather than receiving duplicate native
 approval. Other MCP tools stay host-permission controlled.
 
-Claude's native `AskUserQuestion` uses OpenClaw's structured question flow. When
+Claude's native `AskUserQuestion` uses OpenClaw's structured question flow. Long option
+descriptions are shortened for display; question text and option labels keep their
+exact limits. When
 OpenClaw rejects malformed questions, it reports the failed field and
 constraint without repeating the submitted text, and asks Claude to correct
 the field and retry. Invalid questions do not prompt the user. If the user
@@ -432,6 +440,13 @@ Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs seriali
 When the resolved MCP tool names change, OpenClaw starts a fresh native CLI session
 and logs `cli session reset: provider=<backend> reason=prompt-tools`. This refreshes
 the CLI's cached tool catalog; resending prompt text alone cannot refresh it.
+Tools that follow the calling client (`screen`, `show_widget`, `suggest_task`,
+`dismiss_task`) do not count: subagent-completion and channel turns drop them, and
+resetting on each change would discard the session's context. Their change still
+alters the system prompt, so a warm process restarts and the resumed CLI lists the
+current tools. On this release line, `read` likewise does not count because the same
+logical capability moves from native Claude authority to loopback mediation on an
+internal completion turn.
 The OpenClaw chat remains intact, and saved-history recovery follows the
 [history account boundaries](#history-account-boundaries) above. System-prompt-only
 changes continue to reuse the native session when the backend can resend the prompt.
@@ -598,9 +613,17 @@ stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
 bytes are not tool results or agent progress; client request deadlines and the
 current model attempt's timeout still apply.
 
+Each loopback response uses `Connection: close` so clients cannot reuse a pooled
+socket as the server closes it after an idle timeout. The connection closes only
+when the response ends; long-running tool responses and SSE notification streams
+remain open until completion or shutdown. Each later request opens a new loopback
+TCP connection.
+
 The shared listener remains available after the turn that first started it completes.
 Later calls use their own run's permissions and caller liveness, without retaining
 the starting turn's transcript read fence or request scope.
+If the listener closes unexpectedly, its grants are retired and the next CLI run
+starts a replacement. A warning records the closure in the Gateway log.
 The listener retains the Gateway's process broker and database-reader lifecycle.
 After plugin replacement, new CLI turns resolve bridge tools against the current
 plugin generation without restarting the listener. Retired plugin instances remain
@@ -618,6 +641,11 @@ permitted tools and supported native capabilities. When a run retains native `Ba
 the saved automation retains its Gateway host target, including with an explicit
 `toolsAllow: ["exec"]` cap. Current account, tool, sandbox, and approval restrictions
 still apply; capturing the target does not grant broader execution permission.
+Exec calls that request another host or a node fail with an error naming the
+Gateway pin before the command runs. Calls without an explicit target keep using
+the pin. To change a scheduled job's target, an operator can set an explicit tool
+list with `openclaw cron edit <id> --tools exec`; this replaces the job's tool list
+and clears the captured pin, while current exec policy still applies.
 
 Backends that retain their native shell can also receive a node-only `exec` tool,
 offered only when policy permits it and a connected

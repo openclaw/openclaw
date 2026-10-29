@@ -150,3 +150,6 @@ export {
   CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
 } from "./native-tool-policy.js";
 export { buildCodexRuntimeThreadConfigForRun } from "./src/app-server/thread-requests.js";
+
+export const loadCodexSubscriptionRoutingTestFixture = () =>
+  import("./src/app-server/subscription-routing.test-support.js");

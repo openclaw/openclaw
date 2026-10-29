@@ -28,6 +28,11 @@ import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-databa
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  GatewayDrainingError,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { clearOpenClawAgentDatabaseValidationCache } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -632,3 +637,42 @@ describe("restart recovery claim settlement", () => {
     expect(persisted?.restartRecoveryTerminalRunIds).toContain("source-turn");
   });
 });
+
+it.each(["restart-drain", "stale-drain", "user-stop"] as const)(
+  "preserves an existing recovery claim only for a live restart refusal (%s)",
+  async (cause) => {
+    await withTrackedReply(async ({ controller, operation, readEntry }) => {
+      if (cause === "user-stop") {
+        operation.abortByUser();
+      }
+      if (cause !== "stale-drain") {
+        markGatewayRestartDraining();
+      }
+      try {
+        await handleReplyAgentRunError(new GatewayDrainingError(), {
+          resolveVisibleReplyDelivery: async () => false,
+          isHeartbeat: false,
+          replyExpectation: "required",
+          isRestartRecoveryArmed: controller.isArmed,
+          replyOperation: operation,
+          resolvedVerboseLevel: "off",
+          sessionCtx: {},
+          returnWithQueuedFollowupDrain: (value) => value,
+        });
+        await controller.clear();
+        expect(readEntry()?.restartRecoveryDeliveryRunId).toBe(
+          cause === "restart-drain" ? "old-recovery" : undefined,
+        );
+        expect(operation.result).toMatchObject(
+          cause === "restart-drain"
+            ? { kind: "aborted", code: "aborted_for_restart" }
+            : cause === "user-stop"
+              ? { kind: "aborted", code: "aborted_by_user" }
+              : { kind: "failed", code: "gateway_draining" },
+        );
+      } finally {
+        resetGatewayWorkAdmission();
+      }
+    });
+  },
+);

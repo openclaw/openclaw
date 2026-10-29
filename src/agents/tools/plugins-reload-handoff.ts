@@ -2,12 +2,9 @@ import { randomUUID } from "node:crypto";
 import { getAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.js";
-import {
-  captureSessionEventTargetForHost,
-  enqueueSessionEventForHost,
-} from "../../auto-reply/reply/session-event-handoff.js";
+import { captureSessionEventTargetForHost } from "../../auto-reply/reply/session-event-handoff.js";
 import { prepareSessionEventTargetForHost } from "../../auto-reply/reply/session-event-target.js";
-import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
+import { captureOperatorToolGatewayRequestContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   execRequestAbortSignal,
@@ -20,7 +17,6 @@ import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-wo
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 
 const log = createSubsystemLogger("plugins/reload-handoff");
@@ -55,13 +51,17 @@ export async function handoffPluginReload(params: {
     throw new ToolInputError("This turn already handed off a plugin reload.");
   }
   pending.add(operation);
-  let continuation: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>> =
-    undefined;
+  let continuation: Awaited<
+    ReturnType<typeof captureOperatorToolGatewayRequestContinuationContext>
+  > = undefined;
   try {
-    continuation = await captureOperatorToolGatewayContinuationContext({
-      agentId: caller.agentId,
-      sessionKey: caller.sessionKey,
-    });
+    continuation = await captureOperatorToolGatewayRequestContinuationContext(
+      {
+        agentId: caller.agentId,
+        sessionKey: caller.sessionKey,
+      },
+      { method: "plugins.reload", params: params.request },
+    );
     if (!continuation) {
       throw new ToolInputError("reloadAndResume requires its admitted Gateway.");
     }
@@ -104,15 +104,10 @@ export async function handoffPluginReload(params: {
                 try {
                   const destination = await prepareSessionEventTargetForHost(target);
                   try {
-                    result = await retained.run(() =>
-                      callAgentToolGatewayRequest({
-                        method: "plugins.reload",
-                        params: params.request,
-                        sessionMutationCommitGuard: destination.assertCurrent,
-                        signal: AbortSignal.any([retained.signal, signal]),
-                        timeoutMs: null,
-                      }),
-                    );
+                    result = await retained.dispatch({
+                      assertCurrent: destination.assertCurrent,
+                      signal: AbortSignal.any([retained.signal, signal]),
+                    });
                   } finally {
                     destination.release();
                   }
@@ -128,7 +123,7 @@ export async function handoffPluginReload(params: {
                 if (signal.aborted) {
                   return;
                 }
-                const receipt = enqueueSessionEventForHost(
+                const receipt = await retained.enqueueSessionEvent(
                   "Plugin reload result: " +
                     params.formatResult(result) +
                     "\nContinue the original task in this conversation. Do not repeat a completed reload.",

@@ -26,6 +26,7 @@ import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
+import type { StreamingReplyResolver } from "./embedded-agent-subscribe.streaming-reply.types.js";
 import type {
   BlockReplyChunking,
   SubscribeEmbeddedAgentSessionParams,
@@ -171,6 +172,7 @@ export type EmbeddedAgentSubscribeState = {
     raw: string;
     text: string;
     projection?: {
+      replyResolver?: StreamingReplyResolver;
       kind: "raw" | "delivery" | "final";
       projector: ReturnType<typeof createAssistantVisibleStreamText>;
       directiveCodePrefix?: StreamDirectiveCodePrefix;

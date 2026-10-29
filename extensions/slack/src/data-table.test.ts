@@ -5,10 +5,51 @@ import {
   countSlackDataTableCellCharacters,
   renderSlackDataTableCompactPlainTextFallback,
   renderSlackDataTableFallbackText,
+  renderSlackTableFallbackText,
   SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX,
 } from "./data-table.js";
 
 describe("Slack data table blocks", () => {
+  it.each([false, true])(
+    "preserves rich-text dates in table fallback (mrkdwnSafe=%s)",
+    (mrkdwnSafe) => {
+      expect(
+        renderSlackTableFallbackText(
+          {
+            type: "table",
+            rows: [
+              [{ type: "raw_text", text: "When" }],
+              [
+                {
+                  type: "rich_text",
+                  elements: [
+                    {
+                      type: "rich_text_section",
+                      elements: [
+                        { type: "text", text: "From " },
+                        { type: "date", timestamp: 0, format: "{date_num}" },
+                        { type: "text", text: " to " },
+                        {
+                          type: "date",
+                          timestamp: 1_700_000_000,
+                          format: "{date_short}",
+                          fallback: "<tomorrow>",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            ],
+          },
+          mrkdwnSafe,
+        ),
+      ).toBe(
+        `When\nFrom 1970-01-01T00:00:00.000Z to ${mrkdwnSafe ? "&lt;tomorrow&gt;" : "<tomorrow>"}`,
+      );
+    },
+  );
+
   it("maps portable cells to Slack's current native shape", () => {
     expect(
       buildSlackDataTableBlock({

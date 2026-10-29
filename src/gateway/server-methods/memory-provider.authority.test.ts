@@ -11,6 +11,7 @@ import type {
 } from "../../plugins/registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import * as profiles from "../../state/user-profile-list.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -68,7 +69,12 @@ async function call(
   return respond;
 }
 
+let sharedGateway = false;
 beforeEach(() => {
+  sharedGateway = false;
+  vi.spyOn(profiles, "hasMultipleResidentSessionSharingIdentities").mockImplementation(
+    () => sharedGateway,
+  );
   config = providerConfig;
   provider = createProvider();
   open = vi.fn<MemoryProviderRuntime["open"]>(async () => ({ provider }));
@@ -81,6 +87,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
 });
 
@@ -278,4 +285,40 @@ describe("Memory Core legacy owner", () => {
       undefined,
     );
   });
+});
+
+it("requires administrator for content reads on shared Gateway", async () => {
+  sharedGateway = true;
+  for (const [method, params] of [
+    ["memory.search", { version: 2, query: "x" }],
+    ["memory.get", { reference }],
+  ] as const) {
+    expect(await call(method, params, cliClient())).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("requires an administrator") }),
+    );
+  }
+  expect(open).not.toHaveBeenCalled();
+  expect(await call("memory.status", {}, cliClient())).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({ status: "ready" }),
+    undefined,
+  );
+  expect(
+    await call("memory.search", { version: 2, query: "x" }, cliClient(["operator.admin"])),
+  ).toHaveBeenCalledWith(true, expect.objectContaining({ agentId: "main" }), undefined);
+});
+it("refuses content I/O when Gateway becomes shared during open", async () => {
+  open.mockImplementation(async (input) => {
+    sharedGateway = true;
+    input.context.assertCurrent();
+    return { provider };
+  });
+  expect(await call("memory.search", { version: 2, query: "x" }, cliClient())).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ message: expect.stringContaining("requires an administrator") }),
+  );
+  expect(provider.search).not.toHaveBeenCalled();
 });

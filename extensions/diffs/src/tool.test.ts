@@ -82,6 +82,31 @@ describe("diffs tool", () => {
     });
   }
 
+  it("preserves trailing patch whitespace in the viewer payload", async () => {
+    const result = await createTool().execute("patch-whitespace", {
+      patch: "--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-old\n+new  \n",
+      mode: "view",
+    });
+    const details = readDetails(result);
+    const [id = "", token = ""] = String(details.viewerPath).split("/").slice(-2);
+    const viewer = await store.readAuthorizedViewer(id, token);
+    if (!viewer) {
+      throw new Error("viewer artifact missing");
+    }
+    const encoded = Buffer.from(viewer.html)
+      .toString("utf8")
+      .match(
+        /<script type="application\/json" data-openclaw-diff-payload>([\s\S]*?)<\/script>/,
+      )?.[1];
+    if (!encoded) {
+      throw new Error("viewer payload missing");
+    }
+    const payload = JSON.parse(encoded);
+    const fileDiff = payload.fileDiff;
+    expect(fileDiff.additionLines).toEqual(["new  \n"]);
+    expect(fileDiff.deletionLines).toEqual(["old\n"]);
+  });
+
   it("uses current public origin for retained tools after config reload", async () => {
     let config: OpenClawConfig = { gateway: { publicOrigin: "https://first.example" } };
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();

@@ -1,15 +1,25 @@
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as clientRuntime from "./client-runtime.js";
+import {
+  CODEX_INFERENCE_GENERATION_KEY,
+  createCodexInferenceContext,
+} from "./inference-context.js";
 import type { CodexTurn, CodexUserInput } from "./protocol.js";
 import { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
+import { isCodexTurnContextHandoff } from "./test-support.js";
 
+const inference = vi.hoisted(() => ({
+  route: undefined as { context: ReturnType<typeof createCodexInferenceContext> } | undefined,
+}));
 const cleanup = vi.hoisted(() => ({ interrupt: vi.fn(), retire: vi.fn() }));
 const references = vi.hoisted(() => ({
   delivered: false,
   accepted: vi.fn(),
 }));
-vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
   embeddedAgentLog: { debug: vi.fn(), warn: vi.fn() },
   formatErrorMessage: String,
 }));
@@ -21,7 +31,8 @@ vi.mock("./attempt-diagnostics.js", () => ({
   createCodexModelCallDiagnosticEmitter: () => ({ setRequestPayloadBytes: vi.fn() }),
   utf8JsonByteLength: () => 1,
 }));
-vi.mock("./client-runtime.js", () => ({
+vi.mock("./client-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client-runtime.js")>()),
   prepareCodexWorkspaceReferences: () => ({
     include: !references.delivered,
     accepted: () => {
@@ -30,11 +41,15 @@ vi.mock("./client-runtime.js", () => ({
     },
   }),
 }));
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   isCodexAppServerIndeterminateRequestCancellationError: () => false,
 }));
 vi.mock("./explicit-skill-input.js", () => ({ resolveCodexExplicitSkillInputs: async () => [] }));
-vi.mock("./inference-routing.js", () => ({ getCodexInferenceThread: () => undefined }));
+vi.mock("./inference-routing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inference-routing.js")>()),
+  getCodexInferenceThread: () => inference.route,
+}));
 vi.mock("./protocol-validators.js", () => ({
   assertCodexTurnStartResponse: (response: unknown) => response,
 }));
@@ -58,6 +73,7 @@ vi.mock("./trajectory.js", () => ({ recordCodexTrajectoryContext: vi.fn() }));
 vi.mock("./user-prompt-message.js", () => ({ buildCodexUserPromptMessage: vi.fn() }));
 
 beforeEach(() => {
+  inference.route = undefined;
   references.delivered = false;
   references.accepted.mockClear();
   cleanup.interrupt.mockReset().mockResolvedValue(true);
@@ -122,6 +138,7 @@ async function prepare(
   acknowledgment?: Acknowledgment,
   native = createNativeThread(),
   usesSupervisionConnection = true,
+  onResources?: (resources: Parameters<typeof prepareCodexAttemptTurnRequest>[0]) => void,
 ) {
   const request = vi.fn(
     async (
@@ -132,6 +149,9 @@ async function prepare(
       options.assertCurrent?.();
       if (method === "thread/turns/list") {
         return { data: [native.latest] };
+      }
+      if (method === "thread/inject_items") {
+        return {};
       }
       if (method === "turn/start") {
         native.latest = { id: "new-turn", status: "inProgress", items: [] };
@@ -165,6 +185,7 @@ async function prepare(
       turnState,
       systemPromptReport: { injectedWorkspaceFiles: [] },
       contextImageGroups: [],
+      setParentLocalEgress: vi.fn(),
       buildRenderedCodexDeveloperInstructions: () => "developer instructions",
       refreshWorkspaceReferences: (include: boolean) => {
         turnState.codexTurnPromptText = include ? "workspace reference\nuser input" : "user input";
@@ -195,6 +216,7 @@ async function prepare(
     },
   } as unknown as Parameters<typeof prepareCodexAttemptTurnRequest>[0];
   const turnRuntime = { state: {} } as Parameters<typeof prepareCodexAttemptTurnRequest>[1];
+  onResources?.(resources);
   const prepared = await prepareCodexAttemptTurnRequest(
     resources,
     turnRuntime,
@@ -256,7 +278,14 @@ describe("native acknowledged turn requests", () => {
         return response;
       });
       await expect(attempt.prepared.startCodexTurn()).rejects.toThrow(/ownership changed/);
-      expect(attempt.request.mock.calls.map(([method]) => method)).toEqual(["thread/turns/list"]);
+      expect(
+        attempt.request.mock.calls
+          .filter(
+            ([method, payload]) =>
+              method !== "thread/inject_items" || !isCodexTurnContextHandoff(payload),
+          )
+          .map(([method]) => method),
+      ).toEqual(["thread/turns/list"]);
       expect(native.latest.status).toBe("failed");
       expect(host.acceptNativeTurn).not.toHaveBeenCalled();
       expect(references.accepted).not.toHaveBeenCalled();
@@ -344,16 +373,28 @@ describe("native acknowledged turn requests", () => {
 
   it("selects the replacement thread on a fresh ordinary retry", async () => {
     const attempt = await prepare(undefined, createNativeThread(), false);
-    attempt.request.mockRejectedValueOnce(new Error("context overflow"));
+    const request = attempt.request.getMockImplementation()!;
+    let rejectTurnStart = true;
+    attempt.request.mockImplementation(async (...args) => {
+      if (args[0] === "turn/start" && rejectTurnStart) {
+        rejectTurnStart = false;
+        throw new Error("context overflow");
+      }
+      return request(...args);
+    });
     await expect(attempt.prepared.startCodexTurn()).rejects.toThrow("context overflow");
     changeSelection(attempt, "thread");
     await expect(attempt.prepared.startCodexTurn()).resolves.toMatchObject({
       turn: { turn: { id: "new-turn" } },
     });
-    expect(attempt.request.mock.calls.map(([, payload]) => payload.threadId)).toEqual([
-      "same-thread",
-      "replacement-thread",
-    ]);
+    expect(
+      attempt.request.mock.calls
+        .filter(
+          ([method, payload]) =>
+            method !== "thread/inject_items" || !isCodexTurnContextHandoff(payload),
+        )
+        .map(([, payload]) => payload.threadId),
+    ).toEqual(["same-thread", "replacement-thread"]);
     expect(references.accepted).toHaveBeenCalledOnce();
     expect(cleanup.interrupt).not.toHaveBeenCalled();
   });
@@ -399,9 +440,120 @@ describe("native acknowledged turn requests", () => {
       await expect(second.prepared.startCodexTurn()).rejects.toThrow(
         "native provider review changed",
       );
-      expect(second.request.mock.calls.map(([method]) => method)).toEqual(["thread/turns/list"]);
+      expect(
+        second.request.mock.calls
+          .filter(
+            ([method, payload]) =>
+              method !== "thread/inject_items" || !isCodexTurnContextHandoff(payload),
+          )
+          .map(([method]) => method),
+      ).toEqual(["thread/turns/list"]);
       expect(freshHost.acceptNativeTurn).not.toHaveBeenCalled();
       expect(cleanup.interrupt).toHaveBeenCalledTimes(1);
     },
   );
+});
+
+it.each(["release", "abort"])(
+  "waits for root capacity before preparing a native turn: %s",
+  async (outcome) => {
+    const context = createCodexInferenceContext(() => {});
+    inference.route = { context };
+    const roots = await Promise.all(
+      Array.from({ length: 64 }, (_, index) =>
+        context.register({
+          threadId: `saturated-${index}`,
+          text: "",
+          signal: new AbortController().signal,
+          assertCurrent() {},
+          retainPrefix: false,
+        }),
+      ),
+    );
+    const controller = new AbortController();
+    let settled = false;
+    const attempt = await prepare(undefined, createNativeThread(), true, (resources) => {
+      const connection = resources.prompt.context.runtime.connection;
+      connection.runAbortController = controller;
+      connection.assertLegacyCurrent = () => {};
+      connection.params.hostCapabilities = {
+        assertActive() {},
+      } as typeof connection.params.hostCapabilities;
+    });
+    const pending = attempt.prepared.startCodexTurn();
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    try {
+      for (let index = 0; index < 5; index++) {
+        await Promise.resolve();
+      }
+      expect(settled).toBe(false);
+      expect(attempt.request).not.toHaveBeenCalled();
+      if (outcome === "abort") {
+        controller.abort(new Error("cancel waiting turn"));
+        await expect(pending).rejects.toThrow("cancel waiting turn");
+      } else {
+        roots[0]!.release();
+        await pending;
+        expect(attempt.request).toHaveBeenCalledWith(
+          "turn/start",
+          expect.objectContaining({
+            responsesapiClientMetadata: expect.objectContaining({
+              [CODEX_INFERENCE_GENERATION_KEY]: expect.any(String),
+            }),
+          }),
+          expect.anything(),
+        );
+        attempt.resources.state.releaseInferenceContext?.();
+      }
+    } finally {
+      controller.abort();
+      roots.forEach((root) => root.release());
+      context.close();
+      await Promise.allSettled([pending]);
+    }
+  },
+);
+
+it("rejects lost relay ownership at protected continuation dispatch", async () => {
+  const context = createCodexInferenceContext(() => {});
+  inference.route = { context };
+  const protectedWork = vi
+    .spyOn(clientRuntime, "isCodexAppServerLiveThreadProtected")
+    .mockReturnValue(true);
+  const native = createNativeThread();
+  try {
+    const attempt = await prepare(undefined, native, false, (resources) => {
+      const runtime = resources.prompt.context.runtime;
+      runtime.runtimeParams.extraSystemPrompt = "Current internal continuation.";
+      runtime.runtimeParams.extraSystemPromptTurnContext = {
+        start: 0,
+        text: "Current internal continuation.",
+      };
+      runtime.connection.assertLegacyCurrent = () => {};
+      runtime.connection.params.hostCapabilities = {
+        assertActive() {},
+      } as typeof runtime.connection.params.hostCapabilities;
+    });
+    attempt.route.armTurn.mockImplementationOnce(() => {
+      inference.route = undefined;
+    });
+    await expect(attempt.prepared.startCodexTurn()).rejects.toThrow(
+      "requires a current parent-local inference relay",
+    );
+    expect(native.latest.status).toBe("failed");
+    expect(attempt.nativeProcessAuthority.bindTurn).not.toHaveBeenCalled();
+    expect(attempt.route.cancelTurn).toHaveBeenCalledOnce();
+    expect(cleanup.interrupt).not.toHaveBeenCalled();
+    expect(cleanup.retire).not.toHaveBeenCalled();
+  } finally {
+    protectedWork.mockRestore();
+    context.close();
+  }
 });

@@ -213,6 +213,46 @@ it.each(["agent:main:cron:nightly:run:123", "agent:main:subagent:123"])(
     });
     expect(opts.extraSystemPrompt).toBe("Continue the isolated task.");
     expect(opts.silentReplyPromptMode).toBeUndefined();
+    expect(opts.extraSystemPromptTurnContext).toBeUndefined();
+  },
+);
+
+it.each([undefined, "Persistent cron policy.\n"])(
+  "marks only delivery context for direct cron execution (policy=%s)",
+  async (extraSystemPrompt) => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "telegram",
+              outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
+            }),
+            agentPrompt: { inboundFormattingHints: () => ({ text_markup: "markdown", rules: [] }) },
+          } satisfies ChannelPlugin,
+        },
+      ]),
+    );
+    try {
+      const opts = await prepareCommandConversationContext({
+        cfg: {},
+        opts: { message: "Run the scheduled task.", deliver: true, extraSystemPrompt },
+        runContext: { messageChannel: "telegram" },
+        sessionKey: "agent:main:cron:nightly:run:123",
+        sessionAgentId: "main",
+      });
+      const context = opts.extraSystemPromptTurnContext;
+      expect(context?.text).toContain("### Delivery Format");
+      expect(context?.start).toBe(extraSystemPrompt ? extraSystemPrompt.length + 2 : 0);
+      expect(opts.extraSystemPrompt).toBe(
+        [extraSystemPrompt, context?.text].filter(Boolean).join("\n\n"),
+      );
+      expect(context?.text).not.toContain("Persistent cron policy.");
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   },
 );
 
@@ -296,6 +336,7 @@ it.each([
           silentReplyPromptMode: "none",
         });
       expect(prompt(prepared.opts.extraSystemPrompt)).toBe(prompt(normalContext));
+      expect(prepared.opts.extraSystemPromptTurnContext).toEqual({ start: 0, text: normalContext });
       expect(prepared.opts.privateCompletion).toBe(privateCompletion);
       expect(prepared.opts.silentReplyPromptMode).toBe("none");
       expect(prepared.opts.inputProvenance).toEqual({

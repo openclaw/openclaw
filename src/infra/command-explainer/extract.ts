@@ -15,7 +15,10 @@ import {
   POSIX_PARSEABLE_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../shell-wrapper-resolution.js";
-import { parseBashForCommandExplanation } from "./tree-sitter-runtime.js";
+import {
+  type BashCommandParser,
+  getBashParserForCommandExplanation,
+} from "./tree-sitter-runtime.js";
 import type {
   CommandContext,
   CommandExplanation,
@@ -53,6 +56,7 @@ type CommandArgv = {
 };
 
 type WalkState = {
+  parse: BashCommandParser;
   wrapperPayloadDepth: number;
   spanBase: SpanBase;
   parentCommandId?: string;
@@ -716,12 +720,12 @@ function recordCommandRisks(
   return wrapperPayload;
 }
 
-async function visitNode(
+function visitNode(
   node: TreeSitterNode,
   output: MutableExplanation,
   context: CommandContext,
   state: WalkState,
-): Promise<CommandContext> {
+): CommandContext {
   recordShape(node, output);
 
   const span = spanFromNode(node, state.spanBase);
@@ -793,7 +797,7 @@ async function visitNode(
         output.commands.push(step);
         const wrapperPayload = recordCommandRisks(parsed, node.text, span, output);
         if (wrapperPayload && state.wrapperPayloadDepth < MAX_WRAPPER_PAYLOAD_DEPTH) {
-          const wrapperTree = await parseBashForCommandExplanation(wrapperPayload.command);
+          const wrapperTree = state.parse(wrapperPayload.command);
           const wrapperSpanBase = wrapperPayload.spanBase;
           try {
             output.operatorSources.push({
@@ -810,7 +814,8 @@ async function visitNode(
                 span: spanFromNode(wrapperTree.rootNode, wrapperSpanBase),
               });
             }
-            await walk(wrapperTree.rootNode, output, "wrapper-payload", {
+            walk(wrapperTree.rootNode, output, "wrapper-payload", {
+              parse: state.parse,
               wrapperPayloadDepth: state.wrapperPayloadDepth + 1,
               spanBase: wrapperSpanBase,
               parentCommandId: commandId,
@@ -825,12 +830,12 @@ async function visitNode(
   return childContext;
 }
 
-async function walk(
+function walk(
   root: TreeSitterNode,
   output: MutableExplanation,
   rootContext: CommandContext,
   rootState: WalkState,
-): Promise<void> {
+): void {
   if (root.descendantCount > output.remainingNodes) {
     throw new CommandExplanationWorkLimitError(
       "Shell command syntax is too complex to explain safely",
@@ -842,7 +847,7 @@ async function walk(
   const pending: WalkFrame[] = [{ node: root, context: rootContext, state: rootState }];
   for (let frame = pending.pop(); frame; frame = pending.pop()) {
     const { node, context, state } = frame;
-    const childContext = await visitNode(node, output, context, state);
+    const childContext = visitNode(node, output, context, state);
     for (let index = node.namedChildren.length - 1; index >= 0; index -= 1) {
       const child = node.namedChildren[index];
       if (child) {
@@ -987,7 +992,8 @@ function resolveOperators(
 }
 
 export async function explainShellCommand(source: string): Promise<CommandExplanation> {
-  const tree = await parseBashForCommandExplanation(source);
+  const parse = await getBashParserForCommandExplanation();
+  const tree = parse(source);
   try {
     const output: MutableExplanation = {
       shapes: new Set(),
@@ -997,7 +1003,8 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
       hasParseError: tree.rootNode.hasError,
       remainingNodes: MAX_COMMAND_EXPLANATION_NODES,
     };
-    await walk(tree.rootNode, output, "top-level", {
+    walk(tree.rootNode, output, "top-level", {
+      parse,
       wrapperPayloadDepth: 0,
       spanBase: ROOT_SPAN_BASE,
     });

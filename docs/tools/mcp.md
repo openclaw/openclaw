@@ -172,3 +172,10 @@ Follow the printed authorization URL. OpenClaw normally captures the loopback re
 - [MCP CLI reference](/cli/mcp)
 - [Manage plugins](/plugins/manage-plugins)
 - [Tool policies](/tools)
+
+### Remote session cleanup
+
+A Streamable HTTP server that does not confirm its session DELETE produces a warning,
+not a permanent local cleanup failure. Once the local transport and client close,
+the next turn can replace the runtime. Unconfirmed local cleanup still blocks
+replacement. A remote server may retain an abandoned session until it expires.

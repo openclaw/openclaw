@@ -1,4 +1,6 @@
 import { Buffer } from "node:buffer";
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 /** Runner mode belongs to the fixture, not the test harness's ambient CI environment. */
 export function testRunnerFixtureEnv(
@@ -61,11 +63,20 @@ export function preparedScriptWrapperEnv(
   entries: ReadonlyArray<readonly [source: URL, prepared: URL]>,
   env: NodeJS.ProcessEnv = process.env,
   virtualModules: ReadonlyArray<readonly [source: URL, prepared: URL]> = [],
+  // Caller owns this file until all fixture children have joined.
+  preloadFile?: string,
 ): NodeJS.ProcessEnv {
   const preload = preparedScriptWrapperPreload(entries, virtualModules);
   if (!preload) {
     return { ...env };
   }
-  const url = `data:text/javascript;base64,${Buffer.from(preload).toString("base64")}`;
+  // Large real dependency graphs can exceed the per-environment-entry exec limit.
+  // A fixture-owned file keeps the identical loader and mapping out of NODE_OPTIONS.
+  if (preloadFile) {
+    writeFileSync(preloadFile, preload);
+  }
+  const url = preloadFile
+    ? pathToFileURL(preloadFile).href
+    : `data:text/javascript;base64,${Buffer.from(preload).toString("base64")}`;
   return { ...env, NODE_OPTIONS: [env.NODE_OPTIONS, `--import=${url}`].filter(Boolean).join(" ") };
 }

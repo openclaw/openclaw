@@ -5,6 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
 import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
 import { logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
@@ -479,7 +480,26 @@ export async function runBridgeRequest(params: {
         );
         const result = called.result;
         if (!isRecord(result) || result.isError || !isRecord(result.details)) {
-          throw new ToolInputError("Installed skill request failed.");
+          const details = isRecord(result) && isRecord(result.details) ? result.details : undefined;
+          const detail = details?.error ?? details?.message;
+          const textPart =
+            isRecord(result) && Array.isArray(result.content)
+              ? result.content.find(
+                  (part) => isRecord(part) && part.type === "text" && typeof part.text === "string",
+                )
+              : undefined;
+          const message =
+            typeof detail === "string"
+              ? detail
+              : isRecord(textPart) && typeof textPart.text === "string"
+                ? textPart.text
+                : undefined;
+          throw new Error(
+            `Installed skill request failed: ${truncateUtf16Safe(
+              redactToolPayloadText(message || "missing structured result details"),
+              1_024,
+            )}`,
+          );
         }
         if (params.request.method === "skillsRead") {
           const { name, location, locationNote, content } = result.details;

@@ -2,6 +2,7 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayCredentialsRequiredError } from "../../gateway/call-device-auth.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
 import { createGatewayRestartDeadline } from "./restart-health-deadline.js";
@@ -13,7 +14,9 @@ import {
   monotonicClock,
   callGateway,
   gatewayResponseError,
+  gatewayVerifiedUserRequiredError,
   requestReadinessProbe,
+  requestStartupProbe,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
   sleep,
@@ -66,7 +69,9 @@ describe("restart health", () => {
           deadline,
         });
         expect(health.healthy).toBe(false);
-        expect(health.probeError).toBe("gateway request timeout for health");
+        expect(health.probeError, JSON.stringify(health)).toBe(
+          "gateway request timeout for health",
+        );
         expect(monotonicClock.nowMs).toBe(30_000);
       } finally {
         deadline?.dispose();
@@ -113,6 +118,241 @@ describe("restart health", () => {
         });
       });
     }
+  });
+
+  it.each([
+    {
+      label: "matching HTTP identity",
+      ready: true,
+      started: true,
+      version: "2026.10.4",
+      build: "candidate-build",
+      outcome: "healthy",
+    },
+    {
+      label: "failed readiness",
+      ready: false,
+      started: true,
+      version: "2026.10.4",
+      build: "candidate-build",
+      outcome: "auth-rejected",
+    },
+    {
+      label: "failed startup",
+      ready: true,
+      started: false,
+      version: "2026.10.4",
+      build: "candidate-build",
+      outcome: "auth-rejected",
+    },
+    {
+      label: "version mismatch",
+      ready: true,
+      started: true,
+      version: "2026.10.3",
+      build: "candidate-build",
+      outcome: "version-mismatch",
+    },
+    {
+      label: "build mismatch",
+      ready: true,
+      started: true,
+      version: "2026.10.4",
+      build: "old-build",
+      outcome: "build-id-mismatch",
+    },
+  ])(
+    "retains RPC auth warnings while settling twelve HTTP observations ($label)",
+    async (scenario) => {
+      const reason = "device identity required";
+      callGateway.mockRejectedValue(gatewayResponseError(reason));
+      inspectPortUsage.mockResolvedValue(ownedPortUsage);
+      requestStartupProbe.mockResolvedValue({
+        statusCode: scenario.started ? 200 : 503,
+        body: JSON.stringify({
+          ok: scenario.started,
+          status: scenario.started ? "started" : "starting",
+          version: scenario.version,
+          buildId: scenario.build,
+        }),
+      });
+      requestReadinessProbe.mockResolvedValue({
+        statusCode: scenario.ready ? 200 : 503,
+        body: JSON.stringify({ ready: scenario.ready }),
+      });
+      const observations: Array<{ healthy: boolean; authenticationError?: string }> = [];
+      const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+      const snapshot = await waitForGatewayHealthyRestart({
+        service: makeGatewayService({ status: "running", pid: 8000 }),
+        port: 18789,
+        expectedVersion: "2026.10.4",
+        expectedBuildId: "candidate-build",
+        requireRunningService: true,
+        requirePluginHealth: false,
+        requireChannelHealth: false,
+        settle: { probes: 12 },
+        timeoutMs: 15_000,
+        delayMs: 1_000,
+        onObservation: ({ healthy, authenticationError }) => {
+          observations.push({ healthy, authenticationError });
+        },
+      });
+      const healthy = scenario.outcome === "healthy";
+      expect(snapshot.waitOutcome).toBe(scenario.outcome);
+      expect(snapshot.healthy).toBe(healthy);
+      expect(snapshot.authenticationError).toBe(reason);
+      expect(observations).toHaveLength(healthy ? 12 : 1);
+      expect(observations.every((observation) => observation.authenticationError === reason)).toBe(
+        true,
+      );
+      expect(observations.every((observation) => observation.healthy === healthy)).toBe(true);
+      expect(callGateway).toHaveBeenCalledTimes(healthy ? 12 : 1);
+      // Each observation reads startup progress and then fallback identity.
+      expect(requestStartupProbe).toHaveBeenCalledTimes(healthy ? 24 : 2);
+      expect(requestReadinessProbe).toHaveBeenCalledTimes(healthy ? 12 : 1);
+      expect(sleep).toHaveBeenCalledTimes(healthy ? 11 : 0);
+      expect(sleep.mock.calls.every(([delay]) => delay === 1_000)).toBe(true);
+      expect(monotonicClock.nowMs).toBe(healthy ? 11_000 : 0);
+    },
+  );
+
+  it.each([
+    { transport: "response", ready: true, build: "candidate-build", outcome: "healthy" },
+    { transport: "close", ready: true, build: "candidate-build", outcome: "healthy" },
+    { transport: "response", ready: false, build: "candidate-build", outcome: "auth-rejected" },
+    { transport: "response", ready: true, build: "old-build", outcome: "build-id-mismatch" },
+    { transport: "credentials", ready: true, build: "candidate-build", outcome: "healthy" },
+  ])("settles policy rejection through HTTP ($transport, $ready, $build)", async (scenario) => {
+    const credentialError = new GatewayCredentialsRequiredError({
+      method: "health",
+      configPath: "fixture-config.json",
+    });
+    const reason =
+      scenario.transport === "credentials" ? credentialError.message : "device identity required";
+    callGateway.mockRejectedValue(
+      scenario.transport === "credentials"
+        ? credentialError
+        : scenario.transport === "close"
+          ? createGatewayCloseTransportError({
+              code: 1008,
+              reason,
+              requestDispatched: false,
+              connectionDetails: {
+                url: "ws://127.0.0.1:18789",
+                urlSource: "local loopback",
+                message: "local fixture",
+              },
+            })
+          : gatewayResponseError(reason),
+    );
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    requestStartupProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({
+        ok: true,
+        status: "started",
+        version: "2026.10.4",
+        buildId: scenario.build,
+      }),
+    });
+    requestReadinessProbe.mockResolvedValue({
+      statusCode: scenario.ready ? 200 : 503,
+      body: JSON.stringify({ ready: scenario.ready }),
+    });
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedVersion: "2026.10.4",
+      expectedBuildId: "candidate-build",
+      requirePluginHealth: false,
+      requireChannelHealth: false,
+      timeoutMs: 1_800_000,
+      delayMs: 30_000,
+    });
+    expect(snapshot.waitOutcome).toBe(scenario.outcome);
+    expect(snapshot.healthy).toBe(scenario.outcome === "healthy");
+    expect(snapshot.authenticationError).toEqual(
+      scenario.transport === "credentials"
+        ? expect.stringContaining("requires credentials")
+        : reason,
+    );
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "matching HTTP identity",
+      requirePluginHealth: false,
+      build: "candidate-build",
+      outcome: "healthy",
+    },
+    {
+      label: "HTTP build mismatch",
+      requirePluginHealth: false,
+      build: "old-build",
+      outcome: "build-id-mismatch",
+    },
+    {
+      label: "strict plugin check",
+      requirePluginHealth: true,
+      build: "candidate-build",
+      outcome: "auth-rejected",
+    },
+  ])("settles a verified-user rejection without another RPC ($label)", async (scenario) => {
+    const rejection = gatewayVerifiedUserRequiredError();
+    callGateway.mockRejectedValue(rejection);
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    requestStartupProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({
+        ok: true,
+        status: "started",
+        version: "2026.10.8",
+        buildId: scenario.build,
+      }),
+    });
+    requestReadinessProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({ ready: true }),
+    });
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedVersion: "2026.10.8",
+      expectedBuildId: "candidate-build",
+      requirePluginHealth: scenario.requirePluginHealth,
+      requireChannelHealth: false,
+      timeoutMs: 1_800_000,
+      delayMs: 30_000,
+    });
+    expect(snapshot.waitOutcome).toBe(scenario.outcome);
+    expect(snapshot.healthy).toBe(scenario.outcome === "healthy");
+    expect(snapshot.authenticationError).toBe(rejection.message);
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("rejects uncorrelated verified-user details without trusting HTTP identity", async () => {
+    const fake = Object.assign(new Error("verified user required"), {
+      code: "NOT_PAIRED",
+      details: { code: "AUTH_VERIFIED_USER_REQUIRED" },
+    });
+    callGateway.mockRejectedValue(fake);
+    const { confirmGatewayReachable } = await import("./restart-health-probe.js");
+    const result = await confirmGatewayReachable({
+      port: 18789,
+      config: { gateway: { auth: { mode: "none" } } },
+      auth: {},
+      allowHttpVerification: true,
+    });
+    expect(result.reachable).toBe(false);
+    expect(result.authenticationError).toBeUndefined();
+    expect(result.probeError).toBe("verified user required");
+    expect(requestStartupProbe).not.toHaveBeenCalled();
+    expect(requestReadinessProbe).not.toHaveBeenCalled();
   });
 
   it("keeps the readiness deadline monotonic when the wall clock rewinds", async () => {

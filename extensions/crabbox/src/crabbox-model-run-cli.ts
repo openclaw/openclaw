@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import { runCrabboxModelCommand } from "./crabbox-model-run.js";
@@ -33,8 +34,8 @@ export function registerCrabboxModelRunCommand({
           timeout: string;
         },
       ) => {
-        const seconds = Number(options.timeout);
-        if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 86_400) {
+        const seconds = parseStrictPositiveInteger(options.timeout);
+        if (seconds === undefined || seconds > 86_400) {
           throw new Error("--timeout must be an integer between 1 and 86400 seconds");
         }
         const controller = new AbortController();

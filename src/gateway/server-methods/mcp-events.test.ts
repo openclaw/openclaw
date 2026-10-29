@@ -190,3 +190,19 @@ describe("mcp.events.list caller boundary", () => {
     expect(f.respond.mock.calls[0]?.[0]).toBe(false);
   });
 });
+
+it("keeps an astral event description whole at the catalog cap", async () => {
+  const f = fixture();
+  const prefix = "a".repeat(4095);
+  mocks.request.mockImplementation(async (input) =>
+    input.method === "server/discover"
+      ? { supportedVersions: ["2026-07-28"], capabilities: { events: {} } }
+      : { events: [{ ...event, description: `${prefix}\u{1F600}tail` }] },
+  );
+  await f.run();
+  expect(f.respond).toHaveBeenCalledWith(
+    true,
+    { serverName: "calendar", events: [{ ...event, description: prefix }] },
+    undefined,
+  );
+});

@@ -43,18 +43,22 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     cacheCandidates?: MemoryEmbeddingCacheCandidate[],
   ): Promise<number[][]>;
 
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
+  protected async pruneEmbeddingCacheIfNeeded(
+    recount = false,
+    assertGeneration?: () => void,
+  ): Promise<void> {
     const max = this.cache.maxEntries;
     if (!this.cache.enabled || !max || max <= 0) {
       return;
     }
     const database = this.database;
     const assertCurrent = () => {
+      assertGeneration?.();
       if (this.closed || !database.isOpen || this.database !== database) {
         throw new Error("Memory database owner closed or changed before write admission");
       }
     };
-    while (await database.pruneEmbeddingCache(max, assertCurrent)) {
+    while (await database.pruneEmbeddingCache(max, assertCurrent, recount)) {
       await yieldToEventLoop();
     }
   }
@@ -139,6 +143,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
   private async withGeneratedEmbeddingCacheWrite(
     generation: MemorySemanticProviderGeneration,
     mutation: MemoryEmbeddingCacheMutation,
+    reindex?: { writesPendingPrune: boolean },
   ): Promise<void> {
     await this.withPublishedDatabase(async () => {
       if (!this.canWriteEmbeddingCache(generation) || this.database !== generation.database) {
@@ -157,7 +162,13 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       // Rebuilds use a shadow index; cache writes retain the captured published owner.
       await generation.database.mutateEmbeddingCache(mutation, assertCurrent, () => {
         assertCurrent();
-        return this.canWriteEmbeddingCache(generation);
+        if (!this.canWriteEmbeddingCache(generation)) {
+          return false;
+        }
+        if (reindex) {
+          reindex.writesPendingPrune = true;
+        }
+        return true;
       });
     });
   }
@@ -252,16 +263,26 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       if (accepted.length === 0) {
         return;
       }
-      await this.withGeneratedEmbeddingCacheWrite(generation, {
-        kind: "upsert",
-        header: {
-          agentId: this.agentId,
-          provider: { id: generation.provider.id, model: generation.provider.model },
-          providerKey: generation.providerKey,
-          maxEntries: this.cache.maxEntries,
+      // Capture before withPublishedDatabase exits the shadow async-local scope.
+      const reindex = this.reindexCacheState;
+      await this.withGeneratedEmbeddingCacheWrite(
+        generation,
+        {
+          kind: "upsert",
+          header: {
+            agentId: this.agentId,
+            provider: { id: generation.provider.id, model: generation.provider.model },
+            providerKey: generation.providerKey,
+            // Only full rebuilds borrow bounded headroom for unread cached vectors.
+            maxEntries:
+              this.cache.maxEntries === undefined
+                ? undefined
+                : Math.min(Number.MAX_SAFE_INTEGER, this.cache.maxEntries * (reindex ? 2 : 1)),
+          },
+          entries: accepted,
         },
-        entries: accepted,
-      });
+        reindex,
+      );
     });
   }
 }

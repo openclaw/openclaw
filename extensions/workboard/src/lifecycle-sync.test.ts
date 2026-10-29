@@ -257,6 +257,40 @@ describe("Workboard gateway lifecycle sync", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
+  it.each([-60_000, 60_000])(
+    "keeps the board debounce at 60 seconds after a %s ms wall-clock step",
+    async (wallClockStepMs) => {
+      const request = vi.fn<NonNullable<ServiceCron["enqueueRun"]>>(async () => {
+        vi.setSystemTime(Date.now() + wallClockStepMs);
+        return { ok: true, ran: true };
+      });
+      const store = createWorkboardSqliteTestStore();
+      await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });
+      const card = await createLinkedCard(store, {
+        boardId: "planning",
+        sessionKey: "agent:main:step",
+      });
+      const service = createWorkboardAutomationNudgeService({ store });
+      const context = nudgeContext(request);
+      await service.start(context);
+      const boards = await store.listBoards();
+      vi.spyOn(store, "listBoards").mockResolvedValue(boards);
+      vi.useFakeTimers();
+      try {
+        await service.nudge({ cards: [card] });
+        await vi.advanceTimersByTimeAsync(59_999);
+        await service.nudge({ cards: [card] });
+        expect(request).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1);
+        await service.nudge({ cards: [card] });
+        expect(request).toHaveBeenCalledTimes(2);
+      } finally {
+        await service.stop?.(context);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("swallows nudge failures without affecting lifecycle sync", async () => {
     const store = createWorkboardSqliteTestStore();
     await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });

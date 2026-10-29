@@ -18,6 +18,7 @@ import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramAccountConfig } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import {
@@ -264,8 +265,8 @@ export function createTelegramInboundMedia({
       {
         provider: "telegram",
         conversationId: buildTelegramGroupPeerId(chatId, threadSpec),
-        providerPolicy:
-          authorization.authorizationCfg.channels?.telegram?.accounts?.[accountId]?.mentionPatterns,
+        providerPolicy: resolveTelegramAccountConfig(authorization.authorizationCfg, accountId)
+          ?.mentionPatterns,
       },
     );
     const hasAnyMention = textParts.entities.some((entity) => entity.type === "mention");

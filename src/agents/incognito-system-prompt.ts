@@ -17,6 +17,6 @@ export function appendIncognitoSystemPrompt(params: {
   if (!incognito) {
     return params.extraSystemPrompt;
   }
-  const existing = params.extraSystemPrompt?.trim();
+  const existing = params.extraSystemPrompt;
   return existing ? `${existing}\n\n${INCOGNITO_SYSTEM_PROMPT}` : INCOGNITO_SYSTEM_PROMPT;
 }

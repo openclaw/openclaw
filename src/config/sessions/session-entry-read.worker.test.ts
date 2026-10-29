@@ -7,6 +7,7 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { invalidateSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -21,6 +22,7 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
+import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
 import * as entryReads from "./session-accessor.sqlite-entry-read.js";
 import {
   deleteSessionEntryRows,
@@ -623,7 +625,7 @@ it.each(["sharing", "list"] as const)(
   },
 );
 
-it("preserves listing validation of dirty siblings in selected worker reads", async () => {
+it.each([false, true])("preserves dirty sibling validation (transcript=%s)", async (transcript) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:selected";
@@ -631,14 +633,23 @@ it("preserves listing validation of dirty siblings in selected worker reads", as
     for (const key of [sessionKey, sibling]) {
       writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
     }
-    const read = () =>
-      readSessionEntriesFromStoreInWorker({
-        agentId: "main",
-        storePath: database.path,
-        env,
-        sessionKeys: [sessionKey],
-        projection: "list",
-      });
+    const read = async () =>
+      transcript
+        ? readExactSessionEntriesWithLifecycle({
+            kind: "session-exact-entries",
+            database: { agentId: "main", path: database.path },
+            env,
+            sessionKeys: [sessionKey],
+            projection: "list",
+            selection: { kind: "transcript-aliases", sessionIds: [] },
+          })
+        : await readSessionEntriesFromStoreInWorker({
+            agentId: "main",
+            storePath: database.path,
+            env,
+            sessionKeys: [sessionKey],
+            projection: "list",
+          });
     expect((await read()).entries).toHaveLength(1);
     markCanonicalSessionValidationPending(database, [sibling]);
     database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
@@ -937,3 +948,39 @@ it.each(["entry", "store", "topology", "native"] as const)(
     });
   },
 );
+
+it("retains full canonical validation for older transcript projection readers", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const key = "agent:main:selected";
+    const sibling = "agent:main:matrix:channel:!mixed:example.org";
+    for (const sessionKey of [key, sibling]) {
+      writeSessionEntry(database, sessionKey, { sessionId: sessionKey, updatedAt: 1 });
+    }
+    const version = database.db.prepare("PRAGMA user_version").get()?.user_version;
+    try {
+      database.db.exec("PRAGMA user_version = 20");
+      invalidateSqliteSchemaFacts(database.db);
+      const read = () =>
+        readSelectedSessionEntriesInDatabase(database, [key], { transcriptSessionIds: [] });
+      expect(read().map((row) => row.sessionKey)).toEqual([key]);
+      database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+        JSON.stringify({
+          sessionId: sibling,
+          updatedAt: 1,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "matrix", to: "!Mixed:example.org" },
+          }),
+        }),
+        sibling,
+      );
+      database.db
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+        .run(sibling);
+      expect(read).toThrow("non-canonical persisted row");
+    } finally {
+      database.db.exec(`PRAGMA user_version = ${Number(version)}`);
+      invalidateSqliteSchemaFacts(database.db);
+    }
+  });
+});

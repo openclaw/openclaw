@@ -168,3 +168,22 @@ describe("duplicate paragraphs", () => {
     expect(projection.text).toBe(duplicateParagraphTextFilter.transform(projection.source));
   });
 });
+
+it.each([
+  ["A\r\n\r\nA\r\n\r\nB", "A\r\n\r\nB"],
+  ["A\r\nB\r\n\r\nA\r\nB", "A\r\nB"],
+  ["A\r\n\r\nB", "A\r\n\r\nB"],
+  ["```text\r\nA\r\n\r\nA\r\n```\r\n\r\nB\r\n\r\nB", "```text\r\nA\r\n\r\nA\r\n```\r\n\r\nB"],
+])("preserves streaming CRLF separators %#", (source, expected) => {
+  expect(duplicateParagraphTextFilter.transform(source)).toBe(expected);
+  for (let split = 0; split <= source.length; split++) {
+    const projection = createTextProjection([duplicateParagraphTextFilter]);
+    projection.append(source.slice(0, split));
+    expect(projection.append(source.slice(split)).text).toBe(expected);
+  }
+  const projection = createTextProjection([duplicateParagraphTextFilter]);
+  for (const char of source) {
+    projection.append(char);
+  }
+  expect(projection.text).toBe(expected);
+});

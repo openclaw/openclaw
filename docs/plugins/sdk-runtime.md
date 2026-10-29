@@ -128,7 +128,12 @@ local tool calls are also denied, with at most two additional inference attempts
 On Anthropic, changing tool choice invalidates the messages cache, but preserves
 the tool and system caches. Other APIs without a supported hosted-tool prohibition
 are rejected when the recorded request contains tools.
-Snapshots stay in bounded process memory until expiry or session cleanup.
+Snapshots stay in process memory for up to 90 minutes, at most 1,000 sessions and
+64 MiB of retained data, until expiry or session cleanup. The budget includes
+request bytes, detached replay options, later publications, native backing storage,
+and conservative container overhead. Blob slices retain only copied visible bytes;
+shared-memory buffers cannot be retained for isolated replay. A failed option copy
+does not replace a valid snapshot, while an unretainable publication retires it.
 The built-in runtime retains the prepared provider prefix instead of a second copy
 of conversation history. Forks convert only later publications and the side question;
 HTTP continuations retain the full prefix even when the parent sends only a suffix.

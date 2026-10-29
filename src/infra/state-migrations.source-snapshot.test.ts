@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
@@ -82,6 +83,42 @@ describe("doctor legacy migration source contract", () => {
     const stateRoot = await root(source.stateDir, { hardlinks: "reject", symlinks: "reject" });
     return { ...source, stateRoot };
   }
+
+  it.each([{ bytes: [0xff] }, { bytes: [0xe2, 0x82] }])(
+    "rejects malformed decoded fingerprints while preserving raw hash callers %j",
+    async ({ bytes }) => {
+      const { sourcePath, stateDir, stateRoot } = await createRootSource();
+      const buffer = Buffer.from(bytes);
+      fs.writeFileSync(sourcePath, buffer);
+      const params = { sourcePath, stateDir, stateRoot, maxBytes: 1024, label: "test" };
+      await expect(
+        readLegacyMigrationSourceSnapshot({ ...params, hashDecodedText: true }),
+      ).rejects.toMatchObject({ code: "ERR_INVALID_UTF8" });
+      const raw = await readLegacyMigrationSourceSnapshot(params);
+      expect(raw.sha256).toBe(createHash("sha256").update(buffer).digest("hex"));
+      expect(raw.buffer).toEqual(buffer);
+      expect(raw.size).toBe(buffer.length);
+      expect(fs.readFileSync(sourcePath)).toEqual(buffer);
+      expect(fs.existsSync(sourcePath + ".doctor-importing")).toBe(false);
+    },
+  );
+
+  it("preserves BOM and valid replacement characters in decoded fingerprints", async () => {
+    const { sourcePath, stateDir, stateRoot } = await createRootSource();
+    const text = '\ufeff{"value":"合法 � 😀"}\r\n';
+    fs.writeFileSync(sourcePath, text);
+    const snapshot = await readLegacyMigrationSourceSnapshot({
+      sourcePath,
+      stateDir,
+      stateRoot,
+      maxBytes: 1024,
+      label: "test",
+      hashDecodedText: true,
+    });
+    expect(snapshot.raw).toBe(text);
+    expect(() => JSON.parse(snapshot.raw)).toThrow();
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe(text);
+  });
 
   it("detects an interrupted claim without accepting absent source state", () => {
     const { sourcePath } = createSource();

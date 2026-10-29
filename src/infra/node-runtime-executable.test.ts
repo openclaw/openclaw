@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { nodeRuntimePathEntries } from "../../node-runtime-env.mjs";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { resolveNodeRuntimeExecutable } from "./node-runtime-executable.js";
 
@@ -45,32 +46,40 @@ it("reuses a current Node executable named nodejs without probing PATH", () => {
   expect(probe).not.toHaveBeenCalled();
 });
 
-it("selects a Windows Node executable and excludes unrelated probe environment", () => {
-  mockBun();
-  mockProcessPlatform("win32");
-  probe.mockReturnValueOnce(String.raw`D:\NodeBin\node.exe` + "\r\n");
+it.each(['"', ""])(
+  "selects a %s-quoted Windows Node and excludes unrelated probe environment",
+  (quote) => {
+    mockBun();
+    mockProcessPlatform("win32");
+    probe.mockImplementation((candidate) => {
+      if (candidate !== String.raw`D:\Program Files\nodejs\node.exe`) {
+        throw new Error("fixture executable unavailable");
+      }
+      return candidate + "\r\n";
+    });
 
-  expect(
-    resolveNodeRuntimeExecutable({
-      env: {
-        PATH: String.raw`D:\NodeBin`,
-        PATHEXT: ".EXE",
-        SystemRoot: String.raw`D:\Windows`,
-        QA_PARENT_ONLY: "synthetic",
+    expect(
+      resolveNodeRuntimeExecutable({
+        env: {
+          PATH: `${quote}D:\\Program Files\\nodejs${quote};`,
+          PATHEXT: ".EXE",
+          SystemRoot: String.raw`D:\Windows`,
+          QA_PARENT_ONLY: "synthetic",
+        },
+      }),
+    ).toBe(String.raw`D:\Program Files\nodejs\node.exe`);
+    expect(probe).toHaveBeenCalledWith(
+      String.raw`D:\Program Files\nodejs\node.exe`,
+      ["--eval", expect.any(String)],
+      {
+        encoding: "utf8",
+        env: { SystemRoot: String.raw`D:\Windows` },
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5_000,
       },
-    }),
-  ).toBe(String.raw`D:\NodeBin\node.exe`);
-  expect(probe).toHaveBeenCalledWith(
-    String.raw`D:\NodeBin\node.exe`,
-    ["--eval", expect.any(String)],
-    {
-      encoding: "utf8",
-      env: { SystemRoot: String.raw`D:\Windows` },
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5_000,
-    },
-  );
-});
+    );
+  },
+);
 
 it("skips a Bun node shim before selecting a real Node executable", () => {
   mockBun();
@@ -95,3 +104,29 @@ it("reports an unavailable runtime when every Node candidate fails", () => {
 
   expect(resolveNodeRuntimeExecutable({ env: { PATH: "/qa/missing" } })).toBeUndefined();
 });
+
+it.each([
+  { platform: "win32", value: undefined, entries: [] },
+  { platform: "win32", value: ';"";;', entries: [] },
+  {
+    platform: "win32",
+    value: '"C:\\Program Files\\nodejs";;D:\\bin;',
+    entries: ["C:\\Program Files\\nodejs", "D:\\bin"],
+  },
+  {
+    platform: "win32",
+    value: 'C:\\a"b;"C:\\unmatched;C:\\end"',
+    entries: ['C:\\a"b', '"C:\\unmatched', 'C:\\end"'],
+  },
+  {
+    platform: "linux",
+    value: ':"/quoted path":/plain;;path:',
+    entries: ['"/quoted path"', "/plain;;path"],
+  },
+] as const)(
+  "parses $platform PATH $value without interpreting embedded quotes",
+  ({ platform, value, entries }) => {
+    mockProcessPlatform(platform);
+    expect(nodeRuntimePathEntries(value)).toEqual(entries);
+  },
+);

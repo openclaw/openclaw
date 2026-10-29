@@ -95,7 +95,7 @@ export class NodeWorkerCapacity {
     signal?: AbortSignal,
     reclaimIdle?: () => Promise<boolean>,
   ): Promise<Exclude<NodeWorkerLaunchClaimResult, { action: "at-capacity" }>> {
-    const deadlineMs = Date.now() + this.waitMs;
+    const deadlineMs = performance.now() + this.waitMs;
     const assertCurrent = () => {
       if (this.closeAbort.signal.aborted) {
         throw new Error("node worker supervisor is closed");
@@ -221,7 +221,7 @@ export class NodeWorkerCapacity {
     signal?: AbortSignal,
     reclaimIdle?: () => Promise<boolean>,
   ): Promise<boolean> {
-    const remainingMs = deadlineMs - Date.now();
+    const remainingMs = deadlineMs - performance.now();
     if (remainingMs <= 0) {
       throw new NodeWorkerCapacityExhaustedError(this.waitMs);
     }
@@ -245,7 +245,7 @@ export class NodeWorkerCapacity {
               ? new Error("node worker supervisor is closed")
               : capacityAbortReason(waiting),
           );
-        } else if (reclaimIdle && Date.now() >= deadlineMs) {
+        } else if (reclaimIdle && performance.now() >= deadlineMs) {
           reject(new NodeWorkerCapacityExhaustedError(this.waitMs));
         } else {
           complete();

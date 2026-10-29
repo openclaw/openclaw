@@ -91,6 +91,7 @@ const log = createSubsystemLogger("memory");
 const reindexDatabase = new AsyncLocalStorage<{
   manager: MemoryManagerSyncBase;
   database: MemoryIndexDatabase;
+  cacheState: { writesPendingPrune: boolean };
 }>();
 
 export abstract class MemoryManagerSyncBase {
@@ -115,6 +116,11 @@ export abstract class MemoryManagerSyncBase {
     return shadow ?? this.publishedDatabase;
   }
 
+  protected get reindexCacheState() {
+    const context = reindexDatabase.getStore();
+    return context?.manager === this ? context.cacheState : undefined;
+  }
+
   protected get db(): DatabaseSync {
     return this.database.db;
   }
@@ -136,9 +142,10 @@ export abstract class MemoryManagerSyncBase {
   protected async withReindexDatabase<T>(
     database: MemoryIndexDatabase,
     run: () => Promise<T>,
+    cacheState: { writesPendingPrune: boolean },
   ): Promise<T> {
     try {
-      const result = await reindexDatabase.run({ manager: this, database }, run);
+      const result = await reindexDatabase.run({ manager: this, database, cacheState }, run);
       // Publication attaches the finished file only after its writer closes.
       await database.closeShadow();
       return result;
@@ -228,7 +235,10 @@ export abstract class MemoryManagerSyncBase {
     message: string,
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
-  protected abstract pruneEmbeddingCacheIfNeeded(): Promise<void>;
+  protected abstract pruneEmbeddingCacheIfNeeded(
+    recount?: boolean,
+    assertGeneration?: () => void,
+  ): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void>;

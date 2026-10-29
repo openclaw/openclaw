@@ -117,7 +117,7 @@ fi`,
   }
   const env = {
     HOME: root,
-    PATH: `${nodeBin}:/usr/bin:/bin`,
+    PATH: `${nodeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
     RUNNER_TEMP: runnerTemp,
     GITHUB_ACTION_PATH: actionPath,
     FIXTURE_REAL_NODE: process.execPath,

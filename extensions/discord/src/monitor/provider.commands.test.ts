@@ -2,6 +2,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import { listNativeCommandSpecsForConfig as listRealNativeCommandSpecsForConfig } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
+import { createPluginCommandRuntime } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createTestRegistry,
@@ -74,7 +75,7 @@ const skillCommands = [
 
 function createResolverHarness(
   options: {
-    pluginCommandSpecs?: NativeCommandSpec[];
+    pluginCommandSpecs?: (NativeCommandSpec & { nativeNames?: Record<string, string> })[];
     voiceEnabled?: boolean;
     nativeCommandSpecs?: NativeCommandSpec[];
     skillCommands?: SkillCommands;
@@ -302,5 +303,100 @@ describe("resolveDiscordProviderCommandSpecs", () => {
       dispatchReplyFromConfig,
     );
     expect(createNativeCommand.mock.calls[0]?.[0].buildContext).toBe(buildContext);
+  });
+});
+
+describe("Discord plugin command names", () => {
+  beforeEach(() => resetPluginRuntimeStateForTest());
+  afterEach(() => resetPluginRuntimeStateForTest());
+
+  it("keeps the 32-character boundary and later valid commands before cap planning", async () => {
+    const boundary = "a".repeat(32);
+    const paddingSkills = Array.from({ length: 97 }, (_, index) => ({
+      name: "skill-" + index,
+      skillName: "Skill " + index,
+      description: "Padding skill",
+    }));
+    const harness = createResolverHarness({
+      skillCommands: paddingSkills,
+      maxDiscordCommands: 100,
+      pluginCommandSpecs: [boundary, "b".repeat(33), "LaterValid"].map((name) => ({
+        name,
+        description: "Plugin command",
+        acceptsArgs: false,
+      })),
+    });
+    const resolved = await harness.resolve();
+
+    expect(resolved.commandSpecs.map((command) => command.name)).toEqual([
+      "built-in",
+      ...paddingSkills.map(({ name }) => name),
+      boundary,
+      "latervalid",
+    ]);
+    expect(harness.listNativeCommandSpecsForConfig).toHaveBeenCalledTimes(1);
+    expect(harness.log).not.toHaveBeenCalled();
+    expect(harness.error).toHaveBeenCalledExactlyOnceWith(
+      danger(
+        `discord: plugin command "/${"b".repeat(32)}…" exceeds the 32-character name limit. Set a shorter Discord native alias. Skipping.`,
+      ),
+    );
+  });
+
+  it("normalizes Discord aliases without changing Slack spelling or plugin dispatch", async () => {
+    setActivePluginRegistry(createTestRegistry());
+    const handler = vi.fn(async () => ({ text: "original handler" }));
+    expect(
+      registerPluginCommand("alias-plugin", {
+        name: "p".repeat(40),
+        description: "Alias command",
+        nativeNames: { discord: "MiXeDAlias", slack: "SlackAlias" },
+        handler,
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      registerPluginCommand("collision-plugin", {
+        name: "shadow",
+        description: "Collision",
+        nativeNames: { discord: "BuIlT-In" },
+        handler: async () => ({ text: "shadow handler" }),
+      }),
+    ).toEqual({ ok: true });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv;
+    const listNativeCommandSpecsForConfig = vi.fn(() => [
+      { name: "built-in", description: "Built in", acceptsArgs: false },
+    ]);
+    const { commandSpecs } = await resolveDiscordProviderCommandSpecs({
+      cfg: {},
+      runtime,
+      nativeEnabled: true,
+      nativeSkillsEnabled: false,
+      voiceEnabled: false,
+      listNativeCommandSpecsForConfig,
+    });
+    expect(commandSpecs.map((command) => command.name)).toEqual(["built-in", "mixedalias"]);
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      danger(
+        'discord: plugin command "/built-in" duplicates an existing native command. Skipping.',
+      ),
+    );
+    expect(createPluginCommandRuntime().listNativeCandidates("slack")[0]?.name).toBe("SlackAlias");
+    const candidate = commandSpecs[1]!;
+    if (!("prepareDispatch" in candidate)) {
+      throw new Error("Expected a plugin candidate");
+    }
+    const dispatch = candidate.prepareDispatch();
+    if (dispatch.kind !== "plugin") {
+      throw new Error("Expected the original plugin dispatch");
+    }
+    await expect(
+      dispatch.execute({
+        channel: "discord",
+        isAuthorizedSender: true,
+        commandBody: "/mixedalias",
+        config: {},
+      }),
+    ).resolves.toEqual({ text: "original handler" });
+    expect(handler).toHaveBeenCalledOnce();
   });
 });

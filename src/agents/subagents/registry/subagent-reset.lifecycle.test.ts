@@ -43,9 +43,13 @@ const parentKey = "agent:main:main";
 const controllerKey = "agent:main:telegram:default:direct:123";
 const childKey = (id: string) => "agent:main:subagent:" + id;
 
-it.each([false, true])(
-  "reset preserves a replacement child and retires only suppressed terminal work (suppressed=%s)",
-  async (suppressed) => {
+it.each([
+  { suppressed: false, pendingWake: true },
+  { suppressed: true, pendingWake: true },
+  { suppressed: false, pendingWake: false },
+])(
+  "reset preserves a replacement child (suppressed=$suppressed, pendingWake=$pendingWake)",
+  async ({ suppressed, pendingWake }) => {
     const storePath = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId: "main",
@@ -81,7 +85,11 @@ it.each([false, true])(
         suppressSessionEffects: suppressed ? true : undefined,
       };
       entry.completion = { required: false, capturedAt: 1_000, resultText: "stopped" };
-      entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      if (pendingWake) {
+        entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      } else {
+        delete entry.requesterSettleWake;
+      }
     });
     await patchSessionEntryCore({ storePath, sessionKey: key }, (entry) => ({
       ...entry,
@@ -110,20 +118,20 @@ it.each([false, true])(
         isWebchatConnect: () => false,
       });
       expect(respond).toHaveBeenCalledWith(
-        suppressed,
-        suppressed ? expect.objectContaining({ ok: true }) : undefined,
-        suppressed
+        suppressed || !pendingWake,
+        suppressed || !pendingWake ? expect.objectContaining({ ok: true }) : undefined,
+        suppressed || !pendingWake
           ? undefined
           : expect.objectContaining({ message: expect.stringContaining("Reset did not complete") }),
       );
       const parent = loadSessionEntry({ storePath, sessionKey: parentKey });
-      if (suppressed) {
+      if (suppressed || !pendingWake) {
         expect(parent?.lifecycleRevision).not.toBe("reset-parent-revision");
         expect(subagentRuns.get("original-run")).toMatchObject({
           execution: {
             outcome: { status: "error", error: "original session incarnation changed" },
           },
-          suppressCompletionDelivery: true,
+          ...(suppressed ? { suppressCompletionDelivery: true } : {}),
         });
         expect(subagentRuns.get("original-run")?.requesterSettleWake).toBeUndefined();
       } else {

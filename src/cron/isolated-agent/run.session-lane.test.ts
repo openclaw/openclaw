@@ -23,6 +23,7 @@ import {
   resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
+import type { CronLaneWaitCallback } from "./run.types.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
@@ -131,9 +132,11 @@ describe("session-bound cron lane admission", () => {
     });
     await occupied.promise;
     const controller = new AbortController();
+    const laneSignals: Array<Parameters<CronLaneWaitCallback>[0]> = [];
     const run = startCron(target, {
       abortSignal: controller.signal,
       onLaneWait: (info) => {
+        laneSignals.push(info);
         if (info?.waiting) {
           (laneReleased ? settlementWait : laneWait).resolve();
         }
@@ -193,6 +196,9 @@ describe("session-bound cron lane admission", () => {
         expect(committed?.lifecycleRevision).toEqual(expect.any(String));
         expect(committed?.lifecycleRevision).not.toBe(entry.lifecycleRevision);
         expect(committed?.sessionId).toBe(target.sessionId);
+        // Session-lane entry is not execution admission; hook HTTP acceptance relies on this.
+        expect(laneSignals).toContainEqual({ waiting: false, stage: "session-preparation" });
+        expect(laneSignals.filter((info) => info?.stage !== "session-preparation")).toEqual([]);
         if (previous) {
           expect(committed).toMatchObject(terminal);
         }

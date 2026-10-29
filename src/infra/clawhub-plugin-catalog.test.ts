@@ -45,6 +45,36 @@ function requestedUrl(fetchImpl: ReturnType<typeof mockResponse>) {
 }
 
 describe("ClawHub plugin catalog client", () => {
+  it("keeps astral MCP display text whole at the metadata caps", async () => {
+    const detail = await fetchClawHubPluginDetail({
+      baseUrl: "https://example.com",
+      packageName: "memory-plus",
+      skipAuth: true,
+      fetchImpl: mockResponse({
+        package: remotePlugin,
+        version: {
+          version: "1.2.3",
+          createdAt: 100,
+          pluginManifestSummary: {
+            configFields: [],
+            bundledSkills: [],
+            mcpServers: [
+              {
+                name: "astral",
+                transport: "stdio",
+                scope: `${"s".repeat(999)}\u{1F600}scope tail`,
+                setup: `${"d".repeat(1999)}\u{1F9DE}setup tail`,
+              },
+            ],
+          },
+        },
+      }),
+    });
+    expect(detail.mcpServerDetails).toEqual([
+      { name: "astral", transport: "stdio", scope: "s".repeat(999), setup: "d".repeat(1999) },
+    ]);
+  });
+
   it.each([false, true])(
     "attributes manual search unless telemetry is disabled: %s",
     async (disabled) => {

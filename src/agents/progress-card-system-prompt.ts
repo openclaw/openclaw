@@ -74,6 +74,6 @@ export async function appendProgressCardSystemPrompt(params: {
   if (utilityModelRef === modelRef) {
     return params.extraSystemPrompt;
   }
-  const existing = params.extraSystemPrompt?.trim();
+  const existing = params.extraSystemPrompt;
   return existing ? `${existing}\n\n${PROGRESS_CARD_SYSTEM_PROMPT}` : PROGRESS_CARD_SYSTEM_PROMPT;
 }

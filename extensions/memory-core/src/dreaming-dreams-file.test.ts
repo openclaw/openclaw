@@ -178,16 +178,19 @@ describe("dream diary file behavior", () => {
     ).resolves.toEqual([]);
   });
 
-  it.each(["EPERM"])("only optional diary context suppresses %s", async (code) => {
-    const workspaceDir = await createTempWorkspace("dreaming-diary-read-permission-");
-    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(dreamsPath, "# Existing\n");
-    const error = Object.assign(new Error("read denied"), { code });
-    vi.spyOn(fs, "open").mockRejectedValue(error);
+  it.each(["EPERM", "ERR_INVALID_UTF8"])(
+    "only optional diary context suppresses %s",
+    async (code) => {
+      const workspaceDir = await createTempWorkspace("dreaming-diary-read-permission-");
+      const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+      await fs.writeFile(dreamsPath, "# Existing\n");
+      const error = Object.assign(new Error("read denied"), { code });
+      vi.spyOn(fs, "open").mockRejectedValue(error);
 
-    await expect(readDreamsFile(dreamsPath)).rejects.toBe(error);
-    await expect(readRecentDreamDiaryEntries({ workspaceDir })).resolves.toEqual([]);
-  });
+      await expect(readDreamsFile(dreamsPath)).rejects.toBe(error);
+      await expect(readRecentDreamDiaryEntries({ workspaceDir })).resolves.toEqual([]);
+    },
+  );
 
   it("preserves an undefined error code across optional context handling", async () => {
     const workspaceDir = await createTempWorkspace("dreaming-diary-error-code-");
@@ -270,4 +273,47 @@ describe("dream diary file behavior", () => {
     expect(content.match(/The server room smelled like rain\./g)?.length).toBe(1);
     expect(content).toContain("A fresh signal arrived after the cleanup started.");
   });
+});
+
+it("leaves DREAMS.md unchanged when it contains invalid UTF-8", async () => {
+  const workspaceDir = await createTempWorkspace("invalid-utf8-");
+  const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+  const bytes = Buffer.concat([Buffer.from("# Diary\n\nprior entry\n\n"), Buffer.from([0xff])]);
+  await fs.writeFile(dreamsPath, bytes);
+
+  await expect(
+    updateDreamsFile({
+      workspaceDir,
+      updater: () => ({ content: "# Rewritten\n", result: undefined }),
+    }),
+  ).rejects.toThrow(/must be valid UTF-8/);
+
+  expect(await fs.readFile(dreamsPath)).toEqual(bytes);
+});
+
+it("degrades malformed diary context to empty history so dreaming continues", async () => {
+  const workspaceDir = await createTempWorkspace("invalid-utf8-");
+  const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+  const bytes = Buffer.concat([
+    Buffer.from(
+      "<!-- openclaw:dreaming:diary:start -->Prior diary entry<!-- openclaw:dreaming:diary:end -->",
+    ),
+    Buffer.from([0xff]),
+  ]);
+  await fs.writeFile(dreamsPath, bytes);
+
+  await expect(readRecentDreamDiaryEntries({ workspaceDir })).resolves.toEqual([]);
+  expect(await fs.readFile(dreamsPath)).toEqual(bytes);
+});
+
+it("reads valid Unicode and preserves malformed workspace text bytes", async () => {
+  const workspaceDir = await createTempWorkspace("workspace-utf8-");
+  const filePath = path.join(workspaceDir, "daily.md");
+  const { readWorkspaceText } = await import("./memory-workspace-files.js");
+  await fs.writeFile(filePath, "café 😀");
+  expect(await readWorkspaceText(workspaceDir, filePath)).toBe("café 😀");
+  const bytes = Buffer.from([0xff]);
+  await fs.writeFile(filePath, bytes);
+  await expect(readWorkspaceText(workspaceDir, filePath)).rejects.toThrow(/must be valid UTF-8/);
+  expect(await fs.readFile(filePath)).toEqual(bytes);
 });

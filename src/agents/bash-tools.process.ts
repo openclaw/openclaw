@@ -435,16 +435,21 @@ export function createProcessTool(
             if (signal?.aborted) {
               throw createAbortError(signal.reason);
             }
-            const deadline = Date.now() + pollWaitMs;
+            // The wait budget is elapsed time, so a wall-clock step cannot end it early
+            // or stretch it past the requested timeout.
+            const deadline = performance.now() + pollWaitMs;
             // Interactive children cannot progress until their pending prompt reaches the model.
             while (
               !scopedSession.exited &&
               !hasPendingPollDelivery(scopedSession) &&
               scopedSession.pendingOutput.length === 0 &&
               !scopedSession.pendingOutputDropped &&
-              Date.now() < deadline
+              performance.now() < deadline
             ) {
-              await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
+              await sleepPollInterval(
+                Math.max(0, Math.min(250, deadline - performance.now())),
+                signal,
+              );
             }
           }
           return await runWithAgentToolSourceExecutionScope(assertSourceCurrent, async () => {

@@ -367,3 +367,26 @@ describe("setOcPath — cross-cutting properties", () => {
     }
   });
 });
+
+it.each([
+  { value: "", expected: undefined },
+  { value: " \t\r\n ", expected: undefined },
+  { value: "0", expected: 0 },
+  { value: "1e2", expected: 100 },
+  { value: "0x10", expected: 16 },
+  { value: "1.", expected: 1 },
+  { value: " -2 ", expected: -2 },
+])("refuses blank numeric edits and preserves numeric coercion: $value", ({ value, expected }) => {
+  const raw = '{"k":3}';
+  const ast = parseJsonc(raw).ast;
+  const result = setOcPath(ast, parseOcPath("oc://config/k"), value);
+  if (expected === undefined) {
+    expect(result).toMatchObject({ ok: false, reason: "parse-error" });
+    expect(ast.raw).toBe(raw);
+  } else {
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(JSON.parse(result.ast.raw)).toEqual({ k: expected });
+    }
+  }
+});

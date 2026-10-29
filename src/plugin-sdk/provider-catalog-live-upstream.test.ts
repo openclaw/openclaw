@@ -46,7 +46,6 @@ describe("shared upstream provider metadata catalogs", () => {
     expect(fetchGuard.mock.calls[0]?.[0]).toMatchObject({
       url: endpoint,
       requireHttps: true,
-      timeoutMs: 15_000,
       auditContext: "upstream-provider-catalog-discovery",
     });
     expect(

@@ -11,6 +11,7 @@ import {
   confirmSqliteFileIntegrity,
   isTerminalSqliteIntegrityError,
   runSqliteIntegrityOperationSync,
+  SqliteIntegrityError,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
@@ -19,6 +20,20 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("assertSqliteIntegrity", () => {
+  it("retains every finding for offline repair", () => {
+    using database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    database.exec(
+      "CREATE TABLE damaged (value INTEGER CHECK(value > 0)); PRAGMA ignore_check_constraints = ON; WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 105) INSERT INTO damaged SELECT -n FROM rows; PRAGMA ignore_check_constraints = OFF;",
+    );
+    let failure: unknown;
+    try {
+      assertSqliteIntegrity(database, "offline repair", { allFindings: true });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(SqliteIntegrityError);
+    expect((failure as SqliteIntegrityError).findings).toHaveLength(105);
+  });
   it("classifies cascade-owned task delivery orphans without admitting writes", () => {
     const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
     try {

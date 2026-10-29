@@ -294,9 +294,14 @@ openclaw_e2e_signal_process() {
   kill "-$signal" "$pid" >/dev/null 2>&1 || true
 }
 openclaw_e2e_process_alive() {
-  local pid="${1:-}"
+  local pid="${1:-}" state=""
   [ -n "$pid" ] || return 1
-  kill -0 "$pid" >/dev/null 2>&1 || kill -0 -- "-$pid" >/dev/null 2>&1
+  kill -0 "$pid" >/dev/null 2>&1 || kill -0 -- "-$pid" >/dev/null 2>&1 || return 1
+  if [ -r "/proc/$pid/stat" ]; then
+    state="$(sed -nE 's/^.*\) ([A-Z]) .*/\1/p' "/proc/$pid/stat" 2>/dev/null || true)"
+    [ "$state" != "Z" ] || return 1
+  fi
+  return 0
 }
 openclaw_e2e_stop_process() {
   local pid="${1:-}" _
@@ -403,11 +408,11 @@ openclaw_e2e_wait_gateway_ready() {
       [ -n "$ready_port" ] || ready_port="${OPENCLAW_E2E_GATEWAY_READY_PORT:-18789}"
     fi
     if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
-      [ "$saw_ready_log" = "true" ] && openclaw_e2e_probe_tcp 127.0.0.1 "$ready_port" 400 && return 0
+      [ "$saw_ready_log" = "true" ] && openclaw_e2e_probe_tcp 127.0.0.1 "$ready_port" 400 && openclaw_e2e_process_alive "$pid" && return 0
     elif [ -n "$ready_port" ]; then
       # Deferred admission can settle after the one-time startup log check.
       # The owned port's modern readiness JSON is authoritative, not any HTTP 200.
-      openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" gateway-ready 400 && return 0
+      openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" gateway-ready 400 && openclaw_e2e_process_alive "$pid" && return 0
     fi
     sleep 0.25
   done

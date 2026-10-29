@@ -250,6 +250,13 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     execOverridePromptHint,
   ].filter(Boolean);
   const extraSystemPromptParts = [inboundMetaPrompt, ...staticSystemPromptParts].filter(Boolean);
+  // Metadata and conversation guidance vary per turn; configured policy and exec hints do not.
+  const turnContextText = [inboundMetaPrompt, sessionStableConversationContext, groupIntro]
+    .filter(Boolean)
+    .join("\n\n");
+  const extraSystemPromptTurnContext = turnContextText
+    ? { start: 0, text: turnContextText }
+    : undefined;
   const sourceConversationContextPromptOffset = sessionStableConversationContext
     ? inboundMetaPrompt
       ? inboundMetaPrompt.length + 2
@@ -462,6 +469,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     fullAccessState,
     isFirstTurnInSession,
     extraSystemPromptParts,
+    extraSystemPromptTurnContext,
     sourceConversationContextByMode,
     sourceConversationContextPromptOffset,
     extraSystemPromptStatic,

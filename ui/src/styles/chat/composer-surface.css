@@ -341,6 +341,14 @@
   }
 }
 
+@media (forced-colors: active) {
+  /* Forced colors drop the box shadows and border shift that mark focus above. */
+  .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
 /* Everything docked above the editor. It must stay a flow box with nothing in it
    when there is nothing to show — no minimum height, no padding of its own — so
    an absent attachment or reply preview costs the surface no height at all. */

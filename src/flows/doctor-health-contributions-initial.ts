@@ -1,3 +1,4 @@
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { runInitialConfigWriteHealth } from "./doctor-health-contribution-runners.config.js";
 import {
   runClaudeCliHealth,
@@ -145,7 +146,11 @@ export function resolveInitialDoctorHealthContributions(params: {
           async detect(ctx) {
             const { collectNodeHostingPreconditionFindings } =
               await import("../commands/doctor-node-hosting-preconditions.js");
-            return collectNodeHostingPreconditionFindings(ctx.cfg);
+            const findings = await collectNodeHostingPreconditionFindings(ctx.cfg);
+            // The rehearsal's loopback listener does not describe the serving Gateway's ingress.
+            return resolveUpdateRehearsalRoot(ctx.env ?? process.env)
+              ? findings.filter((finding) => finding.requirement !== "node-onboarding-url")
+              : findings;
           },
         },
       },

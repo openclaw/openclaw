@@ -135,6 +135,12 @@ Slack `read` actions. Only native table blocks are admitted from ordinary
 attachments; link-unfurl and other non-forwarded attachment text remains
 excluded.
 
+Rich-text dates in inbound messages and table cells preserve Slack's supplied
+fallback text. When that optional text is absent or blank, OpenClaw renders a
+valid Unix-seconds timestamp as an ISO UTC instant, such as
+`2023-11-14T22:13:20.000Z`. This keeps date-only messages readable without
+guessing the Slack viewer's timezone or relative-date formatting.
+
 ## Plugin-owned modal submissions
 
 Slack plugins that register an interactive handler can also receive modal

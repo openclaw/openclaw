@@ -78,8 +78,9 @@ lists only the current bound or requester session; owner identity and
 
 `/acp steer` queues a follow-up; it cannot add input to the running ACP turn.
 The instruction waits for that turn to finish, then runs in the same session
-and context. The command replies after the follow-up completes. To redirect
-work in progress, run `/acp cancel` first, then send the new instruction.
+and context. A multiline instruction keeps its line breaks and indentation.
+The command replies after the follow-up completes. To redirect work in
+progress, run `/acp cancel` first, then send the new instruction.
 
 `/acp status` shows the effective runtime options plus runtime-level and
 backend-level session identifiers. Unsupported-control errors surface

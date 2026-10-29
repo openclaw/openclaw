@@ -313,6 +313,7 @@ function McpServersCardContent(props: McpServersCardProps) {
                             <button
                               type="button"
                               class="btn btn--sm"
+                              aria-label={t("mcpServers.signInNamed", { name: server().name })}
                               disabled={disabled()}
                               onClick={() => signIn(server())}
                             >
@@ -322,6 +323,14 @@ function McpServersCardContent(props: McpServersCardProps) {
                           <button
                             type="button"
                             class="btn btn--sm"
+                            aria-label={t(
+                              view().busy
+                                ? "mcpServers.workingNamed"
+                                : server().enabled
+                                  ? "mcpServers.disableNamed"
+                                  : "mcpServers.enableNamed",
+                              { name: server().name },
+                            )}
                             title={mutationBlockedReason() ?? ""}
                             disabled={disabled()}
                             onClick={() => void toggleServer(server().name, !server().enabled)}

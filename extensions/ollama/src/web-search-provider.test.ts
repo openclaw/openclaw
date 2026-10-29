@@ -98,7 +98,7 @@ function mockLocalMissesThenCloudSearch() {
 }
 
 function mockSuccessfulSearchResponse() {
-  fetchWithSsrFGuardMock.mockResolvedValue(guardedResponse({ results: [] }));
+  fetchWithSsrFGuardMock.mockImplementation(async () => guardedResponse({ results: [] }));
 }
 
 async function runOllamaWebSearch(
@@ -615,5 +615,23 @@ describe("ollama web search provider", () => {
       createOllamaConfig(),
       "Ollama Web Search requires `ollama signin`.\nhttps://ollama.com/signin",
     );
+  });
+
+  it("uses configured result count and deadline while explicit count wins", async () => {
+    mockSuccessfulSearchResponse();
+    const tool = createOllamaWebSearchProvider().createTool({
+      config: createOllamaConfig(),
+      searchConfig: { maxResults: 2, timeoutSeconds: 2 },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected search tool");
+    }
+    await tool.execute({ query: "openclaw" });
+    await tool.execute({ query: "openclaw", count: 7 });
+    expect(fetchRequest(0)).toMatchObject({
+      timeoutMs: 2_000,
+      init: { body: JSON.stringify({ query: "openclaw", max_results: 2 }) },
+    });
+    expect(fetchRequest(1).init.body).toBe(JSON.stringify({ query: "openclaw", max_results: 7 }));
   });
 });

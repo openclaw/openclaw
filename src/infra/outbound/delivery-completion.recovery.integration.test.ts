@@ -186,6 +186,7 @@ describe("recovered requester final receipts", () => {
         throw new Error("Expected durable source evidence for reconciliation");
       }
       const classify = createDirectAnnounceResponseClassifier({
+        replyExpectation: "required",
         params: {
           sourceTool: "subagent_settle",
           expectsCompletionMessage: true,

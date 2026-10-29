@@ -158,3 +158,29 @@ describe("normalizeRegisteredProvider", () => {
     ]);
   });
 });
+
+it("preserves default OAuth repairs but removes empty explicit repair fields", () => {
+  const { provider } = normalizeProviderFixture(
+    makeProvider({
+      deprecatedProfileIds: [" legacy ", "legacy", ""],
+      oauthProfileIdRepairs: [
+        {},
+        { legacyProfileId: " old ", promptLabel: " Pick " },
+        { promptLabel: " Pick " },
+        { legacyProfileId: " " },
+        { promptLabel: " " },
+      ],
+    }),
+  );
+  expect(provider?.deprecatedProfileIds).toEqual(["legacy"]);
+  expect(provider?.oauthProfileIdRepairs).toEqual([
+    {},
+    { legacyProfileId: "old", promptLabel: "Pick" },
+    { promptLabel: "Pick" },
+  ]);
+  const empty = normalizeProviderFixture(
+    makeProvider({ deprecatedProfileIds: [], oauthProfileIdRepairs: [] }),
+  ).provider;
+  expect(empty).not.toHaveProperty("deprecatedProfileIds");
+  expect(empty).not.toHaveProperty("oauthProfileIdRepairs");
+});

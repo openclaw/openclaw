@@ -12,7 +12,7 @@ import {
   spawnCommand,
   withCommandProcessScope,
 } from "./exec-spawn.js";
-import { runExec } from "./exec.js";
+import { runCommandBuffered, runExec } from "./exec.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
 const transport = vi.hoisted(() => ({ spawn: vi.fn(), settle: vi.fn() }));
@@ -477,3 +477,31 @@ it("preserves canonical cleanup remedies through nested scopes and module copies
   expect(failure).toMatchObject({ message, code: original.code, cleanup: "uncertain" });
   expect(collectNestedErrorCandidates(failure)).toContain(cause);
 });
+
+it.each([
+  { notStarted: false, canonical: false },
+  { notStarted: true, canonical: false },
+  { notStarted: false, canonical: true },
+])(
+  "preserves buffered startup cleanup (notStarted=$notStarted, canonical=$canonical)",
+  async ({ notStarted, canonical }) => {
+    const fixture = commandFixture();
+    if (notStarted) {
+      fixture.child.markNotStarted();
+    }
+    const failure = canonical
+      ? new CommandProcessCleanupError()
+      : new Error("broker lost before PID delivery");
+    const pending = runCommandBuffered(["fixture"]);
+    fixture.fail(failure);
+    fixture.cleanup.resolve("forced");
+    const result = await pending;
+    expect(result.termination).toBe("error");
+    expect(hasCommandProcessCleanupError(result.error)).toBe(!notStarted);
+    if (notStarted || canonical) {
+      expect(result.error).toBe(failure);
+    } else {
+      expect(result.error?.cause).toBe(failure);
+    }
+  },
+);

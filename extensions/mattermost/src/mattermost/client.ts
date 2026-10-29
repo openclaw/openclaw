@@ -387,6 +387,7 @@ export async function fetchMattermostChannelPosts(
     limit?: number;
     before?: string;
     after?: string;
+    skipFetchThreads?: boolean;
   } = {},
 ): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
   const before = normalizeOptionalString(options.before);
@@ -405,6 +406,9 @@ export async function fetchMattermostChannelPosts(
   }
   if (after) {
     query.set("after", after);
+  }
+  if (options.skipFetchThreads) {
+    query.set("skipFetchThreads", "true");
   }
   const response = await client.request<unknown>(
     `/channels/${encodeURIComponent(channelId)}/posts?${query.toString()}`,

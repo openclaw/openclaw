@@ -455,7 +455,7 @@ describe("FaceTime runtime call sequencing", () => {
     await runtime.stop();
   });
 
-  it("retains suppression after action absence until native closure when inspection is unavailable", async () => {
+  it("releases suppression on native disconnected without an ended timestamp", async () => {
     const { runtime, talk } = await startActiveCall();
     mocks.helper.safetyMute.mockResolvedValue(completeAbsence());
     mocks.helper.leaveCall.mockResolvedValue(completeAbsence());
@@ -465,7 +465,11 @@ describe("FaceTime runtime call sequencing", () => {
     expect((await runtime.status()).calls).toMatchObject([{ carrierHangupPending: true }]);
     expect(talk.close).not.toHaveBeenCalled();
 
-    void mocks.helperParams?.onMessage(incomingCall(6));
+    const disconnected = incomingCall(6);
+    void mocks.helperParams?.onMessage({
+      ...disconnected,
+      data: { ...disconnected.data, has_ended: false },
+    });
     await vi.waitFor(async () => expect((await runtime.status()).calls).toEqual([]));
     expect(talk.close).toHaveBeenCalledWith("native-ended");
     await runtime.stop();

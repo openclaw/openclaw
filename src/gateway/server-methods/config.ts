@@ -75,6 +75,7 @@ import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
   didSharedGatewayAuthChange,
+  respondConfigWriteApplicationOutcome,
   resolveGatewayConfigPath,
   resolveGatewayConfigRestartWriteResult,
   shouldAwaitGatewayConfigApplication,
@@ -519,7 +520,7 @@ async function commitConfigRestartWrite(params: {
   writeSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
   writeConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
-  actor: ReturnType<typeof resolveControlPlaneActor>;
+  client: Parameters<typeof resolveControlPlaneActor>[0];
   context: GatewayRequestContext;
   respond: RespondFn;
   uiHints: ConfigRedactionHints;
@@ -533,7 +534,7 @@ async function commitConfigRestartWrite(params: {
     listConfigReloadRefinementPrefixes(),
   );
   params.context?.logGateway?.info(
-    `${params.mode} write ${formatControlPlaneActor(params.actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=${params.mode}`,
+    `${params.mode} write ${formatControlPlaneActor(resolveControlPlaneActor(params.client))} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=${params.mode}`,
   );
   // Compare before the write so successful publication invalidates the previous shared secret.
   const disconnectSharedAuthClients =
@@ -565,25 +566,19 @@ async function commitConfigRestartWrite(params: {
       : {}),
     ...(!params.summary ? { config: redactConfigObject(writeResult.config, params.uiHints) } : {}),
   };
-  if (writeResult.application) {
-    const outcome = await writeResult.application;
-    if (outcome !== "applied") {
-      const message =
-        outcome === "applied-restart-required"
-          ? `${params.mode} persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision`
-          : outcome === "restart-pending"
-            ? `${params.mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
-            : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, message, {
-          details: { persistedConfig },
-        }),
-      );
-      writeResult.queueFollowUp();
-      return;
-    }
+  if (
+    writeResult.application &&
+    respondConfigWriteApplicationOutcome({
+      outcome: await writeResult.application,
+      mode: params.mode,
+      client: params.client,
+      respond: params.respond,
+      success: { ok: true, path: writeResult.path, ...persistedConfig, changedPaths },
+      persistedConfig,
+    })
+  ) {
+    writeResult.queueFollowUp();
+    return;
   }
   const noopReload = isNoopGatewayReloadPlan(
     buildGatewayReloadPlan(changedPaths, {
@@ -607,7 +602,7 @@ async function commitConfigRestartWrite(params: {
     changedPaths,
     previousConfig: snapshot.config,
     nextConfig: params.nextConfig,
-    actor: params.actor,
+    client: params.client,
     context: params.context,
   });
   params.respond(
@@ -953,6 +948,17 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
+    // Only explicit keyed nulls populate the writer's roster-removal grant.
+    const allowedAgentRosterRemovals: string[] = [];
+    const sourceEntries = sourceConfig.agents?.entries;
+    const patchEntries = normalizedPatch.agents?.entries;
+    if (!hashlessPatch && sourceEntries && patchEntries) {
+      for (const [id, entry] of Object.entries(patchEntries)) {
+        if (entry === null && Object.hasOwn(sourceEntries, id)) {
+          allowedAgentRosterRemovals.push(id);
+        }
+      }
+    }
     await commitConfigRestartWrite({
       requestParams: params,
       mode: "config.patch",
@@ -960,6 +966,7 @@ export const configHandlers: GatewayRequestHandlers = {
         ...writeSnapshot,
         writeOptions: {
           ...writeOptions,
+          allowedAgentRosterRemovals,
           // The committed policy may revoke this requester before canonical reread.
           // Admit publication synchronously; retain the writer's own guards through completion.
           assertBeforePublish: () => {
@@ -970,7 +977,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       writeConfig,
       nextConfig: validatedConfig,
-      actor,
+      client,
       context,
       respond,
       uiHints: schemaPatch.uiHints,
@@ -997,14 +1004,13 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
-    const actor = resolveControlPlaneActor(client);
     await commitConfigRestartWrite({
       requestParams: params,
       mode: "config.apply",
       writeSnapshot: parsed.writeSnapshot,
       writeConfig: parsed.writeConfig,
       nextConfig: parsed.config,
-      actor,
+      client,
       context,
       respond,
       uiHints: parsed.schema.uiHints,

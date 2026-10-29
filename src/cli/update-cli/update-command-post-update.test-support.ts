@@ -22,8 +22,13 @@ import { captureEnv } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { finishUpdate } from "./update-command-post-update.js";
+import * as rollbackModule from "./update-command-rollback.js";
 import * as sourceRuntime from "./update-command-runtime.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
+import {
+  simulateVerifiedActivationFailure,
+  VERIFIED_ACTIVATION_FAILURE_OUTCOMES,
+} from "./update-command-verified-activation.test-support.js";
 
 vi.mock("./update-command-verification.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-verification.js")>()),
@@ -642,4 +647,63 @@ export function registerUnverifiedDefinitionRecoveryTest(options: {
       reason: "service-definition-rollback-unverified",
     });
   });
+}
+
+export function registerVerifiedActivationFailureTests({
+  tempDirs,
+  mocks,
+}: {
+  tempDirs: { make(prefix: string): string };
+  mocks: {
+    restartService: Mock<typeof import("./update-command-service.js").maybeRestartService>;
+    printResult: Mock;
+  };
+}) {
+  it.each(VERIFIED_ACTIVATION_FAILURE_OUTCOMES)(
+    "classifies post-activation failures without granting authority (%s)",
+    async (outcome) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-verified-target-") };
+      const run = createUpdateRun({ trigger: "cli" }, { env });
+      const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
+      mocks.restartService.mockImplementationOnce(({ onVerified }) =>
+        simulateVerifiedActivationFailure(outcome, onVerified),
+      );
+      const finishing = finishSuccessfulPackageSwitch({
+        run: { runId: run.runId, env },
+        restartEnvironment: process.env,
+      });
+      if (outcome !== "restart-health" && outcome !== "reported-failure") {
+        await expect(finishing).rejects.toMatchObject({
+          result: {
+            status: "error",
+            ...(outcome === "data-at-risk"
+              ? {
+                  recovery: {
+                    serviceRestartSafe: false,
+                    reason: "runtime-verification-failed",
+                  },
+                }
+              : {}),
+          },
+        });
+        expect(getUpdateRun(run.runId, { env })?.status).toBe("failed");
+      } else {
+        await expect(finishing).resolves.toBeUndefined();
+        expect(rollback).not.toHaveBeenCalled();
+        expect(getUpdateRun(run.runId, { env })?.status).toBe("succeeded");
+        const result = mocks.printResult.mock.lastCall?.[0] as UpdateRunResult;
+        expect(result.status).toBe("ok");
+        expect(
+          result.steps.find((step) => step.name === "post-update maintenance")?.advisory,
+        ).toMatchObject({
+          kind: "recoverable-maintenance",
+          message: expect.stringContaining(
+            outcome === "restart-health"
+              ? "post-activation receipt unavailable"
+              : "restart-unhealthy",
+          ),
+        });
+      }
+    },
+  );
 }

@@ -246,6 +246,49 @@ describe("Telegram recorded session destinations", () => {
     });
   });
 
+  it("routes named-account reactions to the real cached private-topic message session", async () => {
+    cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
+    cfg.channels!.telegram!.accounts = { default: {}, atlas: {} };
+    cfg.channels!.telegram!.reactionNotifications = "all";
+    cfg.channels!.telegram!.direct = { [String(chat.id)]: { requireTopic: true } };
+    const enqueue = vi.spyOn(harness.telegramBotDepsForTest, "enqueueRoutedSystemEvent");
+    try {
+      // getMe intentionally lacks topic capability; the real cached message proves it.
+      const bot = await createBot(false, true, cfg, false, "atlas");
+      const message = {
+        ...commandMessage("a private topic on a named account"),
+        message_id: 812,
+        message_thread_id: 77,
+        is_topic_message: true,
+      };
+      await receive(bot, message);
+      const sessionKey = "agent:main:telegram:atlas:direct:42001:thread:42001:77";
+      expect(harness.replySpy.mock.calls.at(-1)?.[0]).toMatchObject({ SessionKey: sessionKey });
+      expect(getSessionEntry({ storePath, sessionKey })?.delivery).toMatchObject({
+        kind: "external",
+        context: { accountId: "atlas", to: "telegram:42001", threadId: "77" },
+      });
+      await deliverTelegramUpdate(bot, {
+        update_id: ++updateId,
+        message_reaction: {
+          chat,
+          message_id: message.message_id,
+          user: message.from!,
+          date: message.date,
+          old_reaction: [],
+          new_reaction: [{ type: "emoji", emoji: "🔥" }],
+        },
+      });
+      expect(enqueue).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("Telegram reaction added:"),
+        expect.objectContaining({ sessionKey, accountId: "atlas", lastRoutePolicy: "session" }),
+        expect.any(Object),
+      );
+    } finally {
+      enqueue.mockRestore();
+    }
+  });
+
   it("admits plugin-bound ambient topics without replacing their channel session", async () => {
     cfg.channels!.telegram!.groups = {
       "*": { requireMention: true, requireMentionInBotThreads: true },

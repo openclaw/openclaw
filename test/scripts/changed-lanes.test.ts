@@ -958,6 +958,34 @@ describe("scripts/changed-lanes", () => {
     },
   );
 
+  it("keeps non-core release tooling from widening targeted core lint", () => {
+    const commands = expectDefined(
+      createTargetedCoreLintCommands(
+        [
+          "src/agents/agent-tools.ts",
+          ".agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs",
+          ".github/workflows/full-release-validation.yml",
+          "test/vitest/vitest.database-worker-core-paths.mjs",
+        ],
+        { PATH: "/usr/bin" },
+        { fileExists: () => true },
+      ),
+      "core lint commands",
+    );
+
+    expect(commands).toHaveLength(1);
+    expect(commands[0]?.args.slice(3)).toEqual(["src/agents/agent-tools.ts"]);
+  });
+
+  it("keeps Plugin SDK core changes on extension typechecking without full extension lint", () => {
+    const plan = createChangedCheckPlan(detectChangedLanes(["src/plugin-sdk/core.ts"]), {
+      env: { PATH: "/usr/bin" },
+    });
+
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:extensions");
+  });
+
   it("bounds encoded core lint commands without dropping long Unicode paths on POSIX", () => {
     const targets = Array.from(
       { length: 160 },

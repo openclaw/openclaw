@@ -19,6 +19,7 @@ let inspectionFixtureId = 0;
 export function createInspectionFixture(options?: {
   registration?: "throw" | "async-resolve" | "async-reject" | "thenable" | "tracked";
   pauseDisposal?: boolean;
+  resourceProvider?: boolean;
   disposalFailure?: boolean;
   contextEngine?: boolean;
   capturedDisposal?: "async-context" | "work-tracker" | "sibling-tracker";
@@ -130,6 +131,15 @@ module.exports = {
         : captureMode === "sibling-tracker" ? () => state.sibling.track(dispose) : () => track(dispose);
     }
     api.registerRuntimeLifecycle(lifecycle);
+    if (${options?.resourceProvider === true}) {
+      api.registerProvider({
+        id: "inspection-resource", label: "Inspection resource", auth: [],
+        normalizeModelId() {
+          state.captured.read = database.prepare("SELECT 42 AS value").get();
+          return String(state.captured.read.value);
+        },
+      });
+    }
     if (${options?.contextEngine === true}) {
       api.registerContextEngine(${JSON.stringify(id)}, () => {
         state.factoryCalls++;

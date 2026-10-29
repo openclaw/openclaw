@@ -313,6 +313,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       outcome: { status: "ok" },
     });
     const children = [childA, childB, childC];
+    // These findings have not been individually delivered to the requester.
+    for (const child of children) {
+      child.delivery = { status: "pending" };
+    }
     const transcripts = new Map<string, unknown[]>();
     const findings = ["alpha findings", "bravo findings", "charlie findings"];
     for (const [index, child] of children.entries()) {
@@ -874,6 +878,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   it("delivers the complete final source reply after a same-run silent terminal", async () => {
     const text = `${"<source-reply>".repeat(400)}required source reply tail`;
     const child = makeSettledChild({
+      delivery: { status: "pending" },
       runId: "run-b",
       outcome: { status: "ok" },
       completion: {
@@ -938,6 +943,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       makeSettledChild({
         runId: "run-b",
         outcome: { status: "error", error: "provider unavailable" },
+        delivery: { status: "pending" },
         completion: { required: true, resultText: "provider unavailable" },
       }),
       makeSettledChild({

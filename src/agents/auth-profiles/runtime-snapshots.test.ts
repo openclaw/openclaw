@@ -21,6 +21,7 @@ import {
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreMetadataRevision,
+  getRuntimeAuthProfileStoreCatalogRevision,
   getRuntimeAuthProfileStoreSnapshotRevision,
   noteRuntimeAuthProfileStorePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener,
@@ -55,6 +56,46 @@ describe("runtime auth profile snapshots", () => {
   beforeEach(() => {
     prepareSharedAuthStoreOwnershipForNative();
   });
+
+  it.each(["set", "replace"] as const)(
+    "classifies %s availability without changing catalog identity",
+    (operation) => {
+      const agentDir = tempDirs.make("availability-snapshot-");
+      const store = createStore("synthetic");
+      setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+      const catalog = getRuntimeAuthProfileStoreCatalogRevision(agentDir);
+      const metadata = getRuntimeAuthProfileStoreMetadataRevision(agentDir);
+      const listener = vi.fn();
+      const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+      const publish = (next: AuthProfileStore) =>
+        operation === "set"
+          ? setRuntimeAuthProfileStoreSnapshot(next, agentDir)
+          : replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: next }]);
+      try {
+        const availabilityChanges: NonNullable<AuthProfileStore["usageStats"]>[] = [
+          { "openai:default": { cooldownUntil: 30000 } },
+          { "openai:default": { blockedUntil: 40000, blockedScope: "model" as const } },
+          { "openai:default": { disabledUntil: 50000, disabledReason: "billing" as const } },
+          {},
+        ];
+        for (const usageStats of availabilityChanges) {
+          publish({ ...store, usageStats });
+          expect(listener).toHaveBeenLastCalledWith(
+            expect.objectContaining({ availabilityOnly: true }),
+          );
+          expect(getRuntimeAuthProfileStoreCatalogRevision(agentDir)).toBe(catalog);
+        }
+        expect(getRuntimeAuthProfileStoreMetadataRevision(agentDir)).toBeGreaterThan(metadata);
+        publish({ ...store, order: { openai: [] } });
+        expect(getRuntimeAuthProfileStoreCatalogRevision(agentDir)).toBeGreaterThan(catalog);
+        expect(listener).toHaveBeenLastCalledWith(
+          expect.objectContaining({ availabilityOnly: false }),
+        );
+      } finally {
+        unregister();
+      }
+    },
+  );
 
   it("retires only the changed owner's reader until the runtime closes", () => {
     const agentDir = tempDirs.make("auth-snapshot-readers-");
@@ -274,6 +315,7 @@ describe("runtime auth profile snapshots", () => {
         );
         expect(listener).toHaveBeenCalledExactlyOnceWith({
           affectsInheritedStores: true,
+          availabilityOnly: false,
           profileSetChanged: operation === "remove",
         });
       } finally {
@@ -396,6 +438,31 @@ describe("runtime auth profile snapshots", () => {
       expectDefined(blocked.usageStats?.["acme:primary"], "published usage").cooldownUntil = 99;
       expect(read(worker).usageStats?.["acme:primary"]?.cooldownUntil).toBe(30_000);
       expect(cleared.usageStats).toEqual({ "worker:external": { lastUsed: 7 } });
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
+  it("adds and clears newly observed inline-key availability immediately", () => {
+    const agentDir = "/tmp/openclaw-auth-inline-usage";
+    const store: AuthProfileStore = { version: 1, profiles: {}, usageStats: {} };
+    try {
+      setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+      const read = createPreparedRuntimeAuthProfileUsageReader(agentDir, agentDir);
+      for (const usage of [
+        { cooldownUntil: 30000 },
+        { blockedUntil: 40000 },
+        { disabledUntil: 50000 },
+      ]) {
+        setRuntimeAuthProfileStoreSnapshot(
+          { ...store, usageStats: { "inline-api-key:acme": usage } },
+          agentDir,
+        );
+        expect(read(store).usageStats?.["inline-api-key:acme"]).toEqual(usage);
+      }
+      const captured = read(store);
+      setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+      expect(read(captured).usageStats?.["inline-api-key:acme"]).toBeUndefined();
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
     }

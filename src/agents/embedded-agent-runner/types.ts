@@ -152,7 +152,7 @@ export type EmbeddedRunFailureSignal = {
   fatalForCron: true;
 };
 
-export type EmbeddedRunTerminalToolFailure = {
+type EmbeddedRunTerminalToolFailure = {
   source: "tool";
   toolName: "exec" | "wait";
   code: "UNKNOWN_TOOL_ID";

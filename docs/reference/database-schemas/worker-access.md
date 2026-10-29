@@ -6502,3 +6502,5 @@ watermark from that same projection snapshot. It does not issue a separate retai
 watermark query. Standalone watermark reads and the early context-authority check
 keep their existing database readers. Schema, stored bytes, retention, permissions,
 and update behavior are unchanged.
+
+Logical session-entry comparison ignores top-level property insertion order from replica deltas while preserving JSON field values and rejecting intervening owner or content changes.

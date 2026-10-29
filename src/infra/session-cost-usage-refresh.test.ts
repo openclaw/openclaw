@@ -163,7 +163,9 @@ describe("session cost usage refresh", () => {
     });
   }
 
-  it("refreshes each dirty session once after its own quiet gap and parks when clean", async () => {
+  it("keeps per-session quiet gaps across wall-clock rollback and unrelated reads", async ({
+    signal,
+  }) => {
     await withRefreshFixture(async ({ agentId, sessionFiles }) => {
       const scope = new AsyncWorkScope();
       const refresh = vi.mocked(refreshCostUsageCacheForAgent).mockResolvedValue("refreshed");
@@ -179,6 +181,17 @@ describe("session cost usage refresh", () => {
         );
       try {
         dirty(sessionFiles[0]);
+        await withinTest(
+          loadSessionCostSummariesFromCache({
+            config,
+            agentId,
+            sessions: [{ sessionFile: sessionFiles[1] }],
+            requestRefresh: false,
+          }),
+          signal,
+        );
+        expect(refresh).not.toHaveBeenCalled();
+        vi.spyOn(Date, "now").mockReturnValue(Date.now() - 120_000);
         await vi.advanceTimersByTimeAsync(20_000);
         dirty(sessionFiles[0]);
         dirty(sessionFiles[1]);

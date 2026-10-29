@@ -213,7 +213,24 @@ describe("openclaw-mcp-servers-card", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
   });
-
+  it("names each row action after its server and keeps the visible label", async () => {
+    const client = new GatewayBrowserClient({ url: "ws://gateway-a.example.test" });
+    const { card } = await mountCard({
+      gateway: createApplicationGateway(
+        createGateway({ client, methods: ["mcp.authLogin"] }).snapshot,
+      ).gateway,
+      config: {
+        mcp: { servers: { docs: oauthServer, search: { ...oauthServer, enabled: false } } },
+      },
+    });
+    const named = (name: string) =>
+      [...card.querySelectorAll("button")]
+        .filter((button) => button.getAttribute("aria-label") === name)
+        .map((button) => button.textContent?.trim());
+    expect(named("Sign in docs")).toEqual(["Sign in"]);
+    expect(named("Disable docs")).toEqual(["Disable"]);
+    expect(named("Enable search")).toEqual(["Enable"]);
+  });
   it("starts the selected connector and keeps a usable link when the popup is blocked", async () => {
     const { card, request, open, connection } = await mountLoginCard();
     request

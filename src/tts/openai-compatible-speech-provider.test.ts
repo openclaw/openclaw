@@ -5,7 +5,10 @@ import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { mockFirstObjectArg } from "../test-utils/mock-call-assertions.js";
 import { createOpenAiCompatibleSpeechProvider } from "./openai-compatible-speech-provider.js";
 import { withSpeakerSelectionCompat, withSpeakerSelectionFallbackCompat } from "./speaker.js";
-import { getResolvedSpeechProviderConfig } from "./tts-provider-resolution.js";
+import {
+  getResolvedSpeechProviderConfig,
+  resolveSpeechProviderTimeoutMs,
+} from "./tts-provider-resolution.js";
 import { resolveTtsConfig } from "./tts-settings.js";
 
 const providerState = vi.hoisted(() => ({
@@ -69,6 +72,38 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     providerState.provider = undefined;
     vi.unstubAllEnvs();
   });
+
+  it.each([
+    ["global default", undefined, undefined, undefined, 30_000],
+    ["provider default", 120_000, undefined, undefined, 120_000],
+    ["explicit global-default value", 120_000, 30_000, undefined, 30_000],
+    ["configured timeout", 120_000, 45_000, undefined, 45_000],
+    ["per-call timeout", 120_000, 45_000, 5_000, 5_000],
+  ] as const)(
+    "uses the %s for the HTTP request",
+    async (_name, defaultTimeoutMs, configured, perCall, expected) => {
+      const provider = createOpenAiCompatibleSpeechProvider({ ...demoOptions, defaultTimeoutMs });
+      const cfg = { tts: { timeoutMs: configured } };
+      postJsonRequestMock.mockResolvedValue({
+        response: new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
+        release: async () => {},
+      });
+
+      await provider.synthesize({
+        text: "Hosted speech can take longer. Keep the operator's timeout.",
+        cfg,
+        providerConfig: { apiKey: "test-key" },
+        target: "audio-file",
+        timeoutMs: resolveSpeechProviderTimeoutMs({
+          config: resolveTtsConfig(cfg),
+          provider,
+          timeoutMs: perCall,
+        }),
+      });
+
+      expect(mockFirstObjectArg(postJsonRequestMock).timeoutMs).toBe(expected);
+    },
+  );
 
   it.each([
     {

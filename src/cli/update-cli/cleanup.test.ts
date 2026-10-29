@@ -26,6 +26,30 @@ vi.mock("../../config/io.js", async (importOriginal) => ({
   readSourceConfigBestEffort: vi.fn(),
 }));
 
+function cleanupReport(): RecoveryCleanupReport {
+  return {
+    stateDir: "/fixture/state",
+    artifacts: [
+      {
+        path: "/fixture/original",
+        runs: [],
+        bytes: 7,
+        outcome: "candidate",
+        reason: "retained",
+      },
+    ],
+    totals: {
+      candidateBytes: 7,
+      verificationRequiredBytes: 0,
+      protectedBytes: 0,
+      blockedBytes: 0,
+      removedBytes: 0,
+      removedFiles: 0,
+    },
+    status: "preview",
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(readSourceConfigBestEffort).mockResolvedValue({});
@@ -37,27 +61,7 @@ afterEach(() => vi.restoreAllMocks());
 it.each(["refused", "blocked"] as const)(
   "preserves one reported %s cleanup result while unwinding its exit",
   async (status) => {
-    const report: RecoveryCleanupReport = {
-      stateDir: "/fixture/state",
-      artifacts: [
-        {
-          path: "/fixture/original",
-          runs: [],
-          bytes: 7,
-          outcome: "candidate",
-          reason: "retained",
-        },
-      ],
-      totals: {
-        candidateBytes: 7,
-        verificationRequiredBytes: 0,
-        protectedBytes: 0,
-        blockedBytes: 0,
-        removedBytes: 0,
-        removedFiles: 0,
-      },
-      status: "preview",
-    };
+    const report = cleanupReport();
     vi.mocked(inspectSessionSqliteRecovery).mockReturnValue(report);
     vi.mocked(retireSessionSqliteRecovery).mockResolvedValue({ ...report, status: "blocked" });
 
@@ -78,7 +82,11 @@ it("still reports a genuine cleanup error once as blocked", async () => {
   vi.mocked(readSourceConfigBestEffort).mockRejectedValueOnce(new Error("inventory unavailable"));
   await expect(updateCleanupCommand({ json: true })).rejects.toEqual(new ExitError(1));
   expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
-    { status: "blocked", error: "Error: inventory unavailable" },
+    {
+      ok: false,
+      status: "blocked",
+      error: { type: "cli_error", message: "Error: inventory unavailable" },
+    },
     2,
   );
   expect(retireSessionSqliteRecovery).not.toHaveBeenCalled();
@@ -97,8 +105,13 @@ it.each([
     await expect(updateCleanupCommand({ json: true, yes: true })).rejects.toEqual(new ExitError(1));
     expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
       {
+        ok: false,
         status: "blocked",
-        error: "Error: Stop the Gateway first (openclaw --profile work gateway stop), then retry.",
+        error: {
+          type: "cli_error",
+          message:
+            "Error: Stop the Gateway first (openclaw --profile work gateway stop), then retry.",
+        },
       },
       2,
     );
@@ -106,4 +119,23 @@ it.each([
   } finally {
     vi.unstubAllEnvs();
   }
+});
+
+it("keeps the inspected recovery report when retirement throws", async () => {
+  const report = cleanupReport();
+  vi.mocked(inspectSessionSqliteRecovery).mockReturnValue(report);
+  vi.mocked(retireSessionSqliteRecovery).mockRejectedValueOnce(new Error("retirement unavailable"));
+
+  await expect(updateCleanupCommand({ json: true, yes: true })).rejects.toEqual(new ExitError(1));
+
+  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
+    {
+      ...report,
+      ok: false,
+      status: "blocked",
+      error: { type: "cli_error", message: "Error: retirement unavailable" },
+    },
+    2,
+  );
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
 });

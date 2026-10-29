@@ -33,6 +33,12 @@ describe("CommandPalette session search", () => {
       title: "Per-session communication controls in UI",
       sameSession: true,
     },
+    {
+      name: "canonical Unicode title",
+      query: "München",
+      title: "Mu\u0308nchen",
+      sameSession: true,
+    },
     { name: "transcript-only match", serverMatch: false },
     { name: "server metadata match", serverMatch: true },
     {

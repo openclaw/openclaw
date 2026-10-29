@@ -18,31 +18,18 @@ export function sqliteSessionEntriesEqual(
   if (!left || !right) {
     return left === right;
   }
-  const {
-    participants: _leftParticipants,
-    participantCount: _leftParticipantCount,
-    sessionDiffBaseline: leftBaseline,
-    skillsSnapshot: leftSkills,
-    systemPromptReport: leftReport,
-    ...leftEntry
-  } = left;
-  const {
-    participants: _rightParticipants,
-    participantCount: _rightParticipantCount,
-    sessionDiffBaseline: rightBaseline,
-    skillsSnapshot: rightSkills,
-    systemPromptReport: rightReport,
-    ...rightEntry
-  } = right;
-  // Participant history is a separately mutable SQLite projection. It must not
-  // invalidate logical-session compare-and-swap or leak into entry_json writes.
-  // Hydration appends cold fields to hot facts; their original top-level order is not identity.
-  return (
-    JSON.stringify(leftEntry) === JSON.stringify(rightEntry) &&
-    JSON.stringify(leftBaseline) === JSON.stringify(rightBaseline) &&
-    JSON.stringify(leftSkills) === JSON.stringify(rightSkills) &&
-    JSON.stringify(leftReport) === JSON.stringify(rightReport)
-  );
+  // Participant history is a separately mutable projection. All other fields
+  // retain JSON omission semantics, but replica deltas may change top-level order.
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const key of keys) {
+    if (key === "participants" || key === "participantCount") {
+      continue;
+    }
+    if (JSON.stringify(Reflect.get(left, key)) !== JSON.stringify(Reflect.get(right, key))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function sqliteLifecycleTargetSnapshotsEqual(

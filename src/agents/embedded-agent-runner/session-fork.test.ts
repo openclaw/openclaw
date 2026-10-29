@@ -100,6 +100,7 @@ afterEach(async () => {
   cleanupSessionResources();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   await closeProviderTransportDispatcherPool();
 });
 
@@ -213,14 +214,27 @@ describe("prepared session fork provider boundary", () => {
     async function completeParent() {
       const caller = { turn: "completed" };
       const parentContext = structuredClone(context);
+      const thinkingBudgets = { high: 4096 };
+      const hostedTools = new Set(["web_search"]);
       const onPayload = (payload: unknown) => {
         expect(callers.getStore()).toBe(caller);
         return payload;
       };
-      references.push(new WeakRef(caller), new WeakRef(parentContext), new WeakRef(onPayload));
+      references.push(
+        new WeakRef(caller),
+        new WeakRef(parentContext),
+        new WeakRef(onPayload),
+        new WeakRef(thinkingBudgets),
+        new WeakRef(hostedTools),
+      );
       const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
       await callers.run(caller, async () => {
-        await (await parent(model, parentContext, { onPayload })).result();
+        const options = {
+          onPayload,
+          thinkingBudgets,
+          openclawCodeModeAllowedHostedToolTypes: hostedTools,
+        };
+        await (await parent(model, parentContext, options)).result();
       });
     }
 
@@ -293,18 +307,20 @@ describe("prepared session fork provider boundary", () => {
       });
     });
     vi.stubGlobal("fetch", physicalFetch);
+    const lookupFn = vi.fn(async () => {
+      beforeDns?.();
+      return [{ address: "93.184.216.34", family: 4 }];
+    });
     const realGuardedFetch = guardedFetch.fetchWithSsrFGuard;
     vi.spyOn(guardedFetch, "fetchWithSsrFGuard").mockImplementation((options) =>
       realGuardedFetch({
         ...options,
-        lookupFn: async () => {
-          beforeDns?.();
-          return [{ address: "93.184.216.34", family: 4 }];
-        },
+        lookupFn,
       }),
     );
     return {
       physicalFetch,
+      lookupFn,
       parent: wrapStreamFnWithSessionFork(
         api === "anthropic-messages"
           ? createAnthropicMessagesTransportStreamFn()
@@ -566,15 +582,20 @@ describe("prepared session fork provider boundary", () => {
   );
 
   it("blocks the physical send when access is withdrawn during guarded DNS preparation", async () => {
+    // This case owns the direct DNS route, not an operator proxy route.
+    // Keep the bypass scoped to this exact fixture endpoint and restore it after the test.
+    vi.stubEnv("no_proxy", "api.openai.com:443");
     let revoked = false;
     let withdrawDuringDns = false;
-    const { parent, physicalFetch } = guardedTransport(() => {
+    const { parent, physicalFetch, lookupFn } = guardedTransport(() => {
       if (withdrawDuringDns) {
         revoked = true;
       }
     });
     await (await parent(model, context, { apiKey: "synthetic-key", transport: "sse" })).result();
+    expect(lookupFn).toHaveBeenCalledOnce();
     physicalFetch.mockClear();
+    lookupFn.mockClear();
     withdrawDuringDns = true;
     await expect(
       runEmbeddedSessionFork({
@@ -589,6 +610,8 @@ describe("prepared session fork provider boundary", () => {
         },
       }),
     ).rejects.toThrow("Session access withdrawn");
+    expect(lookupFn).toHaveBeenCalledOnce();
+    expect(revoked).toBe(true);
     expect(physicalFetch).not.toHaveBeenCalled();
   });
 
@@ -616,6 +639,9 @@ describe("prepared session fork provider boundary", () => {
         });
       },
       async (baseUrl) => {
+        // The native parent uses fetch directly, while the independent fork uses
+        // the guarded host transport. Both must reach this same local endpoint.
+        vi.stubEnv("no_proxy", new URL(baseUrl).host);
         const requestModel = attachModelProviderRequestTransport(
           {
             ...model,
@@ -655,13 +681,24 @@ describe("prepared session fork provider boundary", () => {
             }
           },
         });
-        const rejected = expect(result).rejects.toThrow("Session access withdrawn");
-        await redirectReady.promise;
-        revoked = true;
-        releaseRedirect.resolve();
-        await rejected;
-        expect(requests).toHaveLength(1);
-        expect(requests).not.toContain("/redirected");
+        try {
+          // Observe an early transport failure instead of leaving an assertion
+          // promise unhandled while waiting for a request that cannot arrive.
+          await Promise.race([
+            redirectReady.promise,
+            result.then(() => {
+              throw new Error("Fork completed before the redirect fixture received a request");
+            }),
+          ]);
+          const rejected = expect(result).rejects.toThrow("Session access withdrawn");
+          revoked = true;
+          releaseRedirect.resolve();
+          await rejected;
+          expect(requests).toHaveLength(1);
+          expect(requests).not.toContain("/redirected");
+        } finally {
+          releaseRedirect.resolve();
+        }
       },
     );
   });
@@ -827,23 +864,26 @@ describe("prepared session fork provider boundary", () => {
     expect(payloads).toHaveLength(1);
   });
 
-  it("retires optional replay if a published message cannot be retained", async () => {
-    const payloads: Record<string, unknown>[] = [];
-    const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
-    await (await parent(model, context, {})).result();
-    expect(() =>
-      recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
-        role: "toolResult",
-        toolCallId: "lookup",
-        toolName: "lookup",
-        content: [],
-        isError: false,
-        timestamp: 2,
-        details: { callback: () => {} },
-      }),
-    ).not.toThrow();
-    await expect(fork()).rejects.toThrow("requires a parent turn");
-  });
+  it.each([{ callback: () => {} }, { bytes: new Uint8Array(new SharedArrayBuffer(16)) }])(
+    "retires optional replay if a published message cannot be retained: %j",
+    async (details) => {
+      const payloads: Record<string, unknown>[] = [];
+      const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
+      await (await parent(model, context, {})).result();
+      expect(() =>
+        recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+          role: "toolResult",
+          toolCallId: "lookup",
+          toolName: "lookup",
+          content: [],
+          isError: false,
+          timestamp: 2,
+          details,
+        }),
+      ).not.toThrow();
+      await expect(fork()).rejects.toThrow("requires a parent turn");
+    },
+  );
 
   it("isolates replayed wire data without re-entering the parent's one-shot payload hook", async () => {
     const { parent, physicalFetch } = guardedTransport();

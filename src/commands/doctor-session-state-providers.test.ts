@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawAgentHarness } from "../agents/harness/builtin-openclaw.js";
+import type * as RuntimePluginLoadPlan from "../agents/harness/runtime-plugin-load-plan.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   loadSessionEntryReadOnly,
@@ -11,6 +13,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type * as PluginLoader from "../plugins/loader.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   createPluginSessionStateDoctorScanner,
@@ -42,6 +46,47 @@ const anthropicOwner = {
   authProfilePrefixes: ["anthropic:", "claude-cli:"],
 };
 const ownerState = vi.hoisted(() => ({ owners: [] as Array<Record<string, unknown>> }));
+const runtimeState = vi.hoisted(() => ({
+  registered: true,
+  supported: true,
+  cliBackends: [] as Array<{ id: string; modelProvider: string }>,
+}));
+
+vi.mock("../agents/harness/runtime-plugin-load-plan.js", async () => ({
+  ...(await vi.importActual<typeof RuntimePluginLoadPlan>(
+    "../agents/harness/runtime-plugin-load-plan.js",
+  )),
+  resolveAgentRuntimePluginLoadPlan: ({ config }: { config: OpenClawConfig }) => ({
+    config,
+    pluginIds: ["codex", "anthropic", "google"],
+  }),
+}));
+
+vi.mock("../plugins/loader.js", async () => ({
+  ...(await vi.importActual<typeof PluginLoader>("../plugins/loader.js")),
+  acquirePluginRegistryForInspection: async () => {
+    const registry = createEmptyPluginRegistry();
+    if (runtimeState.registered) {
+      registry.agentHarnesses.push({
+        pluginId: "codex",
+        source: "test",
+        harness: {
+          ...createOpenClawAgentHarness(),
+          id: "codex",
+          supports: () => ({ supported: runtimeState.supported }),
+        },
+      });
+    }
+    for (const backend of runtimeState.cliBackends) {
+      registry.cliBackends.push({
+        pluginId: backend.modelProvider,
+        source: "test",
+        backend: { ...backend, config: { command: backend.id } },
+      });
+    }
+    return { registry, release: async () => {} };
+  },
+}));
 
 vi.mock("../plugins/doctor-contract-registry.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/doctor-contract-registry.js")>(
@@ -76,7 +121,7 @@ async function runDoctor(params: {
       scanner.scanEntry(sessionKey, sessionEntry);
     }
     await runPluginSessionStateDoctorRepairs({
-      scan: scanner.result(),
+      scan: await scanner.result(),
       store: { kind: "legacy", path: storePath },
       prompter: { confirmRuntimeRepair },
       warnings,
@@ -101,10 +146,102 @@ function entry(patch: Record<string, unknown>): SessionEntry {
   } as SessionEntry;
 }
 
+function heldModelConfig(model: string): OpenClawConfig {
+  return { agents: { defaults: { model } } };
+}
+async function heldRunEntry(selected: SessionEntry, cfg: OpenClawConfig) {
+  const key = "agent:main:subagent:held-selection";
+  const result = await runDoctor({ cfg, store: { [key]: selected } });
+  return { ...result, row: result.store[key] };
+}
+
 describe("doctor session state provider routes", () => {
   beforeEach(() => {
     ownerState.owners = [codexOwner, openAIOwner];
+    runtimeState.registered = true;
+    runtimeState.supported = true;
+    runtimeState.cliBackends = [];
   });
+
+  it.each([
+    "legacy map",
+    "exact policy",
+    "provider wildcard",
+    "unrestricted policy",
+    "without origin",
+  ])("preserves an automatic child selection allowed by %s", async (policy) => {
+    const cfg = heldModelConfig("openai/example-primary");
+    cfg.agents!.defaults!.models = {
+      "openai/example-primary": {},
+      "openai/example-secondary": {},
+    };
+    if (policy === "exact policy") {
+      cfg.agents!.defaults!.modelPolicy = { allow: ["openai/example-secondary"] };
+    } else if (policy === "provider wildcard") {
+      cfg.agents!.defaults!.modelPolicy = { allow: ["openai/*"] };
+    } else if (policy === "unrestricted policy") {
+      cfg.agents!.defaults!.modelPolicy = { allow: [] };
+    }
+    const selected = entry({
+      providerOverride: "openai",
+      modelOverride: "example-secondary",
+      modelOverrideSource: "auto",
+      ...(policy === "without origin"
+        ? {}
+        : {
+            modelOverrideFallbackOriginProvider: "openai",
+            modelOverrideFallbackOriginModel: "example-secondary",
+          }),
+    });
+
+    const result = await heldRunEntry(selected, cfg);
+
+    expect(result.row).toEqual(selected);
+    expect(result.warnings).toEqual([]);
+    expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+  });
+
+  it.each(["no policy", "default restriction", "agent restriction", "active fallback"])(
+    "still repairs automatic routing with %s",
+    async (policy) => {
+      const cfg = heldModelConfig("openai/example-primary");
+      if (policy !== "no policy") {
+        cfg.agents!.defaults!.models = {
+          "openai/example-primary": {},
+          "openai/example-secondary": {},
+        };
+      }
+      if (policy === "default restriction") {
+        cfg.agents!.defaults!.modelPolicy = { allow: ["openai/example-primary"] };
+      } else if (policy === "agent restriction") {
+        cfg.agents!.entries = { main: { modelPolicy: { allow: ["openai/example-primary"] } } };
+      }
+
+      const result = await heldRunEntry(
+        entry({
+          providerOverride: "openai",
+          modelOverride: "example-secondary",
+          modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "openai",
+          modelOverrideFallbackOriginModel:
+            policy === "active fallback" ? "example-primary" : "example-secondary",
+        }),
+        cfg,
+      );
+
+      expect(result.confirmRuntimeRepair).toHaveBeenCalledOnce();
+      expect(result.warnings.join("\n")).toContain("stale OpenAI session routing state");
+      for (const key of [
+        "providerOverride",
+        "modelOverride",
+        "modelOverrideSource",
+        "modelOverrideFallbackOriginProvider",
+        "modelOverrideFallbackOriginModel",
+      ]) {
+        expect(result.row).not.toHaveProperty(key);
+      }
+    },
+  );
 
   it("skips unrelated recovery metadata and valid locked harness rows", async () => {
     const store = {
@@ -300,7 +437,7 @@ describe("doctor session state provider routes", () => {
     scanner.scanEntry(sessionKey, staleEntry);
 
     await runPluginSessionStateDoctorRepairs({
-      scan: scanner.result(),
+      scan: await scanner.result(),
       store: { kind: "sqlite", agentId: "ops", path: sqliteStorePath },
       prompter: { confirmRuntimeRepair: vi.fn(async () => true) },
       warnings: [],
@@ -316,6 +453,116 @@ describe("doctor session state provider routes", () => {
     expect(repaired?.modelOverride).toBeUndefined();
     expect(repaired?.modelProvider).toBeUndefined();
     expect(fsSync.existsSync(legacyStorePath)).toBe(false);
+  });
+
+  it.each([
+    { name: "available", registered: true, supported: true, kept: true },
+    { name: "uninstalled", registered: false, supported: true, kept: false },
+    { name: "invalid for the model", registered: true, supported: false, kept: false },
+  ])("handles an explicit runtime that is $name without changing its model", async (state) => {
+    runtimeState.registered = state.registered;
+    runtimeState.supported = state.supported;
+    const key = "agent:main:dashboard:explicit-runtime";
+    const selected = entry({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+      agentRuntimeOverride: "codex",
+      archived: true,
+    });
+    const result = await runDoctor({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+      },
+      store: { [key]: selected },
+    });
+    if (state.kept) {
+      expect(result.store[key]).toEqual(selected);
+      expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+    } else {
+      expect(result.store[key]).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "user",
+        archived: true,
+      });
+      expect(result.store[key]).not.toHaveProperty("agentRuntimeOverride");
+    }
+  });
+
+  it.each([
+    {
+      provider: "anthropic",
+      runtime: "claude-cli",
+      model: "claude-sonnet-4-6",
+      available: true,
+    },
+    {
+      provider: "google",
+      runtime: "google-gemini-cli",
+      model: "gemini-2.5-pro",
+      available: true,
+    },
+    {
+      provider: "anthropic",
+      runtime: "claude-cli",
+      model: "claude-sonnet-4-6",
+      available: false,
+    },
+  ])("preserves only available CLI owner $provider/$runtime ($available)", async (choice) => {
+    ownerState.owners = [
+      {
+        id: choice.provider,
+        label: choice.provider,
+        providerIds: [choice.provider],
+        runtimeIds: [choice.runtime],
+      },
+    ];
+    runtimeState.registered = false;
+    runtimeState.cliBackends = choice.available
+      ? [{ id: choice.runtime, modelProvider: choice.provider }]
+      : [];
+    const key = "agent:main:dashboard:cli-runtime";
+    const selected = entry({
+      providerOverride: choice.provider,
+      modelOverride: choice.model,
+      modelOverrideSource: "user",
+      agentRuntimeOverride: choice.runtime,
+    });
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
+      store: { [key]: selected },
+    });
+    if (choice.available) {
+      expect(result.store[key]).toEqual(selected);
+    } else {
+      expect(result.store[key]).not.toHaveProperty("agentRuntimeOverride");
+      expect(result.store[key]).toMatchObject({
+        providerOverride: choice.provider,
+        modelOverride: choice.model,
+      });
+    }
+  });
+
+  it("clears ignored legacy claude-cli residue after switching to openai-codex", async () => {
+    ownerState.owners = [codexOwner, anthropicOwner];
+    const key = "agent:main:telegram:direct:legacy";
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: { primary: "openai-codex/gpt-5.5" } } } },
+      store: {
+        [key]: entry({
+          modelProvider: "openai-codex",
+          model: "gpt-5.5",
+          agentRuntimeOverride: "claude-cli",
+        }),
+      },
+    });
+    expect(result.store[key]).not.toHaveProperty("agentRuntimeOverride");
   });
 
   it("leaves explicit user owner choices for manual review", async () => {

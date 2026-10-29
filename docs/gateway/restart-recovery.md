@@ -17,7 +17,9 @@ until you inspect or replace it.
 
 Before accepting another message, the Gateway retires leftover recovery records
 whose runs are all recorded terminal and have no remaining execution or delivery
-owner. This lets a stopped conversation continue without resetting its history.
+owner. For a killed conversation, it also releases unfinished fences after checking
+that no run or session work remains active and no final delivery is pending. This
+lets a stopped conversation continue without resetting its history.
 
 Inter-session steering updates remain context for the executing turn. When that
 turn retains a Control UI, channel, or authenticated operator source claim,
@@ -1195,3 +1197,5 @@ Use the session transcript and recorded delivery outcome to verify completion.
 - Standalone embedded turns cannot take over a main session with pending
   restart recovery because they do not share the gateway's lifecycle owner.
   Run the turn through the gateway or reset it there with `/new` or `/reset`.
+
+A plain stop (SIGTERM or SIGINT) during an in-place restart drain turns that restart into a stop; managed update handoffs retain their own handling.

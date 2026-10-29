@@ -147,11 +147,9 @@ describe("browser action input batch command", () => {
         ["browser", "batch", "--actions", "[]", "--actions-file", "/tmp/browser-actions.json"],
         { from: "user" },
       ),
-    ).rejects.toThrow("__exit__:1");
+    ).rejects.toThrow("Specify only one of --actions or --actions-file");
 
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
-      "Specify only one of --actions or --actions-file",
-    );
+    expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
     expect(mocks.readActionsPayload).not.toHaveBeenCalled();
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
@@ -204,12 +202,10 @@ describe("browser action input batch command", () => {
     const program = createActionInputProgram();
 
     await expect(program.parseAsync(["browser", "batch"], { from: "user" })).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
       "Provide --actions, --actions-file, or --actions-file -",
     );
+
+    expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 });

@@ -532,6 +532,7 @@ describe("SOCKS proxy protocol boundaries", () => {
         maxOrigins: 1,
         requestTls: { ca: certificate },
         httpProxy: socksProxy,
+        httpsProxy: socksProxy,
         noProxy: "",
       });
       let response: Awaited<ReturnType<typeof undiciFetch>> | undefined;

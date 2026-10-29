@@ -187,6 +187,21 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodesCameraMocks.writeCameraPayloadToFile.mockClear();
   });
 
+  it.each(["browser.proxy", "browser.proxy.upload.v1"])(
+    "refuses generic %s before gateway invocation",
+    async (invokeCommand) => {
+      await expect(
+        createNodesTool().execute("browser-policy", {
+          action: "invoke",
+          node: "node-1",
+          invokeCommand,
+          invokeParamsJson: "{}",
+        }),
+      ).rejects.toThrow("use the dedicated browser tool");
+      expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
+
   it("bounds durationMs schema to positive values capped at 300000", () => {
     expect(createNodesTool().parameters).toMatchObject({
       properties: { durationMs: { type: "integer", minimum: 1, maximum: 300_000 } },

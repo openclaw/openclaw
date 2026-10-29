@@ -22,6 +22,69 @@ type NativeEsmGraphProbe = {
 let nativeEsmGraphProbe: NativeEsmGraphProbe;
 
 describe("tryNativeRequireJavaScriptModule", () => {
+  it("loads captured external modules without intercepting a compiled Bun entry", async () => {
+    const dir = tempDirs.make("openclaw-native-captured-bun-");
+    const ownerPath = path.join(dir, "native-require.mjs");
+    await build({
+      entryPoints: [path.resolve("src/plugins/native-module-require.ts")],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      outfile: ownerPath,
+      logLevel: "silent",
+    });
+    const ownerUrl = pathToFileURL(ownerPath).href;
+    const probePath = path.join(dir, "probe.mjs");
+    fs.writeFileSync(
+      probePath,
+      `import assert from "node:assert/strict";
+const main = "/$bunfs/root/entry [captured].mjs";
+let resolve;
+globalThis.Bun = {
+  main,
+  plugin({ setup }) {
+    setup({
+      onResolve({ filter, namespace }, callback) {
+        assert.equal(namespace, "file");
+        // Compiled Bun rejects matching entry filters before calling the resolver.
+        if (filter.test(main)) throw new Error("compiled entry cannot be intercepted");
+        resolve = (args) => filter.test(args.path) ? callback(args) : undefined;
+      },
+    });
+  },
+};
+const { registerCapturedPluginModuleResolver } = await import(${JSON.stringify(ownerUrl)});
+const dispose = registerCapturedPluginModuleResolver({
+  prepare(request) {
+    return request === "fixture-package" || request === main + ".external"
+      ? "/captured/plugin.cjs" : undefined;
+  },
+  resolve() {},
+});
+assert.equal(resolve({ path: main, importer: "" }), undefined);
+for (const request of ["fixture-package", main + ".external"]) {
+  assert.deepEqual(resolve({ path: request, importer: "/plugin/index.cjs" }), {
+    path: "/captured/plugin.cjs", namespace: "file",
+  });
+}
+dispose();
+assert.equal(resolve({ path: "fixture-package", importer: "/plugin/index.cjs" }), undefined);
+console.log("external capture retained; compiled entry untouched");
+`,
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `await import(${JSON.stringify(pathToFileURL(probePath).href)});`,
+      ],
+      { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" }, timeout: 30_000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("external capture retained; compiled entry untouched");
+  });
+
   it("uses source-transform fallback only when native TLA loading needs it", () => {
     const dir = tempDirs.make("openclaw-native-require-");
     const modulePath = path.join(dir, "plugin.mjs");

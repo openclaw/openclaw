@@ -8,17 +8,13 @@ import {
   errorShape,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveUsageCostWorkerDayBucket } from "../../infra/session-cost-usage-worker-runtime.js";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { readSessionRowChangeRevision } from "../../sessions/session-row-changes.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
-import {
-  createUsageAggregateAccumulator,
-  UNKNOWN_USAGE_CREATOR_KEY,
-} from "../../shared/usage-aggregates.js";
+import { createUsageAggregateAccumulator } from "../../shared/usage-aggregates.js";
 import { buildUsageOverview, selectUsageOverviewPage } from "../../shared/usage-overview.js";
 import { extractQueryTerms } from "../../shared/usage-query.js";
 import type {
@@ -49,6 +45,7 @@ import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { projectUsageCreator } from "./usage-creator.js";
 import {
   formatDateLabel,
   resolveDateInterpretation,
@@ -134,49 +131,6 @@ function resolveUsageDateRangeOrRespond(
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
-function projectUsageCreator(
-  session: UsageSessionSelection,
-  profiles: Parameters<typeof projectSessionActor>[1],
-  config: OpenClawConfig,
-): SessionUsageCreator {
-  const entry = session.storeEntry ?? session.creatorEntry;
-  const actor = entry?.createdActor;
-  if (!actor) {
-    return { key: UNKNOWN_USAGE_CREATOR_KEY };
-  }
-  const projected = projectSessionActor(
-    actor,
-    profiles,
-    config,
-    Boolean(sessionCreatorProfileId(actor)),
-  );
-  if (!projected?.id && actor.type !== "system") {
-    return { key: UNKNOWN_USAGE_CREATOR_KEY };
-  }
-  const identity = projected?.identity;
-  const origin = sessionDeliveryOrigin(entry);
-  const channel = sessionDeliveryChannel(entry);
-  if (actor.type === "human" && actor.source !== "profile" && !channel) {
-    return { key: UNKNOWN_USAGE_CREATOR_KEY };
-  }
-  const key =
-    identity?.type === "profile"
-      ? JSON.stringify(["profile", identity.id])
-      : actor.type === "human"
-        ? JSON.stringify([
-            "human",
-            actor.source,
-            session.agentId,
-            channel ?? null,
-            origin?.accountId ?? null,
-            projected?.id,
-          ])
-        : actor.type === "agent"
-          ? JSON.stringify([identity?.type ?? "agent", identity?.id ?? projected?.id])
-          : JSON.stringify(["system", projected?.id ?? null]);
-  return { key, ...(projected ? { actor: projected } : {}) };
-}
-
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond, context, client }) => {
     // Only clients with bounded retry machinery may receive an incomplete cold result.
@@ -215,7 +169,21 @@ export const usageHandlers: GatewayRequestHandlers = {
       return;
     }
     const { startMs, endMs } = range;
-    const agentId = normalizeOptionalString(params?.agentId);
+    const requestedAgentId = params?.agentId;
+    const requestedAgentScope = params?.agentScope;
+    if (requestedAgentId !== undefined && typeof requestedAgentId !== "string") {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId must be a string"));
+      return;
+    }
+    if (requestedAgentScope !== undefined && requestedAgentScope !== "all") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "agentScope must be 'all' when provided"),
+      );
+      return;
+    }
+    const agentId = normalizeOptionalString(requestedAgentId);
     if (params?.agentScope === "all" && agentId) {
       respond(
         false,

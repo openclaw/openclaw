@@ -324,6 +324,7 @@ export async function runPreparedTsgoCommand(args, options) {
       for (const [exitCode, ci] of [
         [0, true],
         [2, true],
+        [124, true],
         [137, true],
         [2, false],
       ] as const) {
@@ -353,13 +354,13 @@ export async function runPreparedTsgoCommand(args, options) {
         const selected = indices.map((index) => TSGO_ROOT_TEST_SHARDS[index]!);
         const failureIndex = selected.findIndex((graph) => graph.name === "test-root-scripts");
         const fails = exitCode !== 0 && failureIndex >= 0;
-        expect(result.status, result.stderr).toBe(_label === "mixed CI" ? 2 : fails ? exitCode : 0);
+        expect(result.status, result.stderr).toBe(fails ? exitCode : _label === "mixed CI" ? 2 : 0);
         const calls = fs
           .readFileSync(path.join(root, "calls.jsonl"), "utf8")
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
-        const stops = fails && (!ci || exitCode >= 128);
+        const stops = fails && (!ci || exitCode === 124 || exitCode >= 128);
         expect(calls).toEqual([
           ...(_label === "mixed CI" ? ["tsconfig.scripts.json"] : []),
           ...selected.slice(0, stops ? failureIndex + 1 : undefined).map((graph) => graph.config),

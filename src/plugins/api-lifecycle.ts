@@ -10,6 +10,8 @@ const LATE_CALLABLE_PLUGIN_API_METHODS: ReadonlySet<string> = new Set<keyof Open
   "enqueueNextTurnInjection",
   "steerActiveRun",
   "getRunContext",
+  // Registered callbacks still need these pure utilities after register() returns.
+  "resolvePath",
   "sendSessionAttachment",
   "scheduleSessionTurn",
   "setRunContext",

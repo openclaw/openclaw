@@ -1,4 +1,5 @@
 /** Config preflight for Doctor: legacy migration, recovery, and snapshot loading. */
+import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -381,5 +382,16 @@ async function runDoctorConfigPreflightOperation(
     ...(stateMigrationStepReceipts.length > 0 ? { stateMigrationStepReceipts } : {}),
     ...(postSessionPluginMigration ? { postSessionPluginMigration } : {}),
     ...(postSessionPluginMigrationPlanBound ? { postSessionPluginMigrationPlanBound: true } : {}),
+    ...(postSessionPluginMigrationPlanBound &&
+    deferredPluginMigrations.length === 0 &&
+    isDeepStrictEqual(stateMigrationInput?.cfg, baseConfig) &&
+    stateMigrationStepReceipts.every(
+      (receipt) =>
+        receipt.id === "plugin-doctor-post-session-state" ||
+        ((receipt.outcome === "completed" || receipt.outcome === "skipped") &&
+          receipt.warnings.length === 0),
+    )
+      ? { preflightLegacyStateConfig: baseConfig }
+      : {}),
   };
 }

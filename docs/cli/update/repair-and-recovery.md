@@ -541,6 +541,10 @@ the installation repair command. These maintenance warnings also appear in
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair does not request update activation. The repair parent restores a Gateway it stopped for maintenance.                                                                                                                                                                 |
 
+An invalid `--channel` exits with status 1 without changing the configured channel.
+With `--json`, stdout contains a JSON error object (`ok: false`, `error.type: "cli_error"`)
+and stderr retains the diagnostic. You can place `--json` before or after `repair`.
+
 Untouched, identityless 2026.9.2-era update admissions heal automatically after
 more than 24 hours. Gateway startup, `openclaw update status`, and `openclaw status`
 retain the row as an abandoned failure with reason `legacy-driver-expired` and an
@@ -922,7 +926,9 @@ or snapshots. They do not make immutable releases eligible for `update cleanup`;
 Doctor's `<database>.pre-startup-migration-<id>.bak` groups, including their
 `.scoped.bak` members, become eligible only
 after Doctor verifies migration completion and update history records a successful
-update that started later. Until then they appear as protected. Changed or
+update that started later. Until then they appear as protected. An external
+supervisor's native update counts once the supervisor accepts it with `update finish`.
+Releases swapped without `update migrate` are not recorded. Changed or
 unrecorded backups remain protected or blocked; cleanup never infers permission
 to delete from their filenames. Keep these files with your pre-upgrade backups
 while you still need to restore the matching database generation.

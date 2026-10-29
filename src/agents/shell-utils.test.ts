@@ -591,6 +591,47 @@ describe("getShellConfig on Windows", () => {
     expect(getShellConfig().shell).toBe(pwshPath);
   });
 
+  it.each([
+    { name: "native PATH executable", withNative: true },
+    { name: "PowerShell 5.1", withNative: false },
+  ])("prefers $name over an inaccessible app-execution alias", ({ withNative }) => {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pfiles-"));
+    const aliasDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-alias-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bin-"));
+    const systemRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sysroot-"));
+    tempDirs.push(programFiles, aliasDir, binDir, systemRoot);
+    const aliasPath = path.join(aliasDir, "pwsh.exe");
+    const pwshPath = path.join(binDir, "pwsh.exe");
+    const powershellDir = path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0");
+    const ps51Path = path.join(powershellDir, "powershell.exe");
+    fs.mkdirSync(powershellDir, { recursive: true });
+    fs.writeFileSync(aliasPath, "");
+    fs.chmodSync(aliasPath, 0o755);
+    if (withNative) {
+      fs.writeFileSync(pwshPath, "");
+      fs.chmodSync(pwshPath, 0o755);
+    }
+    fs.writeFileSync(ps51Path, "");
+    // Windows AppExecLinks pass access(X_OK), but stat fails with EACCES and
+    // activating the alias from S4U can fail while its app runs in another session.
+    fs.accessSync(aliasPath, fs.constants.X_OK);
+    const statSync = fs.statSync;
+    vi.spyOn(fs, "statSync").mockImplementation((candidate, options) => {
+      if (String(candidate) === aliasPath) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      return statSync(candidate, options);
+    });
+
+    process.env.ProgramFiles = programFiles;
+    process.env.SystemRoot = systemRoot;
+    process.env.PATH = [aliasDir, binDir].join(path.delimiter);
+    delete process.env.ProgramW6432;
+    delete process.env.WINDIR;
+
+    expect(getShellConfig().shell).toBe(withNative ? pwshPath : ps51Path);
+  });
+
   it("falls back to Windows PowerShell 5.1 path when pwsh is unavailable", () => {
     const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pfiles-"));
     const sysRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sysroot-"));

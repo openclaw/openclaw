@@ -220,6 +220,7 @@ async function startOAuthFixture() {
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -335,6 +336,9 @@ describe("mcp login OAuth integration", () => {
   });
 
   it("logs in and probes through the CLI with a portless loopback registration", async () => {
+    // The issuer and callback are local fixtures, not ambient proxy destinations.
+    vi.stubEnv("NO_PROXY", "127.0.0.1");
+    vi.stubEnv("no_proxy", "127.0.0.1");
     await withTempHome(`openclaw-mcp-login-${randomUUID()}-`, async () => {
       const fixture = await startOAuthFixture();
       try {

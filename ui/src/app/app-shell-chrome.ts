@@ -7,8 +7,6 @@ import {
   isCommandPaletteShortcut,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   shellNavDrawerTriggerFromEvent,
-  type CommandPaletteElement,
-  type CommandPaletteTargetDetail,
 } from "../components/command-palette-contract.ts";
 import { registryFor } from "../components/overlay-registry.ts";
 import {
@@ -24,7 +22,6 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { focusWithoutTooltip } from "../components/tooltip.ts";
-import type { BoardFace } from "../lib/board/settings.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -42,9 +39,10 @@ import {
   type DebugOverlayElement,
   type DebugOverlayMode,
 } from "../pages/debug/debug-overlay-state.ts";
+import type { ShellChromeHost } from "./app-shell-chrome.types.ts";
 import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
-import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
-import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
+import { openShellNewSession } from "./app-shell-new-session.ts";
+import { ShellPanelOwner } from "./app-shell-panels.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
   isOptionalElementDefined,
@@ -80,31 +78,9 @@ import { isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
-let nativeCommandsOwner: AbortController | undefined;
+export type { ShellChromeHost } from "./app-shell-chrome.types.ts";
 
-export interface ShellChromeHost extends ShellNewSessionHost, ShellPanelHost {
-  readonly element: HTMLElement;
-  readonly isConnected: boolean;
-  readonly activeSessionKey: string;
-  readonly updateComplete: Promise<boolean>;
-  readonly commandPaletteElement: OptionalCustomElement;
-  readonly execApprovalElement: OptionalCustomElement;
-  readonly commandPalette: CommandPaletteElement | undefined;
-  readonly approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
-  navDrawerOpen: boolean;
-  desktopNavigationExpanded: boolean;
-  navDrawerTrigger: HTMLElement | null;
-  nativeHistoryState: NativeHistoryState;
-  commandPaletteTarget: CommandPaletteTargetDetail | undefined;
-  requestUpdate(): void;
-  closeNavDrawer(options?: { restoreFocus?: boolean }): void;
-  exitSettings(): void;
-  navigate(routeId: string, options?: ApplicationNavigationOptions): void;
-  chatNavigationOptions(
-    face: BoardFace,
-    options?: ApplicationNavigationOptions,
-  ): ApplicationNavigationOptions | undefined;
-}
+let nativeCommandsOwner: AbortController | undefined;
 
 export class ShellChromeOwner {
   readonly panels: ShellPanelOwner;
@@ -425,7 +401,9 @@ export class ShellChromeOwner {
     }
     if (!host.commandPalette && isCommandPaletteShortcut(event)) {
       event.preventDefault();
-      this.togglePalette();
+      if (!event.repeat) {
+        this.togglePalette();
+      }
       return;
     }
     if (

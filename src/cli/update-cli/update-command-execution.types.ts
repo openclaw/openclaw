@@ -56,6 +56,8 @@ export type MutableUpdateExecutionParams = {
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
   packageUpdateNodeRunner?: string;
   packageActivationRuntime?: PackageActivationRuntime;
+  /** Original engine-admission authority and executable snapshot, not a fresh acceptance. */
+  assertPackageRuntimeCurrent?: () => Promise<void>;
   managedServiceNodeRunner?: string;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   managedServiceRoot?: string;

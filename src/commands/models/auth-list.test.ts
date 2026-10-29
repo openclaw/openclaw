@@ -67,6 +67,40 @@ function createRuntime(): OutputRuntimeEnv & { logs: string[]; jsonPayloads: unk
 }
 
 describe("modelsAuthListCommand", () => {
+  it("escapes terminal fields while preserving exact JSON identities", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const profileId = "openai:café\x1b[31m\nforged\tprofile\r\x00\x85";
+    const model = "café\x1b[2J\nforged-model";
+    const store = {
+      version: 1,
+      profiles: { [profileId]: createApiKeyCredential("openai", "synthetic-key") },
+      usageStats: {
+        [profileId]: {
+          blockedUntil: NOW + 60_000,
+          blockedReason: "subscription_limit",
+          blockedSource: "wham",
+          blockedScope: "model",
+          blockedModel: model,
+        },
+      },
+    } satisfies AuthProfileStore;
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    mocks.resolveAuthStatePathForDisplay.mockReturnValue("/tmp/café\x1b[31m\nstore.sqlite");
+    const text = createRuntime();
+    await modelsAuthListCommand({}, text);
+    expect(text.logs[1]).toBe("Auth state store: /tmp/café\\nstore.sqlite");
+    expect(text.logs.at(-1)).toContain("- openai:café\\nforged\\tprofile\\r [openai/api_key;");
+    expect(text.logs.at(-1)).toContain("for model café\\nforged-model until");
+    expect(text.logs.join("")).not.toMatch(/\p{Cc}/u);
+    const json = createRuntime();
+    await modelsAuthListCommand({ json: true }, json);
+    expect(json.jsonPayloads[0]).toMatchObject({
+      authStatePath: "/tmp/café\x1b[31m\nstore.sqlite",
+      profiles: [{ id: profileId, label: profileId, blockedModel: model }],
+    });
+    expect(Object.hasOwn(store.profiles, profileId)).toBe(true);
+  });
+
   beforeEach(() => {
     mocks.loadModelsConfig.mockReset().mockResolvedValue({} as OpenClawConfig);
     mocks.ensureAuthProfileStore.mockReset();

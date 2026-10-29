@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import "./detached-async-context.js";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
@@ -40,9 +40,11 @@ export class AsyncWorkScope {
     const owner = currentWorkScope.getStore();
     const ancestry = currentWorkScopeAncestry.getStore();
     const parent = owner ? (ancestry?.scope === owner ? ancestry : { scope: owner }) : undefined;
-    return currentWorkScopeAncestry.run({ scope: this, parent }, () =>
-      currentWorkScope.run(this, run),
-    );
+    return new AsyncResource("OpenClawAsyncWorkScope").runInAsyncScope(() => {
+      currentWorkScope.enterWith(this);
+      currentWorkScopeAncestry.enterWith({ scope: this, parent });
+      return run();
+    });
   }
 
   /** Enters synchronous work without inspecting or assimilating its return value. */

@@ -221,6 +221,7 @@ export function createChatMetadataHarness(
       getPreparedOwner,
       getPreparedAuthStore,
       getAuthStoreRevision,
+      getAuthCatalogRevision: getAuthStoreRevision,
       getSkillsVersion,
       getPluginRegistryVersion,
       buildCommands,

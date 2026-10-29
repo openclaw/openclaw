@@ -156,6 +156,14 @@ function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrl
   );
 }
 
+export function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
+  return (
+    payload.isError === true ||
+    getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true ||
+    (payload.audioAsVoice === true && hasReplyPayloadMedia(payload))
+  );
+}
+
 /** Returns normalized TTS supplement metadata only when the payload has media to carry it. */
 export function getReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
@@ -330,6 +338,8 @@ export type ReplyPayloadMetadata = {
   deliverDespiteSourceReplySuppression?: boolean;
   /** An independently delivered message does not complete the active turn's answer. */
   independentDeliveryIntentId?: string;
+  /** Explicit progress/final marker retained from the source-reply owner. */
+  sourceReplyFinal?: boolean;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
    * the live delivery vehicle unless transcriptOwner identifies an already

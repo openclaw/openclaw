@@ -149,11 +149,11 @@ describe("browser element commands", () => {
     const program = createElementProgram();
 
     await expect(program.parseAsync(["browser", "click", "   "], { from: "user" })).rejects.toThrow(
-      "__exit__:1",
+      "ref is required",
     );
 
     const capture = getBrowserCliRuntimeCapture();
-    expect(capture.runtimeErrors.join("\n")).toContain("ref is required");
+    expect(capture.runtimeErrors).toEqual([]);
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
@@ -189,10 +189,10 @@ describe("browser element commands", () => {
 
     await expect(
       program.parseAsync(["browser", "click-coords", "0x10", "20"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    ).rejects.toThrow("Invalid x: must be a finite number");
 
     const capture = getBrowserCliRuntimeCapture();
-    expect(capture.runtimeErrors.join("\n")).toContain("Invalid x: must be a finite number");
+    expect(capture.runtimeErrors).toEqual([]);
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 

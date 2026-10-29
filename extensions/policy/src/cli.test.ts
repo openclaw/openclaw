@@ -8,6 +8,7 @@ import { registerPolicyCli } from "./cli.js";
 import { createPolicyAttestation } from "./policy-state.js";
 
 let workspaceDir: string;
+const originalStdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 
 type PolicyCheckCliOptions = {
   readonly severityMin?: string;
@@ -23,17 +24,20 @@ type PolicyCompareCliOptions = {
 };
 
 async function runPolicyCli(args: readonly string[]) {
-  const output: string[] = [];
-  const stdout = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
-    output.push(String(chunk));
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const capture = (stream: string[], chunk: unknown) => {
+    stream.push(String(chunk));
     return true;
-  }) as typeof process.stdout.write);
-  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
-    output.push(String(chunk));
-    return true;
-  }) as typeof process.stderr.write);
+  };
+  const stdoutWrite = vi
+    .spyOn(process.stdout, "write")
+    .mockImplementation((chunk) => capture(stdout, chunk));
+  const stderrWrite = vi
+    .spyOn(process.stderr, "write")
+    .mockImplementation((chunk) => capture(stderr, chunk));
   const consoleError = vi.spyOn(console, "error").mockImplementation((...values: unknown[]) => {
-    output.push(`${values.map(String).join(" ")}\n`);
+    capture(stderr, `${values.map(String).join(" ")}\n`);
   });
   const previousExitCode = process.exitCode;
   process.exitCode = undefined;
@@ -41,13 +45,18 @@ async function runPolicyCli(args: readonly string[]) {
     const program = new Command().name("openclaw");
     registerPolicyCli(program);
     await program.parseAsync(["policy", ...args], { from: "user" });
-    const lastOutput = output.at(-1) ?? "";
+    const lastOutput = stdout.at(-1) ?? "";
     const parsed = /^[{[]/.test(lastOutput.trimStart()) ? JSON.parse(lastOutput) : {};
-    return { exitCode: process.exitCode ?? 0, parsed, output };
+    return {
+      exitCode: process.exitCode ?? 0,
+      parsed,
+      stdout: stdout.join(""),
+      stderr: stderr.join(""),
+    };
   } finally {
     process.exitCode = previousExitCode;
-    stdout.mockRestore();
-    stderr.mockRestore();
+    stdoutWrite.mockRestore();
+    stderrWrite.mockRestore();
     consoleError.mockRestore();
   }
 }
@@ -130,6 +139,11 @@ describe("policy commands", () => {
   });
 
   afterEach(async () => {
+    if (originalStdoutTTY) {
+      Object.defineProperty(process.stdout, "isTTY", originalStdoutTTY);
+    } else {
+      Reflect.deleteProperty(process.stdout, "isTTY");
+    }
     vi.unstubAllEnvs();
     clearConfigCache();
     await fs.rm(workspaceDir, { recursive: true, force: true });
@@ -159,7 +173,7 @@ describe("policy commands", () => {
       },
     });
 
-    const { exitCode, parsed, output } = await runPolicyCheckJson();
+    const { exitCode, parsed, stdout, stderr } = await runPolicyCheckJson();
 
     expect(exitCode).toBe(1);
     expect(parsed.findings.map((finding: { checkId: string }) => finding.checkId)).toEqual([
@@ -170,7 +184,8 @@ describe("policy commands", () => {
     expect(parsed.evidence.routing.probes).toEqual([
       expect.objectContaining({ id: "family-dm", agentId: "main", matchedBy: "default" }),
     ]);
-    expect(output.join("\n")).not.toContain(peerId);
+    expect(stdout).not.toContain(peerId);
+    expect(stderr).not.toContain(peerId);
   });
 
   it.each([
@@ -330,10 +345,10 @@ describe("policy commands", () => {
   });
 
   it("rejects partial policy watch intervals before evaluating policy", async () => {
-    const { exitCode, output } = await runPolicyWatchJson({ intervalMs: "500ms" });
+    const { exitCode, stderr } = await runPolicyWatchJson({ intervalMs: "500ms" });
 
     expect(exitCode).toBe(2);
-    expect(output.join("\n")).toContain("--interval-ms must be an integer >= 250.");
+    expect(stderr).toContain("--interval-ms must be an integer >= 250.");
   });
 
   it("reports findings before stale when accepted attestation exists", async () => {
@@ -365,13 +380,50 @@ describe("policy commands", () => {
     });
   });
 
-  it("rejects invalid severity thresholds", async () => {
-    const { exitCode, output } = await runPolicyCheckJson({ severityMin: "warnng" });
+  describe.each([
+    { mode: "explicit JSON", stdoutIsTTY: true, jsonArgs: ["--json"] },
+    { mode: "piped output", stdoutIsTTY: false, jsonArgs: [] },
+  ])("$mode failures", ({ stdoutIsTTY, jsonArgs }) => {
+    it.each([
+      {
+        command: "check",
+        args: ["check", "--severity-min", "warnng"],
+        message: "Invalid --severity-min value. Expected one of: info, warning, error.",
+      },
+      {
+        command: "watch",
+        args: ["watch", "--once", "--interval-ms", "0"],
+        message: "--interval-ms must be an integer >= 250.",
+      },
+      {
+        command: "compare",
+        args: ["compare", "--baseline", " "],
+        message: "Missing required --baseline value.",
+      },
+    ])("returns a JSON error on stdout for $command", async ({ args, message }) => {
+      Object.defineProperty(process.stdout, "isTTY", { value: stdoutIsTTY, configurable: true });
 
-    expect(exitCode).toBe(2);
-    expect(output).toEqual([
+      const result = await runPolicyCli([...args, ...jsonArgs]);
+
+      expect(result.exitCode).toBe(2);
+      expect(JSON.parse(result.stdout)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message },
+      });
+      expect(result.stderr).toBe(`${message}\n`);
+    });
+  });
+
+  it("keeps terminal failures on stderr without JSON", async () => {
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+
+    const result = await runPolicyCli(["check", "--severity-min", "warnng"]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
       "Invalid --severity-min value. Expected one of: info, warning, error.\n",
-    ]);
+    );
   });
 
   it("fails closed when the OpenClaw config is invalid", async () => {
@@ -832,11 +884,11 @@ describe("policy commands", () => {
     await writeExplicitFleetConfig();
     await writeFixture(join(workspaceDir, "baseline.policy.jsonc"), {});
 
-    const { exitCode, output } = await runPolicyCli(args);
+    const { exitCode, stderr } = await runPolicyCli(args);
 
     expect(exitCode).toBe(2);
-    expect(output.join("\n")).toContain(expected);
-    expect(output.join("\n")).toContain("Pass --agent <id>.");
+    expect(stderr).toContain(expected);
+    expect(stderr).toContain("Pass --agent <id>.");
   });
 
   it("rejects an unknown explicit owner with profile-aware guidance", async () => {
@@ -844,10 +896,10 @@ describe("policy commands", () => {
     vi.stubEnv("OPENCLAW_PROFILE", "testprof");
     vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
 
-    const { exitCode, output } = await runPolicyCli(["check", "--agent", "ghost", "--json"]);
+    const { exitCode, stderr } = await runPolicyCli(["check", "--agent", "ghost", "--json"]);
 
     expect(exitCode).toBe(2);
-    expect(output.join("\n")).toContain(
+    expect(stderr).toContain(
       'Unknown agent id "ghost". Run openclaw --profile testprof agents list to see configured agents.',
     );
   });

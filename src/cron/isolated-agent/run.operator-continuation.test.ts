@@ -51,6 +51,7 @@ import {
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { createCronServiceWithStateForTest, createNoopLogger } from "../service.test-harness.js";
 import { onTimer } from "../service/timer.test-support.js";
+import { runCronSessionTurn } from "../session-run.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import {
   ensureAgentWorkspaceMock,
@@ -65,8 +66,22 @@ import {
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
+const sessionRunner = vi.hoisted(() => ({
+  runEmbedded: vi.fn<typeof import("../../agents/embedded-agent-runner/run.js").runEmbeddedAgent>(),
+}));
+// mock-isolation: Only model execution is synthetic; scheduled admission and publication stay real.
+vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
+  runEmbeddedAgent: sessionRunner.runEmbedded,
+}));
+
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const { resolveAgentDir } = await import("./run.runtime.js");
+await Promise.all([
+  import("../../auto-reply/dispatch.js"),
+  import("../../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
 const session = await vi.importActual<typeof import("./session.js")>("./session.js");
 const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
   "../../config/sessions/session-accessor.js",
@@ -82,6 +97,9 @@ beforeEach(() => {
   ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({ dir }));
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
   mockRunCronFallbackPassthrough();
+  sessionRunner.runEmbedded
+    .mockReset()
+    .mockImplementation((params) => runEmbeddedAgentMock(params));
 });
 afterEach(() => {
   runEmbeddedAgentMock.mockReset();
@@ -142,6 +160,10 @@ describe("same-conversation scheduled operator continuation", () => {
       sessionId: SESSION_ID,
       scopes: scenario === "guest" ? ["operator.sessions.write"] : ["operator.admin"],
     });
+    // Ordinary admission retires a completed predecessor; an active claim keeps custody.
+    recovery.entry.status = "done";
+    recovery.entry.abortedLastRun = false;
+    await accessor.replaceSessionEntry(recovery.target, recovery.entry);
     // Capture fresh authenticated admission, not the released recovery fixture authority.
     // The legacy row has identical human attribution but no operator admission.
     const original =
@@ -377,6 +399,10 @@ describe("same-conversation scheduled operator continuation", () => {
         params.preparedRunAdmission,
         "scheduled admission",
       ).admit("gateway", params.runId);
+      // Session admission settles only after the runner reports execution start.
+      params.onExecutionPhase?.({ phase: "model_call_started" });
+      await params.onExecutionStarted?.();
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
       return withPreparedEmbeddedGatewayTools(
         {
           admittedRunContext: admitted,
@@ -454,15 +480,23 @@ describe("same-conversation scheduled operator continuation", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runSchedulerOwned: createScheduledGatewayRunner(() => context),
+      runSessionEvent: (request) =>
+        runCronSessionTurn({
+          ...request,
+          cfg: config,
+          agentId: "main",
+          sessionKey: expectDefined(
+            resolveCronSessionTargetSessionKey(request.job.sessionTarget),
+            "explicit continuation session target",
+          ),
+        }),
       runIsolatedAgentJob: (request) =>
         runCronIsolatedAgentTurn({
           ...request,
           cfg: config,
           deps: {},
           agentId: "main",
-          sessionKey:
-            resolveCronSessionTargetSessionKey(request.job.sessionTarget) ??
-            "cron:" + request.job.id,
+          sessionKey: "cron:" + request.job.id,
         }),
     });
     context.cron = execution;
@@ -489,7 +523,10 @@ describe("same-conversation scheduled operator continuation", () => {
             : /authority|source|conversation|session|role/i,
         );
       } else {
-        expect(state.lastRunStatus, state.lastError).toBe("ok");
+        // Session admission keeps live operator custody, so mid-run revocation fails the turn.
+        expect(state.lastRunStatus, state.lastError).toBe(
+          scenario === "role revoked during merge" ? "error" : "ok",
+        );
         expect(entered).toBe(1);
         if (scenario === "operator" || scenario === "paused force run") {
           expect(rejected).toBeUndefined();
@@ -501,6 +538,7 @@ describe("same-conversation scheduled operator continuation", () => {
             });
           }
         } else if (scenario === "role revoked during merge") {
+          expect(state.lastError).toMatch(/operator authority changed/i);
           expect(reads).toBe(0);
           expect(results).toHaveLength(0);
           expect(rejected).toMatch(/operator authority changed/i);

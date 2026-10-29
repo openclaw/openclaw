@@ -418,7 +418,7 @@ async function startAndWaitForLocalService(params: {
     service.readyTimeoutMs,
     DEFAULT_READY_TIMEOUT_MS,
   );
-  const deadline = Date.now() + readyTimeoutMs;
+  const deadline = performance.now() + readyTimeoutMs;
   for (;;) {
     if (await probeHealth(healthUrl, healthHeaders, signal)) {
       diagnostics.readyAt = Date.now();
@@ -439,7 +439,7 @@ async function startAndWaitForLocalService(params: {
         )}${formatLocalServiceDiagnosticTail(diagnostics)}`,
       );
     }
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw new Error(`${provider} local service did not become ready at ${healthUrl}`);
     }
     await sleepWithAbort(PROBE_INTERVAL_MS, signal, { ref: false });

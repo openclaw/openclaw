@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
+import { sessionsCompactCommand } from "./sessions-compact.js";
 import { sessionsLifecycleCommand } from "./sessions-lifecycle.js";
 
 const mocks = vi.hoisted(() => ({
@@ -87,6 +88,18 @@ describe("sessions lifecycle commands", () => {
     },
   );
 
+  it("emits the shared JSON failure envelope for rejected compaction", async () => {
+    const runtime = createNonExitingRuntimeEnv();
+    const key = "agent:main:missing";
+    mocks.callGateway.mockRejectedValueOnce(new Error("Session not found."));
+    await sessionsCompactCommand({ key, json: true }, runtime);
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      { ok: false, key, error: { type: "cli_error", message: "Session not found." } },
+      2,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
   it("archives through sessions.patch and emits the stable JSON envelope", async () => {
     mocks.callGateway
       .mockResolvedValueOnce({ session: { key: "agent:work:scratch-1", sessionId: "session-1" } })

@@ -77,17 +77,26 @@ describe("database ownership claim process boundary", () => {
       try {
         const gatewayEnv = { ...env, OPENCLAW_SUPERVISOR_MODE: undefined };
         const database = openOpenClawStateDatabase({ env: gatewayEnv });
+        await database.walMaintenance.stop();
         const before = snapshot(database.path);
         const result = await claim(env);
         expect(result.code, result.stderr).toBe(1);
         expect(JSON.parse(result.stdout)).toMatchObject({
-          error: expect.stringMatching(/stop.*external supervisor/iu),
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringMatching(/stop.*external supervisor/iu),
+          },
         });
         assert.deepStrictEqual(snapshot(database.path), before);
         const direct = await claim(env, true);
         expect(direct.code, direct.stderr).toBe(1);
         expect(JSON.parse(direct.stdout)).toMatchObject({
-          error: { message: expect.stringMatching(/OpenClaw state database is busy/iu) },
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringMatching(/OpenClaw state database is busy/iu),
+          },
         });
         assert.deepStrictEqual(snapshot(database.path), before);
         expect(inspectOpenClawStateOwnershipAtPath(database.path)).toBeNull();

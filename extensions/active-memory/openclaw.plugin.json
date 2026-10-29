@@ -238,11 +238,11 @@
     },
     "circuitBreakerMaxTimeouts": {
       "label": "Consecutive Timeout Limit",
-      "help": "Skip recall after this many consecutive timeouts for the same agent/model. Resets on a successful recall or after the cooldown expires. Default: 3."
+      "help": "Skip recall after this many consecutive timeouts for the same agent/model. A completed recall clears the count; cooldown expiry allows another attempt. Default: 3."
     },
     "circuitBreakerCooldownMs": {
       "label": "Recall Pause After Timeouts (ms)",
-      "help": "How long to skip recall after the timeout limit is reached, in milliseconds. Default: 60000 (1 minute)."
+      "help": "How long to skip recall after the timeout limit is reached, in milliseconds. A timeout after the cooldown immediately renews the pause. Default: 60000 (1 minute)."
     },
     "persistTranscripts": {
       "label": "Persist Transcripts",

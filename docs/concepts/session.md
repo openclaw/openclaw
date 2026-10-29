@@ -314,6 +314,11 @@ If automatic recovery is exhausted, the transcript remains available. Use
 **Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
 to start a replacement session.
 
+A canonical Main session archived specifically by restart recovery can also be
+reset. Reset retains its physical session identity and transcript while starting a
+fresh model context; it does not replay the interrupted task. Other archived
+sessions must be restored before reset.
+
 ## Where state lives
 
 - **Runtime session rows and transcripts:** `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` by default

@@ -157,7 +157,7 @@ const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|tsx?)|public\/themes\
 const LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:docs\/|README\.md$|.*\.mdx?$|config\/(?:assertion-safety-baseline|env-var-count-budget|max-lines-baseline|test-timeout-race-baseline|test-mock-exports-baseline)\.txt$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
+  /^(?:scripts|test\/scripts|\.agents\/skills)\/|^\.github\/workflows\/[^/]+\.ya?ml$|^test\/vitest\/[^/]+\.[cm]?js$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
 const TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const ANDROID_VERSION_SYNC_PATHS = new Set([
@@ -1102,9 +1102,9 @@ export function createChangedCheckPlan(
   }
   if (lanes.extensions || lanes.extensionTests) {
     // Generated plugin outputs have their own asset-integrity gate and are
-    // intentionally ignored by oxlint; manifests still need full-lane fallback.
+    // intentionally ignored by oxlint. Core Plugin SDK changes select extension
+    // typechecking, but only changed extension sources need extension lint.
     if (
-      !result.paths.some((changedPath) => generatedExtensionAssetPaths.has(changedPath)) ||
       result.paths.some(
         (changedPath) =>
           getChangedPathFacts(changedPath).surface === "extension" &&

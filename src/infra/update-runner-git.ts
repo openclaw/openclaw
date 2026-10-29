@@ -26,6 +26,7 @@ import {
 import {
   runGitActivationBranchCheckStep,
   runGitCleanCheckStep,
+  readGitRollbackPreservation,
   runGitRollbackSteps,
   runGitUpstreamStep,
 } from "./update-runner-git-steps.js";
@@ -203,18 +204,21 @@ export async function updateGitCheckout(params: {
     runtimeSha = beforeSha,
     source?: { sha: string; branch: string | null },
   ) => {
-    const restoreSource = () =>
-      runGitRollbackSteps({
-        beforeSha,
-        branch,
-        gitRoot,
-        createdDevBranchDuringUpdate,
-        sourceTreeStagingPaths: runtimePromotion?.sourceTreeStagingPaths,
-        recoveryStep,
-        checkSourceUnchanged,
-        assertCurrent,
-        activatedSource: source,
-      });
+    const rollback = {
+      beforeSha,
+      branch,
+      gitRoot,
+      createdDevBranchDuringUpdate,
+      sourceTreeStagingPaths: runtimePromotion?.sourceTreeStagingPaths,
+      recoveryStep,
+      checkSourceUnchanged,
+      assertCurrent,
+      activatedSource: source,
+    };
+    const restoreSource = () => runGitRollbackSteps(rollback);
+    // Check before runtime restoration rewrites tracked output.
+    const preserved = source ? undefined : await readGitRollbackPreservation(rollback);
+    steps.push(...(preserved ? [preserved] : []));
     // Retained rollback must settle every source/ref fence before changing runtime.
     let sourceRestored = source ? await restoreSource() : false;
     let runtimeRestored = true;
@@ -226,7 +230,7 @@ export async function updateGitCheckout(params: {
       steps.push(failureStep("git-runtime-rollback", "restore previous runtime", String(error)));
     }
     // Immediate activation recovery reconstructs tracked output after runtime restoration.
-    if (!source) {
+    if (!source && !preserved) {
       sourceRestored = await restoreSource();
     }
     recovery = !sourceRestored
@@ -334,7 +338,6 @@ export async function updateGitCheckout(params: {
     }
     return undefined;
   };
-
   const runUpdate = async (): Promise<UpdateRunResult> => {
     const inspectAndPrepare = async (
       inspectionRoot: string,

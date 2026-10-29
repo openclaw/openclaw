@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -111,9 +110,7 @@ export function registerBrowserFormWaitEvalCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       if (!opts.fn) {
-        defaultRuntime.error(danger("Missing --fn"));
-        defaultRuntime.exit(1);
-        return;
+        throw new Error("Missing --fn");
       }
       await runBrowserCliCommand(async () => {
         await runBrowserAction({

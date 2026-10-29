@@ -44,6 +44,10 @@ next scheduled tick.
 Pass `--session-key` to target a specific session, for example to relay an
 async-task completion back to the channel that started it.
 
+With `heartbeat.isolatedSession: true`, a targeted wake reads and consumes the
+event from the selected session while running in a fresh heartbeat session.
+Events queued for other sessions stay untouched.
+
 <Note>
 **Timing exception with `--session-key`:** when `--session-key` is supplied,
 `--mode next-heartbeat` collapses to an immediate targeted wake instead of

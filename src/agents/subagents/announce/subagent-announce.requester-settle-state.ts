@@ -1,10 +1,19 @@
 import { logWarn } from "../../../logger.js";
+import type { DeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+
+/** Delivered findings stay consumed unless restart reconciliation still owns them. */
+export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
+  return (
+    entry.delivery?.status !== "delivered" ||
+    entry.execution.interruptionReason === "gateway-restart"
+  );
+}
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
 
@@ -20,6 +29,14 @@ export type RequesterSettleWakeBatchCallbacks = {
     delivery?: SubagentAnnounceDeliveryResult,
     onCommitted?: () => void,
   ) => void | Promise<void>;
+};
+
+export type RequesterSettleWakeParams = RequesterSettleWakeBatchCallbacks & {
+  requesterSessionKey: string;
+  requesterOrigin?: DeliveryContext;
+  settledEntry: SubagentRunRecord;
+  signal?: AbortSignal;
+  isSourceCurrent: () => boolean;
 };
 
 const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
@@ -235,8 +252,9 @@ export function resolveRequesterSettlePolicy(
       : {}),
   };
   const admissionMarker = yieldedFinalDeliverable ? { yieldedFinalDeliverable: true as const } : {};
-  // A yield owes the conversation a visible final unless private findings let the
-  // requester choose silence.
-  const requireVisibleReply = requesterYielded && !hasPrivateRows;
+  // A yield still resumes the requester, but already consumed findings need not
+  // cause another visible final. Restart reconciliation remains owed.
+  const requireVisibleReply =
+    requesterYielded && !hasPrivateRows && completionRows.some(needsRequesterSettleFindings);
   return { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker };
 }

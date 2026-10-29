@@ -570,7 +570,9 @@ export class PaletteController {
     }
     if (isCommandPaletteShortcut(event)) {
       event.preventDefault();
-      this.togglePalette();
+      if (!event.repeat) {
+        this.togglePalette();
+      }
     }
   };
 

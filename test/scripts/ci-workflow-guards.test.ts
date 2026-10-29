@@ -1464,6 +1464,7 @@ AFTER_CD
         "-q",
         "--no-local",
         "--filter=blob:none",
+        "--no-checkout",
         "--depth=2",
         origin,
         checkout,

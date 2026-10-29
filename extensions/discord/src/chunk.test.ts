@@ -30,6 +30,18 @@ function inlineCodeSpans(markdown: string) {
 }
 
 describe("chunkDiscordText", () => {
+  it("treats a CRLF line boundary like an LF boundary", () => {
+    const lf = "hello world\n".repeat(500);
+    const crlf = lf.replaceAll("\n", "\r\n");
+    const lfChunks = chunkDiscordText(lf);
+    const crlfChunks = chunkDiscordText(crlf);
+
+    expect(crlfChunks.length).toBe(lfChunks.length);
+    expect(crlfChunks.map((chunk) => chunk.replaceAll("\r\n", "\n"))).toEqual(lfChunks);
+    expect(crlfChunks.every((chunk) => !chunk.endsWith("\r"))).toBe(true);
+    expect(crlfChunks.every((chunk) => !/^[\r\n]/u.test(chunk))).toBe(true);
+  });
+
   it("uses default chunk limits for non-finite options", () => {
     const text = "x".repeat(2500);
     const chunks = chunkDiscordText(text, {

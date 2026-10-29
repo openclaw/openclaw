@@ -116,6 +116,48 @@ describe("legacy node-host Doctor migration", () => {
     return readConfigMachineStateWithMetadata<NodeHostConfig>(NODE_HOST_CONFIG_KEY, { env });
   }
 
+  it.each(["source", "claim", "pair"])(
+    "retains malformed UTF-8 %s and accepts corrected Unicode",
+    async (mode) => {
+      const { env, stateDir, migrate } = useStateDir();
+      const { sourcePath } = await writeLegacy(
+        stateDir,
+        legacyConfig({ displayName: "Café 会议 �" }),
+      );
+      const valid = await fsp.readFile(sourcePath, "utf8");
+      const invalid = Buffer.from(valid, "latin1");
+      const claimPath = sourcePath + ".doctor-importing";
+      const originals = new Map([[sourcePath, invalid]]);
+      await fsp.writeFile(sourcePath, invalid);
+      if (mode === "claim") {
+        await fsp.rename(sourcePath, claimPath);
+        originals.delete(sourcePath);
+        originals.set(claimPath, invalid);
+      }
+      if (mode === "pair") {
+        const other = Buffer.from(invalid);
+        other[other.indexOf(0xe9)] = 0xea;
+        await fsp.writeFile(claimPath, other);
+        originals.set(claimPath, other);
+      }
+      const refused = await migrate();
+      expect(refused.changes).toEqual([]);
+      expect(refused.warnings.join("\n")).toContain("must be valid UTF-8");
+      expect(refused.warnings.join("\n")).toContain("retry Doctor");
+      expect(readCanonicalRow(env)).toBeUndefined();
+      for (const [file, bytes] of originals) {
+        expect(await fsp.readFile(file)).toEqual(bytes);
+      }
+      for (const file of originals.keys()) {
+        await fsp.writeFile(file, valid, "utf8");
+      }
+      expect((await migrate()).warnings).toEqual([]);
+      expect((await loadNodeHostConfig(env))?.displayName).toBe("Café 会议 �");
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      expect(fs.existsSync(claimPath)).toBe(false);
+    },
+  );
+
   it("detects source and interrupted claim only for explicit Doctor repair", async () => {
     const { stateDir } = useStateDir();
     const { sourcePath } = await writeLegacy(stateDir);

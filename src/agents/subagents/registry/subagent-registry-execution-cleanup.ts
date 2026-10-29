@@ -7,10 +7,17 @@ import {
   clearGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { captureExecRequestCancellation } from "../../bash-process-control.js";
 import { resolveActiveEmbeddedRunOwnerByRunId } from "../../embedded-agent-runner/runs.js";
-import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
+import { retireRequesterFollowupAuthority } from "../requester-cron-authority.js";
+import {
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
 import type { SubagentKillSession } from "./subagent-control-session.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
@@ -99,6 +106,7 @@ export function captureSubagentExecution(params: {
 /** Retire execution authority while its raw owner still supplies cleanup observation. */
 export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void {
   const entry = getCurrentSubagentRunOwner(subagentRuns, observed) ?? observed;
+  retireRequesterFollowupAuthority(entry);
   const key = getSubagentRunRuntimeKey(entry);
   const resolver = getGatewayContextResolver(entry);
   try {
@@ -180,4 +188,74 @@ export function getSubagentExecutionCleanup(
     observation.sessionLifecycleRevision === session?.lifecycleRevision
     ? observation
     : undefined;
+}
+
+function hasRetainedControllerExecution(entry: SubagentRunRecord): boolean {
+  const retained = executionCleanups.get(getSubagentRunRuntimeKey(entry));
+  const cleanup = getSubagentExecutionCleanup(
+    entry,
+    entry.childSessionIdentity ??
+      (retained && {
+        sessionId: retained.sessionId,
+        lifecycleRevision: retained.sessionLifecycleRevision,
+      }),
+  );
+  if (cleanup && !cleanup.settlement.cleanupSettled) {
+    return true;
+  }
+  const context = getGatewayContextResolver(entry)?.();
+  const execution = context?.chatAbortControllers.get(entry.runId);
+  return Boolean(
+    execution &&
+    execution.kind === "agent" &&
+    execution.sessionKey === entry.childSessionKey &&
+    (!entry.childSessionIdentity || execution.sessionId === entry.childSessionIdentity.sessionId) &&
+    (entry.execution.lifecycleGeneration === undefined ||
+      execution.lifecycleGeneration === entry.execution.lifecycleGeneration) &&
+    execution.executionSettlement &&
+    !execution.executionSettlement.cleanupSettled,
+  );
+}
+
+/** Snapshot topology before cancellation awaits; terminal timestamps never prove cleanup. */
+export function captureSubagentRetainedWork() {
+  const children = new Map<string, SubagentRunRecord[]>();
+  for (const entry of subagentRuns.values()) {
+    const key = resolveControllerSessionKey(entry);
+    const group = children.get(key) ?? [];
+    group.push(entry);
+    children.set(key, group);
+  }
+  const hasRetainedWork = (entry: SubagentRunRecord, visited = new Set<string>()): boolean => {
+    if (visited.has(entry.runId)) {
+      return false;
+    }
+    visited.add(entry.runId);
+    const childAgentId = resolveSubagentChildAgentId(entry);
+    return (
+      entry.execution.status !== "terminal" ||
+      typeof entry.execution.endedAt !== "number" ||
+      entry.pauseReason === "sessions_yield" ||
+      Boolean(entry.requesterSettleWake) ||
+      Boolean(
+        entry.killIntent || entry.killReconciliation || entry.collectorLaunchCleanupPending,
+      ) ||
+      captureSubagentEmbeddedExecution(entry) !== undefined ||
+      hasRetainedControllerExecution(entry) ||
+      captureExecRequestCancellation({
+        runId: entry.runId,
+        sessionKey: entry.childSessionKey,
+        sessionId: entry.childSessionIdentity?.sessionId,
+        agentId: childAgentId,
+      }).owners.length > 0 ||
+      (children.get(entry.childSessionKey) ?? []).some(
+        (child) =>
+          (!childAgentId ||
+            (parseAgentSessionKey(resolveControllerSessionKey(child))?.agentId ??
+              child.requesterAgentId) === childAgentId) &&
+          hasRetainedWork(child, visited),
+      )
+    );
+  };
+  return (entry: SubagentRunRecord) => hasRetainedWork(entry);
 }

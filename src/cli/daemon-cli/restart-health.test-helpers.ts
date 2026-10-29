@@ -30,6 +30,16 @@ export function gatewayResponseError(message: string): GatewayProtocolRequestErr
   retainGatewayResponsePayload(error, undefined);
   return error;
 }
+export function gatewayVerifiedUserRequiredError(): GatewayProtocolRequestError {
+  const error = new GatewayProtocolRequestError({
+    code: "NOT_PAIRED",
+    message:
+      "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
+    details: { code: "AUTH_VERIFIED_USER_REQUIRED" },
+  });
+  retainGatewayResponsePayload(error, undefined);
+  return error;
+}
 export const requestStartupProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
 export const requestReadinessProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
 

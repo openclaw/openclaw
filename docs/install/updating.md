@@ -33,7 +33,39 @@ backup.
 
 ## Update implementation contract
 
+If the retained verifier cannot authenticate to the restarted Gateway, it stops
+retrying that rejection. Local HTTP readiness and runtime version/build identity
+can verify activation instead, with an RPC authentication warning recorded in
+the update result. This does not change Gateway authentication or pairing.
+
+An external supervisor's accepted native update (`update migrate`, then
+`update finish`) is recorded in update history as a succeeded run that started
+at migration. A later recorded update therefore lets `openclaw update cleanup`
+retire rollback originals that earlier migrations left, while the latest
+update's own originals stay protected. The candidate must contain this change;
+the supervisor needs none. A failed history write leaves a retry warning in the
+`update finish` result. Releases swapped without the native protocol are not
+recorded.
+
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
+
+This retention covers Node and Bun late imports, including CommonJS dependencies
+and JSON. Module state already loaded by the updater stays shared through cleanup;
+imports outside that retained generation continue using the active installation.
+
+Native pnpm package swaps preserve platform-filtered optional dependencies as
+absent. On Windows, a dangling link declared in its owner's
+`optionalDependencies` is removed from the staged copy instead of failing
+activation; missing required dependencies and other filesystem errors still
+fail. This requires the installed updater to contain the repair. A failed swap
+before any installation or service mutation records the previous Gateway
+observation without restart verification, including with `--no-restart`.
+
+Before replacing a Git checkout's build or an installed package, the updater
+retains its running runtime. Late module imports and background workers keep
+using that generation through finalization, rollback, and CLI cleanup, even when
+the new build has different chunk filenames. The new Gateway starts from the
+activated build.
 
 During update finalization, disposable plugin source copies and private SQLite
 inspection snapshots use the candidate helper's absolute `TMPDIR` (including
@@ -287,6 +319,15 @@ references after native work closes, so a completed Doctor does not leave the
 installed updater waiting indefinitely for its exit. This fix runs in the
 updated package; the published updater and its handoff markers are unchanged.
 
+After a native service starts, restart preparation allows its verified process
+up to the normal startup deadline to replace missing or dead Gateway ownership
+before signaling it. This avoids an intermittent `restart-unhealthy` result when
+an older updater starts the updated service before asking the new installation
+to restart it.
+The fix runs in the new installation, so it also applies to the next update
+from 2026.8.35. Missing ownership after the deadline and unrelated process locks
+still refuse the restart.
+
 The running Gateway retains its shutdown code before an in-place update can
 replace the package's bundled files. Transcript shutdown drains captures and
 persists rule-based notes without starting optional model inference. This
@@ -348,7 +389,10 @@ resumed publication and repair still verify package contents. This optimization
 applies when the installed updater contains it; older updaters keep their checks.
 
 pnpm updates use the installation's own pnpm home and bin directory, even when
-macOS service PATH excludes pnpm. The installed updater must contain this fix.
+macOS service PATH excludes pnpm or a version manager puts another pnpm first.
+Both pnpm 10's home-level shim and pnpm 11's `bin/` shim are supported, and the
+child PATH includes both locations. The installed updater must contain this fix;
+installing a newer candidate cannot repair an older updater's preflight.
 
 Native pnpm updates also relocate pnpm 12 launcher paths before publishing them.
 After activation, unresolved launcher targets produce a warning with repair
@@ -405,9 +449,23 @@ containing the managed-helper authority fix, subsequent updates started through
 **from** the fixed version; it does not repair the 2026.9.4 macOS handoff in place.
 </Note>
 
-Package updates that select Node inspect the exact candidate's Node requirement before activation.
-An incompatible runtime produces `node-runtime-preflight`, with the target
-version, required engine range, selected Node version, and an upgrade command.
+Registry package updates inspect the exact target's Node requirement before
+staging or running package lifecycle scripts. An incompatible Gateway runtime
+produces `preflight-node-runtime-incompatible`, with the target version, required
+engine range, selected Node version, and an upgrade command. If the Gateway
+service pins a Node executable, update that service definition too; changing
+the shell's Node alone does not change the service. The updater keeps the
+requested OpenClaw target and does not select another release automatically.
+When the same-root managed service is running and its definition is authoritatively
+writable, a restart-enabled update can select a compatible current Node or use
+read-only discovery of an already-installed Node from the service account environment.
+Discovery does not permit a download or installation. The updater retains the original
+executable identity and service authority, and rechecks both before runtime preparation,
+candidate validation, and package staging. A writable definition alone does not
+permit staging under an incompatible runtime: fresh Doctor and automatic Node
+provisioning cannot bootstrap this admission check. Manual recovery retains the
+verified service's state, configuration, profile, and native service selectors.
+Later runtime capability checks can still produce `node-runtime-preflight`.
 npm directory permission failures produce `global-install-permission-denied`,
 naming the directory, its owner when available, and the next action. Dry-run JSON
 includes these outcomes in `failures`; the update report and Doctor's update
@@ -482,6 +540,12 @@ After the candidate takes ownership of finalization, optional diagnostics with
 complete lint coverage can run after verified readiness. Their warnings and retry
 commands remain in the update report while the Gateway serves. Missing diagnostic
 selectors cause the checks to run before startup instead.
+If post-plugin lint execution cannot finish because of lock contention, a timeout,
+or an inspection failure, the verified core update continues with a recorded warning
+and the original lint diagnostics. Run `openclaw update repair` to retry those
+checks, stopping the Gateway first when the repair asks for exclusive state
+access. Concrete readiness findings and unverified process cleanup still block
+completion.
 The final report records downtime through convergence and final verification,
 plus verification results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
@@ -510,6 +574,8 @@ This lets validation run while the serving Gateway keeps its configured ports.
 It preserves non-secret Gateway auth settings such as `gateway.auth.rateLimit`
 for policy checks, while using a temporary token and disabling Tailscale identity
 authentication.
+Doctor omits the onboarding URL warning derived from that temporary loopback
+binding during rehearsal; other findings remain visible.
 The activated Gateway retains your normal listener settings. Candidate startup
 progress is emitted only when the driving updater announces support, so older
 updaters, including 2026.9.5 and 2026.9.6, retain actual startup errors instead of
@@ -703,6 +769,10 @@ identities in the journal are not rewritten. Version or inode matches alone do
 not qualify; changed content, unsafe journal permissions or links, active update
 ownership, and unfinished rollback remain refusals.
 
+Symlink launchers may have different recorded permission modes (for example,
+`0755` and `0700`) if their targets and required identities still match. Regular-file
+launcher modes and package-tree integrity checks remain enforced.
+
 If a manual installation has replaced the candidate with a newer version, repair
 verifies that installation's manifest, dist inventories, entry targets, and launchers
 before archiving the old operation as `superseded-by-manual-install`. Old package
@@ -755,13 +825,22 @@ or rollback for it. Do not rewrite identities or delete recovery artifacts.
 
 ### Unfinished publication and rollback
 
-`openclaw update` automatically settles a `publication-complete` operation when
-the live candidate passes the same verification as repair, even when the update
-lease is unchanged. A dry run previews settlement without changing recovery
-artifacts. With an unchanged lease, other unfinished phases still require explicit
-repair.
+`openclaw update` automatically settles a `prepared`, `publishing`, or
+`publication-complete` operation when the live candidate passes the same
+verification as repair, even when the update lease is unchanged. It also retires
+an untouched preparation after verifying the original package and launchers.
+This does not republish files beneath a running Gateway. A dry run previews
+settlement without changing recovery artifacts. Unfinished publication that
+still needs file changes, pending rollback, and failed verification retain their
+recovery artifacts and report the repair command.
 
-For an external-helper operation stuck at `prepared`, `publishing`, or
+After a managed-service update fails before stopping the original Gateway,
+the handoff checks whether that original version is still serving and records
+the outcome. A stopped Gateway or unavailable health check is reported with
+its reason. This observation does not restart the service or mark the attempted
+update successful.
+
+To explicitly settle an external-helper operation stuck at `prepared`, `publishing`, or
 `publication-complete` whose live package already serves the candidate, run
 `openclaw update repair` from an independent terminal. Repair verifies the
 installed candidate's dist content inventory, manifest, launchers,
@@ -1165,6 +1244,13 @@ openclaw doctor
 
 Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
 
+Standalone repair cancels its pre-repair original-state capture after ten minutes.
+If that capture times out, Doctor waits for its workers to settle and reports a
+warning with backup and retry instructions; repair-specific migration backups still apply.
+Doctor restores a managed Gateway it stopped, including after SIGINT, SIGTERM,
+or SIGHUP interrupts repair. If restoration fails, it prints the failure and the
+command to start the Gateway after resolving it.
+
 On Windows, `openclaw doctor --fix` can also retry abandoned backup scratch
 cleanup after an older release reported `EPERM` while renaming to an
 `openclaw-backup-retired-*` directory. Active backup scratch and published
@@ -1242,3 +1328,5 @@ for when the setting takes effect.
 - [Install overview](/install): all installation methods.
 - [Doctor](/gateway/doctor): health checks after updates.
 - [Migrating](/install/migrating): major version migration guides.
+
+Candidate rehearsal snapshots and update database backups tolerate only stale, exactly owned agent FTS indexes after a SQLite tokenizer change. They preserve the source; candidate startup rebuilds the derived indexes before admission. Unknown or mixed integrity damage remains fatal. The first update uses the candidate snapshot worker; activation backups require the installed updater to include this repair.

@@ -344,6 +344,10 @@ export async function waitForGatewayHealthyRestart(
       if (snapshot.buildIdMismatch) {
         return withWaitContext(snapshot, "build-id-mismatch", elapsedMs);
       }
+      // Partial settling clears snapshot.healthy, not the successful observation.
+      if (!healthy && snapshot.authenticationError) {
+        return withWaitContext(snapshot, "auth-rejected", elapsedMs);
+      }
       if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
         return withWaitContext(snapshot, "stale-pids", elapsedMs);
       }

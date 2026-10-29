@@ -68,6 +68,111 @@ afterEach(() => {
 });
 
 describe("post-update failure recovery observation", () => {
+  it.each([
+    { mutationStarted: false, dataAtRisk: false, restart: false },
+    { mutationStarted: false, dataAtRisk: false, restart: true },
+    { mutationStarted: true, dataAtRisk: false, restart: false },
+    { mutationStarted: false, dataAtRisk: true, restart: false },
+  ])(
+    "records package-swap recovery (mutation=$mutationStarted, risk=$dataAtRisk, restart=$restart)",
+    async ({ mutationStarted, dataAtRisk, restart }) => {
+      const env = { ...process.env };
+      const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      mocks.activePort.mockResolvedValueOnce(19431);
+      const readRuntime = vi.fn(async () => ({ status: "unknown" }));
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
+        ...gatewayService.resolveGatewayService(),
+        readRuntime,
+        readCommand: vi.fn(async () => null),
+        isLoaded: vi.fn(async () => false),
+      });
+      const inspect = vi.spyOn(ports, "inspectPortUsage").mockImplementation(async (port) => ({
+        port,
+        status: "free",
+        listeners: [],
+        hints: [],
+      }));
+      const actual = await vi.importActual<typeof import("./update-command-verification.js")>(
+        "./update-command-verification.js",
+      );
+      vi.mocked(verifyUpdatedGateway).mockImplementationOnce(actual.verifyUpdatedGateway);
+      const failure = await finishSuccessfulPackageSwitch(
+        { packageRoot: root, json: true, run },
+        {
+          mutationStarted,
+          shouldRestart: restart,
+          opts: { json: true, restart, run },
+          preManagedServiceStop: {
+            stopped: false,
+            inspected: true,
+            runtimeInspected: true,
+            running: true,
+            serviceEnv: env,
+          },
+          result: {
+            status: "error",
+            mode: "pnpm",
+            root,
+            reason: "package-swap",
+            durationMs: 0,
+            before: { version: "2026.9.5" },
+            ...(dataAtRisk && {
+              recovery: {
+                serviceRestartSafe: false,
+                reason: "state-migration-started",
+              },
+            }),
+            steps: [
+              { name: "package-swap", command: "swap", cwd: root, durationMs: 0, exitCode: 1 },
+            ],
+          },
+        },
+      ).catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        name: "UpdateCommandFailure",
+        result: { status: "error", reason: "package-swap" },
+      });
+      if (!(failure instanceof ReportedUpdateCommandFailure)) {
+        throw failure;
+      }
+      const recorded = updateLedger.getUpdateRun(run.runId, { env });
+      assert(recorded);
+      if (mutationStarted || dataAtRisk) {
+        expect(verifyUpdatedGateway).toHaveBeenCalledOnce();
+        expect(recorded.steps).toContainEqual(
+          expect.objectContaining({ step: "gateway recovery verification", exitCode: 1 }),
+        );
+        if (dataAtRisk) {
+          expect(recorded.verification.recovery).toMatchObject({
+            reason: "state-migration-started",
+            serviceRestartSafe: false,
+          });
+        }
+      } else {
+        expect(verifyUpdatedGateway).not.toHaveBeenCalled();
+        expect(mocks.activePort).not.toHaveBeenCalled();
+        expect(mocks.managedService).not.toHaveBeenCalled();
+        expect(recorded.steps).toContainEqual(
+          expect.objectContaining({ step: "gateway recovery observation", exitCode: 0 }),
+        );
+        const report = renderUpdateRunReport(recorded).markdown;
+        expect(report).not.toContain("restart-unhealthy");
+        expect(failure.result.steps).toContainEqual(
+          expect.objectContaining({
+            name: "gateway recovery observation",
+            diagnostics: [
+              "No recovery needed; still serving 2026.9.5. No service was stopped or started.",
+            ],
+          }),
+        );
+        expect(readRuntime).not.toHaveBeenCalled();
+        expect(inspect).not.toHaveBeenCalled();
+        expect(recorded.verification.readyz).toBeUndefined();
+      }
+      expect(mocks.converge).not.toHaveBeenCalled();
+    },
+  );
+
   it("settles a headless package rollback without waiting for a Gateway", async () => {
     const { packageRoot, transaction } = await createRetainedPackageSwap(root);
     const configPath = path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json");
@@ -268,8 +373,8 @@ describe("post-update failure recovery observation", () => {
       if (!(failure instanceof ReportedUpdateCommandFailure)) {
         throw failure;
       }
-      expect(readRuntime).toHaveBeenCalledTimes(deferred ? 0 : 1);
-      expect(inspect).toHaveBeenCalledTimes(deferred ? 0 : 1);
+      expect(readRuntime).toHaveBeenCalledTimes(activated && !deferred ? 1 : 0);
+      expect(inspect).toHaveBeenCalledTimes(activated && !deferred ? 1 : 0);
       expect(sleep).not.toHaveBeenCalled();
       expect(waitForStartup).not.toHaveBeenCalled();
       expect(elapsedMs).toBe(0);
@@ -289,17 +394,24 @@ describe("post-update failure recovery observation", () => {
         );
       }
       expect(recorded?.verification.serviceRunning).toBeUndefined();
-      expect(recorded?.verification.readyz).toBe(deferred ? undefined : false);
+      expect(recorded?.verification.readyz).toBe(activated && !deferred ? false : undefined);
       expect(recorded?.steps).toContainEqual(
         expect.objectContaining({ step: "candidate-doctor-lint", exitCode: 2 }),
       );
       const recoveryStep = recorded?.steps.find(
         (step) => step.step === "gateway recovery verification",
       );
-      expect(recoveryStep).toMatchObject({
-        status: deferred ? "completed" : "failed",
-        exitCode: deferred ? null : 1,
-      });
+      if (activated) {
+        expect(recoveryStep).toMatchObject({
+          status: deferred ? "completed" : "failed",
+          exitCode: deferred ? null : 1,
+        });
+      } else {
+        expect(recoveryStep).toBeUndefined();
+        expect(recorded?.steps).toContainEqual(
+          expect.objectContaining({ step: "gateway recovery observation", exitCode: 0 }),
+        );
+      }
       if (deferred) {
         expect(recoveryStep?.detail).toContain("deferred");
         expect(recoveryStep?.detail).toContain("service owner");

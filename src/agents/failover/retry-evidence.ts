@@ -12,7 +12,7 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyFailoverReasonFromCode } from "./classification-rules.js";
-import { INCOMPLETE_ASSISTANT_STREAM_RE } from "./message-patterns.js";
+import { INCOMPLETE_ASSISTANT_STREAM_RE, MALFORMED_SSE_MESSAGE_RE } from "./message-patterns.js";
 import type { FailoverClassification, FailoverSignal } from "./signal.js";
 
 type RateLimitWindow =
@@ -81,6 +81,7 @@ function hasTransientRetryEvidence(
   return (
     (status !== undefined && RETRYABLE_HTTP_STATUS_CODES.has(status)) ||
     INCOMPLETE_ASSISTANT_STREAM_RE.test(signal.message ?? "") ||
+    MALFORMED_SSE_MESSAGE_RE.test(signal.message ?? "") ||
     TRANSIENT_RETRY_EVIDENCE_RE.test(signal.message ?? "") ||
     isTransientNetworkError({ code: signal.code })
   );

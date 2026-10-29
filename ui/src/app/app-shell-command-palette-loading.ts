@@ -137,7 +137,9 @@ export class ShellCommandPaletteOwner {
       return false;
     }
     event.preventDefault();
-    this.toggle();
+    if (!event.repeat) {
+      this.toggle();
+    }
     return true;
   }
 }

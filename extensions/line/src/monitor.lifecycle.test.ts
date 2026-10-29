@@ -422,6 +422,65 @@ describe("monitorLineProvider lifecycle", () => {
     }
   });
 
+  it("leaves direct-chat loading to the admitted reply lifecycle", async () => {
+    // humanDelay lives on the agent, but only the dispatcher can act on it, so a
+    // turn that never forwards it paces every block reply at zero.
+    const { setLineRuntime } = await import("./runtime.js");
+    type ResolvedTurn = { replyPipeline?: { typing?: { start: () => Promise<unknown> } } };
+    let resolvedTurn: ResolvedTurn | undefined;
+    const runTurn = async (params: {
+      adapter: { resolveTurn: () => ResolvedTurn };
+    }): Promise<{ dispatched: false }> => {
+      resolvedTurn = params.adapter.resolveTurn();
+      return { dispatched: false };
+    };
+    setLineRuntime({
+      channel: { inbound: { run: runTurn } },
+    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const { messagingApi } = await import("@line/bot-sdk");
+    const loading = vi
+      .spyOn(messagingApi.MessagingApiClient.prototype, "showLoadingAnimation")
+      .mockResolvedValue({});
+    const monitor = await startMonitor();
+    const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+    if (!onMessage) {
+      throw new Error("expected the LINE bot to receive an inbound message handler");
+    }
+
+    try {
+      await onMessage(
+        {
+          ctxPayload: { From: "line:U1", MessageSid: "m1", RawBody: "hi" },
+          replyToken: "reply-token",
+          route: { accountId: "default", agentId: "ops", sessionKey: "line:U1" },
+          isGroup: false,
+          userId: "U123",
+          accountId: "default",
+          turn: { record: {} },
+        } as unknown as Parameters<typeof onMessage>[0],
+        {
+          // The per-agent entry wins, so a turn reading only the defaults would
+          // pace at the wrong interval rather than not at all.
+          cfg: {
+            channels: { line: { channelAccessToken: "test-token" } },
+            agents: {
+              defaults: { humanDelay: { mode: "natural" } },
+              entries: { ops: { humanDelay: { mode: "custom", minMs: 3_000, maxMs: 4_000 } } },
+            },
+          },
+        } as Parameters<typeof onMessage>[1],
+      );
+
+      expect(loading).not.toHaveBeenCalled();
+      expect(resolvedTurn?.replyPipeline?.typing).toBeDefined();
+      await resolvedTurn?.replyPipeline?.typing?.start();
+      expect(loading).toHaveBeenCalledWith({ chatId: "U123", loadingSeconds: 20 });
+    } finally {
+      await monitor.stop();
+      loading.mockRestore();
+    }
+  });
+
   it("carries a group's skill scope into the turn that answers it", async () => {
     // The scope is configured per group but enforced per turn: it only applies
     // if the reply options reaching the agent carry it.

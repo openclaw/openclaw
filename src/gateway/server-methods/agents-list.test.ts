@@ -63,6 +63,7 @@ async function listAgents(
   cfg: () => OpenClawConfig,
   client = readerClient(),
   catalog: GatewayRequestContext["readPreparedGatewayModelCatalog"] = async () => ({ entries: [] }),
+  batchCatalog?: GatewayRequestContext["readPreparedGatewayModelCatalogBatch"],
 ) {
   const respond = vi.fn<RespondFn>();
   await agentListHandler({
@@ -72,6 +73,7 @@ async function listAgents(
     context: {
       getRuntimeConfig: cfg,
       readPreparedGatewayModelCatalog: catalog,
+      readPreparedGatewayModelCatalogBatch: batchCatalog,
     } as GatewayRequestContext,
     respond,
     isWebchatConnect: () => false,
@@ -117,5 +119,65 @@ test("agents.list applies role changes made while catalog preparation is pending
     true,
     { ...roster, agents: [roster.agents[1]] },
     undefined,
+  );
+});
+
+test.each(["single", "batch"] as const)(
+  "agents.list returns an empty roster without waiting for the %s catalog reader",
+  async (mode) => {
+    const entered = createDeferred();
+    const released = createDeferred();
+    const waitForCatalog = async () => {
+      entered.resolve();
+      await released.promise;
+    };
+    const response = listAgents(
+      () => roleConfig([]),
+      readerClient(),
+      async () => {
+        await waitForCatalog();
+        return { entries: [] };
+      },
+      mode === "batch"
+        ? async () => {
+            await waitForCatalog();
+            return [];
+          }
+        : undefined,
+    );
+    try {
+      expect(
+        await Promise.race([
+          response.then(() => "responded"),
+          entered.promise.then(() => "waiting for catalog"),
+        ]),
+      ).toBe("responded");
+    } finally {
+      released.resolve();
+      await response;
+    }
+  },
+);
+
+test("keeps an initially empty roster empty when a grant arrives during projection", async () => {
+  let cfg = roleConfig([]);
+  const response = listAgents(() => cfg);
+  cfg = roleConfig("*");
+  expect(await response).toHaveBeenCalledExactlyOnceWith(
+    true,
+    { ...roster, agents: [] },
+    undefined,
+  );
+});
+
+test("rechecks current role scopes after skipping the catalog for an empty roster", async () => {
+  let cfg = roleConfig([]);
+  const response = listAgents(() => cfg);
+  cfg = roleConfig([]);
+  cfg.gateway!.roles!.definitions!.reader!.scopes = [];
+  expect(await response).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ code: "FORBIDDEN" }),
   );
 });

@@ -74,7 +74,13 @@ describe("structured_output", () => {
     const rejectedRetry = await tool.execute("call-2", { result });
     const rejectedLaterCall = await tool.execute("call-3", { result: '{"count":3}' });
     expect(rejectedRetry.details).toMatchObject({ status: "rejected", success: false });
-    expect(rejectedLaterCall.details).toMatchObject({ status: "rejected", success: false });
+    expect(rejectedLaterCall.details).toMatchObject({
+      status: "rejected",
+      success: false,
+      reason: "retry_budget_exhausted",
+      error: expect.stringContaining("not evaluated"),
+    });
+    expect(rejectedLaterCall.details).not.toHaveProperty("schemaError");
     expect(isToolResultError(rejectedRetry)).toBe(true);
     expect(isToolResultError(rejectedLaterCall)).toBe(true);
     expect(peekSwarmStructuredOutput(runId)).toMatchObject({

@@ -35,6 +35,9 @@ import { createRequesterInitialTransferFixture } from "./registry/subagent-regis
 import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./registry/subagent-run-generation.js";
 import {
+  captureRequesterFollowupAuthority,
+  retireRequesterFollowupAuthority,
+  withRequesterFollowupAuthority,
   consumeRequesterCronAuthorityAdmission,
   prepareRequesterCronAuthority,
   replaceRequesterCronAuthorityEntry,
@@ -776,3 +779,68 @@ describe("requester cron authority lifetime", () => {
     },
   );
 });
+
+it.each(["complete", "revoked", "replaced"] as const)(
+  "retains exact followup requester after observer release (%s)",
+  async (ending) => {
+    let current = true;
+    const release = vi.fn();
+    const [entry] = createBatch("followup-owner");
+    entry!.completionRequesterSessionId = fixture.session.sessionId;
+    const owner = { isCurrent: () => current, senderId: "original", channel: "discord" };
+    const retained = await inAdminRun(
+      "followup-owner",
+      async () =>
+        captureRequesterFollowupAuthority({
+          requesterTurnRunId: "followup-owner",
+          requesterAgentId: "main",
+          requesterSessionKey: SESSION,
+          requesterSessionId: fixture.session.sessionId,
+          sourceSessionKey: entry!.childSessionKey,
+          isCurrent: () => current,
+          release,
+        }),
+      undefined,
+      { source: "channel-owner", isCurrent: () => current },
+      owner,
+    );
+    expect(retained).toBeDefined();
+    retained!.bind({ entry: entry!, runs });
+    retained!.release();
+    expect(release).not.toHaveBeenCalled();
+    if (ending === "revoked") {
+      current = false;
+    }
+    if (ending === "replaced") {
+      runs.delete(entry!.runId);
+    }
+    const deliver = () =>
+      withRequesterFollowupAuthority(entry!, "notice", async () => {
+        const admitted = consumeRequesterCronAuthorityAdmission({
+          runId: "notice",
+          sessionKey: SESSION,
+          sessionId: fixture.session.sessionId,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "subagent_announce",
+            sourceSessionKey: entry!.childSessionKey,
+          },
+        });
+        expect(admitted?.requesterOwner).toBe(owner);
+      });
+    if (ending === "complete") {
+      await deliver();
+    } else {
+      await expect(deliver()).rejects.toThrow("no longer current");
+    }
+    retireRequesterFollowupAuthority(entry!);
+    retained!.release();
+    if (ending === "complete") {
+      expect(release).not.toHaveBeenCalled();
+      revokeRequesterCronAuthority(SESSION);
+    }
+    expect(release).toHaveBeenCalledOnce();
+    await expect(deliver()).rejects.toThrow("no longer current");
+    expect(release).toHaveBeenCalledOnce();
+  },
+);

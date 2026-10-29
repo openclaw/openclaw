@@ -36,7 +36,9 @@ import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-r
 import { listConfiguredSessionStoreAgentIds, type SessionStoreTarget } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
-type CombinedReadOptions = Omit<GatewaySessionStoreOptions, "loadEntries" | "onStoreLoaded">;
+type CombinedReadOptions = Omit<GatewaySessionStoreOptions, "loadEntries" | "onStoreLoaded"> & {
+  transcriptSelection?: { sessionKeys: readonly string[]; sessionIds: readonly string[] };
+};
 
 export async function loadCombinedSessionStoreForGatewayCoreAsync(
   cfg: OpenClawConfig,
@@ -249,19 +251,75 @@ async function loadCombinedSessionStore(
       const rows = await Promise.all(
         prepared.reads.map(async ({ storeTarget }, index) => {
           const source = expectDefined(owners[index], "retained session store");
-          const { entries } = await source.readEntries({
-            ...storeTarget,
-            env: transferEnv,
-            projection: prepared.projection,
-            clone: false,
-          });
+          const { entries } = options.transcriptSelection
+            ? await source.readExactEntries({
+                sessionKeys: options.transcriptSelection.sessionKeys,
+                selection: {
+                  kind: "transcript-aliases",
+                  sessionIds: options.transcriptSelection.sessionIds,
+                },
+                projection: "list",
+                env: transferEnv,
+              })
+            : await source.readEntries({
+                ...storeTarget,
+                env: transferEnv,
+                projection: prepared.projection,
+                clone: false,
+              });
           return [storeTargetKey(storeTarget), entries] as const;
         }),
       );
       const entries = new Map(rows);
+      const selection = options.transcriptSelection;
+      if (selection) {
+        const sessionKeys = new Set(selection.sessionKeys);
+        const sessionIds = new Set(selection.sessionIds);
+        const sessionFiles = new Set<string>();
+        // Close aliases across every retained store, including legacy file aliases
+        // and keys that collide with another identity in an earlier store.
+        for (;;) {
+          const before = sessionKeys.size + sessionIds.size + sessionFiles.size;
+          for (const selected of entries.values()) {
+            for (const { sessionKey, entry } of selected) {
+              sessionKeys.add(sessionKey);
+              if (entry.sessionId.trim()) {
+                sessionIds.add(entry.sessionId.trim());
+              }
+              const sessionFile = Reflect.get(entry, "sessionFile");
+              if (typeof sessionFile === "string" && sessionFile.trim()) {
+                sessionFiles.add(sessionFile.trim());
+              }
+            }
+          }
+          if (before === sessionKeys.size + sessionIds.size + sessionFiles.size) {
+            break;
+          }
+          await Promise.all(
+            prepared.reads.map(async ({ storeTarget }, index) => {
+              const result = await expectDefined(
+                owners[index],
+                "retained session store",
+              ).readExactEntries({
+                sessionKeys: [...sessionKeys],
+                selection: {
+                  kind: "transcript-aliases",
+                  sessionIds: [...sessionIds],
+                  sessionFiles: [...sessionFiles],
+                },
+                projection: "list",
+                env: transferEnv,
+              });
+              entries.set(storeTargetKey(storeTarget), result.entries);
+            }),
+          );
+        }
+      }
       const readEntries = (target: SessionStoreTarget) =>
         expectDefined(entries.get(storeTargetKey(target)), "prepared session entries");
-      const lineage = await prepareCombinedSessionStoreLineage(config, prepared, readEntries);
+      const lineage = selection
+        ? undefined
+        : await prepareCombinedSessionStoreLineage(config, prepared, readEntries);
       const readOptions = {
         ...options,
         discovery: { env, snapshot: options.discovery?.snapshot },
@@ -271,8 +329,8 @@ async function loadCombinedSessionStore(
         readOptions,
         prepared,
         readEntries,
-        lineage,
-        lineage.readIncognitoEntries,
+        lineage ?? { readStored: () => undefined, readAlias: () => undefined },
+        lineage?.readIncognitoEntries,
       );
     },
   );

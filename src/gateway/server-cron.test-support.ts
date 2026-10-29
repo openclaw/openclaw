@@ -1,16 +1,13 @@
 // Shared Gateway cron fixtures keep adapter mocks and process lifetimes consistent across suites.
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import { resolveSelectedCronJobsStorePath } from "../cron/store/paths.js";
 import type { CronJobCreate } from "../cron/types.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
-import type { ManagedRun, RunExit } from "../process/supervisor/types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
@@ -314,15 +311,6 @@ function addCronJob(
   return service.cron.add(cronJob(name, payload, overrides));
 }
 
-export function addSystemEventJob(
-  service: CronServiceFixture,
-  name: string,
-  text: string,
-  overrides: CronJobOverrides = {},
-) {
-  return addCronJob(service, name, { kind: "systemEvent", text }, overrides);
-}
-
 export function addAgentTurnJob(
   service: CronServiceFixture,
   name: string,
@@ -330,56 +318,6 @@ export function addAgentTurnJob(
   overrides: CronJobOverrides = {},
 ) {
   return addCronJob(service, name, { kind: "agentTurn", message }, overrides);
-}
-
-function runExit(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "manual-cancel",
-    exitCode: null,
-    exitSignal: null,
-    durationMs: 1,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
-}
-
-export function createWatchedRun(settleOnCancel = true, exitResult: Partial<RunExit> = {}) {
-  const exit = createDeferred<RunExit>();
-  return {
-    exit,
-    startedAtMs: Date.now(),
-    cancel: vi.fn(() => {
-      if (settleOnCancel) {
-        exit.resolve(runExit(exitResult));
-      }
-    }),
-    detachOutput: vi.fn(),
-    wait: vi.fn(() => exit.promise),
-    waitForExtinction: vi.fn<NonNullable<ManagedRun["waitForExtinction"]>>(async () => {
-      await exit.promise;
-    }),
-  };
-}
-
-export function mockCronSupervisor(...runs: ReturnType<typeof createWatchedRun>[]) {
-  let nextRun = 0;
-  const spawn = vi.fn(async () => {
-    const index = nextRun++;
-    return {
-      ...(runs.length ? expectDefined(runs[index], "watched process") : createWatchedRun()),
-      runId: `cron-watch-${index}`,
-    };
-  });
-  const cancelScope = vi.fn();
-  getProcessSupervisorMock.mockReturnValue({
-    spawn,
-    cancelScope,
-    acquireScopeCleanup: vi.fn(() => vi.fn(async () => {})),
-  });
-  return { spawn, cancelScope };
 }
 
 export function resetGatewayCronMocks() {

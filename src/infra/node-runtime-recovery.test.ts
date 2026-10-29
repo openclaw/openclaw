@@ -204,6 +204,47 @@ async function expectRecoveryStarted(options: Parameters<typeof recoverNodeRunti
 }
 
 describe("runtime recovery discovery", () => {
+  it.each([
+    { platform: "win32", quote: '"', relative: false, selected: true },
+    { platform: "win32", quote: "", relative: false, selected: true },
+    { platform: "win32", quote: '"', relative: true, selected: false },
+    { platform: "linux", quote: '"', relative: false, selected: false },
+  ] as const)(
+    "recovers from $platform PATH (quote=$quote, relative=$relative)",
+    async ({ platform, quote, relative, selected }) => {
+      await withRecoveryHome(async (home) => {
+        const candidate = await writeFixture(
+          path.join(home, "Node Runtime", platform === "win32" ? "node.exe" : "node"),
+        );
+        mockProcessPlatform(platform);
+        mocks.admissible.add(candidate);
+        // A simulated POSIX PATH must not contain a native Windows drive colon.
+        const directory = relative
+          ? "Node Runtime"
+          : platform === "linux" && hostPlatform === "win32"
+            ? "/fixture/Node Runtime"
+            : path.dirname(candidate);
+        if (platform === "linux" && hostPlatform === "win32") {
+          vi.spyOn(path, "isAbsolute").mockImplementation(path.posix.isAbsolute);
+          vi.spyOn(path, "join").mockImplementation(path.posix.join);
+          mocks.virtualPaths.set(path.posix.join(directory, "node"), candidate);
+        }
+        const env = {
+          HOME: home,
+          PATH: `${quote}${directory}${quote}${platform === "win32" ? ";" : ":"}`,
+        };
+
+        if (selected) {
+          await expectRecoveryStarted({ homeDir: home, env });
+          expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
+        } else {
+          expect(await recoverNodeRuntime({ homeDir: home, env })).toBe(false);
+          expect(mocks.spawn).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
+
   it.each(["HOME", "OPENCLAW_HOME"])(
     "reuses a private runtime when cwd equals %s",
     async (homeVariable) => {

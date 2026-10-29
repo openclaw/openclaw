@@ -307,16 +307,15 @@ it.each(["admission", "queue", "delegated"] as const)(
       await recover();
       if (kind === "delegated") {
         expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
-        expect(loadSessionEntry(target)).toMatchObject({
-          status: "failed",
+        const settled = loadSessionEntry(target);
+        expect(settled).toMatchObject({
+          status: "interrupted",
           abortedLastRun: false,
-          mainRestartRecovery: {
-            tombstone: { reason: "delegated recovery sender authority is unavailable" },
-          },
         });
+        expect(settled?.mainRestartRecovery).toBeUndefined();
         const transcript = JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }));
         expect(transcript).toContain("delegated recovery sender authority is unavailable");
-        expect(transcript.match(/Resume in new session/g)).toHaveLength(1);
+        expect(transcript.match(/Send a new authenticated message to continue/g)).toHaveLength(1);
         expect(recoveryLog).toHaveBeenCalledWith(
           expect.stringContaining('"reason":"delegated_authority_unavailable"'),
         );

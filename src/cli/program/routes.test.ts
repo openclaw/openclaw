@@ -30,9 +30,11 @@ vi.mock("../command-execution-startup.js", () => ({
   ensureCliExecutionBootstrap: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Routed config commands must not reach a live Gateway or operator config.
 vi.mock("../config-cli.js", () => ({
   runConfigGet: runConfigGetMock,
   runConfigUnset: runConfigUnsetMock,
+  routeConfigMutationToOwner: () => async () => {},
 }));
 
 vi.mock("../../commands/models/list.list-command.js", () => ({

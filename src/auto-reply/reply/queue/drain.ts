@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -50,6 +49,7 @@ import {
   resolveFollowupReplyAnchor,
   resolveOverflowSummaryInboundEventKind,
 } from "./delivery-context.js";
+import { runOutsideAdmittedGenerationScopes } from "./drain-admission-scope.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
@@ -1120,7 +1120,7 @@ export function scheduleFollowupDrain(
   // a fresh async work scope: drained turns run tracked agent work that must keep
   // working after the triggering request's scope has closed.
   void runWithGatewayDetachedWorkContinuation(
-    () => runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
+    () => runOutsideAdmittedGenerationScopes(drainQueuedFollowups),
     "session:followup-drain",
   ).catch((err: unknown) => {
     // Once entered, the drain's finally alone owns rescheduling.

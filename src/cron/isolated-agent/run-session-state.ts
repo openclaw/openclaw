@@ -67,7 +67,7 @@ export async function withCronSessionPreparation<T>(
     owner: CRON_SESSION_PREPARATION_OWNER,
   };
   if (getSessionWorkAdmissionOwnerRelease(target)) {
-    params.onLaneWait?.({ waiting: true });
+    params.onLaneWait?.({ waiting: true, stage: "session-preparation" });
   }
   const admission = await beginSessionWorkAdmission({
     agentId: params.agentId,
@@ -92,21 +92,21 @@ export async function withCronSessionPreparation<T>(
             if (release) {
               return { kind: "waiting" as const, release };
             }
-            params.onLaneWait?.({ waiting: false });
+            params.onLaneWait?.({ waiting: false, stage: "session-preparation" });
             return { kind: "prepared" as const, value: await prepare() };
           },
           {
             abortSignal: params.signal,
             priority: "background",
             taskIdentity: { taskKind: "cron", sessionKey: params.sessionKey },
-            onQueued: () => params.onLaneWait?.({ waiting: true }),
+            onQueued: () => params.onLaneWait?.({ waiting: true, stage: "session-preparation" }),
           },
         );
         if (result.kind === "prepared") {
           return result.value;
         }
         // Queued owners may need this lane. Await their settlement only after releasing it.
-        params.onLaneWait?.({ waiting: true });
+        params.onLaneWait?.({ waiting: true, stage: "session-preparation" });
         await racePromiseWithAbortSignal(result.release, params.signal, (signal) =>
           toErrorObject(signal.reason, "Queued command aborted"),
         );

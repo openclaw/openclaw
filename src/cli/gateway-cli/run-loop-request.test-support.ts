@@ -112,7 +112,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     });
   });
 
-  it("joins FIFO signal consumption and defers durable restart upgrades through close", async () => {
+  it("joins FIFO signal consumption through close and keeps a queued Stop over a later update", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     const first = createDeferredCore<null>();
     const second = createDeferredCore<null>();
@@ -155,10 +155,9 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         await expect(exited).resolves.toBe(0);
       }
       expect(close).toHaveBeenCalledOnce();
-      expect(writeGatewayRestartHandoff).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "update.run" }),
-        expect.any(Function),
-      );
+      expect(consumeGatewayRestartIntentPayload).toHaveBeenCalledTimes(3);
+      expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+      expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
     });
   });
 

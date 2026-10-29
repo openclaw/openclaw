@@ -128,6 +128,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
   const invalidatePluginMetadataSnapshot = () => {
     // Filesystem/install repairs replace the authoritative plugin generation.
+    delete configResult.preflightLegacyStateConfig;
     pluginMetadataSnapshotState.current = undefined;
     pluginMetadataSnapshotScope.invalidate();
   };
@@ -644,7 +645,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // Later Doctor contributions and service finalization consume these callbacks.
   const resources = preparingResources.move();
 
-  return {
+  const configResult = {
     [Symbol.asyncDispose]: () => resources.disposeAsync(),
     ...finalized,
     ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
@@ -687,4 +688,5 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     runWithPluginMetadataSnapshot,
     invalidatePluginMetadataSnapshot,
   };
+  return configResult;
 }

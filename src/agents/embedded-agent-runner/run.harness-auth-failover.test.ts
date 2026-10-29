@@ -172,6 +172,10 @@ describe("native harness auth failover", () => {
         }),
         expect.objectContaining({ retainIdleRunOwner: true }),
       );
+      expect(mockedEnsureAuthProfileStore).toHaveBeenCalledWith(
+        state.agentDir(),
+        expect.objectContaining({ inheritedAuthDir: state.agentDir() }),
+      );
       const attempts = mockedRunEmbeddedAttempt.mock.calls.map(([attempt]) => attempt);
       expect(attempts.map((attempt) => attempt.authProfileId)).toEqual(
         authProfileIdSource === "user" ? [failedProfile] : [failedProfile, backupProfile],

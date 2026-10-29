@@ -14,6 +14,72 @@ afterEach(async () => {
   await resetCodeModeTestState();
 });
 
+it("reports bounded, redacted installed-skill failures returned by a Gateway", async () => {
+  const secret = `ghp_${"a".repeat(36)}`;
+  const tools = createInstalledSkillTools([
+    {
+      name: "demo",
+      description: "Demo",
+      location: "/skills/demo/SKILL.md",
+      source: { filePath: "/skills/demo/SKILL.md" },
+    },
+  ]);
+  tools[0]!.execute = async () => ({
+    isError: true,
+    content: [{ type: "text", text: "fallback" }],
+    details: {
+      status: "error",
+      error: `Cloud worker transcript requires prepared authority; token=${secret} ${"x".repeat(2_000)}`,
+    },
+  });
+  const h = createCodeModeHarness();
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...tools] });
+  const result = await runUntilCompleted({
+    execTool: h.tools[0]!,
+    waitTool: h.tools[1]!,
+    code: 'return await skills.search("demo", 1);',
+  });
+  expect(result).toMatchObject({
+    status: "failed",
+    failurePhase: "bridge",
+    code: "internal_error",
+    error: expect.stringContaining("Cloud worker transcript requires prepared authority"),
+  });
+  expect(String(result.error)).not.toContain(secret);
+  expect(String(result.error).length).toBeLessThan(1_200);
+});
+
+it.each([null, {}, { content: [null, { type: "text", text: 5 }] }])(
+  "keeps malformed installed-skill failures controlled: %j",
+  async (malformed) => {
+    const tools = createInstalledSkillTools([
+      {
+        name: "demo",
+        description: "Demo",
+        location: "/skills/demo/SKILL.md",
+        source: { filePath: "/skills/demo/SKILL.md" },
+      },
+    ]);
+    tools[0]!.execute = async () => malformed as never;
+    const h = createCodeModeHarness();
+    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...tools] });
+    const result = await runUntilCompleted({
+      execTool: h.tools[0]!,
+      waitTool: h.tools[1]!,
+      code: 'return await skills.search("demo", 1);',
+    });
+    expect(result).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining(
+        malformed === null
+          ? "Tool Search target result could not be captured for transcript projection."
+          : "Installed skill request failed",
+      ),
+    });
+    expect(String(result.error)).not.toMatch(/TypeError|Cannot read/);
+  },
+);
+
 it("reads a known skill with resource context before discovery through the worker bridge", async () => {
   const demo = createFixtureSkillEntry("demo");
   const hidden = createFixtureSkillEntry("hidden");

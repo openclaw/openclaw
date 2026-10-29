@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
@@ -238,6 +239,14 @@ export async function runConfigOperations(params: {
   successMode: "set" | "patch";
   currentExpectation?: ConfigSetCurrentExpectation;
   beforePersistentApply?: () => void;
+  /**
+   * Replaces the local file write when another process owns the state root.
+   * Receives the authored config before and after the change; may return a reload hint.
+   */
+  commit?: (change: {
+    previous: OpenClawConfig;
+    next: OpenClawConfig;
+  }) => Promise<string | undefined>;
 }) {
   const { runtime, operations, options } = params;
   if (
@@ -543,28 +552,53 @@ export async function runConfigOperations(params: {
     return;
   }
 
-  await replaceConfigFile({
-    sourceConfig: authoredNextConfig,
-    snapshot,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    writeOptions: {
-      ...mutationStart.writeOptions,
-      auditOrigin: "cli",
-      ...(assertCurrentExpectation || params.beforePersistentApply
-        ? {
-            assertConfigPathForWrite: () => {
-              mutationStart.writeOptions.assertConfigPathForWrite?.();
-              assertCurrentExpectation?.();
-              params.beforePersistentApply?.();
-            },
-          }
-        : {}),
-      ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
-      ...(normalizedExplicitSetPaths.length > 0
-        ? { explicitSetPaths: normalizedExplicitSetPaths }
-        : {}),
-    },
-  });
+  let committedHint: string | undefined;
+  if (params.commit) {
+    // The local writer enforces immutable config at its write; a routed commit checks here.
+    assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
+    assertCurrentExpectation?.();
+    params.beforePersistentApply?.();
+    const { prepareConfigOwnerChange } = await import("./config-cli-owner-patch.js");
+    const change = await prepareConfigOwnerChange({
+      snapshot,
+      pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+      previous: authoredPreviousConfig,
+      next: authoredNextConfig,
+      explicitSetPaths: normalizedExplicitSetPaths,
+      unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
+      env: resolutionEnv,
+    });
+    committedHint = await params.commit(change);
+    if (change.clearedSessionStoreOwner) {
+      // The local writer reports this itself; the Gateway's writer reports only to its own log.
+      runtime.error(
+        "Cleared agents.defaults.sessionStore.agentId because session.store changed. Set that owner path explicitly to assign the destination store's owner.",
+      );
+    }
+  } else {
+    await replaceConfigFile({
+      sourceConfig: authoredNextConfig,
+      snapshot,
+      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+      writeOptions: {
+        ...mutationStart.writeOptions,
+        auditOrigin: "cli",
+        ...(assertCurrentExpectation || params.beforePersistentApply
+          ? {
+              assertConfigPathForWrite: () => {
+                mutationStart.writeOptions.assertConfigPathForWrite?.();
+                assertCurrentExpectation?.();
+                params.beforePersistentApply?.();
+              },
+            }
+          : {}),
+        ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
+        ...(normalizedExplicitSetPaths.length > 0
+          ? { explicitSetPaths: normalizedExplicitSetPaths }
+          : {}),
+      },
+    });
+  }
   if (removedGatewayAuthPaths.length > 0) {
     runtime.log(
       info(
@@ -572,7 +606,7 @@ export async function runConfigOperations(params: {
       ),
     );
   }
-  const hint = configApplyHintForOperations(operations, currentConfig, nextConfig);
+  const hint = committedHint ?? configApplyHintForOperations(operations, currentConfig, nextConfig);
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";

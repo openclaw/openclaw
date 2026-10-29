@@ -3,15 +3,15 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent
 import { appendIncognitoSystemPrompt } from "./incognito-system-prompt.js";
 
 describe("incognito system prompt", () => {
-  it("appends the incognito instruction after existing per-session context", () => {
+  it("preserves existing context bytes before appending the incognito instruction", () => {
     expect(
       appendIncognitoSystemPrompt({
         agentId: "main",
-        extraSystemPrompt: "Existing context.",
+        extraSystemPrompt: "Existing context.\n",
         storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
       }),
     ).toBe(
-      "Existing context.\n\nThis chat is incognito; do not store its conversation content in memory files or long-term notes.",
+      "Existing context.\n\n\nThis chat is incognito; do not store its conversation content in memory files or long-term notes.",
     );
   });
 });

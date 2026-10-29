@@ -125,6 +125,45 @@ async function runGitCommandExitCode(
 }
 
 describe("sanitizeHostExecEnv", () => {
+  it("drops inherited node-service identity while keeping explicit overrides", () => {
+    const serviceEnv = {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "node",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node",
+      OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+      OPENCLAW_TASK_SCRIPT_NAME: "node.cmd",
+      OPENCLAW_LOG_PREFIX: "node",
+      OPENCLAW_GATEWAY_SERVICE_PID: "12345",
+    };
+    expect(
+      sanitizeHostExecEnv({
+        baseEnv: { ...serviceEnv, OPENCLAW_PROFILE: "node-proof" },
+        overrides: { OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service" },
+      }),
+    ).toEqual({
+      OPENCLAW_PROFILE: "node-proof",
+      OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service",
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+    });
+  });
+
+  it("preserves Gateway identity for child commands that need their custom service", () => {
+    const serviceEnv = {
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.custom",
+      OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service",
+      OPENCLAW_WINDOWS_TASK_NAME: "Custom Gateway",
+      OPENCLAW_GATEWAY_SERVICE_PID: "12345",
+    };
+    expect(sanitizeHostExecEnv({ baseEnv: serviceEnv })).toEqual({
+      ...serviceEnv,
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+    });
+  });
+
   it("removes dangerous inherited keys while preserving PATH", () => {
     const env = sanitizeHostExecEnv({
       baseEnv: envRecord(`PATH=/usr/bin:/bin | BASH_ENV=/tmp/pwn.sh | BROWSER=/tmp/pwn-browser

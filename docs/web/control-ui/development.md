@@ -83,6 +83,7 @@ the development proxy preserves the browser's Origin and does not provide
 authentication credentials.
 
 Vite serves the UI and its hot reload connection, and proxies Gateway requests.
+If the Gateway disconnects, the proxy retires that connection so the UI can reconnect without restarting Vite.
 The UI keeps credentials and saved settings scoped to the actual Gateway. An
 owner pairing handoff can be delivered on the dev page while retaining its
 original Gateway destination and fragment. To use another Gateway, restart

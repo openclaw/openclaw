@@ -71,6 +71,36 @@ describe("agents bind/unbind commands", () => {
     setConfig({});
   });
 
+  it("matches channel case-insensitively for bind conflicts and unbind removal (gh-184636)", async () => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+      bindings: [{ ...route("telegram", "default", "ops"), match: { channel: "Telegram" } }],
+    };
+    setConfig(config);
+
+    // bind for another agent on the same channel: cased route must conflict
+    await commands.agentsUpdateBindingsCommand(
+      "bind",
+      { agent: "main", bind: ["telegram:default"], json: true },
+      runtime,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+
+    // unbind for the owning agent: cased route must be found and removed
+    setConfig({
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+      bindings: [{ ...route("telegram", "default", "ops"), match: { channel: "Telegram" } }],
+    });
+    await commands.agentsUpdateBindingsCommand(
+      "unbind",
+      { agent: "ops", bind: ["telegram:default"] },
+      runtime,
+    );
+    const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as OpenClawConfig;
+    expect(written.bindings ?? []).toEqual([]);
+  });
+
   it("lists routing bindings without plugin validation", async () => {
     setConfig({ bindings: [route("matrix"), route("telegram", "work", "ops")] });
     await commands.agentsBindingsCommand({}, runtime);

@@ -27,7 +27,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
-import type { EmbeddingProvider } from "./embeddings.js";
+import { registerCacheHeadroomTests } from "./manager-cache-headroom.test-support.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { resetMemoryDatabase } from "./manager-db.js";
 import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
@@ -36,27 +36,10 @@ import {
   observePublishedSql,
   reservePublishedWriter,
 } from "./manager-publication-observer.test-support.js";
+import type { ReindexHarness, SyncArchiveParams } from "./manager-reindex-harness.test-support.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
-import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
-
-type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: string[] };
-
-type ReindexHarness = {
-  sync: (params: { reason?: string; force?: boolean }) => Promise<void>;
-  syncArchiveFiles: (params: SyncArchiveParams) => Promise<unknown>;
-  db: DatabaseSync;
-  cache: { enabled: boolean; maxEntries?: number };
-  writeMeta: (meta: MemoryIndexMeta) => Promise<void>;
-  providerKey: string | null;
-  provider: EmbeddingProvider | null;
-  dirty: boolean;
-  memoryFullRetryDirty: boolean;
-  sessionsDirty: boolean;
-  sessionsFullRetryDirty: boolean;
-  sessionsDirtyFiles: Set<string>;
-};
 
 describe("memory manager reindex recovery", () => {
   let fixtureRoot = "";
@@ -677,7 +660,7 @@ describe("memory manager reindex recovery", () => {
     },
   );
 
-  it("bounds the shadow cache before any entries reach the primary", async () => {
+  it.each(["incremental", "full"] as const)("bounds every %s cache transaction", async (mode) => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     const interceptedPaths: Array<string | undefined> = [];
@@ -696,7 +679,11 @@ describe("memory manager reindex recovery", () => {
         const client = await open(options, source, {
           ...worker,
           moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
-          input: { kind: "cache-capacity", publication: worker.input, maximum: 2 },
+          input: {
+            kind: "cache-capacity",
+            publication: worker.input,
+            maximum: mode === "full" ? 4 : 2,
+          },
         });
         interceptedPaths.push(options.path);
         return client;
@@ -705,12 +692,14 @@ describe("memory manager reindex recovery", () => {
     const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
     const harness = memoryManager as unknown as ReindexHarness;
     harness.cache.maxEntries = 2;
+    if (mode === "incremental") {
+      await memoryManager.sync({ reason: "cli", force: true });
+    }
     for (let i = 0; i < 4; i += 1) {
       await fs.writeFile(path.join(memoryDir, `${i}.md`), `unique cache content ${i}`);
     }
-    // Reject transient overflow too: checking only the final row count misses
-    // primary-file high-water growth followed by post-publication deletion.
-    await memoryManager.sync({ reason: "cli", force: true });
+    // The writer trigger rejects transient overflow, not just the final count.
+    await memoryManager.sync({ reason: "search-bootstrap", force: mode === "full" });
 
     expect(interceptedPaths.length).toBeGreaterThan(0);
     expect(interceptedPaths.every((filename) => filename === harness.db.location())).toBe(true);
@@ -722,8 +711,8 @@ describe("memory manager reindex recovery", () => {
     });
   });
 
-  it("bounds the canonical cache after a successful all-cache-hit rebuild", async () => {
-    const { memoryManager, harness, newest } = await createOversizedPublishedCache();
+  it("leaves the cache untouched after an all-cache-hit rebuild", async () => {
+    const { memoryManager, harness, before } = await createOversizedPublishedCache();
     embeddingCalls = [];
     const observed = observePublishedSql(harness.db);
     const deletes = () =>
@@ -752,7 +741,7 @@ describe("memory manager reindex recovery", () => {
       expect({ reads: reads(), deletes: deletes() }).toEqual({ reads: [], deletes: [] });
       expect(
         harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all(),
-      ).toEqual(newest);
+      ).toEqual(before);
       expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
         { text: "published alpha" },
       ]);
@@ -761,7 +750,7 @@ describe("memory manager reindex recovery", () => {
     }
   });
 
-  it("leaves even an oversized published cache untouched when a full rebuild fails", async () => {
+  it("preserves the cache when a full rebuild fails without writing embeddings", async () => {
     const { memoryManager, harness, before } = await createOversizedPublishedCache();
     harness.writeMeta = () => {
       throw new Error("failed shadow metadata");
@@ -775,6 +764,16 @@ describe("memory manager reindex recovery", () => {
       before,
     );
   });
+
+  registerCacheHeadroomTests(() => ({
+    openManager,
+    createCfg,
+    memoryDir,
+    resetEmbeddingCalls: () => {
+      embeddingCalls = [];
+    },
+    readEmbeddingCalls: () => embeddingCalls,
+  }));
 
   async function createOversizedPublishedCache() {
     const memoryManager = await openManager(

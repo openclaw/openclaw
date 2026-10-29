@@ -84,7 +84,8 @@ vi.mock("./agent-deletion-cleanup.js", () => ({
   assertAgentDeletionDatabaseCleanupAccess: vi.fn(),
   getAgentDeletionDatabaseCleanup: () => undefined,
 }));
-vi.mock("./openclaw-state-db-async-lifecycle.js", () => ({
+vi.mock("./openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-async-lifecycle.js")>()),
   getOpenClawDatabaseMaintenanceScope: () => undefined,
   observeOpenClawDatabaseMaintenanceResource: vi.fn(),
 }));

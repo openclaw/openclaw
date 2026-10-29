@@ -407,6 +407,12 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
             file: `apps/ios/Tests/${file}`,
             source: readFileSync(path.join("apps/ios/Tests", file), "utf8"),
           }));
+        const sharedComposerTest =
+          "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift";
+        sources.push({
+          file: sharedComposerTest,
+          source: readFileSync(sharedComposerTest, "utf8"),
+        });
         const testCommands = builds.filter(isTestCommand);
         for (const [index, group] of ["voice", "lifecycle"].entries()) {
           const selectors = testCommands[index]!.args.filter((arg) =>
@@ -458,12 +464,14 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
         "never",
         "-resultBundlePath",
         "apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult",
+        "-only-testing:OpenClawTests/ChatComposerTextViewIOSTests",
       ]),
     );
     const authSelectors = [
       ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
       "-only-testing:OpenClawTests/ChatTypingFocusTests",
       "-only-testing:OpenClawTests/ChatSendHydrationTests",
+      "-only-testing:OpenClawTests/ChatComposerTextViewIOSTests",
       "-only-testing:OpenClawTests/GatewayIngressControllerTests",
       "-only-testing:OpenClawTests/GatewayIngressLoginPreparationTests",
       "-only-testing:OpenClawTests/GatewayConnectionControllerTests",
@@ -607,6 +615,10 @@ describe.skipIf(process.platform === "win32")("iOS selected simulator workflow",
     { owner: "apps/ios/fastlane/Fastfile", groups: [] },
     { owner: "apps/ios/Tests/TalkModeConfigParsingTests.swift", groups: ["voice"] },
     { owner: "apps/ios/Tests/ChatSendHydrationTests.swift", groups: ["lifecycle"] },
+    {
+      owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift",
+      groups: ["lifecycle"],
+    },
   ])("builds the app and runs only selected groups for $owner", ({ owner, groups }) => {
     const selection = resolveIosSimulatorTestSelection([owner]);
     const steps = admittedSimulatorSteps(selection);

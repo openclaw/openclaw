@@ -139,6 +139,39 @@ describe("Discord provider startup", () => {
     expect(result.gatewaySupervisor).toBe(gatewaySupervisor);
   });
 
+  it("releases gateway and supervisor when the scheduler closes during startup", async () => {
+    const { createDiscordAutoPresenceController: createPresence } =
+      await vi.importActual<typeof import("./auto-presence.js")>("./auto-presence.js");
+    const registration = createDeferred<void>();
+    const scheduler = createTestPluginServiceScheduler();
+    const gateway = { id: "gateway", disconnect: vi.fn() };
+    const supervisor = { shutdown: vi.fn(), handleError: vi.fn(), dispose: vi.fn() };
+    vi.mocked(createDiscordGatewayPlugin).mockReturnValue(gateway as never);
+    vi.mocked(createDiscordGatewaySupervisor).mockReturnValue(supervisor as never);
+    waitForRegistration.mockReturnValueOnce(registration.promise);
+    vi.mocked(createDiscordAutoPresenceController).mockImplementationOnce(createPresence);
+    const pending = createMonitorClient({ scheduler });
+    await scheduler.stop();
+    registration.resolve();
+    await expect(pending).rejects.toThrow("Plugin service scheduler is closed");
+    expect(gateway.disconnect).toHaveBeenCalledOnce();
+    expect(supervisor.dispose).toHaveBeenCalledOnce();
+  });
+  it("preserves original startup error when disconnect fails", async () => {
+    const failure = new Error("registration failed");
+    const runtime = createRuntimeSpies();
+    const disconnect = vi.fn(() => {
+      throw new Error("disconnect failed");
+    });
+    vi.mocked(createDiscordGatewayPlugin).mockReturnValue({ id: "gateway", disconnect } as never);
+    waitForRegistration.mockRejectedValueOnce(failure);
+    await expect(createMonitorClient({ runtime })).rejects.toBe(failure);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("failed to disconnect gateway during startup cleanup"),
+    );
+  });
+
   it("passes REST timeout options and fetch to internal Discord REST", async () => {
     const restFetch = vi.fn<typeof fetch>();
     const { client } = await createMonitorClient({ restFetch });

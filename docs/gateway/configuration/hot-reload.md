@@ -458,3 +458,5 @@ That keeps hot-reload decisions (hot-apply vs restart) predictable even when a
 single top-level section lives in its own included file such as
 `plugins: { $include: "./plugins.json5" }`. Reload planning stops if the
 source layout is ambiguous.
+
+Automatic plugin drain timeouts with successful rollback settle the writing request as failed before observing idle work and retrying the latest saved configuration. This lets the writing turn release its own retained plugin work. Explicit plugin reloads still report their bounded failure.

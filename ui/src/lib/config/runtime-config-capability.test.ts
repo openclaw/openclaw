@@ -132,17 +132,24 @@ describe("runtime config capability", () => {
     runtimeConfig.dispose();
   });
 
-  it("refreshes config but skips schema after a replacement without config.schema", async () => {
+  it("surfaces a missing mandatory schema method after a client replacement", async () => {
     let current = false;
+    const configRefresh = deferred();
     const createRequest = () =>
       vi.fn(async (method: string) => {
         if (method === "config.get") {
+          if (current) {
+            await configRefresh.promise;
+          }
           return {
             config: { endpoint: current ? "current" : "initial" },
             hash: current ? "hash-current" : "hash-initial",
             valid: true,
             issues: [],
           };
+        }
+        if (current && method === "config.schema") {
+          throw new Error("unknown method: config.schema");
         }
         return method === "config.schema"
           ? { schema: {}, uiHints: {}, version: "schema-initial", generatedAt: "" }
@@ -166,12 +173,16 @@ describe("runtime config capability", () => {
       features: { methods: ["config.get"] },
     } as GatewayHelloOk);
 
-    await vi.waitFor(() => expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-current"));
+    await vi.waitFor(() => expect(runtimeConfig.state.configLoading).toBe(true));
+    configRefresh.resolve();
+    await vi.waitFor(() => {
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-current");
+      expect(runtimeConfig.state.lastError).toContain("unknown method: config.schema");
+    });
     expect(runtimeConfig.state.configForm).toEqual({ endpoint: "current" });
     expect(runtimeConfig.state.configSchemaVersion).toBe("schema-initial");
-    expect(runtimeConfig.state.lastError).toBeNull();
     expect(requestB.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
-    expect(requestB.mock.calls.filter(([method]) => method === "config.schema")).toHaveLength(0);
+    expect(requestB.mock.calls.filter(([method]) => method === "config.schema")).toHaveLength(1);
     runtimeConfig.dispose();
   });
 

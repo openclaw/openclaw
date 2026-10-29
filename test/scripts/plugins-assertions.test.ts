@@ -1296,6 +1296,87 @@ fs.renameSync = (source, destination) => {
     }
   });
 
+  it.for(["2147483648", String(Number.MAX_SAFE_INTEGER)])(
+    "rejects overflowing preflight timeout %s before requests",
+    (timeoutMs, { signal }) =>
+      fixtures.run(async () => {
+        let requests = 0;
+        const server = createServer((_request, response) => {
+          requests += 1;
+          response.end("{}");
+        });
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
+
+        try {
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            throw new Error("expected TCP server address");
+          }
+          const result = await runAssertionAsync(signal, ["clawhub-preflight"], {
+            CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
+            CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+            OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
+            OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: timeoutMs,
+          });
+
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain(
+            "invalid OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: " + timeoutMs,
+          );
+          expect(requests).toBe(0);
+          expect(result.stderr).not.toContain("TimeoutOverflowWarning");
+        } finally {
+          await new Promise<void>((resolve) => {
+            server.close(() => resolve());
+          });
+        }
+      }),
+  );
+
+  it("accepts the maximum preflight timeout for delayed headers and body", ({ signal }) =>
+    fixtures.run(async () => {
+      const server = createServer((_request, response) => {
+        setImmediate(() => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"package":');
+          setImmediate(() =>
+            response.end(
+              JSON.stringify({
+                family: "code-plugin",
+                runtimeId: "openclaw-kitchen-sink-fixture",
+              }) + "}",
+            ),
+          );
+        });
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("expected TCP address");
+        }
+        const result = await runAssertionAsync(signal, ["clawhub-preflight"], {
+          CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
+          CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+          OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
+          OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "2147483647",
+        });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain(
+          "Using ClawHub package @openclaw/kitchen-sink (code-plugin).",
+        );
+        expect(result.stderr).not.toContain("TimeoutOverflowWarning");
+      } finally {
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    }));
+
   it("times out stalled ClawHub package metadata requests", ({ signal }) =>
     fixtures.run(async () => {
       const server = createServer((_request, _response) => {});

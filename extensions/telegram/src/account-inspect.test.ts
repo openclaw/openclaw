@@ -199,3 +199,20 @@ describe("inspectTelegramAccount SecretRef resolution", () => {
     },
   );
 });
+
+it("reads groups from a mixed-case account key for unmentioned group status", () => {
+  const cfg: OpenClawConfig = {
+    channels: {
+      telegram: {
+        groups: { "-100999": { requireMention: true } },
+        accounts: {
+          Work: {
+            botToken: "123:work",
+            groups: { "-100123": { requireMention: false } },
+          },
+        },
+      },
+    },
+  };
+  expect(inspectTelegramAccount({ cfg, accountId: "work" }).allowUnmentionedGroups).toBe(true);
+});

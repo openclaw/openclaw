@@ -26,7 +26,7 @@ afterEach(() => {
 it.each(["child close", "tree signal completion", "already-exited child close"])(
   "keeps provider shutdown owned until %s after PID disappearance",
   async (heldFact) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const child = new ChildProcess();
     let exitCode: number | null = null;
     Object.defineProperties(child, {
@@ -94,7 +94,7 @@ it.each(["child close", "tree signal completion", "already-exited child close"])
 
 it("does not regain Windows PID authority during shutdown retry before child exit", async () => {
   await withMockedPlatform("win32", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const child = new ChildProcess();
     let exitCode: number | null = null;
     Object.defineProperties(child, {
@@ -158,7 +158,7 @@ it.each([
   { completion: "bounded helper timeout", forcedDurationMs: 3_000 },
 ])("joins Windows shutdown until $completion", async ({ completion, forcedDurationMs }) => {
   await withMockedPlatform("win32", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const child = new ChildProcess();
     let exitCode: number | null = null;
     Object.defineProperties(child, {

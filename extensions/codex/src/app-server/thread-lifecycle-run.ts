@@ -4,12 +4,14 @@ import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
 import { isCodexAppServerLiveThreadBackgroundOnly } from "./client-runtime-thread-state.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   isCodexPluginThreadBindingStale,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
+import { assertCodexProtectedContextCarrier } from "./protected-context-carrier.js";
 import {
   assertCodexBindingMayBeReplaced,
   type CodexAppServerPendingSupervisionBranch,
@@ -53,6 +55,7 @@ import {
   throwIfCodexThreadLifecycleAborted,
   tryReuseCodexLiveThread,
 } from "./thread-lifecycle-warm.js";
+import { splitCodexExtraSystemPrompt } from "./thread-prompt.js";
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
 export async function startOrResumeThread(
@@ -131,17 +134,32 @@ export async function startOrResumeThread(
         throwIfAborted,
       });
       serviceTierAdmission = context.serviceTierAdmission;
+      assertCodexProtectedContextCarrier(
+        params.client,
+        binding?.threadId,
+        Boolean(params.inferenceRoute),
+        splitCodexExtraSystemPrompt(params.params).turn,
+      );
       // Managed requests own a parent-local carrier. Only uncovered connections
       // put refreshable instructions in native thread state; recompute after route changes.
       params.refreshableInstructions = params.inferenceRoute
         ? undefined
         : input.refreshableInstructions;
+      // Only an actual relay can preserve current context through native compaction.
+      params.developerInstructions =
+        params.inferenceRoute || input.developerInstructions === undefined
+          ? input.developerInstructions
+          : joinPresentSections(
+              input.developerInstructions,
+              splitCodexExtraSystemPrompt(params.params).turn,
+            );
       return context;
     };
     const releaseRetainedThread = (
       threadId: string,
       ownerClientId = initialBoundClientId,
       assertCurrent?: () => void,
+      afterThreadWrite = false,
     ) =>
       releaseCodexBoundLiveThread({
         client: params.client,
@@ -153,6 +171,7 @@ export async function startOrResumeThread(
         assertCurrent,
         withCurrent: authority.withCurrent,
         signal: params.signal,
+        onExitWaitCancelled: afterThreadWrite ? undefined : params.onPrewriteHandoffCancelled,
       });
     if (binding?.pendingSupervisionBranch) {
       const requestContext = await prepareRequestContext();
@@ -655,7 +674,13 @@ export async function startOrResumeThread(
     });
     if (replacementPredecessor && !preserveExistingBinding && configuredMcpOwnershipChanged) {
       // Configured MCP migration retains the prior subscription until its replacement commits.
-      await releaseRetainedThread(replacementPredecessor.threadId, replacementPredecessor.clientId);
+      // That replacement already subscribed this client, so cancellation cannot keep it.
+      await releaseRetainedThread(
+        replacementPredecessor.threadId,
+        replacementPredecessor.clientId,
+        undefined,
+        true,
+      );
     }
     return publishCodexThreadInferenceBinding(params, started);
   };

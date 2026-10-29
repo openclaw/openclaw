@@ -25,6 +25,11 @@ Cloud worker provider and lease-backed sandbox backend for the Crabbox CLI.
 
 <!-- openclaw-plugin-reference:manual-start -->
 
+## Model-run timeout
+
+`openclaw crabbox run --timeout <seconds>` requires decimal whole seconds from
+`1` through `86400`. Hexadecimal, binary, octal, and exponent spellings are rejected.
+
 ## Configure
 
 See [Cloud worker environments](/gateway/config-cloud-workers#crabbox-profile) for the profile schema and lifecycle notes.

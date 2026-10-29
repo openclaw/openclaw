@@ -12,7 +12,9 @@ import {
   SecretSurfaceUnavailableError,
   setActiveDegradedSecretOwners,
 } from "../../secrets/runtime-degraded-state.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createControlUiSessionPullRequestSubscriptions } from "../control-ui-session-pr-subscriptions.js";
 import { gitHubPublicApi } from "../github-public-api.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
 import { createControlUiHandlers } from "./control-ui.js";
@@ -504,6 +506,39 @@ describe("controlUi.githubPreview", () => {
 });
 
 describe("controlUi.sessionPullRequests.subscribe", () => {
+  it("reports subscription preparation failures without rejecting the request", async () => {
+    const warn = vi.fn();
+    const scheduler = createTestGatewayScheduler();
+    const subscriptions = createControlUiSessionPullRequestSubscriptions({
+      scheduler,
+      broadcastToConnIds: vi.fn(),
+      prepareRead: async () => {
+        throw new Error("session reader unavailable");
+      },
+      load: vi.fn(),
+    });
+    try {
+      const respond = vi.fn<RespondFn>();
+      await expectDefined(
+        createControlUiHandlers(vi.fn())["controlUi.sessionPullRequests.subscribe"],
+        "subscription handler",
+      )(
+        requestOptions({ sessionKeys: ["agent:main:main"] }, respond, {
+          client: { connId: "conn-control-ui" },
+          context: {
+            controlUiSessionPullRequests: subscriptions,
+            logGateway: { warn },
+          },
+        }),
+      );
+      expect(respond).toHaveBeenCalledWith(true, { subscribed: true }, undefined);
+    } finally {
+      await subscriptions.stop();
+      await scheduler.stop();
+    }
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("session reader unavailable"));
+  });
+
   it.each([
     {
       sessionKeys: [" agent:main:main ", "agent:main:main", "agent:work:main"],

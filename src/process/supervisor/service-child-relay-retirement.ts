@@ -103,3 +103,31 @@ export function createServiceChildRelayRetirement(params: {
     },
   };
 }
+
+/** Builds the hard-deadline failure; stability bundles keep messages, not cause payloads. */
+export function createServiceChildCleanupExpiryError(
+  pending: Record<string, boolean>,
+  owner: Record<string, unknown>,
+  diagnostics: ReturnType<ReturnType<typeof createServiceChildRelayRetirement>["diagnostics"]>,
+): Error {
+  const ownerError = new Error(
+    "service child cleanup owner: " +
+      JSON.stringify({
+        ...owner,
+        durationMs: diagnostics.durationMs,
+        escalationAfterMs: diagnostics.escalationAfterMs,
+      }),
+    { cause: diagnostics.signalError },
+  );
+  // Preserve live diagnostic consumers without expanding serialized Error payloads.
+  Object.defineProperties(ownerError, {
+    durationMs: { value: diagnostics.durationMs },
+    escalationAfterMs: { value: diagnostics.escalationAfterMs },
+    signalError: { value: diagnostics.signalError },
+  });
+  return new Error(
+    "service child cleanup did not complete before its hard deadline; pending: " +
+      JSON.stringify(pending),
+    { cause: ownerError },
+  );
+}

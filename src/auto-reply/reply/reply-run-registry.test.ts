@@ -41,6 +41,7 @@ import {
   expireStaleReplyOperation,
   isReplyRunEvidenceStale,
   lifecycleAdmissionByOperation,
+  waitForReplyBarrierSettlement,
 } from "./reply-run-registry.state.js";
 import {
   createTestReplyOperation,
@@ -538,6 +539,32 @@ describe("reply run registry", () => {
       next.complete();
     });
   });
+
+  it.each([-60_000, 60_000])(
+    "keeps the extendable barrier deadline after a %s ms wall-clock step",
+    async (wallClockStepMs) => {
+      await withFakeReplyTimers(async () => {
+        const pending = createDeferred();
+        let settled = false;
+        const settlement = waitForReplyBarrierSettlement(pending.promise, {
+          maxTimeoutMs: 30_000,
+          shouldExtend: () => true,
+        }).then(() => {
+          settled = true;
+        });
+        try {
+          vi.setSystemTime(Date.now() + wallClockStepMs);
+          await vi.advanceTimersByTimeAsync(15_000);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(15_000);
+          expect(settled).toBe(true);
+        } finally {
+          pending.resolve();
+          await settlement;
+        }
+      });
+    },
+  );
 
   it("keeps follow-up admission blocked during an unsettled inter-block delay", async () => {
     await withFakeReplyTimers(async () => {

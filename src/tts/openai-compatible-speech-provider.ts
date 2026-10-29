@@ -52,6 +52,7 @@ export type OpenAiCompatibleSpeechProviderOptions<
   defaultModel: string;
   defaultVoice: string;
   defaultBaseUrl: string;
+  defaultTimeoutMs?: number;
   envKey: string;
   responseFormats: readonly string[];
   defaultResponseFormat: string;
@@ -225,6 +226,7 @@ export function createOpenAiCompatibleSpeechProvider<
     label: options.label,
     autoSelectOrder: options.autoSelectOrder,
     defaultModel: options.defaultModel,
+    defaultTimeoutMs: options.defaultTimeoutMs,
     models: [...options.models],
     voices: [...options.voices],
     resolveConfig: ({ rawConfig }) => normalizeConfig(rawConfig),

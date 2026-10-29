@@ -217,7 +217,7 @@ describe("exa web search provider", () => {
       { baseUrl: "ftp://proxy.example/exa" },
       { query: "invalid endpoint" },
       "invalid_base_url",
-      "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/exa",
+      "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL.",
     ],
     [
       {},
@@ -245,6 +245,24 @@ describe("exa web search provider", () => {
       message,
       docs: `https://docs.openclaw.ai/tools/${error === "invalid_base_url" ? "exa-search" : "web"}`,
     });
+  });
+
+  it.each([
+    "ftp://fixture-user:fixture-url-password@proxy.example/exa?api_key=fixture-query-token",
+    "fixture-user:fixture-url-password@proxy.example:invalid/exa?api_key=fixture-query-token",
+    "custom://fixture-user:fixture-url-password@proxy.example/exa?api_key=fixture-query-token",
+  ])("redacts credentials from rejected custom endpoint %s", async (baseUrl) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const result = await requireExaTool({ apiKey: "test-exa-key", baseUrl }).execute({
+      query: "invalid credential-bearing endpoint",
+    });
+    expect(JSON.stringify(result)).not.toContain("fixture-url-password");
+    expect(JSON.stringify(result)).not.toContain("fixture-query-token");
+    expect(result).toMatchObject({
+      error: "invalid_base_url",
+      message: expect.stringContaining("plugins.entries.exa.config.webSearch.baseUrl"),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it.each([0, 1])("honors the current cache TTL %s", async (cacheTtlMinutes) => {

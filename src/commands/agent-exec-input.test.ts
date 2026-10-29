@@ -15,8 +15,14 @@ describe("agent exec prompt sources", () => {
   ])("reads a $source prompt", async ({ source, text, expected }) => {
     let messageFile = source === "stdin" ? "-" : undefined;
     if (source === "file") {
-      messageFile = path.join(tempDirs.make("openclaw-agent-exec-prompt-"), "prompt.md");
+      messageFile = path.join(
+        tempDirs.make("openclaw-agent-exec-prompt-"),
+        process.platform === "win32" ? "prompt.md" : " prompt.md ",
+      );
       await fs.writeFile(messageFile, text, "utf8");
+      if (process.platform !== "win32") {
+        await fs.writeFile(messageFile.trim(), "wrong neighboring prompt", "utf8");
+      }
     }
     await expect(
       resolveAgentExecPrompt(

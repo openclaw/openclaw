@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   consumeLiveCatalogRefresh,
+  getProviderCatalogDiscoveryBudget,
   recordLiveCatalogExpiry,
 } from "../plugins/provider-catalog-expiry.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
@@ -146,18 +147,30 @@ export async function getCachedLiveCatalogValue<T>(params: {
   }
   const key = buildLiveCatalogCacheKey(params.keyParts);
   const refresh = consumeLiveCatalogRefresh(key);
+  // Different acquisition budgets must not inherit each other's pending transport deadline.
+  const budget = getProviderCatalogDiscoveryBudget();
+  const pendingKey = key + ":" + (budget ? (budget.timeoutMs ?? "unscoped") : 5_000);
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
-  if (existing) {
-    // An abandoned load may ignore abort; a new caller must not inherit its cancellation.
-    if (
-      !existing.controller.signal.aborted &&
-      (!refresh || !existing.settled) &&
-      isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })
-    ) {
-      return await consumeLiveCatalog(existing, params.signal);
-    }
-    liveCatalogCache.delete(key);
+  if (
+    existing?.settled &&
+    existing.retained &&
+    !existing.controller.signal.aborted &&
+    !refresh &&
+    isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })
+  ) {
+    return await consumeLiveCatalog(existing, params.signal);
   }
+  // SAFETY: Budget aliases point to the same typed entry as their caller-owned catalog key.
+  const shared = liveCatalogCache.get(pendingKey) as LiveCatalogCacheEntry<T> | undefined;
+  if (
+    shared &&
+    !shared.settled &&
+    !shared.controller.signal.aborted &&
+    isFutureDateTimestampMs(shared.expiresAt, { nowMs: rawNow })
+  ) {
+    return await consumeLiveCatalog(shared, params.signal);
+  }
+  liveCatalogCache.delete(key);
   const completion = createDeferredCore<T>();
   // Signaled callers observe their own waiter; an abandoned shared rejection still needs an owner.
   void completion.promise.catch(() => undefined);
@@ -171,8 +184,9 @@ export async function getCachedLiveCatalogValue<T>(params: {
   };
   // Auth-scoped catalogs vary by token. Bound retained entries without rejecting
   // new catalogs or canceling consumers of an evicted load.
-  pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
+  pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 2);
   liveCatalogCache.set(key, entry);
+  liveCatalogCache.set(pendingKey, entry);
   const consumed = consumeLiveCatalog(entry, params.signal);
   void (async () => {
     let retain = false;
@@ -203,7 +217,12 @@ export async function getCachedLiveCatalogValue<T>(params: {
       entry.waiters = undefined;
       entry.retained = retain;
       entry.settled = true;
-      if (!retain && liveCatalogCache.get(key) === entry) {
+      const ownsPending = liveCatalogCache.get(pendingKey) === entry;
+      if (ownsPending) {
+        liveCatalogCache.delete(pendingKey);
+      }
+      // A retired pending generation must not publish a globally reusable result.
+      if ((!retain || !ownsPending) && liveCatalogCache.get(key) === entry) {
         liveCatalogCache.delete(key);
       }
     }

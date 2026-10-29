@@ -89,10 +89,10 @@ function resolveExaApiKey(exa?: ExaConfig): string | undefined {
   );
 }
 
-function invalidBaseUrlPayload(value: string) {
+function invalidBaseUrlPayload() {
   return {
     error: "invalid_base_url",
-    message: `plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ${value}`,
+    message: "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL.",
     docs: "https://docs.openclaw.ai/tools/exa-search",
   };
 }
@@ -106,17 +106,17 @@ function resolveExaSearchEndpoint(
   }
 
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
-    return invalidBaseUrlPayload(configured);
+    return invalidBaseUrlPayload();
   }
   const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
   let parsed: URL;
   try {
     parsed = new URL(candidate);
   } catch {
-    return invalidBaseUrlPayload(configured);
+    return invalidBaseUrlPayload();
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return invalidBaseUrlPayload(configured);
+    return invalidBaseUrlPayload();
   }
 
   const pathname = parsed.pathname.replace(/\/+$/, "");

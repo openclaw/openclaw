@@ -18,7 +18,7 @@ function interruptionScript(
   pendingApproval: boolean,
   restoringApproval: boolean,
   progress: boolean,
-  archiveSignal?: "SIGINT" | "SIGTERM",
+  archiveSignal?: "SIGINT" | "SIGTERM" | "SIGHUP",
   closedChildStdin = false,
 ) {
   return `
@@ -213,6 +213,7 @@ it.skipIf(process.platform === "win32").each([
   { interruption: "SIGINT during archives", code: 130 },
   { interruption: "closed child stdin", code: 0 },
   { interruption: "SIGTERM with progress", code: 143 },
+  { interruption: "SIGHUP during archives", code: 129 },
   { interruption: "SIGTERM while approving", code: 143 },
   { interruption: "SIGTERM while restoring", code: 143 },
 ] as const)(
@@ -222,8 +223,14 @@ it.skipIf(process.platform === "win32").each([
     const eventsPath = path.join(root, "events.json");
     const pendingApproval = interruption === "SIGTERM while approving";
     const restoringApproval = interruption === "SIGTERM while restoring";
-    const archives =
-      interruption === "SIGINT during archives" || interruption === "SIGTERM with progress";
+    const archiveSignal =
+      interruption === "SIGINT during archives"
+        ? "SIGINT"
+        : interruption === "SIGHUP during archives"
+          ? "SIGHUP"
+          : interruption === "SIGTERM with progress"
+            ? "SIGTERM"
+            : undefined;
     const child = spawn(
       resolveTestNodeExecPath(),
       createNodeEvalArgs(
@@ -232,7 +239,7 @@ it.skipIf(process.platform === "win32").each([
           pendingApproval,
           restoringApproval,
           interruption === "SIGTERM with progress",
-          archives ? (interruption === "SIGINT during archives" ? "SIGINT" : "SIGTERM") : undefined,
+          archiveSignal,
           interruption === "closed child stdin",
         ),
       ),
@@ -269,7 +276,7 @@ it.skipIf(process.platform === "win32").each([
         }),
       ]);
       expect(ready[0]).toBe("stopped");
-      const terminationSignal = interruption === "SIGINT during archives" ? "SIGINT" : "SIGTERM";
+      const terminationSignal = archiveSignal ?? "SIGTERM";
       if (pendingApproval || restoringApproval) {
         const approval = Promise.race([
           once(child, "message"),
@@ -282,7 +289,7 @@ it.skipIf(process.platform === "win32").each([
         child.kill("SIGTERM");
       } else if (interruption === "closed stdout") {
         child.stdout!.destroy();
-      } else if (!archives && interruption !== "closed child stdin") {
+      } else if (!archiveSignal && interruption !== "closed child stdin") {
         child.kill(terminationSignal);
       }
       if (!pendingApproval && !restoringApproval) {
@@ -294,7 +301,7 @@ it.skipIf(process.platform === "win32").each([
         "stopped",
         ...(pendingApproval ? ["approval-declined"] : []),
         ...(interruption === "closed child stdin" ? ["child-stdin-closed"] : []),
-        ...(archives
+        ...(archiveSignal
           ? ["archive-started", "archives-cancelled", "repair-cancelled"]
           : ["repair-complete"]),
         "stores-closed",

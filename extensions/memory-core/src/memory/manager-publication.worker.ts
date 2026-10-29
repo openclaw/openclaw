@@ -459,10 +459,17 @@ function createPublicationBackend(
         return undefined;
       }
       if (command.type === "cache.prune") {
-        if (cacheSize() <= command.input.maxEntries) {
+        if (!command.input.recount && cacheSize() <= command.input.maxEntries) {
           return { ok: true, value: false };
         }
-        return writeCache((size) => pruneMemoryEmbeddingCache(db, size, command.input.maxEntries));
+        let exceedsCap = false;
+        const result = writeCache((retainedSize) => {
+          // Terminal cleanup cannot trust a retained population from before the rebuild.
+          const size = command.input.recount ? countMemoryEmbeddingCache(db) : retainedSize;
+          exceedsCap = size > command.input.maxEntries;
+          return exceedsCap ? pruneMemoryEmbeddingCache(db, size, command.input.maxEntries) : size;
+        });
+        return result.ok ? { ...result, value: exceedsCap } : result;
       }
       if (command.type === "cache.clear") {
         return writeCache(

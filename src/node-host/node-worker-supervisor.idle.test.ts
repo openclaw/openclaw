@@ -19,6 +19,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.resetAllMocks();
 });
 
@@ -29,7 +30,7 @@ function input(turnId: string, environmentId = "environment-1") {
   return value;
 }
 
-function fixture(capacity = 1, container = false) {
+function fixture(capacity = 1, container = false, capacityWaitMs?: number) {
   const launches = new Map<string, NodeWorkerLaunchReceipt>();
   const turns = new Map<string, NodeWorkerTurnReceipt>();
   const snapshots: NodeWorkerCapacitySnapshot[] = [];
@@ -224,6 +225,7 @@ function fixture(capacity = 1, container = false) {
     bundleRoot: "/synthetic/bundles",
     env: { OPENCLAW_STATE_DIR: "/synthetic/state" },
     capacity,
+    capacityWaitMs,
     onCapacityChanged: (snapshot) => snapshots.push(snapshot),
     ...(container
       ? {
@@ -464,8 +466,8 @@ describe("node worker idle retention", () => {
           expect(owner.adapter.kill).toHaveBeenCalledTimes(2);
           expect(mocks.prepare).toHaveBeenCalledTimes(1);
         } else {
-          // Move wall time to the boundary without firing the deadline callback.
-          vi.setSystemTime(10_000);
+          // Reach the elapsed admission boundary without firing unrelated timers.
+          vi.spyOn(performance, "now").mockReturnValue(10_000);
         }
         cleanup.resolve();
         if (timing === "before") {
@@ -521,6 +523,7 @@ describe("node worker idle retention", () => {
           );
         await owner.killed.promise;
         if (boundary === "deadline") {
+          vi.setSystemTime(-60_000);
           await vi.advanceTimersByTimeAsync(9_999);
           expect(outcomes).toEqual([]);
           await vi.advanceTimersByTimeAsync(1);
@@ -713,3 +716,32 @@ describe("node worker idle retention", () => {
     },
   );
 });
+
+it.each([0, 37])(
+  "keeps the configured %i ms capacity budget across a wall-clock step",
+  async (waitMs) => {
+    const f = fixture(1, false, waitMs);
+    try {
+      vi.setSystemTime(123_000);
+      await f.launch(input("occupied"));
+      expect(mocks.launchClaim.mock.calls[0]?.[3]).toBe(123_000);
+      const result = f.supervisor
+        .launch(input("waiting", "other-environment"), TEST_WORKER_ENDPOINT)
+        .then(
+          () => ({ error: undefined }),
+          (error: unknown) => ({ error }),
+        );
+      vi.setSystemTime(-60_000);
+      await vi.advanceTimersByTimeAsync(waitMs);
+      expect(await result).toEqual({
+        error: expect.objectContaining({
+          name: "NodeWorkerCapacityExhaustedError",
+          message: "node worker capacity remained full for " + waitMs + " ms",
+        }),
+      });
+      expect(mocks.prepare).toHaveBeenCalledTimes(1);
+    } finally {
+      await f.supervisor.close();
+    }
+  },
+);

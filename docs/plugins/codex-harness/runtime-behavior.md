@@ -32,6 +32,8 @@ Codex tool search under the `openclaw` namespace, keeping the initial model
 context smaller. The restricted-turn shell fallback is the exception for
 `exec` and `process` when a finite allowlist disables native Code Mode;
 runtime allowlists and `codexDynamicToolsExclude` still apply.
+Strict [`agent exec`](/cli/agent#agent-exec) runs also use OpenClaw's tools so
+their process cleanup stays with the one-shot run owner.
 When native shell remains active and Gateway access is policy-eligible,
 OpenClaw instead publishes the distinct `gateway_exec` and `gateway_process`
 names so native shell and the OpenClaw-managed environment path cannot be
@@ -271,6 +273,17 @@ When native interruption and subscription cleanup are confirmed, stopping one
 chat leaves other chats running on the shared client. A follow-up can resume the
 stopped thread without waiting for those chats to finish.
 
+Native child completion delivery stops permanently when its retry budget is
+exhausted or requester recovery blocks it. OpenClaw retires that child turn's
+pending assignment and follow-up receipt together, so later parent registrations
+and Gateway restarts do not restart delivery. A bounded system note in the parent
+transcript identifies the child, its status, and its result session key; a warning
+records retirement even if the transcript note cannot be written. Other pending
+turns of the same child remain independent. Parent subscription retention during
+ordinary completion retries is unchanged.
+
+If a chat’s previous client was retired while siblings still use it, the next turn waits for its exact thread to close or that process to exit. A passive read of that exact old client recovers a missed closure only when the matching thread is notLoaded; failed reads and still-loaded threads preserve the fence. Cancelling the waiting turn stops only its read and wait. Native resume still enforces its exclusive persistence writer lock.
+
 Managed local connections share a bounded inference relay. Up to 16 request
 preparations and uploads run at once, with another 16 waiting in arrival order.
 Responses keep streaming after their upload capacity is released, so a long
@@ -281,8 +294,14 @@ with room for 16 pending or closing admissions. It retains up to 64 usable
 WebSockets and reclaims the oldest completed idle connection when either
 transport needs room. Active responses and newly opened connections awaiting
 their first request are not evicted. HTTP connections close after each response;
-native WebSocket reuse remains intact. The separate limit of 64 admitted root
-contexts is unchanged; transport capacity is not a count of saved conversations.
+native WebSocket reuse remains intact. Separately, each inference relay admits at
+most 64 active root contexts. Additional turns wait in arrival order for a root
+to be released; cancellation removes a waiting turn, and relay shutdown rejects
+its waiters. Admission rechecks the turn and transport ownership before starting.
+Debug logs identify the root limit and waiting count. A completed, failed,
+aborted, or yielded turn releases its root; retained parent subscriptions and
+prepared context do not occupy active roots. Transport capacity is not a count
+of saved conversations.
 
 A new WebSocket waits before opening its upstream connection; admission and its
 handshake share a 10-second deadline. HTTP admission and queued WebSocket

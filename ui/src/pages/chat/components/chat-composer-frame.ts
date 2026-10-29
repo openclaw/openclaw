@@ -267,6 +267,16 @@ export function createChatComposerContext(props: ChatComposerProps) {
     }
   };
 
+  const settleSubmittedCommandMenus = () => {
+    if (state.composerDraftScope !== draftScope || (props.getDraft?.() ?? props.draft) !== "") {
+      return;
+    }
+    resetSlashMenuState(state);
+    resetSkillMenuState(state);
+    // Menu state is a plain owner; the send may already have rendered its cleared draft.
+    requestUpdate();
+  };
+
   const submitDraft = (
     draft: string,
     submissionAction?: Event,
@@ -286,8 +296,13 @@ export function createChatComposerContext(props: ChatComposerProps) {
       void goalComposer.submit(submissionAction);
       return;
     }
-    void props.onSend(followUpModeOverride, submissionAction);
+    const completion = props.onSend(followUpModeOverride, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
+    if (completion) {
+      void completion.then(settleSubmittedCommandMenus, () => undefined);
+    } else {
+      settleSubmittedCommandMenus();
+    }
   };
 
   const handleKeyDown = createComposerKeyDownHandler({

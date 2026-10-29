@@ -1083,6 +1083,7 @@ export function startGatewayConfigReloader(
       if (!superseded || retryCandidate !== attemptedCandidate) {
         settleCandidateApplications(attemptedCandidate, superseded ? "superseded" : "failed");
       }
+      pluginDrain.observeAfterReceipt();
       if (superseded) {
         opts.log.info(`config reload superseded: ${String(err)}`);
       } else if (pluginDrain.shouldReport(err)) {

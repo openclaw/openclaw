@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -110,7 +111,10 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     "plugins.list",
     validatePluginsListParams,
     async ({ respond, context }) => {
-      const catalog = await listManagedPlugins({ config: context.getRuntimeConfig() });
+      const catalog = await listManagedPlugins({
+        config: context.getRuntimeConfig(),
+        cachedCatalogOnly: true,
+      });
       const registry = getPluginRegistryForContext();
       // The first loaded record owns shadowed IDs; read runtime facts after catalog I/O.
       const records = new Map(registry?.plugins.toReversed().map((record) => [record.id, record]));
@@ -142,7 +146,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
                     : record?.status === "disabled"
                       ? "disabled"
                       : "unloaded",
-                ...(error ? { error: error.slice(0, 2000) } : {}),
+                ...(error ? { error: truncateUtf16Safe(error, 2000) } : {}),
               },
             });
           }),

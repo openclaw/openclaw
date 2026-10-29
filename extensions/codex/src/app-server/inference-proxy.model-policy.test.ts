@@ -172,7 +172,7 @@ describe("inference transport model authority", () => {
   it("releases acquired authority when parent-context preparation fails", async () => {
     const model = execution();
     bindModelExecution.mockReturnValue(model.binding);
-    const registration = proxy.context.register({
+    const registration = await proxy.context.register({
       threadId: "root",
       text: "synthetic private instructions",
       signal: new AbortController().signal,

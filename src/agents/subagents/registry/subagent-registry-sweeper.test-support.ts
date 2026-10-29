@@ -41,8 +41,9 @@ export function createArchivedSubagentSweeperRun(
 export function createSubagentSweeperHarness(
   runtime: { current?: GatewayRecoveryRuntime },
   entry = createSubagentSweeperRun(),
+  suppliedRuns?: Map<string, SubagentRunRecord>,
 ) {
-  const runs = new Map([[entry.runId, entry]]);
+  const runs = suppliedRuns ?? new Map([[entry.runId, entry]]);
   const execute = stateWorker.runOpenClawStateWorkerOperation;
   const worker = vi
     .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
@@ -104,12 +105,13 @@ export function createSubagentSweeperHarness(
   const resumeRequesterSettleWake = vi.fn();
   const warn = vi.fn();
   const startSubagentAnnounceCleanupFlow = vi.fn(() => true);
+  const sweepPendingLifecycle = vi.fn();
   const sweeper = createSubagentRegistrySweeper({
     runs,
     resumedRuns: new Set(),
     clearPendingLifecycleError: vi.fn(),
     clearPendingLifecycleTimeout: vi.fn(),
-    sweepPendingLifecycle: vi.fn(),
+    sweepPendingLifecycle,
     completeSubagentRunWithRecovery,
     getGatewayRecoveryRuntime: () => runtime.current,
     finalizeInterruptedSubagentRun,
@@ -148,6 +150,7 @@ export function createSubagentSweeperHarness(
   return {
     entry,
     runs,
+    sweepPendingLifecycle,
     callGateway,
     completeCleanupBookkeeping,
     completeSubagentRunWithRecovery,

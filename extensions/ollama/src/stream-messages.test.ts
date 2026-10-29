@@ -68,6 +68,29 @@ describe("native Ollama messages", () => {
     expect(messages).toEqual(original);
   });
 
+  it.each([
+    { label: "allowlist", options: { availableToolNames: new Set(["exec"]) } },
+    { label: "default prefix strip", options: undefined },
+  ])("normalizes functions.exec tool results with $label", ({ options }) => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "functions.exec", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "functions.exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+        timestamp: 0,
+      },
+    ];
+    const converted = convertToOllamaMessages(messages, undefined, options);
+    expect(converted[0]?.tool_calls?.[0]?.function.name).toBe("exec");
+    expect(converted[1]?.tool_name).toBe("exec");
+  });
+
   it("preserves the request prefix through a tool round and a later user turn", () => {
     const initial = [{ role: "user", content: "Inspect the file." }];
     const toolRound = [

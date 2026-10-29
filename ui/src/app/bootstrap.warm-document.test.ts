@@ -1,5 +1,6 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient, type GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { clearBootRecords, type BootRecord } from "./boot-record.ts";
@@ -10,6 +11,7 @@ import { loadSettings, persistSessionToken } from "./settings.ts";
 const originalUrl = window.location.href;
 const runtimes: ApplicationRuntime[] = [];
 let connections: GatewayBrowserClientOptions[];
+const replies = new Map<string, () => Promise<unknown>>();
 const mainRecord = (): BootRecord => ({
   version: 2,
   authMethod: "token",
@@ -33,6 +35,7 @@ beforeEach(() => {
   );
   persistSessionToken(loadSettings().gatewayUrl, "test-token");
   connections = [];
+  replies.clear();
   const createGateway = gatewayStore.createApplicationGateway;
   vi.spyOn(gatewayStore, "createApplicationGateway").mockImplementation(
     (settings, password, bootstrap, _factory, options) =>
@@ -45,6 +48,9 @@ beforeEach(() => {
           const client = new GatewayBrowserClient(opts);
           vi.spyOn(client, "start").mockImplementation(() => {});
           vi.spyOn(client, "request").mockImplementation(async (method) => {
+            if (replies.has(method)) {
+              return replies.get(method)!();
+            }
             if (method === "agents.list") {
               return mainRecord().agents;
             }
@@ -82,6 +88,81 @@ function open(path: string) {
   const opts = connections.at(-1)!;
   return { runtime, opts };
 }
+
+it.each(["pagehide", "hidden"])(
+  "retains the resolved sidebar profile while self discovery is pending at %s",
+  async (boundary) => {
+    const record = mainRecord();
+    const key = "openclaw.control.bootRecord.v1:" + record.scope;
+    const bytes = JSON.stringify(record);
+    localStorage.setItem(key, bytes);
+    const self = createDeferred<unknown>();
+    replies.set("users.self", () => self.promise);
+    const { runtime, opts } = open("/chat/main");
+    opts.onHello?.({
+      type: "hello-ok",
+      protocol: 1,
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        method: "token",
+        recoveryScope: "main-device",
+      },
+      snapshot: { authMode: "token", presence: [] },
+    });
+    await runtime.context.agents.ensureList();
+    await runtime.context.sessions.groupsLoad();
+    expect(runtime.context.gateway.snapshot.selfUser).toBeUndefined();
+    if (boundary === "pagehide") {
+      window.dispatchEvent(new Event("pagehide"));
+    } else {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+    expect(localStorage.getItem(key)).toBe(bytes);
+    const loaded = runtime.context.gateway.loadSelfProfile();
+    self.resolve({
+      profile: {
+        id: "same-profile",
+        displayName: "Riley",
+        emails: [],
+        avatarMime: null,
+        hasAvatar: false,
+        githubIdentity: null,
+        mergedInto: null,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    });
+    await loaded;
+    window.dispatchEvent(new Event("pagehide"));
+    expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({
+      profileId: "same-profile",
+      recoveryScope: "main-device",
+      groups: [],
+    });
+  },
+);
+
+it("persists an explicitly resolved absent profile", async () => {
+  const { runtime, opts } = open("/chat/main");
+  opts.onHello?.({
+    type: "hello-ok",
+    protocol: 1,
+    auth: { role: "operator", scopes: [], method: "token", recoveryScope: "main-device" },
+    snapshot: { authMode: "token", presence: [] },
+  });
+  await runtime.context.gateway.loadSelfProfile();
+  await runtime.context.agents.ensureList();
+  await runtime.context.sessions.groupsLoad();
+  expect(runtime.context.gateway.snapshot.selfUser).toBeNull();
+  window.dispatchEvent(new Event("pagehide"));
+  const key = "openclaw.control.bootRecord.v1:" + mainRecord().scope;
+  expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({
+    profileId: null,
+    recoveryScope: "main-device",
+  });
+});
 
 it.each(["/focus/terminal", "/approve/exec%3A1", "/ask/question-1"])(
   "keeps shellless %s out of main admission reads, publication, and retirement",

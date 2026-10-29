@@ -124,6 +124,29 @@ describe("linux-node commands", () => {
     vi.clearAllMocks();
   });
 
+  it.each(["camera.list", "camera.snap", "camera.clip"])(
+    "surfaces failed device enumeration for %s without starting FFmpeg",
+    async (name) => {
+      const { command } = createHarness();
+      const error = Object.assign(new Error("device enumeration denied"), { code: "EACCES" });
+      boundary.readdir.mockRejectedValueOnce(error);
+
+      await expect(command(name).handle()).rejects.toBe(error);
+      expect(boundary.runCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("distinguishes successful empty enumeration from a failed device read", async () => {
+    const { command } = createHarness();
+    boundary.readdir.mockResolvedValue([]);
+
+    await expect(command("camera.list").handle()).resolves.toBe('{"devices":[]}');
+    await expect(command("camera.snap").handle()).rejects.toThrow(
+      "CAMERA_UNAVAILABLE: no V4L2 camera devices found",
+    );
+    expect(boundary.runCommand).not.toHaveBeenCalled();
+  });
+
   it("lists only V4L2 nodes that expose capture formats through FFmpeg", async () => {
     const runCommand = vi.fn(async (argv: string[]) =>
       success(

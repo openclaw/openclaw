@@ -32,7 +32,7 @@ notifications include an `Inspect` link into the Control UI. Command and script
 completion announcements open the automation run; isolated agent announcements
 open the run's session.
 
-With `announce`, the chat that receives the result owns it. The result is added to the conversation after the channel confirms delivery, using the content actually sent after channel transforms and hooks. OpenClaw writes one assistant message into that chat's transcript so the next reply can use it as context. The result records its job and run; retries do not duplicate it, and OpenClaw waits for active turns before committing it. Destination creation and remembered-route updates happen only after confirmed delivery; newly created destinations inherit the source session's required sandbox policy.
+With `announce`, the chat that receives the result owns it. The result is added to the conversation after the channel confirms delivery, using the content actually sent after channel transforms and hooks. OpenClaw writes one assistant message into that chat's transcript so the next reply can use it as context. The result records its job and run; retries do not duplicate it, and the append can commit while a destination turn remains active. The transcript writer preserves ordering and rechecks the destination generation; destructive lifecycle mutations still serialize with the commit. Destination creation and remembered-route updates happen only after confirmed delivery; newly created destinations inherit the source session's required sandbox policy.
 
 - Delivery to the creating chat writes the result there.
 - Delivery to a different chat or topic writes the result **only in the destination**, not in the creating chat.
@@ -111,7 +111,8 @@ Implicit announce delivery uses configured channel allowlists to validate and re
 Failure-alert webhooks stay **Unknown** when the request may have reached the
 receiver but its response is lost. An explicit HTTP rejection or a failure proven
 to precede sending records **Not delivered** and allows the in-app fallback
-notification. An unknown outcome does not trigger that fallback.
+notification, including when Gateway work admission refuses an alert before its
+transport starts. An unknown outcome does not trigger that fallback.
 
 A model-backed run can finish successfully even when its final reply says the requested task is blocked or could not be completed. The scheduler does not infer execution failure from assistant prose. Such a reply follows normal delivery: `announce` sends it, `none` stays silent, and `NO_REPLY` suppresses a text-only announcement without failing the run. A blocker report does not itself increment the execution-failure streak, trigger error backoff, or request a failure alert or owner-conversation repair. Runtime errors, such as provider failures and execution timeouts, still use the failure policy below.
 

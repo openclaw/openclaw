@@ -129,3 +129,18 @@ export async function discoverRestartRecoveryStoreTargets(params: {
       (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),
     );
 }
+
+/** A killed row may release fences only after the store owner proves there is no live work. */
+export function isKilledMainSessionRecoveryFenceOnly(entry: SessionEntry): boolean {
+  const state = entry.mainRestartRecovery;
+  return Boolean(
+    entry.status === "killed" &&
+    entry.restartRecoveryRuns?.length &&
+    !entry.pendingFinalDelivery &&
+    !entry.restartRecoveryDeliveryRunId &&
+    !entry.restartRecoveryHarnessCompletion &&
+    !state?.reservation &&
+    !state?.foregroundClaims &&
+    !state?.tombstone,
+  );
+}

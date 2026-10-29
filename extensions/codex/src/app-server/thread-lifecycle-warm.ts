@@ -157,13 +157,23 @@ async function releaseCodexRetainedLiveThread(
 
 /** Release follows the physical owner across connection rotation, never a copied thread id. */
 export async function releaseCodexBoundLiveThread(
-  options: CodexLiveThreadReleaseParams & { clientId?: string; ownerClientId?: string },
+  options: CodexLiveThreadReleaseParams & {
+    clientId?: string;
+    ownerClientId?: string;
+    /** Runs synchronously when `signal` ends a wait for the previous owner's exit. */
+    onExitWaitCancelled?: () => void;
+  },
 ): Promise<boolean> {
+  const exitWaitAbortError = (signal: AbortSignal) => {
+    // Abort dispatch calls this synchronously, before any rejection handler runs.
+    options.onExitWaitCancelled?.();
+    return codexThreadLifecycleAbortError(signal);
+  };
   const changedClient = options.ownerClientId && options.ownerClientId !== options.clientId;
   const previous = changedClient
     ? await retainSharedCodexAppServerClientByInstanceId(options.ownerClientId!, {
         signal: options.signal,
-        createAbortError: codexThreadLifecycleAbortError,
+        createAbortError: exitWaitAbortError,
       })
     : undefined;
   if (changedClient && !previous) {
@@ -172,6 +182,7 @@ export async function releaseCodexBoundLiveThread(
   const client = previous?.client ?? options.client;
   let threadClosed: Promise<void> | undefined;
   let stopWatching: (() => void) | undefined;
+  let stopReading: (() => void) | undefined;
   if (previous) {
     // Unsubscribe acknowledges detachment, not shutdown. Observe this physical
     // owner's stopped runtime before release can trigger its idle unload.
@@ -198,7 +209,9 @@ export async function releaseCodexBoundLiveThread(
       isCodexAppServerLiveThreadClaimed(client, options.threadId) ||
       isCodexAppServerLiveThreadProtected(client, options.threadId)
     ) {
-      throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
+      throw new AgentHarnessPreflightError(
+        `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
+      );
     }
     return await releaseCodexRetainedLiveThread({
       ...options,
@@ -221,16 +234,41 @@ export async function releaseCodexBoundLiveThread(
         !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
           !isCodexAppServerLiveThreadProtected(client, options.threadId),
       );
-      // A sibling lease can keep the retired process alive indefinitely. Exact
-      // thread closure is sufficient for the successor to resume this thread.
       if (retiredExit) {
-        await racePromiseWithAbortSignal(
-          threadClosed ? Promise.race([retiredExit, threadClosed]) : retiredExit,
-          options.signal,
-          codexThreadLifecycleAbortError,
-        );
+        const stopped = threadClosed ? [retiredExit, threadClosed] : [retiredExit];
+        if (!client.getCloseError() && !wasCodexAppServerThreadClosed(client, options.threadId)) {
+          // Hot reload can attach closure tracking after the old runtime unloaded.
+          // Read that physical owner once; native resume still owns its writer lock.
+          const readController = new AbortController();
+          stopReading = () => readController.abort();
+          const signal = options.signal
+            ? AbortSignal.any([options.signal, readController.signal])
+            : readController.signal;
+          stopped.push(
+            client
+              .request(
+                "thread/read",
+                { threadId: options.threadId, includeTurns: false },
+                { signal, assertCurrent: options.assertCurrent, withCurrent: options.withCurrent },
+              )
+              .then(
+                ({ thread }) => {
+                  if (thread.id !== options.threadId) {
+                    throw new Error("Codex returned another thread during retired-owner handoff");
+                  }
+                  return thread.status?.type === "notLoaded" ? undefined : retiredExit;
+                },
+                // Closing rejects pending requests before the transport exits; a
+                // failed read proves nothing, so keep the exit/closure fence.
+                () => retiredExit,
+              ),
+          );
+        }
+        // Siblings may keep the old process alive after this exact thread stops.
+        await racePromiseWithAbortSignal(Promise.race(stopped), options.signal, exitWaitAbortError);
       }
     } finally {
+      stopReading?.();
       stopWatching?.();
     }
   }

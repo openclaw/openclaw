@@ -144,7 +144,7 @@ describe("agent session reuse at mutation", () => {
         {
           initial: current,
           fresh: { ...current, lastInteractionAt: 1 },
-          expectedId: "replacement",
+          expectedId: scope.sessionId,
           startedAt: now,
         },
       ]) {
@@ -163,7 +163,7 @@ describe("agent session reuse at mutation", () => {
   });
 
   it.each([
-    { name: "expired ordinary turn", input: {}, sessionId: "replacement", isNew: true },
+    { name: "expired ordinary turn", input: {}, sessionId: "original", isNew: true },
     { name: "fresh ordinary turn", input: { freshEntry }, sessionId: "original", isNew: false },
     {
       name: "expected existing identity",
@@ -192,7 +192,7 @@ describe("agent session reuse at mutation", () => {
     {
       name: "background terminal expiry",
       input: { freshEntry: { ...expiredEntry, status: "failed" }, visibleRequest: false },
-      sessionId: "replacement",
+      sessionId: "original",
       isNew: true,
     },
     {
@@ -207,7 +207,7 @@ describe("agent session reuse at mutation", () => {
     {
       name: "requested identity for an expired row",
       input: { requestedSessionId: "requested" },
-      sessionId: "replacement",
+      sessionId: "original",
       isNew: true,
     },
     {
@@ -272,7 +272,7 @@ describe("agent session reuse at mutation", () => {
         throw new Error("Session preparation did not return a candidate");
       }
       expect(prepared.isNewSession).toBe(true);
-      expect(prepared.sessionId).not.toBe("original");
+      expect(prepared.sessionId).toBe("original");
       const concurrent: SessionEntry = {
         ...freshEntry,
         sessionId: "concurrent",

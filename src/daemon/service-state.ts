@@ -31,9 +31,9 @@ import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
 import { findSystemdGatewayInstallation } from "./systemd-scope.js";
 import { readSystemdServiceExecStart } from "./systemd.js";
 
-class ServiceInspectionDeadlineError extends Error {
-  constructor() {
-    super("Service inspection deadline expired.");
+export class ServiceInspectionDeadlineError extends Error {
+  constructor(phase?: string) {
+    super("Service inspection deadline expired." + (phase ? " Stalled check: " + phase + "." : ""));
   }
 }
 
@@ -160,13 +160,13 @@ async function readGatewayServiceStateWithBinding(
   const now = getServiceInspectionClock();
   const baseEnv = args.env ?? process.env;
   const { timeoutMs, systemdReadBinding, systemdReadTarget } = args;
-  const remainingTimeoutMs = () => {
+  const remainingTimeoutMs = (phase?: string) => {
     if (timeoutMs === undefined) {
       return undefined;
     }
     const remaining = deadline - now();
     if (remaining <= 0) {
-      throw new ServiceInspectionDeadlineError();
+      throw new ServiceInspectionDeadlineError(phase);
     }
     return remaining;
   };
@@ -293,7 +293,7 @@ async function readGatewayServiceStateWithBinding(
   const readLoadState = async () =>
     readGatewayServiceLoadState(service, {
       env: statusEnv,
-      timeoutMs: remainingTimeoutMs(),
+      timeoutMs: remainingTimeoutMs("service load state"),
       ...(args.requireEffective ? { requireEffective: true } : {}),
     });
   const readRuntime = async () =>

@@ -3,8 +3,13 @@ import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
+import {
+  buildAnnounceIdFromChildRun,
+  buildAnnounceIdempotencyKey,
+} from "../../announce-idempotency.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
+import { withRequesterFollowupAuthority } from "../requester-cron-authority.js";
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAgentId,
@@ -551,14 +556,24 @@ export const startSubagentAnnounceCleanupFlow = (
     }
     try {
       announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
-        params.runSubagentAnnounceFlow({
-          ...announceParams,
-          childAgentId: entry.childAgentId,
-          childSessionIdentity: entry.childSessionIdentity,
-          signal: deadline.signal,
-          // Delivery expiry bounds admission; the requester owns its execution budget.
-          onExecutionStarted: () => clearTimeout(deadlineTimer),
-        }),
+        withRequesterFollowupAuthority(
+          entry,
+          buildAnnounceIdempotencyKey(
+            buildAnnounceIdFromChildRun({
+              childSessionKey: entry.childSessionKey,
+              childRunId: entry.runId,
+            }),
+          ),
+          () =>
+            params.runSubagentAnnounceFlow({
+              ...announceParams,
+              childAgentId: entry.childAgentId,
+              childSessionIdentity: entry.childSessionIdentity,
+              signal: deadline.signal,
+              // Delivery expiry bounds admission; the requester owns its execution budget.
+              onExecutionStarted: () => clearTimeout(deadlineTimer),
+            }),
+        ),
       );
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {

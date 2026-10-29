@@ -167,6 +167,8 @@ describe("progressive image viewer geometry", () => {
       await Promise.all(image.getAnimations().map((animation) => animation.finished));
       const zoomBefore = zoom.textContent;
       const before = image.getBoundingClientRect();
+      expect(before.width).toBeGreaterThan(fitted.width);
+      expect(before.height).toBeGreaterThan(fitted.height);
       full.resolve({ src: source, title: "Synthetic screenshot", width, height });
       await expect.poll(() => image.src).toBe(source);
       await image.decode();
@@ -178,6 +180,18 @@ describe("progressive image viewer geometry", () => {
       }
     },
   );
+
+  it("zooms an ordinary image without supplied dimensions", async () => {
+    const { viewer, image } = await mountImage({
+      src: imageSource(320, 200, "#264060"),
+      title: "Intrinsic image",
+    });
+    const fitted = image.getBoundingClientRect();
+    viewer.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!.click();
+    await expect.poll(() => image.getBoundingClientRect().width).toBeGreaterThan(fitted.width);
+    await Promise.all(image.getAnimations().map((animation) => animation.finished));
+    expect(image.getBoundingClientRect().height).toBeGreaterThan(fitted.height);
+  });
 
   it("uses a neighbor's intrinsic size when its dimensions are absent", async () => {
     const neighbor = { src: imageSource(320, 200, "#264060"), title: "Small neighbor" };

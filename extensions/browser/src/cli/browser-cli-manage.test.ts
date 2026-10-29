@@ -340,30 +340,44 @@ describe("browser manage output", () => {
     expect(output).toContain("id: RAW_TARGET_1");
   });
 
-  it("rejects non-integer tab indexes without calling browser actions", async () => {
+  it.each([
+    ["select", "1.9", false],
+    ["close", "abc", false],
+    ["select", "0", true],
+    ["select", "-1", true],
+    ["select", "1.9", true],
+    ["close", "abc", true],
+  ] as const)("rejects tab %s %s (json=%s) before dispatch", async (action, index, json) => {
     const program = createBrowserManageProgram();
-
     await expect(
-      program.parseAsync(["browser", "tab", "select", "1.9"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
-      "index must be a positive integer",
+      program.parseAsync(["browser", ...(json ? ["--json"] : []), "tab", action, index], {
+        from: "user",
+      }),
+    ).rejects.toThrow(json ? "index must be a positive integer" : "__exit__:1");
+    expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual(
+      json ? [] : ["index must be a positive integer"],
     );
-
-    getBrowserCliRuntimeCapture().resetRuntimeCapture();
-    await expect(
-      program.parseAsync(["browser", "tab", "close", "abc"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-    expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
-      "index must be a positive integer",
-    );
-    expect(getBrowserManageGatewayMock()).not.toHaveBeenCalledWith(
-      "browser.request",
-      expect.anything(),
-      expect.objectContaining({ path: "/tabs/action" }),
-      expect.anything(),
-    );
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledTimes(json ? 0 : 1);
+    expect(getBrowserManageGatewayMock()).not.toHaveBeenCalled();
   });
+
+  it.each(["select", "close"] as const)(
+    "dispatches a valid %s index as zero-based",
+    async (action) => {
+      getBrowserManageGatewayMock().mockResolvedValueOnce({ ok: true });
+      await createBrowserManageProgram().parseAsync(["browser", "--json", "tab", action, "2"], {
+        from: "user",
+      });
+      expect(getBrowserManageGatewayMock()).toHaveBeenCalledWith(
+        "browser.request",
+        expect.anything(),
+        expect.objectContaining({ path: "/tabs/action", body: { action, index: 1 } }),
+        expect.anything(),
+      );
+      expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
+      expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects unsupported profile drivers before creating a profile", async () => {
     const program = createBrowserManageProgram();

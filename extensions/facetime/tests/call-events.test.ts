@@ -99,10 +99,11 @@ describe("FaceTime call events", () => {
     expect(owner(event)).toEqual({ senderId: "owner@example.com", senderIsOwner: true });
   });
 
-  it("requires explicit native ended evidence and fails unknown numeric states closed", () => {
-    const ended = call({ call_status: 6, has_ended: true });
+  it("recognizes disconnected without an ended timestamp and fails unknown states closed", () => {
+    const ended = call({ call_status: 6, has_ended: false });
     const unknown = call({ call_status: 99 });
     expect(isEndedCall(ended)).toBe(true);
+    expect(isUnknownCallStatus(ended)).toBe(false);
     expect(isEndedCall(unknown)).toBe(false);
     expect(isUnknownCallStatus(unknown)).toBe(true);
   });

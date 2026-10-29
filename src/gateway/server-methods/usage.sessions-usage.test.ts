@@ -73,7 +73,6 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
     loadSessionLogs: vi.fn(async () => []),
   };
 });
-import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
@@ -82,6 +81,7 @@ import {
   resolveUsageSessionSource,
 } from "../../infra/session-cost-usage.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { mockCombinedStore, registerUsageCapacityTest } from "./usage-capacity.test-support.js";
 import { usageHandlers } from "./usage.js";
 
 let TEST_RUNTIME_CONFIG: OpenClawConfig = {
@@ -119,32 +119,6 @@ function readResult(respond: ReturnType<typeof vi.fn>): SessionsUsageResult {
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return respond.mock.calls[0]?.[1] as SessionsUsageResult;
 }
-function mockCombinedStore(
-  store: Record<string, SessionEntry>,
-  owners: ReadonlyArray<readonly [string, string]>,
-  storePath?: string,
-) {
-  vi.mocked(loadCombinedSessionStoreForGatewayCoreAsync).mockResolvedValue({
-    durableTargets: [],
-    storePath: "(multiple)",
-    store,
-    targetsBySessionKey: new Map(
-      owners.map(([key, agentId]) => [
-        key,
-        {
-          agentId,
-          entry: store[key],
-          readSourceEntry: (sourceKey: string) => store[sourceKey],
-          resolveSourceKey: (sourceKey: string) => sourceKey,
-          storeTarget: {
-            agentId,
-            storePath: storePath ?? `/tmp/agents/${agentId}/agent/openclaw-agent.sqlite`,
-          },
-        },
-      ]),
-    ),
-  });
-}
 function mockStoredSession(
   key: string,
   entry: SessionEntry,
@@ -166,6 +140,14 @@ function mockStoredSession(
 }
 
 describe("sessions.usage", () => {
+  registerUsageCapacityTest({
+    mockCombinedStore,
+    run: async () =>
+      readResult(
+        await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "opus", groupBy: "family" }),
+      ),
+  });
+
   beforeEach(() => {
     TEST_RUNTIME_CONFIG = { ...TEST_RUNTIME_CONFIG };
     vi.clearAllMocks();
@@ -266,10 +248,10 @@ describe("sessions.usage", () => {
     const load = vi.mocked(loadSessionCostSummariesFromCache);
     const originalLoad = load.getMockImplementation()!;
     discovered.mockResolvedValue(
-      Array.from({ length: 257 }, (_, index) => ({
+      Array.from({ length: 1025 }, (_, index) => ({
         sessionId: `budget-${index}`,
         sessionFile: `/tmp/budget-${index}.jsonl`,
-        mtime: 257 - index,
+        mtime: 1025 - index,
       })),
     );
     load.mockImplementation(async ({ sessions }) => {
@@ -305,7 +287,7 @@ describe("sessions.usage", () => {
       expect(result.cacheStatus).toMatchObject({
         status: "partial",
         cachedFiles: 256,
-        pendingFiles: 1,
+        pendingFiles: 769,
       });
       expect(result.partial?.reason).toBe("time-budget");
       expect(result.overview?.queryWarnings).toContain(result.partial?.message);
@@ -331,10 +313,10 @@ describe("sessions.usage", () => {
     const load = vi.mocked(loadSessionCostSummariesFromCache);
     const originalLoad = load.getMockImplementation()!;
     discovered.mockResolvedValue(
-      Array.from({ length: 257 }, (_, index) => ({
+      Array.from({ length: 1025 }, (_, index) => ({
         sessionId: `memory-${index}`,
         sessionFile: `/tmp/memory-${index}.jsonl`,
-        mtime: 257 - index,
+        mtime: 1025 - index,
       })),
     );
     load.mockImplementation(async ({ sessions, reportBudgetBytes }) => ({
@@ -356,7 +338,7 @@ describe("sessions.usage", () => {
       expect(result.cacheStatus).toMatchObject({
         status: "partial",
         cachedFiles: 256,
-        pendingFiles: 1,
+        pendingFiles: 769,
       });
     } finally {
       discovered.mockImplementation(originalDiscovery);
@@ -965,7 +947,7 @@ describe("sessions.usage", () => {
       summaries: sessions.map(({ sessionId }) =>
         sessionId === "old" ? null : { ...createEmptyCostUsageTotals(), totalTokens: 20 },
       ),
-      cacheStatus: { status: "partial", cachedFiles: 1, pendingFiles: 1, staleFiles: 0 },
+      cacheStatus: { status: "partial", cachedFiles: 1, pendingFiles: 769, staleFiles: 0 },
     }));
     const partial = readResult(
       await runSessionsUsage({

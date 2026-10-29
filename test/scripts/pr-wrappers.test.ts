@@ -1689,6 +1689,14 @@ exit 99
 
   it.each([
     {
+      script: "run-vitest.mts",
+      args: "./wrapper-closure-missing.test.ts",
+      status: 1,
+      output: "explicit test/source file(s) not found",
+      dependency: "",
+      binding: "",
+    },
+    {
       script: "verify-pr-hosted-gates.mjs",
       args: "--anchor-proof",
       status: 1,

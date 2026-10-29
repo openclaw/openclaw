@@ -28,7 +28,9 @@ import {
   UpdateDatabaseBackupSchema,
 } from "../../infra/update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import { VERSION } from "../../version.js";
 import {
   captureTargetDatabaseSchemaContext,
   formatSchemaRefusalLines,
@@ -42,6 +44,8 @@ import {
 const ReceiptSchema = z.object({
   schemaVersion: z.literal(1),
   runId: z.string().uuid(),
+  // Receipts written before this field remain on disk and must stay finishable.
+  startedAtMs: z.number().int().nonnegative().optional(),
   stateDir: z.string(),
   configPath: z.string(),
   status: z.enum(["backed-up", "migrated", "failed", "restoring-config", "restored", "finished"]),
@@ -142,6 +146,7 @@ async function readConfigIdentity(configPath: string): Promise<Receipt["configId
 
 /** The external supervisor owns drain/start; the candidate owns backup and schema repair. */
 export async function updateMigrateCommand(backupRoot: string): Promise<void> {
+  const startedAtMs = Date.now();
   const file = receiptPath(backupRoot);
   if ((await readJsonIfExists(file)) !== null) {
     throw new Error(
@@ -197,6 +202,7 @@ export async function updateMigrateCommand(backupRoot: string): Promise<void> {
       const capturedReceipt: Receipt = {
         schemaVersion: 1,
         runId: randomUUID(),
+        startedAtMs,
         stateDir: resolveStateDir(env),
         configPath: resolveConfigPath(env),
         status: "backed-up",
@@ -427,13 +433,32 @@ export async function updateFinishCommand(backupRoot: string): Promise<void> {
   receipt.configFiles = [];
   await saveReceipt(file, receipt);
   const removed = await removePackageUpdatePath(receipt.backup.directory);
+  const warnings = removed
+    ? []
+    : [`Backup cleanup remains pending at ${receipt.backup.directory}; retry update finish.`];
+  // Cleanup retires rollback originals only after a later update succeeds. Starting the
+  // run at migration keeps originals from this update's own Doctor run protected; a
+  // receipt without its start time cannot prove that ordering and is not recorded.
+  if (receipt.startedAtMs !== undefined) {
+    try {
+      createUpdateRun(
+        {
+          runId: receipt.runId,
+          trigger: "cli",
+          accepted: { startedAtMs: receipt.startedAtMs },
+          after: { version: VERSION },
+        },
+        { env: process.env },
+      );
+    } catch (error) {
+      warnings.push(
+        `Update history did not record this accepted update (${formatErrorMessage(error)}); retry update finish.`,
+      );
+    }
+  }
   defaultRuntime.writeJson({
     status: receipt.status,
     receipt: file,
-    ...(removed
-      ? {}
-      : {
-          warning: `Backup cleanup remains pending at ${receipt.backup.directory}; retry update finish.`,
-        }),
+    ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
   });
 }

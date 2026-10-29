@@ -1,6 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as ttsSettings from "../tts/tts-settings.js";
 import * as preparedModelCatalog from "./prepared-model-catalog.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
@@ -105,6 +111,75 @@ function buildPrompt(config: OpenClawConfig, agentId = "main", sessionKey?: stri
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it.each<[string, string, OpenClawConfig, boolean]>([
+    ["disabled routes", "discord", { commands: { text: false, native: false } }, false],
+    [
+      "channel disables native",
+      "discord",
+      {
+        commands: { text: false, native: true },
+        channels: { discord: { commands: { native: false } } },
+      },
+      false,
+    ],
+    [
+      "channel enables native",
+      "discord",
+      {
+        commands: { text: false, native: false },
+        channels: { discord: { commands: { native: true } } },
+      },
+      true,
+    ],
+    ["native auto on", "discord", { commands: { text: false } }, true],
+    ["native auto off", "slack", { commands: { text: false } }, false],
+    ["text enabled", "discord", { commands: { native: false } }, true],
+    ["text-only surface", "webchat", { commands: { text: false, native: false } }, true],
+  ])("renders reasoning command guidance for %s", (_name, channel, config, enabled) => {
+    const registry = createTestRegistry(
+      ["discord", "slack"].map((id) => ({
+        pluginId: id,
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id,
+            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+          }),
+          commands: { nativeCommandsAutoEnabled: id === "discord" },
+        },
+      })),
+    );
+    const previous = captureActivePluginRegistrySnapshot();
+    onTestFinished(() => restoreActivePluginRegistrySnapshot(previous));
+    // Command routing consumes process-level channel metadata.
+    setActivePluginRegistry(registry);
+    const prompt = buildConfiguredAgentSystemPrompt({
+      config,
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel },
+      reasoningLevel: "stream",
+    });
+    expect(prompt).toContain("Reasoning=stream; hidden unless on/stream.");
+    expect(prompt.includes("Toggle /reasoning")).toBe(enabled);
+    expect(prompt.includes("/status shows when enabled.")).toBe(enabled);
+  });
+  it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
+    "does not recommend disabled update or restart commands with tools $toolNames",
+    ({ toolNames }) => {
+      const params = { workspaceDir: "/tmp/openclaw", toolNames };
+      const disabled = buildConfiguredAgentSystemPrompt({
+        ...params,
+        config: { commands: { restart: false } },
+      });
+      expect(disabled).not.toContain("`/update`");
+      expect(disabled).not.toContain("`/restart`");
+      expect(disabled).toContain("openclaw update");
+      expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
+      const enabled = buildConfiguredAgentSystemPrompt({ ...params, config: {} });
+      expect(enabled).toContain("`/update`");
+    },
+  );
+
   it.each(["minimal", "none"] as const)(
     "skips full-only preparation in %s mode and refreshes the next full prompt",
     (promptMode) => {
@@ -306,7 +381,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     },
   );
 
-  it("renders only current supplied aliases without ambient lookup or repeated discovery", () => {
+  it("keeps admitted aliases after snapshot retirement without rediscovery", () => {
     const config: OpenClawConfig = {
       plugins: { enabled: false },
       agents: {
@@ -314,28 +389,33 @@ describe("buildConfiguredAgentSystemPrompt", () => {
           model: "fixture/current",
           models: {
             "fixture/current": { alias: "Current" },
+            "fixture/another": { alias: "Another" },
             "fixture/unsupported": { alias: "Unavailable" },
           },
         },
       },
     };
-    const owner = preparedOwner(config, ["current"], "writer");
+    const owner = preparedOwner(config, ["current", "another"], "writer");
     const lookup = vi
       .spyOn(preparedModelCatalog, "getPreparedModelCatalogOwnerSnapshot")
       .mockReturnValue(owner);
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network"));
     const params = { config, agentId: "writer", workspaceDir: "/tmp/openclaw" };
     expect(buildConfiguredAgentSystemPrompt(params)).not.toContain("## Model Aliases");
+    let admitted = "";
     for (let index = 0; index < 3; index++) {
       const prompt = buildConfiguredAgentSystemPrompt({ ...params, preparedModelRuntime: owner });
       expect(prompt).toContain("- Current: fixture/current");
+      expect(prompt).toContain("- Another: fixture/another");
+      expect(prompt.indexOf("- Another:")).toBeLessThan(prompt.indexOf("- Current:"));
+      admitted = prompt;
       expect(prompt).not.toContain("Unavailable");
       expect(prompt).not.toContain("fixture/unsupported");
     }
     owner.isCurrent.mockReturnValue(false);
-    expect(
-      buildConfiguredAgentSystemPrompt({ ...params, preparedModelRuntime: owner }),
-    ).not.toContain("## Model Aliases");
+    expect(buildConfiguredAgentSystemPrompt({ ...params, preparedModelRuntime: owner })).toBe(
+      admitted,
+    );
     const replacementConfig: OpenClawConfig = {
       ...config,
       agents: { defaults: { models: { "fixture/current": { alias: "Replacement" } } } },

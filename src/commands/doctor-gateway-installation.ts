@@ -23,6 +23,7 @@ export type DoctorGatewayInstallationMaintenance = {
   managerUid?: number;
   assertCurrent: () => void;
   assertReadCurrent: () => void;
+  beforeMutation?: () => Promise<void>;
 };
 
 type GatewayServiceInstallationRepair = {
@@ -76,7 +77,12 @@ export async function installDoctorGatewayService(
             );
           }
         }
-        await params.service.install({ ...params.args, assertCurrent, definitionTransaction });
+        await params.service.install({
+          ...params.args,
+          assertCurrent,
+          definitionTransaction,
+          beforeMutation: params.maintenance?.beforeMutation ?? params.args.beforeMutation,
+        });
       };
       if (params.repair.kind !== "installation" && params.repair.root) {
         const { reconcileGatewayServiceDefinition } =

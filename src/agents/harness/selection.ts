@@ -655,8 +655,9 @@ async function preparePluginHarnessParams(
       policies.safeDeniedToolNames.length > 0 ? policies.safeDeniedToolNames : undefined,
     pluginHarnessToolPolicyRestricted: policies.toolPolicyRestricted,
   };
+  // Consented host-only runtimes must receive the unrestricted per-turn permission mode.
   const effectiveParams = nativePermissionsConsented
-    ? policyParams
+    ? { ...policyParams, permissionMode: "full" as const }
     : applyPluginHarnessDenyAllToolPolicy(policyParams, policies);
   setInputAttachmentReadAllowed(
     isRuntimeToolAllowed("read", effectiveParams.toolsAllow) &&

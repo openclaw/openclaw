@@ -22,6 +22,20 @@ vi.mock("../../config/config.js", async (importOriginal) => {
   };
 });
 
+const restartMocks = vi.hoisted(() => ({
+  scheduleGatewayRestart: vi.fn(() => ({ ok: true, delayMs: 0 })),
+}));
+
+vi.mock("../../infra/restart.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/restart.js")>()),
+  scheduleGatewayRestart: restartMocks.scheduleGatewayRestart,
+}));
+
+vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/restart-sentinel.js")>()),
+  writeRestartSentinel: vi.fn(async () => {}),
+}));
+
 vi.mock("../../secrets/runtime-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../secrets/runtime-state.js")>();
   return {
@@ -33,6 +47,7 @@ vi.mock("../../secrets/runtime-state.js", async (importOriginal) => {
 import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
+  resolveGatewayConfigRestartWriteResult,
   shouldAwaitGatewayConfigApplication,
 } from "./config-write-flow.js";
 
@@ -60,9 +75,12 @@ it("awaits transcript additions and title edits only when the reload owner can a
   ).toBe(false);
 });
 
-it.each(["hybrid", "off"] as const)(
-  "hot-applies cold-storage settings with reload mode %s",
-  (mode) => {
+it.each([
+  ["hybrid", true],
+  ["off", false],
+] as const)(
+  "awaits cold-storage settings only when reload mode %s can apply them",
+  (mode, awaited) => {
     expect(
       shouldAwaitGatewayConfigApplication({
         previousConfig: {},
@@ -75,7 +93,37 @@ it.each(["hybrid", "off"] as const)(
           "session.maintenance.coldStorage.afterDays",
         ],
       }),
-    ).toBe(true);
+    ).toBe(awaited);
+  },
+);
+
+it.each([
+  { mode: "off", path: "gateway.nodes.commands.allow", cli: false, restart: true },
+  { mode: "off", path: "gateway.nodes.commands.allow", cli: true, restart: false },
+  { mode: "hybrid", path: "gateway.port", cli: true, restart: false },
+  { mode: "restart", path: "gateway.port", cli: true, restart: false },
+] as const)(
+  "schedules a direct restart for $path under reload $mode (CLI caller: $cli): $restart",
+  async ({ mode, path, cli, restart }) => {
+    restartMocks.scheduleGatewayRestart.mockClear();
+    const result = await resolveGatewayConfigRestartWriteResult({
+      requestParams: {},
+      kind: "config-patch",
+      mode: "config.patch",
+      configPath: "/tmp/openclaw.json",
+      changedPaths: [path],
+      previousConfig: { gateway: { reload: { mode } } },
+      nextConfig: { gateway: { reload: { mode }, port: 19001 } },
+      client: {
+        connect: {
+          client: cli ? { id: "cli", mode: "cli" } : { id: "openclaw-control-ui", mode: "webchat" },
+        },
+      } as never,
+    });
+    // Hybrid and restart modes leave restart-required changes to the config reloader.
+    expect(result.payload.stats?.requiresRestart).toBe(true);
+    expect(result.restart !== undefined).toBe(restart);
+    expect(restartMocks.scheduleGatewayRestart).toHaveBeenCalledTimes(restart ? 1 : 0);
   },
 );
 

@@ -98,20 +98,9 @@ export async function verifyPreparedSidecarRecovery(
       connected: true,
       lifecycle: "ready",
     });
-    if (mode === "live") {
-      expect(result).toMatchObject({ cause: preparationError });
-    } else {
-      expect(result).toMatchObject({
-        cause: {
-          errors: [
-            preparationError,
-            expect.objectContaining({
-              message: "Plugin channel early-running could not start: default",
-            }),
-          ],
-        },
-      });
-    }
+    // Rollback preserves the timed-out manual stop instead of starting a replacement,
+    // so the original preparation error is not wrapped in a channel-start failure.
+    expect(result).toMatchObject({ cause: preparationError });
   } finally {
     finishTask.resolve();
     vi.useRealTimers();

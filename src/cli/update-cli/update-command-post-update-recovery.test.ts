@@ -362,8 +362,20 @@ describe("failed update recovery restart", () => {
     async ({ mutationStarted, stopped, waitForStartup }) => {
       const root = tempDirs.make("update-recovery-startup-policy-");
       await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "1.0.0" }));
-      await finishFailedUpdate({ ...failedResult(undefined), root }, { mutationStarted, stopped });
-      expect(mocks.verifyGateway).toHaveBeenCalledWith(expect.objectContaining({ waitForStartup }));
+      const failure = await finishFailedUpdate(
+        { ...failedResult(undefined), root },
+        { mutationStarted, stopped },
+      );
+      if (mutationStarted || stopped) {
+        expect(mocks.verifyGateway).toHaveBeenCalledWith(
+          expect.objectContaining({ waitForStartup }),
+        );
+      } else {
+        expect(mocks.verifyGateway).not.toHaveBeenCalled();
+        expect(failure.result.steps).toContainEqual(
+          expect.objectContaining({ name: "gateway recovery observation", exitCode: 0 }),
+        );
+      }
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(mocks.restartCandidate).not.toHaveBeenCalled();
     },

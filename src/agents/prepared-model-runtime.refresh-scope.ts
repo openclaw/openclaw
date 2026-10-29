@@ -333,6 +333,7 @@ export function createPreparedModelRuntimeRecovery(host: {
     const affected = [...host.owners.values()].filter(
       (candidate) => candidate.catalogRecovery === recovery,
     );
+    const recoveryClaim: { gateId?: PreparedModelRuntimeReplacement["gateId"] } = {};
     const publication = host
       .publish(owner.input.config, {
         catalogMode: "static",
@@ -340,7 +341,10 @@ export function createPreparedModelRuntimeRecovery(host: {
         agentIds: new Set(affected.flatMap((candidate) => candidate.input.agentId ?? [])),
         pluginMetadataSnapshot: owner.snapshot?.metadataSnapshot,
         isPublicationCurrent: () =>
-          host.canRecover() && host.owners.get(ownerKey(owner.input)) === owner,
+          host.canRecover() &&
+          (host.owners.get(ownerKey(owner.input)) === owner ||
+            (recoveryClaim.gateId !== undefined &&
+              host.getReplacement()?.gateId === recoveryClaim.gateId)),
       })
       .catch((error: unknown) => {
         if (
@@ -355,7 +359,10 @@ export function createPreparedModelRuntimeRecovery(host: {
         }
         throw error;
       });
-    recovery.replacementGateId = host.getReplacement()?.gateId;
+    // This publication can replace its own owner before commit. Keep only its exact gate alive;
+    // newer replacement epochs remain fenced by the publication queue.
+    recoveryClaim.gateId = host.getReplacement()?.gateId;
+    recovery.replacementGateId = recoveryClaim.gateId;
     await racePromiseWithAbortSignal(publication, abortSignal);
     assertLifetime();
   }

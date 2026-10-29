@@ -12,6 +12,7 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const managementMocks = vi.hoisted(() => ({
@@ -49,11 +50,12 @@ async function callHandler(
   method: string,
   params: Record<string, unknown>,
   runtimeConfig: Record<string, unknown> = {},
+  registry = createEmptyPluginRegistry(),
 ) {
   let ok: boolean | null = null;
   let response: unknown;
   let error: unknown;
-  await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
+  await withPluginRuntimeRegistryScope(registry, () =>
     expectDefined(
       pluginsHandlers[method],
       "pluginsHandlers[method] test invariant",
@@ -88,6 +90,28 @@ const workboard = {
 const reviewToken = "a".repeat(64);
 
 describe("plugin management Gateway handlers", () => {
+  it("keeps an astral plugin runtime error whole at the report cap", async () => {
+    const prefix = "a".repeat(1999);
+    managementMocks.list.mockResolvedValue({
+      plugins: [{ ...workboard, id: "broken-plugin", state: "error" }],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "broken-plugin",
+        status: "error",
+        error: `${prefix}\u{1F600}tail`,
+      }),
+    );
+    const result = await callHandler("plugins.list", {}, {}, registry);
+    expect(result.ok).toBe(true);
+    expect(result.response).toMatchObject({
+      plugins: [{ id: "broken-plugin", runtime: { state: "unloaded", error: prefix } }],
+    });
+  });
+
   beforeEach(() => {
     managementMocks.inspect.mockReset();
     managementMocks.list.mockReset();

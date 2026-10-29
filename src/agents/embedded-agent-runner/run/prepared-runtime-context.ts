@@ -1,7 +1,14 @@
 import { isCurrentPluginMetadataSnapshotRuntimeGeneration } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
-import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+} from "../../prepared-model-runtime-generation-scope.js";
+import {
+  preparedModelRuntimeConfigsMatch,
+  type PreparedModelRuntimeSnapshot,
+} from "../../prepared-model-runtime.js";
 import {
   resolveCanonicalRunRuntimeWorkspace,
   resolveRootedRunRuntimeWorkspace,
@@ -41,16 +48,29 @@ export function resolvePreparedRuntimeWorkspaces(params: RunEmbeddedAgentParamsW
     workspaceDir: requestedWorkspaceResolution.workspaceDir,
     isCanonicalWorkspace: requestedWorkspaceResolution.isCanonicalWorkspace,
   };
+  const generation = params.pluginGeneration ?? getPreparedModelRuntimePluginGeneration();
+  const borrowed = generation ? getPreparedModelRuntimeBorrowedSnapshot(generation) : undefined;
+  const borrowedWorkspace =
+    params.preparedModelRuntimeMode !== "isolated-read-only" &&
+    borrowed?.workspaceDir &&
+    params.config !== undefined &&
+    preparedModelRuntimeConfigsMatch(borrowed.config, params.config) &&
+    borrowed.agentId === requestedWorkspaceResolution.agentId &&
+    borrowed.agentDir === params.agentDir
+      ? resolveRunWorkspaceDir({ ...params, workspaceDir: borrowed.workspaceDir })
+      : undefined;
   // An admitted generation keeps its own workspace identity; only rooted selection applies.
-  const sharedRuntimeWorkspace = params.pluginGeneration
-    ? resolveRootedRunRuntimeWorkspace(workspaceParams)
-    : resolveSharedPluginRuntimeWorkspace(workspaceParams, () =>
-        loadPluginMetadataSnapshot({
-          config: params.config ?? {},
-          workspaceDir: requestedWorkspaceResolution.workspaceDir,
-          env: process.env,
-        }),
-      );
+  const sharedRuntimeWorkspace =
+    borrowedWorkspace ??
+    (params.pluginGeneration
+      ? resolveRootedRunRuntimeWorkspace(workspaceParams)
+      : resolveSharedPluginRuntimeWorkspace(workspaceParams, () =>
+          loadPluginMetadataSnapshot({
+            config: params.config ?? {},
+            workspaceDir: requestedWorkspaceResolution.workspaceDir,
+            env: process.env,
+          }),
+        ));
   return {
     requestedWorkspaceResolution,
     runtimeWorkspaceResolution: sharedRuntimeWorkspace ?? requestedWorkspaceResolution,

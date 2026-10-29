@@ -95,7 +95,7 @@ function createFixture(protocolVersion = "2025-06-18") {
     },
   });
   clients.push(client);
-  return { client, child, stdin, stdout, messages, requested: requested.promise };
+  return { client, child, root, stdin, stdout, stderr, messages, requested: requested.promise };
 }
 
 afterEach(async () => {
@@ -196,5 +196,29 @@ describe("createMcpStdioClient", () => {
     });
     expect(client.isAvailable()).toBe(false);
     expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+  });
+
+  it.each([
+    {
+      name: "keeps complete characters at the 32KiB tail boundary",
+      output: Buffer.from("你".repeat(20000)),
+      expected: /^unavailable: proxy exited \(1\): 你+$/,
+    },
+    {
+      name: "preserves malformed bytes when stderr was not truncated",
+      output: Buffer.from([0x80, 0x61]),
+      expected: /^unavailable: proxy exited \(1\): �a$/,
+    },
+  ])("$name", async ({ output, expected }) => {
+    const fixture = createFixture();
+    const { client, root, stderr, requested } = fixture;
+    const pending = client.request("tools/call", {}, { timeoutMs: 1000 });
+    const rejected = expect(pending).rejects.toThrow(expected);
+    await requested;
+    stderr.write(output);
+    root.resolve({ code: 1, signal: null });
+    await rejected;
+    expect(client.isAvailable()).toBe(false);
+    expect(fixture.child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
   });
 });

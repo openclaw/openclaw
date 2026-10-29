@@ -138,11 +138,15 @@ export async function createDoctorMaintenanceState(options: {
       captureAdmitted = false;
     }
   };
-  const enterResources = async (acquired: NonNullable<typeof owner>) => {
+  const enterResources = async (
+    acquired: NonNullable<typeof owner>,
+    assertAdmission?: () => void,
+  ) => {
     // Transfer can retire the source owner before caller revalidation runs.
     owner = acquired;
     try {
       acquired.assertCurrent(options.assertCurrent);
+      assertAdmission?.();
       resourcesParent = getOpenClawDatabaseMaintenanceScope();
       resources = createOpenClawDatabaseMaintenanceScope({
         schemaMaintenance: true,
@@ -205,7 +209,8 @@ export async function createDoctorMaintenanceState(options: {
       // Cancellation stops read-only inspections; admitted writers retain their resource scope.
       return resources!.run(() => inspections!.run(operation));
     },
-    async acquire() {
+    async acquire(assertAdmission?: () => void) {
+      assertAdmission?.();
       if (resources) {
         return;
       }
@@ -220,17 +225,20 @@ export async function createDoctorMaintenanceState(options: {
         {
           ...params,
           assertCurrent: options.assertCurrent,
+          assertAdmission,
           deadlineMs: options.deadline(),
         },
       );
-      await enterResources(acquired);
+      await enterResources(acquired, assertAdmission);
     },
-    async prepareRepair() {
+    async prepareRepair(assertAdmission?: () => void) {
+      assertAdmission?.();
       const beforeStateMutation = params.beforeStateMutation;
       if (beforeStateMutation) {
         await resources!.run(() =>
           beforeStateMutation({ env: selectedEnv, signal: options.signal }),
         );
+        assertAdmission?.();
         resources!.assertAdmission();
       }
       resources!.run(() =>
@@ -260,12 +268,13 @@ export async function createDoctorMaintenanceState(options: {
       await owner!.release();
       owner = undefined;
       options.assertCurrent?.();
+      assertAdmission?.();
       const migration = prepareLegacyStateDirMigration({ env });
       if (migration && !migration.result.migrated) {
         throw new Error(migration.result.warnings.join("\n"));
       }
       selectedEnv = env;
-      await state.acquire();
+      await state.acquire(assertAdmission);
       if (migration) {
         const { loadDotEnv } = await import("../infra/dotenv.js");
         loadDotEnv({ quiet: true });

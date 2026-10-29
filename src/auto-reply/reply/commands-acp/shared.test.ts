@@ -14,54 +14,38 @@ describe("formatRuntimeOptionsText", () => {
 });
 
 describe("parseSteerInput", () => {
-  it("preserves non-option instruction tokens while normalizing unicode-dash flags", () => {
-    const parsed = parseSteerInput([
-      "\u2014session",
-      "agent:codex:acp:s1",
-      "\u2014briefly",
-      "summarize",
-      "this",
-    ]);
-
-    expect(parsed).toEqual({
-      ok: true,
-      value: {
-        sessionToken: "agent:codex:acp:s1",
-        instruction: "\u2014briefly summarize this",
-      },
-    });
-  });
-
   it.each([
-    [["--session", " primary ", "one", "two"], "primary", "one two"],
-    [["--session= primary ", "one", "two"], "primary", "one two"],
-    [["--session=--literal", "one"], "--literal", "one"],
-    [["--session=—target", "one"], "—target", "one"],
     [
-      ["one", "--session", "first", "two", "--session=second", "—literal"],
-      "second",
-      "one two —literal",
+      "—session agent:codex:acp:s1 —briefly summarize this",
+      "agent:codex:acp:s1",
+      "—briefly summarize this",
     ],
+    ["--session primary one two", "primary", "one two"],
+    ["--session=primary one two", "primary", "one two"],
+    ["--session=--literal one", "--literal", "one"],
+    ["--session=—target one", "—target", "one"],
+    ["one —session first two --session=second —literal", "second", "one two —literal"],
+    ["--session primary first\nsecond\n  third", "primary", "first\nsecond\n  third"],
   ])(
     "consumes session values without changing instructions: %s",
-    (tokens, sessionToken, instruction) => {
-      expect(parseSteerInput(tokens)).toEqual({
+    (text, sessionToken, instruction) => {
+      expect(parseSteerInput(text)).toEqual({
         ok: true,
         value: { sessionToken, instruction },
       });
     },
   );
 
-  it.each([
-    { tokens: ["--session"] },
-    { tokens: ["--session", "", "one"] },
-    { tokens: ["--session", "  ", "one"] },
-    { tokens: ["--session", "--next", "one"] },
-    { tokens: ["--session", "—next", "one"] },
-    { tokens: ["--session=", "one"] },
-    { tokens: ["--session=  ", "one"] },
-  ])("rejects missing session values: $tokens", ({ tokens }) => {
-    expect(parseSteerInput(tokens)).toEqual({
+  it.each(
+    [
+      "--session",
+      "--session   ",
+      "--session --next one",
+      "--session —next one",
+      "--session= one",
+    ].map((text) => ({ text })),
+  )("rejects missing session values: $text", ({ text }) => {
+    expect(parseSteerInput(text)).toEqual({
       ok: false,
       error:
         "--session requires a value. Usage: /acp steer [--session <session-key|session-id|session-label>] <instruction>",

@@ -10,7 +10,55 @@ import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+const captureRef = (directory: string) => ({
+  directory,
+  manifestPath: path.join(directory, "manifest.json"),
+  manifestSha256: "0".repeat(64),
+});
+const captureDefaults = () => ({
+  root: process.cwd(),
+  runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+  signal: new AbortController().signal,
+  assertCurrent() {},
+});
+
+it.each(["admission", "worker"] as const)(
+  "bounds %s capture work and reports recovery advice",
+  async (work) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let elapsed = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+      vi.spyOn(baselineCapture, "captureUpdateRecoveryBaseline").mockImplementation(
+        async ({ assertCurrent, signal }) => {
+          if (work === "admission") {
+            elapsed = 10 * 60_000;
+            assertCurrent();
+          } else {
+            await vi.advanceTimersByTimeAsync(10 * 60_000);
+          }
+          signal?.throwIfAborted();
+          return {
+            ref: captureRef(state.stateDir),
+            warnings: [],
+            diagnostics: { databaseWarnings: [] },
+          };
+        },
+      );
+      const defaults = captureDefaults();
+      await preserveDoctorOriginalState({ ...defaults, env: state.env });
+      const messages = defaults.runtime.log.mock.calls.flat().join("\n");
+      expect(messages).toContain("timed out after 600 s");
+      expect(messages).toContain("verified backup");
+      expect(messages).toContain("openclaw doctor --fix");
+    });
+  },
+);
 
 it.each(["ancestry-unverified", "missing-capture"] as const)(
   "preserves the original capture refusal classification for %s",

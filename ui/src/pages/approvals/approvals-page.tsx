@@ -274,6 +274,10 @@ function ApprovalsPageContent() {
     state.error = null;
     publish();
     const isCurrent = () => isCurrentRequest(client, gateway, generation);
+    // Grants remain independently revocable while history stalls or fails.
+    if (reset) {
+      void loadGrants(client, isCurrent);
+    }
     try {
       const result = await client.request<ApprovalHistoryResult>("approval.history", {
         ...(cursor ? { cursor } : {}),
@@ -288,9 +292,6 @@ function ApprovalsPageContent() {
       state.items = reset ? result.items : [...state.items, ...result.items];
       state.nextCursor = result.nextCursor ?? null;
       state.hasLoaded = true;
-      if (reset) {
-        void loadGrants(client, isCurrent);
-      }
     } catch (error) {
       if (isCurrent()) {
         state.error = formatUiError(error);

@@ -1401,6 +1401,43 @@ describe("initSessionState RawBody", () => {
     },
   );
 
+  it.each([
+    { trigger: "/reset", idle: false },
+    { trigger: "/new", idle: false },
+    { trigger: "continue", idle: true },
+  ] as const)(
+    "keeps a project session folder without a worktree through $trigger",
+    async ({ trigger, idle }) => {
+      const storePath = await makeStorePath("openclaw-rollover-project-");
+      const sessionKey = "agent:main:dashboard:project-rollover";
+      const updatedAt = idle ? Date.now() - 120_000 : Date.now();
+      const project = {
+        projectId: "project-1",
+        spawnedCwd: "/work/project/packages/app",
+        sessionRoot: "/work/project",
+      };
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: "project-session",
+          updatedAt,
+          sessionStartedAt: updatedAt,
+          lastInteractionAt: updatedAt,
+          ...project,
+        },
+      });
+      const result = await initSessionState({
+        cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 1 } } },
+        ctx: { RawBody: trigger, ChatType: "direct", SessionKey: sessionKey },
+      });
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(!idle);
+      expect(result.sessionEntry).toMatchObject(project);
+      expect(loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })).toMatchObject(
+        project,
+      );
+    },
+  );
+
   it("preserves the session-owned worktree binding across an implicit daily stale rollover (#159452)", async () => {
     // Regression: a worker-placed session's worktree reference was dropped at
     // the implicit daily/idle rollover boundary even though the underlying

@@ -110,12 +110,12 @@ describe("browser action input file/download commands", () => {
   it("rejects conflicting dialog actions without arming the hook", async () => {
     const program = createActionInputProgram();
 
-    await program.parseAsync(["browser", "dialog", "--accept", "--dismiss"], { from: "user" });
-
-    const errorCall = getBrowserCliRuntime().error.mock.calls.at(-1);
+    await expect(
+      program.parseAsync(["browser", "dialog", "--accept", "--dismiss"], { from: "user" }),
+    ).rejects.toThrow("Specify only one of --accept or --dismiss");
     expect(gatewayMock).not.toHaveBeenCalled();
-    expect(String(errorCall?.[0])).toContain("Specify only one of --accept or --dismiss");
-    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+    expect(getBrowserCliRuntime().error).not.toHaveBeenCalled();
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
   });
 
   it.each([""])("preserves prompt response %j", async (prompt) => {

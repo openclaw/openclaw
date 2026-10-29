@@ -28,6 +28,7 @@ import type {
   MainSessionRecoveryView,
 } from "./main-session-recovery-types.js";
 import {
+  isKilledMainSessionRecoveryFenceOnly,
   MAX_RECOVERY_RETRIES,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
@@ -135,13 +136,14 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
   );
 }
 
-/** Reconcile failed admission and terminal residue before a new input adds recovery custody. */
+/** Select reconciliation before new input adds custody; the store owner checks run liveness. */
 export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry): boolean {
   return (
-    (entry.status === undefined ||
-      entry.status === "failed" ||
-      isMainRestartRecoveryTerminalOnly(entry)) &&
-    entry.abortedLastRun !== true &&
+    (isKilledMainSessionRecoveryFenceOnly(entry) ||
+      ((entry.status === undefined ||
+        entry.status === "failed" ||
+        isMainRestartRecoveryTerminalOnly(entry)) &&
+        entry.abortedLastRun !== true)) &&
     hasMainSessionRecoveryClaim(entry) &&
     !isRetryableUnadoptedChatClaim(entry) &&
     !entry.mainRestartRecovery?.tombstone

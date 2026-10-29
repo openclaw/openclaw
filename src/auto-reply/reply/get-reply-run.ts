@@ -1,5 +1,13 @@
-import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import {
+  runOutsidePreparedModelRuntimePluginGenerationScope,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../../agents/prepared-model-runtime-generation-scope.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
+import {
+  runOutsidePluginRuntimeGenerationScope,
+  withPluginRuntimeGenerationScope,
+} from "../../plugins/runtime/generation-scope.js";
 import type { ReplyPayload } from "../types.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
@@ -27,27 +35,41 @@ export async function runPreparedReply(
 
   const { acquireAgentRunPreparedModelRuntime } =
     await import("../../agents/prepared-model-runtime.js");
-  await using lease = await acquireAgentRunPreparedModelRuntime(
-    {
-      config: dispatchRuntime.config,
-      agentId: dispatchRuntime.agentId,
-      agentDir: dispatchRuntime.agentDir,
-      allowGatewaySubagentBinding: true,
-      workspaceDir: context.workspaceDir,
-      runtimePluginSelections: [
-        {
-          provider: params.provider,
-          modelId: params.model,
-          runtime: context.thinkingRuntime,
-        },
-      ],
-    },
-    {
-      catalogMode: "static",
-      pluginGeneration: dispatchRuntime.pluginGeneration,
-      abortSignal: params.opts?.abortSignal,
-    },
-  );
+  const acquireRuntime = (pluginGeneration?: PreparedModelRuntimePluginGeneration) =>
+    acquireAgentRunPreparedModelRuntime(
+      {
+        config: dispatchRuntime.config,
+        agentId: dispatchRuntime.agentId,
+        agentDir: dispatchRuntime.agentDir,
+        allowGatewaySubagentBinding: true,
+        workspaceDir: dispatchRuntime.workspaceDir,
+        preserveWorkspaceDirOnRefresh: false,
+        runtimePluginSelections: [
+          {
+            provider: params.provider,
+            modelId: params.model,
+            runtime: context.thinkingRuntime,
+          },
+        ],
+      },
+      {
+        catalogMode: "static",
+        pluginGeneration,
+        abortSignal: params.opts?.abortSignal,
+      },
+    );
+  let preparedRuntime: Awaited<ReturnType<typeof acquireRuntime>>;
+  try {
+    preparedRuntime = await acquireRuntime(dispatchRuntime.pluginGeneration);
+  } catch (error) {
+    if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+      throw error;
+    }
+    preparedRuntime = await runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+      runOutsidePluginRuntimeGenerationScope(() => acquireRuntime()),
+    );
+  }
+  await using lease = preparedRuntime;
   let leaseActive = true;
   try {
     return await withPreparedModelRuntimePluginGenerationScope(

@@ -42,7 +42,7 @@ import {
 } from "./session-binding.js";
 import { createCodexRuntimeTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, isCodexTurnContextHandoff } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 setupRunAttemptTestHooks();
@@ -343,7 +343,12 @@ describe("registered Codex harness model attribution", () => {
       });
       expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
       expect(requests.filter(({ method }) => method === "thread/unsubscribe")).toHaveLength(0);
-      expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+      expect(
+        requests.filter(
+          ({ method, params: payload }) =>
+            method === "thread/inject_items" && !isCodexTurnContextHandoff(payload),
+        ),
+      ).toHaveLength(1);
     } finally {
       abort.abort("test cleanup");
       try {

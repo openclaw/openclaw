@@ -387,6 +387,97 @@ describe("media store filesystem faults", () => {
     return Object.assign(new Error(code), { code });
   }
 
+  it.each(
+    (["readdir", "lstat", "remove"] as const).flatMap((operation) =>
+      (operation === "readdir" ? ["EACCES", "EIO"] : ["EACCES", "EIO", "ENOENT"]).map((code) => ({
+        operation,
+        code,
+      })),
+    ),
+  )(
+    "handles playback quota $operation/$code at the writer boundary",
+    async ({ operation, code }) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-playback-quota-"));
+      const injectedError = errnoError(code);
+      const oldName = "v2-quota-old.mp4";
+      const insertedName = "v2-quota-inserted.mp4";
+      let injected = false;
+      if (operation === "remove") {
+        vi.doMock("@openclaw/fs-safe/store", async (importOriginal) => {
+          const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
+          return {
+            ...actual,
+            fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
+              const actualStore = actual.fileStore(options);
+              return {
+                ...actualStore,
+                remove: async (...args: Parameters<typeof actualStore.remove>) => {
+                  if (args[0] === `playback-transcode/${oldName}`) {
+                    injected = true;
+                    if (code !== "ENOENT") {
+                      throw injectedError;
+                    }
+                    await fs.unlink(actualStore.path(args[0]));
+                  }
+                  return await actualStore.remove(...args);
+                },
+              };
+            },
+          };
+        });
+      }
+      const store = await importFreshModule<typeof import("./store.js")>(
+        import.meta.url,
+        `./store.js?scope=playback-quota-${operation}-${code}`,
+      );
+      const cacheDir = path.join(await store.ensureMediaDir(), store.PLAYBACK_TRANSCODE_SUBDIR);
+      await fs.mkdir(cacheDir);
+      const oldPath = path.join(cacheDir, oldName);
+      const oldSize = 512 * 1024 * 1024;
+      await fs.writeFile(oldPath, "");
+      await fs.truncate(oldPath, oldSize);
+      const oldTime = (Date.now() - 2_000) / 1000;
+      await fs.utimes(oldPath, oldTime, oldTime);
+      if (operation === "readdir") {
+        const readdir = fs.readdir;
+        vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+          if (args[0] === cacheDir) {
+            injected = true;
+            throw injectedError;
+          }
+          return await readdir(...args);
+        });
+      } else if (operation === "lstat") {
+        const lstat = fs.lstat;
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          if (args[0] === oldPath) {
+            injected = true;
+            if (code !== "ENOENT") {
+              throw injectedError;
+            }
+            await fs.unlink(oldPath);
+          }
+          return await lstat(...args);
+        });
+      }
+      const result = store.writePlaybackTranscodeCache({
+        buffer: Buffer.from("x"),
+        fileName: insertedName,
+        maxBytes: 1,
+        tempPrefix: ".playback-quota-test",
+      });
+      if (code === "ENOENT") {
+        await expect(result).resolves.toBe(path.join(cacheDir, insertedName));
+        await expect(fs.stat(oldPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(result).rejects.toBe(injectedError);
+        await expect(fs.stat(oldPath)).resolves.toMatchObject({ size: oldSize });
+      }
+      expect(injected).toBe(true);
+      await expect(fs.readFile(path.join(cacheDir, insertedName), "utf8")).resolves.toBe("x");
+    },
+  );
+
   it.each([
     {
       name: "standalone fs-safe not-found",

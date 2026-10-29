@@ -597,7 +597,11 @@ export function createControlUiHandlers(
           parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
           resolve,
         );
-        void replacement.catch(() => {});
+        void replacement.catch((error: unknown) => {
+          context.logGateway.warn(
+            `Failed to prepare Control UI pull request subscriptions; retry the subscription: ${String(error)}`,
+          );
+        });
       });
       respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
     },

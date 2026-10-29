@@ -72,6 +72,7 @@ Important behavior details:
 - After launching a local managed browser, readiness checks allow up to 1.5 seconds per HTTP request and 2 seconds per WebSocket stage to tolerate Gateway scheduling delays. The readiness retry window is eight seconds; checks near its end use shorter timeouts.
 - Later operations use the same readiness allowance for an owned managed browser before deciding it needs a restart. Stopping a profile aborts its pending discovery and readiness checks; canceling one caller waiting for a shared start does not stop that shared launch.
 - Navigation protection is separate. A successful `start` or `tabs` result does not mean a later `open` or `navigate` target is allowed.
+- Timed-out or cancelled page interactions and `browser navigate` requests cancel their pending navigation-policy checks. A stalled DNS check from that request should not keep the profile busy when you run `openclaw browser stop`. An observed browser dialog interrupts the foreground interaction without cancelling its still-active navigation guard.
 
 Resetting or deleting a local managed profile stops a verified browser left by an
 earlier Gateway runtime before moving its data. If a live profile owner cannot be

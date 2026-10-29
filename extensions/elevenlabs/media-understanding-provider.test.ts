@@ -36,6 +36,48 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
     expect(form.get("file")).toBeInstanceOf(Blob);
   });
 
+  it("forwards supported provider query options to speech-to-text", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ text: "hello" }));
+
+    await elevenLabsMediaUnderstandingProvider.transcribeAudio!({
+      ...request,
+      query: { no_verbatim: true, tag_audio_events: false, diarize: true },
+      fetchFn: fetchMock,
+    });
+
+    const [, requestInit] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const form = expectDefined(requestInit, "ElevenLabs request init").body as FormData;
+    expect(form.get("no_verbatim")).toBe("true");
+    expect(form.get("tag_audio_events")).toBe("false");
+    expect(form.get("diarize")).toBe("true");
+  });
+
+  it("ignores unsupported query keys and does not let them override dedicated fields", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ text: "hello" }));
+
+    const query = {
+      webhook: "https://example.com/hook",
+      model_id: "other_model",
+      language_code: "fr",
+    };
+    // Model malformed JavaScript input without weakening the typed request contract.
+    Object.defineProperty(query, "no_verbatim", { value: ["true"], enumerable: true });
+
+    await elevenLabsMediaUnderstandingProvider.transcribeAudio!({
+      ...request,
+      language: "en",
+      query,
+      fetchFn: fetchMock,
+    });
+
+    const [, requestInit] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const form = expectDefined(requestInit, "ElevenLabs request init").body as FormData;
+    expect(form.get("model_id")).toBe("scribe_v2");
+    expect(form.get("language_code")).toBe("en");
+    expect(form.get("webhook")).toBeNull();
+    expect(form.get("no_verbatim")).toBeNull();
+  });
+
   it("rejects non-object successful speech-to-text JSON with a stable provider error", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([])));
 

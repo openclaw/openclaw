@@ -169,7 +169,9 @@ export async function refreshLegacySystemdServiceMetadata(
     env,
     async (mutation) => {
       const snapshot = mutation.snapshots.get(unitPath) ?? null;
-      if (!snapshot) {
+      // Legacy unsafe modes need the full installer: back up and regenerate policy
+      // together instead of publishing the same unit with only its version removed.
+      if (!snapshot || snapshot.requiresRegeneration) {
         return false;
       }
       const previous = snapshot.contents.toString("utf8");
@@ -557,6 +559,9 @@ export async function uninstallSystemdService({
   await removeNodeSystemdManagedEnvironmentKeys(env);
   if (removed) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
+    // The manager keeps a deleted unit loaded until it reloads. A retry after a
+    // failed reload finds no unit file and skips this; accepted, rare.
+    await reloadSystemdUserManager(env);
   } else {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
   }

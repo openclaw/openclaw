@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import {
   readDeferredPluginMigrations,
@@ -438,5 +439,51 @@ it.each([
         expect(run.verification.readyz).not.toBe(true);
       }
     }
+  },
+);
+
+it.each([false, true])(
+  "parks the managed Gateway before repairing source artifacts (stop refusal=%s)",
+  async (failStop) => {
+    native.contend = false;
+    native.failStop = failStop;
+    const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance");
+    let runtimeStartedAt = 0;
+    let runtimeTimeoutMs = 0;
+    vi.mocked(updateCheck.resolveUpdateInstallKind).mockResolvedValue("git");
+    const afterPublication = new Error("Synthetic Doctor failure after runtime publication");
+    vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockImplementationOnce(
+      async ({ beforePublication, timeoutMs }) => {
+        runtimeStartedAt = Date.now();
+        runtimeTimeoutMs = timeoutMs;
+        await beforePublication?.();
+        if (!native.stopped) {
+          throw new Error("Runtime artifacts require an offline Gateway");
+        }
+        native.events.push("publish");
+        return { changed: true };
+      },
+    );
+    vi.mocked(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
+      afterPublication,
+    );
+
+    await expect(
+      updateRepairCommand({ json: true, yes: true, deferCompletionCache: true, timeout: "3600" }),
+    ).rejects.toThrow(
+      failStop ? "An admitted migration write is incomplete." : afterPublication.message,
+    );
+    expect(native.events).toEqual(
+      failStop
+        ? ["running-holder"]
+        : ["running-holder", "stop-verified", "publish", "restart", "restart-verified"],
+    );
+    expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).toHaveBeenCalledTimes(
+      failStop ? 0 : 1,
+    );
+    expect(maintenance).toHaveBeenCalledTimes(1);
+    const inspectionDeadline = maintenance.mock.calls[0]?.[0].serviceInspectionDeadlineAtMs;
+    expect(inspectionDeadline).toBeGreaterThan(runtimeStartedAt);
+    expect(inspectionDeadline).toBeLessThanOrEqual(runtimeStartedAt + runtimeTimeoutMs);
   },
 );

@@ -29,6 +29,9 @@ keeps its normal streaming behavior, and text
 inside a `[[tts:text]]` block remains audio-only.
 
 Visible captions and their text fallbacks preserve whitespace inside code blocks.
+When streamed and final answers differ only in paragraph separators, OpenClaw
+delivers the final answer once, preserving its paragraph spacing. Spaces, tabs,
+and indentation within lines remain significant when comparing answers.
 
 After synthesis, OpenClaw persists batch TTS output in the media store under
 `tool-speech-synthesis`. The reply uses that stable media path instead of a

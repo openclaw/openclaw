@@ -673,7 +673,7 @@ async function verifyAndPublishSqliteSnapshot(
           try {
             // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
             source.prepare("PRAGMA schema_version;").get();
-            assertSqliteIntegrity(source, options.sourcePath);
+            assertSqliteIntegrity(source, options.sourcePath, options.integrity);
             options.validate?.(source, options.sourcePath);
             if (!privateSourcePath) {
               await backupNodeSqliteDatabase(source, stagedPath, options.onProgress);
@@ -724,7 +724,7 @@ async function verifyAndPublishSqliteSnapshot(
             });
             try {
               published.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
-              assertSqliteIntegrity(published, options.targetPath);
+              assertSqliteIntegrity(published, options.targetPath, options.integrity);
               options.validate?.(published, options.targetPath);
               const publishedUserVersion = readSqliteUserVersion(published);
               if (publishedUserVersion !== userVersion) {

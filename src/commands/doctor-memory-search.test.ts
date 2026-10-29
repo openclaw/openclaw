@@ -686,6 +686,22 @@ describe("noteMemorySearchHealth", () => {
     },
   );
 
+  it.each(["none", "ollama"])(
+    "explains stopped indexing and recovery with fallback %s",
+    async (fallback) => {
+      await runMemorySearchHealth("openai", undefined, { fallback });
+      expect(note).toHaveBeenCalledTimes(1);
+      expectFirstNoteContains(
+        "Without working primary or fallback embeddings, memory sync stops for explicitly configured providers or existing vector indexes",
+        "new and changed memory files are not indexed",
+        "Set OPENAI_API_KEY",
+        'set memory.search.provider to "none" for this agent (including any agent override)',
+        "openclaw memory index --force --agent agent-default",
+        "Then rerun: openclaw doctor",
+      );
+    },
+  );
+
   it.each([
     ["resolves provider auth from the default agent directory", "gemini", "google", "GEMINI"],
   ])("%s", async (_name, provider, authProvider, envPrefix) => {

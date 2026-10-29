@@ -57,7 +57,11 @@ it.each([
       expect(unmeasured).toHaveLength(1);
       expect(unmeasured[0]?.predictedSeconds).toBeUndefined();
       expect(unmeasured[0]?.timeoutMinutes).toBe(
-        owner === "agentic-cli-process" || owner === "core-runtime-config" ? 90 : undefined,
+        owner === "agentic-agents-support" ||
+          owner === "agentic-cli-process" ||
+          owner === "core-runtime-config"
+          ? 90
+          : undefined,
       );
       const pullRequest = { compactMode: "pull-request", runnerBackend: "github" } as const;
       const beforePr = createNodeTestShardBundles(pullRequest);

@@ -1,7 +1,34 @@
 // Covers the manifest-schema boundary that keeps third-party schema failures out of the loader.
 import { Format } from "typebox/format";
+import { Settings } from "typebox/system";
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue, validatePluginSchemaValue } from "./schema-validator.js";
+
+it("does not reuse evaluated properties between cached nonaccelerated checks", () => {
+  const useAcceleration = Settings.Get().useAcceleration;
+  Settings.Set({ useAcceleration: false });
+  try {
+    const schema = {
+      type: "object",
+      anyOf: [{ properties: { a: { type: "number" } } }, { properties: { b: { type: "number" } } }],
+      unevaluatedProperties: false,
+    };
+    expect(validatePluginSchemaValue({ origin: "global", schema, value: { a: 1 } })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      validatePluginSchemaValue({ origin: "global", schema, value: { a: "bad" } }),
+    ).toMatchObject({ ok: false, schemaError: false });
+    expect(validatePluginSchemaValue({ origin: "global", schema, value: { b: 2 } })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      validatePluginSchemaValue({ origin: "global", schema, value: { b: "bad" } }),
+    ).toMatchObject({ ok: false, schemaError: false });
+  } finally {
+    Settings.Set({ useAcceleration });
+  }
+});
 
 describe("validatePluginSchemaValue", () => {
   it("strips terminal control characters a manifest embedded in the thrown text", () => {

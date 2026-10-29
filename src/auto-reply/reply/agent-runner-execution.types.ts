@@ -49,6 +49,7 @@ export type AgentTurnCompaction = {
 type AbortedAgentTurn = {
   kind: "aborted";
   reason: "user" | "restart" | "superseded";
+  sessionWriter?: CompactionAccountingTarget;
   compaction?: AgentTurnCompaction;
 };
 
@@ -58,6 +59,7 @@ export type AgentTurnInternalResult =
   | SettledAgentTurn
   | {
       kind: "final";
+      sessionWriter?: CompactionAccountingTarget;
       payload: ReplyPayload;
       resolved?: { provider: string; model: string };
       postCompactionModelFailure?: true;
@@ -103,6 +105,7 @@ export type AgentTurnExecutionResult = {
     | AbortedAgentTurn
     | {
         kind: "rejected";
+        sessionWriter?: CompactionAccountingTarget;
         compaction?: AgentTurnCompaction;
         payload: ReplyPayload;
         resolved?: { provider: string; model: string };

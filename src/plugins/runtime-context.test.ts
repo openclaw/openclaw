@@ -1,12 +1,14 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { bindPluginCacheRoot, createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 import { withPluginRegistrationContext } from "./runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import { createPluginRecord } from "./status.test-fixtures.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 
 describe("plugin runtime record source ownership", () => {
   it.each([
@@ -231,31 +233,67 @@ describe("plugin runtime record source ownership", () => {
     }
   });
 
-  it("resolves unrelated modules after a captured instance is disposed", async () => {
+  it("resolves unrelated modules while a captured instance releases module resources", async () => {
     const registry = createEmptyPluginRegistry();
     const retired = createPluginRecord({ id: "retired", rootDir: path.resolve("retired") });
     const current = createPluginRecord({ id: "current", rootDir: path.resolve("current") });
     registry.plugins.push(retired, current);
     const instance = new PluginInstance(retired.id, { record: retired, registry });
+    const captured = path.resolve("captured/api.js");
+    const callFinished = createDeferredCore();
+    const cleanupEntered = createDeferredCore();
+    const cleanupFinished = createDeferredCore();
+    let releasingModules = false;
     instance.bindModuleLoader(
       () => ({}),
-      (source) => source === retired.source,
+      (source) => {
+        if (releasingModules) {
+          throw new Error("Captured source owner is releasing its resources");
+        }
+        return source === captured;
+      },
     );
-    await instance.dispose();
-    withPluginCache(createPluginCache(), () =>
+    instance.onModuleDispose(async () => {
+      releasingModules = true;
+      cleanupEntered.resolve();
+      await cleanupFinished.promise;
+    });
+    const call = instance.run(() => callFinished.promise);
+    const owner = new AsyncWorkScope();
+    const disposal = owner.track(() => instance.dispose());
+    let ownerDrained = false;
+    const drained = owner.drain().then(() => {
+      ownerDrained = true;
+    });
+    try {
+      withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: registry, isWebchatConnect: () => false },
+        () => expect(resolvePluginRuntimeRecord({ modulePath: captured })).toBe(retired),
+      );
+      callFinished.resolve();
+      await cleanupEntered.promise;
       withPluginRuntimeGatewayRequestScope(
         { pluginRegistry: registry, isWebchatConnect: () => false },
         () => {
           expect(resolvePluginRuntimeRecord({ modulePath: path.resolve("current/api.js") })).toBe(
             current,
           );
-          expect(
-            resolvePluginRuntimeRecord({ modulePath: path.resolve("unknown/api.js") }),
-          ).toBeUndefined();
-          expect(() => instance.loadModule(retired.source)).toThrow(/reloaded or disabled/);
+          expect(resolvePluginRuntimeRecord({ modulePath: captured })).toBeUndefined();
         },
-      ),
-    );
+      );
+      expect(instance.owner?.registry).toBe(registry);
+      expect(ownerDrained).toBe(false);
+      cleanupFinished.resolve();
+      await Promise.all([call, disposal, drained]);
+      expect(ownerDrained).toBe(true);
+      expect(instance.owner?.registry).toBeUndefined();
+      expect(instance.hasModuleSource(captured)).toBe(false);
+      expect(() => instance.loadModule(retired.source)).toThrow(/reloaded or disabled/);
+    } finally {
+      callFinished.resolve();
+      cleanupFinished.resolve();
+      await Promise.allSettled([call, disposal, drained]);
+    }
   });
 
   it.each([

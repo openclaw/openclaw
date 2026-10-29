@@ -109,3 +109,30 @@ export function stripLinesOutsideCode(
       : raw;
   });
 }
+
+export function isInsideSettledBlockCode(
+  pos: number,
+  text: string,
+  regions: ReturnType<typeof findCodeRegions>,
+): boolean {
+  return regions.some(
+    (region) =>
+      region.block &&
+      region.start <= pos &&
+      pos < region.end &&
+      /[\r\n]/.test(text.slice(region.start, pos)),
+  );
+}
+
+/** Bounded marker-free reuse; complex Markdown retains the canonical parser. */
+export function canReuseMarkdownOwnership(
+  previousText: string,
+  nextText: string,
+  ownership?: ReturnType<typeof findCodeOwnership>,
+): boolean {
+  if (ownership || !nextText.startsWith(previousText)) {
+    return false;
+  }
+  const boundary = previousText.slice(-4) + nextText.slice(previousText.length);
+  return !/[\x60~\t|\r[\]():-]| {4}/u.test(boundary);
+}

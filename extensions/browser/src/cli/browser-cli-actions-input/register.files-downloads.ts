@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -142,15 +141,11 @@ export function registerBrowserFilesAndDownloadsCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       if (opts.accept && opts.dismiss) {
-        defaultRuntime.error(danger("Specify only one of --accept or --dismiss"));
-        defaultRuntime.exit(1);
-        return;
+        throw new Error("Specify only one of --accept or --dismiss");
       }
       const accept = opts.accept ? true : opts.dismiss ? false : undefined;
       if (accept === undefined) {
-        defaultRuntime.error(danger("Specify --accept or --dismiss"));
-        defaultRuntime.exit(1);
-        return;
+        throw new Error("Specify --accept or --dismiss");
       }
       await runHook(parent, opts, {
         path: "/hooks/dialog",

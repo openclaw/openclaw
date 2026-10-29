@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
+import { afterEach, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createDuckDuckGoWebSearchProvider } from "../web-search-contract-api.js";
 import { resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
@@ -270,5 +271,129 @@ describe("duckduckgo web search provider", () => {
     ];
     expect(result).toMatchObject({ count: expected.length, results: expected });
     expect(JSON.stringify(result)).not.toContain("Discarded");
+  });
+});
+
+describe("configured DuckDuckGo search defaults", () => {
+  let fetch: MockInstance<typeof globalThis.fetch>;
+  beforeEach(() => {
+    fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected search"));
+  });
+  afterEach(() => vi.restoreAllMocks());
+  function createSearchTool(config: OpenClawConfig = {}) {
+    const tool = createDuckDuckGoWebSearchProvider().createTool({ config });
+    assert(tool, "Expected tool definition");
+    return tool;
+  }
+  function htmlResponse(html: string) {
+    return new Response(html, { headers: { "content-type": "text/html" } });
+  }
+  function resultHtml(url: string, title: string, snippet = "") {
+    return (
+      '<a class="result__a" href="' +
+      url +
+      '">' +
+      title +
+      '</a><a class="result__snippet">' +
+      snippet +
+      "</a>"
+    );
+  }
+  it("honors tools.web.search maxResults when count is omitted", async () => {
+    fetch.mockResolvedValue(
+      htmlResponse(
+        [1, 2, 3]
+          .map((index) => resultHtml(`https://example.com/${index}`, `Result ${index}`))
+          .join(""),
+      ),
+    );
+    const tool = createDuckDuckGoWebSearchProvider().createTool({
+      config: { tools: { web: { search: { cacheTtlMinutes: 0 } } } },
+      searchConfig: { maxResults: 2, timeoutSeconds: 2 },
+    });
+    assert(tool, "Expected tool definition");
+    const result = (await tool.execute({ query: "openclaw docs" })) as {
+      results?: unknown[];
+    };
+    expect(result.results).toHaveLength(2);
+  });
+
+  it("keeps an explicit count ahead of the configured maxResults", async () => {
+    fetch.mockResolvedValue(
+      htmlResponse(
+        [1, 2, 3]
+          .map((index) => resultHtml(`https://example.com/${index}`, `Result ${index}`))
+          .join(""),
+      ),
+    );
+    const tool = createDuckDuckGoWebSearchProvider().createTool({
+      config: { tools: { web: { search: { cacheTtlMinutes: 0 } } } },
+      searchConfig: { maxResults: 1 },
+    });
+    assert(tool, "Expected tool definition");
+    const result = (await tool.execute({ query: "openclaw docs", count: 2 })) as {
+      results?: unknown[];
+    };
+    expect(result.results).toHaveLength(2);
+  });
+
+  function mockHangingFetchUntilAbort() {
+    fetch.mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const reason = init.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("aborted"));
+          });
+        }) as Promise<Response>,
+    );
+  }
+
+  it("cancels a slow DuckDuckGo search at the configured deadline", async () => {
+    mockHangingFetchUntilAbort();
+    const tool = createDuckDuckGoWebSearchProvider().createTool({
+      config: {},
+      searchConfig: { timeoutSeconds: 1 },
+    });
+    assert(tool, "Expected tool definition");
+    vi.useFakeTimers();
+    let pending: Promise<unknown> | undefined;
+    try {
+      let settled = false;
+      pending = expect(
+        tool.execute({ query: "openclaw docs" }).finally(() => {
+          settled = true;
+        }),
+      ).rejects.toThrow(/timed out|TimeoutError|aborted/i);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled, "request must settle at its configured deadline").toBe(true);
+      await pending;
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      await pending;
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the client fallback deadline when timeoutSeconds is not configured", async () => {
+    vi.useFakeTimers();
+    let pending: Promise<unknown> | undefined;
+    try {
+      mockHangingFetchUntilAbort();
+      const tool = createSearchTool({ tools: { web: { search: { cacheTtlMinutes: 0 } } } });
+      let settled = false;
+      pending = expect(
+        tool.execute({ query: "fallback deadline" }).finally(() => {
+          settled = true;
+        }),
+      ).rejects.toThrow(/timed out|TimeoutError|aborted/i);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(settled, "request must settle at its configured deadline").toBe(true);
+      await pending;
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      await pending;
+      vi.useRealTimers();
+    }
   });
 });

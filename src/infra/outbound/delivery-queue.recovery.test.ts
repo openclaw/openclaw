@@ -1062,6 +1062,28 @@ describe("delivery-queue recovery", () => {
     expect(entry?.lastError).toContain("provider lookup timed out");
   });
 
+  it.each([
+    ["permanent", "chat not found", undefined],
+    ["transient", "provider lookup timed out", 1],
+  ] as const)(
+    "classifies a thrown %s unknown-send reconciliation with the delivery error policy",
+    async (_kind, error, retryCount) => {
+      const id = await enqueueUnknownRecovery({ text: "unknown" });
+      const reconcileUnknownSend = vi.fn().mockRejectedValue(new Error(error));
+      installUnknownSendAdapter(reconcileUnknownSend);
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver });
+      expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result.failed).toBe(1);
+      if (retryCount === undefined) {
+        await expectFailedQueue(id);
+      } else {
+        await expectPendingEntry({ id, retryCount, recoveryState: "unknown_after_send" });
+      }
+    },
+  );
+
   it.each(["recovered", "exhausted", "untyped"] as const)(
     "preserves bounded final-text recovery across storage restart: %s",
     async (outcome) => {

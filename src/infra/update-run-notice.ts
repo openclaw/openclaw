@@ -13,7 +13,10 @@ const SKIPPED_UPDATE_RUN_HEADLINES = new Map<string | null, string>([
   ["already-current", "✅ OpenClaw is already up to date."],
   ["still-starting", "⏳ OpenClaw is installed and still starting."],
   ["gateway-readiness-unverified", "⚠️ OpenClaw is installed, but we couldn't confirm it's ready."],
-  ["managed-service-handoff-already-running", "⬆️ OpenClaw is already updating."],
+  [
+    "managed-service-handoff-already-running",
+    "⚠️ A previous update still holds this installation.",
+  ],
 ]);
 
 /** Chat shows the outcome; the update views keep diagnostics and recovery instructions. */

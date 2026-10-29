@@ -9,6 +9,7 @@ on:
       - scripts/build-installers.mjs
       - scripts/lib/standalone-installers.mjs
       - scripts/install.ps1
+      - test/scripts/install-ps1-entrypoint.ps1
       - .github/workflows/website-installer-sync.yml
   push:
     branches: [main]
@@ -19,6 +20,7 @@ on:
       - scripts/build-installers.mjs
       - scripts/lib/standalone-installers.mjs
       - scripts/install.ps1
+      - test/scripts/install-ps1-entrypoint.ps1
       - .github/workflows/website-installer-sync.yml
   workflow_dispatch:
     inputs:
@@ -358,6 +360,9 @@ jobs:
             } finally {
               Remove-Item Env:OPENCLAW_INSTALL_METHOD -ErrorAction SilentlyContinue
             }
+
+            & $hostCommand -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/scripts/install-ps1-entrypoint.ps1 -InstallerPath $scriptPath
+            if ($LASTEXITCODE -ne 0) { throw "$hostCommand failed the piped installer regression." }
 
             $help = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs @("-?")
             if ($help.ExitCode -ne 0 -or $help.Output -match '\[OK\] Windows detected') {

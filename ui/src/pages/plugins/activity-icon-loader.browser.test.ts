@@ -199,7 +199,63 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
+  it("rasterizes an ordinary transform and a long valid transform list", async ({
+    onTestFinished,
+  }) => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    fetch.mockImplementation(
+      async () =>
+        new Response(wrapSvg('<path d="M4 4h16v16H4Z" transform="translate(1 2) scale(1.5)"/>'), {
+          headers: { "content-type": "image/svg+xml" },
+        }),
+    );
+    const ordinary = await fetchPluginActivityIconBlobUrl({
+      ...common,
+      pluginId: "ordinary-transform",
+      signal: new AbortController().signal,
+    });
+    expect(ordinary).not.toBeNull();
+    onTestFinished(() => URL.revokeObjectURL(ordinary!));
+    const ordinaryBlob = await (await nativeFetch(ordinary!)).blob();
+    expect(ordinaryBlob.type).toBe("image/png");
+
+    fetch.mockImplementation(
+      async () =>
+        new Response(wrapSvg(`<path d="M4 4h16v16H4Z" transform="${"scale(1) ".repeat(40)}"/>`), {
+          headers: { "content-type": "image/svg+xml" },
+        }),
+    );
+    const longList = await fetchPluginActivityIconBlobUrl({
+      ...common,
+      pluginId: "long-transform",
+      signal: new AbortController().signal,
+    });
+    expect(longList).not.toBeNull();
+    onTestFinished(() => URL.revokeObjectURL(longList!));
+    const longBlob = await (await nativeFetch(longList!)).blob();
+    expect(longBlob.type).toBe("image/png");
+  });
+
+  it("rejects an unclosed transform through the activity loader without stalling", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          wrapSvg(`<path d="M4 4h16v16H4Z" transform="scale(${"\t\t)scale(".repeat(24)}"/>`),
+          { headers: { "content-type": "image/svg+xml" } },
+        ),
+    );
+    const started = performance.now();
+    await expect(
+      fetchPluginActivityIconBlobUrl({
+        ...common,
+        pluginId: "stalling-transform",
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toBeNull();
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
+  it.each<[string, string, string]>([
     ["package PNG", "image/png", "png"],
     [
       "active SVG",
@@ -219,7 +275,7 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
         ["oversized view box", 'viewBox="0 0 4097 24"'],
         ["oversized dimensions", 'width="24" height="4097"'],
       ] as const
-    ).map(([name, attributes]) => [
+    ).map(([name, attributes]): [string, string, string] => [
       name,
       "image/svg+xml",
       `<svg xmlns="http://www.w3.org/2000/svg" ${attributes}><path d="M4 4h16v16H4Z"/></svg>`,
@@ -240,3 +296,7 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
     ).resolves.toBeNull();
   });
 });
+
+function wrapSvg(body: string) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${body}</svg>`;
+}

@@ -510,3 +510,36 @@ it("lists current memory entries and owner changes alongside durable targets", a
     }
   });
 });
+
+it("rejects transcript alias collisions across retained stores", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const secondary = state.statePath("main.sqlite");
+    const anchor = "agent:main:anchor";
+    const alias = "agent:main:alias";
+    for (const [storePath, sessionKey, sessionId] of [
+      [primary, anchor, "shared"],
+      [primary, alias, "different"],
+      [secondary, alias, "shared"],
+    ] as const) {
+      replaceSessionEntrySync(
+        { agentId: "main", storePath, sessionKey },
+        { sessionId, updatedAt: 1 },
+      );
+    }
+    await expect(
+      loadCombinedSessionStoreForGatewayCoreAsync(
+        {
+          agents: { entries: { main: {} } },
+          session: { store: state.statePath("{agentId}.sqlite") },
+        },
+        {
+          agentId: "main",
+          includeIncognito: false,
+          projection: "list",
+          transcriptSelection: { sessionKeys: [anchor], sessionIds: [] },
+        },
+      ),
+    ).rejects.toThrow("duplicate rows resolve to canonical session key");
+  });
+});

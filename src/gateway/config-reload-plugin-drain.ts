@@ -31,6 +31,7 @@ export function createConfigPluginDrainTracker(params: {
         paths: readonly string[];
         observation: AbortController;
         retriesWhenIdle: boolean;
+        observing: boolean;
         reported: boolean;
       }
     | undefined;
@@ -78,25 +79,30 @@ export function createConfigPluginDrainTracker(params: {
           paths: plan.reloadPluginPaths ?? [],
           observation: new AbortController(),
           retriesWhenIdle: timeout !== undefined,
+          observing: false,
           reported: false,
         };
         failure = current;
-        if (!timeout) {
-          return;
-        }
-        // The rolled-back generation keeps serving and accepting work. Retry a timed-out
-        // drain when it would pass immediately; other drain failures need an operator.
-        const signal = AbortSignal.any([params.signal, current.observation.signal]);
-        void Promise.all(timeout.instances.map((instance) => instance.waitForIdle(signal))).then(
-          () => {
-            if (failure === current) {
-              clear();
-              params.onWorkSettled();
-            }
-          },
-          () => {},
-        );
       }
+    },
+    observeAfterReceipt() {
+      const current = failure;
+      const timeout = current?.error.cause;
+      if (!current || current.observing || !(timeout instanceof PluginAdmittedWorkTimeoutError)) {
+        return;
+      }
+      current.observing = true;
+      // The failed write receipt must settle before its turn can release retained work.
+      const signal = AbortSignal.any([params.signal, current.observation.signal]);
+      void Promise.all(timeout.instances.map((instance) => instance.waitForIdle(signal))).then(
+        () => {
+          if (failure === current) {
+            clear();
+            params.onWorkSettled();
+          }
+        },
+        () => {},
+      );
     },
     applied(plan?: GatewayReloadPlan, runtime?: PluginRuntimeApplication) {
       // Clear reverted settings only after the candidate applies, including unrelated plugin edits.

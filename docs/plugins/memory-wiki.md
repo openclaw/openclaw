@@ -96,6 +96,10 @@ reads are off, those commands keep local/offline behavior.
 
 Managed content stays inside generated blocks; human note blocks are
 preserved across regeneration.
+Pruning also leaves a source page and its synchronization record intact when
+its bytes are not valid UTF-8, rather than salvaging replacement-decoded Notes
+and deleting the original. Keep a byte-for-byte backup, convert a copy to UTF-8
+using its original encoding, and retry the import.
 
 - `sources/`: imported raw material and bridge/unsafe-local-backed pages
 - `entities/`: durable things, people, systems, projects, objects

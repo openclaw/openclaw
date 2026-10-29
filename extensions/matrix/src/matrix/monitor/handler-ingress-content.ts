@@ -473,6 +473,7 @@ export async function resolveMatrixIngressContent(config: {
     shouldBypassMention,
     canDetectMention,
     commandAuthorized,
+    isControlCommand: allowTextCommands && hasControlCommandInMessage,
     inboundHistory,
     senderName,
     bodyText,

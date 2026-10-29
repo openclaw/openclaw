@@ -1,6 +1,7 @@
 // Anthropic tests cover forward-compat resolution for unreleased Claude ids.
 import { supportsClaudeAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildAnthropicProvider } from "./register.runtime.js";
 
 function resolveModel(modelId: string, provider = "anthropic") {
@@ -124,4 +125,24 @@ describe("unreleased Claude generations", () => {
     expect(resolveModel("mimo-v2-flash")).toBeUndefined();
     expect(resolveModel("kimi-k2.6")).toBeUndefined();
   });
+});
+
+it("carries manifest context-window choices onto hand-built modern rows", () => {
+  // Session window selection needs these choices even when live discovery has no rows.
+  const models = manifest.modelCatalog.providers.anthropic.models;
+  const selectable = models.filter((model) => model.contextWindows);
+  expect(selectable.length).toBeGreaterThan(0);
+  for (const { id, contextWindows, contextWindowDefault } of selectable) {
+    expect(resolveModel(id), id).toMatchObject({ contextWindows, contextWindowDefault });
+  }
+  // Claude CLI rows take their choices from their catalog rows, and models that
+  // declare none gain none. Ids this builder declines resolve to no row.
+  for (const rows of [
+    selectable.flatMap(({ id }) => resolveModel(id, "claude-cli") ?? []),
+    models.filter((model) => !model.contextWindows).flatMap(({ id }) => resolveModel(id) ?? []),
+  ]) {
+    for (const row of rows) {
+      expect(row.contextWindows, row.id).toBeUndefined();
+    }
+  }
 });

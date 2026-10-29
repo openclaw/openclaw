@@ -591,14 +591,11 @@ export class MemoryIndexDatabase {
     return this.read({ type: "source.state", input: query }, assertCurrent);
   }
 
-  async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {
+  async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void, recount = false) {
     assertCurrent();
-    // Each failed BEGIN releases admission before retry; successful batches yield at the caller.
-    return (
-      (await this.retryPublication(() =>
-        this.executePublication({ type: "cache.prune", input: { maxEntries } }, assertCurrent),
-      )) ?? false
-    );
+    const input = { maxEntries, recount };
+    const run = () => this.executePublication({ type: "cache.prune", input }, assertCurrent);
+    return (await this.retryPublication(run)) ?? false;
   }
 
   async mutateEmbeddingCache(

@@ -54,11 +54,7 @@ import {
   pluginSyncResult,
   stableConfig,
 } from "./update-cli/update-cli-config.test-support.js";
-import {
-  mockUnbuiltRecoveryFixture,
-  recoveryVerificationStep,
-  recoveryVersionMismatch,
-} from "./update-cli/update-cli-failure-recovery.test-support.js";
+import { mockUnbuiltRecoveryFixture } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import {
   writeJsonFixture,
   writeOpenClawPackageFixture,
@@ -575,7 +571,13 @@ describe("update-cli", () => {
         reason: "post-update-failed",
         steps: [
           expect.objectContaining({ exitCode: 1, stderrTail: message }),
-          recoveryVerificationStep([recoveryVersionMismatch]),
+          {
+            name: "gateway recovery observation",
+            command: "gateway verification",
+            cwd: process.cwd(),
+            durationMs: expect.any(Number),
+            exitCode: 0,
+          },
         ],
       });
     },

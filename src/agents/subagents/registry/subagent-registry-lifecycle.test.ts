@@ -1479,6 +1479,30 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
+  it.each([
+    ["with", "requester-revision"],
+    ["without", undefined],
+  ] as const)(
+    "hands a quiet interrupted child to a requester %s a lifecycle revision",
+    async (_label, completionRequesterLifecycleRevision) => {
+      const entry = createRunEntry({
+        expectsCompletionMessage: false,
+        completionRequesterSessionId: "requester-session",
+        completionRequesterLifecycleRevision,
+      });
+      const controller = createLifecycleController({ entry });
+
+      await controller.completeSubagentRun(makeInterruptedSubagentCompletion(entry));
+
+      expect(readLifecycleRun(entry)).toMatchObject({
+        terminalOwner: "interrupted-recovery",
+        completionTarget: "parent",
+        cleanup: "keep",
+        execution: { interruptionReason: "gateway-restart" },
+      });
+    },
+  );
+
   it("persists interrupted recovery before task projection and rejects late provider or yield", async () => {
     const entry = createRunEntry();
     const beforeWrite = vi.fn();
@@ -2481,6 +2505,29 @@ describe("subagent registry lifecycle hardening", () => {
     await completeRun(controller, entry, { endedAt: 4_001, triggerCleanup: true });
 
     expect(readLifecycleRun(entry)).toEqual(original);
+  });
+
+  it("keeps a confirmed cancellation's pending notice when the killed callback repeats", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "agent run aborted" },
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: null, capturedAt: 4_000 },
+      delivery: { status: "pending" },
+      cleanupHandled: true,
+    });
+    const original = structuredClone(entry);
+    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await controller.completeSubagentRun(
+      makeKilledSubagentCompletion(entry, { triggerCleanup: true }),
+    );
+
+    expect(readLifecycleRun(entry).killReconciliation).toBeUndefined();
+    expect(readLifecycleRun(entry)).toEqual(original);
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
   it("keeps cancellation that becomes durable during completion capture", async () => {

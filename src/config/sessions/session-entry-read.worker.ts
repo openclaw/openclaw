@@ -379,6 +379,12 @@ export function readExactSessionEntriesWithLifecycle(
               ...(request.selection?.kind === "session-id-or-key"
                 ? { sessionIdOrKey: request.selection.sessionIdOrKey }
                 : {}),
+              ...(request.selection?.kind === "transcript-aliases"
+                ? {
+                    transcriptSessionIds: request.selection.sessionIds,
+                    transcriptSessionFiles: request.selection.sessionFiles,
+                  }
+                : {}),
             }),
             lifecycleTimestamps: {},
           }

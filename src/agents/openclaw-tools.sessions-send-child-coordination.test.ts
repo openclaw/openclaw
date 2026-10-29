@@ -108,6 +108,7 @@ import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "./embedded-agent-r
 import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import {
+  endChildRun,
   registerSessionsSendRequesterRetirementTests,
   type GatewayCall,
 } from "./openclaw-tools.sessions-send-requester-retirement.test-support.js";
@@ -117,6 +118,7 @@ import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-regis
 import { observeRootWork } from "./subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
   addSubagentRunForTests,
+  countPendingDescendantRuns,
   getSubagentRunByRunId,
   resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
@@ -395,11 +397,14 @@ describe("sessions_send child coordination", () => {
   );
 
   it.each([
-    { acknowledgment: "acknowledged", watch: undefined },
-    { acknowledgment: "ACK lost", watch: true },
+    { acknowledgment: "acknowledged", watch: undefined, timeoutSeconds: 0, observation: "timeout" },
+    { acknowledgment: "acknowledged", watch: undefined, timeoutSeconds: 1, observation: "timeout" },
+    { acknowledgment: "acknowledged", watch: undefined, timeoutSeconds: 1, observation: "yielded" },
+    { acknowledgment: "acknowledged", watch: undefined, timeoutSeconds: 1, observation: "pending" },
+    { acknowledgment: "ACK lost", watch: true, timeoutSeconds: 0, observation: "timeout" },
   ] as const)(
     "delivers a queued child follow-up after its original wake was consumed ($acknowledgment, watch=$watch)",
-    async ({ acknowledgment, watch }) => {
+    async ({ acknowledgment, watch, timeoutSeconds, observation }) => {
       const requesterSessionKey = "agent:main:dashboard:requester";
       const childSessionKey = "agent:main:dashboard:existing-child";
       const requesterTurnRunId = "followup-requester-turn";
@@ -426,6 +431,7 @@ describe("sessions_send child coordination", () => {
         requesterTurnRunId: undefined,
         requesterSettleWake: undefined,
       });
+      let inlineObserved = false;
       let finishChild = () => {};
       const childPending = new Promise<void>((resolve) => {
         finishChild = resolve;
@@ -441,6 +447,12 @@ describe("sessions_send child coordination", () => {
           return receipt;
         }
         if (request.method === "agent.wait" && request.params?.runId === runId) {
+          if (!inlineObserved && request.params?.timeoutMs === 1000) {
+            inlineObserved = true;
+            return observation === "yielded"
+              ? { status: "ok", yielded: true }
+              : { status: observation };
+          }
           await childPending;
           return {
             runId,
@@ -474,7 +486,7 @@ describe("sessions_send child coordination", () => {
           sessionKey: childSessionKey,
           mode: "followup",
           ...(watch === undefined ? {} : { watch }),
-          timeoutSeconds: 0,
+          timeoutSeconds,
           message: "Return the follow-up result",
         });
         expect(result.details).toMatchObject({
@@ -554,6 +566,90 @@ describe("sessions_send child coordination", () => {
         await resetSubagentRegistryForTests();
         announceTesting.setDepsForTest();
       }
+    },
+  );
+
+  it.each(["ok", "error", "timeout"] as const)(
+    "consumes an inline native child result without a later parent notice (%s)",
+    async (status) => {
+      const requesterSessionKey = "agent:main:dashboard:inline-parent";
+      const childSessionKey = "agent:main:dashboard:inline-child";
+      const requesterTurnRunId = "inline-parent-turn";
+      const runId = "inline-followup";
+      const terminalReply = { disposition: "visible" as const, text: "Inline result" };
+      await writeEntry(requesterSessionKey, { sessionId: "inline-parent", updatedAt: 1 });
+      await writeEntry(childSessionKey, {
+        sessionId: "inline-child",
+        updatedAt: 1,
+        spawnedBy: requesterSessionKey,
+        spawnDepth: 1,
+      });
+      await resetSubagentRegistryForTests();
+      callGatewayMock.mockImplementation(async (request: GatewayCall) => {
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId, status: "accepted", targetDisposition: "queued" };
+        }
+        if (request.method === "agent.wait") {
+          if (status === "ok") {
+            await endChildRun(runId, childSessionKey, terminalReply);
+            // The live inline claim owns cleanup until its guarded acknowledgement.
+            expect(getSubagentRunByRunId(runId)?.cleanupCompletedAt).toBeUndefined();
+          }
+          return {
+            runId,
+            status,
+            startedAt: 1,
+            endedAt: Date.now(),
+            ...(status === "ok" ? { terminalReply } : { error: "Child failed" }),
+          };
+        }
+        return {};
+      });
+      const result = await createSessionsSendTool({
+        agentSessionKey: requesterSessionKey,
+        requesterTurnRunId,
+        config,
+        callGateway: callGatewayMock,
+      }).execute("inline", {
+        sessionKey: childSessionKey,
+        mode: "followup",
+        timeoutSeconds: 1,
+        message: "Continue",
+      });
+      expect(result.details).toMatchObject({ status });
+      expect(getSubagentRunByRunId(runId)).toMatchObject({
+        expectsCompletionMessage: false,
+        completion: { required: false },
+        delivery: { status: "delivered" },
+      });
+      await settleRequesterAfterSessionSpawns({
+        requesterSessionKey,
+        requesterAgentId: "main",
+        requesterTurnRunId,
+        requesterYielded: false,
+        acceptedSessionSpawns: [{ runId, childSessionKey, expectsCompletionMessage: false }],
+      });
+      if (status !== "ok") {
+        // A later lifecycle terminal still owns its normal cleanup after acknowledgement.
+        await endChildRun(runId, childSessionKey, terminalReply);
+      }
+      await settleSessionWork();
+      expect(getSubagentRunByRunId(runId)?.cleanupCompletedAt).toEqual(expect.any(Number));
+      expect(await countPendingDescendantRuns(requesterSessionKey, () => {})).toBe(0);
+      // Replaying the lifecycle cannot revive the consumed notice.
+      emitAgentEvent({
+        runId,
+        sessionKey: childSessionKey,
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: Date.now() },
+      });
+      await settleSessionWork();
+      expect(
+        calls.filter(
+          (call) => call.method === "agent" && call.params?.sessionKey === requesterSessionKey,
+        ),
+      ).toHaveLength(0);
     },
   );
 

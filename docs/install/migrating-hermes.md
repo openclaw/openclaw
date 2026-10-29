@@ -159,6 +159,8 @@ openclaw migrate apply hermes --json --yes
 
 ## Troubleshooting
 
+If source directory inspection or skill listing fails, preview stops with the filesystem error instead of silently omitting files. Resolve the reported access or storage problem and rerun the preview before applying.
+
 <AccordionGroup>
   <Accordion title="Apply refuses with conflicts">
     Inspect the plan output. Each conflict identifies the source path and the existing target. Decide per item whether to skip, edit the target, or rerun with `--overwrite`.
@@ -181,3 +183,12 @@ openclaw migrate apply hermes --json --yes
 - [Migrating](/install/migrating): move an OpenClaw install between machines.
 - [Doctor](/gateway/doctor): post-migration health check.
 - [Agent workspace](/concepts/agent-workspace): where `SOUL.md`, `AGENTS.md`, and memory files live.
+
+### Special text files
+
+Migration text readers do not wait for a named-pipe writer or read devices as
+text streams. Memory append sources and destinations must be ordinary files;
+replace an unexpected special file and retry. Symlinks to ordinary source text
+files remain supported. Optional text reads retain their existing unreadable-file
+fallback behavior. Memory imports preserve UTF-8 validation and repeat-import
+deduplication.

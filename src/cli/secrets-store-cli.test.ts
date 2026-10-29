@@ -96,6 +96,38 @@ beforeEach(() => {
 });
 
 describe("secrets store CLI", () => {
+  it("escapes readable env values while preserving JSON and plain output", async () => {
+    const run = (...args: string[]) =>
+      createProgram().parseAsync(["secrets", "store", ...args], { from: "user" });
+    const value =
+      "\u001b]8;;https://example.invalid\u0007café\u001b]8;;\u0007\u001b[31m\noperator-forged\tend\rrow\u0007";
+    const entry = { name: "SERVICE_MODE", kind: "env", valuePreview: value };
+    mocks.list.mockReturnValue([entry]);
+    mocks.read.mockResolvedValue({ ok: true, value });
+
+    await run("list");
+    await run("get", "SERVICE_MODE");
+    expect(mocks.runtimeLogs).toEqual([
+      "SERVICE_MODE [env] = café\\noperator-forged\\tend\\rrow",
+      "SERVICE_MODE=café\\noperator-forged\\tend\\rrow",
+    ]);
+
+    mocks.runtimeLogs.length = 0;
+    await run("list", "--json");
+    await run("get", "SERVICE_MODE", "--json");
+    expect(JSON.parse(mocks.runtimeLogs[0] ?? "")).toEqual([entry]);
+    expect(JSON.parse(mocks.runtimeLogs[1] ?? "")).toEqual({
+      name: "SERVICE_MODE",
+      kind: "env",
+      value,
+    });
+
+    mocks.runtimeLogs.length = 0;
+    await run("list", "--plain");
+    await run("get", "SERVICE_MODE", "--plain");
+    expect(mocks.runtimeLogs).toEqual([`SERVICE_MODE\tenv\t${value}\t`, value]);
+  });
+
   it.each(["set", "import"])(
     "preserves an existing credential during a redacted %s round-trip",
     async (command) => {

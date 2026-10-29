@@ -5,7 +5,10 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import type { useTempSessionsFixture } from "./test-helpers.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
-import { readRecentUserAssistantTextForSession } from "./transcript.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  readRecentUserAssistantTextForSession,
+} from "./transcript.js";
 
 export function registerRecentTranscriptTextSnapshotTests(params: {
   fixture: Pick<ReturnType<typeof useTempSessionsFixture>, "storePath">;
@@ -16,6 +19,44 @@ export function registerRecentTranscriptTextSnapshotTests(params: {
 }) {
   const { fixture, sessionId, sessionKey, createFixtureTranscriptScope, writeTranscriptStore } =
     params;
+  it("restores only confirmed final message-tool replies when requested", async () => {
+    await writeTranscriptStore();
+    const mirrors = [
+      { kind: "message-tool-source-reply", final: false, sourceTurnId: "source-turn" },
+      { kind: "message-tool-source-reply", final: true, sourceTurnId: "source-turn" },
+      { kind: "message-tool-source-reply", final: true },
+      { kind: "channel-final" },
+    ] as const;
+    for (const [index, deliveryMirror] of mirrors.entries()) {
+      expect(
+        await appendAssistantMessageToSessionTranscript({
+          agentId: "main",
+          expectedSessionId: sessionId,
+          sessionKey,
+          storePath: fixture.storePath(),
+          text: `reply ${index}`,
+          idempotencyKey: `delivery-${index}`,
+          deliveryMirror,
+        }),
+      ).toMatchObject({ ok: true });
+    }
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+        includeMessageToolSourceReplies: true,
+      }),
+    ).resolves.toEqual([expect.objectContaining({ role: "assistant", text: "reply 1" })]);
+  });
+
   it("reads recent context only from the active transcript branch", async () => {
     await writeTranscriptStore();
     await persistSessionTranscriptTurn(

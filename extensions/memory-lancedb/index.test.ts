@@ -1218,12 +1218,25 @@ describe("memory plugin e2e", () => {
     });
     await Promise.resolve();
 
-    vi.setSystemTime(15_000);
+    await vi.advanceTimersByTimeAsync(15_000);
     resolveTask?.("late success");
 
     await expect(result).resolves.toEqual({ status: "timeout" });
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  test.each([-30_000, 30_000])(
+    "keeps the outer recall deadline monotonic across wall-clock step %s",
+    async (jumpMs) => {
+      vi.useFakeTimers();
+      const task = createDeferred<string>();
+      const result = runWithTimeout({ timeoutMs: 15_000, task: async () => await task.promise });
+      vi.setSystemTime(Date.now() + jumpMs);
+      task.resolve("on time");
+      await expect(result).resolves.toEqual({ status: "ok", value: "on time" });
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   test("gates every memory surface on the agent's memorySearch.enabled", async () => {
     const embeddingsCreate = vi.fn(async () => ({
@@ -1975,6 +1988,7 @@ describe("memory plugin e2e", () => {
   test("retries without rejected dimensions and truncates the fallback vector", async () => {
     let nowMs = 1_000;
     const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const performanceNow = vi.spyOn(performance, "now").mockReturnValue(0);
     const rejectedDimensions = Object.assign(
       new Error("422 Extra inputs are not permitted: body.dimensions"),
       {
@@ -2049,8 +2063,9 @@ describe("memory plugin e2e", () => {
         model: "text-embedding-3-small",
         input: "hello dimensions",
       });
-      expect(post.mock.calls[0]?.[1]).toMatchObject({ timeout: 15_000 });
-      expect(post.mock.calls[1]?.[1]).toMatchObject({ timeout: 14_500 });
+      const firstTimeout = (post.mock.calls[0]?.[1] as { timeout?: number } | undefined)?.timeout;
+      const secondTimeout = (post.mock.calls[1]?.[1] as { timeout?: number } | undefined)?.timeout;
+      expect([firstTimeout, secondTimeout]).toEqual([15_000, 14_500]);
       const truncatedVector = expectDefined(
         vectorSearch.mock.calls[0]?.[0],
         "truncated LanceDB search vector",
@@ -2059,6 +2074,7 @@ describe("memory plugin e2e", () => {
       expect(truncatedVector.slice(0, 2)).toEqual([0.6, 0.8]);
     } finally {
       dateNow.mockRestore();
+      performanceNow.mockRestore();
       resetMemoryModuleMocks();
     }
   });

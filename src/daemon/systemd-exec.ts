@@ -55,8 +55,10 @@ async function execSystemdCommand(
   args: string[],
   env?: GatewayServiceEnv,
   timeoutMs?: number,
+  beforeEffect?: () => void,
 ): Promise<ExecResult> {
   return await execFileUtf8(command, args, {
+    beforeEffect,
     env: env ? { ...process.env, ...env } : process.env,
     // A wedged systemd socket can leave manager commands blocked forever; the timeout
     // kills the child so status reads fail soft instead of hanging the command.
@@ -68,8 +70,9 @@ export async function execSystemctl(
   args: string[],
   env?: GatewayServiceEnv,
   timeoutMs?: number,
+  beforeEffect?: () => void,
 ): Promise<ExecResult> {
-  return await execSystemdCommand("systemctl", args, env, timeoutMs);
+  return await execSystemdCommand("systemctl", args, env, timeoutMs, beforeEffect);
 }
 
 /** System-manager reads never inherit user-bus routing. */
@@ -184,6 +187,7 @@ async function execSystemdUserCommand(
   timeoutMs?: number,
   assertCurrent?: () => void,
   stopInspection?: SystemdStopInspection,
+  beforeEffect?: () => void,
 ): Promise<SystemdExecResult> {
   const now = stopInspection ? () => performance.now() : getServiceInspectionClock();
   const deadline = timeoutMs && timeoutMs > 0 ? now() + timeoutMs : undefined;
@@ -235,7 +239,13 @@ async function execSystemdUserCommand(
     }
     const scope =
       transport?.kind === "machine" ? ["--machine", `${transport.user}@`, "--user"] : ["--user"];
-    return await execSystemdCommand(command, [...scope, ...args], childEnv, remaining);
+    return await execSystemdCommand(
+      command,
+      [...scope, ...args],
+      childEnv,
+      remaining,
+      beforeEffect,
+    );
   } catch (error) {
     assertServiceInspectionFallbackAllowed(error);
     runServiceInspectionGuard(assertCurrent);
@@ -259,6 +269,7 @@ export async function execSystemctlUser(
   timeoutMs?: number,
   assertCurrent?: () => void,
   stopInspection?: SystemdStopInspection,
+  beforeEffect?: () => void,
 ): Promise<SystemdExecResult> {
   return await execSystemdUserCommand(
     "systemctl",
@@ -267,6 +278,7 @@ export async function execSystemctlUser(
     timeoutMs,
     assertCurrent,
     stopInspection,
+    beforeEffect,
   );
 }
 

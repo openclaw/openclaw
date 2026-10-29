@@ -129,6 +129,13 @@ function restoredSource(): RestoredGatewayOperatorAuthority {
   };
   return {
     authority,
+    authenticatedUserProfile: {
+      profileId: "requester",
+      displayName: "Requester",
+      avatarRevision: "",
+      hasAvatar: false,
+      updatedAt: 1,
+    },
     controlUiAdmin: true,
     release: vi.fn(),
   };

@@ -568,7 +568,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               startOutcomes.set(id, { status: "skipped", reason: "manual-stop" });
               return;
             }
-            if (!timedOutRecovery || !recoveryStartRequested.has(rKey)) {
+            if (
+              !timedOutRecovery ||
+              (!recoveryStartRequested.has(rKey) && optsValue.manual !== true)
+            ) {
               if (timedOutRecovery) {
                 recoveryStartRequested.add(rKey);
                 setRuntime(channelId, id, { restartPending: true });
@@ -1283,8 +1286,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               });
             } else {
               setStoppedRuntime(channelId, id, stoppedPatch);
-              recoveryStopTimedOut.add(rKey);
             }
+            recoveryStopTimedOut.add(rKey);
             return outcome;
           }
           clearRecoveryState(rKey);
@@ -1385,7 +1388,20 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const recoverAutostartSuppression = createChannelAutostartRecovery({
     getSuppression: () => autostartSuppression,
     clearSuppression: () => {
+      const message = autostartSuppression?.message;
       autostartSuppression = null;
+      if (message === undefined) {
+        return;
+      }
+      // Accounts that stay stopped after recovery (unlinked, disabled) are not
+      // restarted, so they would keep reporting the breaker as the failure.
+      for (const [channelId, store] of channelStores) {
+        for (const [accountId, runtime] of store.runtimes) {
+          if (runtime.lastError === message) {
+            setRuntime(channelId, accountId, { lastError: null });
+          }
+        }
+      }
     },
     tryRecover: opts.tryRecoverAutostartSuppression,
     signal: opts.scheduler.signal,

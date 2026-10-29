@@ -357,9 +357,15 @@ describe("original requester media handoff", () => {
   it("ends bounded handoff without claiming durability when both storage paths remain unavailable", async () => {
     await withMediaSession(async ({ lifecycle, handle, mediaPath, queueContext }) => {
       vi.useFakeTimers({ toFake: ["Date"] });
+      const realPerformanceNow = performance.now.bind(performance);
+      let performanceClockSkewMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(
+        () => realPerformanceNow() + performanceClockSkewMs,
+      );
       const startedAt = Date.now();
       vi.spyOn(queue, "enqueueClaimedSessionDelivery").mockImplementation(async () => {
         vi.setSystemTime(startedAt + 120_001);
+        performanceClockSkewMs += 120_001;
         throw new Error("queue remains unavailable");
       });
       vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockRejectedValue(
@@ -433,6 +439,11 @@ describe("queued media completion past the handoff deadline", () => {
           });
           const startedAt = Date.now();
           vi.useFakeTimers({ toFake: ["Date"] });
+          const realPerformanceNow = performance.now.bind(performance);
+          let performanceClockSkewMs = 0;
+          vi.spyOn(performance, "now").mockImplementation(
+            () => realPerformanceNow() + performanceClockSkewMs,
+          );
           const observedQueuedRetry = createDeferredCore();
           let scheduledCount = 0;
           let queueId: string | undefined;
@@ -442,6 +453,7 @@ describe("queued media completion past the handoff deadline", () => {
             queueId = id;
             await drain(id);
             vi.setSystemTime(startedAt + 120_001);
+            performanceClockSkewMs += 120_001;
             if (++scheduledCount > 1) {
               observedQueuedRetry.resolve();
             }

@@ -5,6 +5,7 @@ import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
 
 export type CreateVerifiedSqliteSnapshotOptions = {
+  integrity?: import("./sqlite-integrity.js").SqliteIntegrityCheckOptions;
   sourcePath: string;
   targetPath: string;
   /** Only in an isolated child: acquire and consume a fresh private image, including crash recovery. */

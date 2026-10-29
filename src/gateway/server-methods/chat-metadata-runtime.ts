@@ -2,7 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
-import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
+import {
+  getRuntimeAuthProfileStoreCatalogRevision,
+  getRuntimeAuthProfileStoreMetadataRevision,
+} from "../../agents/auth-profiles/runtime-snapshots.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import {
@@ -109,6 +112,7 @@ export function createGatewayChatMetadataRuntime(params: {
     getPreparedOwner: getPublishedPreparedModelCatalogOwnerSnapshot,
     getPreparedAuthStore: getPreparedRuntimeAuthProfileStoreSnapshot,
     getAuthStoreRevision: getRuntimeAuthProfileStoreMetadataRevision,
+    getAuthCatalogRevision: getRuntimeAuthProfileStoreCatalogRevision,
     getSkillsVersion: getSkillsSnapshotVersion,
     getPluginRegistryVersion: getActivePluginRegistryVersion,
     buildCommands: async ({ cfg, agentId }) => {
@@ -133,7 +137,7 @@ export function createGatewayChatMetadataRuntime(params: {
         catalogStatusChanged ||
         !previous ||
         !facts ||
-        !generationFactsMatch(previous, facts, "catalog"),
+        !generationFactsMatch(previous, facts, "catalog-notification"),
       authChanged: !previous || !facts || !generationFactsMatch(previous, facts, "auth"),
       ...(previous && facts && generationFactsMatch(previous, facts, "commands")
         ? { commandsChanged: false as const }

@@ -37,6 +37,7 @@ import {
   runLiveUpdaterMain,
   verifyGatewayReadiness,
 } from "../../.agents/skills/openclaw-live-updater/scripts/update-main.mjs";
+import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../gateway-shutdown-budget.mjs";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
@@ -427,6 +428,16 @@ if (Object.hasOwn(params, "terminalPolicy")) {
     deployment: { ...gatewayCliDeployment(root, checkout), invocationPrefix: [capturePath] },
   };
 }
+
+test("admits the installed Gateway shutdown budget while rejecting unbounded stops", () => {
+  expect(resolveLaunchAgentExitTimeoutSeconds(LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS)).toBe(
+    LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  );
+  expect(() => resolveLaunchAgentExitTimeoutSeconds(0)).toThrow("prevents bounded stopped proof");
+  expect(() => resolveLaunchAgentExitTimeoutSeconds(LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 1)).toThrow(
+    "prevents bounded stopped proof",
+  );
+});
 
 describe("openclaw live updater", () => {
   beforeAll(() => {

@@ -32,6 +32,7 @@ import {
 } from "./subagent-exec-request-ownership.js";
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { captureSubagentListReadContext, type SubagentListReadContext } from "./subagent-list.js";
+import { captureSubagentRetainedWork } from "./subagent-registry-execution-cleanup.js";
 import {
   getCurrentSubagentRunOwner,
   getSubagentRunsForRequesterSession,
@@ -82,6 +83,17 @@ export async function prepareSessionSubagentKillSelection(params: {
     ].map((entry) => [entry.runId, entry]),
   );
   const preparationErrors: string[] = [];
+  const hasRetainedWork = captureSubagentRetainedWork();
+  // Select inert history before notice retirement can publish replacement state.
+  for (const entry of runs.values()) {
+    if (
+      entry.execution.suppressSessionEffects !== true &&
+      ownsRoot(entry) &&
+      !hasRetainedWork(entry)
+    ) {
+      runs.delete(entry.runId);
+    }
+  }
   for (const entry of runs.values()) {
     if (
       entry.execution.status !== "terminal" ||
@@ -115,7 +127,13 @@ export async function prepareSessionSubagentKillSelection(params: {
       }
       preparationErrors.push(`${resolveSubagentLabel(entry)}: ${formatErrorMessage(error)}`);
     }
-    runs.delete(entry.runId);
+    // Retiring an old notice must not abandon its still-draining execution.
+    const current = getCurrentSubagentRunOwner(subagentRuns, entry);
+    if (current && hasRetainedWork(current)) {
+      runs.set(entry.runId, current);
+    } else {
+      runs.delete(entry.runId);
+    }
   }
   return {
     cfg: params.cfg,

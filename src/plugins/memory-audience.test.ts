@@ -568,3 +568,51 @@ it.each(["memory", "other", "reset", "abort"] as const)(
     }
   },
 );
+
+it("grants owner-private memory across agents only for an owner spawn from an owner direct root", async () => {
+  const FOREIGN_CHILD_KEY = "agent:fm-know:subagent:child";
+  const resolveForeignChild = (parent: FakeSessionRow, child: FakeSessionRow) => {
+    const resolveAgentStorePath = vi.fn((agentId: string) => `/tmp/stores/${agentId}.sqlite`);
+    fakeSessionOwner.rows.set(ROOT_KEY, parent);
+    fakeSessionOwner.rows.set(FOREIGN_CHILD_KEY, child);
+    const resolution = resolveMemoryAudienceFromEntry(
+      {
+        agentId: "fm-know",
+        sessionKey: FOREIGN_CHILD_KEY,
+        sessionId: child.sessionId,
+        senderIsOwner: false,
+        storePath: "/tmp/stores/fm-know.sqlite",
+        resolveAgentStorePath,
+      },
+      child,
+    );
+    return { resolution, resolveAgentStorePath };
+  };
+
+  const owner = rootEntry();
+  const granted = resolveForeignChild(owner, childEntry(owner));
+  const grant = await granted.resolution;
+  if (grant.status !== "granted") {
+    throw new Error(grant.reason);
+  }
+  expect(grant.audience).toEqual({ kind: "owner-private", agentId: "fm-know" });
+  expect(granted.resolveAgentStorePath).toHaveBeenCalledWith("main");
+  grant.release();
+
+  const group = rootEntry("group");
+  await expect(resolveForeignChild(group, childEntry(group)).resolution).resolves.toMatchObject({
+    status: "denied",
+    kind: "ineligible",
+  });
+  const nonOwnerSpawn = { ...childEntry(owner), spawnedBySenderIsOwner: false };
+  await expect(resolveForeignChild(owner, nonOwnerSpawn).resolution).resolves.toMatchObject({
+    status: "denied",
+    kind: "ineligible",
+  });
+  const reset = { ...owner, lifecycleRevision: randomUUID() };
+  await expect(resolveForeignChild(reset, childEntry(owner)).resolution).resolves.toMatchObject({
+    status: "denied",
+    kind: "stale-lineage",
+  });
+  expect(fakeSessionOwner.activeLeases).toBe(0);
+});

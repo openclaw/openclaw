@@ -49,7 +49,11 @@ import {
   type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-diagnostics.js";
 import { loadExpectedRestartRecoveryTarget } from "./main-session-restart-recovery-exact-target.js";
-import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
+import {
+  finishDelegatedRestartRecovery,
+  requiresDelegatedRecoverySource,
+  tombstoneMainRestartRecoveryWithNotice,
+} from "./main-session-restart-recovery-failure.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
   resolveMainSessionResumePolicy,
@@ -62,28 +66,6 @@ import {
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
-
-function requiresDelegatedRecoverySource(
-  entry: SessionEntry,
-  source: Awaited<ReturnType<typeof readMainSessionRecoveryCheckpoint>>["source"],
-): boolean {
-  // Steering is context, not a new admission. A non-browser operator can have
-  // internal ingress too; its durable source goes through the Gateway's exact
-  // claim and current-policy restoration before any recovery turn executes.
-  if (
-    entry.restartRecoveryDeliverySourceRunId &&
-    (entry.restartRecoveryOperatorSource ||
-      entry.restartRecoverySourceIngress === "control-ui" ||
-      entry.restartRecoverySourceIngress === "channel")
-  ) {
-    return false;
-  }
-  return (
-    source === "inter_session" ||
-    (entry.restartRecoverySourceIngress === "internal" &&
-      (source === undefined || source === "internal_system" || source === "harness_completion"))
-  );
-}
 
 async function pendingFinalRecoveryAction(
   pending: NonNullable<SessionEntry["pendingFinalDelivery"]>,
@@ -567,7 +549,7 @@ export async function recoverStore(params: {
         !completionSource &&
         requiresDelegatedRecoverySource(entry, source)
       ) {
-        const tombstone = await tombstoneMainRestartRecoveryWithNotice({
+        const outcome = await finishDelegatedRestartRecovery({
           ...target,
           cfg: params.cfg,
           entry,
@@ -575,7 +557,7 @@ export async function recoverStore(params: {
           observation: recoveryView.observation,
           reason: "delegated recovery sender authority is unavailable",
         });
-        if (tombstone === "notice_failed") {
+        if (outcome === "notice_failed") {
           result.failed++;
         } else {
           skip("delegated_authority_unavailable");

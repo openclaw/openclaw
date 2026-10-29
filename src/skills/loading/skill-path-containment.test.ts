@@ -1,4 +1,5 @@
 // Skill path containment tests cover root escapes, allowed symlinks, and diagnostics.
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -376,4 +377,26 @@ describe("skill path containment", () => {
       expect(names).toContain("repo-nested-skill");
     },
   );
+});
+
+it("loads skills when the workspace path has different casing on disk", async ({ skip }) => {
+  const workspace = await fs.mkdtemp(path.join(tempRoot, "CaseWorkspace"));
+  const configuredWorkspace = path.join(
+    path.dirname(workspace),
+    path.basename(workspace).toLowerCase(),
+  );
+  if (!existsSync(configuredWorkspace)) {
+    skip("Requires a case-insensitive filesystem");
+  }
+  await writeSkill({
+    dir: path.join(workspace, "skills", "case-skill"),
+    name: "case-skill",
+    description: "Case test",
+  });
+  const warn = captureWarningLogger();
+
+  const entries = loadTestWorkspaceSkills(configuredWorkspace);
+
+  expect(warn).not.toHaveBeenCalled();
+  expect(entries.map((entry) => entry.skill.name)).toEqual(["case-skill"]);
 });

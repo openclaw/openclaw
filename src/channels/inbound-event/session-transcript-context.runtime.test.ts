@@ -198,6 +198,7 @@ describe("session transcript inbound context", () => {
     });
 
     expect(readRecent.mock.calls[0]?.[0]).not.toHaveProperty("includeCronDirectDeliveryContext");
+    expect(readRecent.mock.calls[0]?.[0]).not.toHaveProperty("includeMessageToolSourceReplies");
     expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
       source: "session",
       payload: {

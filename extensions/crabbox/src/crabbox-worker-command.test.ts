@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   isUnrecognizedLease,
   runCrabboxCommand,
+  runCrabboxCommandWithCoordinatorRetry,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
 
@@ -129,7 +130,7 @@ describe("Crabbox coordinator timeouts", () => {
     "keeps the stop deadline and diagnostic, process timeout=%s",
     async (processTimeout) => {
       let elapsedMs = 0;
-      const now = vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
+      const now = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
       const timeouts: number[] = [];
       const sleep = vi.fn(async (ms: number) => {
         elapsedMs += ms;
@@ -159,6 +160,61 @@ describe("Crabbox coordinator timeouts", () => {
       }
     },
   );
+
+  it.each([-90_000, 90_000])(
+    "shares command and backoff budget after a %i ms wall-clock step",
+    async (clockStepMs) => {
+      let monotonicMs = 0;
+      let wallStep = 0;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+      const wallClock = vi.spyOn(Date, "now").mockImplementation(() => monotonicMs + wallStep);
+      const timeouts: number[] = [];
+      const sleep = vi.fn(async (ms: number) => {
+        monotonicMs += ms;
+      });
+      try {
+        const result = await runCrabboxCommandWithCoordinatorRetry({
+          action: "stop",
+          args: ["stop", "--id", LEASE_ID],
+          binary: "crabbox",
+          timeoutMs: 5_000,
+          runCommand: async (_argv, options) => {
+            timeouts.push(options.timeoutMs);
+            monotonicMs += 1_000;
+            wallStep = clockStepMs;
+            return transportFailure;
+          },
+          sleep,
+        });
+        expect(timeouts).toEqual([5_000, 3_000]);
+        expect(sleep.mock.calls).toEqual([[1_000, undefined]]);
+        expect(result).toMatchObject({ ...transportFailure, coordinatorAttempts: 2 });
+      } finally {
+        wallClock.mockRestore();
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("does not start another command when cancelled during retry backoff", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled during coordinator retry");
+    const runCommand = vi.fn().mockResolvedValue(transportFailure);
+    const sleep = vi.fn(async () => controller.abort(reason));
+    await expect(
+      runCrabboxCommandWithCoordinatorRetry({
+        action: "stop",
+        args: ["stop", "--id", LEASE_ID],
+        binary: "crabbox",
+        timeoutMs: 5_000,
+        signal: controller.signal,
+        runCommand,
+        sleep,
+      }),
+    ).rejects.toBe(reason);
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(1_000, controller.signal);
+  });
 });
 it.each(["output capture failed", "cleanup could not confirm process exit", "spawn ENOENT"])(
   "reports the runner failure without retaining private error data: %s",

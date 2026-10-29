@@ -7,7 +7,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { CliSessionBinding, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { mintMcpLoopbackClientGrant as MintMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
 import {
@@ -21,6 +21,7 @@ import {
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
+import { resolveCliSessionReuse } from "../cli-session.js";
 import * as subagentSpawn from "../subagents/spawn/subagent-spawn.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
@@ -426,6 +427,92 @@ describe("restricted CLI tool preparation", () => {
       expect(Object.keys(bundle.mcpServers)).toEqual(["openclaw"]);
     } finally {
       await context.preparedBackend.cleanup?.();
+    }
+  });
+
+  it("keeps the Claude session across Control UI turns and caller-less completion turns", async () => {
+    const { sessionTarget } = fixture.session;
+    const childSessionKey = "agent:main:subagent:surface-tools";
+    replaceSessionEntrySync(
+      { storePath: sessionTarget.storePath, sessionKey: childSessionKey },
+      {
+        sessionId: "surface-tools-child",
+        updatedAt: 1,
+        spawnedBy: sessionTarget.sessionKey,
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["read", "screen", "show_widget", "suggest_task", "dismiss_task"],
+      },
+    );
+    const base = {
+      sessionKey: sessionTarget.sessionKey,
+      sessionId: sessionTarget.sessionId,
+      provider: "claude-cli",
+      model: "opus",
+      modelHasVision: false,
+      sourceReplyDeliveryMode: "automatic" as const,
+      config: {
+        session: { store: sessionTarget.storePath },
+        tools: { allow: ["read", "screen", "show_widget", "suggest_task", "dismiss_task"] },
+      },
+    };
+    const turns: { binding: CliSessionBinding; systemPrompt: string }[] = [];
+    for (const completion of [false, true, false]) {
+      const context = await fixture.prepare({
+        ...base,
+        ...(completion
+          ? {
+              trustedInternalHandoff: {
+                kind: "subagent-completion" as const,
+                sourceSessionKey: childSessionKey,
+                sourceSessionId: "surface-tools-child",
+                targetSessionKey: sessionTarget.sessionKey,
+                targetSessionId: sessionTarget.sessionId,
+                provider: "claude-cli",
+                model: "opus",
+              },
+              inputProvenance: {
+                kind: "inter_session" as const,
+                sourceTool: "subagent_announce",
+                sourceSessionKey: childSessionKey,
+              },
+            }
+          : {
+              clientCaps: ["ui-commands", "inline-widgets"],
+              taskSuggestionDeliveryMode: "gateway" as const,
+            }),
+      });
+      try {
+        turns.push({
+          binding: {
+            sessionId: "native-surface-session",
+            authEpoch: context.authEpoch,
+            authEpochVersion: context.authEpochVersion,
+            extraSystemPromptHash: context.extraSystemPromptHash,
+            messageToolPolicyHash: context.messageToolPolicyHash,
+            promptToolNamesHash: context.promptToolNamesHash,
+            cwdHash: context.cwdHash,
+            mcpConfigHash: context.preparedBackend.mcpConfigHash,
+            mcpResumeHash: context.preparedBackend.mcpResumeHash,
+          },
+          systemPrompt: context.systemPrompt,
+        });
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    }
+    expect(turns[0]!.binding.promptToolNamesHash).toBeTruthy();
+    expect(turns[1]!.systemPrompt).not.toBe(turns[0]!.systemPrompt);
+    expect(turns[2]!.systemPrompt).toBe(turns[0]!.systemPrompt);
+    for (const [index, turn] of turns.slice(1).entries()) {
+      const { authEpochVersion, ...current } = turn.binding;
+      expect(
+        resolveCliSessionReuse({
+          ...current,
+          authEpochVersion: authEpochVersion!,
+          binding: turns[index]!.binding,
+        }),
+      ).toMatchObject({ sessionId: "native-surface-session" });
     }
   });
 

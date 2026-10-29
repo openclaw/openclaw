@@ -747,7 +747,7 @@ describe("sendSingleTextMessageMatrix", () => {
 
       const content = sentContent();
       expect(content.msgtype).toBe("m.text");
-      expect(content).not.toHaveProperty("m.mentions");
+      expect(content["m.mentions"]).toEqual({});
       expect(content["org.matrix.msc4357.live"]).toEqual({});
       expect(content.formatted_body).toContain(
         "<code>read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed</code>",
@@ -995,7 +995,7 @@ describe("editMessageMatrix mentions", () => {
     expect(sentContent()["m.mentions"]).toEqual({ user_ids: ["@bob:example.org"] });
   });
 
-  it("supports quiet draft preview edits without mention metadata or history reads", async () => {
+  it("supports quiet draft preview edits that mention nobody and skip history reads", async () => {
     getEvent.mockRejectedValue(new Error("Matrix history unavailable"));
 
     await edit("@room hi @alice:example.org", { msgtype: "m.notice", includeMentions: false });
@@ -1004,8 +1004,8 @@ describe("editMessageMatrix mentions", () => {
     const content = sentContent();
     expect(content.msgtype).toBe("m.notice");
     expect(newContent(content).msgtype).toBe("m.notice");
-    expect(content).not.toHaveProperty("m.mentions");
-    expect(newContent(content)).not.toHaveProperty("m.mentions");
+    expect(content["m.mentions"]).toEqual({});
+    expect(newContent(content)["m.mentions"]).toEqual({});
     expect(sentContent().formatted_body).not.toContain("matrix.to");
     expect(newContent(content).formatted_body).not.toContain("matrix.to");
   });

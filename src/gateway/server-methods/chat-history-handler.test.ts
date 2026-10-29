@@ -887,3 +887,43 @@ describe("chat metadata ownership", () => {
     expect(readChatMetadata).not.toHaveBeenCalled();
   });
 });
+
+it("chat.history reports the session agent's own verboseDefault", () =>
+  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
+    const cfg = {
+      agents: {
+        defaults: { verboseDefault: "off" },
+        entries: { main: {}, ops: { verboseDefault: "full" } },
+      },
+    } satisfies OpenClawConfig;
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
+    const client = { connect: { scopes: ["operator.admin"] } } as never;
+    for (const [agentId, expected] of [
+      ["ops", "full"],
+      ["main", "off"],
+    ] as const) {
+      const scope = { agentId, sessionKey: `agent:${agentId}:main`, sessionId: `${agentId}-main` };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      let result: unknown;
+      await expectDefined(
+        chatHistoryHandlers["chat.history"],
+        "history handler",
+      )({
+        params: { agentId, sessionKey: scope.sessionKey },
+        context,
+        client,
+        req: { type: "req", id: "verbose-default", method: "chat.history" },
+        isWebchatConnect: () => false,
+        respond: (ok, payload, error) => {
+          expect(error).toBeUndefined();
+          expect(ok).toBe(true);
+          result = payload;
+        },
+      });
+      const payload = expectDefined(asOptionalRecord(result), "history response");
+      expect(payload.verboseLevel).toBe(expected);
+      expect(payload.sessionInfo).toMatchObject({ verboseLevel: expected });
+    }
+  }));

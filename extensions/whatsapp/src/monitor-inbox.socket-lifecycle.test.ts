@@ -157,12 +157,22 @@ describe("web monitor inbox socket lifecycle", () => {
     await inbound.platform.sendMedia({ text: "after-reconnect" });
     await inbound.platform.sendComposing();
 
-    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "pong",
-    });
-    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "after-reconnect",
-    });
+    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "999@s.whatsapp.net",
+      {
+        text: "pong",
+      },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
+    expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(
+      2,
+      "999@s.whatsapp.net",
+      {
+        text: "after-reconnect",
+      },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
     expect(replacementSock.sendPresenceUpdate).toHaveBeenCalledWith(
       "composing",
       "999@s.whatsapp.net",
@@ -202,9 +212,13 @@ describe("web monitor inbox socket lifecycle", () => {
     await inbound?.platform.reply("pong");
 
     expect(sleepWithAbortMock).toHaveBeenCalledWith(10, undefined);
-    expect(replacementSock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: "pong",
-    });
+    expect(replacementSock.sendMessage).toHaveBeenCalledWith(
+      "999@s.whatsapp.net",
+      {
+        text: "pong",
+      },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
     expect(sock.sendMessage).not.toHaveBeenCalled();
 
     await listener.close();
@@ -226,12 +240,11 @@ describe("web monitor inbox socket lifecycle", () => {
 
     await inbound?.platform.reply("pong");
 
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "pong",
-    });
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "pong",
-    });
+    const firstId = sock.sendMessage.mock.calls[0]?.[2]?.messageId;
+    expect(firstId).toEqual(expect.any(String));
+    expect(sock.sendMessage.mock.calls[1]?.[2]?.messageId).toBe(firstId);
+    await inbound?.platform.reply("next logical send");
+    expect(sock.sendMessage.mock.calls[2]?.[2]?.messageId).not.toBe(firstId);
     expect(socketRef.current).toBe(sock);
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
 
@@ -352,7 +365,11 @@ describe("web monitor inbox socket lifecycle", () => {
         } else {
           await expect(sendPromise).resolves.toBeDefined();
           if (target.endsWith("@g.us")) {
-            expect(sock.sendMessage).toHaveBeenCalledWith(target, { text: send.text });
+            expect(sock.sendMessage).toHaveBeenCalledWith(
+              target,
+              { text: send.text },
+              expect.objectContaining({ messageId: expect.any(String) }),
+            );
           }
         }
       }
@@ -629,12 +646,22 @@ describe("web monitor inbox socket lifecycle", () => {
       await inbound.platform.sendMedia({ text: "media after restart" });
 
       expect(successorSock.sendMessage).toHaveBeenCalledTimes(2);
-      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-        text: "pong",
-      });
-      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-        text: "media after restart",
-      });
+      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(
+        1,
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
+      expect(successorSock.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        "999@s.whatsapp.net",
+        {
+          text: "media after restart",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
     } finally {
       await close();
     }
@@ -652,9 +679,13 @@ describe("web monitor inbox socket lifecycle", () => {
     try {
       await inbound.platform.reply("pong");
       expect(successorSock.sendMessage).toHaveBeenCalledTimes(1);
-      expect(successorSock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-        text: "pong",
-      });
+      expect(successorSock.sendMessage).toHaveBeenCalledWith(
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
     } finally {
       await close();
     }

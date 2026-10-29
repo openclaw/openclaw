@@ -6,6 +6,11 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { isConfiguredPluginPathDiagnosticCode } from "../../plugins/discovery-availability.js";
 import { formatCommandOutput, formatCommandResult } from "../../process/command-error.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+  readCommandProcessFailure,
+} from "../../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
@@ -37,22 +42,31 @@ function readinessWarning(
   };
 }
 
-function createPostPluginReadinessExecutionFailure(
+function createPostPluginReadinessExecutionWarning(
   pluginUpdate: PostCorePluginUpdateResult,
   reason: string,
 ): PostCorePluginUpdateResult {
+  const diagnostic = redactSupportString(
+    reason,
+    { env: process.env, stateDir: resolveStateDir() },
+    { maxLength: 500 },
+  );
+  const warning = {
+    reason: "doctor-advisory",
+    message: `Updated plugin readiness checks could not be completed before restart. ${diagnostic}`,
+    guidance: ["Run `openclaw update repair` to retry post-update readiness checks."],
+  };
+  if (pluginUpdate.doctorLint) {
+    pluginUpdate.doctorLint.advisory = {
+      kind: "recoverable-maintenance",
+      message: warning.message,
+    };
+  }
   return {
     ...pluginUpdate,
-    status: "error",
-    reason: "post-plugin-update-readiness-execution-failed",
-    warnings: [
-      ...(pluginUpdate.warnings ?? []),
-      {
-        reason,
-        message: "Updated plugin readiness checks could not be completed before restart.",
-        guidance: ["Run `openclaw update repair` to retry post-update readiness checks."],
-      },
-    ],
+    status: pluginUpdate.status === "error" ? "error" : "warning",
+    reason: pluginUpdate.reason ?? "post-plugin-update-readiness-execution-failed",
+    warnings: [...(pluginUpdate.warnings ?? []), warning],
   };
 }
 
@@ -94,6 +108,8 @@ export async function applyPostPluginUpdateReadiness(params: {
       {
         cwd: params.root,
         timeoutMs: params.timeoutMs,
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
         input: "",
         maxOutputBytes: 4 * 1024 * 1024,
         outputCapture: "head",
@@ -105,6 +121,9 @@ export async function applyPostPluginUpdateReadiness(params: {
         },
       },
     );
+    if (execution.cleanup === "uncertain") {
+      throw new CommandProcessCleanupError();
+    }
     doctorLint.exitCode = execution.code;
     doctorLint.termination = execution.termination;
     doctorLint.signal = execution.signal;
@@ -126,7 +145,14 @@ export async function applyPostPluginUpdateReadiness(params: {
     }
     report = parseUpdateDoctorLintReport(execution.stdout);
   } catch (error) {
-    return createPostPluginReadinessExecutionFailure(
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    if (readCommandProcessFailure(error)?.cleanup === "uncertain") {
+      throw new CommandProcessCleanupError({ cause: error });
+    }
+    // A settled lint execution failure is not evidence that installed state is unsafe.
+    return createPostPluginReadinessExecutionWarning(
       pluginUpdate,
       executionFailure ?? String(error),
     );
@@ -183,7 +209,7 @@ export async function applyPostPluginUpdateReadiness(params: {
     return pluginUpdate;
   }
   if (readinessFindings.length === 0) {
-    return createPostPluginReadinessExecutionFailure(
+    return createPostPluginReadinessExecutionWarning(
       pluginUpdate,
       report.checksRun === 0
         ? "Updated Doctor did not run a declared readiness check."

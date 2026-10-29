@@ -16,10 +16,15 @@ export async function acquireDoctorGatewayMaintenanceOwner(
     options: DoctorOptions;
     runtime: RuntimeEnv;
     assertCurrent?: () => void;
+    assertAdmission?: () => void;
     deadlineMs?: number;
   },
 ) {
   const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options));
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    params.assertAdmission?.();
+  };
   let waiting = false;
   return await acquireWithWait({
     acquire: async () => {
@@ -29,7 +34,7 @@ export async function acquireDoctorGatewayMaintenanceOwner(
           role: "sqlite-maintenance",
           allowInTests: true,
           lifecycleDeadlineMs: params.deadlineMs,
-          assertCurrent: params.assertCurrent,
+          assertCurrent,
           onWait: params.runtime.log,
         });
         if (!owner) {
@@ -56,7 +61,7 @@ export async function acquireDoctorGatewayMaintenanceOwner(
       ) {
         return false;
       }
-      params.assertCurrent();
+      assertCurrent();
       if (!waiting) {
         waiting = true;
         params.runtime.log("Waiting for the previous foreground Gateway to release state.");

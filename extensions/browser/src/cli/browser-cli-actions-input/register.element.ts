@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import {
@@ -31,13 +30,11 @@ export function registerBrowserElementCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
-  const parseRequiredNumber = (value: string, label: string): number | undefined => {
+  const parseRequiredNumber = (value: string, label: string): number => {
     const trimmed = value.trim();
     const parsed = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : Number.NaN;
     if (!Number.isFinite(parsed)) {
-      defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
-      defaultRuntime.exit(1);
-      return undefined;
+      throw new Error(`Invalid ${label}: must be a finite number`);
     }
     return parsed;
   };
@@ -67,9 +64,6 @@ export function registerBrowserElementCommands(
     .option("--modifiers <list>", "Comma-separated modifiers (Shift,Alt,Meta)")
     .action(async (ref: string | undefined, opts, cmd) => {
       const refValue = requireRef(ref);
-      if (!refValue) {
-        return;
-      }
       const modifiers = opts.modifiers
         ? String(opts.modifiers)
             .split(",")
@@ -104,9 +98,6 @@ export function registerBrowserElementCommands(
     .action(async (xRaw: string, yRaw: string, opts, cmd) => {
       const x = parseRequiredNumber(xRaw, "x");
       const y = parseRequiredNumber(yRaw, "y");
-      if (x === undefined || y === undefined) {
-        return;
-      }
       await runElementAction({
         cmd,
         body: {
@@ -132,9 +123,6 @@ export function registerBrowserElementCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (ref: string | undefined, text: string, opts, cmd) => {
       const refValue = requireRef(ref);
-      if (!refValue) {
-        return;
-      }
       await runElementAction({
         cmd,
         body: {
@@ -180,9 +168,6 @@ export function registerBrowserElementCommands(
     )
     .action(async (ref: string | undefined, opts, cmd) => {
       const refValue = requireRef(ref);
-      if (!refValue) {
-        return;
-      }
       await runElementAction({
         cmd,
         body: {

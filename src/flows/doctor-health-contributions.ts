@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { isUpdateDoctorInspectionReportMode } from "../commands/doctor/shared/update-phase.js";
@@ -250,58 +251,63 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
 }
 
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { detectLegacyStateMigrations, runLegacyStateMigrations } =
-    await import("../infra/state-migrations.doctor.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
   await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
-  const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
-  const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
   const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
-  const legacyState = await detectLegacyStateMigrations({
-    cfg: ctx.cfg,
-    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-    legacySessionSurfaces,
-  });
-  if (legacyState.warnings.length > 0) {
-    note(legacyState.warnings.join("\n"), "Doctor warnings");
-  }
-  if (legacyState.notices.length > 0) {
-    note(legacyState.notices.join("\n"), "Doctor notices");
-  }
-  if (legacyState.preview.length > 0) {
-    note(legacyState.preview.join("\n"), "Legacy state detected");
-    const migrate =
-      ctx.options.nonInteractive === true
-        ? true
-        : await ctx.prompter.confirm({
-            message: "Migrate detected legacy state now?",
-            initialValue: true,
-          });
-    if (migrate) {
-      const migrated = await runLegacyStateMigrations({
-        detected: legacyState,
-        config: ctx.cfg,
-        ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-        legacySessionSurfaces,
-      });
-      recordDoctorHealthWarnings(
-        ctx,
-        [],
-        migrated.stepReceipts.flatMap((receipt) =>
-          receipt.outcome === "warning" || receipt.outcome === "deferred" ? receipt.warnings : [],
-        ),
-      );
-      if (migrated.changes.length > 0) {
-        note(migrated.changes.join("\n"), "Doctor changes");
-      }
-      const notices = migrated.notices ?? [];
-      if (notices.length > 0) {
-        note(notices.join("\n"), "Doctor notices");
-      }
-      if (migrated.warnings.length > 0) {
-        note(migrated.warnings.join("\n"), "Doctor warnings");
+  if (
+    !doctorOnlyStateMigrations ||
+    !isDeepStrictEqual(ctx.configResult.preflightLegacyStateConfig, ctx.cfg)
+  ) {
+    const { detectLegacyStateMigrations, runLegacyStateMigrations } =
+      await import("../infra/state-migrations.doctor.js");
+    const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
+    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const legacyState = await detectLegacyStateMigrations({
+      cfg: ctx.cfg,
+      ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
+      legacySessionSurfaces,
+    });
+    if (legacyState.warnings.length > 0) {
+      note(legacyState.warnings.join("\n"), "Doctor warnings");
+    }
+    if (legacyState.notices.length > 0) {
+      note(legacyState.notices.join("\n"), "Doctor notices");
+    }
+    if (legacyState.preview.length > 0) {
+      note(legacyState.preview.join("\n"), "Legacy state detected");
+      const migrate =
+        ctx.options.nonInteractive === true
+          ? true
+          : await ctx.prompter.confirm({
+              message: "Migrate detected legacy state now?",
+              initialValue: true,
+            });
+      if (migrate) {
+        const migrated = await runLegacyStateMigrations({
+          detected: legacyState,
+          config: ctx.cfg,
+          ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
+          legacySessionSurfaces,
+        });
+        recordDoctorHealthWarnings(
+          ctx,
+          [],
+          migrated.stepReceipts.flatMap((receipt) =>
+            receipt.outcome === "warning" || receipt.outcome === "deferred" ? receipt.warnings : [],
+          ),
+        );
+        if (migrated.changes.length > 0) {
+          note(migrated.changes.join("\n"), "Doctor changes");
+        }
+        const notices = migrated.notices ?? [];
+        if (notices.length > 0) {
+          note(notices.join("\n"), "Doctor notices");
+        }
+        if (migrated.warnings.length > 0) {
+          note(migrated.warnings.join("\n"), "Doctor warnings");
+        }
       }
     }
   }

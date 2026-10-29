@@ -14,12 +14,14 @@ export function AgentFileError(params: {
       when={params.conflictName}
       fallback={
         <Show when={params.error}>
-          <div class="callout danger">{params.error}</div>
+          <div class="callout danger" role="alert">
+            {params.error}
+          </div>
         </Show>
       }
     >
       {(name) => (
-        <div class="callout danger">
+        <div class="callout danger" role="alert">
           <span>{params.error ?? t("agents.files.conflictHint")}</span>
           <div class="agent-file-actions">
             <button

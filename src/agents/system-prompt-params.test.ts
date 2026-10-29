@@ -2,7 +2,7 @@
 // root discovery from workspace, cwd, and explicit config.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildActiveNodeContextText, setActiveNodeContexts } from "../infra/active-node-context.js";
@@ -10,6 +10,29 @@ import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-p
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtime = { host: "host", os: "os", arch: "arch", node: "node", model: "model" };
+
+// Exercise real marker discovery inside owned fixtures without reading enclosing host repositories.
+// This is the same maxDepth boundary used by git-root's filesystem tests, not a fake root result.
+vi.mock("../infra/git-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/git-root.js")>();
+  return {
+    ...actual,
+    findGitRoot(startDir: string, opts: { maxDepth?: number } = {}) {
+      const fixtureRoot = [...tempDirs.dirs].find(
+        (root) => startDir === root || startDir.startsWith(root + path.sep),
+      );
+      if (!fixtureRoot) {
+        return actual.findGitRoot(startDir, opts);
+      }
+      const fixtureDepth =
+        path.relative(fixtureRoot, startDir).split(path.sep).filter(Boolean).length + 1;
+      return actual.findGitRoot(startDir, {
+        ...opts,
+        maxDepth: Math.min(opts.maxDepth ?? fixtureDepth, fixtureDepth),
+      });
+    },
+  };
+});
 
 async function makeRepoRoot(root: string): Promise<void> {
   await fs.mkdir(path.join(root, ".git"), { recursive: true });

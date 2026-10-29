@@ -739,6 +739,28 @@ describe("microsoft-foundry plugin", () => {
     ]);
   });
 
+  it.each([undefined, { canonicalModelId: "gpt-5-mini" }])(
+    "preserves manual limits through repeated selection and normalization with params %j",
+    async (params) => {
+      const config = makeConfig({
+        models: [makeModel({ id: "prod-mini", name: "gpt-5-mini", params })],
+      });
+      const provider = registerProvider();
+      for (let selection = 0; selection < 2; selection++) {
+        await selectModel(provider, config, "prod-mini");
+        const model = config.models!.providers![providerId]!.models[0]!;
+        expect(model).toMatchObject({ contextWindow: 128_000, maxTokens: 16_384 });
+        expect(
+          provider.normalizeResolvedModel?.({
+            provider: providerId,
+            modelId: model.id,
+            model: makeModel({ id: model.id, name: model.name, params: model.params }),
+          }),
+        ).toMatchObject({ contextWindow: 128_000, maxTokens: 16_384 });
+      }
+    },
+  );
+
   it("preserves an explicit per-model Foundry endpoint when switching models", async () => {
     const provider = registerProvider();
     const config = makeConfig({

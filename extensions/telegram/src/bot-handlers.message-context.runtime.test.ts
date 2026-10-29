@@ -152,8 +152,29 @@ describe("resolveCachedMessageThreadSpec", () => {
 
     await expect(
       runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 102 }),
-    ).resolves.toEqual({ scope: "direct-messages", id: TOPIC_ID });
+    ).resolves.toEqual({
+      threadSpec: { scope: "direct-messages", id: TOPIC_ID },
+      isTopicMessage: false,
+    });
   });
+  it.each([true, false])(
+    "recovers provider-observed private topic evidence: %s",
+    async (isTopicMessage) => {
+      const runtime = createRuntime();
+      const msg = {
+        ...forumMessage(103, TOPIC_ID),
+        chat: { id: CHAT_ID, type: "private", first_name: "Bob" },
+        is_topic_message: isTopicMessage,
+      } as Message;
+      await runtime.recordMessageForReplyChain(msg, { scope: "dm", id: TOPIC_ID });
+      await expect(
+        runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 103 }),
+      ).resolves.toEqual({ threadSpec: { scope: "dm", id: TOPIC_ID }, isTopicMessage });
+      await expect(
+        runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID + 1, messageId: 103 }),
+      ).resolves.toBeUndefined();
+    },
+  );
 });
 
 describe("automatic Telegram retained history workload", () => {

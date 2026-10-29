@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  assistantTraceTextFilter,
   assistantVisibleTextFilters,
   minimaxToolCallTextFilter,
   sanitizeAssistantFinalAnswerText,
@@ -217,8 +218,8 @@ describe("MiniMax tool-call text", () => {
     const fenced =
       '```xml\n<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>\n```';
 
-    expect(minimaxToolCallTextFilter.transform(inline)).toBe(inline);
-    expect(minimaxToolCallTextFilter.transform(fenced)).toBe(fenced);
+    expect(minimaxToolCallTextFilter().transform(inline)).toBe(inline);
+    expect(minimaxToolCallTextFilter().transform(fenced)).toBe(fenced);
   });
 });
 
@@ -288,6 +289,99 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(
       sanitizeAssistantFinalAnswerText("Visible prefix <thinking><internal>private reflection"),
     ).toBe("Visible prefix");
+  });
+});
+
+describe("assistantTraceTextFilter streamed projection", () => {
+  it.each([" ", "\n"])("bounds trace work for prose separated by %j", (separator) => {
+    const source = Array(256)
+      .fill("A helper function call returns the tool call payload for the value.")
+      .join(separator);
+    const projection = createTextProjection([assistantTraceTextFilter]);
+    let testedCharacters = 0;
+    const probe = vi.spyOn(RegExp.prototype, "test").mockImplementation(function (
+      this: RegExp,
+      text,
+    ) {
+      testedCharacters += text.length;
+      return this.exec(text) !== null;
+    });
+    try {
+      for (let offset = 0; offset < source.length; offset += 4) {
+        projection.append(source.slice(offset, offset + 4));
+      }
+    } finally {
+      probe.mockRestore();
+    }
+    expect(projection.text).toBe(source);
+    expect(testedCharacters).toBeGreaterThan(0);
+    expect(testedCharacters).toBeLessThan(source.length * 8);
+  });
+
+  it.each([
+    [
+      "a channel trace line",
+      'Visible intro.\ntool call: read {"path":"a.ts"}\nVisible outro.',
+      "Visible intro.\nVisible outro.",
+    ],
+    [
+      "a warning trace line",
+      "Visible intro.\n⚠️ 🛠️ Exec failed: `x` (exit 1)\nVisible outro.",
+      "Visible intro.\nVisible outro.",
+    ],
+    [
+      "a quoted progress line",
+      "Visible intro.\n> 📊 Session Status: ok\nVisible outro.",
+      "Visible intro.\nVisible outro.",
+    ],
+    [
+      "an indented progress line",
+      "Visible intro.\n   📊 Session Status: ok\nVisible outro.",
+      "Visible intro.\nVisible outro.",
+    ],
+    [
+      "a marker line that is not a trace line",
+      "Visible intro.\n📊 Summary of results\nVisible outro.",
+      "Visible intro.\n📊 Summary of results\nVisible outro.",
+    ],
+    [
+      "trace lines inside fenced code",
+      "Visible intro.\n```text\n> ⚠️ 🛠️ Exec failed\nfunction_call: example\n```\ntool-result: hidden\nVisible outro.",
+      "Visible intro.\n```text\n> ⚠️ 🛠️ Exec failed\nfunction_call: example\n```\nVisible outro.",
+    ],
+    [
+      "a tilde fence split across deltas",
+      "~~~\ntool call: example\n~~~\nVisible outro.",
+      "~~~\ntool call: example\n~~~\nVisible outro.",
+    ],
+    [
+      "unbounded whitespace before a channel delimiter",
+      `Visible intro.\nFUNCTION_CALL${"\t".repeat(80)}= hidden\nVisible outro.`,
+      "Visible intro.\nVisible outro.",
+    ],
+  ])("projects %s in token-sized chunks", (_name, source, expected) => {
+    for (const size of [1, 3, 7]) {
+      const projection = createTextProjection(assistantVisibleTextFilters("delivery", true));
+      let accumulated = "";
+      for (let offset = 0; offset < source.length; offset += size) {
+        const chunk = source.slice(offset, offset + size);
+        accumulated += chunk;
+        projection.append(chunk);
+        expect(projection.text).toBe(
+          sanitizeAssistantVisibleTextWithProfile(accumulated, "delivery", true),
+        );
+      }
+      expect(projection.text).toBe(expected);
+    }
+  });
+
+  it("resets rejected line heads when an upstream stage replaces text", () => {
+    const projection = createTextProjection([assistantTraceTextFilter]);
+    expect(projection.append("A tool call in prose.").text).toBe("A tool call in prose.");
+    expect(projection.replace("tool call: hidden\nVisible").text).toBe("Visible");
+    expect(projection.replace("```\ntool call: literal\n```").text).toBe(
+      "```\ntool call: literal\n```",
+    );
   });
 });
 

@@ -14,7 +14,7 @@ import type { ReplyExpectation } from "../reply-completion.js";
 import type { AgentRuntimeCredentialSource } from "../runtime-plan/credential-source.types.js";
 import type { NormalizedUsage } from "../usage.js";
 
-export type EmbeddedAgentMeta = {
+type EmbeddedAgentMeta = {
   sessionId: string;
   sessionFile?: string;
   provider: string;
@@ -87,7 +87,7 @@ export type EmbeddedAgentMeta = {
   terminalReceipt?: Omit<AgentRunTerminalReceipt, "terminalDisposition">;
 };
 
-export type TraceAttempt = {
+type TraceAttempt = {
   provider: string;
   model: string;
   result:
@@ -106,7 +106,7 @@ export type TraceAttempt = {
   status?: number;
 };
 
-export type ToolSummaryTrace = {
+type ToolSummaryTrace = {
   calls: number;
   tools: string[];
   failures?: number;
@@ -115,9 +115,9 @@ export type ToolSummaryTrace = {
   totalToolTimeMs?: number;
 };
 
-export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
+type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
 
-export type EmbeddedRunFailureSignal = {
+type EmbeddedRunFailureSignal = {
   kind: "execution_denied";
   source: "tool";
   toolName?: string;

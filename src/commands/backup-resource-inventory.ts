@@ -50,6 +50,8 @@ type BackupResourcePolicy = Readonly<{
   stateDir: string;
   agentRoots: readonly BackupAgentRoot[];
   regenerableRoots: readonly BackupRegenerableRoot[];
+  /** Owner selection for absolute paths; traversal separately enforces filesystem privacy. */
+  isIncludedByOwner: (sourcePath: string) => boolean;
   isIncluded: (sourcePath: string) => boolean;
   isTraversable: (sourcePath: string) => boolean;
   isPackageContent: (sourcePath: string) => boolean;
@@ -230,11 +232,10 @@ function createBackupPathPolicy({
   BackupResourcePlan,
   "stateDir" | "agentRoots" | "regenerableRoots" | "protectedPaths" | "excludedPaths"
 >): BackupResourcePolicy {
-  const isIncluded = (sourcePath: string): boolean => {
+  // Keep the cheap owner predicate independent from live privacy-path probes.
+  // Discovery admits traversal directories first, then batches only owned files.
+  const isIncludedByOwner = (sourcePath: string): boolean => {
     const candidate = path.resolve(sourcePath);
-    if (isUpdateCapturePath(candidate, stateDir)) {
-      return false;
-    }
     const exclusion = excludedPaths.find((excludedPath) => isPathInside(excludedPath, candidate));
     if (!exclusion) {
       return true;
@@ -246,6 +247,8 @@ function createBackupPathPolicy({
         isPathInside(protectedPath, candidate) && isPathInside(exclusion, protectedPath),
     );
   };
+  const isIncluded = (sourcePath: string): boolean =>
+    isIncludedByOwner(sourcePath) && !isUpdateCapturePath(path.resolve(sourcePath), stateDir);
   const isTraversable = (sourcePath: string): boolean => {
     const candidate = path.resolve(sourcePath);
     if (isUpdateCapturePath(candidate, stateDir)) {
@@ -307,6 +310,7 @@ function createBackupPathPolicy({
     stateDir,
     agentRoots,
     regenerableRoots,
+    isIncludedByOwner,
     isIncluded,
     isTraversable,
     isPackageContent,

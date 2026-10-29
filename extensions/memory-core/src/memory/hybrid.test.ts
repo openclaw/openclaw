@@ -1,4 +1,5 @@
 // Memory Core tests cover hybrid plugin behavior.
+import { INVALID_PROJECT_ANNOTATION_KEY } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import {
   mergeHybridResults,
@@ -38,6 +39,48 @@ function keywordHit(id: string, textScore: number, details: Partial<KeywordHit> 
 }
 
 describe("memory hybrid helpers", () => {
+  it("puts keyword scores on the vector scale before weighting them", async () => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      vector: [
+        vectorHit("closer-meaning", 0.55),
+        vectorHit("weak-keyword-a", 0.5),
+        vectorHit("weak-keyword-b", 0.48),
+        // Completed stored scores for keyword candidates outside the vector window.
+        vectorHit("full-query", 0.45),
+        vectorHit("partial-path", 0.2),
+        vectorHit("excluded", 0.9, { projectKey: INVALID_PROJECT_ANNOTATION_KEY }),
+      ],
+      keyword: [
+        keywordHit("full-query", 0.9, { rankingScore: 0.95 }),
+        keywordHit("weak-keyword-a", 0.5, { rankingScore: 0.75 }),
+        keywordHit("weak-keyword-b", 0.45, { rankingScore: 0.7 }),
+        // SQLite's path substring fallback reports 1 without a rank.
+        keywordHit("partial-path", 0, { pathScore: 1 }),
+        // Malformed project annotations never reach results.
+        keywordHit("excluded", 0.95, {
+          rankingScore: 0.99,
+          projectKey: INVALID_PROJECT_ANNOTATION_KEY,
+        }),
+      ],
+    });
+
+    // Weak keyword matches rank below a closer meaning, and the strongest keyword
+    // match (or an unranked one) earns up to the best returned vector score.
+    expect(merged.map((entry) => entry.path)).toEqual([
+      "memory/full-query.md",
+      "memory/closer-meaning.md",
+      "memory/weak-keyword-a.md",
+      "memory/weak-keyword-b.md",
+      "memory/partial-path.md",
+    ]);
+    expect(merged[0]?.score).toBeCloseTo(0.7 * 0.45 + 0.3 * 0.55);
+    expect(merged[1]?.score).toBeCloseTo(0.7 * 0.55);
+    expect(merged[2]?.textScore).toBe(0.5);
+    expect(merged[4]?.score).toBeCloseTo(0.7 * 0.2 + 0.3 * 0.55);
+  });
+
   it("bm25RankToScore is monotonic and clamped", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);
@@ -515,7 +558,8 @@ describe("memory hybrid helpers", () => {
 
     expect(merged).toHaveLength(1);
     expect(merged[0]?.snippet).toBe("kw-a");
-    expect(merged[0]?.score).toBeCloseTo(0.5 * 0.2 + 0.5 * 1);
+    // Keyword credit is capped at the best vector score.
+    expect(merged[0]?.score).toBeCloseTo(0.5 * 0.2 + 0.5 * 0.2);
     expect(merged[0]?.vectorScore).toBeCloseTo(0.2);
     expect(merged[0]?.textScore).toBeCloseTo(1);
   });
@@ -626,7 +670,8 @@ describe("memory hybrid helpers", () => {
     expect(byPath.get(paths.vectorMedia)?.score).toBeCloseTo(0.8);
     expect(byPath.get(paths.vectorText)?.score).toBeCloseTo(0.7 * 0.8);
     expect(byPath.get(paths.keywordMedia)?.score).toBeCloseTo(0.3 * 0.9);
-    expect(byPath.get(paths.bothMedia)?.score).toBeCloseTo(0.7 * 0.95 + 0.3 * 0.8);
+    // Relevance 0.8 / (1 - 0.8) = 4 against the strongest 0.9 / (1 - 0.9) = 9.
+    expect(byPath.get(paths.bothMedia)?.score).toBeCloseTo(0.7 * 0.95 + 0.3 * (4 / 9) * 0.95);
     expect(byPath.get(paths.bothMedia)?.textScore).toBeCloseTo(0.8);
     expect(byPath.get(paths.bothText)?.score).toBeCloseTo(0.7 * 0.6 + 0.3 * 0.9);
   });

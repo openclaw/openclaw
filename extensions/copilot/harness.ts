@@ -558,7 +558,10 @@ export function createCopilotAgentHarness(
         }
         throw error;
       }
-      const openclawSessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+      const openclawSessionId =
+        params.sessionPersistence === "detached" || typeof params.sessionId !== "string"
+          ? undefined
+          : params.sessionId;
 
       // Reuse the SDK session across turns within the same OpenClaw session so
       // Copilot's prompt cache, tool history, and compaction state survive.

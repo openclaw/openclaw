@@ -1,4 +1,5 @@
 import { setImmediate } from "node:timers/promises";
+import { Stream } from "openai/core/streaming";
 import {
   createAssistantMessageEventStream,
   type Context,
@@ -10,6 +11,7 @@ import { expect, it, vi } from "vitest";
 import { processResponsesStream } from "../../../packages/ai/src/transports/openai-responses-stream-internal.js";
 import { failTransportStream } from "../../../packages/ai/src/transports/transport-stream-shared.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -35,6 +37,9 @@ function responseCall(callId: string, args = "", status = "in_progress") {
 
 it.each([
   { failure: "eof", recover: true },
+  { failure: "malformed_sse", recover: true },
+  { failure: "malformed_sse", recover: false, repeatFailure: true },
+  { failure: "malformed_sse", recover: false, retryEnabled: false },
   { failure: "max_output_tokens", recover: true },
   { failure: "max_output_tokens", responseStatus: "completed", recover: false },
   { failure: "content_filter", recover: false },
@@ -202,7 +207,7 @@ it.each([
             };
             return;
           }
-          if (failure !== "eof") {
+          if (failure !== "eof" && failure !== "malformed_sse") {
             yield {
               type: failure === "completed" ? "response.completed" : "response.incomplete",
               response: {
@@ -214,8 +219,31 @@ it.each([
             };
           }
         })();
+        // Use the real SDK parser for malformed wire data, not a fabricated error.
+        const source =
+          failure === "malformed_sse"
+            ? Stream.fromSSEResponse(
+                new Response(
+                  new ReadableStream<Uint8Array>({
+                    async start(controller) {
+                      const encoder = new TextEncoder();
+                      for await (const event of events) {
+                        controller.enqueue(
+                          encoder.encode(
+                            `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+                          ),
+                        );
+                      }
+                      controller.enqueue(encoder.encode("data: {malformed\n\n"));
+                      controller.close();
+                    },
+                  }),
+                ),
+                new AbortController(),
+              )
+            : events;
         void processResponsesStream(
-          events,
+          source,
           output,
           {
             push: (event) => {
@@ -245,6 +273,8 @@ it.each([
           parameters: Type.Object({}),
           execute,
         },
+        // Async tool calls need sessions_yield to collect their results.
+        { ...createStubTool("sessions_yield"), async: false },
       ],
     });
 
@@ -393,6 +423,8 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
           parameters: Type.Object({}),
           execute,
         },
+        // Async tool calls need sessions_yield to collect their results.
+        { ...createStubTool("sessions_yield"), async: false },
       ],
     });
     session.subscribe((event) => events.push(event));

@@ -88,6 +88,45 @@ it("expires a queued deadline without invoking it or releasing its predecessor",
   }
 });
 
+it("keeps a queued deadline on the monotonic clock across wall-clock jumps", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  vi.setSystemTime(0);
+  const entered = createDeferred();
+  const release = createDeferred();
+  const commands: string[] = [];
+  try {
+    await withGatewayServiceUpdateAuthority(
+      () => undefined,
+      async () => {
+        const runner = getGatewayServiceUpdateNativeCommand();
+        if (!runner) {
+          throw new Error("missing native fixture");
+        }
+        const first = runner(["first"], {});
+        await entered.promise;
+        const queued = runner(["survives"], { timeoutMs: 20 });
+        await vi.advanceTimersByTimeAsync(5);
+        vi.setSystemTime(60_000);
+        release.resolve();
+        await expect(queued).resolves.toMatchObject({ code: 0 });
+        expect(commands).toEqual(["first", "survives"]);
+        await first;
+      },
+      {
+        nativeCommand: async (argv) => {
+          commands.push(argv[0]!);
+          entered.resolve();
+          await release.promise;
+          return result;
+        },
+      },
+    );
+  } finally {
+    release.resolve();
+    vi.useRealTimers();
+  }
+});
+
 it("closes unstarted submissions but joins the already running native call", async () => {
   const entered = createDeferred();
   const release = createDeferred();

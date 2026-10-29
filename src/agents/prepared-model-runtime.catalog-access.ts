@@ -106,6 +106,8 @@ export async function createFullModelCatalogAccess(
     params.agentFacts.input.agentDir,
     params.agentFacts.input.inheritedAuthDir,
   );
+  const readCurrentUsage = (store: Parameters<typeof readUsage>[0]) =>
+    params.isCurrent() ? readUsage(store) : store;
   const setCatalogAuth = (catalog: ModelCatalogSnapshot, auth: PreparedModelCatalogAuth) =>
     setPreparedModelFullCatalogAuth(catalog, auth, (store) =>
       params.isCurrent() ? readUsage(store) : store,
@@ -691,6 +693,7 @@ export async function createFullModelCatalogAccess(
   return {
     accountCatalog,
     initialAuth: currentAuth,
+    readUsage: readCurrentUsage,
     isCurrent: params.isCurrent,
     withRefreshStatus: attempt.withRefreshStatus,
     loadAuth: (scope) => loadScopedModelCatalogAuth(authOwner, scope),

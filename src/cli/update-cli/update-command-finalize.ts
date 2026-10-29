@@ -4,7 +4,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readRetiredDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
+import { retainCurrentDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
 import { readInstallOwner } from "../../infra/install-owner.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
@@ -40,6 +40,7 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import { refuseHostOwnedUpdate, reportHostOwnedUpdate } from "./host-owned.js";
 import {
+  parseUpdateChannel,
   parseUpdateTimeoutMs,
   readPackageVersion,
   resolveNodeRunner,
@@ -99,14 +100,7 @@ export async function updateFinalizeCommand(
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel !== undefined && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
+  const requestedChannel = parseUpdateChannel(opts.channel);
 
   let exitCode: number | undefined;
   await withCommandProcessScope(async (stopChildren) => {
@@ -330,9 +324,7 @@ async function updateFinalizeCommandInternal(
   const { root, nodeRunner, preFinalizeConfig, requestedChannel, channel } = prepared;
   let doctorWarnings: string[] = [];
   const onDoctorWarnings = (warnings: string[]) => {
-    doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
-      ...new Set([...doctorWarnings, ...warnings]),
-    ]);
+    doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([...doctorWarnings, ...warnings]);
     lifecycle.recordWarnings(doctorWarnings);
   };
 
@@ -350,6 +342,22 @@ async function updateFinalizeCommandInternal(
   let maintenance: Awaited<
     ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
+  const enterMaintenance = async (serviceInspectionDeadlineAtMs: number | undefined) => {
+    if (!ownsMaintenance || maintenance) {
+      return;
+    }
+    const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
+    maintenance = await beginDoctorMaintenance({
+      root,
+      runId: invokingRunId,
+      options: { repair: true, nonInteractive: true, json: opts.json },
+      runtime: { ...defaultRuntime, log: defaultRuntime.error },
+      serviceInspectionDeadlineAtMs,
+    });
+    lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
+    // Fresh Doctor owns database fences; the parent retains service custody.
+    await maintenance?.releaseState();
+  };
   const restoreMaintenance = async (cfg: OpenClawConfig) => {
     const owned = maintenance;
     maintenance = undefined;
@@ -361,36 +369,30 @@ async function updateFinalizeCommandInternal(
   let outcome: { complete: () => Promise<void> } | { error: unknown };
   try {
     if (prepared.installKind === "git") {
-      await completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins") });
+      const runtimeTimeoutMs = lifecycle.budget("plugins");
+      const runtimeDeadline = performance.now() + runtimeTimeoutMs;
+      await completeSourceUpdateRuntime({
+        root,
+        timeoutMs: runtimeTimeoutMs,
+        beforePublication: () =>
+          enterMaintenance(Date.now() + Math.max(0, runtimeDeadline - performance.now())),
+      });
     }
     const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
       await lifecycle.run("configSnapshot", () => createUpdateConfigSnapshot());
       await lifecycle.run(
         "doctor",
-        () =>
+        (phase) =>
           runUpdateFinalizationDoctorInFreshProcess({
             phase: "pre-plugin",
             ...doctorParams,
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
+            serviceInspectionDeadlineAtMs: phase.deadlineAtMs,
           }),
         undefined,
         {
-          enter: async () => {
-            if (!ownsMaintenance) {
-              return;
-            }
-            const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
-            maintenance = await beginDoctorMaintenance({
-              root,
-              runId: invokingRunId,
-              options: { repair: true, nonInteractive: true, json: opts.json },
-              runtime: { ...defaultRuntime, log: defaultRuntime.error },
-            });
-            lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
-            // Fresh Doctor owns database fences; the parent retains service custody.
-            await maintenance?.releaseState();
-          },
+          enter: enterMaintenance,
         },
       );
       return await lifecycle.run(
@@ -442,17 +444,12 @@ async function updateFinalizeCommandInternal(
             warning.reason === "doctor-advisory" && warning.pluginId ? [warning.pluginId] : [],
           ),
         );
-        const retiredWarnings = await readRetiredDeferredPluginMigrationWarnings(
+        doctorWarnings = await retainCurrentDeferredPluginMigrationWarnings(
           doctorWarnings,
           finallyReportedPluginIds,
         );
         phase.assertCurrent();
-        if (retiredWarnings.size > 0) {
-          // Earlier Doctor warnings were persisted when reported; retire the ones a
-          // later pass settled or superseded so the run report matches the ledger.
-          doctorWarnings = doctorWarnings.filter((warning) => !retiredWarnings.has(warning));
-          lifecycle.recordWarnings(doctorWarnings);
-        }
+        lifecycle.recordWarnings(doctorWarnings);
         await persistValidatedDowngradeConfig(result.configSnapshot, phase.assertCurrent);
         return result;
       },

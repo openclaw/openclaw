@@ -202,6 +202,8 @@ While admitted work drains, ordinary model catalog, auth-status, and chat metada
 
 Retained work and in-flight calls share a 60-second pre-stop budget. Retained runs finish before ordinary call admission closes. Existing calls then settle while published metadata remains readable. Sidecars release their capability consumers before the remaining finite consumers drain; memory teardown retains cleanup authority for its exact retiring provider instances until the raw cleanup settles. Replacement stops services and channels only after that handoff. Idle service and channel custody stops later with its owners. If work does not finish, the reload fails once, resumes admission, and clears the reload status; the previous plugin generation keeps serving. The deadline does not cancel agent runs or permit disposal of unfinished writes. Retry `openclaw plugins reload <id>` after that work finishes, or explicitly select `--wait` to wait until admitted work settles. The explicit wait belongs to its requesting connection: Ctrl+C or disconnect cancels the pre-publication wait and runs the same rollback. Cancellation never disposes admitted work, bypasses cleanup, or reverses a committed publication. Service shutdown and recovery retain their bounded deadlines. Successful publication logs the applied replacement and emits `plugins.changed`.
 
+Automatic config reloads treat an admitted-work timeout with successful rollback as deferred. The previous generation resumes serving, and the config watcher retries the latest saved configuration after that generation's work and cleanup settle. A waiting config-write receipt still reports that the bounded attempt did not apply: keeping it open could prevent the writing turn itself from releasing the old generation. Check `config.get` after the work settles to confirm the active revision. The retry observation does not keep plugin admission closed or extend the drain budget. Explicit plugin reload requests still report their bounded drain failure; cleanup failures and failures after publication remain errors.
+
 A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then request `plugins.reload` through the admin Gateway API to load the repaired plugin.
 
 Read-only model validation, effective tool inventory, and isolated model checks acquire their own registrations when they need executable provider or harness hooks. Concurrent callers share the prepared generation, and its lifecycle disposers run after the final borrower and any unfinished preparation or catalog work settle. Cancellation does not close a registration while its callback is still running. Process shutdown revokes these registry views before joining their remaining work and disposal. Catalog reads that need only metadata do not acquire these executable registrations. Effective tool inventory prepares only configured and session-selected model facts, including captured catalogs from enabled providers; it does not refresh the full model catalog. Session selections do not change the configured model picker.
@@ -231,6 +233,8 @@ Standalone plugin and Codex supervision MCP stdio services retain their discover
 Hot registry publication does not wait for retired host cleanup; terminal shutdown also joins cleanup already started by earlier registry replacements before resetting shared state. Activation and rollback apply only to their captured registry version. An activation superseded by a lifecycle callback reports an error.
 
 The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.
+
+Gateway `plugins.list` serves installed metadata without waiting for hosted catalog or category enrichment. While the generation's shared enrichment is pending, the response uses bundled presentation metadata and includes a pending diagnostic; refresh the list to read the completed facts. Unavailable category enrichment remains recorded until an explicit catalog refresh or metadata generation change. Config validation, enablement, and runtime service health still use current local facts on each read.
 
 Install, update, registry refresh, and doctor flows may read fresh package metadata to validate their changes. A management snapshot or installed-index write alone does not replace the running Gateway's inventory: the Gateway lifecycle owner must prepare and publish it. Runtime flows use their selected snapshot or lookup table instead of falling back to cold management paths.
 
@@ -321,7 +325,10 @@ missing, fresh admission reads the installed package without promoting the missi
 capture's identities. This also applies to post-update Doctor with older updaters.
 Ctime-only uncertainty is resolved
 with a bounded rehash, including ordinary companion files whose inodes another
-capture retains or releases. Legacy reload receipts keep their framed raw-byte value,
+capture retains or releases. First-read metadata stamps from Windows security
+software do not invalidate otherwise unchanged native companions. Mutable source
+copies are compared with their source bytes before accepting ctime-only drift,
+and completed companion digests retain the observed file identity. Legacy reload receipts keep their framed raw-byte value,
 so a changed receipt still requires streaming its native payloads.
 Read-only inspection never publishes its native admissions during later settlement.
 Deferred publication retains the original database authority and state directory.
@@ -336,7 +343,9 @@ removes unreferenced captures while preserving installed-index references, warm
 generations, and live owners. System-temp fallback captures are scoped to their
 state directory; captures with unknown ownership are preserved.
 
-Gateway idle cleanup checks capture directories and npm retention markers before
+Gateway idle cleanup runs after startup and repeats hourly after each completed
+pass, deferring while the Gateway is busy and stopping during shutdown. It
+checks capture directories and npm retention markers before
 acquiring the plugin lifecycle lease. An empty scan makes no shared-state writes
 and leaves the Gateway's metadata caches intact. When candidates exist, cleanup
 uses a private operation-scoped cache and one fresh installed-index payload for
@@ -344,7 +353,7 @@ install records and native receipt protection. Invalid receipts still preserve
 captures, and every deletion retains its live lease and custody checks. The
 private cache is disposed before the lease is released. These best-effort scans
 do not freeze the filesystem: artifacts created or retired after inspection
-remain for a later cleanup attempt. Scheduling and deletion criteria are unchanged.
+remain for a later cleanup attempt.
 
 Each captured generation links the selected host `openclaw` package so Workers
 and child processes started from its modules can resolve the host SDK. This link
@@ -661,6 +670,12 @@ That host joins admitted callback work before releasing consumers and resources;
 releasing the inspection still prevents new borrows. Gateway shutdown keeps shared dependencies
 until the owners that still need them have joined. These ownership rules do not
 make native plugins a sandbox or automatically close plugin-created resources.
+
+After admitted calls and plugin cleanup finish, captured-source membership retires
+before module resources begin asynchronous release. Unrelated public-surface
+lookups cannot re-enter a retiring capture worker; the registration and cleanup
+scope remain retained until resource release finishes.
+
 See [Plugin lifecycle and cleanup](/plugins/sdk-runtime#plugin-lifecycle-and-cleanup)
 for the plugin author's cleanup contract.
 

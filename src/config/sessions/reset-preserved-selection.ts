@@ -55,7 +55,7 @@ export function resolveResetPreservedSelection(params: {
   }
 
   const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(entry);
-  if (authProfileOverrideSource === "user" && entry.authProfileOverride) {
+  if (authProfileOverrideSource === "user" || authProfileOverrideSource === "user-link") {
     preserved.authProfileOverride = entry.authProfileOverride;
     preserved.authProfileOverrideSource = authProfileOverrideSource;
     if (entry.authProfileOverrideCompactionCount !== undefined) {

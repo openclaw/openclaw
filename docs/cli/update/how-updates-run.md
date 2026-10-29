@@ -39,6 +39,13 @@ consumes the shared deadline, so it cannot extend the update's overall budget.
 These checks belong to the installed updater; a candidate cannot change an
 older updater's already-running readiness wait.
 
+Before replacing the same installation, the updater observes the incumbent Gateway once. Failed
+readiness produces a warning and prevents automatic rollback from restarting it;
+the updater does not wait for the incumbent to recover before replacing it.
+The replacement still receives the full startup and readiness verification.
+Certifying a service rooted in a different installation, or verifying a restored
+service after restart, still waits within the existing readiness budget.
+
 On Windows, candidate commands verify their recorded handoff lease and their own
 PID/start identity even when the launcher process tree changes. A different
 immediate parent no longer causes a valid candidate to fail with `Candidate
@@ -51,6 +58,14 @@ the original refusal in its output. The updater can then revalidate and restart
 the preserved service definition. Actual loss of native service authority still
 leaves recovery pending until ownership and restoration can be verified.
 
+On Linux, service refresh repairs group/other-writable unit files and legacy
+backups created by older installers, provided they are regular files owned by
+the service account in safe directories. It backs up the prior definition and
+regenerates the unit and backup with owner-only permissions. Unsafe directories,
+foreign ownership, symlinks, and protected mounts still refuse replacement.
+This repair runs in the candidate installer, including when an older installed
+updater invokes it.
+
 Load slows updates rather than establishing failure: startup inspections and
 recovery backlogs keep acceptance pending within the installation owner's bounded
 readiness budget. The managed-release controller waits for the marker agent's
@@ -60,10 +75,11 @@ The restored predecessor uses the same acceptance rules. Wrong identity, physica
 corruption, a wrong marker reply, or exhaustion of the readiness budget still
 requires failure recovery.
 
-Channel health collection timeouts are warnings during post-update verification.
+Channel probe failures, stopped channels, and health collection timeouts are
+warnings during post-update verification.
 The Gateway must still answer, report the expected version and build, pass HTTP
-readiness, and pass the normal health-settle checks. An explicit negative channel
-probe still fails verification. Timeout warnings remain in the update report even
+readiness, and pass the normal health-settle checks. A channel fault that also
+makes HTTP readiness fail still fails verification. Timeout warnings remain in the update report even
 if a later probe completes; run `openclaw health` to check the affected channels.
 The seven-second collection budget is unchanged. Updated Gateways also avoid
 reporting collection timeouts as negative probes to older updaters, although those
@@ -168,6 +184,13 @@ retries one transient timeout with a recorded warning. A second timeout names
 the stalled check and leaves the original Gateway running; ownership refusals
 are never retried. The installed updater owns this sequence, so a candidate
 cannot change an older updater's stop behavior during its first update.
+
+During finalization, an explicit update timeout includes Doctor preparation,
+maintenance admission, and the fresh Doctor process. Nested service inspection
+and stop attempts receive only the remaining allowance. An expired allowance
+prevents new effects; an already admitted stop still settles and retains the
+existing restoration path. This requires the running updater to contain the fix;
+a new candidate cannot change an older updater’s parent deadline.
 
 Unavailable service inspection produces a recorded `managed-service` warning,
 including the manual restart action. A stale, uninspectable service record cannot
@@ -799,8 +822,9 @@ path. This avoids repeated backup integrity audits and unnecessary writable open
 while the service is stopped; startup validation retains its own policy.
 
 Settled, verified successful activation removes the current update's database
-snapshots, together with the old package backup. Rollback, failed or unverified
-completion, and restore refusal keep them. Cleanup failures produce a maintenance warning with
+snapshots only while automatic restoration remains available, together with the old
+package backup. Rollback, failed or unverified completion, and restore refusal
+(including refusal recorded after Doctor runs) keep the snapshots. Cleanup failures produce a maintenance warning with
 the retained path. Older snapshot directories remain untouched because their
 ownership and successful outcome cannot be proven from existing receipts;
 Doctor reports older npm snapshot directories with their size and removal command.
@@ -845,7 +869,7 @@ provided by this check.
 If Doctor cannot provide write evidence, rollback requires the last verified
 database generations to remain unchanged.
 Snapshots taken while a Gateway may still be writing, including with
-`--no-restart`, remain available for manual recovery with a warning until verified
+`--no-restart`, remain available for manual recovery with a warning even after verified
 successful activation. They never
 become eligible for automatic restoration just because that Gateway later exits.
 

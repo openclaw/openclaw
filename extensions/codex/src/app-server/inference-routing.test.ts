@@ -771,6 +771,38 @@ describe("managed inference route ownership", () => {
     { env: { HTTPS_PROXY: "http://proxy.example:80" }, supported: true },
     { env: { HTTPS_PROXY: " http://proxy.example:80 " }, supported: false },
     { env: { HTTPS_PROXY: "http://proxy.example:80", REQUEST_METHOD: "GET" }, supported: false },
+    {
+      env: {
+        HTTP_PROXY: "http://proxy.example:80",
+        HTTPS_PROXY: "http://proxy.example:80",
+        NO_PROXY: "127.0.0.1,example.com",
+      },
+      supported: false,
+    },
+    {
+      env: {
+        HTTP_PROXY: "http://proxy.example:80",
+        HTTPS_PROXY: "http://proxy.example:80",
+        NO_PROXY: "127.0.0.1,10.0.0.0/8",
+      },
+      supported: false,
+    },
+    {
+      env: {
+        HTTP_PROXY: "http://proxy.example:80",
+        HTTPS_PROXY: "http://proxy.example:80",
+        NO_PROXY: "127.0.0.1,127.0.0.0/16",
+      },
+      supported: false,
+    },
+    {
+      env: {
+        HTTP_PROXY: "http://proxy.example:80",
+        HTTPS_PROXY: "http://proxy.example:80",
+        NO_PROXY: "127.0.0.1,*.localhost",
+      },
+      supported: false,
+    },
   ])(
     "qualifies both native and relay proxy routing ($supported): $env",
     async ({ env, supported }) => {

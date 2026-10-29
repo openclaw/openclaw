@@ -8,6 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import * as fsSafe from "../../infra/fs-safe.js";
@@ -599,4 +600,90 @@ describe("registered harness input attachment preparation", () => {
       openSpy?.mockRestore();
     }
   });
+});
+
+it.each([
+  {
+    label: "valid owner consent",
+    owner: true,
+    consent: "codex",
+    storedSessionId: undefined,
+    hostOnly: true,
+    expected: "full",
+  },
+  {
+    label: "revoked consent",
+    owner: true,
+    consent: undefined,
+    storedSessionId: undefined,
+    hostOnly: true,
+    expected: undefined,
+  },
+  {
+    label: "another harness consent",
+    owner: true,
+    consent: "another-runtime",
+    storedSessionId: undefined,
+    hostOnly: true,
+    expected: undefined,
+  },
+  {
+    label: "another incarnation consent",
+    owner: true,
+    consent: "codex",
+    storedSessionId: "retired-session",
+    hostOnly: true,
+    expected: undefined,
+  },
+  {
+    label: "nonowner without consent",
+    owner: false,
+    consent: undefined,
+    storedSessionId: undefined,
+    hostOnly: true,
+    expected: undefined,
+  },
+  {
+    label: "sandbox-capable runtime",
+    owner: true,
+    consent: "codex",
+    storedSessionId: undefined,
+    hostOnly: false,
+    expected: undefined,
+  },
+])("passes only the admitted per-turn permission mode: $label", async (scenario) => {
+  const storePath = path.join(trajectoryTempDirs.make("native-consent-"), "sessions.json");
+  const config: OpenClawConfig = { session: { store: storePath } };
+  const attempt = createAttemptParams(config);
+  attempt.agentId = "main";
+  attempt.sessionKey = "agent:main:consented-native";
+  attempt.senderIsOwner = scenario.owner;
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: attempt.sessionKey, storePath },
+    {
+      sessionId: scenario.storedSessionId ?? attempt.sessionId,
+      updatedAt: 1,
+      agentRuntimeOverride: "codex",
+      permissionMode: "full",
+      sandboxMode: "off",
+      nativeRuntimeConsent: scenario.consent,
+    },
+  );
+  const nativeStart = vi.fn<AgentHarness["runAttempt"]>(async () =>
+    makeEmbeddedRunnerAttempt({ agentHarnessId: "codex" }),
+  );
+  registerAgentHarness(
+    {
+      id: "codex",
+      label: "Codex",
+      ...(scenario.hostOnly ? { executionEnvironment: "host-only" as const } : {}),
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: nativeStart,
+    },
+    { ownerPluginId: "codex" },
+  );
+  await runAgentHarnessAttempt(attempt);
+  expect(nativeStart).toHaveBeenCalledOnce();
+  expect(nativeStart.mock.calls[0]?.[0].permissionMode).toBe(scenario.expected);
+  expect(attempt.permissionMode).toBeUndefined();
 });

@@ -283,8 +283,8 @@ process.stdin.on("end", () => {
 
 <ParamField path="skills.allowBundled" type="string[]">
   Optional allowlist for **bundled** skills only. When set, only bundled
-  skills in the list are eligible. Managed, agent-level, and workspace
-  skills are unaffected.
+  skills in the list are eligible; an empty list disables all bundled skills.
+  Managed, agent-level, and workspace skills are unaffected.
 </ParamField>
 
 ## Per-skill entries (`skills.entries`)

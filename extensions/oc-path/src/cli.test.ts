@@ -615,6 +615,27 @@ describe("openclaw path CLI", () => {
       expect(stderrText(rt)).toContain("gateway.jsonc");
     });
 
+    it.each(["jsonc", "jsonl"])(
+      "refuses blank numeric %s writes without changing bytes",
+      async (kind) => {
+        for (const value of ["", " \t\r\n "]) {
+          const workspaceDir = tempDirs.make("oc-path-blank-");
+          const filePath = join(workspaceDir, `config.` + kind);
+          const before = '{"count":1}\n';
+          writeFileSync(filePath, before, "utf8");
+          const rt = createTestRuntime();
+          await pathSetCommand(
+            "oc://config." + kind + "/" + (kind === "jsonl" ? "L1/" : "") + "count",
+            value,
+            { cwd: workspaceDir, json: true },
+            rt,
+          );
+          expect(rt.exitCode).toBe(1);
+          expect(JSON.parse(stdoutText(rt))).toMatchObject({ ok: false, reason: "parse-error" });
+          expect(readFileSync(filePath, "utf8")).toBe(before);
+        }
+      },
+    );
     it("CLI-S05 malformed yaml returns structured parse-error", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "workflow.yaml");

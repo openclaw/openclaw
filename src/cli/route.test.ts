@@ -40,7 +40,12 @@ vi.mock("../commands/channels/status.js", () => ({ channelsStatusCommand: runRou
 vi.mock("./plugins-list-command.js", () => ({ runPluginsListCommand: runRouteMock }));
 vi.mock("./daemon-cli/status.js", () => ({ runDaemonStatus: runRouteMock }));
 vi.mock("./gateway-cli/health-route.js", () => ({ runGatewayHealthJsonRoute: runRouteMock }));
-vi.mock("./config-cli.js", () => ({ runConfigGet: runRouteMock, runConfigUnset: runRouteMock }));
+// mock-isolation: Routed config commands must not reach a live Gateway or operator config.
+vi.mock("./config-cli.js", () => ({
+  runConfigGet: runRouteMock,
+  runConfigUnset: runRouteMock,
+  routeConfigMutationToOwner: () => async () => {},
+}));
 vi.mock("../commands/models/list.status-command.js", () => ({ modelsStatusCommand: runRouteMock }));
 
 vi.mock("../runtime.js", () => ({

@@ -165,8 +165,9 @@ OpenClaw release:
         native login tokens. Claude owns the login and token refresh lifecycle.
         Gateway startup shares the native login check across agent workspaces using
         the same config and environment. Checks use `claude auth status --json`;
-        an explicit logged-out response blocks the native route, while a timeout
-        or unreadable response allows Claude to try the request. Captures expire
+        an explicit logged-out response or a `claude` executable missing from
+        `PATH` blocks the native route, while a timeout or unreadable response
+        allows Claude to try the request. Captures expire
         after one minute. If a selected native login is unavailable, spawn admission
         rechecks it immediately, so signing in does not require a Gateway restart.
 
@@ -556,6 +557,13 @@ colors stay unset. Discovery reads a bounded transcript prefix and tail, so rece
 metadata appended to large transcripts is included without reading the entire
 history. Metadata outside those windows may be unavailable. Desktop rows retain
 their Desktop title and remain colorless.
+
+Routine discovery reads at most 64 MiB of transcript metadata across 10,000 files.
+If it reaches either limit, the final discovered page reports `DISCOVERY_TRUNCATED`
+instead of claiming the inventory is complete. Search by an exact session ID to
+look up matching transcripts independently of that frontier; reading, continuing,
+and opening a known session in a terminal use the same bounded lookup. Per-file
+metadata windows and normal path, sidechain, and archive checks still apply.
 
 No additional OpenClaw config is required for discovery. The Anthropic plugin
 is bundled and enabled by default; a native macOS node advertises the read-only
@@ -967,8 +975,9 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
     When `anthropicCompactThreshold` is omitted, OpenClaw uses
     `max(50000, floor(budget * 0.7))`, where the budget is the model's
-    `contextTokens` cap when set and its `contextWindow` otherwise. With the
-    default trigger, Anthropic compacts before local preflight compaction
+    `contextTokens` cap when set and its `contextWindow` otherwise. Explicit session
+    context-window choices still apply when live model discovery is unavailable.
+    With the default trigger, Anthropic compacts before local preflight compaction
     would. If a trigger falls inside the local compaction reserve, for example
     the 50000 minimum on a small window, local compaction may run first; that
     only skips server compaction, never overflows. An explicit

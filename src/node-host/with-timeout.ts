@@ -17,11 +17,13 @@ export async function runAbortableTimeout<T>(
   }
 
   const abortCtrl = new AbortController();
-  const deadline = maxTotalMs === undefined ? undefined : Date.now() + maxTotalMs;
+  // Keep the deadline on the monotonic clock setTimeout arms on, so wall-clock jumps
+  // can't inflate or collapse the remaining window resetTimeout re-reads across ticks.
+  const deadline = maxTotalMs === undefined ? undefined : performance.now() + maxTotalMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let settled = false;
   const resetTimeout = () => {
-    const remainingMs = (deadline ?? Number.POSITIVE_INFINITY) - Date.now();
+    const remainingMs = (deadline ?? Number.POSITIVE_INFINITY) - performance.now();
     // At the deadline the armed window is already due; re-arming would postpone it.
     if (settled || abortCtrl.signal.aborted || (timer && remainingMs <= 0)) {
       return;

@@ -386,6 +386,24 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
       ],
     },
     {
+      name: "answered calls repeated by a request echo before the final reply",
+      expected: false,
+      lines: [
+        message("assistant", [tool("spawn")]),
+        message("user", [result("spawn")]),
+        { type: "api-request-blob", message: { role: "assistant", content: [tool("spawn")] } },
+        { type: "api-request" },
+      ],
+    },
+    {
+      name: "an orphan followed only by a request echo",
+      expected: true,
+      lines: [
+        message("assistant", [tool("orphan")]),
+        { type: "api-request-blob", message: { role: "user", content: [result("orphan")] } },
+      ],
+    },
+    {
       name: "main-conversation orphans with sidechain results",
       expected: true,
       lines: [message("assistant", [tool("main")]), message("user", [result("main")], true)],

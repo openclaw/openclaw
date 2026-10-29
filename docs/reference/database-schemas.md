@@ -194,6 +194,12 @@ idle timeout. Surplus readers retire after 30 seconds idle and restart on demand
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
 
+If a shared-state writer worker is lost, its logical leases retire even while
+idle. Retirement joins dispatched commands but does not wait for external
+callback bodies, allowing agent lease cleanup to reach its existing recovery
+path. An uncertain write remains `outcome-unknown`; recovery never replays it or
+claims that it rolled back.
+
 Transcript history and search lanes likewise retire surplus workers after 30
 seconds idle. Each lane keeps one worker until its existing five-minute idle
 retirement, which waits for logical reader leases to be released. Surplus

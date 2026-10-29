@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   delay: vi.fn(async (_milliseconds: number) => {
     throw new Error("stop watch fixture");
   }),
+  writeStdout: vi.fn((_chunk: unknown) => true),
 }));
 
 vi.mock("node:timers/promises", () => ({ setTimeout: mocks.delay }));
@@ -25,7 +26,7 @@ beforeEach(async () => {
   workspaceDir = await fs.mkdtemp(join(tmpdir(), "policy-watch-interval-"));
   vi.stubEnv("OPENCLAW_WORKSPACE_DIR", workspaceDir);
   await fs.writeFile(join(workspaceDir, "policy.jsonc"), "{}", "utf-8");
-  vi.spyOn(process.stdout, "write").mockImplementation((() => true) as typeof process.stdout.write);
+  vi.spyOn(process.stdout, "write").mockImplementation(mocks.writeStdout);
   vi.spyOn(process.stderr, "write").mockImplementation((() => true) as typeof process.stderr.write);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -44,9 +45,15 @@ async function runPolicyWatch(args: readonly string[]): Promise<void> {
   await program.parseAsync(["policy", "watch", "--json", ...args], { from: "user" });
 }
 
-it("caps oversized watch intervals at the safe timer maximum", async () => {
+it("caps oversized watch intervals and appends failures to the JSON stream", async () => {
   await runPolicyWatch(["--interval-ms", String(Number.MAX_SAFE_INTEGER)]);
 
   expect(mocks.delay).toHaveBeenCalledTimes(1);
   expect(mocks.delay).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+  expect(process.exitCode).toBe(2);
+  const records = mocks.writeStdout.mock.calls.map(([chunk]) => JSON.parse(String(chunk)));
+  expect(records).toEqual([
+    expect.objectContaining({ status: "clean", ok: true }),
+    { ok: false, error: { type: "cli_error", message: "stop watch fixture" } },
+  ]);
 });

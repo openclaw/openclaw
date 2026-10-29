@@ -17,7 +17,7 @@ export type GoalContinuation = Pick<SessionEntry, "sessionId" | "lifecycleRevisi
   localCodexGoal?: true;
 };
 
-export async function resolveCodexGoalPlacement(params: {
+async function resolveCodexGoalPlacement(params: {
   agentId?: string;
   sessionKey: string;
   sessionId: string;

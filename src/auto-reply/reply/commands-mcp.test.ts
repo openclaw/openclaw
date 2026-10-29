@@ -30,7 +30,8 @@ vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
   deliverOutboundPayloadsInternal: deliverOutboundPayloads,
 }));
 
-vi.mock("../../config/mcp-config.js", () => ({
+vi.mock("../../config/mcp-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/mcp-config.js")>()),
   listConfiguredMcpServers: vi.fn(async () => ({
     ok: true,
     path: "/tmp/openclaw.json",

@@ -67,4 +67,33 @@ describe("googlechat secret contract", () => {
     expect(workAccount?.serviceAccount).toBe('{"client_email":"bot@example.com"}');
     expect(context.warnings).toStrictEqual([]);
   });
+  it("assigns root credentials to the implicit default and inherited accounts", () => {
+    const sourceConfig = {
+      channels: {
+        googlechat: {
+          serviceAccount: { source: "env", provider: "default", id: "ROOT" },
+          accounts: {
+            alpha: {},
+            beta: {},
+            override: { serviceAccount: { source: "env", provider: "default", id: "OVERRIDE" } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const context = createResolverContext({ sourceConfig, env: {} });
+    collectRuntimeConfigAssignments({
+      config: structuredClone(sourceConfig),
+      defaults: undefined,
+      context,
+    });
+    expect(context.assignments.map(({ ownerId, path }) => ({ ownerId, path }))).toEqual([
+      { ownerId: "googlechat:alpha", path: "channels.googlechat.serviceAccount" },
+      { ownerId: "googlechat:beta", path: "channels.googlechat.serviceAccount" },
+      { ownerId: "googlechat:default", path: "channels.googlechat.serviceAccount" },
+      {
+        ownerId: "googlechat:override",
+        path: "channels.googlechat.accounts.override.serviceAccount",
+      },
+    ]);
+  });
 });

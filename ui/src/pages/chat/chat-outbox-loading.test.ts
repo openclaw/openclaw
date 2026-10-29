@@ -3,8 +3,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
+import { admitHostQueueItems } from "./chat-outbox-recovery.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { handleSendChat } from "./chat-send-submit.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
@@ -25,7 +25,17 @@ it.each([
     sessionKey,
     currentSessionId: "outbox-session",
     chatRunId: "finished-run",
-    chatMessage: "Retained outbox message",
+    chatQueue: [
+      {
+        id: "retained-input",
+        text: "Retained outbox message",
+        createdAt: 1,
+        sessionKey,
+        sendRunId: "next-run",
+        sendState: "waiting-idle",
+        sendAttempts: 0,
+      },
+    ],
     chatError: null,
     lastError: null,
     requestHandlers: {
@@ -44,7 +54,7 @@ it.each([
       "chat.send": { runId: "next-run", status: "started", messageSeq: 1 },
     },
   });
-  await handleSendChat(host, undefined, { followUpMode: "queue" });
+  admitHostQueueItems(host);
   expect(host.chatQueue).toHaveLength(1);
   const renderedErrors: Array<string | null | undefined> = [];
   host.requestUpdate = () => {

@@ -51,8 +51,31 @@ describe("yielded private settle outcomes", () => {
       expected: { delivered: false, reason: "visible_reply_missing" },
     },
     {
-      name: "empty successful turn",
+      name: "empty successful optional turn",
       response: { status: "ok", result: { payloads: [] } },
+      expected: { delivered: true },
+    },
+    {
+      name: "optional silence promoted to result-required",
+      response: {
+        status: "ok",
+        result: {
+          payloads: [],
+          meta: {
+            terminalReply: { disposition: "silent" },
+            terminalReplyExpectation: "required",
+          },
+        },
+      },
+      expected: { delivered: false, reason: "visible_reply_missing" },
+    },
+    {
+      name: "public required silence",
+      public: true,
+      response: {
+        status: "ok",
+        result: { payloads: [], meta: { terminalReply: { disposition: "silent" } } },
+      },
       expected: { delivered: false, reason: "visible_reply_missing" },
     },
     {

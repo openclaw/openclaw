@@ -30,6 +30,10 @@ import {
   getPluginRuntimeGenerationRegistry,
   withPluginRuntimeGenerationScope,
 } from "../plugins/runtime/generation-scope.js";
+import {
+  createColdPluginFixture,
+  isColdPluginRuntimeLoaded,
+} from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -275,6 +279,52 @@ afterEach(async () => {
   resetPluginLoaderTestStateForTest();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
+
+it("describes images without evaluating configured memory or context plugins", async () => {
+  const fixture = nativeImageFixture();
+  const agentOwners = ["memory", "context"].map((kind) => {
+    const rootDir = path.join(fixture.dir, kind);
+    fs.mkdirSync(rootDir);
+    return createColdPluginFixture({
+      rootDir,
+      pluginId: `expensive-${kind}`,
+      manifest: kind === "memory" ? { kind: "memory" } : {},
+      runtimeMessage: "Image descriptions must not evaluate agent-owned plugins",
+    });
+  });
+  const cfg: OpenClawConfig = {
+    ...fixture.config,
+    plugins: {
+      allow: [fixture.id, ...agentOwners.map((plugin) => plugin.pluginId)],
+      load: {
+        paths: [
+          ...(fixture.config.plugins?.load?.paths ?? []),
+          ...agentOwners.map((plugin) => plugin.rootDir),
+        ],
+      },
+      slots: { memory: "expensive-memory", contextEngine: "expensive-context" },
+      entries: Object.fromEntries(
+        agentOwners.map((plugin) => [plugin.pluginId, { enabled: true }]),
+      ),
+    },
+  };
+  try {
+    await fixture.environment(async () => {
+      useNoBundledPlugins();
+      fixture.state.finish.resolve();
+      expect(
+        await describeImageWithModelCore({ ...fixture.request, cfg, timeoutMs: 30_000 }),
+      ).toMatchObject({
+        text: "native image 42",
+      });
+      for (const owner of agentOwners) {
+        expect(isColdPluginRuntimeLoaded(owner)).toBe(false);
+      }
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
 
 it("does not dispatch an image completion retired during transport initialization", async () => {
   const fixture = nativeImageFixture();

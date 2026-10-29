@@ -133,7 +133,7 @@ import {
   retainCliPluginExecutionConsumer,
   unsupportedIsolatedCompletionError,
 } from "./execution-target.js";
-import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
+import { cliSessionToolNames, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
@@ -1280,7 +1280,7 @@ async function prepareCliRunContextWithinReadFence(
       execute: preparedExecution?.execute,
     });
     const promptToolNamesHash = bundleMcpEnabled
-      ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
+      ? hashCliSessionText(JSON.stringify(cliSessionToolNames(promptTools)))
       : undefined;
     // `sessionMode: none` may still use a live transport in-process, but neither a
     // returned nor previously stored id is authority for cross-process continuity.

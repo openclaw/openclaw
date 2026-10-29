@@ -5,7 +5,11 @@ import {
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
-import { buildDeveloperInstructions } from "./thread-prompt.js";
+import {
+  buildCodexConversationTurnInstructions,
+  buildDeveloperInstructions,
+  splitCodexExtraSystemPrompt,
+} from "./thread-prompt.js";
 
 const delegationTools: CodexDynamicToolSpec[] = [
   {
@@ -202,5 +206,55 @@ describe("buildDeveloperInstructions delivery-mode stability", () => {
     if (!available) {
       expect(instructions[0]).not.toContain("message(action=send)");
     }
+  });
+});
+
+describe("Codex conversation context handoff", () => {
+  it("moves only the annotated conversation section and preserves policy on both sides", () => {
+    const text = "Current owner context.";
+    const prefix = "Persistent prelude.\n\n";
+    const params = createParams({
+      extraSystemPrompt: prefix + text + "\n\nPersistent trailing policy.",
+      extraSystemPromptTurnContext: { start: prefix.length, text },
+    });
+    expect(splitCodexExtraSystemPrompt(params)).toEqual({
+      persistent: "Persistent prelude.\n\nPersistent trailing policy.",
+      turn: text,
+    });
+    const withRelay = buildDeveloperInstructions(params, { omitConversationTurnContext: true });
+    expect(withRelay).toContain("Persistent prelude.");
+    expect(withRelay).toContain("Persistent trailing policy.");
+    expect(withRelay).not.toContain(text);
+    expect(buildDeveloperInstructions(params)).toContain(text);
+    const next = {
+      ...params,
+      extraSystemPrompt: prefix + "Private completion.\n\nPersistent trailing policy.",
+      extraSystemPromptTurnContext: { start: prefix.length, text: "Private completion." },
+    };
+    expect(buildDeveloperInstructions(next, { omitConversationTurnContext: true })).toBe(withRelay);
+    const handoff = buildCodexConversationTurnInstructions(next, []);
+    expect(handoff).toContain("Private completion.");
+    expect(handoff).not.toContain(text);
+    expect(handoff).toContain("none");
+  });
+
+  it.each([
+    { start: -1, text: "context" },
+    { start: 0.5, text: "context" },
+    { start: 0, text: "mismatch" },
+    { start: 0, text: "context" },
+    { start: 1, text: "ontext" },
+  ])("keeps malformed or non-section annotations in immutable policy (%j)", (annotation) => {
+    const params = createParams({
+      extraSystemPrompt: "context-not-a-whole-section",
+      extraSystemPromptTurnContext: annotation,
+    });
+    expect(splitCodexExtraSystemPrompt(params)).toEqual({
+      persistent: params.extraSystemPrompt,
+      turn: undefined,
+    });
+    expect(buildDeveloperInstructions(params, { omitConversationTurnContext: true })).toContain(
+      params.extraSystemPrompt,
+    );
   });
 });

@@ -286,3 +286,5 @@ GitHub-backed sign-in through Cloudflare Access or Tailscale Serve automatically
 - [Session tools](/concepts/session-tool)
 - [Presence](/concepts/presence)
 - [Gateway security](/gateway/security)
+
+Linked model-account selections retain their user-link provenance across explicit and automatic session resets.

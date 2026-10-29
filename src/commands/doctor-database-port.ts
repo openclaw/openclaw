@@ -20,6 +20,7 @@ import type { PortVerification } from "../infra/database-engine/port.worker.js";
 import type { DatabaseEngineId } from "../infra/database-engine/registry.js";
 import {
   archiveDatabasePortManifest,
+  assertDatabasePortPlatformSupported,
   assertDatabasePortRecoveryAllowed,
   databasePortManifestPath,
   prepareDatabasePortDirectory,
@@ -625,6 +626,7 @@ async function loadRecovery(ctx: Context) {
 }
 
 export async function doctorDatabasePort(options: DatabasePortOptions) {
+  assertDatabasePortPlatformSupported();
   const stateDir = path.resolve(resolveStateDir()),
     configPath = path.resolve(resolveConfigPath());
   const ctx: Context = {

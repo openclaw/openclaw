@@ -226,9 +226,11 @@ export async function resolveTerminalReplyDelivery(params: {
     minimumAssistantMessageIndex,
     (error) => logVerbose(`reply delivery observation failed; retaining custody: ${String(error)}`),
   );
-  if (sourceDelivery === "delivered" || params.sourceReplyDeliveryState !== undefined) {
+  if (sourceDelivery === "delivered") {
     return sourceDelivery;
   }
+  // Runtime facts can miss host-owned block/direct sends. Their terminal
+  // receipts still confirm delivery or retain custody before recovery.
   let pending =
     sourceDelivery === "pending" ||
     blockReplyPipeline?.hasRetryBlockedTerminalDelivery?.(minimumAssistantMessageIndex) === true;
@@ -366,10 +368,8 @@ export async function handleReplyAgentRunError(
   ) {
     return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
   }
-  if (
-    replyOperation.result?.kind === "aborted" &&
-    replyOperation.result.code === "aborted_for_restart"
-  ) {
+  if (resolveReplyOperationAbortReason(replyOperation, error) === "restart") {
+    replyOperation.abortForRestart();
     if (
       (await isRestartRecoveryArmed()) ||
       isReplyOperationSuperseded(replyOperation) ||

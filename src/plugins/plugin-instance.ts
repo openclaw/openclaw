@@ -576,10 +576,13 @@ export class PluginInstance {
       const terminalFailures = (this.disposalFailures = new DisposalFailures(this));
       const work = new AsyncWorkScope(terminalFailures);
       // Physical cleanup outlives the releasing caller's invocation scope.
+      // Its work owner also retains module release after the bounded result returns.
       const physical = pluginInvocationContext.exit(() =>
-        this.finishDisposal(
-          trackAsyncWork(() => this.runDisposalCleanup(work, terminalFailures, beforeCleanup)),
-          terminalFailures,
+        trackAsyncWork(() =>
+          this.finishDisposal(
+            this.runDisposalCleanup(work, terminalFailures, beforeCleanup),
+            terminalFailures,
+          ),
         ),
       );
       const settled = physical.then(() => {
@@ -667,7 +670,7 @@ export class PluginInstance {
         hostFailure = { error };
       }
     }
-    const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
+    const deadline = performance.now() + SHUTDOWN_TIMEOUT_MS;
     this.abortDisposal(cleanupWork);
     const moduleCleanups: Array<() => void | Promise<void>> = [];
     for (const [cleanup, kind] of Array.from(this.cleanups).toReversed()) {
@@ -676,9 +679,13 @@ export class PluginInstance {
         continue;
       }
       try {
-        await raceWithTimeout(runCleanup(cleanup), Math.max(0, deadline - Date.now()), () => {
-          throw new Error(`Plugin ${this.pluginId} cleanup did not settle`);
-        });
+        await raceWithTimeout(
+          runCleanup(cleanup),
+          Math.max(0, deadline - performance.now()),
+          () => {
+            throw new Error(`Plugin ${this.pluginId} cleanup did not settle`);
+          },
+        );
       } catch (error) {
         failures.push(error);
       }
@@ -694,6 +701,8 @@ export class PluginInstance {
     const { failures, hostFailure, moduleCleanups } = await cleanupCompletion;
     // Expired calls lose authority, but retain their code until they actually return.
     await this.waitForCalls(() => false, new AbortController().signal);
+    // Retire captured membership before module cleanup can wait on its source worker.
+    this.moduleSourceExists &&= false;
     for (const cleanup of moduleCleanups) {
       try {
         await this.invoke(cleanup, this.lease({ cleanup: true }));
@@ -708,8 +717,6 @@ export class PluginInstance {
     this.moduleLoader = undefined;
     this.setupCache = undefined;
     this.captureModuleRecovery = undefined;
-    // Release captured paths without reopening the never-bound bundled-library fallback.
-    this.moduleSourceExists &&= false;
     this.slots.clear();
     for (const failure of terminalFailures) {
       if (!failures.includes(failure)) {

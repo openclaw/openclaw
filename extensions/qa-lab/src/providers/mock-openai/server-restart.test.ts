@@ -35,7 +35,7 @@ describe("mock provider restart checkpoints", () => {
     },
   ];
   const restartRecoveryPrompt =
-    "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
+    "Your previous turn was interrupted while OpenClaw was waiting on tool/model work. Continue from the existing transcript.";
 
   async function expectRestartCheckpointExecution(
     execArgs: Record<string, unknown>,

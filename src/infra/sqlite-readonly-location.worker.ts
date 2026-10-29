@@ -3,6 +3,7 @@ import { setImmediate } from "node:timers/promises";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
+import { routeLogsToStderr } from "../logging/console.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { jsonFieldBatches } from "./json-field-transfer.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
@@ -404,6 +405,8 @@ function runSession(): void {
 }
 
 if (process.argv[2] === SQLITE_READONLY_CHILD_ARG) {
+  // One-shot stdout is the JSON result, and sessions may inherit a JSON caller's stdout.
+  routeLogsToStderr();
   if (process.argv[3] === "session" && process.send) {
     runSession();
   } else {

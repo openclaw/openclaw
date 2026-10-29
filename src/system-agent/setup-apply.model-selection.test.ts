@@ -4,6 +4,27 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 
 describe("applySystemAgentModelSelection", () => {
+  it("keeps provider-added first-run model metadata unrestricted", async () => {
+    const previousConfig: OpenClawConfig = { gateway: { mode: "local" } };
+    const cfg = await applySystemAgentModelSelection({
+      config: {
+        ...previousConfig,
+        agents: { defaults: { models: { "openai/gpt-6-astra": { alias: "GPT" } } } },
+      },
+      previousConfig,
+      model: "openai/gpt-6-astra",
+      agentRuntimeId: "openclaw",
+      runtimeInDefaults: true,
+    });
+    const allowed = buildAllowedModelSet({ cfg, catalog: [], defaultProvider: "openai" });
+    expect(allowed.allows({ provider: "openai", model: "gpt-5.4-mini" })).toBe(true);
+    expect(cfg.agents?.defaults?.modelPolicy).toBeUndefined();
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-6-astra"]).toEqual({
+      alias: "GPT",
+      agentRuntime: { id: "openclaw" },
+    });
+  });
+
   it("adds a utility without changing other bindings", async () => {
     const config: OpenClawConfig = {
       agents: {
@@ -81,8 +102,18 @@ describe("applySystemAgentModelSelection", () => {
   });
 
   it("keeps a newly approved model allowed when migrating a first-run legacy model map", async () => {
+    const previousConfig: OpenClawConfig = {
+      agents: { defaults: { models: { "fixture/old": {} } } },
+    };
     const cfg = await applySystemAgentModelSelection({
-      config: { agents: { defaults: { models: { "fixture/old": {} } } } },
+      config: {
+        agents: {
+          defaults: {
+            models: { "fixture/old": {}, "fixture/unapproved": { alias: "Provider default" } },
+          },
+        },
+      },
+      previousConfig,
       model: "fixture/new",
       agentRuntimeId: "openclaw",
       runtimeInDefaults: true,
@@ -91,6 +122,7 @@ describe("applySystemAgentModelSelection", () => {
     expect(allowed.allows({ provider: "fixture", model: "new" })).toBe(true);
     expect(allowed.allows({ provider: "fixture", model: "old" })).toBe(true);
     expect(allowed.allows({ provider: "fixture", model: "unapproved" })).toBe(false);
+    expect(previousConfig.agents?.defaults?.models).toEqual({ "fixture/old": {} });
   });
 
   it("rejects an unrepresentable explicit agent instead of updating main", async () => {

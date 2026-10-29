@@ -225,7 +225,7 @@ export async function prepareHostedSmsMedia(params: PrepareHostedSmsMediaParams)
     throw new Error("Hosted MMS media expired before it could be sent.");
   }
   const contentType = entry.metadata.contentType?.split(";", 1)[0]?.trim().toLowerCase();
-  if (!contentType || !TWILIO_MMS_EXTENSION_BY_TYPE[contentType]) {
+  if (!contentType || !Object.hasOwn(TWILIO_MMS_EXTENSION_BY_TYPE, contentType)) {
     await cleanup();
     throw new Error(
       `Twilio MMS does not support media type ${contentType || "unknown content type"}.`,
@@ -461,9 +461,10 @@ export async function materializeSmsInboundMedia(params: {
 
 function hostedSmsMediaFileName(id: string, contentType: string | undefined): string | undefined {
   const normalizedContentType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
-  const extension = normalizedContentType
-    ? TWILIO_MMS_EXTENSION_BY_TYPE[normalizedContentType]
-    : undefined;
+  const extension =
+    normalizedContentType && Object.hasOwn(TWILIO_MMS_EXTENSION_BY_TYPE, normalizedContentType)
+      ? TWILIO_MMS_EXTENSION_BY_TYPE[normalizedContentType]
+      : undefined;
   return extension ? `mms-${id.slice(0, 10)}${extension}` : undefined;
 }
 

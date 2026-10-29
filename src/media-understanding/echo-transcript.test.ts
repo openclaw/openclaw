@@ -82,6 +82,64 @@ describe("sendTranscriptEcho", () => {
     expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
+  it("requires durable ownership for complete Telegram source identities", async () => {
+    await sendTranscriptEcho({
+      ctx: createCtx({
+        Provider: "telegram",
+        OriginatingTo: "telegram:group:-123:topic:7",
+        MessageSid: "42",
+      }),
+      cfg: EMPTY_CONFIG,
+      transcript: "same body",
+    });
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bestEffort: false,
+        durability: "required",
+        deliveryIntentId: expect.stringMatching(/^transcript-echo:v1:[a-f0-9]{64}$/),
+        completionRetention: {
+          idPrefix: "transcript-echo:v1:",
+          maxAgeMs: 86_400_000,
+          maxEntries: 2_000,
+        },
+      }),
+    );
+  });
+
+  it.each([
+    { AccountId: undefined },
+    { MessageSid: undefined },
+    { OriginatingTo: "telegram:bad chat" },
+  ])("keeps incomplete Telegram identities best effort: %j", async (overrides) => {
+    await sendTranscriptEcho({
+      ctx: createCtx({
+        Provider: "telegram",
+        OriginatingTo: "telegram:-123",
+        MessageSid: "42",
+        ...overrides,
+      }),
+      cfg: EMPTY_CONFIG,
+      transcript: "same body",
+    });
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ bestEffort: true, durability: "best_effort" }),
+    );
+    expect(mockDeliverOutboundPayloads.mock.calls[0]?.[0]).not.toHaveProperty("deliveryIntentId");
+  });
+
+  it("does not deduplicate other providers using Telegram source identity rules", async () => {
+    await sendTranscriptEcho({
+      ctx: createCtx({ MessageSid: "42" }),
+      cfg: EMPTY_CONFIG,
+      transcript: "same body",
+    });
+    expect(mockDeliverOutboundPayloads.mock.calls[0]?.[0]).toMatchObject({
+      bestEffort: true,
+      durability: "best_effort",
+    });
+    expect(mockDeliverOutboundPayloads.mock.calls[0]?.[0]).not.toHaveProperty("deliveryIntentId");
+  });
+
   it("swallows delivery failures", async () => {
     mockDeliverOutboundPayloads.mockRejectedValueOnce(new Error("delivery timeout"));
 

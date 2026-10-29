@@ -4,6 +4,8 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
+import { runSignalSseLoop, type SignalStatusSink } from "./sse-reconnect.js";
 
 vi.mock("openclaw/plugin-sdk/core", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/core")>(
@@ -370,4 +372,59 @@ describe("streamSignalEvents", () => {
       }),
     ).rejects.toThrow("Signal SSE event data exceeded size limit");
   });
+});
+it.each(["", 'event: receive\ndata: {"envelope":{}}\n\n'])(
+  "reports a cleanly closed HTTP event stream as a lost connection (%j)",
+  async (body) => {
+    const abort = new AbortController();
+    const runtime = createRuntimeSpies();
+    const statusSink = vi.fn<SignalStatusSink>((patch) => {
+      if (patch.lifecycle === "recovering") {
+        abort.abort();
+      }
+    });
+    await runSignalSseLoop({
+      baseUrl: await withSignalServer((_req, res) => {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(body);
+      }),
+      abortSignal: abort.signal,
+      runtime,
+      onEvent: vi.fn(),
+      statusSink,
+    });
+
+    expect(statusSink).toHaveBeenLastCalledWith({
+      lifecycle: "recovering",
+      connected: false,
+      lastError: expect.stringContaining("Signal daemon closed the event stream"),
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Signal connection lost"));
+  },
+);
+
+it("keeps an idle HTTP stream quiet through intentional shutdown", async () => {
+  const abort = new AbortController();
+  const runtime = createRuntimeSpies();
+  const statusSink = vi.fn<SignalStatusSink>((patch) => {
+    if (patch.lifecycle === "ready") {
+      abort.abort();
+    }
+  });
+  const baseUrl = await withSignalServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.flushHeaders();
+  });
+  await runSignalSseLoop({
+    baseUrl,
+    abortSignal: abort.signal,
+    runtime,
+    onEvent: vi.fn(),
+    statusSink,
+  });
+
+  expect(statusSink).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ lifecycle: "ready", connected: true }),
+  );
+  expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("connection lost"));
 });

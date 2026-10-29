@@ -1,5 +1,5 @@
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { parseCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -17,6 +17,45 @@ function createCollectorTools(swarm?: false) {
 }
 
 describe("Codex collector availability", () => {
+  it("rejects a tool whose narrowed schema mutates its accepted definition in place", async () => {
+    const initial = createCodexDynamicToolBridge({
+      tools: createCollectorTools(),
+      signal: new AbortController().signal,
+    });
+    const spawn = initial.availableTools.find((tool) => tool.name === "sessions_spawn")!;
+    const schema = structuredClone(spawn.parameters);
+    const description = spawn.description;
+    Object.defineProperties(spawn, {
+      parameters: {
+        get: () => schema,
+        set: (prepared: typeof schema) => Object.assign(schema, prepared),
+      },
+      description: { get: () => description, set: () => {} },
+    });
+    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    spawn.execute = execute;
+    const bridge = createCodexDynamicToolBridge({
+      tools: [spawn],
+      registeredSpecs: initial.specs,
+      requireExactRegisteredDefinitions: true,
+      signal: new AbortController().signal,
+    });
+    expect(spawn.parameters).toBe(schema);
+    expect(schema).not.toHaveProperty("properties.collect");
+    expect(spawn.description).toBe(description);
+    await expect(
+      bridge.handleToolCall({
+        threadId: "synthetic-parent",
+        turnId: "synthetic-turn",
+        callId: "mutated-in-place",
+        tool: spawn.name,
+        arguments: { task: "Inspect the synthetic collector source." },
+      }),
+    ).resolves.toMatchObject({ success: false, executionStarted: false });
+    expect(execute).not.toHaveBeenCalled();
+    expect(bridge.specs).toEqual(initial.specs);
+  });
+
   it.each(["direct", "searchable"] as const)(
     "keeps native catalogs frozen across the default-on upgrade with %s loading",
     async (loading) => {

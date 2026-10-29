@@ -39,6 +39,11 @@ export function isRetainedSourceIssue(issue: DoctorSessionSqliteIssue): boolean 
   ].includes(issue.code);
 }
 
+export function isRetainedSourceSettlementIssue(issue: DoctorSessionSqliteIssue): boolean {
+  // Unavailable historical recovery does not invalidate this import's verified originals.
+  return isRetainedSourceIssue(issue) || issue.code === "historical_transcript_deferred";
+}
+
 export function isInformationalMissingSessionIndex(
   report: DoctorSessionSqliteTargetReport,
 ): boolean {

@@ -36,6 +36,20 @@ describe("logs cli", () => {
     readGatewayDispatchConfig.mockReset().mockReturnValue({});
   });
 
+  it.each([
+    ["--local-time", "--utc"],
+    ["--utc", "--local-time"],
+  ])("rejects conflicting timestamp flags before RPC: %s %s", async (...flags) => {
+    callGatewayFromCli.mockResolvedValueOnce({ file: "/tmp/openclaw.log", lines: [] });
+    try {
+      await expect(runLogsCli(["logs", ...flags])).rejects.toThrow(
+        "Pass only one of --local-time or --utc.",
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      callGatewayFromCli.mockReset();
+    }
+  });
   it("writes output directly to stdout/stderr", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",
@@ -86,6 +100,7 @@ describe("logs cli", () => {
   it.each([
     { mode: "plain UTC", tty: true, args: ["--utc", "--plain"], time: "2025-01-01T12:00:00.000Z" },
     { mode: "pretty local", tty: true, args: [], time: "07:00:00-05:00" },
+    { mode: "pretty explicit local", tty: true, args: ["--local-time"], time: "07:00:00-05:00" },
     { mode: "pretty UTC", tty: true, args: ["--utc"], time: "12:00:00+00:00" },
   ])(
     "renders $mode timestamps and preserves missing or malformed values",

@@ -153,30 +153,35 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
     );
   }
 
-  const classify = createDirectAnnounceResponseClassifier({
-    params: {
-      sourceTool: "subagent_settle",
-      expectsCompletionMessage: false,
-      requesterIsSubagent: false,
-    },
-    parentOnly: false,
-    requesterSessionBound: true,
-    deliveryTarget: {},
-    shouldDeliverAgentFinal: true,
-    requiresMessageToolDelivery: false,
-    isSubagentCompletion: false,
-    hasSuccessfulTrustedSubagentNoOutputCompletion: false,
-    hasRequiredSubagentNoOutputCompletion: false,
-    subagentDirectMessageCompletionRequiresMessageTool: false,
-    effectiveDirectOrigin: undefined,
-    requesterSessionOrigin: undefined,
-    textCompletionDirectDeliveryKind: "completed_result",
-    tryTextCompletionDirectDelivery: async () => undefined,
-  });
+  const classifyWithExpectation = (replyExpectation: "required" | "optional") =>
+    createDirectAnnounceResponseClassifier({
+      replyExpectation,
+      params: {
+        sourceTool: "subagent_settle",
+        expectsCompletionMessage: false,
+        requesterIsSubagent: false,
+      },
+      parentOnly: false,
+      requesterSessionBound: true,
+      deliveryTarget: {},
+      shouldDeliverAgentFinal: true,
+      requiresMessageToolDelivery: false,
+      isSubagentCompletion: false,
+      hasSuccessfulTrustedSubagentNoOutputCompletion: false,
+      hasRequiredSubagentNoOutputCompletion: false,
+      subagentDirectMessageCompletionRequiresMessageTool: false,
+      effectiveDirectOrigin: undefined,
+      requesterSessionOrigin: undefined,
+      textCompletionDirectDeliveryKind: "completed_result",
+      tryTextCompletionDirectDelivery: async () => undefined,
+    });
+
+  const classify = classifyWithExpectation("required");
 
   it.each([
     {
       name: "intentional silent final",
+      replyExpectation: "optional" as const,
       result: { meta: { terminalReply: { disposition: "silent" } } },
       delivered: true,
     },
@@ -211,15 +216,21 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
       delivered: true,
     },
     { name: "legacy empty receipt", result: { payloads: [] }, delivered: false },
-  ])("replays $name without inventing visible delivery", async ({ result, delivered }) => {
-    const stored = project(result);
-    const delivery = await classify({ status: "ok", result: stored });
-    expect(delivery).toMatchObject({ delivered, path: "direct" });
-    expect(JSON.stringify(stored)).not.toContain("private synthetic failure");
-    if (!delivered) {
-      expect(delivery).toMatchObject({ reason: "visible_reply_missing" });
-    }
-  });
+  ])(
+    "replays $name without inventing visible delivery",
+    async ({ result, delivered, replyExpectation }) => {
+      const stored = project(result);
+      const delivery = await classifyWithExpectation(replyExpectation ?? "required")({
+        status: "ok",
+        result: stored,
+      });
+      expect(delivery).toMatchObject({ delivered, path: "direct" });
+      expect(JSON.stringify(stored)).not.toContain("private synthetic failure");
+      if (!delivered) {
+        expect(delivery).toMatchObject({ reason: "visible_reply_missing" });
+      }
+    },
+  );
 
   it.each([
     { reason: "no_visible_payload", expected: { reason: "visible_reply_missing" } },

@@ -83,6 +83,54 @@ describe("completion-cli native Bash words", () => {
 
   it.skipIf(process.platform === "win32").each([
     {
+      line: "openclaw --profile s",
+      words: ["openclaw", "--profile", "s"],
+      word: "s",
+      expected: [],
+    },
+    {
+      line: "openclaw --profile 's",
+      words: ["openclaw", "--profile", "'s"],
+      word: "s",
+      expected: [],
+    },
+    {
+      line: "openclaw --profile staging g",
+      words: ["openclaw", "--profile", "staging", "g"],
+      word: "g",
+      expected: ["gateway"],
+    },
+    {
+      line: "openclaw gateway --token st",
+      words: ["openclaw", "gateway", "--token", "st"],
+      word: "st",
+      expected: [],
+    },
+    {
+      line: "openclaw gateway --token --f",
+      words: ["openclaw", "gateway", "--token", "--f"],
+      word: "--f",
+      expected: [],
+    },
+    {
+      line: "openclaw gateway -vt st",
+      words: ["openclaw", "gateway", "-vt", "st"],
+      word: "st",
+      expected: [],
+    },
+    {
+      line: "openclaw completion --profile --shell=fi",
+      words: ["openclaw", "completion", "--profile", "--shell", "=", "fi"],
+      word: "fi",
+      expected: [],
+    },
+    {
+      line: "openclaw completion --profile -sf",
+      words: ["openclaw", "completion", "--profile", "-sf"],
+      word: "-sf",
+      expected: [],
+    },
+    {
       line: "openclaw completion --shell=",
       words: ["openclaw", "completion", "--shell", "="],
       word: "",

@@ -1,5 +1,6 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -61,6 +62,37 @@ async function runStorageCli(args: string[]) {
 }
 
 describe("storage CLI with filesystem transport", () => {
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls without changing storage targets or probe data",
+    async () => {
+      const target = path.join(root, "café\u001b[31m\nforged\tend\rrow\u0007");
+      await fs.mkdir(target);
+      fixture.config.storage!.locations!.archive!.settings = { path: target };
+
+      await runStorageCli(["list"]);
+      const uninitialized = fixture.runtime.log.mock.calls.flat().join("\n");
+      expect(uninitialized).toContain("café\\nforged\\tend\\rrow");
+      expect(uninitialized.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+      expect(uninitialized).not.toContain("\nforged");
+
+      await runStorageCli(["test", "archive"]);
+      expect(fixture.runtime.error.mock.calls.flat().join(" ")).not.toMatch(/\p{Cc}/u);
+      expect(fixture.runtime.exit).toHaveBeenCalledWith(1);
+      fixture.runtime.log.mockClear();
+      await runStorageCli(["init", "archive"]);
+      expect(fixture.runtime.log).toHaveBeenCalledWith(
+        `Storage location archive initialized: ${root}${path.sep}café\\nforged\\tend\\rrow`,
+      );
+      await runStorageCli(["list", "--json"]);
+      expect(
+        JSON.parse(String(fixture.runtime.log.mock.lastCall?.[0])).locations[0].displayTarget,
+      ).toBe(target);
+      await runStorageCli(["test", "archive", "--json"]);
+      expect(JSON.parse(String(fixture.runtime.log.mock.lastCall?.[0])).displayTarget).toBe(target);
+      expect(await fs.readdir(target)).toEqual(["openclaw-storage.json"]);
+    },
+  );
+
   it("initializes, verifies a probe round trip, deletes the probe, and lists availability", async () => {
     await runStorageCli(["--json", "init", "archive"]);
     expect(fixture.runtime.error).not.toHaveBeenCalled();

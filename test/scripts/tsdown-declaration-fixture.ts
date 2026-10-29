@@ -204,6 +204,7 @@ export function createFixture(groups: readonly string[], root: string) {
   // Plain paths are deliberate: owner edits do not select these suites in product PRs
   // (see "Declaration-fixture owner selection" in .agents/skills/openclaw-ci-limits).
   const runtimeEntryOwners = new Set([
+    "node-runtime-env.mjs",
     ...Object.values(runtimeProcessDeclarationEntries),
     "scripts/lib/managed-windows-job-launcher.mts",
     "src/process/exec-result.ts",

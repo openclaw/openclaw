@@ -34,7 +34,8 @@ openclaw-modal-dialog {
 .oc-modal-dialog[open] {
   display: flex;
   opacity: 1;
-  scale: 1;
+  /* Identity scale still contains fixed-position transient anchors. */
+  scale: none;
   transition-duration: var(--openclaw-modal-show-duration);
 }
 
@@ -129,7 +130,7 @@ openclaw-modal-dialog.drawer > .oc-modal-dialog {
   max-height: 100dvh;
   margin: 0 0 0 auto;
   border-radius: 0;
-  scale: 1;
+  scale: none;
 }
 
 openclaw-modal-dialog.drawer > .oc-modal-dialog[open] {

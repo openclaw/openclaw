@@ -49,17 +49,22 @@ type RequesterCronAuthority = {
       sourceSessionKey: string;
       isFollowupCurrent: () => boolean;
       releaseFollowup: () => void;
+      binding?: {
+        entry: SubagentRunRecord;
+        runs: ReadonlyMap<string, SubagentRunRecord>;
+      };
     }
 );
 
 type RequesterCronAuthorityState = {
   byEntry: WeakMap<object, RequesterCronAuthority>;
+  followupEntries: WeakSet<object>;
   bySession: Map<string, Set<RequesterCronAuthority>>;
 };
 
 const state = resolveGlobalSingleton<RequesterCronAuthorityState>(
   Symbol.for("openclaw.subagents.requesterCronAuthority"),
-  () => ({ byEntry: new WeakMap(), bySession: new Map() }),
+  () => ({ byEntry: new WeakMap(), followupEntries: new WeakSet(), bySession: new Map() }),
   (value) => {
     for (const entries of value.bySession.values()) {
       for (const entry of entries) {
@@ -77,13 +82,22 @@ const state = resolveGlobalSingleton<RequesterCronAuthorityState>(
 );
 
 function discard(authority: RequesterCronAuthority): void {
+  if (!authority.active) {
+    return;
+  }
   authority.active = false;
   if (authority.kind === "yield") {
     authority.sessionFacts.release();
-    for (const entry of authority.batch) {
-      if (state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority) {
-        state.byEntry.delete(getSubagentRunRuntimeKey(entry));
-      }
+  }
+  const entries =
+    authority.kind === "yield"
+      ? authority.batch
+      : authority.binding
+        ? [authority.binding.entry]
+        : [];
+  for (const entry of entries) {
+    if (state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority) {
+      state.byEntry.delete(getSubagentRunRuntimeKey(entry));
     }
   }
   const session = state.bySession.get(authority.requesterSessionKey);
@@ -107,7 +121,22 @@ function isCurrent(authority: RequesterCronAuthority): boolean {
     return false;
   }
   if (authority.kind === "followup") {
-    return authority.isFollowupCurrent() && authority.requesterOwner?.isCurrent() === true;
+    if (!authority.isFollowupCurrent() || authority.requesterOwner?.isCurrent() !== true) {
+      return false;
+    }
+    const binding = authority.binding;
+    if (!binding || authority.admittedRunId !== undefined) {
+      return true;
+    }
+    const entry = binding.runs.get(binding.entry.runId);
+    return Boolean(
+      entry &&
+      isSameSubagentRunOwner(entry, binding.entry) &&
+      state.byEntry.get(getSubagentRunRuntimeKey(entry)) === authority &&
+      !entry.suppressCompletionDelivery &&
+      !entry.killIntent?.suppressTaskDelivery &&
+      !entry.killReconciliation?.suppressTaskDelivery,
+    );
   }
   let session: PreparedSessionMutationFacts["target"];
   try {
@@ -319,19 +348,38 @@ export function replaceRequesterCronAuthorityEntry(params: {
   preserve: boolean;
 }): void {
   const authority = state.byEntry.get(getSubagentRunRuntimeKey(params.previous));
-  if (!authority || authority.kind !== "yield") {
+  if (!authority) {
     return;
   }
   if (!params.preserve) {
     discard(authority);
     return;
   }
-  authority.batch = authority.batch.map((entry) =>
-    isSameSubagentRunOwner(entry, params.previous) ? params.next : entry,
-  );
+  if (authority.kind === "yield") {
+    authority.batch = authority.batch.map((entry) =>
+      isSameSubagentRunOwner(entry, params.previous) ? params.next : entry,
+    );
+  } else if (authority.binding) {
+    authority.binding.entry = params.next;
+    state.followupEntries.add(getSubagentRunRuntimeKey(params.next));
+  }
   state.byEntry.delete(getSubagentRunRuntimeKey(params.previous));
   state.byEntry.set(getSubagentRunRuntimeKey(params.next), authority);
   if (!isCurrent(authority)) {
+    discard(authority);
+  }
+}
+
+/** Child retirement releases its pending capture; an admitted requester owns its own lifetime. */
+export function retireRequesterFollowupAuthority(entry: SubagentRunRecord): void {
+  const key = getSubagentRunRuntimeKey(entry);
+  const authority = state.byEntry.get(key);
+  if (authority?.kind !== "followup") {
+    return;
+  }
+  state.byEntry.delete(key);
+  authority.binding = undefined;
+  if (authority.admittedRunId === undefined) {
     discard(authority);
   }
 }
@@ -445,6 +493,36 @@ export async function withRequesterCronAuthority<T>(
   }
 }
 
+async function runRequesterFollowupAuthority<T>(
+  authority: Extract<RequesterCronAuthority, { kind: "followup" }>,
+  runId: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!isCurrent(authority) || authority.admittedRunId !== undefined) {
+    throw new Error("Requester followup authority is no longer current");
+  }
+  return await activeDispatch.run(
+    { authority, runId, isCurrent: () => isCurrent(authority), consumed: false },
+    run,
+  );
+}
+
+/** Run a registry completion under its exact retained requester, never ambient identity. */
+export async function withRequesterFollowupAuthority<T>(
+  entry: SubagentRunRecord,
+  runId: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const key = getSubagentRunRuntimeKey(entry);
+  const authority = state.byEntry.get(key);
+  if (!authority && state.followupEntries.has(key)) {
+    throw new Error("Requester followup authority is no longer current");
+  }
+  return authority?.kind === "followup"
+    ? await runRequesterFollowupAuthority(authority, runId, run)
+    : await run();
+}
+
 /** Child followup results return the captured owner only to their exact requester. */
 export function captureRequesterFollowupAuthority(params: {
   requesterTurnRunId: string;
@@ -477,23 +555,39 @@ export function captureRequesterFollowupAuthority(params: {
   session.add(authority);
   state.bySession.set(params.requesterSessionKey, session);
   return {
+    bind({ entry, runs }) {
+      if (
+        authority.binding ||
+        authority.admittedRunId !== undefined ||
+        !isCurrent(authority) ||
+        !isSameSubagentRunOwner(runs.get(entry.runId), entry) ||
+        entry.requesterSessionKey !== authority.requesterSessionKey ||
+        entry.requesterAgentId !== authority.requesterAgentId ||
+        entry.requesterTurnRunId !== authority.requesterTurnRunId ||
+        entry.completionRequesterSessionId !== authority.requesterSessionId ||
+        entry.childSessionKey !== authority.sourceSessionKey
+      ) {
+        throw new Error("Requester followup authority does not own this child completion");
+      }
+      const key = getSubagentRunRuntimeKey(entry);
+      const previous = state.byEntry.get(key);
+      if (previous && previous !== authority) {
+        discard(previous);
+      }
+      authority.binding = { entry, runs };
+      state.followupEntries.add(key);
+      state.byEntry.set(key, authority);
+    },
     release: () => {
-      // Observation may end before accepted work starts. Its Gateway admission
-      // and subsequent run scope, not the result waiter, now own this capture.
-      if (authority.admittedRunId === undefined) {
+      // The registry or admitted requester run owns this capture after observation ends.
+      if (authority.admittedRunId === undefined && !authority.binding) {
         discard(authority);
       }
     },
     async run<T>(runId: string, run: () => Promise<T>): Promise<T> {
-      if (!isCurrent(authority) || authority.admittedRunId !== undefined) {
-        throw new Error("Requester followup authority is no longer current");
-      }
       // The followup owner retains caller restrictions separately. This scope
       // supplies only the captured channel identity to the returning parent.
-      return await activeDispatch.run(
-        { authority, runId, isCurrent: () => isCurrent(authority), consumed: false },
-        run,
-      );
+      return await runRequesterFollowupAuthority(authority, runId, run);
     },
   };
 }
@@ -527,7 +621,7 @@ function matchesAdmissionTarget(
 
 export function captureRequesterCronAuthorityAdmissionAssertion(params: RequesterAdmissionTarget) {
   const dispatch = activeDispatch.getStore();
-  if (!dispatch || dispatch.consumed || dispatch.authority.kind !== "yield") {
+  if (!dispatch || dispatch.consumed) {
     return undefined;
   }
   if (!matchesAdmissionTarget(dispatch, params)) {
@@ -616,6 +710,12 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
           }
         }
         dispatch.authority.batch = [];
+      } else if (dispatch.authority.binding) {
+        const key = getSubagentRunRuntimeKey(dispatch.authority.binding.entry);
+        if (state.byEntry.get(key) === dispatch.authority) {
+          state.byEntry.delete(key);
+        }
+        dispatch.authority.binding = undefined;
       }
       scope.signal.addEventListener("abort", () => discard(dispatch.authority), { once: true });
     },

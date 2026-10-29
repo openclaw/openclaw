@@ -387,8 +387,19 @@ export class LogbookService {
     if (!this.resolveVisionModel().ref) {
       const now = Date.now();
       if (now - this.lastModelMissingLogMs > MODEL_MISSING_LOG_INTERVAL_MS) {
-        this.lastModelMissingLogMs = now;
-        this.deps.logger.warn(`logbook: analysis paused; ${MODEL_MISSING_MESSAGE}`);
+        try {
+          const hasPendingWork =
+            (await store.countUnbatchedActiveFrames()) > 0 ||
+            Boolean(await store.nextPendingBatch());
+          if (hasPendingWork && !this.deps.scheduler.signal.aborted) {
+            this.lastModelMissingLogMs = now;
+            this.deps.logger.warn(`logbook: analysis paused; ${MODEL_MISSING_MESSAGE}`);
+          }
+        } catch (error) {
+          if (!this.deps.scheduler.signal.aborted) {
+            this.deps.logger.error(`logbook: analysis tick failed: ${String(error)}`);
+          }
+        }
       }
       return;
     }

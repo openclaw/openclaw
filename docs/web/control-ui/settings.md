@@ -468,6 +468,7 @@ IDs return `stale-document`, and unknown commands return `unsupported`. Navigati
 switches sessions in place and reports success after the target state reaches the
 host. It settles within 15 seconds of receipt, including queued commands and host
 acknowledgements; failures return `navigate-timeout` or `navigate-rejected`.
+The deadline measures elapsed time, so system-clock corrections do not consume or renew it.
 The `visible` flag controls pane presentation. A visible, inactive window keeps
 rendering and accepting navigation; `active` only gates composer focus requests.
 Change-only `state` messages carry a monotonic revision,

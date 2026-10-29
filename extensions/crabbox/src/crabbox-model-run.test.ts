@@ -2,11 +2,13 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { Command } from "commander";
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import type { ConfiguredModelEgress } from "openclaw/plugin-sdk/secret-egress-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CRABBOX_MIN_VERSION, resolveManagedCrabboxBinaryPath } from "./crabbox-managed-binary.js";
+import { registerCrabboxModelRunCommand } from "./crabbox-model-run-cli.js";
 
 const mocks = vi.hoisted(() => ({ run: vi.fn(), version: vi.fn(), withEgress: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
@@ -144,3 +146,63 @@ describe("Crabbox protected model command", () => {
     await expect(runCrabboxModelCommand(options)).rejects.toThrow("could not confirm");
   });
 });
+
+it.each(["0x10", "1e3", "0b101", "0o17", "0", "-1", "1.5", "86401", "", "9007199254740992"])(
+  "rejects invalid timeout %s before external calls",
+  async (timeout) => {
+    const program = new Command().exitOverride();
+    registerCrabboxModelRunCommand({ program, config: {} });
+    await expect(
+      program.parseAsync(
+        [
+          "crabbox",
+          "run",
+          "--id",
+          "cbx_owned",
+          "--model",
+          "example/example-model",
+          "--timeout",
+          timeout,
+          "--",
+          "node",
+          "test-app.js",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("--timeout must be an integer between 1 and 86400 seconds");
+    expect(mocks.version).not.toHaveBeenCalled();
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(mocks.withEgress).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["1", "86400", undefined])(
+  "accepts decimal boundaries and default timeout %s",
+  async (timeout) => {
+    const program = new Command().exitOverride();
+    registerCrabboxModelRunCommand({ program, config: {} });
+    mocks.run.mockResolvedValueOnce(result(capabilityHelp)).mockResolvedValueOnce(result());
+    const previousExitCode = process.exitCode;
+    try {
+      await program.parseAsync(
+        [
+          "crabbox",
+          "run",
+          "--id",
+          "cbx_owned",
+          "--model",
+          "example/example-model",
+          ...(timeout === undefined ? [] : ["--timeout", timeout]),
+          "--",
+          "node",
+          "test-app.js",
+        ],
+        { from: "user" },
+      );
+      expect(mocks.withEgress).toHaveBeenCalledOnce();
+      expect(mocks.run).toHaveBeenCalled();
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  },
+);

@@ -324,7 +324,7 @@ function compactionUserRole(message: PersistedSenderCarrier): string {
 }
 
 /** Compaction request attribution only; admitted internal inputs still start runtime turns. */
-export function isCompactionUserRequest(message: PersistedSenderCarrier): boolean {
+function isCompactionUserRequest(message: PersistedSenderCarrier): boolean {
   return message.role === "user" && compactionUserRole(message) === "User";
 }
 

@@ -544,48 +544,55 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     }
   });
 
-  it("stops pending handoff retries at the completion deadline", async () => {
-    vi.useFakeTimers();
-    try {
-      const scheduled: Array<() => Promise<void>> = [];
-      const onWakeFailure = vi.fn();
-      const lifecycle = {
-        createTaskRun: vi.fn(),
-        recordTaskProgress: vi.fn(),
-        completeTaskRun: vi.fn(),
-        failTaskRun: vi.fn(),
-        wakeTaskCompletion: vi.fn(async () => ({ status: "pending" as const })),
-      };
-      scheduleImageCompletion({
-        lifecycle,
-        handle: admitMediaHandle({
-          taskId: "task-image-orphaned",
-          runId: "tool:image_generate:orphaned",
-          requesterSessionKey: "agent:main:cron:job:run:run-id",
-          taskLabel: "proof image",
-        }),
-        scheduleBackgroundWork: (work) => scheduled.push(work),
-        onWakeFailure,
-      });
+  it.each([-60000, 0, 60000])(
+    "stops pending handoff retries despite wall clock jump %i",
+    async (jump) => {
+      vi.useFakeTimers();
+      try {
+        const scheduled: Array<() => Promise<void>> = [];
+        const onWakeFailure = vi.fn();
+        const lifecycle = {
+          createTaskRun: vi.fn(),
+          recordTaskProgress: vi.fn(),
+          completeTaskRun: vi.fn(),
+          failTaskRun: vi.fn(),
+          wakeTaskCompletion: vi.fn(async () => ({ status: "pending" as const })),
+        };
+        scheduleImageCompletion({
+          lifecycle,
+          handle: admitMediaHandle({
+            taskId: "task-image-orphaned",
+            runId: "tool:image_generate:orphaned",
+            requesterSessionKey: "agent:main:cron:job:run:run-id",
+            taskLabel: "proof image",
+          }),
+          scheduleBackgroundWork: (work) => scheduled.push(work),
+          onWakeFailure,
+        });
 
-      const backgroundWork = scheduled[0]?.();
-      await vi.advanceTimersByTimeAsync(120_000);
-      await backgroundWork;
+        const backgroundWork = scheduled[0]?.();
+        await vi.advanceTimersByTimeAsync(0);
+        vi.setSystemTime(Date.now() + jump);
+        await vi.advanceTimersByTimeAsync(119_999);
+        expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await backgroundWork;
 
-      expect(lifecycle.wakeTaskCompletion.mock.calls.length).toBeLessThan(70);
-      expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
-        expect.objectContaining({
-          terminalResult: expect.objectContaining({ terminalOutcome: "blocked" }),
-        }),
-      );
-      expect(onWakeFailure).toHaveBeenCalledWith(
-        "Image generation completion wake failed after successful generation",
-        expect.objectContaining({ taskId: "task-image-orphaned" }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(lifecycle.wakeTaskCompletion.mock.calls.length).toBeLessThan(70);
+        expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
+          expect.objectContaining({
+            terminalResult: expect.objectContaining({ terminalOutcome: "blocked" }),
+          }),
+        );
+        expect(onWakeFailure).toHaveBeenCalledWith(
+          "Image generation completion wake failed after successful generation",
+          expect.objectContaining({ taskId: "task-image-orphaned" }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("completes a generated media task when completion delivery cannot be confirmed", async () => {
     const scheduled: Array<() => Promise<void>> = [];

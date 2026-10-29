@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolvePluginRoutePathContext } from "openclaw/plugin-sdk/gateway-config-runtime";
@@ -818,6 +818,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 });
 
 let gateway: Server;
+let gatewayResponse: ServerResponse | undefined;
 let claim: Awaited<ReturnType<typeof acquireTestPortBlock>>;
 
 function post(init: RequestInit = {}, path = "/api/messages") {
@@ -857,6 +858,7 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
         res.writeHead(404).end();
         return;
       }
+      gatewayResponse = res;
       routeState.responseWork = Promise.resolve(route.handler(req, res));
     });
     gateway.listen(claim.port, "127.0.0.1");
@@ -1023,20 +1025,28 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
     routeState.responseGate = gate.promise;
     await withMonitor(async (abort, task) => {
       try {
+        // A proxy may translate socket retirement into HTTP 502; the server's
+        // response ownership, not the client transport, is the drain contract.
         const response = post().then(
-          () => "responded",
-          () => "closed",
+          (res) => res.text(),
+          () => undefined,
         );
         await routeState.requestStarted.promise;
+        const activeResponse = gatewayResponse!;
+        expect(activeResponse.writableFinished).toBe(false);
+        expect(activeResponse.destroyed).toBe(false);
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         abort.abort();
         await vi.advanceTimersByTimeAsync(29_999);
         expect(routeState.unregister).not.toHaveBeenCalled();
         expect(getMSTeamsIngressMockState().instances[0]?.stop).not.toHaveBeenCalled();
+        expect(activeResponse.destroyed).toBe(false);
         await vi.advanceTimersByTimeAsync(1);
         await task;
         expect(routeState.unregister).toHaveBeenCalledOnce();
-        await expect(response).resolves.toBe("closed");
+        expect(activeResponse.destroyed).toBe(true);
+        expect(activeResponse.writableFinished).toBe(false);
+        await response;
         expect(vi.getTimerCount()).toBe(0);
       } finally {
         gate.resolve();

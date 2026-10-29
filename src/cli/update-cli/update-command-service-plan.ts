@@ -153,14 +153,23 @@ export function isGatewayServiceManagementAllowedForUpdate(
 }
 
 export const GATEWAY_SERVICE_INSPECTION_WARNING =
-  "Gateway service inspection is unavailable; automatic service restart was skipped. Restart the Gateway you launched manually after the update. Any recorded service definition was left unchanged; inspect it with `openclaw gateway status --deep`.";
+  "Gateway service inspection is unavailable; automatic service restart was skipped. Any recorded service definition was left unchanged; inspect it with `openclaw gateway status --deep`.";
 
 function serviceInspectionWarningMessage(state: GatewayServiceState): string {
+  const warning = [
+    GATEWAY_SERVICE_INSPECTION_WARNING,
+    state.installed || state.command?.sourcePath
+      ? "A service definition is present and was left unchanged."
+      : "",
+    "Stop the Gateway through its owner (openclaw gateway stop for the managed service), then run openclaw update repair.",
+  ]
+    .filter(Boolean)
+    .join(" ");
   if (state.inspectionReason) {
-    return `${GATEWAY_SERVICE_INSPECTION_WARNING} ${formatServiceInspectionReason(state.inspectionReason)}`;
+    return `${state.runtime?.inspectionFailure?.detail ?? formatServiceInspectionReason(state.inspectionReason)} ${warning}`;
   }
   if (process.platform === "freebsd") {
-    return `${GATEWAY_SERVICE_INSPECTION_WARNING} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
+    return `${warning} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
   }
   const runtime = state.runtime;
   const tasksCurrent = runtime?.systemd?.tasksCurrent;
@@ -172,10 +181,10 @@ function serviceInspectionWarningMessage(state: GatewayServiceState): string {
     tasksCurrent !== undefined &&
     tasksCurrent > 0
   ) {
-    return `${GATEWAY_SERVICE_INSPECTION_WARNING} Processes remain in the systemd service cgroup (${tasksCurrent} tasks). Have their owner stop them before state maintenance.`;
+    return `${warning} Processes remain in the systemd service cgroup (${tasksCurrent} tasks). Have their owner stop them before state maintenance.`;
   }
   const detail = runtime?.inspectionFailure?.detail;
-  return GATEWAY_SERVICE_INSPECTION_WARNING + (detail ? ` ${detail}` : "");
+  return warning + (detail ? ` ${detail}` : "");
 }
 
 export function observedSystemdManagerUid(state: GatewayServiceState): number | undefined {

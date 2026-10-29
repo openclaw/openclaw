@@ -112,6 +112,7 @@ export function evaluateWorkflowExpression(
     >;
     targetContextRef?: string;
     targetRef?: string;
+    testRuntimePolicy?: string;
     useGithubHostedRunners?: boolean;
     workflow?: string;
     workflowSha?: string;
@@ -202,6 +203,7 @@ export function evaluateWorkflowExpression(
       validation_tier: context.validationTier ?? "full",
       target_context_ref: context.targetContextRef ?? "",
       target_ref: context.targetRef ?? "",
+      test_runtime_policy: context.testRuntimePolicy ?? "",
       use_github_hosted_runners: context.useGithubHostedRunners ?? false,
       run_windows_ci: context.runWindowsCi ?? false,
       skip_defender_exclusions: context.skipDefenderExclusions ?? false,

@@ -27,7 +27,10 @@ import {
 } from "../infra/sqlite-worker-store.js";
 import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
-import { captureAgentDatabasePreparationJournal } from "./agent-database-admission.js";
+import {
+  captureAgentDatabasePreparationJournal,
+  recordAgentDatabaseStartupFtsRepair,
+} from "./agent-database-admission.js";
 import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import {
@@ -194,6 +197,22 @@ export function createAgentDatabaseNativeGeneration(
         }
         assertCurrent();
         cleanup?.assertCurrent();
+        if (request.stage === "prepare" && isRecord(facts) && facts.kind === "agent-startup-fts") {
+          assertSourceCurrent();
+          if (
+            !assertPreparationJournal ||
+            !lease ||
+            (facts.message !== undefined && typeof facts.message !== "string")
+          ) {
+            throw new Error("FTS repair requires live Gateway startup admission");
+          }
+          recordAgentDatabaseStartupFtsRepair(
+            [expectedIdentity?.physicalIdentity ?? pathname, expectedIdentity?.birthtime].join(":"),
+            context.admission.databasePath,
+            facts.message,
+          );
+          return undefined;
+        }
         if (!nativeIdentity || creatingIdentity) {
           assertCallerCurrent?.();
         }

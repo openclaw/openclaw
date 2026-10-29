@@ -16,6 +16,7 @@ import {
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import {
+  resolveAgentVerboseDefault,
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
@@ -541,7 +542,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             lifecycleRevision: entry.lifecycleRevision,
           })
         : undefined;
-    const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    const verboseLevel = entry?.verboseLevel ?? resolveAgentVerboseDefault(cfg, sessionAgentId);
     if (sessionInfo) {
       sessionInfo.thinkingLevel = thinkingLevel;
       sessionInfo.verboseLevel = verboseLevel;

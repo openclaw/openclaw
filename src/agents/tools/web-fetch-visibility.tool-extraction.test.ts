@@ -15,6 +15,12 @@ const MARKDOWN_PAGES: Record<string, string> = {
 
 const PAGES: Record<string, string> = {
   ...MARKDOWN_PAGES,
+  "/zero-scale": [
+    "<p>Visible article.</p>",
+    '<div style="transform:scale(0, 0)">Hidden flat content</div>',
+    '<div style="transform:scale3d(0, 0, 0)">Hidden 3D content</div>',
+    '<p style="transform:scale(0.5, 0.5)">Visible scaled content.</p>',
+  ].join(""),
   "/implicit-nested-siblings":
     "<ul><li hidden><ul><li>A<li>B</li></ul>Secret</li></ul><p>Visible</p>",
   "/unmatched-container": "<p hidden>Before</div>Secret</p><p>Visible</p>",
@@ -93,6 +99,14 @@ describe("web_fetch visibility through the real tool execute path", () => {
       .map((block) => block.text)
       .join("\n");
   }
+
+  it.each(["markdown", "text"] as const)("omits zero-scale content in %s mode", async (mode) => {
+    const text = await extract("/zero-scale", mode);
+    expect(text).toContain("Visible article.");
+    expect(text).toContain("Visible scaled content.");
+    expect(text).not.toContain("Hidden flat content");
+    expect(text).not.toContain("Hidden 3D content");
+  });
 
   it.each(["/implicit-nested-siblings", "/unmatched-container"])(
     "keeps hidden owners across %s",

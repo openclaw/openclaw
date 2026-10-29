@@ -159,6 +159,9 @@ function createCodexAuthProfileHarness(params: {
       if (method === "turn/start") {
         return turnStartResult("turn-auth-contract");
       }
+      if (method === "thread/inject_items") {
+        return {};
+      }
       throw new Error(`unexpected method: ${method}`);
     },
     {

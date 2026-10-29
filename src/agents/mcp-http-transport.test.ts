@@ -823,7 +823,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     );
     await expect(
       disposeMcpClient({ client, transport, transportType: "streamable-http" }),
-    ).resolves.toBe("uncertain");
+    ).resolves.toBe("closed");
     expect(onDelete).toHaveBeenCalledTimes(3);
   });
 

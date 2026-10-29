@@ -517,9 +517,12 @@ describe("agentCliCommand", () => {
 
   it("reads a UTF-8 message file for gateway dispatch", async () => {
     await withTempStore(async ({ dir }) => {
-      const messageFile = path.join(dir, "task.md");
+      const messageFile = path.join(dir, process.platform === "win32" ? "task.md" : " task.md ");
       const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
       fs.writeFileSync(messageFile, `\uFEFF${messageBody}`, "utf8");
+      if (process.platform !== "win32") {
+        fs.writeFileSync(messageFile.trim(), "wrong neighboring prompt", "utf8");
+      }
       mockGatewaySuccessReply();
 
       await agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime);

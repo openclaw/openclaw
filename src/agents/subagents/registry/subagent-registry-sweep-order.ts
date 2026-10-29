@@ -1,12 +1,13 @@
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { getSubagentSweepRuns } from "./subagent-registry-memory.js";
 import { isSuspendedPendingFinalDelivery } from "./subagent-registry-suspended-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 export function orderSubagentSweepEntries(runs: Map<string, SubagentRunRecord>, now: number) {
   const phases: Array<Array<[string, SubagentRunRecord]>> = Array.from({ length: 7 }, () => []);
-  for (const item of runs) {
-    const [runId, entry] = item;
+  for (const entry of getSubagentSweepRuns(runs, now)) {
+    const runId = entry.runId;
     const phase = entry.requesterSettleWake
       ? 0
       : isSuspendedPendingFinalDelivery(entry)
@@ -20,7 +21,7 @@ export function orderSubagentSweepEntries(runs: Map<string, SubagentRunRecord>, 
             : entry.killReconciliation
               ? 5
               : 6;
-    phases[phase]!.push(item);
+    phases[phase]!.push([runId, entry]);
   }
   return phases.flat();
 }

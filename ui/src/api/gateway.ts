@@ -234,10 +234,12 @@ export class GatewayBrowserClient {
             error: error instanceof GatewayRequestError ? toGatewayErrorInfo(error) : undefined,
             willRetry: decision.retry,
           };
+          // Known failures must reach the UI before a retry can retire the liveness probe.
           if (
             decision.retry &&
             !context.socketOpened &&
             context.code === BROWSER_WEBSOCKET_CLOSE_CODE &&
+            !context.reason &&
             !info.error
           ) {
             const probe = new AbortController();
@@ -329,7 +331,8 @@ export class GatewayBrowserClient {
   }
 
   get needsWakeReconnect() {
-    if (this.pendingPairing || this.pairingFailure) {
+    // Replacing an in-flight upgrade drops it before a busy Gateway can answer.
+    if (this.pendingPairing || this.pairingFailure || this.client.opening) {
       return false;
     }
     return (

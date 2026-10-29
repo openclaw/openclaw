@@ -1,6 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { parseCodexNativeToolCatalog } from "./native-tool-catalog.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as clientRuntime from "./client-runtime.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import {
+  loadCodexAttemptNativeToolCatalog,
+  loadCodexNativeToolCatalog,
+  parseCodexNativeToolCatalog,
+} from "./native-tool-catalog.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
+import { createAppServerOptions } from "./thread-lifecycle.test-fixtures.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const threadId = "native-thread";
 const tool = {
@@ -44,4 +54,53 @@ describe("parseCodexNativeToolCatalog", () => {
       ),
     ).toEqual([tool]);
   });
+});
+
+it("rejects revoked current authority before acquiring a client or reading a native catalog", async () => {
+  const acquireClient = vi.fn();
+  const releaseClient = vi.fn();
+  await expect(
+    loadCodexAttemptNativeToolCatalog({
+      binding: {
+        threadId,
+        cwd: "/workspace",
+        connectionScope: "supervision",
+        dynamicToolsFingerprint: codexDynamicToolsFingerprint([tool]),
+      },
+      appServer: createAppServerOptions(),
+      agentDir: "/workspace/agent",
+      signal: new AbortController().signal,
+      acquireClient,
+      releaseClient,
+      assertCurrent: () => {
+        throw new Error("current owner authority revoked");
+      },
+    }),
+  ).rejects.toThrow("current owner authority revoked");
+  expect(acquireClient).not.toHaveBeenCalled();
+  expect(releaseClient).not.toHaveBeenCalled();
+});
+
+it("does not read retained declarations through an identityless native connection", async () => {
+  const native = createFakeCodexAppServerClient(async () => ({}));
+  const readMetadata = vi.spyOn(clientRuntime, "readCodexClientSessionMeta");
+  const appServer = createAppServerOptions();
+  const agentDir = "/workspace/agent";
+  await expect(
+    loadCodexNativeToolCatalog({
+      client: native.client,
+      binding: {
+        threadId,
+        cwd: "/workspace",
+        connectionScope: "supervision",
+        dynamicToolsFingerprint: codexDynamicToolsFingerprint([tool]),
+        appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(appServer, agentDir),
+      },
+      appServer,
+      agentDir,
+      assertCurrent: () => {},
+    }),
+  ).rejects.toThrow("original verified local binding and selected native connection");
+  expect(readMetadata).not.toHaveBeenCalled();
+  expect(native.request).not.toHaveBeenCalled();
 });

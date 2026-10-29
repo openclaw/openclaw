@@ -68,6 +68,73 @@ async function receive(params: Record<string, unknown>, authority = true) {
 }
 
 describe("backup outcome ownership", () => {
+  it("rejects non-decimal and unsafe byte counts before recording", async () => {
+    await fixture();
+    const runtime = createTestRuntime();
+    for (const bytes of [
+      "0x10",
+      "1e3",
+      "0b101",
+      "0o17",
+      "2.0",
+      "0.5",
+      "12abc",
+      "",
+      "-1",
+      "9007199254740992",
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      await expect(
+        backupRecordCommand(runtime, { status: "ok", target: "invalid", bytes, json: true }),
+      ).rejects.toThrow("--bytes must be a nonnegative integer.");
+    }
+    expect(await readBackupRuns(process.env)).toEqual([]);
+    expect(transport.call).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("records decimal, numeric, zero, and omitted byte counts", async () => {
+    await fixture();
+    const runtime = createTestRuntime();
+    for (const [target, bytes] of [
+      ["decimal", "42"],
+      ["zero", "0"],
+      ["number", 512],
+      ["omitted", undefined],
+    ] as const) {
+      await backupRecordCommand(runtime, { status: "ok", target, bytes, json: true });
+    }
+    const runs = await readBackupRuns(process.env);
+    expect(runs).toHaveLength(4);
+    expect(runs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: "decimal", bytes: 42 }),
+        expect.objectContaining({ target: "zero", bytes: 0 }),
+        expect.objectContaining({ target: "number", bytes: 512 }),
+      ]),
+    );
+    expect(runs.find((run) => run.target === "omitted")).not.toHaveProperty("bytes");
+  });
+
+  it("escapes terminal controls in record output while preserving persisted and JSON targets", async () => {
+    await fixture();
+    const runtime = createTestRuntime();
+    const target = "café\u001b[31m\nforged\tend\rrow\u0007";
+    await backupRecordCommand(runtime, { status: "ok", target, bytes: "42" });
+    expect(runtime.log).toHaveBeenCalledWith("External backup: café\\nforged\\tend\\rrow (ok)");
+    expect(await readBackupRuns(process.env)).toMatchObject([
+      { target, archivePath: target, bytes: 42 },
+    ]);
+    vi.mocked(runtime.log).mockClear();
+    await backupRecordCommand(runtime, { status: "ok", target, json: true });
+    expect(JSON.parse(String(vi.mocked(runtime.log).mock.lastCall?.[0]))).toMatchObject({
+      target,
+      archivePath: target,
+    });
+  });
+
   it("records offline under exclusive custody and leaves an absent database absent", async () => {
     const { databasePath } = await fixture(false);
     const runtime = createTestRuntime();

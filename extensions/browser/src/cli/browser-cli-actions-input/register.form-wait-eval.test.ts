@@ -207,6 +207,17 @@ describe("browser action input evaluate command", () => {
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
+  it("rejects a missing evaluate function before dispatch", async () => {
+    getBrowserCliRuntime().error.mockClear();
+    getBrowserCliRuntime().exit.mockClear();
+    await expect(
+      createActionInputProgram().parseAsync(["browser", "evaluate"], { from: "user" }),
+    ).rejects.toThrow("Missing --fn");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(getBrowserCliRuntime().error).not.toHaveBeenCalled();
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+  });
+
   it.each([{ rawTimeout: "1", actionTimeoutMs: 1, requestTimeoutMs: 6_252 }])(
     "preserves the $rawTimeout evaluate timeout and canonical outer deadline",
     async ({ rawTimeout, actionTimeoutMs, requestTimeoutMs }) => {

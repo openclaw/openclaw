@@ -19,6 +19,7 @@ import type { stageSessionPendingInput } from "../../config/sessions/session-acc
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { createSessionResetFixture } from "./agent.session-reset-mock.test-support.js";
 import {
   createAgentTestUserTurnRecorder,
   getAgentTestStorePath,
@@ -27,6 +28,10 @@ import {
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   updateSessionStore: vi.fn(),
+  resetSessionEntryLifecycle:
+    vi.fn<
+      typeof import("../../config/sessions/session-accessor.lifecycle.js").resetSessionEntryLifecycle
+    >(),
   applySessionEntryReplacements: vi.fn(),
   patchSessionEntryTarget: vi.fn(),
   persistSessionTranscriptTurn: vi.fn(),
@@ -172,6 +177,12 @@ vi.mock("../../config/sessions.js", async () => {
 });
 
 // mock-isolation: Handler fixtures supply lifecycle timestamps without opening transcript readers.
+vi.mock("../../config/sessions/session-accessor.lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.lifecycle.js")>()),
+  resetSessionEntryLifecycle: mocks.resetSessionEntryLifecycle,
+}));
+
+// mock-isolation: Handler lifecycle timestamps come from fixture mocks without reading real transcripts.
 vi.mock("../../config/sessions/lifecycle-read.js", () => ({
   hasTerminalMainSessionTranscriptNewerThanRegistryAsync: async () => false,
   resolveSessionLifecycleTimestampsAsync: async (
@@ -546,6 +557,9 @@ function selectFreshestTargetFixtureEntry(
 }
 
 export function resetSessionAccessorMocks() {
+  mocks.resetSessionEntryLifecycle
+    .mockReset()
+    .mockImplementation(createSessionResetFixture(mocks.patchSessionEntryTarget));
   // These handler fixtures own an in-memory store. Real admission durability
   // and execution-time promotion are covered by the gateway-server suites.
   mocks.stageSessionPendingInput.mockReset().mockImplementation(async (_scope, options) => {

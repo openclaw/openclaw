@@ -91,6 +91,7 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
     cumCost += p.cost;
     return {
       timestamp: p.timestamp,
+      totalTokens: p.totalTokens,
       input: p.input,
       output: p.output,
       cacheRead: p.cacheRead,
@@ -120,8 +121,9 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
   }
 
   const filteredPoints = hasSelection ? points.slice(rangeStartIdx, rangeEndIdx) : points;
-  const filteredTokens = { output: 0, input: 0, cacheRead: 0, cacheWrite: 0 };
+  const filteredTokens = { totalTokens: 0, output: 0, input: 0, cacheRead: 0, cacheWrite: 0 };
   for (const p of filteredPoints) {
+    filteredTokens.totalTokens += p.totalTokens;
     for (const { key } of USAGE_TOKEN_CATEGORIES) {
       filteredTokens[key] += p[key];
     }
@@ -140,7 +142,7 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
 
   const formatAxisTimestamp = (timestamp: number) =>
     formatTimeMs(timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "");
-  const totalTypeTokens = Object.values(filteredTokens).reduce(
+  const totalTypeTokens = USAGE_TOKEN_CATEGORIES.map(({ key }) => filteredTokens[key]).reduce(
     (total, tokens) => total + tokens,
     0,
   );
@@ -580,7 +582,7 @@ function TimeSeriesChart(props: {
             {model().formatAxisTimestamp(model().rangeStartTs)}–
             {model().formatAxisTimestamp(model().rangeEndTs)}
             {" · "}
-            {formatUsageTokens(model().totalTypeTokens)}
+            {formatUsageTokens(model().filteredTokens.totalTokens)}
             {" · "}
             {formatUsageCost(model().filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
           </>

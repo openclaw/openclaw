@@ -12,6 +12,32 @@ import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 describe("async work scope", () => {
+  it.each([false, true])(
+    "restores unrelated caller stores on scope return or throw: %s",
+    (throws) => {
+      const scope = new AsyncWorkScope();
+      const caller = new AsyncLocalStorage<string>();
+      caller.run("caller", () => {
+        const invoke = () =>
+          scope.run(() => {
+            expect(isAsyncWorkScopeActiveHere(scope)).toBe(true);
+            caller.enterWith("changed");
+            if (throws) {
+              throw new Error("scope callback failed");
+            }
+          });
+        if (throws) {
+          expect(invoke).toThrow("scope callback failed");
+        } else {
+          invoke();
+        }
+        expect(caller.getStore()).toBe("caller");
+        expect(isAsyncWorkScopeActiveHere(scope)).toBe(false);
+      });
+      caller.disable();
+    },
+  );
+
   it.each(["released caller", "released helper"])(
     "joins work across the shipped scope carrier with a %s",
     async (direction) => {

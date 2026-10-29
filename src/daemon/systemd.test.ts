@@ -1464,6 +1464,28 @@ describe("stageSystemdService", () => {
     });
   });
 
+  it("leaves an unsafe legacy unit intact for full installer regeneration", async () => {
+    const { env, unitPath } = await createSystemdFixture("gateway");
+    const previous = [
+      "[Unit]",
+      "Description=OpenClaw Gateway (v2026.6.35)",
+      "[Service]",
+      "ExecStart=/usr/bin/openclaw gateway",
+      "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
+      "Environment=OPENCLAW_SERVICE_KIND=gateway",
+      "Environment=OPENCLAW_SERVICE_VERSION=2026.6.35",
+      "",
+    ].join("\n");
+    await writeUnitFixture(unitPath, previous);
+    await fs.chmod(unitPath, 0o664);
+
+    await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(false);
+
+    expect(await fs.readFile(unitPath, "utf8")).toBe(previous);
+    expect((await fs.stat(unitPath)).mode & 0o777).toBe(0o664);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "reset managed markers", version: "2026.7.1-2", reset: true, admitted: undefined },
     {
@@ -2121,7 +2143,7 @@ describe("systemd service install and uninstall", () => {
     },
   );
 
-  it.each(["operator-values", "password-only", "unlink-refused"] as const)(
+  it.each(["operator-values", "password-only", "unlink-refused", "reload-failed"] as const)(
     "uninstalls the selected node unit and cleans credentials only after removal: %s",
     async (scenario) => {
       const { env, unitPath, nodeEnvFilePath } = await createSystemdFixture("node");
@@ -2158,10 +2180,23 @@ describe("systemd service install and uninstall", () => {
         vi.spyOn(fs, "unlink").mockRejectedValueOnce(
           Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
         );
+      } else {
+        execFileMock.mockImplementationOnce(
+          systemctlUserResult(
+            scenario === "reload-failed"
+              ? [createExecFileError("bus unavailable", { code: 1 }), "", "Bus unavailable"]
+              : [null, "", ""],
+            "daemon-reload",
+          ),
+        );
       }
       const { write, stdout } = createWritableStreamMock();
       const operation = uninstallSystemdService({ env, stdout });
-      if (scenario === "unlink-refused") {
+      if (scenario === "reload-failed") {
+        await expect(operation).rejects.toThrow("systemctl daemon-reload failed: Bus unavailable");
+        await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.readFile(nodeEnvFilePath, "utf8")).resolves.toBe(retained);
+      } else if (scenario === "unlink-refused") {
         await expect(operation).rejects.toThrow("EACCES: permission denied");
         await expect(fs.readFile(unitPath, "utf8")).resolves.toContain("OpenClaw Node");
         await expect(fs.readFile(`${unitPath}.bak`, "utf8")).resolves.toContain(
@@ -2179,7 +2214,14 @@ describe("systemd service install and uninstall", () => {
           expect(requireFirstWrite(write)).toContain("Removed systemd service");
         }
       }
-      expect(execFileMock).toHaveBeenCalledTimes(2);
+      expect(execFileMock).toHaveBeenCalledTimes(scenario === "unlink-refused" ? 2 : 3);
+      if (scenario !== "unlink-refused") {
+        expect(execFileMock.mock.calls.map(([, args]) => args[1])).toEqual([
+          "status",
+          "disable",
+          "daemon-reload",
+        ]);
+      }
     },
   );
 });

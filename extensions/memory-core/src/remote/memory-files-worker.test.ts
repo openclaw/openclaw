@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -172,3 +174,26 @@ it.each(["input end", "output error"] as const)(
     }
   },
 );
+
+it("preserves the malformed diary error code across the remote file protocol", async () => {
+  const dreamsPath = path.join(state.workspaceDir, "DREAMS.md");
+  const bytes = Buffer.concat([Buffer.from("# Dream Diary"), Buffer.from([0xff])]);
+  await fs.writeFile(dreamsPath, bytes);
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const worker = serveMemoryFiles({ workspace: state.workspaceDir, input, output });
+  try {
+    input.end(
+      JSON.stringify({ operation: "maintenance", method: "readDreams", args: [dreamsPath] }),
+    );
+    await worker;
+    expect(JSON.parse(String(output.read()))).toMatchObject({
+      error: { code: "ERR_INVALID_UTF8", message: expect.stringContaining("must be valid UTF-8") },
+    });
+    expect(await fs.readFile(dreamsPath)).toEqual(bytes);
+  } finally {
+    input.end();
+    await worker;
+    output.destroy();
+  }
+});

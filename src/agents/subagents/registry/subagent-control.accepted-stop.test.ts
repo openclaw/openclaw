@@ -33,9 +33,11 @@ import {
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
+import { killSessionSubagentRuns } from "./subagent-control-kill.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
+  captureSubagentRetainedWork,
   getSubagentExecutionCleanup,
   retireSubagentGatewayBinding,
 } from "./subagent-registry-execution-cleanup.js";
@@ -132,6 +134,110 @@ it.each([
     }
   },
 );
+
+it("session cleanup joins terminal controller disposal after its resolver is cleared", async () => {
+  const target = await seedExecutionTarget(
+    "terminal-disposal",
+    "retain physical cleanup",
+    "original-revision",
+  );
+  const registration = registerChatAbortController({
+    chatAbortControllers: target.context.chatAbortControllers,
+    runId: target.runId,
+    sessionKey: target.sessionKey,
+    sessionId: target.sessionId,
+    kind: "agent",
+    timeoutMs: 60_000,
+  });
+  const releaseTail = createDeferred();
+  const execution = runWithChatAbortExecution(
+    registration.entry!,
+    () => releaseTail.promise,
+    registration.cleanup,
+  );
+  let pending: ReturnType<typeof killSessionSubagentRuns> | undefined;
+  let observingStop = false;
+  const joined = createDeferred();
+  const settlement = observeExecutionJoin(registration.entry!, () => {
+    if (observingStop) {
+      joined.resolve();
+    }
+  });
+  try {
+    emitAgentEvent({
+      runId: target.runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: Date.now(),
+        terminalReply: { disposition: "visible", text: "completed" },
+      },
+    });
+    await fixture.settle();
+    const entry = expectDefined(subagentRuns.get(target.runId), "terminal child");
+    expect(entry.execution.status).toBe("terminal");
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expect(getGatewayContextResolver(entry)).toBeUndefined();
+    observingStop = true;
+    pending = killSessionSubagentRuns({
+      cfg: getRuntimeConfig(),
+      sessionKey: entry.requesterSessionKey,
+      agentId: "main",
+    });
+    await awaitGateBeforeSettlement(
+      joined.promise,
+      pending,
+      "Reset did not join controller disposal",
+    );
+    expect(settlement.status).toBe("pending");
+    releaseTail.resolve();
+    await expect(pending).resolves.toMatchObject({ status: "ok", killed: 0 });
+    await execution;
+    expect(settlement.status).toBe("fulfilled");
+  } finally {
+    releaseTail.resolve();
+    await Promise.allSettled([pending, execution]);
+    registration.cleanup();
+  }
+});
+
+it("captures terminal descendant topology without looping or following later replacements", () => {
+  const terminal = (id: string, controller: string) => ({
+    runId: id,
+    childSessionKey: "agent:main:subagent:" + id,
+    childAgentId: "main",
+    requesterAgentId: "main",
+    requesterSessionKey: controller,
+    controllerSessionKey: controller,
+    requesterDisplayKey: "main",
+    task: id,
+    createdAt: 1,
+    generation: 1,
+    cleanup: "keep" as const,
+    execution: { status: "terminal" as const, endedAt: 2 },
+    delivery: { status: "delivered" as const },
+    cleanupCompletedAt: 3,
+  });
+  const root = terminal("cycle-root", "agent:main:subagent:cycle-child");
+  const child = terminal("cycle-child", root.childSessionKey);
+  subagentRuns.set(root.runId, root);
+  subagentRuns.set(child.runId, child);
+  const original = captureSubagentRetainedWork();
+  expect(original(root)).toBe(false);
+  expect(original(child)).toBe(false);
+  const successor = { ...child, generation: 2, execution: { status: "running" as const } };
+  subagentRuns.set(child.runId, successor);
+  expect(original(root)).toBe(false);
+  expect(captureSubagentRetainedWork()(root)).toBe(true);
+  const unrelatedOwner = {
+    ...successor,
+    childAgentId: "other",
+    requesterAgentId: "other",
+    controllerSessionKey: "agent:other:subagent:cycle-root",
+  };
+  subagentRuns.set(child.runId, unrelatedOwner);
+  expect(captureSubagentRetainedWork()(root)).toBe(false);
+});
 
 function observeExecutionJoin(entry: ChatAbortControllerEntry, selected: () => void) {
   const settlement = entry.executionSettlement!;

@@ -1,8 +1,12 @@
 import type fs from "node:fs";
+import path from "node:path";
+import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { hasErrnoCode } from "../infra/errno.js";
+import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import type { captureConfigAuditAppender } from "./io.audit.js";
 import type { captureConfigHealthStateStore } from "./io.health-state.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
+import { resolveStateDir } from "./paths.js";
 
 export type ConfigRecoveryEffect<T> = {
   sync: () => T;
@@ -98,5 +102,53 @@ export function createConfigBackupReadEffect(
       }
     },
     async: () => deps.fs.promises.readFile(backupPath, "utf-8").catch(unavailable),
+  };
+}
+
+/** Atomically replaces the config file, revalidating observation ownership before rename. */
+export function createRecoveryCommitEffect(params: {
+  deps: Pick<NormalizedConfigIoDeps, "fs" | "env" | "homedir">;
+  configPath: string;
+  raw: string;
+  beforeCommit?: () => void;
+}): ConfigRecoveryEffect<boolean> {
+  const options = {
+    filePath: params.configPath,
+    content: params.raw,
+    dirMode:
+      readExistingStateRootMode(
+        path.dirname(params.configPath),
+        resolveStateDir(params.deps.env, params.deps.homedir),
+        params.deps.fs,
+      ) ?? 0o700,
+    mode: 0o600,
+    tempPrefix: path.basename(params.configPath),
+    fileSystem: params.deps.fs,
+  };
+  return {
+    sync: () => {
+      replaceFileAtomicSync(options);
+      return true;
+    },
+    async: (health) =>
+      commitRecoveryFileIfCurrent({
+        health,
+        beforeCommit: params.beforeCommit,
+        write: (assertCurrent) =>
+          replaceFileAtomic({
+            ...options,
+            // Every rename attempt must revalidate; copy fallback has no final guard.
+            copyFallbackOnPermissionError: false,
+            fileSystem: {
+              promises: {
+                ...params.deps.fs.promises,
+                rename: (source: fs.PathLike, destination: fs.PathLike) => {
+                  assertCurrent();
+                  return params.deps.fs.promises.rename(source, destination);
+                },
+              },
+            },
+          }),
+      }),
   };
 }

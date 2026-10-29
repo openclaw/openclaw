@@ -5,7 +5,7 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { createSolidPngBuffer, createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -160,6 +160,66 @@ afterAll(async () => {
 });
 
 describe("loadWebMedia", () => {
+  it("preserves unknown image extensions", async () => {
+    const result = await media.loadWebMedia("https://example.test/portrait.mystery", {
+      fetchImpl: vi.fn(
+        async () =>
+          new Response("unknown image bytes", {
+            headers: { "content-type": "image/x-private-format" },
+          }),
+      ),
+      ssrfPolicy: { allowedHostnames: ["example.test"] },
+      optimizeImages: false,
+    });
+    expect([result.kind, result.contentType, result.fileName]).toEqual([
+      "image",
+      "image/x-private-format",
+      "portrait.mystery",
+    ]);
+  });
+  it.each([true, false])(
+    "reconciles sniffed image names with optimizeImages=%s while preserving raw metadata",
+    async (optimizeImages) => {
+      const file = await writeFile("converted.webp", TINY_PNG);
+      const options = { ...localOptions(), optimizeImages };
+      const result = await media.loadWebMedia(file, options);
+      expect([result.contentType, result.fileName]).toEqual(["image/png", "converted.png"]);
+      expect(result.buffer).toEqual(TINY_PNG);
+
+      const raw = await media.loadWebMediaRaw(file, options);
+      expect([raw.contentType, raw.fileName]).toEqual(["image/png", "converted.webp"]);
+      expect(raw.buffer).toEqual(TINY_PNG);
+    },
+  );
+
+  it.each([
+    {
+      fileName: String.raw`C:\fixtures\portrait.PNG`,
+      contentType: "image/png",
+      buffer: TINY_PNG,
+      expectedName: "portrait.PNG",
+    },
+    {
+      fileName: String.raw`C:\fixtures\portrait.JpEg`,
+      contentType: "image/jpeg",
+      buffer: createTinyJpegBuffer(),
+      expectedName: "portrait.JpEg",
+    },
+  ])(
+    "strips preserved image paths without changing matching aliases ($contentType)",
+    async ({ fileName, contentType, buffer, expectedName }) => {
+      const result = await media.optimizeImageBufferForWebMedia({
+        fileName,
+        contentType,
+        buffer,
+        maxBytes: 1024 * 1024,
+      });
+      expect(result.contentType).toBe(contentType);
+      expect(result.fileName).toBe(expectedName);
+      expect(result.buffer).toBe(buffer);
+    },
+  );
+
   it("loads encoded uppercase file URLs from reply directives without stripping ordinary UUID filenames", async () => {
     const fileName = "café 100% image---a1b2c3d4-5678-90ab-cdef-1234567890ab.png";
     const file = await writeFile(fileName, TINY_PNG);
@@ -260,7 +320,7 @@ describe("loadWebMedia", () => {
     );
   });
 
-  it("preserves oriented JPEG bytes with a stale HEIF filename and model limits", async () => {
+  it("preserves oriented JPEG bytes and corrects a stale HEIF filename with model limits", async () => {
     const jpeg = await resizeToJpeg({
       buffer: createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 }),
       maxSide: 32,
@@ -280,7 +340,7 @@ describe("loadWebMedia", () => {
     });
     expect(result.buffer).toEqual(buffer);
     expect(result.contentType).toBe("image/jpeg");
-    expect(result.fileName).toBe("portrait.heif");
+    expect(result.fileName).toBe("portrait.jpg");
   });
 
   it("preserves the explicit GIF byte cap for optimized remote media", async () => {

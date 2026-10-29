@@ -321,7 +321,8 @@ export async function handleAcpCancelAction(
 
 export async function handleAcpSteerAction(
   params: HandleCommandsParams,
-  restTokens: string[],
+  _restTokens: string[],
+  restText: string,
 ): Promise<CommandHandlerResult> {
   const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
   if (dispatchPolicyError) {
@@ -332,7 +333,7 @@ export async function handleAcpSteerAction(
     );
   }
 
-  const parsed = parseSteerInput(restTokens);
+  const parsed = parseSteerInput(restText);
   if (!parsed.ok) {
     return commandReply(`⚠️ ${parsed.error}`);
   }

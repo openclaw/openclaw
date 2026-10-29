@@ -68,7 +68,8 @@ import { assertUpdatePackageActivationAdmission } from "./update-command-package
 import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
-import type { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
+import { inspectPackageEngineAdmission } from "./update-command-runtime-admission.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
@@ -362,6 +363,10 @@ export async function resolveUpdateCommandTarget(
       // The service runtime can differ even when its package root matches the shell.
       let managedServiceNodeRunner: string | undefined;
       let packageUpdateNodeRunner: string | undefined;
+      let admittedPackageRuntime:
+        | import("../../infra/package-update-activation-runtime.types.js").PackageActivationRuntime
+        | undefined;
+      let assertPackageRuntimeCurrent: (() => Promise<void>) | undefined;
       let serviceUnitTarget: string | undefined;
 
       if (updateInstallKind === "package") {
@@ -596,6 +601,50 @@ export async function resolveUpdateCommandTarget(
           endedAtMs: Date.now(),
         },
       });
+      if (
+        updateInstallKind === "package" &&
+        !opts.dryRun &&
+        !packageAlreadyCurrent &&
+        canResolveRegistryVersionForPackageTarget(packageInstallSpec ?? tag) &&
+        packageRuntimeTarget?.nodeEngine
+      ) {
+        // Candidate admission can stage before the activation runtime check.
+        const runtimeAdmission = await inspectPackageEngineAdmission({
+          channel,
+          requestedChannel,
+          target: packageRuntimeTarget,
+          root,
+          nodeRunner: managedServiceNodeRunner ?? packageUpdateNodeRunner,
+          timeoutMs: updateStepTimeoutMs,
+          shouldRestart: prepared.shouldRestart,
+          invocationCwd,
+        }).catch(async (error: unknown) => {
+          if (hasCommandProcessCleanupError(error) || !(error instanceof UpdatePreMutationError)) {
+            throw error;
+          }
+          await refuseUpdate(error.reason, error.message, error.failureFacts, error.recoverySteps);
+          return undefined;
+        });
+        if (!runtimeAdmission) {
+          return undefined;
+        }
+        const { runtime, assertCurrent } = runtimeAdmission;
+        if (!runtime.ok) {
+          await refuseUpdate(
+            "preflight-node-runtime-incompatible",
+            runtime.error,
+            runtime.failureFacts,
+            runtime.recoverySteps,
+          );
+          return undefined;
+        }
+        if (runtime.value.replacedNodeRunner) {
+          packageUpdateNodeRunner = runtime.value.nodeRunner;
+          admittedPackageRuntime = runtime.value.activationRuntime;
+          assertPackageRuntimeCurrent = assertCurrent;
+        }
+      }
+
       // No-op updates need no candidate snapshot; package-space warnings remain advisory above.
       if (
         updateInstallKind === "package" &&
@@ -653,6 +702,8 @@ export async function resolveUpdateCommandTarget(
         managedServiceRoot,
         managedServiceNodeRunner,
         packageUpdateNodeRunner,
+        ...(assertPackageRuntimeCurrent ? { assertPackageRuntimeCurrent } : {}),
+        ...(admittedPackageRuntime ? { admittedPackageRuntime } : {}),
         devTarget,
       };
     });

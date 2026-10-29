@@ -392,6 +392,9 @@ function ScalarInput(props: {
         !props.params.compact &&
         props.params.value === undefined &&
         state().effectiveValue !== undefined &&
+        event.currentTarget instanceof HTMLInputElement &&
+        event.currentTarget.value === "" &&
+        !event.currentTarget.validity.badInput &&
         (event.key === "ArrowUp" || event.key === "ArrowDown")
       ) {
         event.preventDefault();

@@ -1,6 +1,6 @@
 // Telegram tests cover forum reaction topic recovery before authorization and routing.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramDirectConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
@@ -22,9 +22,9 @@ import { createTelegramEventBindings } from "./bot-handlers.event-bindings.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import { createTelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
+import { makeTelegramConfig } from "./bot.config.test-support.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { setTelegramRuntime } from "./runtime.js";
-import type { TelegramThreadSpec } from "./thread-spec.js";
 
 const FIRE_EMOJI = "\u{1F525}";
 const FORUM_CHAT_ID = -1005678;
@@ -37,10 +37,7 @@ const enqueueRoutedSystemEvent = vi.fn();
 const runtimeLog = vi.fn();
 const runtimeError = vi.fn();
 const resolveCachedMessageThreadSpec = vi.fn<
-  (params: {
-    chatId: number | string;
-    messageId: number | string;
-  }) => Promise<TelegramThreadSpec | undefined>
+  ReturnType<typeof createTelegramMessagePipeline>["resolveCachedMessageThreadSpec"]
 >(async () => undefined);
 
 function buildTelegramConfig(overrides?: {
@@ -63,6 +60,32 @@ function buildTelegramConfig(overrides?: {
       },
     },
   } as OpenClawConfig;
+}
+
+function buildPrivateTopicConfig({
+  direct,
+  requireTopic = true,
+  topicEnabled = true,
+}: {
+  direct?: Omit<TelegramDirectConfig, "topics" | "requireTopic">;
+  requireTopic?: boolean;
+  topicEnabled?: boolean;
+} = {}): OpenClawConfig {
+  return makeTelegramConfig(
+    {
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      reactionNotifications: "all",
+      direct: {
+        "5678": {
+          ...direct,
+          requireTopic,
+          topics: { [String(FORUM_TOPIC_ID)]: { enabled: topicEnabled, agentId: "topicbot" } },
+        },
+      },
+    },
+    { session: { dmScope: "per-channel-peer" } },
+  );
 }
 
 /**
@@ -128,6 +151,7 @@ function forumReactionContext(overrides?: {
   isForum?: boolean;
   isDirectMessages?: boolean;
   chatType?: string;
+  user?: { id: number; first_name: string };
 }) {
   return {
     update: { update_id: 900 },
@@ -139,12 +163,16 @@ function forumReactionContext(overrides?: {
         ...(overrides?.isDirectMessages ? { is_direct_messages: true } : {}),
       },
       message_id: REACTED_MESSAGE_ID,
-      user: { id: 10, first_name: "Bob", username: "bob_user" },
+      user: overrides?.user ?? { id: 10, first_name: "Bob", username: "bob_user" },
       date: 1736380800,
       old_reaction: overrides?.oldReaction ?? [],
       new_reaction: overrides?.newReaction ?? [{ type: "emoji", emoji: FIRE_EMOJI }],
     },
   };
+}
+
+function privateReaction(overrides?: { user?: { id: number; first_name: string } }) {
+  return forumReactionContext({ ...overrides, chatType: "private", isForum: false });
 }
 
 function systemEventOptions(): { sessionKey?: string; contextKey?: string } {
@@ -316,7 +344,10 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
   });
 
   it("routes a recovered topic through its configured topic agent", async () => {
-    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
+    resolveCachedMessageThreadSpec.mockResolvedValue({
+      threadSpec: { scope: "forum", id: FORUM_TOPIC_ID },
+      isTopicMessage: false,
+    });
     const handler = registerHandler(
       buildTelegramConfig({
         topics: { [String(FORUM_TOPIC_ID)]: { enabled: true, agentId: "topicbot" } },
@@ -330,7 +361,10 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
   });
 
   it("applies the recovered topic's disabled config instead of the General topic's", async () => {
-    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
+    resolveCachedMessageThreadSpec.mockResolvedValue({
+      threadSpec: { scope: "forum", id: FORUM_TOPIC_ID },
+      isTopicMessage: false,
+    });
     const handler = registerHandler(
       buildTelegramConfig({
         topics: { "1": { enabled: true }, [String(FORUM_TOPIC_ID)]: { enabled: false } },
@@ -361,8 +395,8 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
 
   it("routes channel Direct Messages reactions through topic config and agent", async () => {
     resolveCachedMessageThreadSpec.mockResolvedValue({
-      scope: "direct-messages",
-      id: FORUM_TOPIC_ID,
+      threadSpec: { scope: "direct-messages", id: FORUM_TOPIC_ID },
+      isTopicMessage: false,
     });
     const handler = registerHandler(
       buildTelegramConfig({
@@ -381,7 +415,24 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
 
   it.each([
     { name: "cache miss", recovered: undefined },
-    { name: "scope mismatch", recovered: { scope: "forum" as const, id: FORUM_TOPIC_ID } },
+    {
+      name: "missing topic id",
+      recovered: { threadSpec: { scope: "direct-messages" as const }, isTopicMessage: false },
+    },
+    {
+      name: "invalid topic id",
+      recovered: {
+        threadSpec: { scope: "direct-messages" as const, id: Number.NaN },
+        isTopicMessage: false,
+      },
+    },
+    {
+      name: "scope mismatch",
+      recovered: {
+        threadSpec: { scope: "forum" as const, id: FORUM_TOPIC_ID },
+        isTopicMessage: false,
+      },
+    },
   ])("drops a channel Direct Messages reaction on $name", async ({ recovered }) => {
     resolveCachedMessageThreadSpec.mockResolvedValue(recovered);
     const handler = registerHandler(buildTelegramConfig());
@@ -392,6 +443,105 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     expect(runtimeLog).toHaveBeenCalledTimes(1);
     expect(String(runtimeLog.mock.calls[0]?.[0])).toContain("thread-context-unavailable");
   });
+
+  it.each([
+    { isTopicMessage: true, sessionKey: "agent:topicbot:telegram:direct:5678:thread:5678:77" },
+    { isTopicMessage: false, sessionKey: "agent:topicbot:telegram:direct:5678" },
+  ])(
+    "routes a cached private-chat thread like its messages (topic: $isTopicMessage)",
+    async ({ isTopicMessage, sessionKey }) => {
+      resolveCachedMessageThreadSpec.mockResolvedValue({
+        threadSpec: { scope: "dm", id: FORUM_TOPIC_ID },
+        isTopicMessage,
+      });
+      enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+      await registerHandler(buildPrivateTopicConfig())(
+        privateReaction({ user: { id: 5678, first_name: "Bob" } }),
+      );
+
+      expect(resolveCachedMessageThreadSpec).toHaveBeenCalledWith({
+        chatId: 5678,
+        messageId: REACTED_MESSAGE_ID,
+      });
+      expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
+      expect(peekSystemEventEntries(sessionKey)).toEqual([
+        expect.objectContaining({
+          text: `Telegram reaction added: ${FIRE_EMOJI} by Bob on msg 100`,
+        }),
+      ]);
+    },
+  );
+
+  it("rejects a private reaction whose cached topic belongs to another scope", async () => {
+    resolveCachedMessageThreadSpec.mockResolvedValue({
+      threadSpec: { scope: "forum", id: FORUM_TOPIC_ID },
+      isTopicMessage: true,
+    });
+    await registerHandler(buildPrivateTopicConfig())(
+      privateReaction({ user: { id: 5678, first_name: "Bob" } }),
+    );
+    expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("drops a cached private-topic reaction when that topic is disabled", async () => {
+    resolveCachedMessageThreadSpec.mockResolvedValue({
+      threadSpec: { scope: "dm", id: FORUM_TOPIC_ID },
+      isTopicMessage: true,
+    });
+    await registerHandler(buildPrivateTopicConfig({ topicEnabled: false }))(
+      privateReaction({ user: { id: 5678, first_name: "Bob" } }),
+    );
+
+    expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("rechecks DM access after the private-topic message was cached", async () => {
+    resolveCachedMessageThreadSpec.mockResolvedValue({
+      threadSpec: { scope: "dm", id: FORUM_TOPIC_ID },
+      isTopicMessage: true,
+    });
+    enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+    await registerHandler(
+      buildPrivateTopicConfig({
+        direct: { dmPolicy: "allowlist", allowFrom: ["5678"] },
+      }),
+    )(privateReaction({ user: { id: 5678, first_name: "Bob" } }));
+    expect(peekSystemEventEntries("agent:topicbot:telegram:direct:5678:thread:5678:77")).toEqual([
+      expect.objectContaining({
+        text: `Telegram reaction added: ${FIRE_EMOJI} by Bob on msg 100`,
+      }),
+    ]);
+
+    enqueueRoutedSystemEvent.mockClear();
+    await registerHandler(
+      buildPrivateTopicConfig({
+        direct: { dmPolicy: "allowlist", allowFrom: ["9999"] },
+      }),
+    )(privateReaction({ user: { id: 5678, first_name: "Bob" } }));
+    expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { requireTopic: true, expectedQueue: false },
+    { requireTopic: false, expectedQueue: true },
+  ])(
+    "handles a private cache miss with requireTopic=$requireTopic",
+    async ({ requireTopic, expectedQueue }) => {
+      enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+      await registerHandler(buildPrivateTopicConfig({ requireTopic }))(
+        privateReaction({ user: { id: 5678, first_name: "Bob" } }),
+      );
+
+      expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(expectedQueue ? 1 : 0);
+      if (expectedQueue) {
+        expect(peekSystemEventEntries("agent:main:telegram:direct:5678")).toEqual([
+          expect.objectContaining({
+            text: `Telegram reaction added: ${FIRE_EMOJI} by Bob on msg 100`,
+          }),
+        ]);
+      }
+    },
+  );
 
   it.each([false, true])(
     "awaits own-message lookup before reaction delivery: %s",

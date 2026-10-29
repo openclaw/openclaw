@@ -109,3 +109,10 @@ describe("install.ps1 source contracts", () => {
     expect(localPathBody).toContain("[System.IO.Path]::GetFullPath($PackagePath)");
   });
 });
+
+it("routes the piped installer regression through both Windows hosts", () => {
+  const workflow = readFileSync(".github/workflows/website-installer-sync.yml", "utf8");
+  expect(workflow).toContain("test/scripts/install-ps1-entrypoint.ps1 -InstallerPath $scriptPath");
+  const entrypoint = readFileSync("test/scripts/install-ps1-entrypoint.ps1", "utf8");
+  expect(entrypoint).toContain("Invoke-Expression");
+});

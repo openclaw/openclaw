@@ -18,6 +18,15 @@ export type ScheduledToolPolicyContext = (
   execTarget?: { host: "gateway"; ask?: "always" };
 };
 
+/** Keeps hook and join-intro event turns scoped to their current cron-runner job. */
+export function resolveSelfRemoveOnlyJobId(params: {
+  trigger?: string;
+  jobId?: string;
+}): string | undefined {
+  const jobId = params.jobId?.trim();
+  return jobId && (params.trigger === "cron" || params.trigger === "event") ? jobId : undefined;
+}
+
 /** Separates a scheduled creator's authorization identity from its delivery route. */
 export function resolveScheduledToolCallerContext(params: {
   scheduledToolPolicy?: ScheduledToolPolicyContext;

@@ -471,7 +471,7 @@ export async function handleControlUiAvatarRequest(
       return true;
     }
 
-    if (url.searchParams.has("v") && projection.image) {
+    if ((url.searchParams.has("v") || resolved?.kind === "data") && projection.image) {
       const image = await (
         await loadAvatarThumbnail()
       ).readGatewayAvatarThumbnail(projection.image);

@@ -72,6 +72,7 @@ function bootstrapTelegramWithFormattingHints() {
 
 type EmbeddedRunFormatting = {
   extraSystemPrompt?: string;
+  extraSystemPromptTurnContext?: { start: number; text: string };
 };
 
 async function runCron(delivery: Record<string, unknown>, accountId?: string) {
@@ -103,6 +104,7 @@ async function runCron(delivery: Record<string, unknown>, accountId?: string) {
     }),
   );
   const run = mockCall(runEmbeddedAgentMock)[0] as EmbeddedRunFormatting;
+  expect(run.extraSystemPromptTurnContext).toEqual({ start: 0, text: run.extraSystemPrompt });
   return run.extraSystemPrompt;
 }
 

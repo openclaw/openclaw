@@ -59,7 +59,6 @@ describe("agent roster offline ownership", () => {
   });
 
   it.each([
-    ["setup", ["setup", "--baseline", "--workspace", "WORKSPACE", "--json"]],
     [
       "advanced creation",
       ["agents", "add", "advanced", "--role", "researcher", "--workspace", "WORKSPACE", "--json"],

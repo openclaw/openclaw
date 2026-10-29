@@ -16,6 +16,27 @@ import { createPublicationOwner } from "../../infra/package-update-publication-o
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 
+export async function preparePackagePublication(
+  f: Awaited<ReturnType<typeof createPackageSwapFixture>>,
+  options: Parameters<typeof preparePackageActivationJournal>[0]["options"],
+) {
+  const reader = createPackageIntegrityReader();
+  return preparePackageActivationJournal({
+    options,
+    liveRoot: f.packageRoot,
+    stageRoot: f.params.stage.packageRoot,
+    launcherRoot: f.params.stage.layout.binDir,
+    binDir: path.dirname(f.launcher),
+    previous: await reader.tree(f.packageRoot),
+    launchers: [
+      {
+        name: "openclaw",
+        previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
+      },
+    ],
+  });
+}
+
 export async function createInterruptedPackagePublication(
   fixtureRoot: string,
   phase: "prepared" | "publishing" | "publication-complete" = "publishing",

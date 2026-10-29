@@ -32,6 +32,55 @@ async function createReadVault(relativePath = "sources/alpha.md") {
 }
 
 describe("wiki query page reads", () => {
+  it.each(["NFC", "NFD"] as const)(
+    "matches canonically equivalent %s text in live pages and compiled metadata",
+    async (form) => {
+      const { rootDir, config } = await createVault({
+        initialize: true,
+        config: {
+          search: { backend: "local", corpus: "wiki" },
+          render: { createDashboards: false },
+        },
+      });
+      const search = (query: string) => searchMemoryWiki({ config, query });
+      const text = "Café 한국어".normalize(form);
+      const query = "한국어 CAFÉ".normalize(form === "NFC" ? "NFD" : "NFC");
+      const paths = ["title", "alias", "claim", "body"].map((field) => `entities/${field}.md`);
+      for (const field of ["title", "alias", "claim", "body"]) {
+        const targetPath = path.join(rootDir, `entities/${field}.md`);
+        await fs.mkdir(path.dirname(targetPath), { recursive: true });
+        await fs.writeFile(
+          targetPath,
+          renderWikiMarkdown({
+            frontmatter: {
+              pageType: "entity",
+              id: `entity.${field}`,
+              title: field === "title" ? text : "Neutral",
+              ...(field === "alias" ? { aliases: [text] } : {}),
+              ...(field === "claim"
+                ? { claims: [{ id: "claim.observation", text, status: "supported" }] }
+                : {}),
+            },
+            body: `# Neutral\n\n${field === "body" ? text : "Ordinary context."}\n`,
+          }),
+        );
+      }
+      const live = await search(query);
+      expect(
+        live.map((result) => result.path).toSorted((a, b) => (a ?? "").localeCompare(b ?? "")),
+      ).toEqual(paths.toSorted((a, b) => a.localeCompare(b)));
+      expect(live.find((result) => result.path === "entities/title.md")?.title).toBe(text);
+      for (const field of ["claim", "body"]) {
+        expect(live.find((result) => result.path === `entities/${field}.md`)?.snippet).toBe(text);
+      }
+
+      await compileMemoryWikiVault(config);
+      await expect(search(query)).resolves.toEqual(live);
+      await expect(search("Ordinary context")).resolves.toHaveLength(3);
+      await expect(search("NeverRecordedNebula")).resolves.toEqual([]);
+    },
+  );
+
   it("reads only compiled metadata candidates for distributed query tokens", async () => {
     const { rootDir, config, targetPath, relativePath } = await createReadVault();
     await fs.writeFile(

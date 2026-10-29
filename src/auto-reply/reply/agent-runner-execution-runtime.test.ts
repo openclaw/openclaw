@@ -60,6 +60,9 @@ describe("executeAgentTurn: runtime selection", () => {
       );
       state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "final" }], meta: {} });
       const followupRun = createFollowupRun();
+      const turnContext = { start: 0, text: "Current conversation." };
+      followupRun.run.extraSystemPrompt = "Current conversation.\n\nPersistent policy.";
+      followupRun.run.extraSystemPromptTurnContext = turnContext;
       followupRun.run.provider = provider;
       followupRun.run.model = model;
       followupRun.run.thinkLevel = thinkLevel;
@@ -82,6 +85,8 @@ describe("executeAgentTurn: runtime selection", () => {
       expect(result.kind).toBe("success");
       expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded thinking params", {
         thinkLevel,
+        extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
+        extraSystemPromptTurnContext: turnContext,
         modelThinkingCapability: {
           provider,
           modelId: model,

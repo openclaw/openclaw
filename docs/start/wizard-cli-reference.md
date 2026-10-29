@@ -183,6 +183,8 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
     - If both `gateway.auth.token` and `gateway.auth.password` exist while
       `gateway.auth.mode` is unset, daemon installation blocks until you choose
       a mode explicitly.
+    - If restarting an installed service fails, setup reports the failure reason
+      and recovery commands instead of claiming the service restarted.
 
   </Step>
   <Step title="Health check">

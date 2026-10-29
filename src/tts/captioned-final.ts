@@ -51,10 +51,10 @@ export function shouldDeferFinalTtsText(params: {
 export function mergeDeferredFinalText(streamedText: string, finalText?: string): string {
   const streamed = streamedText.trim();
   const final = finalText?.trim() ?? "";
-  if (!streamed) {
+  if (!streamed || streamed.replace(/\n{2,}/g, "\n") === final.replace(/\n{2,}/g, "\n")) {
     return final;
   }
-  if (!final || streamed === final || streamed.startsWith(final)) {
+  if (!final || streamed.startsWith(final)) {
     return streamed;
   }
   if (final.startsWith(streamed)) {

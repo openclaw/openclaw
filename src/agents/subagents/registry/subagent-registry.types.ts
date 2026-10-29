@@ -182,6 +182,10 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   /** Completion-producing row retirement deferred until requesterTurnRunId settles. */
   retireAfterRequesterTurn?: boolean;
   requesterOrigin?: DeliveryContext;
+  /** Private original principal; never an outward route or an executable grant. */
+  operatorRecoverySource?: import("../../../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
+  /** Missing evidence must not regain ambient system authority after a restart. */
+  completionAuthorityRequired?: true;
   /** Durable source locator for transport-neutral progress presentation. */
   progressOrigin?: SubagentProgressOrigin;
   requesterDisplayKey: string;

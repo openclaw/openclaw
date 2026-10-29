@@ -173,3 +173,41 @@ describe("telegram audit", () => {
     }
   });
 });
+
+it.each([-60_000, 60_000])("bounds membership audit across wall-clock jump %s", async (jumpMs) => {
+  fetchWithTimeoutMock.mockReset();
+  fetchWithTimeoutMock
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          setTimeout(
+            () => resolve(Response.json({ ok: true, result: { status: "member" } })),
+            40_000,
+          );
+        }),
+    )
+    .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({ start() {} })));
+  vi.useFakeTimers();
+  try {
+    let settled = false;
+    const pending = auditTelegramGroupMembership({
+      token: "t",
+      botId: 123,
+      groupIds: ["-1001", "-1002"],
+      timeoutMs: 50_000,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    vi.setSystemTime(Date.now() + jumpMs);
+    await vi.advanceTimersByTimeAsync(41_000);
+    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(settled).toBe(true);
+    expect(await pending).toMatchObject({ ok: false, checkedGroups: 2 });
+  } finally {
+    vi.useRealTimers();
+  }
+});

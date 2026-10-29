@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi, type Mock } from "vitest";
 import type { readConfigFileSnapshot } from "../../config/config.js";
 import type {
@@ -9,11 +12,13 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import { adoptUpdateRun, createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
 import type { runExec, runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { defaultRuntime } from "../../runtime.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 
 export function registerFreshDoctorOutcomeTests(
@@ -24,6 +29,7 @@ export function registerFreshDoctorOutcomeTests(
     pendingMigrations: Mock<typeof readDeferredPluginMigrationsAsync>;
   },
   updateOptions: Parameters<typeof completePostCorePluginUpdate>[0],
+  validConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
 ): void {
   it.each([false, true])(
     "reports plugin repairs still pending after successful Doctor (completed: %s)",
@@ -226,6 +232,98 @@ export function registerFreshDoctorOutcomeTests(
       expect(hasCommandProcessCleanupError(error)).toBe(fault === "cleanup");
       expect(mocks.readConfig).not.toHaveBeenCalled();
       expect(mocks.runUtf8).not.toHaveBeenCalled();
+    },
+  );
+  it("returns readiness facts without publishing update history, output, or reports", async () => {
+    await withTempHome(async (home) => {
+      const run = createUpdateRun({ trigger: "cli" });
+      adoptUpdateRun(run.runId);
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+      const before = getUpdateRun(run.runId);
+      const beforeDoctor = vi.fn(async () => undefined);
+      mocks.readConfig.mockResolvedValue({ ...validConfigSnapshot, valid: false });
+      vi.mocked(defaultRuntime.log).mockClear();
+      vi.mocked(defaultRuntime.error).mockClear();
+
+      const result = await completePostCorePluginUpdate({
+        ...updateOptions,
+        runId: run.runId,
+        pluginUpdate: { ...updateOptions.pluginUpdate, changed: false },
+        beforeDoctor,
+      });
+
+      expect(result.pluginUpdate.status).toBe("ok");
+      expect(result.pluginUpdate.doctorLint).toMatchObject({ exitCode: 0, termination: "exit" });
+      expect(beforeDoctor).not.toHaveBeenCalled();
+      expect(result.configSnapshot.valid).toBe(false);
+      expect(mocks.command.mock.calls.map(([, args]) => args)).toEqual([
+        ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
+      ]);
+      expect(mocks.runUtf8).toHaveBeenCalledOnce();
+      expect(getUpdateRun(run.runId)).toEqual(before);
+      expect(defaultRuntime.log).not.toHaveBeenCalled();
+      expect(defaultRuntime.error).not.toHaveBeenCalled();
+      await expect(fs.stat(path.join(home, ".openclaw", "update-reports"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+  it.each([
+    { name: "policy exit", physical: { code: 1 } },
+    { name: "other exit", physical: { code: 2 } },
+    {
+      name: "signal",
+      physical: { code: null, termination: "signal", signal: "SIGTERM", killed: true },
+    },
+    {
+      name: "timeout",
+      physical: { code: 124, termination: "timeout", signal: "SIGTERM", killed: true },
+    },
+    {
+      name: "overflow",
+      physical: {
+        code: 1,
+        termination: "signal",
+        signal: "SIGTERM",
+        killed: true,
+        outputLimitExceeded: true,
+      },
+    },
+  ] as const)(
+    "retains physical $name facts without accepting interrupted policy output",
+    async ({ physical }) => {
+      const finding = {
+        checkId: "core/doctor/security",
+        severity: "error",
+        message: "Discord DMs are open.",
+      };
+      const execution = {
+        ...({
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          outputLimitExceeded: undefined,
+        } as const),
+        ...physical,
+        stdout: JSON.stringify({ ok: false, checksRun: 1, findings: [finding] }),
+        stderr: "Readiness diagnostic",
+      };
+      mocks.runUtf8.mockResolvedValue(execution);
+
+      const { pluginUpdate: result } = await completePostCorePluginUpdate(updateOptions);
+
+      expect(result.status).toBe("warning");
+      expect(result.doctorLint).toMatchObject({
+        exitCode: execution.code,
+        termination: execution.termination,
+        signal: execution.signal,
+        killed: execution.killed,
+        outputLimitExceeded: execution.outputLimitExceeded,
+        stderrTail: execution.stderr,
+        doctorLintFindings: [{ ...finding, severity: "warning" }],
+      });
+      expect(result.doctorLint?.advisory?.kind).toBe("recoverable-maintenance");
     },
   );
 }

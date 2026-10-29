@@ -10,7 +10,6 @@ import type {
   CliOutput,
   CliUsage,
 } from "./cli-output-contracts.js";
-import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 import type { CliEventProjectionState } from "./cli-output-events.js";
 import {
   createLeadingTaggedReasoningRouter,
@@ -48,7 +47,7 @@ import { appendCliResultText, recordItemText, withCliRawFinalText } from "./cli-
 import {
   CLI_STREAM_JSON_OUTPUT_LIMITS,
   frameBoundedCliJsonlChunk,
-  measureClaudePartialMessage,
+  chargeClaudeStreamJsonLine,
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
 import { resolveCliStreamOutput } from "./cli-output-stream-output.js";
@@ -660,21 +659,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     const parsedRecords = decodeCliRecords(line);
     if (claudeStreamJson) {
-      const partialChars =
-        parsedRecords.length === 1
-          ? measureClaudePartialMessage(parsedRecords[0]!, rawLine)
-          : undefined;
-      const normalized =
-        parsedRecords.length === 1
-          ? normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!)
-          : undefined;
-      // Neither media omission nor token-envelope discounts may erase wire whitespace.
-      const retainedChars =
-        partialChars ??
-        (normalized
-          ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
-          : rawLine.length);
-      if (!accountClaudeJsonlLine(retainedChars, partialChars !== undefined)) {
+      const record = parsedRecords.length === 1 ? parsedRecords[0] : undefined;
+      const charge = chargeClaudeStreamJsonLine(record, rawLine);
+      if (!accountClaudeJsonlLine(charge.chars, charge.partialMessage)) {
         return;
       }
     }

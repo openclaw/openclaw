@@ -1,14 +1,17 @@
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import { Api, HttpError } from "grammy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { Agent, fetch as undiciFetch } from "undici/index.js";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
-import { TelegramRequestNotStartedError } from "./network-errors.js";
+import { isSafeToRetrySendError, TelegramRequestNotStartedError } from "./network-errors.js";
 import {
+  bindTelegramRequestAuthority,
   bindTelegramTransportAuthority,
   findTelegramRequestAuthorityError,
 } from "./request-authority.js";
+import { createTelegramNonIdempotentRequestWithDiag } from "./send-context.js";
 
 const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
@@ -40,6 +43,15 @@ describe("Telegram client cancellation and custody", () => {
     // the installed fetch implements the standard fetch contract used here.
     return (undiciFetch as unknown as typeof globalThis.fetch)(input, requestInit);
   };
+  const clientFor = (options: Partial<Parameters<typeof createTelegramClientFetch>[0]> = {}) =>
+    createTelegramClientFetch({ fetchImpl: asTelegramClientFetch(fetch), ...options });
+  const observeResponse = (sending: Promise<Pick<Response, "json">>) =>
+    sending
+      .then((response) => response.json())
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
   const sockets = new Set<Socket>();
   const responses = new Set<ServerResponse>();
   const requests: string[] = [];
@@ -353,6 +365,113 @@ describe("Telegram client cancellation and custody", () => {
         expect(edgeError).not.toBeInstanceOf(TelegramRequestNotStartedError);
       }
       expect(requests).toHaveLength(fallback ? 1 : 0);
+    },
+  );
+  it.each(["headers", "body"] as const)(
+    "preserves an ambiguous owned deadline through grammY while %s are pending",
+    async (phase) => {
+      hold = phase;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const headers = createDeferred<void>();
+      const forceFallback = vi.fn(() => true);
+      const observedFetch: typeof fetch = async (input, init) => {
+        const response = await fetch(input, init);
+        headers.resolve();
+        return response;
+      };
+      const client = clientFor({
+        fetchImpl: asTelegramClientFetch(observedFetch),
+        transport: { forceFallback },
+      });
+      const api = new Api("123:fixture", {
+        apiRoot: new URL(apiRoot).origin,
+        fetch: asTelegramClientFetch(client),
+      });
+      const request = createTelegramNonIdempotentRequestWithDiag({
+        cfg: {},
+        useApiErrorLogging: false,
+      });
+      const sending = request(() => api.sendMessage(123, "Saved final answer"), "sendMessage");
+      const failure = expect(sending).rejects.toMatchObject({
+        error: { code: "ETIMEDOUT", message: "Telegram sendmessage timed out after 60000ms" },
+      });
+      await arrived.promise;
+      if (phase === "body") {
+        await headers.promise;
+      }
+      await vi.advanceTimersByTimeAsync(60_000);
+      await failure;
+      const error: unknown = await sending.catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(HttpError);
+      expect(isSafeToRetrySendError(error)).toBe(false);
+      expect(requests).toEqual(["/bot123:fixture/sendMessage"]);
+      expect(forceFallback).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["shutdown", "request", "authority"] as const)(
+    "preserves %s rejection when preparation settles after the request deadline",
+    async (source) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const started = createDeferred<void>();
+      const release = createDeferred<void>();
+      const cancellation = new Error("caller ended this request");
+      const shutdown = new AbortController();
+      const request = new AbortController();
+      let current = true;
+      effectGate.prepare = async () => {
+        started.resolve();
+        await release.promise;
+      };
+      const forceFallback = vi.fn(() => true);
+      const client = bindTelegramRequestAuthority(
+        asTelegramClientFetch(
+          clientFor({
+            shutdownSignal: shutdown.signal,
+            transport: { sourceFetch: fetch, forceFallback },
+          }),
+        ),
+        () => {
+          if (!current) {
+            throw cancellation;
+          }
+        },
+      );
+      // Use a control method as well: a masked refusal must not select a fallback.
+      const sending = observeResponse(
+        client(`${apiRoot}/deleteWebhook`, { signal: request.signal }),
+      );
+      try {
+        await Promise.race([
+          started.promise,
+          sending.then(() => {
+            throw new Error("request settled before preparation");
+          }),
+        ]);
+        if (source === "authority") {
+          current = false;
+        } else {
+          (source === "shutdown" ? shutdown : request).abort(cancellation);
+        }
+        await vi.advanceTimersByTimeAsync(15_000);
+        release.resolve();
+        const outcome = await sending;
+        expect(outcome).toHaveProperty("error");
+        if ("error" in outcome) {
+          expect(
+            source === "authority"
+              ? findTelegramRequestAuthorityError(outcome.error)?.originalError
+              : outcome.error,
+          ).toBe(cancellation);
+          expect(outcome.error).not.toHaveProperty("code");
+        }
+        expect(requests).toEqual([]);
+        expect(forceFallback).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await sending;
+        effectGate.prepare = undefined;
+      }
     },
   );
 });

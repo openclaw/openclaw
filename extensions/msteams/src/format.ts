@@ -286,7 +286,10 @@ function protectMSTeamsCode(
         quoteDepth > 0
           ? `${"> ".repeat(quoteDepth)}${rendered.replaceAll("\n", `\n${"> ".repeat(quoteDepth)}`)}`
           : rendered;
-      if (hasTrailingQuotedText && !quoted.endsWith("\n")) {
+      // A closing fence must end its line before the next list item.
+      const followedByText =
+        codeStyle === "code_block" && span.end < ir.text.length && ir.text[span.end] !== "\n";
+      if ((hasTrailingQuotedText || followedByText) && !quoted.endsWith("\n")) {
         quoted += "\n";
       }
       const index = code.push(quoted) - 1;

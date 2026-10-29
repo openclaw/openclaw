@@ -41,13 +41,22 @@ describe("plugin SDK surface report", () => {
         const directory = fixtures.createTempDir("plugin-sdk-surface-lifetime-");
         const stdout = path.join(directory, "stdout.log");
         const stderr = path.join(directory, "stderr.log");
+        const registeredCommand =
+          (
+            JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+              scripts?: Record<string, string>;
+            }
+          ).scripts?.["plugin-sdk:surface:check"] ?? "";
+        expect(registeredCommand).toBe(
+          "node --max-old-space-size=8192 --import ./scripts/tsx.mjs scripts/plugin-sdk-surface-report.mts --check",
+        );
         const out = fs.openSync(stdout, "wx", 0o600);
         try {
           const err = fs.openSync(stderr, "wx", 0o600);
           try {
             const code = await runManagedCommand({
-              bin: "pnpm",
-              args: ["plugin-sdk:surface:check"],
+              bin: process.execPath,
+              args: registeredCommand.split(" ").slice(1),
               cwd: process.cwd(),
               env: baseSurfaceReportEnv(),
               signal,

@@ -36,8 +36,41 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
       };
     }
 
+    it("bounds unused block-delivery work after unfenced XML", async () => {
+      const context = createMessageUpdateContext();
+      const shadow = markup[2]!;
+      const source =
+        "Visible\n" +
+        shadow +
+        "\n" +
+        Array.from(
+          { length: 100 },
+          (_, index) => "Paragraph " + index + ": the reply continues.\n",
+        ).join("");
+      const regions = vi.spyOn(codeRegions, "findCodeRegions");
+      try {
+        let text = "";
+        for (let offset = 0; offset < source.length; offset += 4) {
+          const delta = source.slice(offset, offset + 4);
+          text += delta;
+          const partial = message(text);
+          await updateMessage(context, {
+            message: partial,
+            assistantMessageEvent: { type: "text_delta", delta, partial, contentIndex: 0 },
+          });
+        }
+        expect(context.state.assistantStream?.text).toBe(source.replace(shadow, "").trimEnd());
+        expect(
+          regions.mock.calls.reduce((total, [parsed]) => total + parsed.length, 0),
+        ).toBeLessThan(source.length * 8);
+      } finally {
+        regions.mockRestore();
+      }
+    });
+
     it("bounds Markdown parse work after quoted tool XML in token-sized deltas", async () => {
       const context = createMessageUpdateContext();
+      context.params.onBlockReply = vi.fn();
       const example = `\`\`\`xml\n${markup[2]}\n\`\`\`\n\n`;
       const continuation = "Explanation.\n\n- Item\n\n```python\nprint('hello')\n```\n\n".repeat(
         128,
@@ -102,6 +135,7 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
       async (shadow) => {
         const onAgentEvent = vi.fn();
         const context = createMessageUpdateContext({ onAgentEvent });
+        context.params.onBlockReply = vi.fn();
         let text = "";
         for (const delta of ["Visible\n", ...shadow.split(""), "\nDone."]) {
           text += delta;
@@ -141,6 +175,7 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
       "restores the terminal literal %s after withholding its ambiguous suffix",
       async (text) => {
         const context = createMessageUpdateContext();
+        context.params.onBlockReply = vi.fn();
         const partial = message(text);
         await updateMessage(context, {
           message: partial,

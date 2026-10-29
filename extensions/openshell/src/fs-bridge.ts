@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import { extractErrorCode, FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenShellFsBridgeContext, OpenShellMirrorBackend } from "./backend.types.js";
+import { lstatIfExists } from "./lstat-if-exists.js";
 import {
   isOpenShellRemotePathInside,
   resolveOpenShellWorkspaceRoot,
@@ -194,7 +195,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
   async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
     const target = this.resolveTarget(params);
     const hostPath = target.hostPath;
-    const stats = await fsPromises.lstat(hostPath).catch(() => null);
+    const stats = await lstatIfExists(hostPath);
     if (!stats) {
       return null;
     }

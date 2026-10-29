@@ -1115,6 +1115,7 @@ describe("agent request events", () => {
       diskAvailableBytes: 16384,
     };
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    using parse = vi.spyOn(JSON, "parse");
     setActiveNodeContexts([{ nodeId: "active-computer" }]);
     try {
       await expect(
@@ -1124,6 +1125,7 @@ describe("agent request events", () => {
         }),
       ).resolves.toEqual(eventResult("node.host.stats", "updated", true));
       expect(session.hostStats).toEqual({ ...stats, updatedAtMs: 100_000 });
+      expect(parse.mock.calls.filter(([raw]) => raw === JSON.stringify(stats))).toHaveLength(1);
       expect(broadcast).toHaveBeenCalledExactlyOnceWith(
         "node.hostStats",
         { nodeId: session.nodeId, hostStats: { ...stats, updatedAtMs: 100_000 } },
@@ -1161,18 +1163,16 @@ describe("agent request events", () => {
         broadcast,
         updateNodeHostStats: (params) => registry.updateHostStats(params),
       };
+      using parse = vi.spyOn(JSON, "parse");
+      const payload = { ...stats, memoryFreeBytes: 1024 };
       try {
         await expect(
-          handleNodeEvent(
-            ctx,
-            session.nodeId,
-            nodeEvent("node.host.stats", { ...stats, memoryFreeBytes: 1024 }),
-            {
-              connId: connection === "stale" ? "retired-connection" : client.connId,
-            },
-          ),
+          handleNodeEvent(ctx, session.nodeId, nodeEvent("node.host.stats", payload), {
+            connId: connection === "stale" ? "retired-connection" : client.connId,
+          }),
         ).resolves.toEqual(eventResult("node.host.stats", "stale_connection"));
         expect(session.hostStats).toEqual({ ...stats, updatedAtMs: 100 });
+        expect(parse.mock.calls.filter(([raw]) => raw === JSON.stringify(payload))).toHaveLength(1);
         expect(broadcast).not.toHaveBeenCalled();
       } finally {
         registry.unregister(client.connId);

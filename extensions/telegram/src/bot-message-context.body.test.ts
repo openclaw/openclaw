@@ -579,6 +579,7 @@ describe("Telegram admitted model input", () => {
     expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
       OriginatingTo: "telegram:-10042001:topic:99",
       AccountId: "default",
+      MessageSid: String(voice.message_id + 1),
       ChatType: "group",
       MessageThreadId: 99,
     });
@@ -623,12 +624,14 @@ describe("Telegram admitted model input", () => {
       await receive(await createBot(false, true, cfg, threadId !== undefined, "atlas"), {
         ...textMessage("", false),
         text: undefined,
+        message_id: 901,
         message_thread_id: threadId,
         voice: { file_id: "dm-voice", file_unique_id: "dm-voice-u", duration: 1 },
       });
       expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
         OriginatingTo: "telegram:42001",
         AccountId: "atlas",
+        MessageSid: "901",
         ChatType: "direct",
         MessageThreadId: threadId,
       });
@@ -754,4 +757,21 @@ describe("Telegram admitted model input", () => {
       expect.objectContaining({ reaction: [{ type: "emoji", emoji: "\u{1f440}" }] }),
     );
   });
+});
+
+it("uses the mixed-case account mention policy for inbound text", async () => {
+  const cfg = config();
+  cfg.messages = { groupChat: { mentionPatterns: ["account"] } };
+  cfg.channels!.telegram!.mentionPatterns = { mode: "deny" };
+  cfg.channels!.telegram!.accounts = {
+    Work: {
+      botToken: "123:work",
+      mentionPatterns: { mode: "allow", allowIn: ["-10042001"] },
+    },
+  };
+  const bot = await createBot(false, true, cfg, true, "work");
+
+  await receive(bot, textMessage("account policy"));
+
+  expect(harness.replySpy.mock.calls[0]?.[0].BodyForAgent).toBe("account policy");
 });

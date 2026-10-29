@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { shouldRequireGatewayTokenForInstall } from "../gateway/auth-install-policy.js";
 import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
@@ -110,6 +111,29 @@ describe("resolveGatewayAuthTokenForService", () => {
 });
 
 describe("shouldRequireGatewayTokenForInstall", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.each([
+    { prefix: "OPENCLAW", requiresToken: false },
+    { prefix: "CLAWDBOT", requiresToken: true },
+    { prefix: "MOLTBOT", requiresToken: true },
+  ])(
+    "only infers password auth from canonical durable env ($prefix)",
+    async ({ prefix, requiresToken }) => {
+      const stateDir = tempDirs.make("openclaw-install-password-env-");
+      const passwordEnvKey = envVar(prefix, "GATEWAY", "PASSWORD");
+      const resolved = await resolveGatewayInstallToken({
+        config: { env: { vars: { [passwordEnvKey]: "synthetic-install-password" } } },
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        requireExisting: true,
+      });
+
+      expect(resolved.unavailableReason).toBe(
+        requiresToken ? "Deferred service load requires an existing Gateway token." : undefined,
+      );
+    },
+  );
+
   it("requires token in inferred mode when password env exists only in shell", async () => {
     await withEnvAsync(
       { [envVar("OPENCLAW", "GATEWAY", "PASSWORD")]: "password-from-env" },

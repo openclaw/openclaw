@@ -14,6 +14,7 @@ import {
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import { readCapturedPreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -131,9 +132,19 @@ describe("prepared model runtime owner selection", () => {
   );
 
   it("prepares prompt-only runtime owners separately from the configured agent generation", async () => {
+    const discovered = { id: "live-only", name: "Published discovered model", provider: "custom" };
+    mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+      entries: [discovered],
+      routeVariants: [discovered],
+    });
     const config = gatewayConfig();
     await publishGateway(config, { catalogMode: "static" });
     const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    const configuredSnapshot = await prepareModelRuntimeSnapshot(
+      fixture.agentInput("default", config),
+    );
+    await configuredSnapshot.loadFullModelCatalog!({ refresh: true, wait: true });
+    expect(configuredSnapshot.readFullModelCatalog?.()?.entries).toContainEqual(discovered);
     mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
     const lease = await acquireAgentRunPreparedModelRuntime(
       {
@@ -145,6 +156,9 @@ describe("prepared model runtime owner selection", () => {
     );
     try {
       expect(lease.pluginGeneration).not.toBe(published.pluginGeneration);
+      expect(readCapturedPreparedModelRuntimeCatalog(lease.snapshot)?.entries).toContainEqual(
+        discovered,
+      );
       expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.calls[0]?.[0]).toMatchObject({
         purpose: "isolated-completion",
       });

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
@@ -13,6 +14,20 @@ const otherArch = hostArch === "arm64" ? "x64" : "arm64";
 const commit = "0123456789012345678901234567890123456789";
 const revision = "fixture+012345678";
 const digest = (data: Buffer) => createHash("sha256").update(data).digest("hex");
+const zipTool = existsSync("/usr/bin/zip")
+  ? {
+      bin: "/usr/bin/zip",
+      args: (archive: string, executable: string) => ["-q", archive, executable],
+    }
+  : {
+      bin: "/usr/bin/python3",
+      args: (archive: string, executable: string) => [
+        "-c",
+        "import sys, zipfile; z = zipfile.ZipFile(sys.argv[1], 'w'); z.write(sys.argv[2], sys.argv[2]); z.close()",
+        archive,
+        executable,
+      ],
+    };
 type Arch = "arm64" | "x64";
 let compiled: Promise<Record<Arch, Buffer>> | undefined;
 
@@ -125,7 +140,7 @@ describe.runIf(["darwin", "linux"].includes(process.platform))(
           await mkdir(path.join(root, directory));
           await writeFile(path.join(root, executable), binary);
           const archive = path.join(downloads, asset);
-          await runTool("/usr/bin/zip", ["-q", archive, executable], root, command);
+          await runTool(zipTool.bin, zipTool.args(archive, executable), root, command);
           const archiveBytes = await readFile(archive);
           await writeFile(
             path.join(cache, asset),
@@ -182,6 +197,36 @@ while [[ "$#" -gt 0 ]]; do
   shift
 done
 exit 2
+`,
+          { mode: 0o755 },
+        );
+        await writeFile(
+          path.join(tools, "unzip"),
+          `#!/bin/bash
+set -euo pipefail
+archive=""
+destination=""
+member=""
+print_member=false
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -q) shift ;;
+    -p) print_member=true; shift ;;
+    -d) destination="$2"; shift 2 ;;
+    *)
+      if [[ -z "$archive" ]]; then
+        archive="$1"
+      elif [[ -z "$member" ]]; then
+        member="$1"
+      fi
+      shift
+      ;;
+  esac
+done
+if [[ "$print_member" == true ]]; then
+  exec /usr/bin/python3 -c 'import sys, zipfile; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))' "$archive" "$member"
+fi
+exec /usr/bin/python3 -m zipfile -e "$archive" "$destination"
 `,
           { mode: 0o755 },
         );

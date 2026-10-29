@@ -213,7 +213,6 @@ export function validateMcpLoopbackRequest(params: {
     params.res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      Connection: "keep-alive",
     });
     params.res.flushHeaders();
     params.res.write(":\n\n");
@@ -232,7 +231,8 @@ export function validateMcpLoopbackRequest(params: {
   }
 
   const contentType = getHeader(params.req, "content-type") ?? "";
-  if (!contentType.startsWith("application/json")) {
+  // Media types are case-insensitive (RFC 9110 §8.3.1).
+  if (contentType.slice(0, "application/json".length).toLowerCase() !== "application/json") {
     logMcpLoopbackTraffic("reject", {
       reason: "unsupported_media_type",
       method: params.req.method ?? "",

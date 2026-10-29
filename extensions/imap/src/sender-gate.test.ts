@@ -26,6 +26,29 @@ async function message(headers: string[]) {
 }
 
 describe("IMAP sender admission", () => {
+  // Regression fixtures from Nodemailer fixes 0a876176 and 1cd57d2 (Andris Reinman).
+  it.each([
+    ["nested comment", "Attacker (x(y) <trusted@example.com>) <attacker@evil.example>"],
+    ["quoted angle", '<"trusted@example.com>"@evil.example>'],
+    ["quoted group", 'G: "a;" "<trusted@example.com>" <attacker@evil.example>;'],
+  ])("does not admit a trusted address hidden inside a %s", async (_label, from) => {
+    const mail = await message(["From: " + from, "To: reader+secret-token@example.com"]);
+    const authenticator = vi.fn(async () => createImapAuthResult("pass"));
+    const verdict = await evaluateImapSender({
+      ...mail,
+      account: account({
+        addressTokens: [{ token: "secret-token", senders: ["trusted@example.com"] }],
+      }),
+      authenticator,
+    });
+    // From groups have no top-level mailbox; admission must not flatten them.
+    expect(verdict).toMatchObject({
+      accepted: false,
+      reason: _label === "quoted group" ? "invalid-from" : "sender-not-allowed",
+    });
+    expect(authenticator).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["trusted@EXAMPLE.com", ["trusted@example.COM"], true],
     ["person@example.com", ["@EXAMPLE.com"], true],

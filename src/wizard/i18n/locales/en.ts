@@ -200,6 +200,8 @@ export const en = {
       installedPlugin: "Installed {plugin} plugin",
       installingPlugin: "Installing {plugin} plugin…",
       installTitle: "Plugin install",
+      invalidInteger: "Enter a JSON integer.",
+      invalidNumber: "Enter a valid JSON number.",
       noRemoteInstallSource:
         "No remote install source is available for {plugin}. Returning to selection.",
       officialInstall: "Install optional plugins",

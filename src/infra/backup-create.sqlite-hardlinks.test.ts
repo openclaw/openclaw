@@ -55,7 +55,7 @@ async function declareBackupResources(state: OpenClawTestState): Promise<void> {
 }
 
 async function withHardlinkedDatabase(
-  ownerName: "alpha.sqlite" | "zeta.sqlite",
+  ownerName: string,
   run: (fixture: HardlinkedDatabase) => Promise<void>,
   ownership: "declared" | "opaque" = "declared",
 ): Promise<void> {
@@ -69,7 +69,7 @@ async function withHardlinkedDatabase(
       const aliasPath = state.statePath(
         "plugins",
         "hardlinks",
-        ownerName === "alpha.sqlite" ? "zeta.sqlite" : "alpha.sqlite",
+        ownerName.startsWith("alpha") ? "zeta" + ownerName.slice(5) : "alpha" + ownerName.slice(4),
       );
       await fs.mkdir(path.dirname(ownerPath), { recursive: true });
       const sqlite = requireNodeSqlite();
@@ -100,6 +100,19 @@ async function withHardlinkedDatabase(
       }
     },
   );
+}
+
+function hardlinkCase<Args extends unknown[]>(
+  run: (fixture: HardlinkedDatabase, ...args: Args) => Promise<void>,
+  opaque = false,
+  ownerName = "alpha.sqlite",
+) {
+  return (...args: Args) =>
+    withHardlinkedDatabase(
+      ownerName,
+      (fixture) => run(fixture, ...args),
+      opaque ? "opaque" : "declared",
+    );
 }
 
 function createArchive(state: OpenClawTestState) {
@@ -221,6 +234,33 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
         expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
       });
     },
+  );
+
+  it.runIf(process.platform === "linux").each(["singleton", "hardlink pair"] as const)(
+    "preserves a live writer's main-file POSIX lock when header-probing a declared plugin %s named .db",
+    hardlinkCase(
+      async ({ state, ownerPath, aliasPath }, layout: string) => {
+        if (layout === "singleton") {
+          await fs.unlink(aliasPath);
+        }
+        const locksBefore = readMainDatabasePosixLocks(ownerPath);
+        expect(locksBefore).toEqual([
+          { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+        ]);
+
+        const archive = await createArchive(state);
+
+        // The header probe must run outside this process: closing a raw
+        // descriptor here would drop the live writer's POSIX locks above.
+        expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
+        // Verified snapshots (not opaque copies) prove the probe classified
+        // the .db names as SQLite databases.
+        expect(archive.warnings ?? []).toEqual([]);
+        expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
+      },
+      false,
+      "alpha.db",
+    ),
   );
 
   it.each([

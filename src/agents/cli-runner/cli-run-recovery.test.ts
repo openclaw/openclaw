@@ -56,3 +56,17 @@ describe("cli-run-recovery retry budget", () => {
     expect(executeAttempt).toHaveBeenCalledOnce();
   });
 });
+
+it("attempts one fresh session after a rejected checkpoint and does not retry its failure", async () => {
+  const { executeAttempt, run } = recovery();
+  const secondFailure = new FailoverError("fresh session also failed", {
+    reason: "session_expired",
+    provider: "claude-cli",
+    code: "cli_resume_at_unsupported",
+  });
+  executeAttempt.mockReset().mockRejectedValue(secondFailure);
+  await expect(run()).rejects.toBe(secondFailure);
+  expect(executeAttempt).toHaveBeenCalledTimes(2);
+  expect(executeAttempt.mock.calls[0]?.[0]).toBe("s1");
+  expect(executeAttempt.mock.calls[1]?.[0]).toBeUndefined();
+});

@@ -1,13 +1,19 @@
 // Mattermost tests cover slash http plugin behavior.
 import { IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import {
+  expectPairingReplyText,
+  createPluginRuntimeMock,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
+import { setMattermostRuntime } from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostClient } from "./client.js";
 const clientMocks = vi.hoisted(() => ({
   createMattermostClient: vi.fn(),
-  fetchMattermostChannel: vi.fn(async () => {
+  fetchMattermostChannel: vi.fn<typeof import("./client.js").fetchMattermostChannel>(async () => {
     throw new Error("channel lookup intentionally unavailable in token validation tests");
   }),
 }));
@@ -504,5 +510,38 @@ describe("slash-http", () => {
     expect(firstLogMessage(log)).toBe(
       `mattermost: slash command registration check failed for /oc_status: ${"e".repeat(299)}; command lookup: primary failure`,
     );
+  });
+  it.each(["PAIR1234", ""])("answers a pairing request with code=%s", async (code) => {
+    const runtime = createPluginRuntimeMock();
+    vi.mocked(runtime.channel.pairing.upsertPairingRequest).mockResolvedValue({
+      code,
+      created: false,
+    });
+    vi.mocked(runtime.channel.pairing.buildPairingReply).mockImplementation(buildPairingReply);
+    setMattermostRuntime(runtime);
+    clientMocks.createMattermostClient.mockReturnValue(
+      createCommandLookupClient({ command: createCurrentCommand() }),
+    );
+    clientMocks.fetchMattermostChannel.mockResolvedValue({ id: "c1", type: "D" });
+
+    const response = await runSlashRequest({
+      registeredCommands: [createRegisteredCommand()],
+      body: "token=valid-token&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
+    });
+
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toBeTruthy();
+    const { text } = JSON.parse(response.getBody()) as { text: string };
+    if (code) {
+      expectPairingReplyText(text, {
+        channel: "mattermost",
+        idLine: "Your Mattermost user id: u1",
+        code,
+      });
+    } else {
+      expect(text).toContain("DM pairing is full");
+      expect(text).toContain("no pairing request was saved");
+      expect(text).not.toContain("pairing approve");
+    }
   });
 });

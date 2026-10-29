@@ -87,7 +87,7 @@ export type MemoryPublicationOperations = {
     output: "current" | "forgotten";
   };
   "cache.prune": {
-    input: { maxEntries: number };
+    input: { maxEntries: number; recount?: boolean };
     output: MemoryPublicationResult<boolean>;
   };
   "cache.stage.start": {

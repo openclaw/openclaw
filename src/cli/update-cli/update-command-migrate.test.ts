@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import * as doctor from "../../flows/doctor-health.js";
 import * as jsonFiles from "../../infra/json-files.js";
+import { listUpdateRuns } from "../../infra/update-run-reader.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -108,11 +109,26 @@ it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unch
         fail ? "failed" : "migrated",
       );
       if (outcome === "finished") {
+        // A receipt from an earlier candidate has no start time: it retires unrecorded.
+        const { startedAtMs, ...legacy } = JSON.parse(await fs.readFile(receiptPath, "utf8"));
+        await fs.writeFile(receiptPath, JSON.stringify(legacy));
         await updateFinishCommand(backupRoot);
         const receipt = JSON.parse(await fs.readFile(receiptPath, "utf8"));
         expect(receipt.status).toBe("finished");
         expect(receipt.configFiles).toEqual([]);
         await expect(fs.stat(receipt.backup.directory)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(listUpdateRuns({}, { env: state.env })).toEqual([]);
+        // With it, the run starts at migration, and a retried finish keeps the one record.
+        await fs.writeFile(receiptPath, JSON.stringify({ ...receipt, startedAtMs }));
+        await updateFinishCommand(backupRoot);
+        await updateFinishCommand(backupRoot);
+        expect(listUpdateRuns({}, { env: state.env })).toEqual([
+          expect.objectContaining({
+            runId: receipt.runId,
+            createdAtMs: startedAtMs,
+            status: "succeeded",
+          }),
+        ]);
         await expect(updateRestoreCommand(backupRoot)).rejects.toThrow(
           "rollback backup has been retired",
         );

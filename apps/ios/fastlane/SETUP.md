@@ -381,4 +381,5 @@ Versioning rules:
 - App Store release uses `OpenClawPushMode=appStore`, which derives the official production hosted relay, production APNs, production relay profile, and `appleStrict` proof. The release lane rejects custom production relay URL overrides.
 - The exported IPA is validated before upload by inspecting its push mode, signed entitlements, and embedded App Store profile.
 - The default `pnpm ios:release:upload` destination stages screenshots and the App Review PDF attachment before uploading the IPA, waits for processing, then stages saved notes and selects the build. It does not submit for App Review or upload the App Store Connect `Notes` field
+- Screenshot processing allows two replacement rounds, ten minutes apart, for assets stuck in `UPLOAD_COMPLETE`. Completed screenshots are preserved, and the final set must match the local files in count, order, and checksum. Replacements do not reset the existing one-hour processing deadline (`DELIVER_SCREENSHOT_PROCESSING_TIMEOUT` overrides that total budget). Explicit processing failures and upload or deletion errors stop the release.
 - See `apps/ios/VERSIONING.md` for the detailed workflow

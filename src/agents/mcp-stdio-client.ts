@@ -8,6 +8,11 @@ import {
   type Request,
   type Result,
 } from "@modelcontextprotocol/sdk/types.js";
+import {
+  appendCapturedOutput,
+  createCapturedOutputBuffers,
+  finalizeCapturedOutput,
+} from "../process/exec-output.js";
 import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { connectMcpClient, disposeMcpClient } from "./mcp-client-lifecycle.js";
 import { isMcpRequestTimeoutError } from "./mcp-error.js";
@@ -58,7 +63,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
   let shutdown: Promise<void> | undefined;
   let cleanupError: unknown;
   let inFlight = 0;
-  let stderr = Buffer.alloc(0);
+  const stderr = createCapturedOutputBuffers();
 
   class StdioProtocol extends Protocol<Request, Notification, Result> {
     override async connect(transport: Transport, options?: RequestOptions): Promise<void> {
@@ -114,7 +119,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
       );
     override onexit: OpenClawStdioClientTransport["onexit"] = ({ code, signal }) => {
       if (!stopped && !failure) {
-        const tail = stderr.toString("utf8").trim();
+        const tail = finalizeCapturedOutput(stderr, "tail", true).toString("utf8").trim();
         fail(
           errors.unavailable(
             `proxy exited (${signal ?? code ?? "unknown"})${tail ? `: ${tail}` : ""}`,
@@ -147,7 +152,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
   });
   const protocol = new StdioProtocol();
   const onStderr = (chunk: Buffer) => {
-    stderr = Buffer.concat([stderr, chunk]).subarray(-MAX_STDERR_BYTES);
+    appendCapturedOutput(stderr, chunk, MAX_STDERR_BYTES, "tail");
   };
   transport.stderr?.on("data", onStderr);
   const startup = connectMcpClient({

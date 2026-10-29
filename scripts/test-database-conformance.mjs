@@ -1,27 +1,102 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
+import { readFileSync, readdirSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { assignWeightedTestFiles } from "./lib/weighted-test-shards.mts";
 
 const usage =
-  "Usage: node scripts/test-database-conformance.mjs --engine postgres --connection <dsn> [-- <targets and test options>]";
+  "Usage: node scripts/test-database-conformance.mjs --engine postgres [--connection <dsn> | --list] [--shard <index>/<count>] [-- <targets and test options>]";
 const separator = process.argv.indexOf("--", 2);
+const forwarded = separator < 0 ? [] : process.argv.slice(separator + 1);
+const explicitTargets = forwarded.length > 0 && !forwarded[0].startsWith("-");
 let values;
+let shardIndex;
+let shardCount;
 try {
   ({ values } = parseArgs({
     args: process.argv.slice(2, separator < 0 ? undefined : separator),
-    options: { engine: { type: "string" }, connection: { type: "string" } },
+    options: {
+      engine: { type: "string" },
+      connection: { type: "string" },
+      shard: { type: "string" },
+      list: { type: "boolean", default: false },
+    },
   }));
-  if (values.engine !== "postgres" || !values.connection) {
+  if (values.engine !== "postgres" || (!values.connection && !values.list)) {
     throw new Error();
   }
-  if (!["postgres:", "postgresql:"].includes(new URL(values.connection).protocol)) {
+  if (
+    values.connection &&
+    !["postgres:", "postgresql:"].includes(new URL(values.connection).protocol)
+  ) {
     throw new Error();
+  }
+  if (values.shard !== undefined) {
+    const match = /^([1-9]\d*)\/([1-9]\d*)$/u.exec(values.shard);
+    if (!match || explicitTargets) {
+      throw new Error();
+    }
+    shardIndex = Number(match[1]);
+    shardCount = Number(match[2]);
+    if (!Number.isSafeInteger(shardCount) || shardIndex > shardCount) {
+      throw new Error();
+    }
   }
 } catch {
   console.error(usage);
   process.exit(2);
+}
+
+// Expand every original directory target so each test belongs to exactly one shard.
+const directoryTargets = [
+  "extensions/workboard",
+  "src/infra/postgres-sync",
+  "src/infra/database-engine",
+];
+function listTestFiles(directory) {
+  const files = [];
+  for (const entry of readdirSync(new URL("../" + directory + "/", import.meta.url), {
+    withFileTypes: true,
+  })) {
+    // Match the test runner's source inventory, never installed dependencies or symlink trees.
+    if (entry.name === "node_modules" || entry.name === ".git") {
+      continue;
+    }
+    const relativePath = directory + "/" + entry.name;
+    if (entry.isDirectory()) {
+      files.push(...listTestFiles(relativePath));
+    } else if (entry.isFile() && /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(entry.name)) {
+      files.push(relativePath);
+    }
+  }
+  return files.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+}
+let targets = explicitTargets
+  ? []
+  : [...directoryTargets.flatMap(listTestFiles), "src/state/openclaw-state-db.postgres.test.ts"];
+if (shardCount) {
+  if (shardCount > targets.length) {
+    console.error(usage);
+    process.exit(2);
+  }
+  // All jobs read the same committed weights; missing samples never remove a target.
+  const { targetSeconds } = JSON.parse(
+    readFileSync(new URL("../config/postgres-conformance-timings.json", import.meta.url), "utf8"),
+  );
+  const shards = Array.from({ length: shardCount }, (_, index) => ({
+    checkName: String(index + 1),
+    includePatterns: [],
+    weight: 0,
+  }));
+  assignWeightedTestFiles(shards, targets, (target) => targetSeconds[target] ?? 30);
+  const selected = new Set(shards[shardIndex - 1].includePatterns);
+  targets = targets.filter((target) => selected.has(target));
+}
+if (values.list) {
+  console.log(JSON.stringify(explicitTargets ? forwarded : [...targets, ...forwarded], null, 2));
+  process.exit(0);
 }
 
 const preload = new URL("./test-database-conformance-preload.mjs", import.meta.url);
@@ -45,16 +120,6 @@ for (const output of [catalog.stdout, catalog.stderr]) {
 if (catalog.status !== 0) {
   process.exit(catalog.status ?? 1);
 }
-const forwarded = separator < 0 ? [] : process.argv.slice(separator + 1);
-const targets =
-  forwarded.length && !forwarded[0].startsWith("-")
-    ? []
-    : [
-        "extensions/workboard",
-        "src/infra/postgres-sync",
-        "src/infra/database-engine",
-        "src/state/openclaw-state-db.postgres.test.ts",
-      ];
 const child = spawn(
   process.execPath,
   [

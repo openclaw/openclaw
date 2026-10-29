@@ -204,3 +204,9 @@ describe("plugin api lifecycle", () => {
     expect(result).toBeUndefined();
   });
 });
+
+it("keeps path resolution available to registered callbacks", () => {
+  const api = captureRegisteredPluginApi({});
+
+  expect(api.resolvePath("models/model.onnx")).toBe("models/model.onnx");
+});

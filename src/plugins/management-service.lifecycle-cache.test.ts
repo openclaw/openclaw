@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as bundledDiscoveryState from "./bundled-discovery-state.js";
@@ -173,6 +174,34 @@ describe("plugin management catalog lifecycle", () => {
       plugins: [],
     });
     expect(mocks.officialCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves installed rows while catalog enrichment is pending, then reuses the prepared facts", async () => {
+    const hosted = createDeferred<{ source: "hosted"; entries: never[] }>();
+    mocks.metadata.mockReturnValue(dependencyMetadataSnapshot({ pluginId: "phase-plugin" }));
+    mocks.officialCatalog.mockReturnValue(hosted.promise);
+    const config = { plugins: { entries: { "phase-plugin": { enabled: true } } } };
+    const params = { config, env: {}, cachedCatalogOnly: true };
+    const pending = listManagedPlugins(params);
+    try {
+      const first = await Promise.race([pending, nextTurn().then(() => undefined)]);
+      expect(first?.plugins).toContainEqual(
+        expect.objectContaining({ id: "phase-plugin", installed: true, enabled: true }),
+      );
+      expect(first?.diagnostics).toContainEqual(
+        expect.objectContaining({ message: expect.stringContaining("pending") }),
+      );
+    } finally {
+      hosted.resolve({ source: "hosted", entries: [] });
+      await pending;
+    }
+    const prepared = await listManagedPlugins({ config, env: {} });
+    expect(await listManagedPlugins(params)).toEqual(prepared);
+    config.plugins.entries["phase-plugin"].enabled = false;
+    expect((await listManagedPlugins(params)).plugins).toContainEqual(
+      expect.objectContaining({ id: "phase-plugin", enabled: false, state: "disabled" }),
+    );
+    expect(mocks.officialCatalog).toHaveBeenCalledOnce();
   });
 
   it("uses current config after awaiting the hosted catalog", async () => {

@@ -1,5 +1,9 @@
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  filterStringEntries,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -23,8 +27,27 @@ type ClaudeCliAuthStatus =
       authMethod?: (typeof CLAUDE_CLI_AUTH_METHODS)[number];
       email?: string;
     }
-  | { status: "missing" | "unreadable" }
+  | { status: "missing" | "not-installed" | "unreadable" }
   | { status: "timeout"; timeoutMs: number };
+
+// Mirrors the CLI runner's child-env contract (src/agents/cli-runner/execute.ts): keys listed
+// here survive the Claude clear list for native-login runs, so readiness must probe them too.
+const CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
+
+function readPreservedCliEnv(env: NodeJS.ProcessEnv): ReadonlySet<string> {
+  const raw = env[CLI_BACKEND_PRESERVE_ENV]?.trim();
+  if (!raw) {
+    return new Set();
+  }
+  if (raw.startsWith("[")) {
+    try {
+      return new Set(filterStringEntries(JSON.parse(raw)));
+    } catch {
+      return new Set();
+    }
+  }
+  return new Set(raw.split(/[,\s]+/).filter(Boolean));
+}
 
 /** Ask Claude CLI whether its own login is usable without reading token material. */
 export async function probeClaudeCliAuthStatus(params?: {
@@ -33,8 +56,11 @@ export async function probeClaudeCliAuthStatus(params?: {
   signal?: AbortSignal;
 }): Promise<ClaudeCliAuthStatus> {
   const env = { ...(params?.env ?? process.env) };
+  const preserved = readPreservedCliEnv(env);
   for (const name of CLAUDE_CLI_CLEAR_ENV) {
-    delete env[name];
+    if (!preserved.has(name)) {
+      delete env[name];
+    }
   }
   try {
     const program = resolveWindowsSpawnProgram({
@@ -76,8 +102,9 @@ export async function probeClaudeCliAuthStatus(params?: {
       ...(authMethod ? { authMethod } : {}),
       ...(email && email.length <= 320 && !/[\r\n]/u.test(email) ? { email } : {}),
     };
-  } catch {
+  } catch (error) {
     params?.signal?.throwIfAborted();
-    return { status: "unreadable" };
+    // A host without the executable cannot run native login; only an installed CLI is inconclusive.
+    return { status: isRecord(error) && error.code === "ENOENT" ? "not-installed" : "unreadable" };
   }
 }

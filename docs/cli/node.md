@@ -417,6 +417,11 @@ identity remains authoritative when an older release recreates `identity/device.
 Doctor owns that stale file's cleanup. Keep `state/openclaw.sqlite` private;
 it contains the device keypair and auth tokens.
 
+Retired `node.json` and interrupted Doctor claims must contain valid UTF-8.
+Doctor reports malformed text as a recoverable warning and preserves its bytes
+for repair. Keep a backup, correct the encoding in a copy, replace the affected
+file, then rerun `openclaw doctor --fix` before starting the node host.
+
 ## Exec approvals
 
 `system.run` is gated by local exec approvals:

@@ -1,7 +1,7 @@
+import * as engineSessions from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 // Memory Core tests cover session search visibility plugin behavior.
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { normalizeSessionDeliveryState } from "openclaw/plugin-sdk/session-store-runtime";
-import * as sessionTranscriptHit from "openclaw/plugin-sdk/session-transcript-hit";
 import * as sessionVisibility from "openclaw/plugin-sdk/session-visibility";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
@@ -17,12 +17,12 @@ const crossAgentStore: Record<string, TestSessionEntry> = {
 };
 let combinedSessionStore: Record<string, TestSessionEntry> = crossAgentStore;
 
-vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-sessions")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGatewayAsync: vi.fn(async () => ({
+    loadMemorySearchSessionStore: vi.fn(async () => ({
       storePath: "(test)",
       store: combinedSessionStore,
     })),
@@ -32,7 +32,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 describe("filterMemorySearchHitsBySessionVisibility", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).mockClear();
+    vi.mocked(engineSessions.loadMemorySearchSessionStore).mockClear();
     combinedSessionStore = crossAgentStore;
   });
 
@@ -64,7 +64,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
         },
       });
       expect(filtered).toEqual(hits);
-      expect(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).not.toHaveBeenCalled();
+      expect(engineSessions.loadMemorySearchSessionStore).not.toHaveBeenCalled();
       expect(guard).not.toHaveBeenCalled();
     },
   );
@@ -653,3 +653,24 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toStrictEqual([]);
   });
 });
+
+it.each([false, true])(
+  "requires explicit trusted scope without requester (trusted=%s)",
+  async (trustedAgentScope) => {
+    combinedSessionStore = {
+      "agent:main:only": sessionEntry("u1", 1, "/tmp/u1.jsonl"),
+      "agent:peer:only": sessionEntry("u2", 1, "/tmp/u2.jsonl"),
+    };
+    const main = searchHit("sessions/main/u1.jsonl", "sessions", "main");
+    const peer = searchHit("sessions/peer/u2.jsonl", "sessions", "peer");
+    const result = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "all" } } }),
+      agentId: "main",
+      requesterSessionKey: undefined,
+      trustedAgentScope,
+      sandboxed: false,
+      hits: [main, peer],
+    });
+    expect(result).toEqual(trustedAgentScope ? [main] : []);
+  },
+);

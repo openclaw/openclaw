@@ -107,6 +107,53 @@ describe("request validation behind gateway status codes", () => {
     },
   );
 
+  it.each([400, 422])("leaves placeholder-only HTTP %i failures unclassified", (status) => {
+    for (const body of [
+      "[Malformed diagnostic JSON redacted]",
+      "[Oversized diagnostic JSON redacted]",
+      "[Unserializable]",
+    ]) {
+      expect(
+        classifyFailoverSignal({ status, message: `${status}: ${body}` }, { providerPlugin: null }),
+      ).toBeNull();
+    }
+    expect(
+      classifyFailoverSignal(
+        { status, message: `${status} status code (no body)` },
+        { providerPlugin: null },
+      ),
+    ).toBeNull();
+    expect(
+      classifyFailoverSignal(
+        {
+          status,
+          message: "Unsupported parameter: logprobs",
+          errorType: "invalid_request_error",
+          code: "unknown_parameter",
+        },
+        { providerPlugin: null },
+      ),
+    ).toEqual({
+      kind: "reason",
+      reason: "format",
+    });
+    expect(
+      classifyFailoverSignal(
+        { status, message: "[Malformed diagnostic JSON redacted] Unsupported parameter: logprobs" },
+        { providerPlugin: null },
+      ),
+    ).toEqual({ kind: "reason", reason: "format" });
+  });
+
+  it("preserves other HTTP status semantics for redacted bodies", () => {
+    expect(
+      classifyFailoverSignal(
+        { status: 500, message: "[Malformed diagnostic JSON redacted]" },
+        { providerPlugin: null },
+      ),
+    ).toEqual({ kind: "reason", reason: "server_error" });
+  });
+
   it.each([
     { status: 402, reason: "billing" },
     { status: 529, reason: "overloaded" },

@@ -151,6 +151,9 @@ overflow summary.
   from promoting work into a half-stopped session.
 - Clearing the entire session queue without per-requester checks is not the
   stop path for multi-owner sessions.
+- A new prompt accepted after Stop keeps its own cancellation and queue custody.
+  If the stopped turn is still settling preparation, the new prompt waits for
+  that owner to finish before running; it does not inherit the earlier Stop.
 - Queued waits are not projected as active agent runs for `sessions.list` and
   do not own active-run timeout semantics; only the active phase does.
 - A queued request that expires or is cancelled before execution settles only

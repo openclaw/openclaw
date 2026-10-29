@@ -1,7 +1,11 @@
 import { realpathSync, statSync } from "node:fs";
 import { Option, type Command } from "commander";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import type { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import type {
   CreateManagedWorktreeParams,
@@ -61,7 +65,7 @@ function printRecord(record: ManagedWorktreeRecord, json: boolean): void {
     defaultRuntime.writeJson(record);
     return;
   }
-  defaultRuntime.log(`${record.id}\t${record.path}`);
+  defaultRuntime.log(`${sanitizeTerminalText(record.id)}\t${sanitizeTerminalText(record.path)}`);
 }
 
 export function registerWorktreesCli(program: Command): void {
@@ -124,7 +128,7 @@ export function registerWorktreesCli(program: Command): void {
         return;
       }
       defaultRuntime.log(
-        renderTable({
+        renderTerminalSafeTable({
           width: getTerminalTableWidth(),
           columns: [
             { key: "ID", header: "ID", minWidth: 16, flex: true },
@@ -253,8 +257,8 @@ export function registerWorktreesCli(program: Command): void {
           } else {
             defaultRuntime.log(
               removed
-                ? `Removed ${id} without force.`
-                : `Retained ${id}: ${cleanup?.outcome ?? "cleanup not admitted"}.`,
+                ? `Removed ${sanitizeTerminalText(id)} without force.`
+                : `Retained ${sanitizeTerminalText(id)}: ${cleanup?.outcome ?? "cleanup not admitted"}.`,
             );
           }
           return;
@@ -264,10 +268,10 @@ export function registerWorktreesCli(program: Command): void {
         } else {
           defaultRuntime.log(
             result.recoveryPath
-              ? `Retired ${id}; original source retained at ${result.recoveryPath} for the snapshot recovery period.`
+              ? `Retired ${sanitizeTerminalText(id)}; original source retained at ${sanitizeTerminalText(result.recoveryPath)} for the snapshot recovery period.`
               : result.snapshotError
-                ? `Removed ${id} without a snapshot: ${result.snapshotError}`
-                : `Removed ${id}.`,
+                ? `Removed ${sanitizeTerminalText(id)} without a snapshot: ${sanitizeTerminalText(result.snapshotError)}`
+                : `Removed ${sanitizeTerminalText(id)}.`,
           );
         }
       },
@@ -311,7 +315,7 @@ export function registerWorktreesCli(program: Command): void {
         if (opts.json) {
           defaultRuntime.writeJson(result);
         } else {
-          defaultRuntime.log(`Retired snapshot ${id}.`);
+          defaultRuntime.log(`Retired snapshot ${sanitizeTerminalText(id)}.`);
         }
       },
     );
@@ -333,7 +337,9 @@ export function registerWorktreesCli(program: Command): void {
       if (opts.json) {
         defaultRuntime.writeJson(result);
       } else {
-        defaultRuntime.log(`Completed removal of ${id}; original snapshot retained.`);
+        defaultRuntime.log(
+          `Completed removal of ${sanitizeTerminalText(id)}; original snapshot retained.`,
+        );
       }
     });
 
@@ -395,8 +401,8 @@ export function registerWorktreesCli(program: Command): void {
       } else {
         defaultRuntime.log(
           "jobId" in result
-            ? `Worktree cleanup ${result.state}: ${result.jobId}. ${formatWorktreeGcResult(result)}\nProgress: openclaw worktrees gc --job ${result.jobId}${result.error ? `\n${result.error}` : ""}`
-            : formatWorktreeGcResult(result),
+            ? `Worktree cleanup ${result.state}: ${sanitizeTerminalText(result.jobId)}. ${sanitizeTerminalText(formatWorktreeGcResult(result))}\nProgress: openclaw worktrees gc --job ${sanitizeTerminalText(result.jobId)}${result.error ? `\n${sanitizeTerminalText(result.error)}` : ""}`
+            : sanitizeTerminalText(formatWorktreeGcResult(result)),
         );
       }
       if (result.outcome === "partial" || ("state" in result && result.state === "failed")) {

@@ -23,7 +23,10 @@ import {
   emitAssistantTextEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { resolveManagedStreamMediaUrls } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import { resolveStreamingReply } from "./embedded-agent-subscribe.handlers.messages.stream.js";
+import {
+  createStreamingReplyResolver,
+  resolveStreamingReply,
+} from "./embedded-agent-subscribe.handlers.messages.stream.js";
 
 const googleModel: Model<"google-generative-ai"> = {
   id: "gemini-2.5-flash",
@@ -573,6 +576,53 @@ it("keeps generic directive URLs separate from tool-owned managed media", () => 
   expect(
     resolveManagedStreamMediaUrls(state, ["./ordinary.png", "./managed.png", "./unknown.png"]),
   ).toEqual(["./managed.png"]);
+});
+
+it.each([
+  [
+    "a held directive frame",
+    [
+      { text: "<tool_call", delta: "<tool_call", held: true, expected: "" },
+      {
+        text: "<tool_call>{}</tool_call>Visible\n",
+        delta: ">{}</tool_call>Visible\n",
+        expected: "Visible",
+      },
+    ],
+  ],
+  [
+    "a source replacement",
+    [
+      { text: "Discarded.", delta: "Discarded.", expected: "Discarded." },
+      { text: "<tool_call>{}</tool_call>Visible\n", expected: "Visible" },
+      {
+        text: "<tool_call>{}</tool_call>Visible\ntail",
+        delta: "tail",
+        expected: "Visible\ntail",
+      },
+    ],
+  ],
+] as const)("retains raw XML projection across %s", (_name, frames) => {
+  const resolve = createStreamingReplyResolver();
+  let previousCleaned = "";
+  for (const frame of frames) {
+    const delta = "delta" in frame ? frame.delta : undefined;
+    const result = resolve({
+      evtType: "text_delta",
+      next: frame.text,
+      previousText: "",
+      previousCleaned,
+      visibleDelta: delta ?? frame.text,
+      appendDelta: delta ?? null,
+      parsedStreamDirectives:
+        "held" in frame ? null : { text: "", replyToTag: false, isSilent: false },
+      previousAudioDirectiveCount: 0,
+      rawDirectiveSource: frame.text,
+      rawDirectiveDelta: delta,
+    });
+    expect(result.text).toBe(frame.expected);
+    previousCleaned = result.text;
+  }
 });
 
 it("appends visible text across long blank runs without stalling the media scan", () => {

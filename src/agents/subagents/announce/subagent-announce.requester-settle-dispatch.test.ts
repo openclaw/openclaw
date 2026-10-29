@@ -88,6 +88,8 @@ describe("requester settle dispatch deadline", () => {
             : undefined,
       );
       const child = settledChild();
+      // This fixture still owes findings and a visible final to its requester.
+      child.delivery = { status: "pending" };
       child.requesterSessionKey = requesterSessionKey;
       child.requesterSettleWake = {
         status: "pending",
@@ -162,6 +164,75 @@ describe("requester settle dispatch deadline", () => {
       expect(completeBatch).toHaveBeenCalledOnce();
     },
   );
+
+  it.each([
+    { name: "consumed silent", pending: false, restart: false, silent: true },
+    { name: "consumed empty", pending: false, restart: false, silent: false },
+    { name: "pending silent", pending: true, restart: false, silent: true },
+    { name: "restart silent", pending: false, restart: true, silent: true },
+  ])("settles only consumed optional cohorts: $name", async ({ pending, restart, silent }) => {
+    vi.useFakeTimers();
+    const child = settledChild();
+    child.delivery = { status: pending ? "pending" : "delivered" };
+    if (restart) {
+      child.execution.interruptionReason = "gateway-restart";
+    }
+    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+    const context = createContext();
+    startTurn.mockImplementation(async ({ preflight, io }) => {
+      io.emitAcceptance([true, { runId: preflight.request.idempotencyKey, status: "accepted" }], {
+        runId: preflight.request.idempotencyKey,
+      });
+      io.emitFinal([
+        true,
+        {
+          status: "ok",
+          result: {
+            payloads: [],
+            meta: { terminalReply: { disposition: silent ? "silent" : "empty" } },
+          },
+        },
+      ]);
+    });
+    setSubagentAnnounceDeliveryDepsForTest({
+      getRuntimeConfig: () => ({}),
+      loadRequesterSessionEntry: () => ({
+        cfg: {},
+        canonicalKey: REQUESTER_KEY,
+        agentId: "main",
+        entry: { sessionId: "requester-session", updatedAt: 1 },
+      }),
+      getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
+    });
+    deliver.mockImplementation(sendSubagentAnnounceDirectly);
+    const completeBatch = vi.fn(() => {
+      child.requesterSettleWake = undefined;
+    });
+    const run = () =>
+      withPluginRuntimeGatewayRequestScope(
+        { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
+        () =>
+          maybeWakeRequesterAfterAllChildrenSettled({
+            requesterSessionKey: REQUESTER_KEY,
+            isSourceCurrent: () => true,
+            settledEntry: child,
+            transitionBatch: publishWakeTransition,
+            completeBatch,
+          }),
+      );
+    const required = pending || restart;
+    await expect(run()).resolves.toBe(!required);
+    expect(startTurn).toHaveBeenCalledOnce();
+    expect(completeBatch).toHaveBeenCalledTimes(required ? 0 : 1);
+    expect(deliver.mock.calls[0]?.[0].triggerMessage).toContain(
+      required ? "child result" : "each child result was announced individually",
+    );
+    if (!required) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledOnce();
+    }
+  });
 
   it("queues a pause notice behind the requester's current turn and delivers it once", async () => {
     vi.useFakeTimers();

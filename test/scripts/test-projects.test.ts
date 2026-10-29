@@ -3762,6 +3762,7 @@ describe("test selector native source facts", () => {
           references: ["scripts/tool.mts"],
         };
         for (const file of [
+          "node-runtime-env.mjs",
           "scripts/lib/test-selector-source-facts.mts",
           "scripts/lib/test-source-term-matcher.mts",
           "src/infra/node-runtime-executable.ts",

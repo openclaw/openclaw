@@ -1101,6 +1101,25 @@ describe("/acp command", () => {
     }
   });
 
+  it("sends every line of a multiline ACP steer instruction", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        return { key: defaultAcpSessionKey };
+      }
+      return { ok: true };
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+
+    await runDiscordAcpCommand(
+      `/acp steer --session ${defaultAcpSessionKey} first line\n  second line\n\nfourth line`,
+    );
+
+    expectMockCallFields(hoisted.runTurnMock, {
+      mode: "steer",
+      text: "first line\n  second line\n\nfourth line",
+    });
+  });
+
   it("keeps bounded ACP steer output UTF-16 safe", async () => {
     const prefix = "a".repeat(799);
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {

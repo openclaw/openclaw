@@ -39,6 +39,18 @@ export function mergeAcceptedSessionSpawnsForRun(
   return receipts ? [...receipts.values()] : [];
 }
 
+/** Retire only the exact receipt consumed by an inline terminal result. */
+export function retireAcceptedSessionSpawnCompletionForRun(
+  instance: OperationalRunInstanceRef,
+  accepted: Pick<AcceptedSessionSpawn, "runId" | "childSessionKey">,
+): void {
+  const receipts = acceptedSpawnsByRun.get(instance);
+  const receipt = receipts?.get(accepted.runId);
+  if (receipt?.childSessionKey === accepted.childSessionKey) {
+    receipts?.set(accepted.runId, { ...receipt, expectsCompletionMessage: false });
+  }
+}
+
 /** Normalize a tool result that accepted a child session spawn. */
 export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSessionSpawn | null {
   const details = asOptionalRecord(asOptionalRecord(result)?.details);

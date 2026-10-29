@@ -393,6 +393,43 @@ describe("Heartbeat event routing", () => {
     });
   });
 
+  it.each(["manual", "notifications-event"] as const)(
+    "consumes a targeted %s event once during isolated heartbeats with cadence disabled",
+    async (source) => {
+      await withRouting(
+        async ({ cfg, storePath, replySpy, baseKey, sendTelegram, run }) => {
+          const sessionKey = "agent:main:telegram:group:-100155462274:topic:42";
+          const isolatedKey = `${sessionKey}:heartbeat`;
+          const eventText = "Background task is ready.";
+          await writeTelegramSessionStore(storePath, sessionKey, { sessionId: "conversation" });
+          enqueueSystemEvent(eventText, { sessionKey });
+          enqueueSystemEvent("Other conversation event", { sessionKey: baseKey });
+          enqueueSystemEvent("Isolated queue event", { sessionKey: isolatedKey });
+          const formatted: Array<string | undefined> = [];
+          replySpy.mockImplementation(async (ctx, options) => {
+            formatted.push(await formatQueuedEvents(cfg, ctx, options));
+            return { text: "Task complete." };
+          });
+          const wake = { sessionKey, source, intent: "immediate", reason: "wake" } as const;
+
+          expect((await run(wake)).status).toBe("ran");
+          expect(formatted).toEqual([expect.stringContaining(eventText)]);
+          expect(getFirstReplyContext(replySpy).SessionKey).toBe(isolatedKey);
+          expectTelegramSend(sendTelegram, { to: "-100155462274", text: "Task complete." });
+          expect(peekSystemEvents(sessionKey)).toEqual([]);
+
+          expect((await run(wake)).status).toBe("ran");
+          expect(formatted).toEqual([expect.stringContaining(eventText), undefined]);
+          expect(peekSystemEvents(sessionKey)).toEqual([]);
+          expect(peekSystemEvents(baseKey)).toEqual(["Other conversation event"]);
+          expect(peekSystemEvents(isolatedKey)).toEqual(["Isolated queue event"]);
+        },
+        true,
+        { every: "0m" },
+      );
+    },
+  );
+
   it("delivers an isolated group completion after its base conversation moves to a blocked direct chat", async () => {
     await withRouting(
       async ({ cfg, storePath, replySpy, baseKey, isolatedKey, sendTelegram, run }) => {

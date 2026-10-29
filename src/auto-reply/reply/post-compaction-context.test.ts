@@ -6,7 +6,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { readPostCompactionContext } from "./post-compaction-context.js";
+import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
+import {
+  appendPostCompactionRefreshPrompt,
+  readPostCompactionContext,
+} from "./post-compaction-context.js";
 
 describe("readPostCompactionContext", () => {
   let tmpDir = "";
@@ -49,6 +53,32 @@ describe("readPostCompactionContext", () => {
     } as OpenClawConfig;
     return readPostCompactionContext(tmpDir, { ...options, cfg });
   }
+
+  it("preserves the annotated turn and policy bytes when refreshing after compaction", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 9, 27, 12));
+    try {
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "## Session Startup\nRead files.");
+      const context = { start: 0, text: "Current conversation.\n" };
+      const original = context.text + "\n\nPersistent policy.\n";
+      const followupRun = createTestFollowupRun({
+        workspaceDir: tmpDir,
+        extraSystemPrompt: original,
+        extraSystemPromptTurnContext: context,
+      });
+      const params = { cfg: defaultPostCompactionCfg, followupRun };
+
+      await appendPostCompactionRefreshPrompt(params);
+
+      const refreshed = followupRun.run.extraSystemPrompt;
+      expect(refreshed?.startsWith(original + "\n\n")).toBe(true);
+      expect(refreshed).toContain("Read files.");
+      expect(followupRun.run.extraSystemPromptTurnContext).toEqual(context);
+      await appendPostCompactionRefreshPrompt(params);
+      expect(followupRun.run.extraSystemPrompt).toBe(refreshed);
+    } finally {
+      now.mockRestore();
+    }
+  });
 
   it("returns null when no AGENTS.md exists", async () => {
     const result = await readPostCompactionContext(tmpDir);

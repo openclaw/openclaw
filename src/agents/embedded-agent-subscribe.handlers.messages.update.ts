@@ -30,6 +30,7 @@ import {
   resolveAssistantStreamItemId,
   resolveAssistantTextChunk,
   resolveStreamingReply,
+  createStreamingReplyResolver,
   scopeAssistantMessageToStreamBlock,
   shouldSuppressDeterministicApprovalOutput,
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
@@ -472,7 +473,11 @@ export function handleMessageUpdate(
       replyDirectives,
       audioDirectiveCount,
       directiveCodePrefix,
-    } = resolveStreamingReply({
+    } = (
+      projection?.kind === "raw"
+        ? (projection.replyResolver ??= createStreamingReplyResolver())
+        : resolveStreamingReply
+    )({
       evtType,
       next,
       previousText,
@@ -482,6 +487,7 @@ export function handleMessageUpdate(
       parsedStreamDirectives,
       previousAudioDirectiveCount: ctx.state.lastAssistantAudioDirectiveCount,
       rawDirectiveSource: projection?.kind === "raw" ? nextRawStreamText : undefined,
+      rawDirectiveDelta: projection?.kind === "raw" && unchangedBlockAppend ? chunk : undefined,
       directiveCodePrefix: projection?.kind === "raw" ? projection.directiveCodePrefix : undefined,
     });
     if (projection?.kind === "raw") {
@@ -512,9 +518,10 @@ export function handleMessageUpdate(
       next === nextRawStreamText.trim() &&
       ((previousText === previousCleaned && next === cleanedText) ||
         (appendDelta !== null && replyDelta === appendDelta));
-    if (plainAppend) {
+    // Block snapshots only serve the optional block-delivery consumer.
+    if (ctx.params.onBlockReply && plainAppend) {
       ctx.blockChunker.append(chunk);
-    } else {
+    } else if (ctx.params.onBlockReply) {
       const previousBlock = extractAssistantStreamSnapshot(ctx, partialAssistant, {
         throughIndex: streamItemChanged ? blockSourceIndex : priorSourceIndex,
         observedText: streamItemChanged ? "" : priorBlockText,

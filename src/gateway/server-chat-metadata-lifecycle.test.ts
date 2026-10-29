@@ -230,6 +230,7 @@ async function createRealMetadataLifecycle(
                 getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
                 getAuthStoreRevision: () => revision,
               }),
+          getAuthCatalogRevision: authSnapshots.getRuntimeAuthProfileStoreCatalogRevision,
           getSkillsVersion: options.skillsWorkspaceDir ? getSkillsSnapshotVersion : () => 0,
           getPluginRegistryVersion: () => 0,
           buildCommands,
@@ -259,7 +260,12 @@ async function createRealMetadataLifecycle(
   }
   const modelEvent = (event: { phase: string; error?: Error; modelFactsChanged?: boolean }) =>
     mocks.registerModelListener.mock.calls[0]![0](event);
-  const authEvent = () => mocks.registerAuthListener.mock.calls[0]![0]();
+  const authEvent = () =>
+    mocks.registerAuthListener.mock.calls[0]![0]({
+      affectsInheritedStores: true,
+      profileSetChanged: false,
+      availabilityOnly: false,
+    });
   return {
     lifecycle,
     attach,
@@ -299,6 +305,33 @@ async function createRealMetadataLifecycle(
 }
 
 describe("gateway chat metadata lifecycle", () => {
+  it("coalesces availability notifications and cancels the pending refresh on stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const { lifecycle: pending, sidecarOwner } = createLifecycle();
+      const lifecycle = await pending;
+      await lifecycle.attachContext({ ...context, broadcast: vi.fn() }, sidecarOwner.publish);
+      const listener = mocks.registerAuthListener.mock.calls[0]![0];
+      mocks.refresh.mockClear();
+      const event = {
+        affectsInheritedStores: true,
+        profileSetChanged: false,
+        availabilityOnly: true,
+      };
+      listener(event);
+      listener(event);
+      expect(mocks.refresh).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(mocks.refresh).toHaveBeenCalledOnce();
+      listener(event);
+      await sidecarOwner.stop();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(mocks.refresh).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ignores coverage-only skills events and publishes completed revisions", async () => {
     resetSkillsRefreshStateForTest();
     const workspaceDir = "/tmp/chat-metadata-skills";
@@ -504,6 +537,7 @@ describe("gateway chat metadata lifecycle", () => {
           getPreparedOwner,
           getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
           getAuthStoreRevision: () => revision,
+          getAuthCatalogRevision: () => revision,
           getSkillsVersion: () => 0,
           getPluginRegistryVersion: () => 0,
           buildCommands: async () => ({ commands: [] }),
@@ -545,7 +579,7 @@ describe("gateway chat metadata lifecycle", () => {
     modelListener({ phase: "invalidated" });
     available = true;
     revision += 1;
-    authListener();
+    authListener({ availabilityOnly: false });
     expect(broadcast).toHaveBeenCalledTimes(2);
     modelListener({ phase: "published" });
     await vi.waitFor(() => expect(outcomes).toHaveLength(3));
@@ -553,7 +587,7 @@ describe("gateway chat metadata lifecycle", () => {
 
     available = false;
     revision += 1;
-    authListener();
+    authListener({ availabilityOnly: false });
     await vi.waitFor(() => expect(outcomes).toHaveLength(4));
     expect(outcomes[3]).toEqual([expect.objectContaining({ available: false })]);
 
@@ -609,6 +643,7 @@ describe("gateway chat metadata lifecycle", () => {
             getPreparedOwner: () => (ownerAvailable ? owner : undefined),
             getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
             getAuthStoreRevision: () => revision,
+            getAuthCatalogRevision: () => revision,
             getSkillsVersion: () => 0,
             getPluginRegistryVersion: () => 0,
             buildCommands: async () => ({ commands: [] }),
@@ -702,7 +737,7 @@ describe("gateway chat metadata lifecycle", () => {
           modelListener({ phase: "invalidated" });
           modelListener({ phase: "catalog-published" });
           modelListener({ phase: "catalog-failed", error: new Error("obsolete catalog failed") });
-          authListener();
+          authListener({ availabilityOnly: false });
           skillsListener({ reason: "watch" });
           expect(mocks.refresh).toHaveBeenCalledOnce();
           expect(warn).not.toHaveBeenCalled();
@@ -710,7 +745,7 @@ describe("gateway chat metadata lifecycle", () => {
           expect(mocks.refresh).toHaveBeenCalledTimes(2);
           expect(warn).not.toHaveBeenCalled();
         } else {
-          authListener();
+          authListener({ availabilityOnly: false });
           expect(mocks.refresh).toHaveBeenCalledTimes(2);
           skillsListener({ reason: "watch" });
           expect(mocks.refresh).toHaveBeenCalledTimes(3);

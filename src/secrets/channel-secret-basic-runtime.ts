@@ -83,6 +83,9 @@ type ChannelSecretCollectorParams = {
 /** Keeps registry discovery and account-surface resolution shared while channels own activation. */
 export function createChannelSecretContract(
   params: Parameters<typeof createChannelSecretTargetRegistryEntries>[0] & {
+    hasImplicitDefaultAccount?: (
+      params: ChannelSecretCollectorParams & { channel: Record<string, unknown> },
+    ) => boolean;
     collect: (
       params: ChannelSecretCollectorParams & {
         channelKey: string;
@@ -102,6 +105,21 @@ export function createChannelSecretContract(
       const resolved = getChannelSurface(collectorParams.config, params.channelKey);
       if (!resolved) {
         return;
+      }
+      // Opt-in only: other channels retain their explicit-account semantics.
+      // A configured default (including disabled) always wins over a synthetic one.
+      if (
+        resolved.surface.hasExplicitAccounts &&
+        !resolved.surface.accounts.some(
+          ({ accountId }) => normalizeAccountId(accountId) === "default",
+        ) &&
+        params.hasImplicitDefaultAccount?.({ ...collectorParams, channel: resolved.channel })
+      ) {
+        resolved.surface.accounts.push({
+          accountId: "default",
+          account: {},
+          enabled: resolved.surface.channelEnabled,
+        });
       }
       params.collect({
         ...collectorParams,

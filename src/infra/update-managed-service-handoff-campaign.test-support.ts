@@ -13,9 +13,13 @@ export function registerManagedCampaignFailureTests(
   ) => Promise<ManagedServiceManagerBoundaryResult>,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
 ): void {
-  itUnix.each([undefined, "consumed-before-exit"] as const)(
-    "records the child's early refusal without its notification (%s)",
-    async (updaterNotification) => {
+  itUnix.each([
+    { updaterNotification: undefined, gatewayHealth: "ready" },
+    { updaterNotification: "consumed-before-exit", gatewayHealth: "exited" },
+    { updaterNotification: undefined, gatewayHealth: "throw" },
+  ] as const)(
+    "records the child's early refusal without its notification ($updaterNotification, $gatewayHealth)",
+    async ({ updaterNotification, gatewayHealth }) => {
       const reason = "update-recovery-pending";
       const repair =
         "Retained package activation is prepared. Run openclaw update repair before retrying.";
@@ -33,11 +37,14 @@ export function registerManagedCampaignFailureTests(
           controlDisconnect: "transferred",
           validationResult: "child-result",
           helperExitCode: 7,
+          recoveryTimeoutMs: 30 * 60_000,
           updaterNotification,
+          gatewayHealth,
           updaterResult: {
             status: "error",
             mode: "npm",
             reason,
+            after: { version: "2.0.0" },
             recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
             steps: [
               {
@@ -60,8 +67,18 @@ export function registerManagedCampaignFailureTests(
       expect(state.restored).toBeUndefined();
       expect(sentinel).toBeNull();
       expect(sensitiveFilesRemoved).toBe(true);
+      expect(state).toMatchObject({
+        healthProbeCount: 1,
+        expectedVersion: "1.0.0",
+        recoveryProbeTimeoutMs: 3000,
+      });
       const recorded = expectDefined(run, "closed campaign run");
-      expect(recorded).toMatchObject({ status: "failed", phase: "finished", reason });
+      expect(recorded).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason,
+        after: { version: "2.0.0" },
+      });
       expect(recorded.steps).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -80,6 +97,19 @@ export function registerManagedCampaignFailureTests(
       const report = renderUpdateRunReport(recorded).markdown;
       expect(report).toContain(reason);
       expect(report).toContain("Package publication is incomplete.");
+      expect(recorded.verification.recovery).toMatchObject({ serviceRestartSafe: false });
+      expect(report).toContain(
+        gatewayHealth === "ready"
+          ? "Recorded recovery: Gateway readiness is pending; recovery check completed without verified readiness."
+          : gatewayHealth === "exited"
+            ? "Recorded recovery: not serving (service-not-running)"
+            : "Recorded recovery: recovery check failed (gateway-probe-failed)",
+      );
+      expect(state.triageInput).toMatchObject({
+        error: expect.stringContaining(
+          gatewayHealth === "ready" ? "Service recovery succeeded." : "Service recovery failed.",
+        ),
+      });
     },
   );
 

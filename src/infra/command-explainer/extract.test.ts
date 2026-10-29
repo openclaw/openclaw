@@ -2,7 +2,7 @@
 // nested wrapper parsing, and parser error handling.
 import { describe, expect, it } from "vitest";
 import { CommandExplanationWorkLimitError, explainShellCommand } from "./extract.js";
-import { parseBashForCommandExplanation } from "./tree-sitter-runtime.js";
+import { getBashParserForCommandExplanation } from "./tree-sitter-runtime.js";
 
 function riskMatches(risk: unknown, fields: Record<string, unknown>): boolean {
   if (!risk || typeof risk !== "object") {
@@ -31,7 +31,8 @@ function nestShellSyntax(open: string, inner: string, close: string, depth: numb
 
 describe("command explainer tree-sitter runtime", () => {
   it("rejects oversized parser input before parsing", async () => {
-    await expect(parseBashForCommandExplanation("x".repeat(128 * 1024 + 1))).rejects.toThrow(
+    const parse = await getBashParserForCommandExplanation();
+    expect(() => parse("x".repeat(128 * 1024 + 1))).toThrow(
       "Shell command is too large to explain",
     );
   });

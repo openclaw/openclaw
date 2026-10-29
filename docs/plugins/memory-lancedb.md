@@ -221,6 +221,13 @@ Auto-recall embeds the current turn's prompt after removing media attachment
 notes and normalizing whitespace. The same limit bounds each recalled item
 after prompt escaping before that text reaches the model.
 
+Automatic recall and `memory_recall` each have a 15-second budget shared by
+embedding-provider initialization, the embedding request, and database search.
+On the provider-adapter path, cold initialization does not give the embedding
+request a fresh budget: if initialization finishes after the deadline, that
+expired query is not sent. Shared provider initialization may still finish for
+later operations.
+
 `captureMaxChars` gates whether a user message from the turn's `agent_end`
 event is short enough to be considered for auto-capture. `memory_store` rejects
 longer text before embedding or storage; the setting does not affect recall

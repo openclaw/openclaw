@@ -3,6 +3,7 @@ import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-ru
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import {
+  getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
   runWithGatewayDetachedWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -22,7 +23,11 @@ import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import {
+  getSubagentActivationRuns,
+  getSubagentSweepRuns,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
@@ -32,6 +37,7 @@ import {
   SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS,
   warnSuspendedDeliveryPressure,
 } from "./subagent-registry-suspended-delivery.js";
+import { createSubagentSweepCleanupTail } from "./subagent-registry-sweep-cleanup-tail.js";
 import {
   createSubagentSweepReadScope,
   deleteSweptSession,
@@ -48,6 +54,7 @@ import {
   reconcileProvisionalSubagentKill,
 } from "./subagent-registry-sweep-kill.js";
 import { orderSubagentSweepEntries } from "./subagent-registry-sweep-order.js";
+import { SUBAGENT_SESSION_RUN_TTL_MS } from "./subagent-registry-work-index.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
@@ -61,7 +68,6 @@ import {
 } from "./subagent-session-reconciliation.js";
 export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 
-const SESSION_RUN_TTL_MS = 5 * 60_000;
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
 const restartRecoveryLoader = createLazyImportLoader(
   () => import("./subagent-registry-restart-recovery.js"),
@@ -187,31 +193,37 @@ export function createSubagentRegistrySweeper(params: {
     warn: params.warn,
   });
 
-  function runCleanupTail(runId: string, label: string, run: () => Promise<unknown>) {
-    // Cleanup can outlive the tick as well as the request that armed its timer.
-    void trackWork(() =>
-      runWithGatewayDetachedWorkAdmission(run, "subagents:sweeper-cleanup").catch(
-        (error: unknown) => params.warn(`subagent sweep ${label} failed`, { runId, error }),
-      ),
-    );
-  }
+  const runCleanupTail = createSubagentSweepCleanupTail({ trackWork, warn: params.warn });
 
   async function sweepOnce(recoveryOnly = false) {
     if (sweepInProgress) {
       return;
     }
     sweepInProgress = true;
+    const drainSignal = getGatewayRestartDrainSignal();
     try {
       const now = Date.now();
+      recovery.prune();
+      const runEntries = recoveryOnly
+        ? [...getSubagentActivationRuns(runs)].map((entry): [string, SubagentRunRecord] => [
+            entry.runId,
+            entry,
+          ])
+        : orderSubagentSweepEntries(runs, now);
+      if (runEntries.length === 0) {
+        params.sweepPendingLifecycle(now);
+        if (runs.size === 0) {
+          stop();
+        }
+        return;
+      }
       const readScope = createSubagentSweepReadScope(runs, params.getGatewayRecoveryRuntime);
       const deleteSession = (entry: SubagentRunRecord, identity: FrozenSessionIdentity) =>
         deleteSweptSession(entry, identity, runs, params.callGateway, () =>
           readScope.assertRunCurrent(entry),
         );
-      recovery.prune();
       if (recoveryOnly) {
-        const restoredRuns = [...runs];
-        for (const [runId, entry] of restoredRuns) {
+        for (const [runId, entry] of runEntries) {
           await recovery.recover(runId, entry);
         }
         return;
@@ -220,7 +232,6 @@ export function createSubagentRegistrySweeper(params: {
         string,
         { requesterSessionKey: string; groupId: string; requesterAgentId?: string }
       >();
-      const runEntries = orderSubagentSweepEntries(runs, now);
       // Completion stays fresh across awaits, but deletion must retain the earlier
       // CAS identity. Bind it to the exact run so replacements wait for another pass.
       const cleanupIdentities = new Map<object, FrozenSessionIdentity | undefined>();
@@ -248,6 +259,10 @@ export function createSubagentRegistrySweeper(params: {
         );
       }
       for (const [runId, snapshot] of runEntries) {
+        // Finish admitted cleanup, but leave the remaining durable backlog for the next Gateway.
+        if (drainSignal.aborted) {
+          return;
+        }
         readScope.assertCurrent();
         const selected = runs.get(runId);
         if (!selected || !isSameSubagentRunOwner(selected, snapshot)) {
@@ -484,7 +499,7 @@ export function createSubagentRegistrySweeper(params: {
             (current) =>
               !current.archiveAtMs &&
               typeof current.cleanupCompletedAt === "number" &&
-              now - current.cleanupCompletedAt > SESSION_RUN_TTL_MS,
+              now - current.cleanupCompletedAt > SUBAGENT_SESSION_RUN_TTL_MS,
             () => null,
           );
           if (deleted === null) {
@@ -567,6 +582,9 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         for (const [candidateRunId, candidate] of groupEntries) {
+          if (drainSignal.aborted) {
+            return;
+          }
           const warnCleanup = (message: string, failure?: { error: unknown }) =>
             params.warn(message, {
               runId: candidateRunId,
@@ -678,7 +696,7 @@ export function createSubagentRegistrySweeper(params: {
       sweepInProgress = false;
       // Count retained delivery after expiry, even when unrelated sweep work fails.
       lastWarnedSuspendedCount = warnSuspendedDeliveryPressure(
-        runs.values(),
+        getSubagentSweepRuns(runs, Date.now()),
         lastWarnedSuspendedCount,
         params.warn,
       );

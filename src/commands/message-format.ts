@@ -1,8 +1,8 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   getTerminalTableWidth,
-  renderTable,
   renderTerminalSafeTable,
 } from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -61,7 +61,7 @@ function renderSummaryValue(value: unknown): string {
 
 function renderObjectSummary(payload: unknown, opts: FormatOpts): string {
   if (!payload || typeof payload !== "object") {
-    return String(payload);
+    return sanitizeTerminalText(String(payload));
   }
   const obj = payload as Record<string, unknown>;
   const keys = Object.keys(obj);
@@ -73,7 +73,7 @@ function renderObjectSummary(payload: unknown, opts: FormatOpts): string {
     const value = renderSummaryValue(obj[k]);
     return { Key: k, Value: shortenText(value, 96) };
   });
-  return renderTable({
+  return renderTerminalSafeTable({
     width: opts.width,
     columns: [
       { key: "Key", header: "Key", minWidth: 16 },
@@ -230,9 +230,18 @@ export function formatMessageCliText(
   opts?: { displayLimit?: number },
 ): string[] {
   const rich = isRich();
-  const ok = (text: string) => (rich ? theme.success(text) : text);
-  const fail = (text: string) => (rich ? theme.error(text) : text);
-  const muted = (text: string) => (rich ? theme.muted(text) : text);
+  const ok = (text: string) => {
+    const safeText = sanitizeTerminalText(text);
+    return rich ? theme.success(safeText) : safeText;
+  };
+  const fail = (text: string) => {
+    const safeText = sanitizeTerminalText(text);
+    return rich ? theme.error(safeText) : safeText;
+  };
+  const muted = (text: string) => {
+    const safeText = sanitizeTerminalText(text);
+    return rich ? theme.muted(safeText) : safeText;
+  };
   const heading = (text: string) => (rich ? theme.heading(text) : text);
 
   const width = getTerminalTableWidth();
@@ -262,7 +271,7 @@ export function formatMessageCliText(
     );
     return [
       headingLine,
-      renderTable({
+      renderTerminalSafeTable({
         width: formatOpts.width,
         columns: [
           { key: "Channel", header: "Channel", minWidth: 10 },

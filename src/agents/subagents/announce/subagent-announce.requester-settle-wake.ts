@@ -4,10 +4,7 @@ import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
-import {
-  type DeliveryContext,
-  normalizeDeliveryContext,
-} from "../../../utils/delivery-context.shared.js";
+import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -64,6 +61,7 @@ import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-s
 import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
 import {
   readSharedBatchState,
+  needsRequesterSettleFindings,
   createRequesterSettleBatchClaim,
   createRequesterSettleBatchDeferral,
   captureRequesterRunOwner,
@@ -72,7 +70,7 @@ import {
   startRequesterSettleWakeAttempt,
   deferRequesterSettleWakePreparation,
   type RequesterSettleWakeBatchState,
-  type RequesterSettleWakeBatchCallbacks,
+  type RequesterSettleWakeParams,
 } from "./subagent-announce.requester-settle-state.js";
 
 const log = createSubsystemLogger("agents/subagent-announce");
@@ -83,13 +81,7 @@ const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 
 /** Wake top-level or yielded requesters after their descendants settle; lifecycle owns transitions. */
 export async function maybeWakeRequesterAfterAllChildrenSettled(
-  params: RequesterSettleWakeBatchCallbacks & {
-    requesterSessionKey: string;
-    requesterOrigin?: DeliveryContext;
-    settledEntry: SubagentRunRecord;
-    signal?: AbortSignal;
-    isSourceCurrent: () => boolean;
-  },
+  params: RequesterSettleWakeParams,
 ): Promise<boolean> {
   return withSubagentRequesterSource(
     params.requesterSessionKey,
@@ -397,7 +389,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       !pauseNotice &&
       (requiredSettled.length === 0 ||
         (requiredSettled.length < 2 &&
-          !requiredSettled.some((entry) => entry.delivery?.status !== "delivered") &&
+          !requiredSettled.some(needsRequesterSettleFindings) &&
           !requesterYieldedAfterDelivery) ||
         (!requesterYieldedAfterDelivery &&
           interruptedContinuations.length === 0 &&
@@ -453,7 +445,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     }
     const preparedFindings = pauseNotice
       ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
-      : await readChildCompletionFindings(completionRows);
+      : await readChildCompletionFindings(completionRows.filter(needsRequesterSettleFindings));
     if (await retireReplacedStore()) {
       return false;
     }

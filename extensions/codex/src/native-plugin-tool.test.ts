@@ -79,9 +79,12 @@ function toolFixture(params?: {
 }
 
 describe("native Codex plugin discovery tool", () => {
-  it("is available only for owner turns even when native plugin policy is disabled", () => {
+  it("denies nonowner calls before reading native plugin state", async () => {
     expect(toolFixture().tool?.name).toBe("codex_plugins");
-    expect(toolFixture({ owner: false }).tool).toBeNull();
+    const { tool, read, request } = toolFixture({ owner: false });
+    await expect(tool.execute("denied", {})).rejects.toThrow("owner-authorized sender");
+    expect(read).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("uses the bound workspace, exposes bounded untrusted metadata, and never installs", async () => {

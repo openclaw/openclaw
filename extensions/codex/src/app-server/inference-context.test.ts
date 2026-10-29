@@ -146,14 +146,14 @@ describe("native inference metadata", () => {
 });
 
 describe("parent-local inference context", () => {
-  it("forks the retained prepared prefix after parent cleanup under only the new root's authority", () => {
+  it("forks the retained prepared prefix after parent cleanup under only the new root's authority", async () => {
     let parentActive = true;
     const { context, controller, register } = fixture(() => {
       if (!parentActive) {
         throw new Error("parent authority ended");
       }
     });
-    const parent = register("private persona\n\nskills\n\nmemory");
+    const parent = await register("private persona\n\nskills\n\nmemory");
     const expectedInstructions = context.prepare(request("root", parent.generation)).body
       .instructions;
     parent.release();
@@ -162,7 +162,7 @@ describe("parent-local inference context", () => {
     expect(() => context.prepare(request("root", parent.generation))).toThrow("current admitted");
     let forkActive = true;
     const forkController = new AbortController();
-    const fork = context.fork({
+    const fork = await context.fork({
       sourceThreadId: "root",
       threadId: "fork",
       signal: forkController.signal,
@@ -178,23 +178,23 @@ describe("parent-local inference context", () => {
     parent.release();
     expect(context.prepare(source).body.instructions).toBe(expectedInstructions);
     expect(() => context.prepare(request("fork", parent.generation))).toThrow("current admitted");
-    expect(() =>
+    await expect(
       context.fork({
         sourceThreadId: "missing",
         threadId: "another",
         signal: forkController.signal,
         assertCurrent: () => {},
       }),
-    ).toThrow("prepared parent");
+    ).rejects.toThrow("prepared parent");
     context.forget("root");
-    expect(() =>
+    await expect(
       context.fork({
         sourceThreadId: "root",
         threadId: "later",
         signal: forkController.signal,
         assertCurrent: () => {},
       }),
-    ).toThrow("prepared parent");
+    ).rejects.toThrow("prepared parent");
     expect(context.prepare(source).body.instructions).toBe(expectedInstructions);
     forkActive = false;
     expect(() => context.prepare(source)).toThrow("fork authority ended");
@@ -205,9 +205,9 @@ describe("parent-local inference context", () => {
     context.close();
   });
 
-  it("preserves parent tool declarations but uses native history after a WebSocket continuation", () => {
+  it("preserves parent tool declarations but uses native history after a WebSocket continuation", async () => {
     const { context, register } = fixture();
-    const parent = register("private");
+    const parent = await register("private");
     const declarations = {
       type: "additional_tools",
       role: "developer",
@@ -223,7 +223,7 @@ describe("parent-local inference context", () => {
       input: [{ type: "function_call_output", call_id: "call", output: "one" }],
     });
     parent.release();
-    const fork = context.fork({
+    const fork = await context.fork({
       sourceThreadId: "root",
       threadId: "fork",
       signal: new AbortController().signal,
@@ -247,7 +247,7 @@ describe("parent-local inference context", () => {
     }
   });
 
-  it("falls back to native reconstruction when the global wire-prefix LRU evicts a session", () => {
+  it("falls back to native reconstruction when the global wire-prefix LRU evicts a session", async () => {
     const contexts = Array.from({ length: 3 }, () => createCodexInferenceContext(() => {}));
     const contextAt = (index: number) => {
       const context = contexts[index];
@@ -257,9 +257,9 @@ describe("parent-local inference context", () => {
       return context;
     };
     const payload = "x".repeat(11 * 1024 * 1024);
-    const prepareParent = (index: number) => {
+    const prepareParent = async (index: number) => {
       const context = contextAt(index);
-      const parent = context.register({
+      const parent = await context.register({
         threadId: "parent",
         text: "private",
         signal: new AbortController().signal,
@@ -279,12 +279,12 @@ describe("parent-local inference context", () => {
         assertCurrent: () => {},
       });
     try {
-      prepareParent(0);
-      prepareParent(1);
-      fork(0).release();
-      prepareParent(2);
+      await prepareParent(0);
+      await prepareParent(1);
+      (await fork(0)).release();
+      await prepareParent(2);
       for (const index of [0, 1, 2]) {
-        const child = fork(index);
+        const child = await fork(index);
         const rebuilt = {
           ...request("fork", child.generation),
           instructions: "rebuilt",
@@ -307,23 +307,24 @@ describe("parent-local inference context", () => {
     }
   });
 
-  it("rejects explicit non-string instructions", () => {
+  it("rejects explicit non-string instructions", async () => {
     const { context, register } = fixture();
+    const registered = await register("persona");
     expect(() =>
-      context.prepare({ ...request("root", register("persona").generation), instructions: null }),
+      context.prepare({ ...request("root", registered.generation), instructions: null }),
     ).toThrow("instructions");
     context.close();
   });
 
-  it("refreshes and removes parent instructions without rewriting native history or affecting children", () => {
+  it("refreshes and removes parent instructions without rewriting native history or affecting children", async () => {
     const { context, register } = fixture();
-    const first = register("persona A");
+    const first = await register("persona A");
     const source = request("root", first.generation);
     const original = structuredClone(source);
     const prepared = context.prepare(source);
     expect(prepared.body).toEqual({ ...source, instructions: "native base\n\npersona A" });
     expect(source).toEqual(original);
-    const second = register("persona B");
+    const second = await register("persona B");
     first.release();
     expect(prepared.signal?.aborted).toBe(true);
     expect(() => prepared.assertCurrent()).toThrow();
@@ -336,21 +337,21 @@ describe("parent-local inference context", () => {
       subagent_kind: "collab_spawn",
     });
     expect(context.prepare(child).body).toEqual(child);
-    const removed = register("");
+    const removed = await register("");
     const after = request("root", removed.generation);
     expect(context.prepare(after).body).toEqual(after);
     context.close();
     expect(() => context.prepare(after)).toThrow("closed");
   });
 
-  it("requires exact physical owner, root identity and admitted generation", () => {
+  it("requires exact physical owner, root identity and admitted generation", async () => {
     let active = true;
     const { context, register } = fixture(() => {
       if (!active) {
         throw new Error("owner retired");
       }
     });
-    const registration = register("private");
+    const registration = await register("private");
     const source = request("root", registration.generation);
     const prepared = context.prepare(source);
     expect(() => context.prepare(request("other", registration.generation))).toThrow(
@@ -389,9 +390,9 @@ describe("parent-local inference context", () => {
     context.close();
   });
 
-  it("does not contaminate local compaction, memory, review or unadmitted startup prewarm", () => {
+  it("does not contaminate local compaction, memory, review or unadmitted startup prewarm", async () => {
     const { context, register } = fixture();
-    const registration = register("persona B");
+    const registration = await register("persona B");
     const exclusions: JsonObject[] = [
       { request_kind: "compaction" },
       { request_kind: "memory" },
@@ -459,7 +460,7 @@ describe("parent-local inference context", () => {
     context.close();
   });
 
-  it("bounds retained prefixes independently of completed turn registrations", () => {
+  it("bounds retained prefixes independently of completed turn registrations", async () => {
     const { context, controller } = fixture();
     const register = (threadId: string) =>
       context.register({
@@ -469,13 +470,13 @@ describe("parent-local inference context", () => {
         assertCurrent: () => {},
       });
     for (let index = 0; index < 256; index += 1) {
-      register(`thread-${index}`).release();
+      (await register(`thread-${index}`)).release();
     }
-    expect(() => register("overflow")).toThrow("prepared inference prefix limit");
+    await expect(register("overflow")).rejects.toThrow("prepared inference prefix limit");
     context.forget("thread-0");
-    const replacement = register("replacement");
+    const replacement = await register("replacement");
     replacement.release();
-    const fork = context.fork({
+    const fork = await context.fork({
       sourceThreadId: "replacement",
       threadId: "side",
       signal: controller.signal,
@@ -485,20 +486,20 @@ describe("parent-local inference context", () => {
       "native base\n\nprepared",
     );
     context.close();
-    expect(() =>
+    await expect(
       context.fork({
         sourceThreadId: "replacement",
         threadId: "after-close",
         signal: controller.signal,
         assertCurrent: () => {},
       }),
-    ).toThrow("closed");
+    ).rejects.toThrow("closed");
   });
 
-  it("bounds context and fences aborts, missing metadata and unsupported request kinds", () => {
+  it("bounds context and fences aborts, missing metadata and unsupported request kinds", async () => {
     const { context, controller, register } = fixture();
-    expect(() => register("x".repeat(256 * 1024 + 1))).toThrow("limit");
-    const registered = register("private");
+    await expect(register("x".repeat(256 * 1024 + 1))).rejects.toThrow("limit");
+    const registered = await register("private");
     const source = request("root", registered.generation);
     expect(() => context.prepare({ instructions: "base" })).toThrow("metadata");
     const invalidMetadata: JsonObject[] = [

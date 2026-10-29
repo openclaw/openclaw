@@ -1,5 +1,5 @@
 // Browser tests cover shared plugin behavior.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -124,3 +124,53 @@ describe("readActionsPayload", () => {
     },
   );
 });
+
+async function withInput(content: string, run: (file: string) => Promise<void>) {
+  await withTempDir("browser-fields", async (root) => {
+    const file = path.join(root, "fields.json");
+    await fs.writeFile(file, content);
+    await run(file);
+  });
+}
+it.each([false, true])(
+  "preserves oversized Unicode fields files (symlink: %s)",
+  async (symlink) => {
+    await withInput(`[${" ".repeat(1_048_577)}{"ref":"1","value":"合法 😀"}]`, async (file) => {
+      if (symlink) {
+        await fs.symlink(file, `${file}.link`);
+      }
+      const fields = await readFields({ fieldsFile: symlink ? `${file}.link` : file });
+      expect(fields).toEqual([{ ref: "1", type: "text", value: "合法 😀" }]);
+    });
+  },
+);
+
+it.skipIf(process.platform === "win32").each([false, true])(
+  "rejects FIFO fields files (symlink: %s)",
+  async (symlink) => {
+    await withTempDir("openclaw-browser-fields-", async (tempDir) => {
+      const fifoPath = path.join(tempDir, "fields.pipe");
+      execFileSync("mkfifo", [fifoPath]);
+      if (symlink) {
+        await fs.symlink(fifoPath, `${fifoPath}.link`);
+      }
+      // A writer lets a regressed reader finish instead of stranding the test runner.
+      const writer = spawn(
+        process.execPath,
+        ["-e", "require('node:fs').writeFileSync(process.argv[1], '[]')", fifoPath],
+        { stdio: "ignore" },
+      );
+      const writerClosed = new Promise((resolve) => {
+        writer.once("close", resolve);
+      });
+      try {
+        await expect(
+          readFields({ fieldsFile: symlink ? `${fifoPath}.link` : fifoPath }),
+        ).rejects.toThrow("regular file");
+      } finally {
+        writer.kill("SIGKILL");
+        await writerClosed;
+      }
+    });
+  },
+);

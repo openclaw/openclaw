@@ -16,7 +16,6 @@ import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resou
 import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { prepareCronRunInference, type CronRunInference } from "../../cron/run-inference.js";
 import type { CronWorkspaceLease } from "../../cron/run-workspace.js";
@@ -66,6 +65,7 @@ import type {
   AgentFallbackCycleState,
 } from "./agent-runner-fallback-cycle.types.js";
 import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js";
+import { applyLiveModelSwitchToRun } from "./agent-runner-live-model-switch.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
 import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
@@ -76,7 +76,6 @@ import {
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
-import type { FollowupRun } from "./queue.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
@@ -126,25 +125,7 @@ async function executeAgentTurnInternalLoop(
           ...runnableRun,
           config: runtimeConfig,
         };
-  let liveModelSwitchRuntimeEntry:
-    | Pick<
-        SessionEntry,
-        "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "pluginOwnerId"
-      >
-    | undefined;
-  const applyLiveModelSwitchToRun = (
-    run: FollowupRun["run"],
-    err: LiveSessionModelSwitchError,
-  ): void => {
-    run.provider = err.provider;
-    run.model = err.model;
-    run.authProfileId = err.authProfileId;
-    run.authProfileIdSource = err.authProfileId ? err.authProfileIdSource : undefined;
-    run.autoFallbackPrimaryProbe = undefined;
-    // Keep runtime paired with the error's model/auth winner even if the
-    // active in-memory session snapshot lags the persisted directive write.
-    liveModelSwitchRuntimeEntry = { agentRuntimeOverride: err.agentRuntimeOverride };
-  };
+  let liveModelSwitchRuntimeEntry: ReturnType<typeof applyLiveModelSwitchToRun> | undefined;
 
   const agentTurnTiming = createAgentTurnTimingTracker({
     profilerEnabled: isReplyProfilerEnabled({ config: runtimeConfig }),
@@ -185,7 +166,6 @@ async function executeAgentTurnInternalLoop(
   let currentTurnImages: CurrentTurnImages;
   let modelPatch: Awaited<ReturnType<typeof createAgentPatchedSessionModelRunGuard>>;
   try {
-    await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
     replyMediaContext =
       params.replyMediaContext ??
       agentTurnTiming.measureSync("reply_media_context", () =>
@@ -383,8 +363,13 @@ async function executeAgentTurnInternalLoop(
       storePath: params.storePath,
     });
 
+  let subagentContinuationPrepared = false;
   while (true) {
     try {
+      if (!subagentContinuationPrepared) {
+        await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
+        subagentContinuationPrepared = true;
+      }
       const presentation = createAgentTurnPresentation({
         turn: params,
         replyMediaContext,
@@ -450,18 +435,22 @@ async function executeAgentTurnInternalLoop(
       } else {
         if (action.liveModelSwitchError) {
           for (const run of new Set([params.followupRun.run, runnableRun, effectiveRun])) {
-            applyLiveModelSwitchToRun(run, action.liveModelSwitchError);
+            liveModelSwitchRuntimeEntry = applyLiveModelSwitchToRun(
+              run,
+              action.liveModelSwitchError,
+            );
           }
         }
         continue;
       }
     }
     if (cycle.kind === "aborted") {
-      return cycle;
+      return { ...cycle, sessionWriter: fallbackCycleState.sessionWriter };
     }
     if (cycle.kind === "final") {
       return {
         ...cycle,
+        sessionWriter: fallbackCycleState.sessionWriter,
         resolved: {
           provider: fallbackCycleState.attemptedRuntimeProvider,
           model: fallbackCycleState.attemptedRuntimeModel,
@@ -667,12 +656,21 @@ async function executeAgentTurnOutcome(
       internal.kind !== "aborted" &&
       resolveReplyOperationAbortReason(executionParams.replyOperation);
     if (abortReason) {
-      return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
+      return {
+        runId,
+        outcome: {
+          kind: "aborted",
+          reason: abortReason,
+          sessionWriter: internal.sessionWriter,
+          ...completedCompaction(),
+        },
+      };
     }
     const outcome: AgentTurnExecutionResult["outcome"] =
       internal.kind === "final"
         ? {
             kind: "rejected",
+            sessionWriter: internal.sessionWriter,
             payload: internal.payload,
             resolved: internal.resolved,
             ...(internal.postCompactionModelFailure

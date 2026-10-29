@@ -48,6 +48,7 @@ describe("check-script-erasability", () => {
       const scriptsRoot = writeScriptsTree({ "input.ts": "" });
       const fixtureRoot = path.dirname(scriptsRoot);
       for (const relativePath of [
+        "node-runtime-env.mjs",
         "scripts/check-script-erasability.mjs",
         "scripts/lib/tsx-cli-shim.mjs",
         "scripts/lib/managed-cleanup-handoff.mts",

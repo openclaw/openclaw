@@ -51,6 +51,7 @@ const { runVitest } = await import("../../scripts/run-vitest.mts");
 const { runVitestCli } = await import("../../scripts/lib/vitest-process.mts");
 const target = "test/scripts/run-vitest.test.ts";
 const environment = testRunnerFixtureEnv({
+  OPENCLAW_BUN_PATH: process.execPath,
   OPENCLAW_TEST_PROJECTS_SERIAL: "1",
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
 });

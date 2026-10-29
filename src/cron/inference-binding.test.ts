@@ -225,6 +225,37 @@ async function resolveFreshRun(params: {
 }
 
 describe("durable cron inference authorization", () => {
+  it.each([platformId, subscriptionId])(
+    "allows concurrent runs to reacquire the same saved account (%s)",
+    async (profileId) => {
+      await fixture(async (root, cfg) => {
+        // capture releases its observation, as saving a job does before its runs start.
+        const binding = await capture(cfg, profileId);
+        const results = await Promise.allSettled(
+          [0, 1].map(() =>
+            acquireCronInferenceAuthorization({ binding, cfg, agentDir: root.agentDir }),
+          ),
+        );
+        try {
+          for (const result of results) {
+            if (result.status === "rejected") {
+              throw result.reason;
+            }
+            expect(result.value.authorizationId).toBe(binding.authorizationId);
+            await result.value.revalidate();
+            expect(result.value.assertCurrent).not.toThrow();
+          }
+        } finally {
+          for (const result of results) {
+            if (result.status === "fulfilled") {
+              result.value.dispose();
+            }
+          }
+        }
+      });
+    },
+  );
+
   it.each([
     {
       profileId: platformId,

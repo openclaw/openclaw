@@ -1,7 +1,7 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   htmlToMarkdown,
-  normalizeWhitespace,
+  markdownToText,
   sanitizeHtml,
   stripInvisibleUnicode,
   type WebContentExtractionRequest,
@@ -120,17 +120,14 @@ async function extractWithReadability(request: WebContentExtractionRequest) {
     const [{ Readability }, { parseHTML }] = await loadReadabilityDeps();
     const { document } = parseHTML(cleanHtml, { location: { href: request.url } });
     const textMode = request.extractMode === "text";
-    // Text mode consumes textContent; skip serializing the HTML it would discard.
-    const reader = new Readability(document, textMode ? { serializer: () => "" } : undefined);
+    const reader = new Readability(document);
     const parsed = reader.parse();
     if (!parsed) {
       return null;
     }
     const title = parsed.title || undefined;
-    const rendered = textMode
-      ? { text: normalizeWhitespace(parsed.textContent ?? ""), title }
-      : htmlToMarkdown(parsed.content ?? "");
-    const text = stripInvisibleUnicode(rendered.text);
+    const rendered = htmlToMarkdown(parsed.content ?? "", { linksAsText: textMode });
+    const text = stripInvisibleUnicode(textMode ? markdownToText(rendered.text) : rendered.text);
     return text ? { text, title: title ?? rendered.title } : null;
   } catch {
     return null;

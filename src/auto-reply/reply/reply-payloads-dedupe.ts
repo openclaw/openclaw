@@ -2,7 +2,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
+import {
+  isMessagingToolDuplicate,
+  normalizeTextForComparison,
+} from "../../agents/embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
@@ -17,6 +20,7 @@ import {
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import {
   copyReplyPayloadMetadata,
+  formatBtwTextForExternalDelivery,
   getReplyPayloadMetadata,
   isReplyPayloadTerminalContent,
   type ReplyDeliveryContext,
@@ -235,6 +239,17 @@ export function resolveMessagingToolPayloadDedupe(params: MessagingToolDedupeRou
   };
 }
 
+function isMessagingToolReplyDuplicate(payload: ReplyPayload, sentTexts: string[]): boolean {
+  if (!payload.btw?.question.trim()) {
+    return isMessagingToolDuplicate(payload.text ?? "", sentTexts);
+  }
+  // A repeated answer alone cannot prove that a different side question was delivered.
+  const rendered = normalizeTextForComparison(formatBtwTextForExternalDelivery(payload) ?? "");
+  return (
+    Boolean(rendered) && sentTexts.some((text) => normalizeTextForComparison(text) === rendered)
+  );
+}
+
 type FilterMessagingToolReplyPayloadParams = Omit<
   MessagingToolDedupeRouteParams,
   "replyToId" | "replyToIsExplicit" | "replyToCurrent" | "replyDelivery"
@@ -291,7 +306,7 @@ export function filterMessagingToolReplyPayload(
         ? payloads
         : payloads.filter(
             (payload) =>
-              !isMessagingToolDuplicate(payload.text ?? "", sentTexts) ||
+              !isMessagingToolReplyDuplicate(payload, sentTexts) ||
               hasReplyPayloadContent(
                 { ...payload, text: undefined },
                 { extraContent: hasEnabledDeliveryOperation(payload) || payload.location != null },

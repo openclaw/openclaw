@@ -4,6 +4,7 @@ import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
+  shouldKeepPayloadDuringSilentTurn,
 } from "../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
@@ -424,6 +425,9 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
           });
     const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
     copyReplyPayloadMetadata(payload, blockPayload);
+    if (params.silentExpected && !shouldKeepPayloadDuringSilentTurn(blockPayload)) {
+      return;
+    }
     const taggedPayload =
       options?.assistantMessageIndex !== undefined
         ? setReplyPayloadMetadata(blockPayload, {

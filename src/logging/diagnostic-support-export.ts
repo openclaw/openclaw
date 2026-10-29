@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { INCLUDE_KEY } from "../config/includes.js";
 import { parseConfigJson5 } from "../config/io.js";
@@ -583,14 +584,13 @@ function resolveOutputPath(options: {
   now: Date;
 }): string {
   const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
-  const raw = options.outputPath?.trim();
+  const raw = readNonBlankString(options.outputPath);
   if (!raw) {
     return path.join(options.stateDir, "logs", "support", filename);
   }
-  const resolved =
-    path.isAbsolute(raw) || raw.startsWith("~")
-      ? resolveHomeRelativePath(raw, { env: options.env })
-      : path.resolve(options.cwd, raw);
+  const resolved = raw.startsWith("~")
+    ? resolveHomeRelativePath(raw, { env: options.env })
+    : path.resolve(options.cwd, raw);
   try {
     if (fs.statSync(resolved).isDirectory()) {
       return path.join(resolved, filename);

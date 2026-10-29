@@ -675,3 +675,5 @@ The reporter is revoked when the service stops or its plugin registry generation
 late callback from an old generation cannot overwrite current health. Prefer returning the startup
 promise when the service is not usable until that promise settles; use the reporter only for
 deliberately nonblocking work that owns its own stop path.
+
+Service startup and cleanup observation budgets measure elapsed time, so wall-clock changes do not shorten or extend them. Strict stop deadlines remain wall-clock epoch values and are converted once when stopping begins.

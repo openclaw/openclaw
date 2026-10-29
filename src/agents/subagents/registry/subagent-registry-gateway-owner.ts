@@ -10,6 +10,7 @@ import {
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
+import { restoreSubagentRequesterSource } from "./subagent-registry-requester-source.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
@@ -78,12 +79,20 @@ export async function bindSubagentRunGatewayOwners(params: {
     }
     const previous = getEntryGatewayContextResolver(entry);
     if (previous) {
-      if (entry.execution.status !== "terminal" || !entry.requesterSettleWake || previous()) {
+      if (previous()) {
+        await restoreSubagentRequesterSource(entry, previous, isCurrent);
+        continue;
+      }
+      if (entry.execution.status !== "terminal" || !entry.requesterSettleWake) {
         continue;
       }
       const previousResumeKey = getSubagentRunRuntimeKey(entry);
       if (await recoverSubagentRunGatewayOwner(entry, resolver, params.onRecovered)) {
         params.resumedRuns.delete(previousResumeKey);
+        const recovered = getCurrentSubagentRunOwner(params.runs, entry);
+        if (recovered) {
+          await restoreSubagentRequesterSource(recovered, resolver, isCurrent);
+        }
       }
       if (!isCurrent()) {
         return false;
@@ -91,6 +100,10 @@ export async function bindSubagentRunGatewayOwners(params: {
       continue;
     }
     bindGatewayContextResolver(entry, resolver);
+    await restoreSubagentRequesterSource(entry, resolver, isCurrent);
+    if (!isCurrent()) {
+      return false;
+    }
     // Binding an existing owner must not supersede a registration already in preparation.
     publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
   }

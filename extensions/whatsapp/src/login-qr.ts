@@ -488,7 +488,7 @@ export async function waitForWebLogin(
     };
   }
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 120_000, 1000);
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   const currentQrDataUrl = opts.currentQrDataUrl;
 
   while (true) {
@@ -517,7 +517,7 @@ export async function waitForWebLogin(
       };
     }
 
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (remaining <= 0) {
       return {
         connected: false,

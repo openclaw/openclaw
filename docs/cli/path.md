@@ -532,3 +532,5 @@ auto-detection.
 
 - [CLI reference](/cli)
 - [OC Path plugin](/plugins/oc-path)
+
+Blank numeric leaf replacements are rejected; use `0` to write zero.

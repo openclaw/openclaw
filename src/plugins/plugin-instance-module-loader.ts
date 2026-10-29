@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread, workerData } from "node:worker_threads";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
+import { isNativeEsmPackage } from "../infra/native-module-format.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createJiti } from "./jiti-factory.js";
@@ -90,30 +91,6 @@ function retainedNativeEsmFor(
     retainedNativeEsmModules.set(key, retained);
   }
   return retained;
-}
-
-function isNativeEsmPackage(source: string): boolean {
-  let directory = path.dirname(source);
-  while (true) {
-    const manifest = path.join(directory, "package.json");
-    if (fs.existsSync(manifest)) {
-      try {
-        const parsed: unknown = JSON.parse(fs.readFileSync(manifest, "utf8"));
-        return (
-          typeof parsed === "object" &&
-          parsed !== null &&
-          Object.getOwnPropertyDescriptor(parsed, "type")?.value === "module"
-        );
-      } catch {
-        return false;
-      }
-    }
-    const parent = path.dirname(directory);
-    if (parent === directory) {
-      return false;
-    }
-    directory = parent;
-  }
 }
 
 function retainedNativeEsmOwner(retained: RetainedNativeEsm) {

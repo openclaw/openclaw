@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "source": "Hosted PostgreSQL conformance run 39062485709; per-target three-worker makespan of observed case spans. Includes failure timeouts; weights are advisory, never inventory.",
+  "targetSeconds": {
+    "src/infra/database-engine/adapters.test.ts": 1,
+    "src/infra/database-engine/admission-scope.test.ts": 4.637,
+    "src/infra/database-engine/backup.test.ts": 78.192,
+    "src/infra/database-engine/config.test.ts": 1,
+    "src/infra/database-engine/json-values.test.ts": 1,
+    "src/infra/database-engine/observation.test.ts": 1,
+    "src/infra/database-engine/open.test.ts": 1,
+    "src/infra/database-engine/physical-facts.test.ts": 2.685,
+    "src/infra/database-engine/port-command.integration.test.ts": 646.779,
+    "src/infra/database-engine/port-command.postgres.test.ts": 75.055,
+    "src/infra/database-engine/port-command.test.ts": 25.756,
+    "src/infra/database-engine/port.test.ts": 4.759,
+    "src/infra/database-engine/registry.test.ts": 1,
+    "src/infra/database-engine/schema-admission.postgres.test.ts": 4.766,
+    "src/infra/database-engine/shared-feature.conformance.test.ts": 1,
+    "src/infra/database-engine/transcript-reader.conformance.test.ts": 1,
+    "src/state/openclaw-state-db.postgres.test.ts": 51.481
+  }
+}

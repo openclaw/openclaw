@@ -20,10 +20,11 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import {
-  beginSessionWorkAdmission,
+  runExclusiveSessionLifecycleMutation,
   getActiveSessionLifecycleMutationCount,
 } from "../../sessions/session-lifecycle-admission.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -393,28 +394,35 @@ describe("current-session completion media", () => {
   it("does not prepare media when the source generation changes while waiting", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const fixture = await createCompletionFixture(state);
-      const admission = await beginSessionWorkAdmission({
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      const mutation = runExclusiveSessionLifecycleMutation("background-result", {
         scope: fixture.scope.storePath,
         identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
-        assertAllowed: () => {},
+        run: async () => {
+          entered.resolve();
+          await finish.promise;
+          await replaceSessionEntry(fixture.scope, {
+            sessionId: "replacement-session",
+            lifecycleRevision: "replacement-generation",
+            updatedAt: 3000,
+          });
+        },
       });
+      await entered.promise;
       const commit = fixture.commit();
       try {
         await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
         expect(await fixture.records()).toEqual([]);
-        await replaceSessionEntry(fixture.scope, {
-          sessionId: "replacement-session",
-          lifecycleRevision: "replacement-generation",
-          updatedAt: 3000,
-        });
-        admission.release();
+        finish.resolve();
+        await mutation;
         await expect(commit).resolves.toMatchObject({ ok: false });
         expect(await fixture.records()).toEqual([]);
         expect(await fixture.messages()).toEqual([]);
         expect(fixture.updates()).toBe(0);
       } finally {
-        admission.release();
-        await commit;
+        finish.resolve();
+        await Promise.all([mutation, commit]);
         await fixture.dispose();
       }
     });

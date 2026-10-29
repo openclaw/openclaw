@@ -54,7 +54,11 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
       Array.isArray(body.tools) &&
       body.tools.some((tool) => isRecord(tool) && tool.name === "exec");
     const recoveryRequest =
-      recovering && text.includes("Your previous turn was interrupted by a gateway restart");
+      recovering &&
+      (text.includes("Your previous turn was interrupted by a gateway restart") ||
+        text.includes(
+          "Your previous turn was interrupted while OpenClaw was waiting on tool/model work",
+        ));
     if (!executionTool && !recoveryRequest) {
       const reply = "Synthetic restart handoff session";
       if (body.stream === false) {

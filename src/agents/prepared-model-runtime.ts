@@ -566,7 +566,7 @@ export function refreshPreparedModelRuntimeSnapshots(
             void publicationQueue
               .enqueue(async () => {
                 if (isPublicationCurrent()) {
-                  await drainPendingAuthMutations(publish);
+                  await drainPendingAuthMutations(publish, options);
                 }
               })
               .catch((error: unknown) => log.warn(`startup auth refresh failed: ${String(error)}`));
@@ -638,12 +638,9 @@ export function refreshPreparedModelRuntimeSnapshots(
       if (!isPublicationCurrent()) {
         return;
       }
-      const drain = () =>
-        drainPendingAuthMutations(
-          // The final queue check, dispatch rebuild, and replacement resolution are one synchronous
-          // commit. A mutation before it is adopted; a mutation after it starts a new auth transaction.
-          commitReplacement,
-        );
+      // The final queue check, dispatch rebuild, and replacement resolution are one synchronous
+      // commit. A mutation before it is adopted; a mutation after it starts a new auth transaction.
+      const drain = () => drainPendingAuthMutations(commitReplacement, options);
       if (replacement?.degraded) {
         await publicationQueue.enqueue(drain);
       } else {
@@ -665,7 +662,10 @@ export function refreshPreparedModelRuntimeSnapshots(
   return publicationQueue.complete(publication, isPublicationCurrent, options, startup);
 }
 
-async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
+async function drainPendingAuthMutations(
+  commit?: () => void,
+  options: PreparedModelRuntimeRefreshOptions = {},
+): Promise<void> {
   await authPublication.drain({
     owners,
     publish: async (ownersToPublish, includeCredentialProviders, reuseGenerations) =>
@@ -674,6 +674,7 @@ async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
         owners,
         agentBuildCompletions,
         buildTimeoutMs: modelRuntimeBuildTimeoutMs,
+        pluginMetadataSnapshot: options.pluginMetadataSnapshot,
         ...(includeCredentialProviders ? { includeCredentialProviders: true } : {}),
         selectPluginGeneration: reuseGenerations ? (owner) => owner.pluginGeneration : undefined,
       }),

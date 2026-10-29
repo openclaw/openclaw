@@ -30,6 +30,7 @@ export type SessionRecentConversationText = {
 export type ReadRecentSessionConversationTextOptions = {
   beforeTimestampMs?: number;
   includeCronDirectDeliveryContext?: boolean;
+  includeMessageToolSourceReplies?: boolean;
   limit?: number;
   minTimestampMs?: number;
   role?: "user" | "assistant";
@@ -57,10 +58,19 @@ function extractRecentConversationText(
     !Array.isArray(deliveryMirror) &&
     "kind" in deliveryMirror &&
     deliveryMirror.kind === CRON_DIRECT_DELIVERY_CONTEXT_KIND;
+  // The candidate owns delivery metadata here; do not import the later shared helper.
+  const sourceReply = asOptionalRecord(deliveryMirror);
+  const includeTerminalSourceReply =
+    options.includeMessageToolSourceReplies === true &&
+    sourceReply?.kind === "message-tool-source-reply" &&
+    sourceReply.final === true &&
+    typeof sourceReply.sourceTurnId === "string" &&
+    sourceReply.sourceTurnId.trim().length > 0;
   if (
     message.role === "assistant" &&
     isTranscriptOnlyOpenClawAssistantMessage(message) &&
-    !includeCronDirectDeliveryContext
+    !includeCronDirectDeliveryContext &&
+    !includeTerminalSourceReply
   ) {
     return undefined;
   }

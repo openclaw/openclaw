@@ -5,8 +5,6 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isUpdateDoctorInspectionReportMode,
-  UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
-  UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
   UPDATE_POST_CORE_CONVERGENCE_ENV,
 } from "../../commands/doctor/shared/update-phase.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
@@ -24,6 +22,7 @@ import { readUpdateStateDatabaseSizes } from "../../infra/update-candidate-state
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
+import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import {
   collectUpdateDoctorFailureFacts,
   consumeUpdatePostInstallDoctorResult,
@@ -86,17 +85,7 @@ import {
 } from "./update-command-service-env.js";
 import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
-export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
-  return await withUpdateEnv(
-    {
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
-      [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
-      [UPDATE_POST_CORE_CONVERGENCE_ENV]: undefined,
-    },
-    run,
-  );
-}
+export { withPrePluginUpdateDoctorEnv } from "./update-command-fresh-doctor-env.js";
 
 export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   phase: "pre-plugin" | "post-plugin";
@@ -111,6 +100,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   json: boolean;
   workspaceSuggestions?: boolean;
   timeoutMs?: number;
+  serviceInspectionDeadlineAtMs?: number;
   nodeRunner?: string;
   entryPath?: string;
   onWarnings?: (warnings: string[]) => void;
@@ -118,6 +108,11 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   /** Propagate a refused child authority to the finalization owner without retrying it. */
   onAuthorityRefused?: () => void;
 }): Promise<PluginUpdateWarning | void> {
+  const requestedTimeoutMs = parseUpdateTimeoutMs(params.opts?.timeout) ?? params.timeoutMs;
+  const serviceInspectionDeadlineAtMs =
+    params.serviceInspectionDeadlineAtMs ??
+    (requestedTimeoutMs === undefined ? undefined : Date.now() + requestedTimeoutMs);
+  const remaining = createDoctorServiceInspectionBudget(serviceInspectionDeadlineAtMs);
   const {
     run,
     executorFence,
@@ -157,7 +152,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   try {
     const commandOptions: CommandOptions = {
       cwd: params.root,
-      timeoutMs: parseUpdateTimeoutMs(params.opts?.timeout) ?? params.timeoutMs,
+      timeoutMs: remaining(),
       maxOutputBytes: 4 * 1024 * 1024,
       terminateOnOutputLimit: true,
       onOutputChunk: captureUpdateFinalizationDoctorOutput(params.phase),
@@ -191,7 +186,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           workerCommand,
           {
             cwd: params.root,
-            timeoutMs: params.timeoutMs,
+            timeoutMs: remaining(),
             baseEnv,
             env: commandOptions.env,
           },
@@ -237,6 +232,10 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             repair: true,
             databaseGenerations:
               params.databaseBackup?.migration?.to ?? params.databaseBackup?.sourceGenerations,
+            get serviceInspectionDeadlineAtMs() {
+              const budget = remaining();
+              return budget === undefined ? undefined : Date.now() + budget;
+            },
             yes: params.yes,
             workspaceSuggestions: params.workspaceSuggestions === true,
             ...(params.phase === "post-plugin" && process.env[POST_CORE_UPDATE_ENV] === "1"
@@ -244,7 +243,8 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
               : {}),
           },
         },
-        (runCommand) => sectionTiming.wrap(runCommand)(doctorArgv, doctorOptions),
+        (runCommand) =>
+          sectionTiming.wrap(runCommand)(doctorArgv, { ...doctorOptions, timeoutMs: remaining() }),
       );
     } else {
       // A valid legacy target contract retains its shipped CLI Doctor. This is
@@ -261,7 +261,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           argv,
           options,
         ),
-      )(doctorArgv, doctorOptions);
+      )(doctorArgv, { ...doctorOptions, timeoutMs: remaining() });
     }
     result = child;
     doctorStep.exitCode = child.code;

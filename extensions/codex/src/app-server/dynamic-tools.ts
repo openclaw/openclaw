@@ -181,6 +181,7 @@ export function createCodexDynamicToolBridge(params: {
   registeredTools?: readonly CodexToolDescriptor[];
   registeredFallbackTools?: AnyAgentTool[];
   registeredSpecs?: readonly CodexDynamicToolSpec[];
+  requireExactRegisteredDefinitions?: boolean;
   signal: AbortSignal;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
@@ -217,10 +218,11 @@ export function createCodexDynamicToolBridge(params: {
     inheritedNames ?? new Set(registeredProjection.tools.map((entry) => entry.name));
   const finalized = finalizeCodexToolAvailability(
     availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
+    params.requireExactRegisteredDefinitions ? inheritedSpecs : undefined,
   );
   const availableTools = finalized.tools;
   const registeredFallbackProjection = projectCodexExecutableDynamicToolSurface(
-    params.registeredFallbackTools ?? [],
+    params.requireExactRegisteredDefinitions ? [] : (params.registeredFallbackTools ?? []),
     params.hookContext,
   );
   const registeredFallbackTools = registeredFallbackProjection.tools.filter(
@@ -399,14 +401,29 @@ export function createCodexDynamicToolBridge(params: {
         boundaries: executionBoundaries,
         retainExecutionSnapshot: options?.retainExecutionSnapshot,
         initialArguments: args,
-        prepareArguments: (toolArgs, nativeArgumentsPrepared) => {
+        prepareArguments: async (toolArgs, nativeArgumentsPrepared) => {
+          signal.throwIfAborted();
+          params.assertCurrent?.();
+          await params.assertCurrentAsync?.();
           const toolArgsRecord = nativeArgumentsPrepared ? toolArgs : args;
           if (toolName === "message" && isRecord(toolArgsRecord)) {
+            const readRemote = readRemoteWorkspaceFile;
             return prepareCodexRemoteWorkspaceMessageMedia({
               args: toolArgsRecord,
               localWorkspaceRoot: params.hookContext?.workspaceDir,
               remoteWorkspaceRoot: params.hookContext?.remoteWorkspaceRoot,
-              readRemoteFile: readRemoteWorkspaceFile,
+              readRemoteFile: readRemote
+                ? async (request) => {
+                    signal.throwIfAborted();
+                    params.assertCurrent?.();
+                    await params.assertCurrentAsync?.();
+                    const bytes = await readRemote(request);
+                    signal.throwIfAborted();
+                    params.assertCurrent?.();
+                    await params.assertCurrentAsync?.();
+                    return bytes;
+                  }
+                : undefined,
               timeoutMs: params.hookContext?.remoteWorkspaceRequestTimeoutMs,
               signal,
             }).then((prepared) => {

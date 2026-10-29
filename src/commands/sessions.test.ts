@@ -436,6 +436,27 @@ describe("sessionsCommand", () => {
     expect(row).toContain("think:high");
   });
 
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls in store headers without changing JSON paths",
+    async () => {
+      const store = await writeStore(
+        {},
+        "sessions-café\u001b[31m\noperator-forged\tend\rrow\u0007",
+      );
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCommand({ store }, runtime);
+      const header = logs.find((line) => line.includes("Session store:"));
+      expect(header).not.toMatch(/\p{Cc}/u);
+      expect(header).toContain("sessions-café\\noperator-forged\\tend\\rrow");
+      expect(logs).toContain("No sessions found.");
+      expect(await runSessionsJson(sessionsCommand, store)).toMatchObject({
+        path: store,
+        count: 0,
+      });
+    },
+  );
+
   it("sanitizes persisted identifiers only for terminal output", async () => {
     const key = "agent:main:\u001B[31mpeer\nrow";
     const sessionId = "session-\u001B[31mid\r\nforged-id";

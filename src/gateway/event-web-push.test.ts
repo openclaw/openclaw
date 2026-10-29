@@ -14,6 +14,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { HumanMentionWebPush } from "./event-web-push.js";
+import { registerViewerWebPushTests } from "./event-web-push.viewer-presence.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
 const {
@@ -364,6 +365,25 @@ describe("event Web Push classification", () => {
     expect(preparedWebPushSendMock).toHaveBeenCalledWith(
       expect.objectContaining({ payload: expect.objectContaining({ url: "sessions" }) }),
     );
+  });
+
+  registerViewerWebPushTests({
+    setRecipients(scopes = ["operator.read"]) {
+      listBoundWebPushSubscriptionsMock.mockResolvedValue([
+        boundSubscription("phone"),
+        boundSubscription("desktop"),
+      ]);
+      listDevicePairingMock.mockReturnValue({
+        paired: [pairedOperator("phone", scopes), pairedOperator("desktop", scopes)],
+      });
+    },
+    sentDeviceIds: () =>
+      preparedWebPushSendMock.mock.calls.flatMap(([call]) =>
+        call.subscriptions.map(({ deviceId }: BoundWebPushSubscription) => deviceId),
+      ),
+    clearSent: () => preparedWebPushSendMock.mockClear(),
+    waitForSend: () => vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce()),
+    authorityCompleted: () => authorityCompleted.promise,
   });
 
   it("does not treat injected transcript updates as agent completion", async () => {

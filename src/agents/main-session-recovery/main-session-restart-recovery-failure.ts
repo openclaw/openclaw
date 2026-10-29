@@ -1,5 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -10,13 +12,114 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
+import type { readMainSessionRecoveryCheckpoint } from "./main-session-restart-recovery-checkpoint.js";
 import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-recovery-delivery.js";
 import {
   mainSessionRecoveryLog,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
+
+/** Whether recovery must re-prove delegated sender authority before resuming. */
+export function requiresDelegatedRecoverySource(
+  entry: SessionEntry,
+  source: Awaited<ReturnType<typeof readMainSessionRecoveryCheckpoint>>["source"],
+): boolean {
+  // Steering is context, not a new admission. A non-browser operator can have
+  // internal ingress too; its durable source goes through the Gateway's exact
+  // claim and current-policy restoration before any recovery turn executes.
+  if (
+    entry.restartRecoveryDeliverySourceRunId &&
+    (entry.restartRecoveryOperatorSource ||
+      entry.restartRecoverySourceIngress === "control-ui" ||
+      entry.restartRecoverySourceIngress === "channel")
+  ) {
+    return false;
+  }
+  return (
+    source === "inter_session" ||
+    (entry.restartRecoverySourceIngress === "internal" &&
+      (source === undefined || source === "internal_system" || source === "harness_completion"))
+  );
+}
+
+/** Publish one local interruption notice and retire the exact input without replay or delivery. */
+async function settleInterruptedRestartRecovery(
+  params: Omit<
+    Parameters<typeof tombstoneMainRestartRecoveryWithNotice>[0],
+    "cfg" | "gatewayRuntime"
+  >,
+): Promise<"settled" | "skipped" | "notice_failed"> {
+  const { entry } = params;
+  const endedAt = Date.now();
+  const capturedReply =
+    entry.pendingFinalDelivery?.kind === "replayable"
+      ? stripInternalMetadataForDisplay(entry.pendingFinalDelivery.text).trim()
+      : undefined;
+  const result = await appendAssistantMessageToSessionTranscript({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    expectedSessionId: entry.sessionId,
+    expectedLifecycleRevision: entry.lifecycleRevision ?? null,
+    expectedSessionState: buildRestartRecoveryExpectedState(entry, params.observation),
+    idempotencyKey: `main-session-restart-recovery:${entry.restartRecoveryDeliverySourceRunId ?? entry.restartRecoveryDeliveryRunId ?? entry.sessionId}:interrupted`,
+    text:
+      `This interrupted turn could not resume after the Gateway restarted: ${params.reason}. ` +
+      "Your session and transcript are preserved. Send a new authenticated message to continue." +
+      (capturedReply ? `\n\nSaved reply (delivery unconfirmed):\n${capturedReply}` : ""),
+    sessionLifecyclePatch: {
+      ...buildMainSessionRecoverySettlementPatch({
+        entry,
+        recordTerminalSource: true,
+        terminalRunId: entry.restartRecoveryDeliveryRunId,
+      }),
+      status: "interrupted",
+      pendingFinalDelivery: undefined,
+      lifecycleRunId: undefined,
+      lastRunId:
+        resolveRestartRecoveryTerminalClientRunId(entry) ??
+        entry.restartRecoveryDeliveryRunId ??
+        entry.restartRecoveryDeliverySourceRunId,
+      lastRunError: params.reason,
+      endedAt,
+      runtimeMs: Math.max(0, endedAt - (entry.startedAt ?? endedAt)),
+      updatedAt: endedAt,
+    },
+  });
+  if (result.ok) {
+    return "settled";
+  }
+  if ("code" in result && result.code === "session-rebound") {
+    return "skipped";
+  }
+  mainSessionRecoveryLog.warn(
+    `failed to settle interrupted recovery ${params.sessionKey}: ${result.reason}`,
+  );
+  return "notice_failed";
+}
+
+/** Sender loss retires one input only when no other execution or delivery custody remains. */
+export async function finishDelegatedRestartRecovery(
+  params: Parameters<typeof tombstoneMainRestartRecoveryWithNotice>[0],
+): Promise<"notice_failed" | "skipped" | "tombstoned" | "settled"> {
+  const { entry } = params;
+  if (
+    entry.pendingFinalDelivery ||
+    entry.restartRecoveryHarnessCompletion ||
+    (entry.restartRecoveryRuns ?? []).some(
+      (run) =>
+        run.runId !== entry.restartRecoveryDeliveryRunId &&
+        run.runId !== entry.restartRecoveryDeliverySourceRunId &&
+        !hasRestartRecoveryTerminalRun(entry, run.runId),
+    )
+  ) {
+    return await tombstoneMainRestartRecoveryWithNotice(params);
+  }
+  return await settleInterruptedRestartRecovery(params);
+}
 
 function buildTombstonedSessionNotice(reason: string): string {
   return (

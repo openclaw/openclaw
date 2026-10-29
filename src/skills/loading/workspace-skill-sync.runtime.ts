@@ -221,6 +221,8 @@ export async function syncWorkspaceSkills(params: {
     assertCurrent?.();
     const target = await root(targetSkillsDir, { assertBeforeMutation: assertCurrent });
     assertCurrent?.();
+    await target.write(".gitignore", "*\n", { mode: 0o644, durable: false });
+    assertCurrent?.();
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
     assertCurrent?.();
     let sourceVersion = getSkillsResourceVersion(sourceWorkspace, sourceScope);
@@ -340,7 +342,7 @@ export async function syncWorkspaceSkills(params: {
     const children = await fsp.readdir(targetSkillsDir);
     assertCurrent?.();
     for (const child of children) {
-      if (!preservedDestinations.has(child)) {
+      if (child !== ".gitignore" && !preservedDestinations.has(child)) {
         const stat = await fsp.lstat(path.join(targetSkillsDir, child));
         assertCurrent?.();
         if (stat.isDirectory()) {

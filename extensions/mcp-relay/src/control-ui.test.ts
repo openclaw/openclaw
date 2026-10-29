@@ -39,6 +39,7 @@ function rendered(predicate: () => boolean) {
 }
 
 function fixture(request: ReturnType<typeof vi.fn>, props: Record<string, string> = {}) {
+  const subscribers = new Set<() => void>();
   let page: ControlUiPage | undefined;
   const controller = new AbortController();
   const host = {
@@ -47,7 +48,10 @@ function fixture(request: ReturnType<typeof vi.fn>, props: Record<string, string
     connection: { connected: true, canRead: true, canWrite: true, canAdmin: false },
     redact: (text: string) => text,
     request,
-    subscribe: () => () => {},
+    subscribe: (listener: () => void) => {
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
+    },
     ui: {
       registerPage: (entry: ControlUiPage) => {
         page = entry;
@@ -79,7 +83,7 @@ function fixture(request: ReturnType<typeof vi.fn>, props: Record<string, string
     controller.abort();
     view?.dispose?.();
   });
-  return { context, view, container };
+  return { context, view, container, publish: () => subscribers.forEach((listener) => listener()) };
 }
 
 function click(label: string) {
@@ -91,6 +95,56 @@ function click(label: string) {
 }
 
 describe("Connected apps native page", () => {
+  it("empties retained view roots and ignores detached controls and pending replies after disposal", async () => {
+    const pending = Promise.withResolvers<unknown>();
+    const grant = {
+      grantId: "grant-owned",
+      clientName: "Personal app",
+      principal: caller.principal,
+      ceiling: ["operator.read"],
+      createdAt: 1_800_000_000_000,
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ ...grants, grants: [grant] })
+      .mockReturnValueOnce(pending.promise);
+    const { view, publish } = fixture(request);
+    const dispose = () => view?.dispose?.();
+    const button = (label: string) =>
+      [...document.querySelectorAll("button")].find((node) => node.textContent === label);
+    await rendered(() => document.body.textContent!.includes("Personal app"));
+    const page = document.querySelector(".mcp-connected-apps")!;
+    const overlay = page.nextElementSibling!;
+    const pair = button("Pair with code")!;
+    const revoke = button("Revoke")!;
+    pair.click();
+    const dialog = overlay.firstElementChild!;
+    click("Create pairing code");
+    expect(request).toHaveBeenCalledTimes(2);
+    const pairingReply = request.mock.results[1]?.value;
+
+    dispose();
+    expect(page.childNodes).toHaveLength(0);
+    expect(overlay.childNodes).toHaveLength(0);
+    expect(document.body.contains(page)).toBe(false);
+    pair.click();
+    revoke.click();
+    publish();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(page.childNodes).toHaveLength(0);
+    expect(overlay.childNodes).toHaveLength(0);
+
+    pending.resolve({
+      code: "ABCDE-FGHIJ",
+      expiresAt: 1_800_000_000_000,
+      mcpUrl: "https://relay.example/mcp",
+    });
+    await pairingReply;
+    expect(dialog.textContent).not.toContain("ABCDE-FGHIJ");
+    expect(overlay.childNodes).toHaveLength(0);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("pairs with the caller's read/write ceiling without accepting a principal from the browser", async () => {
     const request = vi.fn().mockResolvedValueOnce(grants).mockResolvedValueOnce({
       code: "ABCDE-FGHIJ",

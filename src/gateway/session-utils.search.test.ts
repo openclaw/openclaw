@@ -41,6 +41,24 @@ function selectSessionKeys(params: {
 }
 
 describe("filterAndSortSessionEntries search", () => {
+  test.each(["München", "한국어"])("finds canonical forms of %s", (title) => {
+    const store = {
+      "agent:main:composed": { sessionId: "composed", updatedAt: 1, displayName: title },
+      "agent:main:decomposed": {
+        sessionId: "decomposed",
+        updatedAt: 2,
+        displayName: title.normalize("NFD"),
+      },
+      "agent:main:unrelated": { sessionId: "unrelated", updatedAt: 3, displayName: "Unrelated" },
+    };
+    for (const search of [title, title.normalize("NFD")]) {
+      expect(selectSessionKeys({ store, opts: { search, limit: 2 } })).toEqual([
+        "agent:main:decomposed",
+        "agent:main:composed",
+      ]);
+    }
+    expect(store["agent:main:decomposed"].displayName).toBe(title.normalize("NFD"));
+  });
   beforeEach(() => {
     setRuntimeConfigSnapshot(baseCfg);
   });

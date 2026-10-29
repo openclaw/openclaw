@@ -2,7 +2,97 @@
 import { describe, expect, it, vi } from "vitest";
 import { extractBasicHtmlContent, htmlToMarkdown, markdownToText } from "./web-fetch-utils.js";
 
+const extractText = async (html: string) =>
+  (await extractBasicHtmlContent({ html, extractMode: "text" }))?.text;
 describe("web-fetch-utils", () => {
+  it.each(["markdown", "text"] as const)(
+    "separates definition-list terms in %s mode",
+    async (extractMode) => {
+      const result = await extractBasicHtmlContent({
+        html: "<dl><dt>Region</dt><dd>EMEA</dd><dt>Units</dt><dd>120</dd></dl>",
+        extractMode,
+      });
+      expect(result?.text).toBe("Region\nEMEA\nUnits\n120");
+    },
+  );
+
+  it("does not separate ordinary inline elements", () => {
+    expect(htmlToMarkdown("<span>Region</span><span>EMEA</span>").text).toBe("RegionEMEA");
+  });
+
+  it.each([
+    [
+      "<p>He said:</p><blockquote>Stay hungry</blockquote><p>Then he left.</p>",
+      "He said:\nStay hungry\nThen he left.",
+    ],
+    [
+      "<figure><figcaption>Figure 1: Results</figcaption></figure><p>Body text.</p>",
+      "Figure 1: Results\n\nBody text.",
+    ],
+    ["<nav>Home</nav><main>Article</main><aside>Note</aside>", "Home\nArticle\nNote"],
+    ["<details><summary>Question</summary>Answer</details>", "Question\nAnswer"],
+    ["<span>Price</span><div>10 EUR</div>", "Price\n10 EUR"],
+    ["Intro<p>Body</p>", "Intro\nBody"],
+    ["<p>One</p><p>Two</p>", "One\nTwo"],
+  ])("starts block elements on their own line (case %#)", (html, expected) => {
+    expect(htmlToMarkdown(html).text).toBe(expected);
+  });
+
+  it("keeps Markdown-looking inline code literal in text mode", () => {
+    const markdown =
+      "Use `![alt](image.png)` and ``[label](https://example.com)``; read [guide](https://example.com).";
+    // Inline code spans are literal: only the link outside backticks is flattened.
+    expect(markdownToText(markdown)).toBe(
+      "Use ![alt](image.png) and [label](https://example.com); read guide.",
+    );
+    // Line-leading heading and list markers inside inline code stay literal.
+    expect(markdownToText("`# not a heading`\nNext line")).toBe("# not a heading\nNext line");
+    expect(markdownToText("`- not a list`\nNext line")).toBe("- not a list\nNext line");
+    // A backtick run with no matching run of the same length is preserved.
+    expect(markdownToText("cost is 5` per unit")).toBe("cost is 5` per unit");
+    // A fence-looking run inside an inline span is literal content, not a fence.
+    expect(markdownToText("Use `before ```x``` after`.")).toBe("Use before ```x``` after.");
+    // A backtick inside a link/image destination is not a code delimiter.
+    expect(markdownToText("![alt](image`1.png) and `code`.")).toBe("and code.");
+  });
+
+  it.each(["~~~", "~~~~"])("preserves literal text inside %s fences", (fence) => {
+    const code =
+      "# heading\n- literal\n1. literal\n[label](https://example.com)\n`value`\n```literal```\n    two  spaces";
+    expect(markdownToText(`Before\n\n${fence}text\n${code}\n${fence}\n\nAfter`)).toBe(
+      `Before\n\n${code}\n\nAfter`,
+    );
+    expect(markdownToText(`${fence}text\n${code}`)).toBe(code);
+    expect(markdownToText(`\`\`\`inline\`\`\`\n${fence}\n# heading\n${fence}`)).toBe(
+      "inline\n# heading",
+    );
+    expect(markdownToText(`\`\`\`text\n${fence}\n\`\`\`\n${fence}\n# heading\n${fence}`)).toBe(
+      `${fence}\n\n# heading`,
+    );
+  });
+
+  it("removes complete balanced link destinations without leaking URL suffixes", async () => {
+    const markdown =
+      "Read [Cassini](https://example.com/a_(b(c))) and ![diagram](images/a_(b).png).";
+    expect(markdownToText(markdown)).toBe("Read Cassini and .");
+    await expect(
+      extractText('<p>Read <a href="https://example.com/a_(b(c))">Cassini</a>.</p>'),
+    ).resolves.toBe("Read Cassini.");
+    await expect(
+      extractText('<p>Read <a href="https://example.com/search?q=(foo">Cassini</a>.</p>'),
+    ).resolves.toBe("Read Cassini.");
+    await expect(
+      extractText('<p>Read <a href="https://example.com/search?q=foo)">Cassini</a>.</p>'),
+    ).resolves.toBe("Read Cassini.");
+    await expect(
+      extractText('<p>Read <a href="https://example.com/annual report">report</a>.</p>'),
+    ).resolves.toBe("Read report.");
+    await expect(extractText('<p>Open <a href="/docs">C:\\</a>.</p>')).resolves.toBe("Open C:\\.");
+    expect(markdownToText("[broken](https://example.com/a_(b)")).toBe(
+      "[broken](https://example.com/a_(b)",
+    );
+  });
+
   it("matches HTML null replacement in complete tag names", async () => {
     const result = await extractBasicHtmlContent({
       html: "<div\u0000 hidden>Secret</div\uFFFD><p>Visible</p>",
@@ -128,7 +218,7 @@ describe("web-fetch-utils", () => {
   });
 
   it("skips raw-text blocks without reusing indices from a lowercased copy", () => {
-    expect(htmlToMarkdown(`İ<script>x</script><p>After</p>`).text).toBe("İAfter");
+    expect(htmlToMarkdown(`İ<script>x</script><p>After</p>`).text).toBe("İ\nAfter");
   });
 
   it("continues href scanning after unsupported framework-style attributes", () => {

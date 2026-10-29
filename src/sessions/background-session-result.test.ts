@@ -1,29 +1,24 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  loadSessionEntryReadOnly,
-  loadTranscriptEvents,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { sessionMutationHandlers } from "../gateway/server-methods/sessions-mutations.js";
-import { callGatewayHandler } from "../gateway/server-methods/skills.test-helpers.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { commitBackgroundResultToSession } from "./background-session-result.js";
 import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
+  runExclusiveSessionLifecycleMutation,
 } from "./session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "./transcript-events.js";
 
@@ -56,7 +51,7 @@ describe("commitBackgroundResultToSession", () => {
     };
   }
 
-  it("waits for active source work, commits provenance, and deduplicates retry", async () => {
+  it("commits during active source work, preserves provenance, and deduplicates retry", async () => {
     const target = await createTarget();
     const admission = await beginSessionWorkAdmission({
       scope: target.storePath,
@@ -87,35 +82,12 @@ describe("commitBackgroundResultToSession", () => {
         },
       ),
     ];
-    let laterAdmission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
 
     try {
-      await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
-      expect(commitSettled).toBe(false);
-      let laterAdmissionSettled = false;
-      laterAdmission = beginSessionWorkAdmission({
-        scope: target.storePath,
-        identities: [target.sessionKey, target.sessionId],
-        assertAllowed: () => {},
-        signal: controller.signal,
-      });
-      observations.push(
-        laterAdmission.then(
-          () => {
-            laterAdmissionSettled = true;
-          },
-          () => {
-            laterAdmissionSettled = true;
-          },
-        ),
-      );
-      await Promise.resolve();
-      expect(laterAdmissionSettled).toBe(false);
-      admission.release();
-
+      await vi.waitFor(() => expect(commitSettled).toBe(true));
+      expect(admission.isActive()).toBe(true);
       const first = await commit;
       expect(first).toMatchObject({ ok: true });
-      (await laterAdmission).release();
       const retry = await commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
@@ -126,6 +98,8 @@ describe("commitBackgroundResultToSession", () => {
         config: target.config,
       });
       expect(retry).toEqual(first);
+      expect(admission.isActive()).toBe(true);
+      expect(getActiveSessionLifecycleMutationCount()).toBe(0);
       await expect(
         commitBackgroundResultToSession({
           agentId: "main",
@@ -166,123 +140,77 @@ describe("commitBackgroundResultToSession", () => {
       controller.abort();
       admission.release();
       unsubscribe();
-      await laterAdmission?.then(
-        (lease) => lease.release(),
-        () => {},
-      );
       await Promise.allSettled([commit, ...observations]);
     }
   });
 
-  it("cancels a background completion's pure wait without waiting for old work release", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it.each(["cancel", "replace"] as const)(
+    "revalidates a background result queued behind an existing lifecycle mutation: %s",
+    async (action) => {
       const target = await createTarget();
-      const admission = await beginSessionWorkAdmission({
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const blocker = runExclusiveSessionLifecycleMutation("background-result", {
         scope: target.storePath,
         identities: [target.sessionKey, target.sessionId],
-        assertAllowed: () => {},
+        run: async () => {
+          entered.resolve();
+          await release.promise;
+          if (action === "replace") {
+            await replaceSessionEntry(
+              { agentId: "main", sessionKey: target.sessionKey, storePath: target.storePath },
+              { sessionId: target.sessionId, lifecycleRevision: "replacement", updatedAt: 2 },
+            );
+          }
+        },
       });
-      const lifecycle = await import("./session-lifecycle-admission.js");
-      const releaseSpy = vi.spyOn(lifecycle, "getSessionWorkAdmissionRelease");
+      await entered.promise;
       const controller = new AbortController();
       const prepareDisplayContent = vi.fn(async () => undefined);
-      const pending: Promise<unknown>[] = [];
-      let completionOutcome:
-        | PromiseSettledResult<Awaited<ReturnType<typeof commitBackgroundResultToSession>>>
-        | undefined;
-      let sourceResponse: Awaited<ReturnType<typeof callGatewayHandler>> | undefined;
+      const result = commitBackgroundResultToSession({
+        agentId: "main",
+        sessionKey: target.sessionKey,
+        expectedGeneration: target.generation,
+        text: "Queued completion",
+        idempotencyKey: "queued-completion",
+        provenance: { kind: "cron", jobId: "queued", runId: "queued" },
+        config: target.config,
+        signal: controller.signal,
+        prepareDisplayContent,
+      });
+      const observed = result.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
       try {
-        const completion = commitBackgroundResultToSession({
-          agentId: "main",
-          sessionKey: target.sessionKey,
-          expectedGeneration: target.generation,
-          text: "Cancelled synthetic background result",
-          prepareDisplayContent,
-          idempotencyKey: "background-cancellation-progress",
-          provenance: {
-            kind: "cron",
-            jobId: "synthetic-cancel-job",
-            runId: "synthetic-cancel-run",
-          },
-          config: target.config,
-          signal: controller.signal,
-        });
-        pending.push(completion);
-        const completionSettlement = completion.then(
-          (value) => {
-            completionOutcome = { status: "fulfilled", value };
-          },
-          (reason: unknown) => {
-            completionOutcome = { status: "rejected", reason };
-          },
-        );
-        pending.push(completionSettlement);
-        await vi.waitFor(() => expect(releaseSpy).toHaveBeenCalledOnce());
-        expect(getActiveSessionLifecycleMutationCount()).toBe(1);
+        if (action === "cancel") {
+          controller.abort();
+          await expect(result).rejects.toMatchObject({ name: "AbortError" });
+        }
+        release.resolve();
+        await blocker;
+        if (action === "replace") {
+          await expect(result).resolves.toMatchObject({
+            ok: false,
+            reason: expect.stringContaining("session rebound"),
+          });
+        }
         expect(prepareDisplayContent).not.toHaveBeenCalled();
-        const sourceMutation = admission.run(async () => {
-          sourceResponse = await callGatewayHandler(
-            sessionMutationHandlers,
-            "sessions.patch",
-            { key: target.sessionKey, pinned: true },
-            {
-              context: {
-                getRuntimeConfig: () => target.config,
-                getSessionEventSubscriberConnIds: () => new Set<string>(),
-                broadcastToConnIds: vi.fn(),
-                chatAbortControllers: new Map(),
-                chatQueuedTurns: new Map(),
-                dedupe: new Map(),
-              },
-            },
-          );
-          return sourceResponse;
-        });
-        pending.push(sourceMutation);
-        controller.abort();
-        await completionSettlement;
-        expect(
-          completionOutcome,
-          "cancelled background completion must settle while the unrelated old lease stays held",
-        ).toMatchObject({ status: "rejected", reason: { name: "AbortError" } });
-        await expect(sourceMutation).resolves.toMatchObject({ ok: true });
-        expect(admission.isActive()).toBe(true);
-        expect(getActiveSessionLifecycleMutationCount()).toBe(0);
-        expect(prepareDisplayContent).not.toHaveBeenCalled();
-        const scope = {
-          agentId: "main",
-          sessionKey: target.sessionKey,
-          sessionId: target.sessionId,
-          storePath: target.storePath,
-        };
-        expect(loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" })).toMatchObject({
-          pinnedAt: expect.any(Number),
-          sessionId: target.sessionId,
-        });
-        await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
-      } finally {
-        controller.abort();
-        admission.release();
-        const settled = await Promise.allSettled(pending);
-        releaseSpy.mockRestore();
-        expect(settled.filter((result) => result.status === "rejected")).toHaveLength(1);
-        expect(completionOutcome).toMatchObject({
-          status: "rejected",
-          reason: { name: "AbortError" },
-        });
-        expect(sourceResponse).toMatchObject({ ok: true });
-        expect(getActiveSessionLifecycleMutationCount()).toBe(0);
-        expect(
-          await loadTranscriptEvents({
+        await expect(
+          loadTranscriptEvents({
             agentId: "main",
             sessionKey: target.sessionKey,
             sessionId: target.sessionId,
             storePath: target.storePath,
           }),
-        ).toEqual([]);
+        ).resolves.toEqual([]);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([blocker, observed]);
       }
-    });
-  });
+      expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+    },
+  );
 
   it.each([false, true])(
     "settles accepted display content with provider review paused=%s",

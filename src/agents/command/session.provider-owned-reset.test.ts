@@ -117,7 +117,7 @@ describe("command resolveSession provider-owned daily reset", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe("daily-expired-session-id");
+    expect(result.sessionId).toBe("daily-expired-session-id");
     expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
     expect(result.sessionEntry?.lastRunId).toBeUndefined();
     expect(result.persistedThinking).toBe("high");

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { resetThreadLifecycleTestFixtures } from "./thread-lifecycle.test-fixtures.js";
 
@@ -11,6 +11,17 @@ export let tempDir = "";
 
 export function setupUserMcpServerTestHooks(): void {
   beforeEach(async (context) => {
+    // Synthetic loopback catalogs must not use an ambient HTTP proxy.
+    for (const key of [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
     if (!context.codexAttemptRuntime) {
       throw new Error("Codex MCP server tests require the shared extension runtime fixture");
     }
@@ -25,11 +36,15 @@ export function setupUserMcpServerTestHooks(): void {
     if (!context.codexAttemptRuntime) {
       throw new Error("Codex MCP server tests require the shared extension runtime fixture");
     }
-    resetThreadLifecycleTestFixtures();
-    await context.codexAttemptRuntime.stop();
-    await closePolicyHttpServers();
-    if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true });
+    try {
+      resetThreadLifecycleTestFixtures();
+      await context.codexAttemptRuntime.stop();
+      await closePolicyHttpServers();
+      if (tempDir) {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 }

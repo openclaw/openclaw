@@ -14,7 +14,7 @@ import {
   OPENCLAW_DEFAULT_MODEL_ID,
   OPENCLAW_MODEL_ID,
   authorizeGatewayHttpRequestOrReply,
-  isOpenClawAgentModelId,
+  canonicalizeOpenClawAgentModelId,
   resolveAgentIdFromModel,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
@@ -98,7 +98,8 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  if (!isOpenClawAgentModelId(decodedId)) {
+  const modelId = canonicalizeOpenClawAgentModelId(decodedId);
+  if (!modelId) {
     sendInvalidRequest(res, "Invalid model id.");
     return true;
   }
@@ -111,7 +112,7 @@ export async function handleOpenAiModelsHttpRequest(
     configured = Boolean(agentId && listAgentIds(cfg).includes(agentId));
   }
 
-  if (!configured || !ids.includes(decodedId)) {
+  if (!configured || !ids.includes(modelId)) {
     sendJson(res, 404, {
       error: {
         message: `Model '${decodedId}' not found.`,
@@ -121,6 +122,6 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  sendJson(res, 200, toOpenAiModel(decodedId));
+  sendJson(res, 200, toOpenAiModel(modelId));
   return true;
 }

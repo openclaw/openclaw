@@ -39,6 +39,7 @@ describe("isRetryableAssistantError", () => {
   // replay windows, and incomplete-stream regressions at this adapter boundary.
   it.each([
     ["google-sse-eof-incomplete-frame", true],
+    ["openai-sdk-malformed-sse", true],
     ["google-sse-malformed-json-frame", false],
     ["billing-rate-limit-too-many", true],
     ["billing-service-capacity", true],

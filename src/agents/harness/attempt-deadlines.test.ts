@@ -158,4 +158,30 @@ describe("agent harness attempt deadlines", () => {
     expect(onTimeout).not.toHaveBeenCalled();
     expect(onDeadlineChanged).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, Number.NaN, Infinity, -Infinity])(
+    "keeps the admitted budget for legacy monotonic start %s",
+    (monotonicStart) => {
+      vi.advanceTimersByTime(20_000);
+      const onTimeout = vi.fn();
+      // Codex runtime plugins before 2026.10.6 pass only the epoch admission time.
+      const controller = createAgentHarnessAttemptDeadlineController({
+        startedAtMs: 0,
+        ...(monotonicStart === undefined ? {} : { startedAtMonotonicMs: monotonicStart }),
+        timeoutMs: 60_000,
+        settlementTimeoutMs: SETTLEMENT_TIMEOUT_MS,
+        signal: new AbortController().signal,
+        onTimeout,
+      });
+      expect(controller.ownsExecutionWait()).toBe(true);
+      vi.advanceTimersByTime(39_999);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenCalledExactlyOnceWith({
+        kind: "execution",
+        elapsedMs: 60_000,
+        timeoutMs: 60_000,
+      });
+    },
+  );
 });

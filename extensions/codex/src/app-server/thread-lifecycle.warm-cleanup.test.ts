@@ -1,4 +1,5 @@
 import path from "node:path";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   claimCodexAppServerLiveThread,
@@ -274,6 +275,7 @@ describe("Codex warm subscription cleanup", () => {
     fixture.request.mockClear();
     try {
       pluginFingerprint = "changed-plugin-policy";
+      await expect(startOrResumeThread(common)).rejects.toBeInstanceOf(AgentHarnessPreflightError);
       await expect(startOrResumeThread(common)).rejects.toThrow(
         `Codex thread ${threadId} is claimed by active work; stop it first.`,
       );

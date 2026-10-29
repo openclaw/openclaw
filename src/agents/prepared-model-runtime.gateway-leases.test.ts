@@ -9,7 +9,11 @@ import {
 } from "../config/plugin-auto-enable.test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
+  markPreparedModelRuntimeSnapshotsStale,
   acquireAgentRunPreparedModelRuntime,
   acquireAgentRuntimeCleanupRegistries,
   getPreparedModelRuntimeSnapshot,
@@ -184,4 +188,99 @@ describe("prepared model runtime Gateway leases", () => {
     );
     expect(unrelated.registries).toEqual([]);
   });
+});
+
+it("reprepares run admission when config publication supersedes its unfinished build", async () => {
+  const config = { messages: { responsePrefix: "before" } };
+  const current = { messages: { responsePrefix: "after" } };
+  await refreshPreparedModelRuntimeSnapshots(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+  });
+  const gate = createEnteredGate();
+  mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+    await gate.wait();
+    return { entries: [] };
+  });
+  const admission = acquireAgentRunPreparedModelRuntime({
+    ...fixture.agentInput("default", config),
+    loadRuntimePlugins: true,
+  });
+  void admission.catch(() => {});
+  let publication: Promise<void> | undefined;
+  try {
+    await gate.entered;
+    publication = refreshPreparedModelRuntimeSnapshots(current, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    gate.release();
+    await publication;
+    await using lease = await admission;
+    expect(lease.snapshot.config).toEqual(current);
+    expect(lease.snapshot.isCurrent()).toBe(true);
+    expect(
+      (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))?.config,
+    ).toEqual(current);
+  } finally {
+    gate.release();
+    await Promise.allSettled([
+      publication,
+      admission.then((lease) => lease[Symbol.asyncDispose]()),
+    ]);
+  }
+});
+
+it("bounds repeated preparation supersession and leaves ordinary failures untouched", async () => {
+  const input = fixture.agentInput("unconfigured", {});
+  mocks.prepareStaticCatalog.mockImplementation(async () => {
+    markPreparedModelRuntimeSnapshotsStale("fixture publication changed");
+    return { entries: [] };
+  });
+  await expect(acquireAgentRunPreparedModelRuntime(input)).rejects.toThrow(
+    "Model runtime changed during both preparation attempts; retry the request",
+  );
+  expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
+  const failure = new Error("fixture credentials unavailable");
+  mocks.prepareStaticCatalog.mockReset().mockRejectedValue(failure);
+  await expect(acquireAgentRunPreparedModelRuntime(input)).rejects.toBe(failure);
+  expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+});
+
+it.each(["explicit", "inherited"])("does not retry %s generation pins", async (pin) => {
+  const input = { ...fixture.agentInput("pin-boundary", {}), loadRuntimePlugins: true };
+  await using parent = await acquireAgentRunPreparedModelRuntime(input);
+  const generation = expectDefined(parent.pluginGeneration, "retained plugin generation");
+  const failure = new PreparedModelRuntimePublicationSupersededError("pinned boundary changed");
+  let attempts = 0;
+  const acquire = () =>
+    acquireAgentRunPreparedModelRuntime(input, {
+      ...(pin === "explicit" ? { pluginGeneration: generation } : {}),
+      deriveRuntimePluginSelections: () => {
+        attempts++;
+        throw failure;
+      },
+    });
+  await expect(
+    pin === "inherited"
+      ? withPreparedModelRuntimePluginGenerationScope(generation, acquire)
+      : acquire(),
+  ).rejects.toBe(failure);
+  expect(attempts).toBe(1);
+});
+
+it("checks cancellation before re-admitting a superseded request", async () => {
+  const controller = new AbortController();
+  let attempts = 0;
+  await expect(
+    acquireAgentRunPreparedModelRuntime(fixture.agentInput("abort-boundary", {}), {
+      abortSignal: controller.signal,
+      deriveRuntimePluginSelections: () => {
+        attempts++;
+        controller.abort(new Error("request revoked"));
+        throw new PreparedModelRuntimePublicationSupersededError("publication changed");
+      },
+    }),
+  ).rejects.toThrow("admission aborted");
+  expect(attempts).toBe(1);
 });

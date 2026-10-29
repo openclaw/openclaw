@@ -112,6 +112,20 @@ describe("plugins cli uninstall", () => {
     originalEnv.restore();
   });
 
+  it("escapes terminal controls from the installed manifest name in the preview", async () => {
+    configureAlphaInstall();
+    buildPluginSnapshotReportMock.mockReturnValue({
+      plugins: [{ id: "alpha", name: "alpha\u001b[31m\nforged-row" }],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "uninstall", "alpha", "--dry-run"]);
+
+    const output = pluginsCliRuntimeLogs.join("\n");
+    expect(output).not.toContain("\u001b");
+    expect(output).toContain("Plugin: alpha\\nforged-row (alpha)");
+  });
+
   it("shows uninstall dry-run preview without mutating config or acquiring write mode", async () => {
     process.env.OPENCLAW_NIX_MODE = "1";
     const { baseConfig } = configureAlphaInstall();

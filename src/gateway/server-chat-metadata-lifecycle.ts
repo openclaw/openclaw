@@ -10,6 +10,7 @@ import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
+const AVAILABILITY_REFRESH_INTERVAL_MS = 500;
 
 /** A committed auth change remains successful even if its best-effort UI notification fails. */
 export function broadcastChatMetadataChanged(
@@ -33,6 +34,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
   log: GatewayLogger;
 }) {
   let context: GatewayRequestContext | undefined;
+  let availabilityTimer: ReturnType<typeof setTimeout> | undefined;
   let preparedModelRuntimeState: "unobserved" | "available" | "unavailable" = "unobserved";
   let preparedModelRuntimeEventVersion = 0;
   const { createGatewayChatMetadataRuntime } =
@@ -59,13 +61,26 @@ export async function createGatewayChatMetadataLifecycle(params: {
       params.log.warn(`chat metadata refresh failed: ${String(error)}`);
     });
   };
-  const refreshForSubordinateChange = (notifyIfUnchanged = false) => {
+  const refreshForSubordinateChange = (notifyIfUnchanged = false, availabilityOnly = false) => {
     if (context) {
       invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
     }
     // Auth and skill facts are subordinate to the prepared model owner. During replacement the
     // publication event owns the one catch-up refresh after every related fact is committed.
     if (preparedModelRuntimeState === "available") {
+      if (availabilityOnly) {
+        // Reads observe the current auth revision immediately; notification bursts share a window.
+        availabilityTimer ??= setTimeout(() => {
+          availabilityTimer = undefined;
+          // A replacement or failure owns the next publication once availability was revoked.
+          if (preparedModelRuntimeState === "available") {
+            refreshLogged();
+          }
+        }, AVAILABILITY_REFRESH_INTERVAL_MS).unref();
+        return;
+      }
+      clearTimeout(availabilityTimer);
+      availabilityTimer = undefined;
       // The metadata owner compares captured facts before fencing changed generations.
       // Unrelated workspace events and repeated catalog statuses must not discard its cache.
       refreshLogged(notifyIfUnchanged);
@@ -139,8 +154,8 @@ export async function createGatewayChatMetadataLifecycle(params: {
       }
     });
     const unregisterRuntimeAuthProfileStoreMutation =
-      registerRuntimeAuthProfileStoreMutationListener(() => {
-        refreshForSubordinateChange();
+      registerRuntimeAuthProfileStoreMutationListener((event) => {
+        refreshForSubordinateChange(false, event.availabilityOnly);
       });
     const unregisterTopology = sessionChanges.subscribe((change) => {
       if (isSessionStoreTopologyChange(change)) {
@@ -148,6 +163,8 @@ export async function createGatewayChatMetadataLifecycle(params: {
       }
     });
     return () => {
+      clearTimeout(availabilityTimer);
+      availabilityTimer = undefined;
       unregisterTopology();
       unregisterRuntimeAuthProfileStoreMutation();
       unregisterPreparedModelRuntimePublication();

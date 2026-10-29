@@ -55,25 +55,6 @@ type LineWebhookTarget = {
 
 const lineWebhookTargets = new Map<string, LineWebhookTarget[]>();
 
-function startLineLoadingKeepalive(params: {
-  cfg: OpenClawConfig;
-  userId: string;
-  accountId?: string;
-}): () => void {
-  const trigger = () => {
-    void showLoadingAnimation(params.userId, {
-      cfg: params.cfg,
-      accountId: params.accountId,
-      loadingSeconds: 20,
-    }).catch(() => {});
-  };
-
-  trigger();
-  const timer = setInterval(trigger, 18_000);
-
-  return () => clearInterval(timer);
-}
-
 export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
   const {
     channelAccessToken,
@@ -107,16 +88,26 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
       // Admission already resolved the config live for this event; the turn and
       // its delivery run on that same one so the two can never disagree.
       const turnConfig = deliveryControl.cfg;
-
-      const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
-
-      const stopLoading = shouldShowLoading
-        ? startLineLoadingKeepalive({
-            cfg: turnConfig,
-            userId: ctx.userId!,
-            accountId: ctx.accountId,
-          })
-        : null;
+      // LINE shows a loading animation only in one-to-one chats. Core starts it once
+      // the reply is admitted, so send policy and typing suppression keep it silent.
+      const userId = ctx.isGroup ? undefined : ctx.userId;
+      const replyPipeline = userId
+        ? {
+            typing: {
+              start: () =>
+                showLoadingAnimation(userId, {
+                  cfg: turnConfig,
+                  accountId: ctx.accountId,
+                  loadingSeconds: 20,
+                }),
+              keepaliveIntervalMs: 18_000,
+              // The reply lifecycle stops it when the turn settles; keep it for long runs.
+              maxDurationMs: 0,
+              // showLoadingAnimation logs and swallows its own failures.
+              onStartError: () => {},
+            },
+          }
+        : {};
 
       // The inbound context already resolved the sender's name for the agent;
       // reading it back costs nothing instead of asking LINE a second time.
@@ -180,7 +171,7 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
               route: { agentId: route.agentId, sessionKey: route.sessionKey },
               ctxPayload,
               record: ctx.turn.record,
-              replyPipeline: {},
+              replyPipeline,
               // Block replies are paced by the agent's own humanDelay; nothing else
               // reads it, so a turn that never forwards it silently paces at zero.
               dispatcherOptions: {
@@ -201,13 +192,6 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
                   }),
                 deliver: async (payload) => {
                   const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
-
-                  if (ctx.userId && !ctx.isGroup) {
-                    void showLoadingAnimation(ctx.userId, {
-                      cfg: turnConfig,
-                      accountId: ctx.accountId,
-                    }).catch(() => {});
-                  }
 
                   const deliveryResult = await deliverLineAutoReply({
                     payload,
@@ -256,8 +240,6 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
           );
         }
         throw err;
-      } finally {
-        stopLoading?.();
       }
     },
   });

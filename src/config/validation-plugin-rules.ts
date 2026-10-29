@@ -274,7 +274,7 @@ export function validatePreparedConfigWithPlugins(
       ...new Set(
         registry.plugins
           .flatMap((record) => record.contracts?.webSearchProviders ?? [])
-          .map((providerId) => providerId.trim())
+          .map((providerId) => providerId.trim().toLowerCase())
           .filter((providerId) => providerId.length > 0),
       ),
     ].toSorted((left, right) => left.localeCompare(right));
@@ -285,7 +285,7 @@ export function validatePreparedConfigWithPlugins(
       ...new Set([
         ...collectActiveWebSearchProviderIds(),
         ...resolveWebSearchInstallCatalogEntries()
-          .map((entry) => entry.provider.id.trim())
+          .map((entry) => entry.provider.id.trim().toLowerCase())
           .filter((providerId) => providerId.length > 0),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
@@ -321,15 +321,17 @@ export function validatePreparedConfigWithPlugins(
       issues.push({ path: issuePath, message: "web_search provider must not be empty" });
       return;
     }
+    // Match the runtime's case-insensitive provider lookup.
+    const normalizedProviderId = trimmed.toLowerCase();
     const activeProviderIds = collectActiveWebSearchProviderIds();
-    if (activeProviderIds.includes(trimmed)) {
+    if (activeProviderIds.includes(normalizedProviderId)) {
       return;
     }
     if (preserveUnavailableConfig(issuePath)) {
       return;
     }
     const installCatalogEntry = resolveWebSearchInstallCatalogEntries().find(
-      (entry) => entry.provider.id === trimmed,
+      (entry) => entry.provider.id.trim().toLowerCase() === normalizedProviderId,
     );
     if (installCatalogEntry) {
       const issue = {

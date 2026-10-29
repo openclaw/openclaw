@@ -534,10 +534,64 @@ describe("auth publication generation recovery", () => {
       unregister();
     }
   });
+  it.for([false, true])(
+    "re-prepares superseded fresh auth generations with a bound (exhausted: %s)",
+    async (exhausted) => {
+      const { input, snapshot } = await publishOwner();
+      const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!;
+      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
+        (params) => params.reusableRegistry ?? createEmptyPluginRegistry(),
+      );
+      const superseded = new PreparedModelRuntimePublicationSupersededError(
+        "Accepted model catalog changed during runtime preparation",
+      );
+      mocks.resolveAmbientCredentials
+        .mockClear()
+        .mockImplementationOnce(() => {
+          throw superseded;
+        })
+        .mockImplementationOnce(() => {
+          throw superseded;
+        })
+        .mockImplementation(() => {
+          if (exhausted) {
+            throw superseded;
+          }
+          return {};
+        });
+      const mutate = () =>
+        mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+      mutate();
+      if (exhausted) {
+        const result = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }).catch(
+          (error: unknown) => error,
+        );
+        expect(result).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+        expect(result).toMatchObject({
+          message: expect.stringContaining("after 2 fresh-generation retries"),
+        });
+        expect(owner.refreshError).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+        expect(owner.catalogRecovery?.error).toBe(owner.refreshError);
+        expect(mocks.warn).toHaveBeenCalledOnce();
+      } else {
+        await expect(
+          loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+        ).resolves.toMatchObject({ agentId: "default" });
+        expect((await prepareModelRuntimeSnapshot(input)).isCurrent()).toBe(true);
+        expect(mocks.warn).not.toHaveBeenCalled();
+      }
+      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(3);
+      mocks.resolveAmbientCredentials.mockImplementation(() => ({}));
+      await expect(
+        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+      ).resolves.toMatchObject({ agentId: "default" });
+      expect((await prepareModelRuntimeSnapshot(input)).isCurrent()).toBe(true);
+    },
+  );
 });
 
 describe("prepared model auth publication", () => {
-  it("retains the prepared owner on bookkeeping and refreshes on auth availability changes", async () => {
+  it("retains the prepared owner on bookkeeping and availability, but refreshes on credentials", async () => {
     const snapshots = await vi.importActual<typeof import("./auth-profiles/runtime-snapshots.js")>(
       "./auth-profiles/runtime-snapshots.js",
     );
@@ -574,6 +628,18 @@ describe("prepared model auth publication", () => {
         {
           ...store,
           usageStats: { "test:primary": { cooldownUntil: Date.now() + 60_000 } },
+        },
+        agentDir,
+      );
+      expect(await prepareModelRuntimeSnapshot(input)).toBe(initial);
+      expect(events).not.toHaveBeenCalled();
+      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+      snapshots.updateRuntimeAuthProfileStoreSnapshot(
+        {
+          ...store,
+          profiles: {
+            "test:primary": { type: "token", provider: "test", token: "rotated-synthetic-token" },
+          },
         },
         agentDir,
       );

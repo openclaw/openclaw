@@ -91,6 +91,16 @@ async function expectIdentityCommandFailure(options: IdentityOptions, expected: 
 }
 
 describe("agents set-identity command", () => {
+  it.each([
+    [{ identityFile: " " }, "--identity-file must not be blank"],
+    [{ workspace: "\t" }, "--workspace must not be blank"],
+  ] as const)("rejects an explicitly blank path %j", async (options, message) => {
+    const { workspace } = await createIdentityWorkspace();
+    await writeIdentityFile(workspace, ["- Name: Fallback identity"]);
+    setAgents({ entries: { main: { workspace } } });
+    await expectIdentityCommandFailure({ agent: "main", ...options, json: true }, message);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     setAgents({ entries: { main: {} } });

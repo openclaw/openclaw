@@ -13,6 +13,7 @@ import {
 import * as taskProbe from "../daemon/schtasks-state-probe.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import * as sqliteHeaderProbe from "../infra/sqlite-header-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
 import * as updateDatabaseRestore from "../infra/update-database-restore.js";
@@ -244,7 +245,17 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
         createFileSync(file, { mode: 0o600 }),
       );
     }
-    // Native-service platform simulations do not change the actual SQLite VFS.
+    // Service-platform doubles do not change host SQLite helpers or their Node resolution.
+    const probeSqliteHeaders = sqliteHeaderProbe.probeSqliteDatabaseHeaders;
+    vi.spyOn(sqliteHeaderProbe, "probeSqliteDatabaseHeaders").mockImplementation((...args) => {
+      const platform = process.platform;
+      Object.defineProperty(process, "platform", { value: sqliteHostPlatform, configurable: true });
+      try {
+        return probeSqliteHeaders(...args);
+      } finally {
+        Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      }
+    });
     vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
       existingHostUri(file, sqliteHostPlatform),
     );

@@ -1,9 +1,7 @@
 import type fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { root } from "../infra/fs-safe.js";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import {
   enqueueConfigAuditRecord,
   captureConfigAuditAppender,
@@ -25,6 +23,7 @@ import {
   createConfigBackupMissingEffect,
   createConfigBackupReadEffect,
   commitRecoveryFileIfCurrent,
+  createRecoveryCommitEffect,
   type ConfigRecoveryEffect,
 } from "./io.observe-recovery-effects.js";
 import {
@@ -44,7 +43,7 @@ import { chmodConfigBestEffort, chmodConfigBestEffortSync } from "./io.write-saf
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
-import { resolveIsConfigReadOnly, resolveStateDir } from "./paths.js";
+import { resolveIsConfigReadOnly } from "./paths.js";
 import {
   collectPollutedSecretPlaceholders,
   isPluginLocalInvalidConfigSnapshot,
@@ -70,53 +69,6 @@ type ConfigReadRecoveryParams = {
 };
 
 type ConfigReadRecoveryResult = Pick<ConfigRecoveryCandidate, "raw" | "parsed">;
-
-function createRecoveryCommitEffect(params: {
-  deps: ObserveRecoveryDeps;
-  configPath: string;
-  raw: string;
-  beforeCommit?: () => void;
-}): ConfigRecoveryEffect<boolean> {
-  const options = {
-    filePath: params.configPath,
-    content: params.raw,
-    dirMode:
-      readExistingStateRootMode(
-        path.dirname(params.configPath),
-        resolveStateDir(params.deps.env, params.deps.homedir),
-        params.deps.fs,
-      ) ?? 0o700,
-    mode: 0o600,
-    tempPrefix: path.basename(params.configPath),
-    fileSystem: params.deps.fs,
-  };
-  return {
-    sync: () => {
-      replaceFileAtomicSync(options);
-      return true;
-    },
-    async: (health) =>
-      commitRecoveryFileIfCurrent({
-        health,
-        beforeCommit: params.beforeCommit,
-        write: (assertCurrent) =>
-          replaceFileAtomic({
-            ...options,
-            // Every rename attempt must revalidate; copy fallback has no final guard.
-            copyFallbackOnPermissionError: false,
-            fileSystem: {
-              promises: {
-                ...params.deps.fs.promises,
-                rename: (source: fs.PathLike, destination: fs.PathLike) => {
-                  assertCurrent();
-                  return params.deps.fs.promises.rename(source, destination);
-                },
-              },
-            },
-          }),
-      }),
-  };
-}
 
 function parseBackupConfigRaw(
   deps: ObserveRecoveryDeps,
@@ -548,6 +500,20 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
     stat,
     observedAt: now,
   });
+  const entry = readConfigHealthEntry(healthSnapshot.state, snapshot.path);
+  const suspiciousReasons = resolveConfigObserveSuspiciousReasons({
+    bytes: current.bytes,
+    hasMeta: current.hasMeta,
+    gatewayMode: current.gatewayMode,
+    parsed: snapshot.parsed,
+    lastKnownGood: entry.lastKnownGood,
+  });
+  if (suspiciousReasons.length > 0) {
+    params.logger?.warn(
+      `Config last-known-good promotion skipped: ${snapshot.path} (${suspiciousReasons.join(", ")})`,
+    );
+    return false;
+  }
   const lastGoodPath = `${snapshot.path}.last-good`;
   if (!health.isCurrent()) {
     return false;

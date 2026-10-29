@@ -98,7 +98,9 @@ describe("config CLI database effects", () => {
     async ({ args, input }) => {
       const result = await runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env, input });
       expect(result.code, result.stderr).toBe(1);
-      expect(result.stderr).toContain("exclusive offline state ownership");
+      // Writes route to a Gateway listener; this owner holds custody without one.
+      expect(result.stderr).toContain("The state owner has no Gateway listener");
+      expect(result.stderr).toContain("No local mutation was attempted");
       expect(result.stderr).toContain("stop the Gateway");
       expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(originalConfig);
       expect(await readLatestConfigSnapshotAuditRecordAsync({ env })).toBeNull();

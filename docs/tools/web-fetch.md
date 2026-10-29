@@ -12,6 +12,12 @@ sidebarTitle: "Web Fetch"
 markdown or text). It does **not** execute JavaScript. For JS-heavy sites or
 login-protected pages, use the [Web Browser](/tools/browser) instead.
 
+HTML cleanup excludes text hidden by recognized inline styles, including scale
+transforms that collapse the X or Y axis, such as `scale(0, 0)` and
+`scale3d(0, 0, 0)`. Nonzero scales and a zero Z axis alone remain visible.
+Basic HTML extraction keeps definition-list terms and values on separate lines.
+Basic HTML extraction preserves boundaries around block content such as quotes, figure captions, and collapsible sections.
+
 ## Quick start
 
 Enabled by default, no configuration needed:
@@ -27,7 +33,7 @@ URL to fetch. `http(s)` only.
 </ParamField>
 
 <ParamField path="extractMode" type="'markdown' | 'text'" default="markdown">
-Output format after main-content extraction.
+Output format after main-content extraction. Text mode removes complete link destinations, including nested parentheses, and preserves literal inline and fenced code. Readability text output keeps headings, paragraphs, and list items on separate lines.
 </ParamField>
 
 <ParamField path="maxChars" type="number">

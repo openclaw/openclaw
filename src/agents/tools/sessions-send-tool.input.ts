@@ -1,3 +1,4 @@
+import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import { ToolInputError } from "../tool-input-error.js";
 import { readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
 
@@ -38,4 +39,16 @@ export function readSessionsSendMode(params: Record<string, unknown>) {
     throw new ToolInputError("mode must be notify, steer, followup, or resume");
   }
   return mode;
+}
+
+/** Keep label validation shared with the send tool without changing its error contract. */
+export function readSessionsSendLabelAgent(params: Record<string, unknown>) {
+  const input = readToolStringParam(params, "agentId");
+  const normalized = input === undefined ? null : normalizeAgentIdStrict(input);
+  return normalized && !normalized.ok
+    ? {
+        input,
+        error: `Agent "${input}" not found. Run openclaw agents list to see configured agents.`,
+      }
+    : { input, agentId: normalized?.value };
 }

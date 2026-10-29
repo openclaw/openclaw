@@ -23,7 +23,7 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
-import { getPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginInstance, getPluginInstanceOwner } from "./plugin-instance-scope.js";
 import { inheritPluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
 import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
@@ -169,7 +169,10 @@ async function acquireRegistryResources(
     // Rollback completions were already consumed by the collector before this finalizer.
     const results = await Promise.allSettled(
       [...instances]
-        .filter((instance) => !rollbackInstances.has(instance))
+        .filter((instance) => {
+          const owner = getPluginInstanceOwner(instance);
+          return !rollbackInstances.has(instance) && (!owner || owner.registry === registry);
+        })
         .map((instance) => instance.dispose()),
     );
     const failures: unknown[] = results.flatMap((result) =>

@@ -14,7 +14,23 @@ import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
+const memoryWarnings = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (original) => {
+  const actual =
+    await original<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      return args[0] === "memory"
+        ? { ...logger, warn: (...warnArgs: unknown[]) => void memoryWarnings(...warnArgs) }
+        : logger;
+    },
+  };
+});
+
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
+
 const { MemoryIndexManager } = await import("./manager.js");
 
 describe("memory index", () => {
@@ -89,6 +105,35 @@ describe("memory index", () => {
       );
     },
   );
+
+  // #183425: an all-zero query embedding skips vector recall; that must be visible
+  // in the Gateway log instead of silently returning keyword-only results.
+  it("warns when the query embedding is all zeros and keeps keyword results", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "openai", minScore: 0 }));
+    await manager.sync({ reason: "test" });
+    const query = vi
+      .spyOn((manager as unknown as { provider: EmbeddingProvider }).provider, "embed")
+      .mockResolvedValue([0, 0, 0, 0]);
+    memoryWarnings.mockClear();
+
+    expect(
+      (await manager.search("alpha")).some((result) =>
+        result.path.endsWith("memory/2026-01-12.md"),
+      ),
+    ).toBe(true);
+    expect(memoryWarnings.mock.calls.map((call) => String(call[0]))).toEqual([
+      "memory search: query embedding from mock is all zeros; vector recall skipped; check the embedding service and retry",
+    ]);
+
+    query.mockRestore();
+    memoryWarnings.mockClear();
+    expect(
+      (await manager.search("alpha")).some((result) =>
+        result.path.endsWith("memory/2026-01-12.md"),
+      ),
+    ).toBe(true);
+    expect(memoryWarnings).not.toHaveBeenCalled();
+  });
 
   it("keeps configured provider fallback available after query dimension drift", async () => {
     const manager = await getPersistentManager(

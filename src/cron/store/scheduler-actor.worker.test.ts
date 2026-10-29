@@ -15,9 +15,11 @@ import {
 import { projectCronRunHistoryPage } from "../run-history.js";
 import type { CronJob } from "../types.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
+import { finalizeCronRunsInWorker } from "./run-finalization.worker.js";
 import { readCronRunRecordsInDatabase } from "./run-history.kernel.js";
 import { cancelCronRequestsInWorker } from "./run-queue.worker.js";
 import { ensureCronRunReceiptSchema } from "./run-receipt-store.js";
+import { parseCronScheduledRunId } from "./run-request-id.js";
 import { saveCronStoreInDatabase } from "./save.kernel.js";
 import type { CronSchedulerOperations, CronSchedulerSnapshot } from "./scheduler-actor.types.js";
 import { runCronSchedulerInWorker, stopCronSchedulerInWorker } from "./scheduler-actor.worker.js";
@@ -439,6 +441,97 @@ it.each([false, true])("bounds forward clock catch-up with intervening refresh=%
   ).toEqual([jumpedAtMs + 5_000, jumpedAtMs + 10_000]);
   expect(scheduler.tick(jumpedAtMs + 1, 1_001).accepted).toEqual([]);
   expect(scheduler.receipts()).toHaveLength(5);
+});
+
+it.each([false, true])("recovers stale cron slots unless skipMissedJobs=%s", (skipMissedJobs) => {
+  const healthy = job("stale-future", now + minute, {
+    schedule: { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 },
+    state: {
+      nextRunAtMs: now + minute,
+      lastRunAtMs: now,
+      lastRunStatus: "ok",
+      lastDurationMs: 1_000,
+    },
+  });
+  const scheduler = storedScheduler(`missed-slot-${skipMissedJobs}`, [healthy]);
+  expect(
+    scheduler.start(now, {
+      snapshot: { ...snapshot, config: { ...snapshot.config, cronConfig: { skipMissedJobs } } },
+    }).accepted,
+  ).toEqual([]);
+  const stale = {
+    ...healthy,
+    state: {
+      nextRunAtMs: now + 30 * minute,
+      lastRunAtMs: now - 120 * minute,
+      lastRunStatus: "ok" as const,
+      lastDurationMs: 1_000,
+    },
+  };
+  withinWorker(() =>
+    runOpenClawStateWriteTransaction(
+      () => saveCronStoreInDatabase(database, scheduler.storeKey, { version: 1, jobs: [stale] }),
+      { database, path: database.path, env: fixture.env },
+    ),
+  );
+  expect(scheduler.read()[0]?.state).toMatchObject(stale.state);
+  const tick = scheduler.tick(now + 1_000, 1_000);
+  const expectedJobIds = skipMissedJobs ? [] : ["stale-future"];
+  expect(tick.accepted.map(({ job: entry }) => entry.id)).toEqual(expectedJobIds);
+  expect(tick.launches.map(({ job: entry }) => entry.id)).toEqual(expectedJobIds);
+  expect(tick.rejected).toEqual([]);
+  if (skipMissedJobs) {
+    return;
+  }
+  let launch = tick.launches[0]!;
+  expect(parseCronScheduledRunId(launch.runReceipt.receiptId)).toEqual({
+    storeKey: scheduler.storeKey,
+    jobId: "stale-future",
+    scheduledSlotMs: now,
+  });
+  for (let slot = 1; slot <= 30; slot += 1) {
+    const endedAt = launch.runReceipt.startedAtMs + 100;
+    withinWorker(() =>
+      finalizeCronRunsInWorker(database, {
+        storeKey: scheduler.storeKey,
+        snapshot: {
+          nowMs: endedAt,
+          defaultAgentId: "main",
+          outcomes: [
+            {
+              jobId: launch.job.id,
+              job: launch.job,
+              runReceipt: launch.runReceipt,
+              status: "ok",
+              completionStatus: "succeeded",
+              deliveryState: {
+                status: "not-requested",
+                failureNotification: { status: "not-requested" },
+              },
+              startedAt: launch.runReceipt.startedAtMs,
+              endedAt,
+            },
+          ],
+        },
+      }),
+    );
+    const next = scheduler.tick(now + slot * minute, slot * minute);
+    expect(
+      next.accepted.map(({ job: entry }) => entry.id),
+      "accepted minute " + slot,
+    ).toEqual(["stale-future"]);
+    expect(
+      next.launches.map(({ job: entry }) => entry.id),
+      "scheduled minute " + slot,
+    ).toEqual(["stale-future"]);
+    expect(next.rejected).toEqual([]);
+    launch = next.launches[0]!;
+    expect(parseCronScheduledRunId(launch.runReceipt.receiptId)?.scheduledSlotMs).toBe(
+      now + slot * minute,
+    );
+    expect(scheduler.read()[0]?.state.runningReceiptId).toBe(launch.runReceipt.receiptId);
+  }
+  expect(scheduler.receipts()).toHaveLength(31);
 });
 
 it("keeps the persisted next deadline when the wall clock moves backward", () => {

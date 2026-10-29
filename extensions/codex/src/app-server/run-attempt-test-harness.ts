@@ -50,6 +50,10 @@ import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexServerNotification, RpcRequest } from "./protocol.js";
 import {
+  createCodexLifecycleTurnHarness,
+  type CodexLifecycleHarnessOptions,
+} from "./run-attempt-client-identity.test-support.js";
+import {
   cleanupRunSessionOwnersForTest,
   closeRunSessionOwnerDatabasesForTest,
   seedRunSessionOwnerForTest,
@@ -61,7 +65,7 @@ import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
-import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from "./shared-client.js";
+import type { CodexAppServerClientFactory } from "./shared-client.js";
 import {
   adaptCodexTestClientFactory,
   createCodexTestModel,
@@ -70,7 +74,6 @@ import {
   useAutoCleanupTempDirTracker,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
-import { createCodexLifecycleTurnHarness } from "./thread-lifecycle.test-fixtures.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
@@ -467,19 +470,13 @@ export function createAppServerHarness(
     params: unknown,
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>,
-  options: {
-    persistedThreads?: Parameters<typeof createCodexLifecycleTurnHarness>[0]["persistedThreads"];
-    onStart?: (
-      authProfileId: string | undefined,
-      agentDir: string | undefined,
-      options: CodexAppServerClientOptions | undefined,
-    ) => void;
-  } = {},
+  options: CodexLifecycleHarnessOptions = {},
 ) {
   if (options.persistedThreads) {
     const harness = createCodexLifecycleTurnHarness({
       respond: requestImpl,
       persistedThreads: options.persistedThreads,
+      codexHome: options.codexHome,
       agentDir: path.join(tempDir, "wire-agent"),
     });
     setCodexAppServerClientFactoryForTest(

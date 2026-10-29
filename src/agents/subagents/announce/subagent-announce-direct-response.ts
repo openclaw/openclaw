@@ -26,6 +26,7 @@ import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatc
 import type { DeliveryContext } from "./subagent-announce-origin.js";
 
 type DirectAnnounceResponseContext = {
+  replyExpectation: "required" | "optional";
   params: {
     sourceTool?: string;
     expectsCompletionMessage: boolean;
@@ -63,6 +64,7 @@ function missingVisibleReplyResult(): SubagentAnnounceDeliveryResult {
 export function createDirectAnnounceResponseClassifier(context: DirectAnnounceResponseContext) {
   const {
     params,
+    replyExpectation,
     parentOnly,
     requesterSessionBound,
     deliveryTarget,
@@ -126,24 +128,23 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     const terminalReply = normalizeAgentRunTerminalReplySnapshot(
       directAnnounceResult?.meta?.terminalReply,
     );
-    // A yielded private turn may intentionally stay silent, but a failed or
-    // empty turn must not consume the batch as though its final was delivered.
     const requesterCompletedSuccessfully =
       directAnnounceRecord?.status === "ok" &&
       !directAnnounceResult?.meta?.error &&
       !directAnnounceResult?.meta?.aborted;
-    const requiresSettleReply =
-      requesterSessionBound &&
+    // The producer snapshot survives NO_REPLY stripping. A promoted human result
+    // obligation cannot be waived by the optional input that started this turn.
+    const optionalSettleCompletedWithoutReply =
       params.sourceTool === "subagent_settle" &&
-      !(
-        requesterCompletedSuccessfully &&
-        (terminalReply
-          ? terminalReply.disposition === "silent"
-          : hasIntentionalSilentCompletionReply) &&
-        !hasVisibleNonSilentGatewayPayload &&
-        directAnnounceResult?.meta?.yielded !== true &&
-        directAnnounceResult?.meta?.continuationPending !== true
-      );
+      replyExpectation === "optional" &&
+      asOptionalRecord(directAnnounceResult?.meta)?.terminalReplyExpectation !== "required" &&
+      requesterCompletedSuccessfully &&
+      !hasVisibleNonSilentGatewayPayload &&
+      (!terminalReply || terminalReply.disposition !== "visible") &&
+      directAnnounceResult?.meta?.yielded !== true &&
+      directAnnounceResult?.meta?.continuationPending !== true;
+    const requiresSettleReply =
+      params.sourceTool === "subagent_settle" && !optionalSettleCompletedWithoutReply;
     const requiresAutomaticFinalReceipt =
       shouldDeliverAgentFinal &&
       (params.expectsCompletionMessage || params.requireVisibleReply || requiresSettleReply);

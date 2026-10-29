@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { addAbortListener } from "node:events";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -59,7 +60,6 @@ import {
   prepareCommandSessionRecoveryEntry,
   prepareEmbeddedSessionState,
 } from "./command/session-preparation.js";
-import { clearRotatedSessionMetadata } from "./command/session.js";
 import type {
   AgentCommandGatewayIngressOpts,
   AgentCommandIngressOpts,
@@ -73,6 +73,7 @@ import {
   scheduleSessionMaintenance,
   type SessionMaintenanceRequest,
 } from "./session-maintenance/run.js";
+import { clearRotatedSessionMetadata } from "./session-reset-metadata.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -135,6 +136,7 @@ async function agentCommandInternal(
     sessionStore,
     storePath,
     isNewSession,
+    automaticReset,
     sessionAgentId,
     workspaceDir,
     cwd,
@@ -353,8 +355,13 @@ async function agentCommandInternal(
         const allowCreate = currentStoreEntry === undefined && sessionEntry === undefined;
         const initialEntry = currentStoreEntry ??
           sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
-        const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
+        const isSessionRollover =
+          isNewSession && (initialEntry.sessionId !== sessionId || automaticReset !== undefined);
         const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
+        if (automaticReset) {
+          entry.lifecycleRevision = randomUUID();
+          entry.agentHarnessId = undefined;
+        }
         await prepareDeliveryForRun(entry);
         const { nextEntry, guardedHarnessCompletion, isCompletionCurrent } =
           prepareCommandSessionRecoveryEntry({
@@ -377,11 +384,18 @@ async function agentCommandInternal(
           storePath,
           initialEntry,
           entry: nextEntry,
+          resetBoundary: automaticReset && {
+            context: "preserve-tail",
+            reason: automaticReset.reason,
+            cwd: cwd ?? workspaceDir,
+          },
           creation: operatorSession?.creation,
           assertCommitAllowed: operatorSession?.assertCurrent,
           shouldPersist: (current) => {
             operatorSession?.assertAuthorized(current);
             return (
+              (!automaticReset ||
+                current?.lifecycleRevision === automaticReset.expectedLifecycleRevision) &&
               isCompletionCurrent(current) &&
               (isSessionRollover
                 ? current?.sessionId === initialEntry.sessionId

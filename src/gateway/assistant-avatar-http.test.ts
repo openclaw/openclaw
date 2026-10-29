@@ -212,6 +212,19 @@ it.each(["local", "data"])(
       "private, max-age=31536000, immutable",
     );
     expect(first.setHeader).toHaveBeenCalledWith("vary", "Authorization, Cookie");
+    if (sourceKind === "data") {
+      for (const method of ["GET", "HEAD"]) {
+        const response = await request({ url: "/control/avatar/main", method });
+        expect(response.res.statusCode).toBe(200);
+        expect(response.setHeader).toHaveBeenCalledWith("content-type", "image/png");
+        expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-cache");
+        expect(response.setHeader).toHaveBeenCalledWith("vary", "Authorization, Cookie");
+        expect(response.end.mock.calls[0]?.[0]).toEqual(method === "HEAD" ? undefined : thumbnail);
+      }
+      expect(
+        (await request({ url: "/control/avatar/main", authorized: false })).res.statusCode,
+      ).toBe(401);
+    }
     const etag = first.setHeader.mock.calls.find(([name]) => name === "etag")?.[1] as string;
     expect(etag).toBeTruthy();
 

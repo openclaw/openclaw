@@ -33,8 +33,58 @@ type InlineImageReference =
 
 const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 
-export const IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
-export const ATTACHMENT_TAG_RE = /<attachment[^>]+id=["']([^"']+)["'][^>]*>/gi;
+/**
+ * Values of `attr` on each `<tag ...>` in document order, matching the captures of
+ * `/<tag[^>]+attr=["']([^"']+)["'][^>]*>/gi`: the last attribute spelling inside the
+ * tag wins, and a quoted value may contain `>`. Each `<tag` start is resolved from
+ * precomputed next-`>` and next-quote positions in one forward pass.
+ */
+export function htmlTagAttributeValues(
+  html: string,
+  tag: "img" | "attachment",
+  attr: "src" | "id",
+): string[] {
+  const length = html.length;
+  const nextGt = new Int32Array(length + 1).fill(length);
+  const nextQuote = new Int32Array(length + 1).fill(length);
+  for (let index = length - 1; index >= 0; index -= 1) {
+    const char = html[index];
+    nextGt[index] = char === ">" ? index : nextGt[index + 1]!;
+    nextQuote[index] = char === '"' || char === "'" ? index : nextQuote[index + 1]!;
+  }
+  // An attribute spelling is usable when a non-empty value, a closing quote and a
+  // later `>` follow it, whichever tag it ends up inside.
+  const candidates: Array<{ start: number; valueStart: number; valueEnd: number; end: number }> =
+    [];
+  for (const match of html.matchAll(new RegExp(`${attr}=["']`, "gi"))) {
+    const valueStart = match.index + match[0].length;
+    const valueEnd = nextQuote[valueStart]!;
+    if (valueEnd > valueStart && valueEnd < length && nextGt[valueEnd + 1]! < length) {
+      candidates.push({ start: match.index, valueStart, valueEnd, end: nextGt[valueEnd + 1]! + 1 });
+    }
+  }
+  const values: string[] = [];
+  let resumeAt = 0;
+  let pastWindow = 0;
+  for (const open of html.matchAll(new RegExp(`<${tag}`, "gi"))) {
+    if (open.index < resumeAt) {
+      continue;
+    }
+    // The attribute starts at least one character after the tag name (`[^>]+` is
+    // non-empty) and no later than the first `>`, so the window only moves forward.
+    const nameEnd = open.index + open[0].length;
+    const lastStart = nextGt[nameEnd]!;
+    while (pastWindow < candidates.length && candidates[pastWindow]!.start <= lastStart) {
+      pastWindow += 1;
+    }
+    const candidate = candidates[pastWindow - 1];
+    if (candidate && candidate.start > nameEnd) {
+      values.push(html.slice(candidate.valueStart, candidate.valueEnd));
+      resumeAt = candidate.end;
+    }
+  }
+  return values;
+}
 const GRAPH_HOSTED_CONTENT_SRC_RE = /\/hostedContents\/([^/?#]+)/i;
 
 function resolveInlineImageSourceId(src: string): string {
@@ -271,9 +321,8 @@ export function extractInlineImageReferences(
     if (!html) {
       continue;
     }
-    IMG_SRC_RE.lastIndex = 0;
-    for (const match of html.matchAll(IMG_SRC_RE)) {
-      const src = match[1]?.trim();
+    for (const value of htmlTagAttributeValues(html, "img", "src")) {
+      const src = value.trim();
       if (src) {
         if (src.startsWith("data:")) {
           out.push({ kind: "data", src });

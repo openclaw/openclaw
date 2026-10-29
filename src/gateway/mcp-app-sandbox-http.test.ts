@@ -1,6 +1,8 @@
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { AddressInfo } from "node:net";
+import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
@@ -75,6 +77,76 @@ function publicResourceRegistry(
 }
 
 describe("MCP App sandbox HTTP origin", () => {
+  it("binds the browser-reported parent when the iframe request carries no referrer", async () => {
+    await withSandboxHost(async (origin) => {
+      const shell = await (await fetch(new URL(buildMcpAppSandboxPath(), origin))).text();
+      const bootstrap = expectDefined(
+        [...shell.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1],
+        "sandbox bootstrap script",
+      );
+      // WebKit navigates an already attached iframe without the referrer the host requested.
+      const boot = (parentOrigin: string | undefined, referrer = "", isolated = true) => {
+        const posted: unknown[][] = [];
+        const location = {
+          href: `${origin}/mcp-app-sandbox`,
+          ancestorOrigins: parentOrigin === undefined ? undefined : [parentOrigin],
+        };
+        const window = {
+          location,
+          top: {
+            get document(): unknown {
+              if (isolated) {
+                throw new Error("cross-origin");
+              }
+              return undefined;
+            },
+          },
+          parent: { postMessage: (...args: unknown[]) => posted.push(args) },
+          addEventListener: () => {},
+        };
+        runInNewContext(bootstrap, {
+          URL,
+          window: Object.assign(window, { self: window }),
+          location,
+          document: {
+            referrer,
+            body: { appendChild: () => {} },
+            createElement: () => ({ setAttribute: () => {} }),
+          },
+        });
+        return posted;
+      };
+
+      expect(boot("https://control.example")).toEqual([
+        [
+          expect.objectContaining({ method: "ui/notifications/sandbox-proxy-ready" }),
+          "https://control.example",
+        ],
+      ]);
+      expect(() => boot("null")).toThrow("invalid MCP App sandbox parent");
+      expect(boot(undefined, "https://referrer.example/path")).toEqual([
+        [expect.any(Object), "https://referrer.example"],
+      ]);
+      expect(boot("https://control.example", "https://different.example/path")).toEqual([
+        [expect.any(Object), "https://control.example"],
+      ]);
+      for (const parent of [
+        "",
+        "file:///tmp/parent",
+        "javascript:alert(1)",
+        "data:text/html,parent",
+      ]) {
+        expect(() => boot(parent, "https://valid-referrer.example")).toThrow(
+          "invalid MCP App sandbox parent",
+        );
+      }
+      expect(() => boot(undefined)).toThrow("invalid MCP App sandbox parent");
+      expect(() => boot("https://control.example", "", false)).toThrow(
+        "MCP App sandbox isolation failed",
+      );
+    });
+  });
+
   it("fences an awaited public renderer resource when the remote grant closes", async () => {
     const started = createDeferred();
     const resource = createDeferred<{ body: Uint8Array; contentType: string }>();

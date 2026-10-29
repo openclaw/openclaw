@@ -27,6 +27,30 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("buildWorkspaceSkillStatus", () => {
+  it("marks bundled and custodian skills blocked by an empty allowlist", () => {
+    const workspaceDir = tempDirs.make("empty-allowlist");
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      config: { skills: { allowBundled: [] } },
+      entries: [
+        createEntry("bundled", { source: "openclaw-bundled" }),
+        createEntry("custodian", { source: "openclaw-custodian" }),
+        createEntry("workspace", { source: "openclaw-workspace" }),
+      ],
+    });
+
+    expect(
+      report.skills.map(({ name, eligible, blockedByAllowlist }) => [
+        name,
+        eligible,
+        blockedByAllowlist,
+      ]),
+    ).toEqual([
+      ["bundled", false, true],
+      ["custodian", false, true],
+      ["workspace", true, false],
+    ]);
+  });
+
   it("selects dependency recipes using the workspace host platform and binaries", () => {
     const hostPlatform = process.platform === "darwin" ? "linux" : "darwin";
     const entry = createEntry("host-installer", {

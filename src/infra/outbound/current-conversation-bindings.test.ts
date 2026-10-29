@@ -221,6 +221,22 @@ describe("generic current-conversation bindings", () => {
     await fs.rm(testStateDir, { recursive: true, force: true });
   });
 
+  it.each(["user:held\u241fb", "\u241fleading\u241f", "a\u241fb\u241fc"])(
+    "touches and unbinds opaque final conversation id %s",
+    async (conversationId) => {
+      const sibling = expectSessionBinding(await bindWorkspaceConversation("user:held"));
+      const binding = expectSessionBinding(await bindWorkspaceConversation(conversationId));
+      touchGenericCurrentConversationBinding(binding.bindingId, 99);
+      expect(readPersistedBinding(conversationId)?.metadata?.lastActivityAt).toBe(99);
+      await unbindGenericCurrentConversationBindings({
+        bindingId: binding.bindingId,
+        reason: "manual",
+      });
+      expect(readPersistedBinding(conversationId)).toBeNull();
+      expect(readPersistedBinding("user:held")).toEqual(sibling);
+    },
+  );
+
   it("inspects expired ownership without deleting the durable row", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(1_000_000));

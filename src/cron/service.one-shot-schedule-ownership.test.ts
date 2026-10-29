@@ -43,6 +43,7 @@ type IsolatedOutcome =
 
 function createCron(params: {
   runIsolatedAgentJob: CronServiceDeps["runIsolatedAgentJob"];
+  runSessionEvent?: CronServiceDeps["runSessionEvent"];
   runCommandJob?: CronServiceDeps["runCommandJob"];
   onEvent?: (event: CronEvent) => void;
 }) {
@@ -178,15 +179,18 @@ describe("cron one-shot schedule ownership", () => {
       const delayMs = 60_000;
       const payloadStarted = createDeferred();
       const releasePayload = createDeferred();
-      const runIsolatedAgentJob = vi
-        .fn<CronServiceDeps["runIsolatedAgentJob"]>()
+      const runSessionEvent = vi
+        .fn<NonNullable<CronServiceDeps["runSessionEvent"]>>()
         .mockImplementationOnce(async () => {
           payloadStarted.resolve();
           await releasePayload.promise;
           return { status: "ok", summary: "CI is pending", nextCheck: { delayMs } };
         })
         .mockResolvedValue({ status: "ok", summary: "CI passed" });
-      const options = { runIsolatedAgentJob };
+      const options = {
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        runSessionEvent,
+      };
       let { cron } = createCron(options);
       try {
         await cron.start();
@@ -262,11 +266,11 @@ describe("cron one-shot schedule ownership", () => {
         ({ cron } = createCron(options));
         cron.pauseScheduling();
         await cron.start();
-        expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+        expect(runSessionEvent).toHaveBeenCalledTimes(1);
         expect((await cron.readJob(job.id))?.state.nextRunAtMs).toBe(continuationAtMs);
         clock.setTime(continuationAtMs + 2_000);
         await expect(cron.run(job.id, "due")).resolves.toMatchObject({ ok: true, ran: true });
-        expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+        expect(runSessionEvent).toHaveBeenCalledTimes(2);
         for (const jobs of [
           await cron.list({ includeDisabled: true }),
           (await loadCronStore(storePath)).jobs,

@@ -149,3 +149,24 @@ describe("invocation-owned progress cancellation", () => {
     await request;
   });
 });
+
+it.each([-30_000, 30_000])(
+  "heartbeat stays on interval after wall clock skew %i ms",
+  async (skewMs) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const request = vi.fn(async () => ({}));
+    const writer = createNodeInvokeProgressWriter({
+      client: { request } as NodeHostClient,
+      frame,
+      idleTimeoutMs: 30_000,
+      onError: vi.fn(),
+    });
+    vi.setSystemTime(skewMs);
+    writer.startHeartbeats();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(request).toHaveBeenCalledTimes(1);
+    writer.stop();
+    await writer.flush();
+  },
+);

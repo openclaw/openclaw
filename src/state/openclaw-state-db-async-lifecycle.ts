@@ -163,6 +163,17 @@ export function createOpenClawDatabaseMaintenanceScope(
         throw new Error("Database maintenance scope does not own this database");
       }
     },
+    assertCleanupDatabaseAccess(databasePath) {
+      assertOpen();
+      // Revoked operation authority cannot strand resources under the same physical owner.
+      if (assertDatabaseAccess) {
+        assertDatabaseAccess(databasePath);
+      } else if (parent) {
+        parent.assertCleanupDatabaseAccess(databasePath);
+      } else {
+        throw new Error("Database maintenance scope does not own this database");
+      }
+    },
     addAgentSchemaMigrationCheck(check) {
       scope.assertAdmission();
       schemaMigrationChecks.add(check);

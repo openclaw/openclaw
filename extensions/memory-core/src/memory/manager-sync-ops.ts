@@ -567,6 +567,16 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const dbPath = resolveUserPath(this.settings.store.databasePath);
     const tempDbPath = `${dbPath}.memory-reindex-${randomUUID()}`;
     const originalDatabase = this.database;
+    const generation = this.syncProviderGeneration;
+    const cacheState = { writesPendingPrune: false };
+    const assertGeneration = () => {
+      if (
+        this.syncProviderGeneration !== generation ||
+        this.publishedDatabase !== originalDatabase
+      ) {
+        throw new Error("Memory cache generation changed before terminal prune");
+      }
+    };
     const originalRetryState = this.snapshotReindexRetryState();
     const withEmbeddings = this.syncProviderGeneration?.kind === "semantic";
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
@@ -585,63 +595,67 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       shadow.fts.enabled = this.fts.enabled;
       // Only the awaited rebuild inherits the shadow. Concurrent searches and
       // status keep the published handle and its vector/FTS/metadata state.
-      const rebuilt = await this.withReindexDatabase(shadow, async () => {
-        try {
-          await shadow.admitSchema({
-            cacheEnabled: this.cache.enabled,
-            ftsEnabled: shadow.fts.enabled,
-            ftsTokenizer: this.settings.store.fts.tokenizer,
-          });
+      const rebuilt = await this.withReindexDatabase(
+        shadow,
+        async () => {
+          try {
+            await shadow.admitSchema({
+              cacheEnabled: this.cache.enabled,
+              ftsEnabled: shadow.fts.enabled,
+              ftsTokenizer: this.settings.store.fts.tokenizer,
+            });
 
-          await this.executeSourceSync({
-            shouldSyncMemory: shouldRetryMemoryOnFailure,
-            shouldSyncSessions: shouldRetrySessionsOnFailure,
-            needsFullReindex: true,
-            progress,
-          });
-          if (!shouldRetryMemoryOnFailure) {
-            this.clearMemoryRetryState();
-          }
-          const syncProvider = this.syncProviderGeneration
-            ? this.syncProviderGeneration.provider
-            : this.provider;
-          const vectorIndexComplete = syncProvider === null || this.vector.available === true;
-          const nextMeta: MemoryIndexMeta = {
-            model: syncProvider?.model ?? "fts-only",
-            provider: syncProvider?.id ?? "none",
-            providerKey: this.syncProviderGeneration
-              ? this.syncProviderGeneration.providerKey
-              : this.providerKey!,
-            sources: resolveConfiguredSourcesForMeta(this.sources),
-            scopeHash: resolveConfiguredScopeHash({
-              workspaceDir: this.workspaceDir,
-              extraPaths: this.settings.extraPaths,
-              multimodal: this.settings.multimodal,
-            }),
-            chunkTokens: this.settings.chunking.tokens,
-            chunkOverlap: this.settings.chunking.overlap,
-            chunkingVersion: MEMORY_CHUNKING_VERSION,
-            embeddingInputFormatVersion: resolveEmbeddingInputFormatVersion(
-              syncProvider?.model ?? "",
-            ),
-            ftsTokenizer: this.settings.store.fts.tokenizer,
-            provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
-          };
-          if (this.vector.available && this.vector.dims) {
-            nextMeta.vectorDims = this.vector.dims;
-          }
+            await this.executeSourceSync({
+              shouldSyncMemory: shouldRetryMemoryOnFailure,
+              shouldSyncSessions: shouldRetrySessionsOnFailure,
+              needsFullReindex: true,
+              progress,
+            });
+            if (!shouldRetryMemoryOnFailure) {
+              this.clearMemoryRetryState();
+            }
+            const syncProvider = this.syncProviderGeneration
+              ? this.syncProviderGeneration.provider
+              : this.provider;
+            const vectorIndexComplete = syncProvider === null || this.vector.available === true;
+            const nextMeta: MemoryIndexMeta = {
+              model: syncProvider?.model ?? "fts-only",
+              provider: syncProvider?.id ?? "none",
+              providerKey: this.syncProviderGeneration
+                ? this.syncProviderGeneration.providerKey
+                : this.providerKey!,
+              sources: resolveConfiguredSourcesForMeta(this.sources),
+              scopeHash: resolveConfiguredScopeHash({
+                workspaceDir: this.workspaceDir,
+                extraPaths: this.settings.extraPaths,
+                multimodal: this.settings.multimodal,
+              }),
+              chunkTokens: this.settings.chunking.tokens,
+              chunkOverlap: this.settings.chunking.overlap,
+              chunkingVersion: MEMORY_CHUNKING_VERSION,
+              embeddingInputFormatVersion: resolveEmbeddingInputFormatVersion(
+                syncProvider?.model ?? "",
+              ),
+              ftsTokenizer: this.settings.store.fts.tokenizer,
+              provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
+            };
+            if (this.vector.available && this.vector.dims) {
+              nextMeta.vectorDims = this.vector.dims;
+            }
 
-          await this.writeMeta(nextMeta);
-          return {
-            nextMeta,
-            vectorIndexComplete,
-            hasVectors: shadow.facts.hasVectorTable,
-          };
-        } finally {
-          // Escaped continuations must fail closed, never write to the live DB.
-          shadow.closed = true;
-        }
-      });
+            await this.writeMeta(nextMeta);
+            return {
+              nextMeta,
+              vectorIndexComplete,
+              hasVectors: shadow.facts.hasVectorTable,
+            };
+          } finally {
+            // Escaped continuations must fail closed, never write to the live DB.
+            shadow.closed = true;
+          }
+        },
+        cacheState,
+      );
 
       await withMemoryWorkspaceLock(this.workspaceDir, async () => {
         await withMemoryIndexGeneration(dbPath, "write", async () => {
@@ -675,9 +689,12 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       this.fts.available = shadow.fts.available;
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;
-      // Cache-only rebuilds bypass insertion-time eviction; prune the canonical
-      // cache only after successful publication so failed rebuilds retain their work.
-      await this.pruneEmbeddingCacheIfNeeded();
+      if (cacheState.writesPendingPrune) {
+        await this.withPublishedDatabase(() =>
+          this.pruneEmbeddingCacheIfNeeded(true, assertGeneration),
+        );
+        cacheState.writesPendingPrune = false;
+      }
       this.clearFullReindexRetryBackoff();
     } catch (err) {
       this.adoptReindexRetryState(originalRetryState);
@@ -691,12 +708,25 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       throw err;
     } finally {
       try {
-        if (shadowCleanup?.shadowReleased) {
-          shadowCleanup.assertShadowPath();
-          await removeMemoryDatabaseFiles(tempDbPath);
+        if (cacheState.writesPendingPrune) {
+          try {
+            await this.withPublishedDatabase(() =>
+              this.pruneEmbeddingCacheIfNeeded(true, assertGeneration),
+            );
+          } catch (err) {
+            // Cleanup must never replace the original provider/publication failure.
+            log.warn(`failed to prune aborted memory rebuild cache: ${formatErrorMessage(err)}`);
+          }
         }
-      } catch (err) {
-        log.warn(`failed to remove memory reindex shadow database: ${formatErrorMessage(err)}`);
+      } finally {
+        try {
+          if (shadowCleanup?.shadowReleased) {
+            shadowCleanup.assertShadowPath();
+            await removeMemoryDatabaseFiles(tempDbPath);
+          }
+        } catch (err) {
+          log.warn(`failed to remove memory reindex shadow database: ${formatErrorMessage(err)}`);
+        }
       }
     }
   }

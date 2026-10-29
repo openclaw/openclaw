@@ -136,7 +136,7 @@ it.each([
     expect(captureNotices).toHaveLength(debugCapture ? 1 : 0);
     const preview = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
     const notes = json ? JSON.stringify(preview) : log.mock.calls.flat().join("\n");
-    const replacement = !compatible && restart && owned && (!current || (running && refresh));
+    const replacement = !compatible && restart && owned && current && running && refresh;
     if (!compatible && !replacement) {
       const recoverySteps = [
         {
@@ -175,7 +175,7 @@ it.each([
           notes: [expect.stringContaining(message)],
           failures: [
             {
-              reason: "node-runtime-preflight",
+              reason: current ? "node-runtime-preflight" : "preflight-node-runtime-incompatible",
               message: expect.stringContaining(message),
               recoverySteps,
               failureFacts: expect.arrayContaining([
@@ -212,14 +212,14 @@ it.each([
       await expect(
         updateCommand({ ...opts, json: true, admission: "installed" }),
       ).rejects.toBeInstanceOf(Error);
-      if (compatible || replacement) {
+      if (compatible) {
         expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledWith(
           expect.objectContaining({ nodeRunner: replacement ? "/current/node" : "/service/node" }),
         );
       } else {
         expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
           expect.objectContaining({
-            reason: "node-runtime-preflight",
+            reason: "preflight-node-runtime-incompatible",
             steps: expect.arrayContaining([
               expect.objectContaining({
                 stderrTail: expect.stringContaining(

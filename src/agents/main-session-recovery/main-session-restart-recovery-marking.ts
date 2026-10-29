@@ -43,6 +43,7 @@ import {
 } from "./main-session-restart-recovery-diagnostics.js";
 import {
   discoverRestartRecoveryStoreTargets,
+  isKilledMainSessionRecoveryFenceOnly,
   mainSessionRecoveryLog,
 } from "./main-session-restart-recovery-shared.js";
 import {
@@ -65,7 +66,7 @@ async function markRecoveryStore(params: {
         replaceRuns?: boolean;
         runs?: RestartRecoveryRun[];
       }
-    | { action: "retire_terminal" }
+    | { action: "retire_terminal" | "release_killed" }
     | { action: "restore_yielded"; isCurrent: () => boolean }
     | undefined;
 }) {
@@ -99,7 +100,7 @@ async function markRecoveryStore(params: {
           }
           transitionMainSessionRecovery(
             entry,
-            plan.action === "restore_yielded"
+            plan.action === "restore_yielded" || plan.action === "release_killed"
               ? { kind: "clear" }
               : {
                   kind: "observe",
@@ -464,6 +465,12 @@ async function markOrphanedMainSessionStore(
           };
         }
         return undefined;
+      }
+      if (isKilledMainSessionRecoveryFenceOnly(entry)) {
+        // Stop is terminal. An ownerless fence must not resurrect the run or
+        // hold the conversation forever; pending delivery remains with recovery.
+        orphanChecks.push(hasLiveOwner);
+        return { action: "release_killed" };
       }
       // A crash or early restart abort can persist the interruption without a claim.
       // Reuse the normal mark transition, preserving budgets on existing cycles.

@@ -442,7 +442,10 @@ async function sendSubagentAnnounceDirectlyBound(
         runId: params.directIdempotencyKey,
       });
     }
+    const inputReplyExpectation =
+      params.expectsCompletionMessage || params.requireVisibleReply ? "required" : "optional";
     const classifyResponse = createDirectAnnounceResponseClassifier({
+      replyExpectation: inputReplyExpectation,
       params,
       parentOnly,
       requesterSessionBound,
@@ -477,10 +480,7 @@ async function sendSubagentAnnounceDirectlyBound(
                 agentParams: directAgentParams,
                 // Individual result delivery and an owed public synthesis remain
                 // required; optional settle intake may complete without repeating it.
-                replyExpectation:
-                  params.expectsCompletionMessage || params.requireVisibleReply
-                    ? "required"
-                    : "optional",
+                replyExpectation: inputReplyExpectation,
                 // A resumed parent has no inbound channel dispatcher to keep activity visible.
                 typing:
                   sourceToolId === "subagent_settle" &&

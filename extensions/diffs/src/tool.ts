@@ -325,11 +325,11 @@ function buildArtifactContext(
 }
 
 function normalizeDiffInput(params: DiffsToolParams): DiffInput {
-  const patch = params.patch?.trim();
+  const patch = params.patch;
   const before = params.before;
   const after = params.after;
 
-  if (patch) {
+  if (patch?.trim()) {
     assertMaxBytes(patch, "patch", MAX_PATCH_BYTES);
     if (before !== undefined || after !== undefined) {
       throw new PluginToolInputError("Provide either patch or before/after input, not both.");

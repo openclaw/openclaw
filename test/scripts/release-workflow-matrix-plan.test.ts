@@ -87,23 +87,6 @@ function bashRun(command: string, env: NodeJS.ProcessEnv, cwd?: string) {
   });
 }
 
-function runFixture(command: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string) {
-  const result = spawnSync(command, args, { encoding: "utf8", env, cwd });
-  expect(result.status, result.stderr).toBe(0);
-  return result.stdout;
-}
-
-function parseOutputs(text: string) {
-  return Object.fromEntries(
-    text
-      .trim()
-      .split("\n")
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
-}
 // Direct dispatches build from the selected ref. Only trusted workflow callers
 // may provide the complete immutable package artifact tuple.
 const WORKFLOW_CALL_ONLY_INPUTS = new Set([

@@ -33,14 +33,20 @@ import {
   createStartedThreadHarness,
   getRequestInputText,
   makeThreadBootstrapBinding,
-  requestMethodsExcludingSkillDiscovery,
   requireRecord,
   runCodexAppServerAttempt,
   writeCodexAppServerBinding,
 } from "./run-attempt.context-engine.test-support.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import { withoutCodexTurnContextHandoffs } from "./test-support.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
+
+function requestMethodsExcludingSkillDiscovery(harness: {
+  requests: ReadonlyArray<{ method: string; params?: unknown }>;
+}) {
+  return withoutCodexTurnContextHandoffs(harness.requests);
+}
 
 async function createSqliteParams(
   workspaceDir: string,
@@ -55,12 +61,8 @@ async function createSqliteParams(
     storePath,
   });
   const params = createParams(sessionFile, workspaceDir);
-  await upsertSessionEntry({
-    agentId: "main",
-    sessionKey,
-    storePath,
-    entry: { sessionFile, sessionId, updatedAt: Date.now() },
-  });
+  const entry = { sessionFile, sessionId, updatedAt: Date.now() };
+  await upsertSessionEntry({ agentId: "main", sessionKey, storePath, entry });
   params.sessionTarget = {
     agentId: "main",
     sessionId,
@@ -547,6 +549,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
       expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         ...(resumed ? ["thread/read", "thread/resume", "thread/inject_items"] : ["thread/start"]),
@@ -604,6 +607,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/start",
@@ -667,6 +671,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
       expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/start",

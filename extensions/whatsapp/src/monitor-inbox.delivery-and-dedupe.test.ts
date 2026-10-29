@@ -1,4 +1,5 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import { WAMessageStubType } from "baileys";
 import { observeChannelIngressQueueWrite } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -227,12 +228,18 @@ describe("web monitor inbox delivery and dedupe", () => {
     ]);
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("composing", "999@s.whatsapp.net");
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "nested reply works",
-    });
-    expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "nested media works",
-    });
+    expect(sock.sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "999@s.whatsapp.net",
+      { text: "nested reply works" },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
+    expect(sock.sendMessage).toHaveBeenNthCalledWith(
+      2,
+      "999@s.whatsapp.net",
+      { text: "nested media works" },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
 
     await listener.close();
   });
@@ -360,6 +367,35 @@ describe("web monitor inbox delivery and dedupe", () => {
     await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(1));
 
     expect(onMessage).toHaveBeenCalledTimes(1);
+    await listener.close();
+  });
+
+  it("delivery coordinator delivers a decrypted message after its ciphertext stub", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("ciphertext-stub");
+    const upsert = dmUpsert(messageId, "decrypted");
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: messageId, fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          messageStubType: WAMessageStubType.CIPHERTEXT,
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    sock.ev.emit("messages.upsert", upsert);
+    await settleInboundWork();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(inboundMessage(onMessage).payload.body).toBe("decrypted");
     await listener.close();
   });
 
@@ -620,18 +656,38 @@ describe("web monitor inbox delivery and dedupe", () => {
 
       expect(onMessage).toHaveBeenCalledTimes(2);
       expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-        text: "pong",
-      });
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-        text: "media",
-      });
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(3, "999@s.whatsapp.net", {
-        text: "pong",
-      });
-      expect(sock.sendMessage).toHaveBeenNthCalledWith(4, "999@s.whatsapp.net", {
-        text: "media",
-      });
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        1,
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        "999@s.whatsapp.net",
+        {
+          text: "media",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        3,
+        "999@s.whatsapp.net",
+        {
+          text: "pong",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(
+        4,
+        "999@s.whatsapp.net",
+        {
+          text: "media",
+        },
+        expect.objectContaining({ messageId: expect.any(String) }),
+      );
       expect(sock.end).toHaveBeenCalledTimes(1);
       expect(sock.sendMessage.mock.invocationCallOrder.at(-1)).toBeLessThan(
         sock.end.mock.invocationCallOrder.at(0),
@@ -669,9 +725,11 @@ describe("web monitor inbox delivery and dedupe", () => {
     await closePromise;
 
     expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: "pong",
-    });
+    expect(sock.sendMessage).toHaveBeenCalledWith(
+      "999@s.whatsapp.net",
+      { text: "pong" },
+      expect.objectContaining({ messageId: expect.any(String) }),
+    );
     expect(sock.end).toHaveBeenCalledTimes(1);
     expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
       sock.end.mock.invocationCallOrder.at(0),

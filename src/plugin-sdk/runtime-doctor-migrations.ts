@@ -507,3 +507,5 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
     },
   };
 }
+
+export { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";

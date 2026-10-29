@@ -44,6 +44,7 @@ import {
   waitForPendingSubagentKillClaim,
 } from "./subagent-registry-persistence.js";
 import { registerRequiredQueuedSubagent } from "./subagent-registry-queued-registration.js";
+import { captureSubagentRequesterSource } from "./subagent-registry-requester-source.js";
 import {
   createFailedQueuedRun,
   createSubagentRegistrationRecord,
@@ -255,9 +256,18 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               settleFailedLaunch,
             }),
       );
-      authority = registerParams.collect
-        ? undefined
-        : await captureOperatorToolGatewayContinuationContext();
+      authority = await captureOperatorToolGatewayContinuationContext();
+      const originalSource = await captureSubagentRequesterSource({
+        authority: authority?.operatorAuthority,
+        requesterAgentId,
+        requesterSessionKey,
+        requesterTurnRunId: registerParams.requesterTurnRunId,
+        assertCurrent: () => {
+          options.assertCurrent?.();
+          authority?.assertCurrent();
+          registrationOwnership.assertCurrent();
+        },
+      });
       const assertCurrent = () => {
         options.assertCurrent?.();
         authority?.assertCurrent();
@@ -345,6 +355,8 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   )
                 : undefined,
           });
+          entry.operatorRecoverySource = originalSource;
+          entry.completionAuthorityRequired = authority?.operatorAuthority ? true : undefined;
           entry.requesterStorePath =
             previous?.requesterStorePath ??
             resolvePhysicalSessionStorePath(

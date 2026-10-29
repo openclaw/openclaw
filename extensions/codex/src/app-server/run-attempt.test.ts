@@ -3596,6 +3596,7 @@ describe("runCodexAppServerAttempt", () => {
       "invalid image_url base64 payload",
     );
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/start",
@@ -3619,6 +3620,7 @@ describe("runCodexAppServerAttempt", () => {
       "unsupported image input",
     );
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -3679,6 +3681,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -3753,6 +3756,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -4178,6 +4182,33 @@ describe("runCodexAppServerAttempt", () => {
       }
     },
   );
+
+  it("preserves on-request approval policy for native plugin threads and turns", async () => {
+    const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(
+      createGoogleCalendarRequest((method) =>
+        codexAppInventoryResponse(method, [googleCalendarAppInfo(true)]),
+      ),
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        ...GOOGLE_CALENDAR_PLUGIN_CONFIG,
+        appServer: { approvalPolicy: "on-request" },
+      },
+    });
+    await completeStartedRun(run, waitForMethod, completeTurn);
+
+    const threadStart = requests.find((request) => request.method === "thread/start");
+    expect(threadStart?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      config: { apps: { "google-calendar-app": { enabled: true } } },
+    });
+    expect(requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "on-request",
+    });
+  });
 
   it.each([
     {
@@ -4630,8 +4661,9 @@ describe("runCodexAppServerAttempt", () => {
     const { result, requests, client } = await runSettledFailureClientReplacementTest();
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read", "thread/read"],
       [
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/read",
@@ -4648,8 +4680,8 @@ describe("runCodexAppServerAttempt", () => {
       runSettledFailureClientReplacementTest({ denyReplacementShell: true, requests }),
     ).rejects.toThrow("Codex native code mode requires shell_tool");
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
-      ["config/read", "configRequirements/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read", "thread/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read"],
     ]);
   });
 

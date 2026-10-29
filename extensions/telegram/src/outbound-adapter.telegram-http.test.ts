@@ -557,47 +557,68 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       await state.cleanup();
     });
 
-    it("commits the registered action before HTTP and returns its actual reply receipt", async () => {
-      let queued: unknown;
-      const result = await action(
-        "send",
-        {
-          to: "-1001:topic:77",
-          message: "durable answer",
-          quoteText: " \nquoted text  ",
-        },
-        {
-          sessionKey: "agent:main:telegram:group:-1001:topic:77",
-          reply: { replyToId: "456", source: "implicit", mode: "first" },
-          onPlatformSendDispatch: async () => {
-            expect(requests).toEqual([]);
-            queued = readQueuedDeliveryEntriesForTest(state.stateDir);
+    it.each([
+      ["requested topic", 77, false, "77"],
+      ["non-forum reply chain", undefined, false, undefined],
+      ["forum topic", undefined, true, "99"],
+    ] as const)(
+      "commits a registered send and preserves its receipt (%s)",
+      async (_name, requestedTopic, forum, observedThread) => {
+        const to = requestedTopic ? "-1001:topic:" + requestedTopic : "-1001";
+        fixture.responseFor = (method) =>
+          method === "sendMessage"
+            ? {
+                message_id: 102,
+                date: 1700000000,
+                chat: { id: -1001, type: "supergroup", title: "Fixture group" },
+                message_thread_id: requestedTopic ?? 99,
+                ...(forum ? { is_topic_message: true } : {}),
+              }
+            : undefined;
+        let queued: unknown;
+        const result = await action(
+          "send",
+          {
+            to,
+            message: "durable answer",
+            quoteText: " \nquoted text  ",
           },
-        },
-      );
-      expect(queued).toMatchObject([{ channel: "telegram", to: "-1001:topic:77", retryCount: 0 }]);
-      expect(requests).toEqual([
-        {
-          method: "sendMessage",
-          fields: expect.objectContaining({
-            chat_id: "-1001",
-            message_thread_id: 77,
-            text: "durable answer",
-            reply_parameters: expect.objectContaining({
-              message_id: 456,
-              quote: " \nquoted text  ",
+          {
+            sessionKey: "agent:main:telegram:group:" + to,
+            reply: { replyToId: "456", source: "implicit", mode: "first" },
+            onPlatformSendDispatch: async () => {
+              expect(requests).toEqual([]);
+              queued = readQueuedDeliveryEntriesForTest(state.stateDir);
+            },
+          },
+        );
+        expect(queued).toMatchObject([{ channel: "telegram", to, retryCount: 0 }]);
+        expect(requests).toEqual([
+          {
+            method: "sendMessage",
+            fields: expect.objectContaining({
+              chat_id: "-1001",
+              ...(requestedTopic ? { message_thread_id: requestedTopic } : {}),
+              text: "durable answer",
+              reply_parameters: expect.objectContaining({
+                message_id: 456,
+                quote: " \nquoted text  ",
+              }),
             }),
-          }),
-        },
-      ]);
-      expect(result.details).toMatchObject({
-        ok: true,
-        messageId: "1",
-        chatId: "-1001",
-        receipt: { threadId: "77", replyToId: "456" },
-      });
-      expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
-    });
+          },
+        ]);
+        expect(result.details).toMatchObject({
+          ok: true,
+          messageId: "102",
+          chatId: "-1001",
+          receipt: { ...(observedThread ? { threadId: observedThread } : {}), replyToId: "456" },
+        });
+        expect((result.details as { receipt: { threadId?: string } }).receipt.threadId).toBe(
+          observedThread,
+        );
+        expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
+      },
+    );
 
     it.each([undefined, "caller"] as const)(
       "leaves exactly one retry owner after a proven pre-dispatch failure (%s)",

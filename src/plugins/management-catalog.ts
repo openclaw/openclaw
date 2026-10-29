@@ -6,6 +6,7 @@ import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
+import { fetchClawHubPluginVersionCategories } from "../infra/clawhub-plugin-catalog.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
@@ -269,28 +270,86 @@ function overlayBundledOfficialPluginCatalogMetadata(
   });
 }
 
-export async function loadOfficialCatalog(): Promise<OfficialCatalogResult> {
+export async function loadOfficialCatalog(cachedOnly = false): Promise<OfficialCatalogResult> {
   const cache = getManagedPluginCache();
-  if (!cache.officialCatalog) {
-    const promise = loadConfiguredHostedOfficialExternalPluginCatalogEntries().then((result) => {
+  let fact = cache.officialCatalog;
+  if (!fact) {
+    const prepared: NonNullable<typeof cache.officialCatalog> = {
+      value: {
+        entries: overlayBundledOfficialPluginCatalogMetadata(
+          listOfficialExternalPluginCatalogEntries(),
+          { hostedFeaturedAuthoritative: false },
+        ),
+        error: "catalog refresh pending; refresh the plugin list to see completed enrichment",
+      },
+    };
+    prepared.pending = loadConfiguredHostedOfficialExternalPluginCatalogEntries().then((result) => {
       const hostedFeaturedAuthoritative =
         result.source === "hosted" || result.source === "hosted-snapshot";
-      return {
+      prepared.value = {
         entries: overlayBundledOfficialPluginCatalogMetadata(result.entries, {
           hostedFeaturedAuthoritative,
         }),
         hostedFeaturedAuthoritative,
         ...("error" in result ? { error: result.error } : {}),
       };
+      prepared.pending = undefined;
+      return prepared.value;
     });
-    cache.officialCatalog = promise;
-    void promise.catch(() => {
-      if (cache.officialCatalog === promise) {
+    fact = prepared;
+    cache.officialCatalog = fact;
+    void prepared.pending.catch(() => {
+      if (cache.officialCatalog === fact) {
         cache.officialCatalog = undefined;
       }
     });
   }
-  return cache.officialCatalog;
+  // Remote presentation never holds the Gateway's installed inventory behind network I/O.
+  return cachedOnly ? fact.value : (fact.pending ?? fact.value);
+}
+
+export function pluginVersionKey(name: string, version: string): string {
+  return JSON.stringify([name, version]);
+}
+
+/** Undefined is pending, null is unavailable until this catalog generation is refreshed. */
+export async function loadInstalledPluginCategories(params: {
+  baseUrl: string;
+  packages: Array<{ name: string; version: string }>;
+  cachedOnly?: boolean;
+}): Promise<Map<string, string[] | null> | null | undefined> {
+  const cache = (getManagedPluginCache().pluginVersionCategories ??= new Map());
+  const packages = params.packages.toSorted(
+    (left, right) =>
+      left.name.localeCompare(right.name) || left.version.localeCompare(right.version),
+  );
+  const key = JSON.stringify([params.baseUrl, packages]);
+  let fact = cache.get(key);
+  if (!fact) {
+    const pending = fetchClawHubPluginVersionCategories({
+      baseUrl: params.baseUrl,
+      skipAuth: true,
+      packages,
+    })
+      .then(
+        (results) =>
+          new Map(
+            results.map((result) => [
+              pluginVersionKey(result.name, result.version),
+              result.categories,
+            ]),
+          ),
+        () => null,
+      )
+      .then((value) => {
+        const ready = { value };
+        cache.set(key, ready);
+        return ready;
+      });
+    fact = { pending };
+    cache.set(key, fact);
+  }
+  return "value" in fact ? fact.value : params.cachedOnly ? undefined : (await fact.pending).value;
 }
 
 export function normalizeKinds(kind: string | readonly string[] | undefined): string[] | undefined {

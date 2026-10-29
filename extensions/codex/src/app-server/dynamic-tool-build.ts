@@ -517,7 +517,10 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     params.requireWorkspaceOnly === true ||
     params.pluginHarnessToolPolicyRestricted === true ||
     isCodexMemoryFlushRun(params) ||
-    params.disableTools
+    params.disableTools ||
+    // Strict one-shots need the host tool owner's joined process cleanup.
+    // Native command completion cannot certify retired descendant settlement.
+    params.oneShotCliRun === true
   ) {
     return false;
   }

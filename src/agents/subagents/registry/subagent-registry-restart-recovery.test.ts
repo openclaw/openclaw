@@ -707,6 +707,24 @@ describe("interrupted requester-settle continuation ownership", () => {
     });
   });
 
+  it.each(["running", "paused", "recovery-owned"] as const)(
+    "retains an interrupted requester while its incoming child is %s without dispatching it",
+    async (state) => {
+      const { child, worker } = cohort();
+      if (state === "running") {
+        child.execution.status = "running";
+        child.execution.endedAt = undefined;
+      } else if (state === "paused") {
+        child.pauseReason = "sessions_yield";
+      } else {
+        child.terminalOwner = "interrupted-recovery";
+      }
+      expect(await recover(worker)).toEqual({ status: "handled" });
+      expect(dispatchAgent).not.toHaveBeenCalled();
+      expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps the dispatched surviving cohort owned after a member retires", async () => {
     const { child, worker } = cohort();
     child.requesterSettleWake!.batchRunIds!.push("retired-member");

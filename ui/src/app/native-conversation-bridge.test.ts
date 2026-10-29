@@ -552,6 +552,36 @@ describe("native conversation contract", () => {
     );
   });
 
+  it.each([60_000, -60_000])(
+    "keeps queued navigation within its elapsed deadline across wall-clock step %s",
+    async (step) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const f = fixture();
+      const gate = createDeferred();
+      f.navigateAndWait.mockImplementationOnce(async () => {
+        await gate.promise;
+      });
+      f.navigateAndWait.mockImplementationOnce(async () => {
+        f.data.sessionKey = "agent:main:next";
+        f.changed();
+      });
+      f.command("navigate", { agentId: "main", sessionKey: "agent:main:first" });
+      await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      f.command(
+        "navigate",
+        { agentId: "main", sessionKey: "agent:main:next" },
+        { requestId: "second" },
+      );
+      vi.setSystemTime(Date.now() + step);
+      gate.resolve();
+      await flush();
+      expect(f.messages).toContainEqual(
+        expect.objectContaining({ type: "command-result", requestId: "second", ok: true }),
+      );
+    },
+  );
+
   it.each(["ready", "state"] as const)(
     "settles navigation when the host never acknowledges %s",
     async (stalledType) => {

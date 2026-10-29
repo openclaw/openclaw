@@ -129,6 +129,65 @@ describe("legacy Web Push Doctor migration", () => {
     });
   }
 
+  it.each([
+    { source: "subscriptions", claimed: false },
+    { source: "subscriptions", claimed: true },
+    { source: "vapid", claimed: false },
+    { source: "vapid", claimed: true },
+  ] as const)("retains malformed UTF-8 $source (claim $claimed)", async ({ source, claimed }) => {
+    const stateDir = useStateDir();
+    const paths = await writeLegacyState({
+      stateDir,
+      subscriptions: [subscription({ keys: { p256dh: "utf8-marker", auth: "auth" } })],
+      vapid: vapidKeys({ publicKey: "utf8-marker" }),
+    });
+    const sourcePath = (
+      source === "subscriptions" ? paths.subscriptionsPath : paths.vapidKeysPath
+    )!;
+    const bytes = await fsp.readFile(sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fsp.writeFile(sourcePath, bytes);
+    const activePath = sourcePath + (claimed ? ".doctor-importing" : "");
+    if (claimed) {
+      await fsp.rename(sourcePath, activePath);
+    }
+    const result = await migrate(stateDir);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(await fsp.readFile(activePath)).toEqual(bytes);
+    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
+    expect(await readPersistedVapidKeyPair(stateDir)).toBeNull();
+  });
+
+  it.each(["subscriptions", "vapid"] as const)(
+    "preserves distinct malformed %s source and claim bytes",
+    async (source) => {
+      const stateDir = useStateDir();
+      const paths = await writeLegacyState({
+        stateDir,
+        subscriptions: [subscription({ keys: { p256dh: "utf8-marker", auth: "auth" } })],
+        vapid: vapidKeys({ publicKey: "utf8-marker" }),
+      });
+      const sourcePath = (
+        source === "subscriptions" ? paths.subscriptionsPath : paths.vapidKeysPath
+      )!;
+      const sourceBytes = await fsp.readFile(sourcePath);
+      const at = sourceBytes.indexOf("utf8-marker");
+      sourceBytes[at] = 0xff;
+      const claimBytes = Buffer.from(sourceBytes);
+      claimBytes[at] = 0xfe;
+      await fsp.writeFile(sourcePath, sourceBytes);
+      await fsp.writeFile(sourcePath + ".doctor-importing", claimBytes);
+      const result = await migrate(stateDir);
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+      expect(await fsp.readFile(sourcePath)).toEqual(sourceBytes);
+      expect(await fsp.readFile(sourcePath + ".doctor-importing")).toEqual(claimBytes);
+      expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
+      expect(await readPersistedVapidKeyPair(stateDir)).toBeNull();
+    },
+  );
+
   it("detects original and interrupted-claim files only for explicit Doctor repair", async () => {
     const stateDir = useStateDir();
     const { subscriptionsPath } = await writeLegacyState({

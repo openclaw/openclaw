@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createCpuTrackedWorker,
@@ -109,11 +110,15 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       reject(new Error(`Telegram ingress worker exited with code ${code}`));
     });
   });
-  worker.on("message", (message: TelegramIngressWorkerMessage) => {
-    for (const listener of listeners) {
-      listener(message);
-    }
-  });
+  // Bind the dispatcher once to the creating account, not each later subscriber.
+  worker.on(
+    "message",
+    AsyncLocalStorage.bind((message: TelegramIngressWorkerMessage) => {
+      for (const listener of listeners) {
+        listener(message);
+      }
+    }),
+  );
 
   return {
     onMessage(listener) {

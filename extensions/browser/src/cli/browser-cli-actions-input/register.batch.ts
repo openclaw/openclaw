@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import {
@@ -23,14 +22,10 @@ export function registerBrowserBatchCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       if (opts.actions !== undefined && opts.actionsFile !== undefined) {
-        defaultRuntime.error(danger("Specify only one of --actions or --actions-file"));
-        defaultRuntime.exit(1);
-        return;
+        throw new Error("Specify only one of --actions or --actions-file");
       }
       if (!opts.actions && !opts.actionsFile) {
-        defaultRuntime.error(danger("Provide --actions, --actions-file, or --actions-file -"));
-        defaultRuntime.exit(1);
-        return;
+        throw new Error("Provide --actions, --actions-file, or --actions-file -");
       }
       await runBrowserCliCommand(async () => {
         const payload = await readActionsPayload({

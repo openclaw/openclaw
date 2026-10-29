@@ -386,6 +386,65 @@ describe("persistPluginInstall", () => {
 });
 
 describe("persistPluginInstall enablement", () => {
+  const requiredTokenSchema = {
+    type: "object",
+    required: ["token"],
+    properties: { token: { type: "string" } },
+  };
+  function setManifests(...plugins: PluginManifestRecord[]) {
+    loadPluginManifestRegistryMock.mockReturnValue({ plugins, diagnostics: [] });
+  }
+  async function persistNpm(pluginId: string, config: OpenClawConfig) {
+    const { persistPluginInstall } = await import("./install-persistence.js");
+    return persistPluginInstall({
+      snapshot: installSnapshot(config),
+      pluginId,
+      install: { source: "npm", spec: pluginId + "@1.0.0", installPath: "/tmp/" + pluginId },
+    });
+  }
+  it("reads mixed-case manifest policy from canonical lowercase entries on reinstall", async () => {
+    const baseConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          myplug: { enabled: true, config: { token: "abc" } },
+          otherplug: { enabled: false, config: { token: "xyz" } },
+        },
+      },
+    };
+    setManifests(
+      createManifestRecord("MyPlug", { configSchema: requiredTokenSchema }, "my-package"),
+      createManifestRecord("OtherPlug", { configSchema: requiredTokenSchema }, "my-package"),
+    );
+    setInstalledPluginIndexInstallRecords({
+      "my-package": { source: "npm", spec: "my-package@1.0.0" },
+    });
+    enablePluginInConfigMock.mockImplementation((config) => ({ config, enabled: true }));
+
+    const next = await persistNpm("my-package", baseConfig);
+
+    expect(next.plugins?.entries).toEqual(baseConfig.plugins?.entries);
+    expect(enablePluginInConfigMock).toHaveBeenCalledExactlyOnceWith(
+      baseConfig,
+      "MyPlug",
+      expect.anything(),
+    );
+    expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("requires configuration first");
+  });
+
+  it("stages a mixed-case install missing settings under its canonical lowercase entry", async () => {
+    const baseConfig: OpenClawConfig = {
+      plugins: { deny: ["myplug"], entries: { myplug: { hooks: { timeoutMs: 5_000 } } } },
+    };
+    setManifests(createManifestRecord("MyPlug", { configSchema: requiredTokenSchema }));
+
+    const next = await persistNpm("MyPlug", baseConfig);
+
+    expect(next.plugins).toEqual({
+      entries: { myplug: { enabled: false, hooks: { timeoutMs: 5_000 } } },
+    });
+    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
+  });
+
   it("restores runtime child policy when reinstalling its package owner", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {

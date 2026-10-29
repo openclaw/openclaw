@@ -140,6 +140,26 @@ describe("dreaming markdown storage", () => {
     ]);
   });
 
+  it("refuses to rewrite malformed UTF-8 in an inline daily file", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-utf8-");
+    const targetPath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    const bytes = Buffer.concat([Buffer.from("# Daily"), Buffer.from([0xff])]);
+    await fs.writeFile(targetPath, bytes);
+    await expect(
+      writeDailyDreamingPhaseBlock({
+        workspaceDir,
+        phase: "light",
+        bodyLines: ["- replacement"],
+        hasContent: true,
+        nowMs,
+        timezone,
+        storage: { mode: "inline", separateReports: false },
+      }),
+    ).rejects.toThrow(/must be valid UTF-8/);
+    expect(await fs.readFile(targetPath)).toEqual(bytes);
+  });
+
   it("preserves read errors from an empty daily report", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-read-error-");
     const failure = Object.assign(new Error("daily file unavailable"), { code: "EACCES" });

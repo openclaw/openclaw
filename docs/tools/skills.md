@@ -541,10 +541,10 @@ metadata:
   Optional URL shown as "Website" in the macOS Skills UI.
 </ParamField>
 
-<ParamField path="os" type='("darwin" | "linux" | "win32")[]'>
+<ParamField path="os" type='("darwin" | "macos" | "linux" | "win32")[]'>
   Hard platform filter. When set, the skill is only eligible when the local
   host or a connected remote runtime matches a listed OS. `always` does not
-  override this filter.
+  override this filter. `macos` is accepted as an alias for `darwin`.
 </ParamField>
 
 <ParamField path="requires.bins" type="string[]">
@@ -619,7 +619,7 @@ metadata:
       option (brew when available, otherwise node).
     - If all installers are `download`, OpenClaw lists each entry so you can
       see all available artifacts.
-    - Specs can include `os: ["darwin"|"linux"|"win32"]` to filter by platform.
+    - Specs can include `os: ["darwin"|"macos"|"linux"|"win32"]` to filter by platform.
     - Node installs honor `skills.install.nodeManager` in `openclaw.json`
       (default: npm; options: npm / pnpm / yarn / bun). This only affects skill
       installs; the Gateway runtime should still be Node.
@@ -888,7 +888,10 @@ in-flight indexing started under the previous grant.
 In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 `await skills.read(name)`. These calls dispatch through the same tools and
 policies. The read returns a string with the same location context and complete
-instructions. `await skills.list(offset)` returns up to 20 directory entries;
+instructions. Cloud worker turns use the Gateway's admitted skill catalog for
+search and reads, with the same turn-lifetime checks. If a request fails, the
+Code Mode bridge reports a bounded, redacted cause.
+`await skills.list(offset)` returns up to 20 directory entries;
 the default offset is 0. Codex receives the OpenClaw tools through its dynamic
 tool surface; these are distinct from Codex's native skill-resource tools.
 Codex refuses a skill read that exceeds the turn's dynamic-tool output budget

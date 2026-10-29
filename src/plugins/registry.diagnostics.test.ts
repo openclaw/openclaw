@@ -48,6 +48,40 @@ function createRegistrationFixture() {
 }
 
 describe("plugin registration diagnostics", () => {
+  it.each([
+    { modelProvider: undefined, warns: true },
+    { modelProvider: "", warns: true },
+    { modelProvider: " \t ", warns: true },
+    { modelProvider: "acme", warns: false },
+  ])(
+    "diagnoses CLI modelProvider=$modelProvider without dropping direct CLI registration",
+    ({ modelProvider, warns }) => {
+      const { registry, createPlugin } = createRegistrationFixture();
+      const { record, api } = createPlugin("acme-plugin");
+      const backend = { id: "acme-cli", modelProvider, config: { command: "acme" } };
+
+      api.registerCliBackend(backend);
+
+      expect(registry.diagnostics).toEqual(
+        warns
+          ? [
+              {
+                level: "warn",
+                pluginId: "acme-plugin",
+                source: "/plugins/acme-plugin/index.ts",
+                message:
+                  'cli backend "acme-cli" is missing modelProvider; provider-to-runtime binding will be skipped. Set modelProvider to the canonical model provider id to enable this binding.',
+              },
+            ]
+          : [],
+      );
+      expect(registry.cliBackends).toEqual([
+        expect.objectContaining({ pluginId: "acme-plugin", backend }),
+      ]);
+      expect(record.cliBackendIds).toEqual(["acme-cli"]);
+    },
+  );
+
   it("preserves ordered severity and call-time provenance across registrars and rollback", () => {
     const { builder, registry, createPlugin } = createRegistrationFixture();
     const { record: alpha, api: alphaApi } = createPlugin("alpha");

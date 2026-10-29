@@ -392,6 +392,7 @@ describe("/session conversation bindings", () => {
   ])("unbinds only the current $name conversation", async ({ createParams, createBinding }) => {
     const binding = createBinding();
     hoisted.sessionBindingResolveByConversationMock.mockReturnValue(binding);
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([binding]);
     const result = await handleSessionCommand(createParams("/session unbind"), true);
     expect(result?.reply?.text).toBe("✅ Conversation unbound.");
     expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledExactlyOnceWith({
@@ -399,6 +400,15 @@ describe("/session conversation bindings", () => {
       scope: binding.conversation,
       reason: "manual",
     });
+  });
+
+  it("reports an unbind that removed no binding", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
+    const result = await handleSessionCommand(createThreadCommandParams("/session unbind"), true);
+    expect(result?.reply?.text).toBe(
+      "⚠️ No binding was removed; this conversation may still be bound.",
+    );
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledOnce();
   });
 
   it.each([

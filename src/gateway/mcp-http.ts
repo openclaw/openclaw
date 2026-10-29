@@ -172,14 +172,15 @@ async function startMcpLoopbackServer(
   const closeActiveSseResponses = (): void => {
     for (const res of activeSseResponses) {
       if (!res.destroyed && !res.writableEnded) {
-        const socket = res.socket;
         res.end();
-        socket?.end();
       }
     }
   };
 
   const httpServer = createHttpServer((req, res) => {
+    // Close after the complete response so pooled clients cannot race an idle timeout.
+    // Active JSON/SSE streams remain open until res.end().
+    res.setHeader("Connection", "close");
     const auth = validateMcpLoopbackRequest({
       req,
       res,
@@ -560,13 +561,22 @@ async function startMcpLoopbackServer(
   setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
-  return async () => {
-    // Stop admitting this runtime's child grants before draining accepted
-    // requests. A delayed old-server close cannot revoke a successor runtime.
+  let cleanupDone = false;
+  const cleanup = () => {
+    if (cleanupDone) {
+      return;
+    }
+    cleanupDone = true;
     clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
     revokeMcpLoopbackClientGrantsForRuntime(ownerToken);
     unregisterGrantRevocation();
     toolCache.clear();
+  };
+
+  const close = async () => {
+    // Stop admitting this runtime's child grants before draining accepted
+    // requests. A delayed old-server close cannot revoke a successor runtime.
+    cleanup();
     try {
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => (error ? reject(error) : resolve()));
@@ -576,6 +586,18 @@ async function startMcpLoopbackServer(
       await work.drain();
     }
   };
+  const handleUnexpectedClose = () => {
+    cleanup();
+    if (closeActiveMcpLoopbackServer === close) {
+      closeActiveMcpLoopbackServer = undefined;
+      logWarn("mcp-loopback: listener closed unexpectedly; the next run will restart it");
+    }
+    void work.drain().catch((error: unknown) => {
+      logWarn(`mcp-loopback: unexpected server close drain failed: ${String(error)}`);
+    });
+  };
+  httpServer.once("close", handleUnexpectedClose);
+  return close;
 }
 
 /** Waits for the process-owned MCP loopback server, starting one if needed. */

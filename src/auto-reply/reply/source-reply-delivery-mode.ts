@@ -171,7 +171,9 @@ export function resolveSourceReplyVisibilityPolicy(params: {
       inputProvenance: params.ctx.InputProvenance,
       isHeartbeat: params.isHeartbeat,
     }) &&
-    (params.requested !== undefined || isExplicitCommandTurnContext(params.ctx, params.cfg));
+    // Room-event delivery overrides are transient, not session-stable CLI policy.
+    (isExplicitCommandTurnContext(params.ctx, params.cfg) ||
+      (params.requested !== undefined && params.ctx.InboundEventKind !== "room_event"));
   const sessionStableSourceReplyDeliveryMode = hasStableTurnOverride
     ? sourceReplyDeliveryMode
     : resolveSourceReplyDeliveryMode({

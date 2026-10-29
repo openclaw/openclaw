@@ -120,6 +120,7 @@ function createAdmissionFixture() {
     sourceConversationContextByMode: { automatic: "", message_tool_only: "" },
     sourceConversationContextPromptOffset: undefined,
     extraSystemPromptStatic: "",
+    extraSystemPromptTurnContext: undefined,
     cliSessionBindingFacts: { extraSystemPromptStatic: "" },
     baseBodyTrimmedRaw: body,
     effectiveResetTriggered: false,

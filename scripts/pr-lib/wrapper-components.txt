@@ -191,8 +191,10 @@ scripts/lib/numeric-options.mjs
 scripts/lib/official-external-channel-catalog.json
 scripts/lib/official-external-plugin-catalog.json
 scripts/lib/official-external-provider-catalog.json
+scripts/lib/openclaw-bun.json
 scripts/lib/package-dist-inventory-contract.mts
 scripts/lib/package-lifecycle-marker.mjs
+scripts/lib/pinned-bun.mts
 scripts/lib/plain-gh.mjs
 scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
@@ -230,6 +232,7 @@ scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
 scripts/run-vitest.mts
+scripts/stage-openclaw-bun.sh
 scripts/test-projects.test-support.mts
 scripts/tsx.mjs
 scripts/verify-pr-hosted-gates.mjs
@@ -627,6 +630,7 @@ src/config/schema.walk.ts
 src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
+src/config/sessions/transcript-file-names.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/goals-operations.types.ts
 src/config/sessions/group-display.ts
@@ -975,6 +979,7 @@ src/infra/map-size.ts
 src/infra/mutation-authority.ts
 src/infra/native-error-response-schema.ts
 src/infra/native-error-response.ts
+src/infra/native-module-format.ts
 src/infra/net/configured-local-origin-bypass.ts
 src/infra/net/fetch-guard.ts
 src/infra/net/fetch-request-authority.ts
@@ -1684,6 +1689,7 @@ src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
 src/secrets/store/secret-store-validation-error.ts
 src/shared/assistant-error-format.ts
+src/shared/async-store.ts
 src/shared/async-work-scope.ts
 src/shared/avatar-limits.ts
 src/shared/avatar-policy.ts
@@ -1928,6 +1934,7 @@ src/state/openclaw-state-worker-error.ts
 src/state/openclaw-state-worker-lease.ts
 src/state/openclaw-state-worker-memory-pressure.ts
 src/state/openclaw-state-worker-operation.ts
+src/state/openclaw-state-worker-native-loss.ts
 src/state/openclaw-state-worker-owner.ts
 src/state/openclaw-state-worker-registry.ts
 src/state/openclaw-state-worker-store.ts

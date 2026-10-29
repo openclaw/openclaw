@@ -40,9 +40,25 @@ import { formatTomlConfigOverride } from "./toml-inline.js";
 
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const sweptCliImageRoots = new Set<string>();
+const CALLER_SURFACE_TOOL_NAMES = new Set([
+  // This release line serves ordinary Claude reads natively but mediates the same
+  // logical capability through loopback on internal completion turns.
+  "read",
+  "screen",
+  "show_widget",
+  "suggest_task",
+  "dismiss_task",
+]);
 
 export function isClaudeCliBackendId(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
+}
+
+/** Exclude client-bound tools whose turn-to-turn availability must not reset the native CLI session. */
+export function cliSessionToolNames(tools: Iterable<{ name: string }>): string[] {
+  return Array.from(tools, (tool) => tool.name)
+    .filter((name) => !CALLER_SURFACE_TOOL_NAMES.has(name))
+    .toSorted();
 }
 
 export function resolveCliRunQueueKey(params: {

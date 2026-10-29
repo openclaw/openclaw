@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
@@ -71,6 +72,45 @@ describe("voice-call diagnostic stream ownership", () => {
     });
     expect(readFile.mock.calls.filter(([target]) => target === file)).toEqual([]);
   });
+
+  it.skipIf(process.platform === "win32").each(["latency", "tail"])(
+    "rejects a FIFO for %s without treating it as an empty log",
+    async (subcommand) => {
+      const fifo = path.join(workspace.dir, "diagnostics.pipe");
+      execFileSync("mkfifo", [fifo]);
+      // Keep a writer present so a regressed blocking open cannot hang the test worker.
+      const writer = fs.openSync(fifo, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
+      try {
+        await expect(command(subcommand, "--file", fifo)).rejects.toThrow(
+          "Voice-call log must be a regular file.",
+        );
+      } finally {
+        fs.closeSync(writer);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a writerless FIFO in a bounded subprocess",
+    () => {
+      const fifo = path.join(workspace.dir, "writerless.pipe");
+      execFileSync("mkfifo", [fifo]);
+      const script = [
+        'import { Command } from "commander";',
+        'import { registerVoiceCallLogs } from "./extensions/voice-call/src/cli-call-log.ts";',
+        "const root = new Command();",
+        'registerVoiceCallLogs({ root, defaultFile: process.argv[1], ensureHistoryStateRuntime() { throw new Error("unexpected history access"); } });',
+        'try { await root.parseAsync(["latency", "--file", process.argv[1]], { from: "user" }); process.exitCode = 2; } catch (error) { if (!String(error).includes("Voice-call log must be a regular file.")) throw error; console.log("writerless-fifo-rejected"); }',
+      ].join(";");
+      expect(
+        execFileSync(
+          process.execPath,
+          ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", script, fifo],
+          { cwd: process.cwd(), timeout: 15_000, encoding: "utf8" },
+        ),
+      ).toContain("writerless-fifo-rejected");
+    },
+  );
 
   it("does not join a pending record to a larger replacement file", async () => {
     fs.writeFileSync(file, '{"seq":0}\n{"retired":');

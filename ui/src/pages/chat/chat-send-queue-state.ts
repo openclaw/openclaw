@@ -388,6 +388,11 @@ export function settleQueuedChatSendFailure(
       err.message === "gateway not connected";
     const retryDelayMs = retryableGatewayDelayMs(err);
     const safelyRejected = failedBeforeTransport || retryDelayMs !== null;
+    // Delivery or another pane may retire the row while its response is held.
+    if (!readQueuedMessageById(host, id)) {
+      finishScopedChatSending(host, scope);
+      return "pending";
+    }
     const rollbackAttempt = safelyRejected
       ? {
           sendAttempts: queued.sendAttempts,
