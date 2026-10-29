@@ -17,6 +17,7 @@ on:
       - "packages/plugin-package-contract/src/**"
       - "scripts/generate-npm-package-lock.mjs"
       - "scripts/generate-npm-package-lock.mts"
+      - "scripts/lib/npm-lock-package-selection.mjs"
       - "scripts/lib/bounded-response.mjs"
       - "scripts/lib/npm-publish-plan.mjs"
       - "scripts/lib/npm-json-output.mts"

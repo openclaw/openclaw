@@ -797,7 +797,6 @@
 ["extensions/signal/src/monitor/event-handler.partial-delivery.test.ts","../send.js","a5c95c614006f2ef5d095a172e893284696a9d124adb597b793c64a4df8e1699",1]
 ["extensions/signal/src/send-reactions.test.ts","./client-adapter.js","cdb2fcc7ea9422b2364b09a34d5e00e5816b5dc52ad697dbbc47221461cbe1ed",1]
 ["extensions/signal/src/send.test.ts","./client-adapter.js","a4805e02dc3669b7099b7d9458a3769d72d45793564164ceab88cff7181600f6",1]
-["extensions/signal/src/sse-reconnect.test.ts","./client-adapter.js","d46f4d675cfd20cc77232e695560837909d02ffd9e74fbbc5575ba149ac138ad",1]
 ["extensions/slack/src/actions.read.test.ts","./client.js","df15149204c7335c81937ebf49d28e90b98197da9c1adbc57a1378f6a05b2547",1]
 ["extensions/slack/src/channel.lazy-seams.test.ts","./scopes.js","2fcb60bcf97198cd97089e18c35fbc5401a54392ebc3d0b3b99174f5f712faab",1]
 ["extensions/slack/src/client.test.ts","openclaw/plugin-sdk/proxy-capture","eafc0e882ad4b2243274f821c7f104fe61851c8968f5274f8ad437f0481505c7",1]

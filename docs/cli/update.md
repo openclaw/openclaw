@@ -17,6 +17,18 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
+Temporary workspaces require a private root and safe ancestor permissions. If the
+selected system temp root has a group- or world-writable ancestor without sticky
+protection, OpenClaw warns with that ancestor's path and uses private scratch
+under the selected state directory instead. The fallback uses the same private-root
+checks and does not change shared directory permissions. If both locations are
+unsafe, the error names the directory whose owner must restore sticky protection
+(`chmod +t` for shared temp directories) or remove group/other write access
+(`chmod go-w` for private ancestors) before retrying.
+The installed updater must contain this fix; an older release may still need its
+temp hierarchy repaired before updating. Shared coordination databases and service
+locks keep their existing per-user locations across profiles.
+
 Update checks, candidate rehearsal, activation Doctor, and verification inherit
 the managed Gateway's Node heap controls from its effective service command and
 `NODE_OPTIONS`. Command-line heap controls take precedence. An empty service

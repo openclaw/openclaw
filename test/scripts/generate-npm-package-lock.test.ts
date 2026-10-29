@@ -1718,8 +1718,16 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
     ).toEqual([]);
   });
 
-  it("falls back to every npm lock when lockfile ownership is ambiguous", () => {
-    const packageDirs = npmLockPackageDirsForChangedPaths(["pnpm-lock.yaml"]).map(repoRelativePath);
+  it.each([
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "scripts/generate-npm-package-lock.mts",
+    "scripts/lib/npm-lock-package-selection.mjs",
+    "scripts/lib/npm-lock-package-selection.d.mts",
+    "scripts/lib/record-shared.mjs",
+    "scripts/lib/record-shared.d.mts",
+  ])("falls back to every npm lock when policy ownership changes: %s", (file) => {
+    const packageDirs = npmLockPackageDirsForChangedPaths([file]).map(repoRelativePath);
 
     expect(packageDirs).toContain("");
     expect(packageDirs).toContain("packages/gateway-client");
