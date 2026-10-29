@@ -60,6 +60,10 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     }
     throw new Error(`Missing native TypeScript export: ${names.join(" or ")}`);
   };
+  const installedPackageImports = new Map([
+    ["typescript/async", nativeExport("./async", "./unstable/async")],
+    ["typescript/fs", nativeExport("./fs", "./unstable/fs")],
+  ]);
   // Producers traverse only their own reachable owners. Every reached computed
   // import must still match its exact expression and declared targets.
   const dynamicOwners = new Map<string, { expressions: string[]; targets: string[] }>([
@@ -200,8 +204,9 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       const resolved =
         exact && fs.existsSync(exact) && fs.statSync(exact).isFile()
           ? exact
-          : graph.dependencies(absolute).find((edge) => edge.specifier === reference.specifier)
-              ?.resolvedFileName;
+          : (installedPackageImports.get(reference.specifier) ??
+            graph.dependencies(absolute).find((edge) => edge.specifier === reference.specifier)
+              ?.resolvedFileName);
       if (!resolved) {
         throw new Error(
           `Unresolved ${reference.kind} in ${id}:${reference.line}: ${reference.specifier}`,
