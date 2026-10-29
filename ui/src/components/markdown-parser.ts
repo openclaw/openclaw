@@ -343,7 +343,7 @@ export function createMarkdownParser(): MarkdownItParser {
 
   markdownParser.core.ruler.after("linkify-cjk-trim", "file-links", (state) => {
     const env = state.env as Partial<MarkdownRenderEnv> | undefined;
-    if (env?.fileLinks !== true && env?.documentFileLinks !== true) {
+    if (env?.fileLinks !== true && !env?.documentFileLinks) {
       return;
     }
     const decorations: MarkdownFileLinkDecoration[] = [];
@@ -387,7 +387,10 @@ export function createMarkdownParser(): MarkdownItParser {
             }
             if (!decodedHref.includes("://")) {
               const documentTarget = env.documentFileLinks
-                ? parseMarkdownDocumentFileLinkTarget(href)
+                ? parseMarkdownDocumentFileLinkTarget(
+                    href,
+                    env.documentFileLinks === "select" ? "select" : "read",
+                  )
                 : null;
               const target =
                 documentTarget ??

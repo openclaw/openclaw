@@ -69,7 +69,7 @@ function MarkdownAttachment(props: { text: string; label: string; onBrowseFiles?
       codeBlockInteraction: "interactive",
       // Detached attachments have no source folder. Decorate authored links only;
       // the selected catalog row, never this reference, owns the eventual file read.
-      documentFileLinks: Boolean(props.onBrowseFiles),
+      documentFileLinks: props.onBrowseFiles ? "select" : false,
     }),
   }));
   onSettled(() => {
