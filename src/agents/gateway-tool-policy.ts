@@ -62,15 +62,25 @@ function narrowActions(
       if (!isRecord(action)) {
         throw new Error(refusal);
       }
-      const values = Array.isArray(action.enum)
-        ? action.enum.filter((value): value is string => typeof value === "string")
-        : typeof action.const === "string"
-          ? [action.const]
-          : [];
+      if (typeof action.const === "string") {
+        return actions.includes(action.const) ? [variant] : [];
+      }
+      if (!Array.isArray(action.enum)) {
+        throw new Error(refusal);
+      }
+      const values = action.enum.filter((value): value is string => typeof value === "string");
       if (!values.length) {
         throw new Error(refusal);
       }
-      return values.some((value) => actions.includes(value)) ? [variant] : [];
+      const allowed = values.filter((value) => actions.includes(value));
+      if (!allowed.length) {
+        return [];
+      }
+      // Intersect the member's action enum with the policy; the published schema
+      // must not advertise actions the policy forbids.
+      const narrowedAction: Record<string, unknown> = { ...action, enum: allowed };
+      delete narrowedAction.default;
+      return [{ ...variant, properties: { ...variant.properties, action: narrowedAction } }];
     });
     return anyOf.length ? { ...schema, anyOf } : undefined;
   }

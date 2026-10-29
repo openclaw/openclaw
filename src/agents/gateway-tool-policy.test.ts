@@ -114,6 +114,23 @@ describe("required Gateway tool policy", () => {
     ).toEqual([]);
   });
 
+  it("intersects a union member's action enum with the policy allowlist", () => {
+    const tool = {
+      ...unionActionTool(),
+      parameters: Type.Union([
+        Type.Object({ action: stringEnum(["list", "archive"]) }),
+        Type.Object({ action: Type.Literal("read"), thread_id: Type.String() }),
+      ]),
+    };
+    const [projected] = applyGatewayToolPolicy([tool], {
+      tools: { gatewayPolicy: { allow: ["threads"], actions: { threads: ["list", "read"] } } },
+    });
+    const parameters = expectDefined(projected, "allowed union tool").parameters;
+    expect(Value.Check(parameters, { action: "list" })).toBe(true);
+    expect(Value.Check(parameters, { action: "archive" })).toBe(false);
+    expect(Value.Check(parameters, { action: "read", thread_id: "t1" })).toBe(true);
+  });
+
   it("keeps the top-level action refusal for union members that cannot be narrowed", () => {
     const tool = {
       ...unionActionTool(),
@@ -127,14 +144,6 @@ describe("required Gateway tool policy", () => {
         tools: { gatewayPolicy: { allow: ["threads"], actions: { threads: ["list"] } } },
       }),
     ).toThrow("top-level string action field");
-  });
-
-  it("still requires an explicit action list for an allowed union tool", () => {
-    expect(() =>
-      applyGatewayToolPolicy([unionActionTool()], {
-        tools: { gatewayPolicy: { allow: ["threads"] } },
-      }),
-    ).toThrow("requires tools.gatewayPolicy.actions.threads");
   });
 
   it.each(["search", "code-mode"] as const)(
