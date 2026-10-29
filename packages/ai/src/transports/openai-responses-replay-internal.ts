@@ -1,7 +1,8 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { APIError } from "openai";
 import { Stream } from "openai/core/streaming";
-import type { ResponseInput, ResponseStreamEvent } from "openai/resources/responses/responses.js";
+import type { ResponseInput } from "openai/resources/responses/responses.js";
 import type { CompactionReplayRejection } from "../provider-options.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
@@ -20,8 +21,10 @@ import {
   nextResponsesServiceTier,
 } from "./openai-responses-service-tier.js";
 import { log } from "./openai-transport-shared.js";
+import { decodeSseFrames } from "./transport-stream-shared.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
+const PRELUDE_TYPES = new Set(["response.created", "response.in_progress", "response.queued"]);
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
   return (
@@ -41,9 +44,7 @@ export function readResponsesRecoveryEvent(event: unknown) {
           ? (record.error ?? record)
           : undefined,
     hasResponseOutput: Array.isArray(response?.output) && response.output.length > 0,
-    isPrelude:
-      record !== undefined &&
-      ["response.created", "response.in_progress", "response.queued"].includes(String(record.type)),
+    isPrelude: record !== undefined && PRELUDE_TYPES.has(String(record.type)),
   };
 }
 
@@ -208,30 +209,95 @@ export async function createResponsesStreamWithRecovery(params: {
   async function* streamWithTerminalDrain(response: Response, body: ReadableStream<Uint8Array>) {
     const reader = body.getReader();
     let terminal = false;
+    let firstFrame = true;
+    const decoder = decodeSseFrames();
     try {
-      // Decoder cancellation must leave the request reader available for the bounded drain.
-      const forwarded = new ReadableStream<Uint8Array>(
-        {
-          async pull(controller) {
-            const { done, value } = await reader.read();
-            if (done) {
-              controller.close();
-            } else {
-              controller.enqueue(value);
+      // Frame parsing stays synchronous within each read; this owner retains terminal draining.
+      frames: for (let next = decoder.next(); !next.done;) {
+        if (next.value === undefined) {
+          next = decoder.next(await reader.read());
+          continue;
+        }
+        const { frame } = next.value;
+        let eventName: string | null = null;
+        let data: string | undefined;
+        let start = 0;
+        let cr = frame.indexOf("\r");
+        let lf = frame.indexOf("\n");
+        while (start < frame.length) {
+          const end = cr < 0 ? (lf < 0 ? frame.length : lf) : lf < 0 ? cr : Math.min(cr, lf);
+          // The SDK strips one BOM per line; the decoder already handled the stream's first.
+          const bom = !(firstFrame && start === 0) && frame.charCodeAt(start) === 0xfeff;
+          const lineStart = bom ? start + 1 : start;
+          start = end + (frame[end] === "\r" && frame[end + 1] === "\n" ? 2 : 1);
+          if (cr >= 0 && cr < start) {
+            cr = frame.indexOf("\r", start);
+          }
+          if (lf >= 0 && lf < start) {
+            lf = frame.indexOf("\n", start);
+          }
+          if (lineStart < end) {
+            const fieldLength = frame.startsWith("data", lineStart)
+              ? 4
+              : frame.startsWith("event", lineStart)
+                ? 5
+                : 0;
+            const colon = lineStart + fieldLength;
+            if (fieldLength && (colon === end || frame[colon] === ":")) {
+              const value =
+                colon === end ? "" : frame.slice(colon + (frame[colon + 1] === " " ? 2 : 1), end);
+              if (fieldLength === 5) {
+                eventName = value;
+              } else {
+                data = data === undefined ? value : `${data}\n${value}`;
+              }
             }
-          },
-          cancel() {},
-        },
-        { highWaterMark: 0 },
-      );
-      const stream = Stream.fromSSEResponse<ResponseStreamEvent>(
-        new Response(forwarded, response),
-        new AbortController(),
-        params.client,
-      );
-      for await (const event of stream) {
-        terminal ||= event?.type === "response.completed" || event?.type === "response.incomplete";
-        yield event;
+            if (start < frame.length) {
+              continue;
+            }
+          }
+          if (!eventName && data === undefined) {
+            continue;
+          }
+          if (data === "[DONE]") {
+            break frames;
+          }
+          let event: unknown;
+          try {
+            event = JSON.parse(data ?? "");
+          } catch {
+            throw new SyntaxError("Error reading response: malformed server-sent event JSON.");
+          }
+          if (eventName?.startsWith("thread.")) {
+            event = { event: eventName, data: event };
+          } else if (eventName === "error" || (isRecord(event) && event.error)) {
+            throw new APIError(
+              undefined,
+              // @ts-expect-error SDK SSE also passes arbitrary JSON; preserve scalar/null error payloads.
+              isRecord(event) ? (event.error ?? event) : event,
+              undefined,
+              response.headers,
+            );
+          }
+          terminal ||=
+            isRecord(event) &&
+            (event.type === "response.completed" || event.type === "response.incomplete");
+          yield event;
+          eventName = null;
+          data = undefined;
+        }
+        firstFrame = false;
+        next = decoder.next();
+      }
+    } catch (error) {
+      // Match SDK transport cancellation without swallowing provider API errors.
+      if (
+        error instanceof APIError ||
+        !isRecord(error) ||
+        (error.name !== "AbortError" &&
+          !String(error.message).includes("FetchRequestCanceledException"))
+      ) {
+        throw error;
       }
     } finally {
       if (!terminal) {

@@ -1,6 +1,14 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { expect, it } from "vitest";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { daybreakAliasHealthCheck } from "./doctor-health-api.js";
+let state: OpenClawTestState;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "daybreak-doctor-health" });
+});
+afterEach(async () => {
+  await state.cleanup();
+});
 
 const runtime = {
   log() {},
@@ -23,7 +31,12 @@ it("warns about retiring references without rewriting models or account pins", a
     },
   };
   const original = structuredClone(cfg);
-  const result = await daybreakAliasHealthCheck.detect({ cfg, mode: "lint", runtime });
+  const result = await daybreakAliasHealthCheck.detect({
+    cfg,
+    env: state.env,
+    mode: "lint",
+    runtime,
+  });
   expect(cfg).toEqual(original);
   expect(result).toHaveLength(1);
   expect(result[0]).toMatchObject({ severity: "warning" });
@@ -37,7 +50,9 @@ it("warns about retiring references without rewriting models or account pins", a
   }
   expect(result[0]?.message).toContain("October 28, 2026");
   expect(result[0]?.message).toContain("No automatic replacement");
-  expect(await daybreakAliasHealthCheck.detect({ cfg, mode: "fix", runtime })).toEqual(result);
+  expect(
+    await daybreakAliasHealthCheck.detect({ cfg, env: state.env, mode: "fix", runtime }),
+  ).toEqual(result);
 });
 
 it("leaves specific models and other providers alone", async () => {
@@ -51,5 +66,7 @@ it("leaves specific models and other providers alone", async () => {
       },
     },
   };
-  expect(await daybreakAliasHealthCheck.detect({ cfg, mode: "lint", runtime })).toEqual([]);
+  expect(
+    await daybreakAliasHealthCheck.detect({ cfg, env: state.env, mode: "lint", runtime }),
+  ).toEqual([]);
 });

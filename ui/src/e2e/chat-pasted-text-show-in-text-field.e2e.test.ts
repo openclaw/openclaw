@@ -1,10 +1,10 @@
-import { readFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   seedChatSettings,
@@ -314,12 +314,10 @@ suite.define(() => {
             const name = card.querySelector(".chat-attachment-file__name")!;
             const action = card.querySelector(".chat-attachment-text-action")!;
             const rect = card.getBoundingClientRect();
-            const otherRect = other.getBoundingClientRect();
             const { left, right, top, bottom } = action.getBoundingClientRect();
             const { border, borderRadius } = getComputedStyle(card);
             const otherStyle = getComputedStyle(other);
             return {
-              sameSize: rect.width === otherRect.width && rect.height === otherRect.height,
               sameBorder: border === otherStyle.border && borderRadius === otherStyle.borderRadius,
               secondRow: top >= name.getBoundingClientRect().bottom,
               inside: left >= rect.left && right <= rect.right && bottom < rect.bottom,
@@ -329,7 +327,6 @@ suite.define(() => {
             };
           }),
         ).toEqual({
-          sameSize: true,
           sameBorder: true,
           secondRow: true,
           inside: true,
@@ -613,9 +610,7 @@ suite.define(() => {
       const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
       expect(download.suggestedFilename()).toBe(fileName);
       expect(await download.failure()).toBeNull();
-      const file = await download.path();
-      expect(file).not.toBeNull();
-      expect(await readFile(file!)).toEqual(bytes);
+      expect(await readControlUiE2eDownload(download)).toEqual(bytes);
     });
   });
 });

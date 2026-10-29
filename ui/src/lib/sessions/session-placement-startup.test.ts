@@ -5,7 +5,8 @@ import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/
 import type { GatewayProtocolRequestOptions } from "../../../../packages/gateway-client/src/protocol-client.js";
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { useFakeClock as fakeTimers } from "../../test-helpers/fake-clock.ts";
 import { sessionRequest as gatewayRequest } from "./hydration-family.test-support.ts";
 import {

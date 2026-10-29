@@ -132,7 +132,20 @@ it("publishes pinned TypeSafe billing without borrowing prices for aliases or lo
     expect(second.providerPricing?.[`typesafe/${model.id}`]).toBeUndefined();
     if (model.id !== "jev-1.13.0") {
       expect(model.inference?.decision).not.toHaveProperty("billing");
+      // Aliases do not inherit token ceilings, but hosted image bounds are explicit.
+      expect(model.inference?.decision).not.toHaveProperty("limits.maxRequestTokens");
+      expect(model.inference?.decision).not.toHaveProperty("limits.maxStateAndQuestionTokens");
+    }
+    if (model.id === "kev-latest") {
+      expect(model.inference?.decision?.input).toEqual(["text"]);
       expect(model.inference?.decision).not.toHaveProperty("limits");
+    } else {
+      expect(model.inference?.decision?.input).toEqual(["text", "image"]);
+      expect(model.inference?.decision?.limits?.image).toEqual({
+        maxBytes: 4194304,
+        mimeTypes: ["image/png", "image/jpeg"],
+        remoteUrls: false,
+      });
     }
     const usage = finalizePluginModelUsage({
       cfg: {},

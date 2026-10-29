@@ -27,7 +27,9 @@ credentials or network access are needed.
    any retained evidence.
 2. The transaction that acknowledges the publication queues the exact changed
    bytes in `state.sqlite`.
-3. Knowledge commits that batch and records the commit in the receipt.
+3. Knowledge commits that batch outside a SQLite write transaction, then records
+   the commit and receipt together in a short transaction. Queued batches stay
+   ordered; a retry after interruption reuses the checkpoint commit.
 
 The queue is an outbox, not a second knowledge store; Markdown stays
 authoritative. Because exact snapshots are queued, a Git outage followed by more
@@ -51,7 +53,8 @@ versions are committed in order. There is no background retry timer.
   originals and media stay outside automatic snapshots.
 - Unrelated working-tree edits and staged content are not swept into a
   publication commit. Knowledge never checks out, resets, or overwrites working
-  files.
+  files. Updating the working index reuses the exact committed blobs, including
+  when retrying an interrupted checkpoint.
 - Commits name the Knowledge service as committer and label the actor (`agent`,
   `operator`, or external observation). These labels are coarse provenance, not
   authenticated identities.

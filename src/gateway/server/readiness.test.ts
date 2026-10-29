@@ -76,22 +76,7 @@ describe("createReadinessChecker", () => {
     vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
   });
   afterEach(() => vi.useRealTimers());
-  it("reports deferred recovery per agent using required-agent readiness policy", () => {
-    let pending = ["owner"];
-    const { readiness } = setup(undefined, {
-      getPendingAgentInputRecovery: () => pending,
-      isRequiredAgent: (agentId) => agentId === "main",
-    });
-    expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { agentRecovery: ["owner"] }));
-    pending = ["owner", "main"];
-    expect(readiness()).toEqual({
-      ...failingSnapshot(["chat-recovery:main"]),
-      agentRecovery: ["owner", "main"],
-    });
-    pending = [];
-    expect(readiness()).toEqual(readySnapshot());
-  });
-  it("keeps traffic unready until saved input recovery releases chat admission", () => {
+  it("keeps traffic unready until startup releases chat admission", () => {
     const unavailableMethods = new Set(["chat.send"]);
     const deps = {
       startedAt: Date.now() - FIVE_MIN_MS,
@@ -99,19 +84,18 @@ describe("createReadinessChecker", () => {
     };
     const { readiness, manager } = setup(undefined, deps);
 
-    // Startup completion releases recovery's background-work barrier; it cannot await recovery.
     expect(createStartupChecker(deps)()).toEqual({
       ok: true,
       status: "started",
       uptimeMs: FIVE_MIN_MS,
     });
-    expect(readiness()).toEqual(failingSnapshot(["chat-recovery"]));
+    expect(readiness()).toEqual(failingSnapshot(["chat-startup"]));
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
 
     unavailableMethods.clear();
     expect(readiness()).toEqual(readySnapshot());
     unavailableMethods.add("chat.send");
-    expect(readiness()).toEqual(failingSnapshot(["chat-recovery"]));
+    expect(readiness()).toEqual(failingSnapshot(["chat-startup"]));
   });
 
   it.each([

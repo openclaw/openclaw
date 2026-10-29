@@ -5,6 +5,9 @@ import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
 /** Transient facts minted before an owned private family is exposed to readers. */
 export type SqlitePrivateSnapshotFamily = { root: string; main: string; wal: string | null };
 
+/** An allocated destination leaves token and directory retirement with its surviving owner. */
+export type SqliteSnapshotDestination = string | { directory: string };
+
 export type PreparedSqliteReadOnlyLocation = {
   cleanup: () => boolean;
   cleanupAsync: () => Promise<boolean>;

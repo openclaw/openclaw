@@ -357,7 +357,7 @@ export function upsertMemoryEmbeddingCache(params: {
 
 /*
  * Evicts before inserting so even an uncommitted write stays within its capacity budget;
- * full rebuilds temporarily raise that budget until publication or abort. The
+ * full rebuilds raise that budget until live completion or a later ordinary write. The
  * retained count needs a reread only when inexact. Below capacity a direct UPSERT cannot
  * overflow; at capacity, removing replaced rows makes every UPSERT row a true insert.
  */

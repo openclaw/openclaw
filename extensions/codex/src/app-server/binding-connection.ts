@@ -1,11 +1,16 @@
 // Codex helper module selects an app-server connection from private binding ownership.
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { CodexCatalogHome } from "../session-catalog-types.js";
 import type { CodexAppServerRuntimeOptions } from "./config-contracts.js";
 import type { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
+
+const loadBindingConnectionRuntime = createLazyRuntimeModule(
+  () => import("./binding-connection.runtime.js"),
+);
 
 export type CodexCatalogHomeDiscovery = (agentDir: string) => Promise<readonly CodexCatalogHome[]>;
 
@@ -94,6 +99,6 @@ export type CodexBindingAppServerConnectionParams = CodexAppServerRuntimeOptions
 export async function resolveCodexBindingAppServerConnection(
   params: CodexBindingAppServerConnectionParams,
 ): Promise<CodexBindingAppServerConnection> {
-  const runtime = await import("./binding-connection.runtime.js");
+  const runtime = await loadBindingConnectionRuntime();
   return runtime.resolveCodexBindingAppServerConnection(params, catalogHomes.tryGetRuntime());
 }

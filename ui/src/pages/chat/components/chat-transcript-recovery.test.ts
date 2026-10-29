@@ -77,9 +77,11 @@ async function searchTranscript(pane: RecoveryTranscriptElement, query: string) 
     toggleTranscriptSearch(pane.props.paneId);
     await pane.settleUpdates();
   }
-  const input = expectDefined(
-    pane.querySelector<HTMLInputElement>(".agent-chat__search-bar input"),
-    "transcript search input",
+  const input = await waitForSolid(() =>
+    expectDefined(
+      pane.querySelector<HTMLInputElement>(".agent-chat__search-bar input"),
+      "transcript search input",
+    ),
   );
   input.value = query;
   input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -100,6 +102,52 @@ describe("chat transcript full-message recovery", () => {
 
     pending.resolve(fullMessage("The restored exhibit is lunarneedle."));
     await vi.waitFor(() => expect(bubble(pane)?.textContent).toContain("lunarneedle"));
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("recovers a capped mixed envelope once without duplicating its visible text", async () => {
+    const message = (text: string) => ({
+      role: "assistant",
+      content: [
+        { type: "text", text },
+        { type: "thinking", thinking: "Recorded work" },
+        { type: "text", text: "Final finding." },
+      ],
+      runId: "mixed-run",
+      timestamp: 2_000,
+      stopReason: "stop",
+      __openclaw: {
+        id: "mixed-recovery",
+        runId: "mixed-run",
+        truncated: text === "Preview",
+        reason: "display-cap",
+      },
+    });
+    const load = vi.fn<SidebarFullMessageLoader>().mockResolvedValue({
+      ok: true,
+      message: message("Recovered finding."),
+    });
+    const pane = document.createElement("test-recovery-transcript") as RecoveryTranscriptElement;
+    pane.props = {
+      ...threadProps("recovery-mixed", "agent:work:dashboard:recovery", [
+        { role: "user", content: "Inspect the sample", timestamp: 1_000 },
+        message("Preview"),
+      ]),
+      fullMessageAgentId: "work",
+      loadFullAssistantMessage: load,
+      showToolCalls: true,
+      showThinking: true,
+      selectedSession: {
+        key: "agent:work:dashboard:recovery",
+        kind: "direct",
+        reasoningLevel: "on",
+      },
+    };
+    document.body.append(pane);
+    await shows(pane, "Recovered finding.");
+    await pane.settleUpdates();
+    expect(pane.textContent?.match(/Recovered finding\./g)).toHaveLength(1);
+    expect(pane.textContent?.match(/Final finding\./g)).toHaveLength(1);
     expect(load).toHaveBeenCalledOnce();
   });
 

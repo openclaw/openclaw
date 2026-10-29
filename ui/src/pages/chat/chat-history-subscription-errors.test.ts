@@ -2,7 +2,7 @@
 import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { useFakeClock } from "../../test-helpers/fake-clock.ts";
 import { projectChatFields } from "./chat-field-projection.ts";

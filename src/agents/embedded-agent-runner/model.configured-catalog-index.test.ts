@@ -92,6 +92,7 @@ function fixture(
     },
     {
       initialAuth: { authStore, authModes: {}, providerAuthLabels: new Map() },
+      readUsage: (store) => store,
       isCurrent: () => true,
       withRefreshStatus: (catalog) => catalog,
       readFullModelCatalog: () => undefined,

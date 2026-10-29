@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { sleepWithAbort } from "@openclaw/retry";
 import { isChildProcessTreeAlive, signalChildProcessTree } from "../process/child-process-tree.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
 const PROCESS_TREE_EXIT_POLL_MS = 25;
@@ -28,7 +29,7 @@ export function unrefLocalServiceOutput(child: ChildProcess): void {
   }
 }
 
-export function drainLocalServiceOutput(child: ChildProcess): void {
+function drainLocalServiceOutput(child: ChildProcess): void {
   child.stdout?.removeAllListeners("data");
   child.stderr?.removeAllListeners("data");
   child.stdout?.resume();
@@ -88,7 +89,10 @@ export async function stopLocalServiceProcess(owned: ManagedLocalServiceProcess)
     return;
   }
   drainLocalServiceOutput(owned.child);
-  const gracefulDeadline = Date.now() + DEFAULT_PROBE_TIMEOUT_MS;
+  // Grace and final-exit budgets are consumed by sleepWithAbort polls on the
+  // monotonic clock; the deadlines must live there too, or a wall-clock step
+  // (NTP correction, VM resume) stretches the stop window past its bound.
+  const gracefulDeadline = monotonicNow() + DEFAULT_PROBE_TIMEOUT_MS;
   if (owned.pendingSignals.size === 0) {
     signalLocalServiceProcess(owned, "SIGTERM");
   }
@@ -98,7 +102,7 @@ export async function stopLocalServiceProcess(owned: ManagedLocalServiceProcess)
     // Windows taskkill owns its bounded completion deadline. Join every helper
     // before timing final exit observation, even if the service already closed.
     await Promise.all(owned.pendingSignals.values());
-    await waitForChildProcessTreeExit(owned, Date.now() + DEFAULT_PROBE_TIMEOUT_MS);
+    await waitForChildProcessTreeExit(owned, monotonicNow() + DEFAULT_PROBE_TIMEOUT_MS);
   }
   if (!isLocalServiceProcessSettled(owned)) {
     throw new Error(`Local model service process tree ${owned.child.pid} did not stop`);
@@ -110,7 +114,7 @@ async function waitForChildProcessTreeExit(
   deadline: number,
 ): Promise<void> {
   while (!isLocalServiceProcessSettled(owned)) {
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - monotonicNow();
     if (remainingMs <= 0) {
       return;
     }

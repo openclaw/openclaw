@@ -30,9 +30,9 @@ import {
 } from "./session-actor-transcript-replica.js";
 import { summaryFacts, transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
+import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
 import {
   mutateSessionColdTranscriptInWorker,
-  prepareSessionColdBatchInWorker,
   prepareSessionColdRestoreInWorker,
 } from "./session-cold-storage-worker.js";
 import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";

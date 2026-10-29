@@ -1,4 +1,3 @@
-import { jsonPathValue } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -6,6 +5,7 @@ import {
 import { Check } from "typebox/value";
 import type { VaultAccess } from "./access.js";
 import { SourceCheckInput, type SourceIdentity } from "./ingestion-contract.js";
+import { releaseSupersessionGuards } from "./lifecycle.js";
 import type { Receipt } from "./mutation-contract.js";
 import { publicationRole, PublicationFiles } from "./publication-files.js";
 import { observeWithdrawals } from "./retrieval.js";
@@ -20,7 +20,7 @@ import { digest } from "./vault.js";
 export class StorageJournal extends StorageBase {
   resume(access: VaultAccess, requestId: string): Receipt {
     access.assertCurrent();
-    const published = this.transaction((db) => {
+    const published = this.transaction("knowledge.resume", (db) => {
       const row = this.row(db, scopeKey(access.scope), requestId);
       if (!row) {
         throw new Error("Mutation unavailable in this scope.");
@@ -100,6 +100,7 @@ export class StorageJournal extends StorageBase {
           "Published and available to exact reads; keyword indexing is pending until the next search reconciles this scope.";
         const records = plan.records ?? [plan.record];
         observeWithdrawals(db, records, this.retrievalBinding(access));
+        releaseSupersessionGuards(db, plan.restored ?? [], this.retrievalBinding(access));
         for (const record of records) {
           this.recordObservation(db, plan.scope, record, plan.actor, plan.agentId);
         }
@@ -142,10 +143,13 @@ export class StorageJournal extends StorageBase {
       this.flushGit(access);
     }
     access.assertCurrent();
-    return this.store.withDatabase(
+    return this.store.withDatabase((db) => {
+      const row = db
+        .prepare("SELECT receipt FROM mutations WHERE scope=? AND request=?")
+        .get(scopeKey(access.scope), requestId)!;
       // SAFETY: receipts are serialized Receipt values written by this storage layer.
-      (db) => JSON.parse(this.row(db, scopeKey(access.scope), requestId)!.receipt) as Receipt,
-    );
+      return JSON.parse(String(row.receipt)) as Receipt;
+    });
   }
   history(access: VaultAccess, input: { offset?: number; limit?: number; id?: string }) {
     access.assertCurrent();
@@ -191,8 +195,12 @@ export class StorageJournal extends StorageBase {
       if (id !== undefined) {
         query = query.where((eb) =>
           eb.or([
-            eb(jsonPathValue(db, eb.ref("receipt"), eb.val("$.id")), "=", id),
-            eb(jsonPathValue(db, eb.ref("receipt"), eb.val("$.targetId")), "=", id),
+            eb(eb.fn<string | null>("json_extract", [eb.ref("receipt"), eb.val("$.id")]), "=", id),
+            eb(
+              eb.fn<string | null>("json_extract", [eb.ref("receipt"), eb.val("$.targetId")]),
+              "=",
+              id,
+            ),
           ]),
         );
       }

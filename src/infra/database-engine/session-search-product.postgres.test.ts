@@ -199,6 +199,18 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     expect((await search("x ".repeat(2048).trim())).hits).toEqual([]);
   });
 
+  it("snippets the passage holding a punctuation-joined match and keeps its punctuation", async () => {
+    await append(
+      "filename",
+      "filename-hit",
+      `Opening notes for the deploy review. ${"Routine context keeps going here. ".repeat(80)}The fix to server.py landed after review.`,
+    );
+    const { hits } = await search("server.py", { sessionId: "filename" });
+    expect(hits.map((hit) => hit.messageId)).toEqual(["filename-hit"]);
+    expect(hits[0]!.snippet).toContain("fix to server.py landed");
+    expect(hits[0]!.snippet).not.toContain("Opening");
+  });
+
   it("publishes appends, rebuilds the active branch and removes deleted transcripts", async () => {
     const alias = { ...scope("json-alias"), storePath: path.join(root, "shared", "shared.json") };
     await upsertSessionEntryCore(alias, { sessionId: alias.sessionId, updatedAt: 1 });

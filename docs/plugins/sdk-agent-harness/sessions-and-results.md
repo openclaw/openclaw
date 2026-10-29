@@ -309,6 +309,14 @@ The callback is a separate capability, not another ordinary attempt. It must:
 - refuse to run if its selected transcript/isolation strategy cannot enforce
   those restrictions.
 
+The built-in runtime reopens the session for finalization within the same
+replay byte bound as ordinary attempts (eight bytes per context token), with
+`toolResultOverflow: "omit"`: when large tool results such as screenshots would
+push the turn's request out of that bound, their bodies are replaced with an
+omission notice before older messages are dropped. If the notices alone exceed
+the bound, older messages can still be dropped. The stored transcript is
+unchanged.
+
 OpenClaw invokes the callback once as a terminal sub-operation, outside the
 ordinary attempt and retry loop. A failure ends the run with the
 side-effect-aware incomplete-turn warning; it cannot enter ordinary

@@ -64,6 +64,10 @@ function expectLastStatus(fields: Partial<ChannelAccountSnapshot>) {
   expect(setStatus).toHaveBeenLastCalledWith(expect.objectContaining(fields));
 }
 
+function expectFatal(message: string) {
+  expectLastStatus({ accountId: "default", healthState: "error", lastError: message });
+}
+
 describe("Matrix monitor sync lifecycle", () => {
   it.each(["during startup", "after startup"])(
     "contains missing-key-shaped fatal sync errors %s",
@@ -78,7 +82,7 @@ describe("Matrix monitor sync lifecycle", () => {
       }
 
       await expect(monitor.promise).rejects.toThrow(error.message);
-      expectLastStatus({ accountId: "default", healthState: "error", lastError: error.message });
+      expectFatal(error.message);
       expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(
         expect.objectContaining({ mode: "persist" }),
       );
@@ -91,11 +95,7 @@ describe("Matrix monitor sync lifecycle", () => {
     hoisted.client.emit("sync.state", "STOPPED", "SYNCING", undefined);
 
     await expect(monitor.promise).rejects.toThrow("Matrix sync stopped unexpectedly");
-    expectLastStatus({
-      accountId: "default",
-      healthState: "error",
-      lastError: "Matrix sync stopped unexpectedly",
-    });
+    expectFatal("Matrix sync stopped unexpectedly");
   });
 
   it.each(["STOPPED", "unexpected_error", "ERROR"])(
@@ -158,30 +158,18 @@ describe("Matrix monitor sync lifecycle", () => {
       if (transition === "late RECONNECTING") {
         hoisted.client.emit("sync.state", "RECONNECTING", "SYNCING", new Error("late reconnect"));
       }
-      expectLastStatus({
-        accountId: "default",
-        healthState: "error",
-        lastError: "sync exploded",
-      });
+      expectFatal("sync exploded");
       await retirement.started;
       if (transition === "shutdown STOPPED") {
         monitor.controller.abort();
         expect(hoisted.client.listenerCount("sync.state")).toBeGreaterThan(0);
         hoisted.client.emit("sync.state", "STOPPED", "SYNCING", undefined);
       }
-      expectLastStatus({
-        accountId: "default",
-        healthState: "error",
-        lastError: "sync exploded",
-      });
+      expectFatal("sync exploded");
 
       retirement.release();
       await rejected;
-      expectLastStatus({
-        accountId: "default",
-        healthState: "error",
-        lastError: "sync exploded",
-      });
+      expectFatal("sync exploded");
     },
   );
 });

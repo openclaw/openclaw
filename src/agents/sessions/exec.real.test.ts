@@ -4,19 +4,11 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { isProcessAlive } from "../../../test/scripts/live-process-fixture.test-support.js";
 import { execCommand } from "./exec.js";
 
 const cleanupPids = new Set<number>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function forceKillPid(pid: number): void {
   if (!isProcessAlive(pid)) {
@@ -44,6 +36,17 @@ describe("execCommand process-tree cleanup", () => {
     }
     cleanupPids.clear();
   });
+
+  it.each([2 ** 31, Number.MAX_SAFE_INTEGER])(
+    "allows a command to finish with a long timeout of %s ms",
+    async (timeout) => {
+      await expect(
+        execCommand(process.execPath, ["-e", 'process.stdout.write("completed")'], process.cwd(), {
+          timeout,
+        }),
+      ).resolves.toMatchObject({ stdout: "completed", stderr: "", code: 0, killed: false });
+    },
+  );
 
   it("does not resolve a timeout while a SIGTERM-resistant descendant is alive", async ({
     signal,

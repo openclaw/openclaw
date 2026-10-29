@@ -2,6 +2,10 @@ import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
   clearAgentRunContext,
@@ -36,6 +40,7 @@ import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { publishTranscriptFields } from "./session-row-projection-record.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
+import * as sharingRead from "./session-sharing-read.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
@@ -782,3 +787,57 @@ describe("trusted plugin session facts", () => {
       }
     }));
 });
+
+it("filters exact and retained invited facts with current membership after preparation", () =>
+  withFixture(async (fixture, { read, selected, getProjection }) => {
+    const original = sharingRead.prepareProjectedSessionSharing;
+    const policy = vi
+      .spyOn(sharingRead, "prepareProjectedSessionSharing")
+      .mockImplementation((params) => ({
+        ...original(params),
+        // Configuration activation is a later stack slice, not part of this regression.
+        ...sharingRead.prepareSessionSharing(params, {
+          aliases: new Set([params.client?.authenticatedUserProfile?.profileId ?? ""]),
+          sessionCap: "invited",
+          isMember: params.isMember,
+        }),
+      }));
+    onTestFinished(() => policy.mockRestore());
+    const invited = "agent:main:invited-facts";
+    const hidden = "agent:main:nonmember-facts";
+    for (const key of [invited, hidden]) {
+      await fixture.seed(key, "different-owner", {
+        label: "Protected facts",
+        visibility: "shared",
+      });
+    }
+    const scope = { agentId: "main", sessionKey: invited };
+    addSessionMember(scope, { identityId: fixture.profile.id, addedBy: "different-owner" });
+    const keys = [invited, hidden];
+    expect((await read(keys)).sessions.map((row) => row.key)).toEqual([invited]);
+    expect(
+      (await selected()).sessions.filter((row) => keys.includes(row.key)).map((row) => row.key),
+    ).toEqual([invited]);
+    const projection = getProjection();
+    const prepare = projection.withPreparedExactRows.bind(projection);
+    let revoke = true;
+    const preparation = vi
+      .spyOn(projection, "withPreparedExactRows")
+      .mockImplementation((queries, consume, options) =>
+        prepare(
+          (config) => {
+            const targets = queries(config);
+            if (revoke) {
+              revoke = false;
+              removeSessionMember(scope, fixture.profile.id);
+            }
+            return targets;
+          },
+          consume,
+          options,
+        ),
+      );
+    onTestFinished(() => preparation.mockRestore());
+    expect((await read(keys)).sessions).toEqual([]);
+    expect((await selected()).sessions.filter((row) => keys.includes(row.key))).toEqual([]);
+  }));

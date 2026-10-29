@@ -167,6 +167,7 @@ async function startGatewayServerWithSdkHost(
             releasePostReadyWork();
             await runGatewayCloseSteps({
               owner: gatewayKernel,
+              exitAfterClose: optsLocal?.exitAfterClose,
               close: await preparedClose,
               disposeTerminalSessions: () => terminalSessions.disposeAll(),
               runStopHooks: async () => {

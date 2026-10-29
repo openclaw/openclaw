@@ -525,15 +525,14 @@ vi.mock("../../sessions/transcript-events.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../agents/sandbox/context.js", async () => {
-  const original = await vi.importActual<typeof import("../../agents/sandbox/context.js")>(
-    "../../agents/sandbox/context.js",
-  );
-  return {
-    ...original,
-    ensureSandboxWorkspaceForSession: vi.fn(async () => mockState.sandboxWorkspace),
-  };
-});
+vi.mock("../../agents/sandbox/context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/sandbox/context.js")>()),
+  prepareSandboxWorkspaceForSession: vi.fn(async () =>
+    mockState.sandboxWorkspace
+      ? { workspace: mockState.sandboxWorkspace, assertCurrent() {}, [Symbol.dispose]() {} }
+      : null,
+  ),
+}));
 
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
   SANDBOX_MEDIA_MAX_BYTES: 50 * 1024 * 1024,
@@ -2198,10 +2197,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-managed-media-partial-failure-");
     const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
     const mirrorKey = "idem-managed-media-partial-failure:internal-source-reply:0";
-    await appendSourceReplyMirrorEntry({
-      idempotencyKey: mirrorKey,
-      text: `Artifacts ready\nMEDIA:${mediaUrl}`,
-    });
+    mockState.onAfterAgentRunStart = () =>
+      appendSourceReplyMirrorEntry({
+        idempotencyKey: mirrorKey,
+        text: `Artifacts ready\nMEDIA:${mediaUrl}`,
+      });
     const sourceReply = createMainSourceReply({
       idempotencyKey: mirrorKey,
       text: "Artifacts ready\n⚠️ report.7z: Delivery failed. Try sending this file again.",
@@ -2262,15 +2262,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: `idem-plugin-binding-${kind}`,
       expectBroadcast: false,
     });
-    if (kind === "blocked") {
-      expect(mockState.emittedTranscriptUpdates).toHaveLength(0);
-    } else {
-      expect(
-        mockState.emittedTranscriptUpdates.some(
-          (update) => getMessage(update)?.role === "assistant",
-        ),
-      ).toBe(false);
-    }
+    expect(findAssistantTranscriptUpdates()).toEqual([]);
+    expectUserUpdateIdentity(findUserUpdate());
     expect(context.logGateway.warn).toHaveBeenCalledWith(
       `webchat transcript append skipped: ${warning}`,
     );
@@ -2927,11 +2920,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           updatedAt,
           status: "done",
         });
-        await appendSourceReplyMirrorEntry({
-          idempotencyKey: mirrorIdempotencyKey,
-          openclawDelivery: { audioAsVoice: true, replyToId: "stale-reply-id" },
-          text: "Codex source reply with media",
-        });
+        mockState.onAfterAgentRunStart = () =>
+          appendSourceReplyMirrorEntry({
+            idempotencyKey: mirrorIdempotencyKey,
+            openclawDelivery: { audioAsVoice: true, replyToId: "stale-reply-id" },
+            text: "Codex source reply with media",
+          });
         const sourceReply = createMainSourceReply({
           idempotencyKey: mirrorIdempotencyKey,
           text: "Codex source reply with media",
@@ -2976,7 +2970,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           const entry = readSqliteMainSessionEntry();
           expect(entry?.updatedAt).toBeGreaterThanOrEqual(rewrittenAt);
           expect(entry?.updatedAt).toBeGreaterThan(updatedAt);
-          expect(entry?.status).toBe("done");
+          expect(entry?.status).toBeUndefined();
+          expect(entry?.lifecycleRunId).toBe("idem-agent-source-reply-media");
+          expect(entry?.startedAt).toBe(rewrittenAt);
         } finally {
           vi.useRealTimers();
         }
@@ -3000,6 +2996,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     appendSourceReplyMirrorEntry,
     createMainSourceReply,
     setAgentRunReplies,
+    onAfterAgentRunStart: (run) => {
+      mockState.onAfterAgentRunStart = run;
+    },
     send: async (params) => {
       const { context, send } = createChatRequestFixture();
       const broadcast = await send(params);
@@ -3161,22 +3160,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const mirrorIdempotencyKey = `${runId}:internal-source-reply:0`;
       const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
       mockState.triggerAgentRunStart = agentStarted;
-      if (outcome) {
-        await appendTestTranscriptMessage({
-          eventId: `${runId}:user`,
-          role: "user",
-          content: "please keep working",
-          now: 0,
-          parentId: null,
-        });
-        mockState.triggerUserMessagePersisted = true;
-      }
       if (sourceReply) {
         writeSavedPng(fixtureDir, "source-terminal.png");
-        await appendSourceReplyMirrorEntry({
-          idempotencyKey: mirrorIdempotencyKey,
-          text: replyText,
-        });
+        mockState.onAfterAgentRunStart = () =>
+          appendSourceReplyMirrorEntry({
+            idempotencyKey: mirrorIdempotencyKey,
+            text: replyText,
+          });
         mockState.dispatchedReplies = [
           createMainSourceReply({
             idempotencyKey: mirrorIdempotencyKey,
@@ -4231,25 +4221,33 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const userTurnInput = mockState.lastDispatchUserTurnInput as
         | { content?: unknown }
         | undefined;
-      expect(findUserUpdate()).toBeUndefined();
+      const userUpdate = findUserUpdate();
+      expectUserUpdateIdentity(userUpdate);
+      const committedUser = getMessage(userUpdate);
+      expect(committedUser).toMatchObject({
+        content: "edit both",
+        idempotencyKey: "idem-user-transcript-offloaded:user",
+      });
       expect(userTurnInput?.content).toBe("edit both");
-      expectClaimOnlyTranscriptMedia(
-        userTurnInput,
-        [
-          expect.objectContaining({
-            url: "media://inbound/chat-send-inline.png",
-            contentType: "image/png",
-            kind: "image",
-          }),
-          expect.objectContaining({
-            url: "media://inbound/offloaded-big.png",
-            contentType: "image/png",
-            kind: "image",
-          }),
-        ],
-        ["/tmp/chat-send-inline.png", "/tmp/offloaded-big.png"],
-      );
-      expect(userTurnInput?.content).not.toContain("media://");
+      for (const message of [userTurnInput, committedUser]) {
+        expectClaimOnlyTranscriptMedia(
+          message,
+          [
+            expect.objectContaining({
+              url: "media://inbound/chat-send-inline.png",
+              contentType: "image/png",
+              kind: "image",
+            }),
+            expect.objectContaining({
+              url: "media://inbound/offloaded-big.png",
+              contentType: "image/png",
+              kind: "image",
+            }),
+          ],
+          ["/tmp/chat-send-inline.png", "/tmp/offloaded-big.png"],
+        );
+        expect(message?.content).not.toContain("media://");
+      }
     });
   });
 
@@ -4283,6 +4281,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         createExpectedAcpUserTurn({
           content: "bridge image",
           idempotencyKey: "idem-user-transcript-acp-images:user",
+          provenance: { kind: "external_user" },
         }),
       );
     });

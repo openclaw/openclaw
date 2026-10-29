@@ -1,8 +1,8 @@
-import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import { hasSqliteDatabaseSchemaAdmissionForPath } from "../../infra/sqlite-database-admission.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runWithAgentDatabaseReadAdmissionTurn } from "../../state/agent-database-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
@@ -211,7 +211,7 @@ export function retainSessionHistoryWorkerDatabase(
             );
             timer.unref?.();
             try {
-              return await runWithSqliteDatabaseAdmissionTurn(
+              return await runWithAgentDatabaseReadAdmissionTurn(
                 [readOptions.path],
                 () => {
                   // The pool owns dispatch and host-response budgets after admission.
@@ -220,6 +220,7 @@ export function retainSessionHistoryWorkerDatabase(
                 },
                 [],
                 admissionSignal,
+                options,
               );
             } finally {
               clearTimeout(timer);
@@ -236,7 +237,7 @@ export function retainSessionHistoryWorkerDatabase(
               database,
               owned.nativeLanes.has(requestLane) ? "retained" : "admission",
             );
-            return runWithSqliteDatabaseAdmissionTurn(
+            return runWithAgentDatabaseReadAdmissionTurn(
               [database.path],
               () =>
                 requestLane.pool.run(
@@ -297,6 +298,7 @@ export function retainSessionHistoryWorkerDatabase(
                 ),
               [],
               requestSignal,
+              options,
             );
           });
           await retirement;

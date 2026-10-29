@@ -22,7 +22,6 @@ import type {
   GatewayServiceCommandConfig,
   GatewayServiceCommandSnapshot,
   GatewayServiceEnv,
-  GatewayServiceEnvironmentValueSource,
   GatewayServiceManagedOverrides,
   GatewayServiceReadOptions,
   SystemdServiceReadTarget,
@@ -30,11 +29,11 @@ import type {
 import { systemdUnitCallArgs } from "./systemd-bus-query.js";
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
 import {
+  buildSystemdCommandSnapshot,
   expandSystemdSpecifier,
   parseSystemdEnvironmentFileSpec,
   resolveSystemdEnvironmentFiles,
   type SystemdEnvironmentFileSpec,
-  type SystemdEnvironmentFilesParams,
 } from "./systemd-environment-files.js";
 import { assertSystemdServiceAccount } from "./systemd-service-identity.js";
 import {
@@ -46,13 +45,6 @@ import {
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
-
-type SystemdCommandSnapshotParams = SystemdEnvironmentFilesParams & {
-  programArguments: string[];
-  workingDirectory: string;
-  inlineEnvironment: Record<string, string>;
-  unsetEnvironment: string[];
-};
 
 export function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
@@ -91,33 +83,6 @@ const UNKNOWN_SYSTEMD_OVERRIDES = {
   environment: true,
 } satisfies GatewayServiceManagedOverrides;
 
-async function buildSystemdCommandSnapshot(
-  params: SystemdCommandSnapshotParams,
-): Promise<GatewayServiceCommandSnapshot> {
-  const fileEnvironment = await resolveSystemdEnvironmentFiles(params);
-  const environment = { ...params.inlineEnvironment, ...fileEnvironment };
-  const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> =
-    Object.fromEntries(Object.keys(params.inlineEnvironment).map((key) => [key, "inline"]));
-  for (const key of Object.keys(fileEnvironment)) {
-    environmentValueSources[key] = Object.hasOwn(params.inlineEnvironment, key)
-      ? "inline-and-file"
-      : "file";
-  }
-  for (const assignment of params.unsetEnvironment) {
-    const separator = assignment.indexOf("=");
-    const key = separator < 0 ? assignment : assignment.slice(0, separator);
-    if (separator < 0 || environment[key] === assignment.slice(separator + 1)) {
-      delete environment[key];
-      delete environmentValueSources[key];
-    }
-  }
-  return {
-    programArguments: params.programArguments,
-    ...(params.workingDirectory ? { workingDirectory: params.workingDirectory } : {}),
-    ...(Object.keys(environment).length > 0 ? { environment, environmentValueSources } : {}),
-  };
-}
-
 async function readSystemdManagerCommand(
   env: GatewayServiceEnv,
   localDefinition: GatewayServiceCommandSnapshot | null,
@@ -138,6 +103,7 @@ async function readSystemdManagerCommand(
     opts,
     unavailable,
   );
+  let effectiveExecutable: string | undefined;
   try {
     const assertAbsentWithoutLoading = async (): Promise<null> => {
       // Missing loaded objects do not prove an authored/native unit definition is absent.
@@ -351,6 +317,7 @@ async function readSystemdManagerCommand(
     ) {
       snapshot.environment = { ...snapshot.environment, HOME: account.homedir };
     }
+    effectiveExecutable = execution[0];
     return {
       ...snapshot,
       ...(managedDefinition && managedOverrides ? { managedDefinition, managedOverrides } : {}),
@@ -360,6 +327,9 @@ async function readSystemdManagerCommand(
     };
   } finally {
     await close();
+    if (effectiveExecutable) {
+      opts?.onEffectiveExecutable?.(effectiveExecutable);
+    }
   }
 }
 

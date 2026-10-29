@@ -1,8 +1,6 @@
 import { renameSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
@@ -53,7 +51,10 @@ import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import { ready } from "./session-row-projection-record.js";
 import { withAcceptedSuffix } from "./session-row-projection.accepted-facts.test-support.js";
 import { watchRowFacts } from "./session-row-projection.read-fixture.test-support.js";
-import { withSessionRowProjectionState } from "./session-row-projection.test-support.js";
+import {
+  acpProjectionMeta,
+  withSessionRowProjectionState,
+} from "./session-row-projection.test-support.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import * as rowInputs from "./session-utils-row.js";
 
@@ -105,92 +106,6 @@ function sharedFactReads(reads: {
 }) {
   return reads.mock.calls.filter(([, command]) => command.type === "sessionRows.sharedFacts");
 }
-
-it("keeps Board and shared facts while transcript receipts advance summary freshness", async () => {
-  await withSessionRowProjectionState(async (create) => {
-    const cfg = {
-      agents: {
-        entries: { main: {} },
-        defaults: { utilityModel: "unit-test/small" },
-      },
-    };
-    setRuntimeConfigSnapshot(cfg);
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:acp:row-receipts",
-      sessionId: "row-receipts",
-    };
-    const entry: InternalSessionEntry = {
-      sessionId: scope.sessionId,
-      lifecycleRevision: "row-receipts-life",
-      updatedAt: 1,
-    };
-    replaceSessionEntrySync(scope, entry);
-    // Cold transcript initialization may acquire row facts before warmed receipt reuse begins.
-    await writeTranscript(scope, "user", "Initial transcript", { touchSessionEntry: false });
-    const acp: SessionAcpMeta = {
-      backend: "receipt-backend",
-      agent: "main",
-      runtimeSessionName: "receipt-session",
-      mode: "persistent",
-      state: "idle",
-      lastActivityAt: 1,
-    };
-    seedCanonicalAcpSessionMeta({
-      ...scope,
-      lifecycleRevision: entry.lifecycleRevision,
-      meta: acp,
-    });
-    await putBoard(scope.sessionKey, "<p>Current</p>");
-    const projection = await create({ cfg, modelCatalog: [] });
-    const query = { agentId: scope.agentId, key: scope.sessionKey };
-    await projection.ensureMaterialized();
-    const rowReads: string[] = [];
-    watchRowFacts((owner) => (input) => {
-      rowReads.push(...input.sessionKeys);
-      return owner.readRowFacts(input);
-    });
-    const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    await writeTranscript(scope, "user", "First input", { touchSessionEntry: false });
-    await projection.ensureMaterialized();
-    const watermark = readSessionTranscriptWatermark(scope);
-    replaceSessionEntrySync(scope, {
-      ...entry,
-      label: "Published label",
-      activitySummary: activitySummary(scope.sessionId, "First input", watermark, 2, {
-        lifecycleRevision: entry.lifecycleRevision,
-        coveredMessages: 2,
-        totalMessages: 2,
-      }),
-    });
-    await projection.ensureMaterialized();
-    expect(projection.snapshot(query).row).toMatchObject({
-      label: "Published label",
-      activitySummary: { text: "First input", state: "current" },
-    });
-    emitSessionTranscriptUpdate({ target: scope });
-    await projection.ensureMaterialized();
-    expect(projection.snapshot(query).row?.activitySummary?.state).toBe("current");
-    expect(rowReads).toEqual([]);
-    await writeTranscript(scope, "assistant", "Second message", { touchSessionEntry: false });
-    await projection.ensureMaterialized();
-    expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
-    expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
-      hasBoard: true,
-      acpMeta: acp,
-      activitySummaryWatermark: readSessionTranscriptWatermark(scope),
-    });
-    await writeTranscript(scope, "assistant", "Combined entry and transcript");
-    await projection.ensureMaterialized();
-    expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
-    expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
-      hasBoard: true,
-      activitySummaryWatermark: readSessionTranscriptWatermark(scope),
-    });
-    expect(rowReads).toEqual([]);
-    expect(sharedFactReads(sharedReads)).toEqual([]);
-  }, true);
-});
 
 it("refreshes activity state independently of queued materialization and category preparation", async () => {
   await withAcceptedSuffix(async ({ projection, suffix, scope, query, entry, reads, resume }) => {
@@ -265,14 +180,7 @@ it.each([
   "observer adapter",
   "transcript publication",
 ] as const)("carries complete accepted ACP facts across a yield: %s", async (change) => {
-  const initial: SessionAcpMeta = {
-    backend: "accepted-acp-backend",
-    agent: "main",
-    runtimeSessionName: "accepted-1",
-    mode: "persistent",
-    state: "idle",
-    lastActivityAt: 1,
-  };
+  const initial = acpProjectionMeta("accepted-acp-backend", "accepted-1");
   await withAcceptedSuffix(
     async ({ projection, suffix, scope, query, entry, reads, resume }) => {
       const sharing =
@@ -741,43 +649,81 @@ it("lets keyed reads supersede accepted archive facts after a same-generation pu
 });
 
 it("replaces accepted entry, board, and watermark facts through a worker receipt", async () => {
-  await withAcceptedSuffix(async ({ projection, suffix, scope, query, entry, reads, resume }) => {
-    expect(suffix.pendingDatabaseFacts?.hasBoard).toBe(false);
-    await putBoard(query.key, "<p>current</p>");
-    await writeTranscript({ ...scope, sessionId: entry.sessionId }, "user", "Current transcript", {
-      config: projection.state.cfg,
-      touchSessionEntry: false,
-      updateMode: "none",
-    });
-    const watermark = readSessionTranscriptWatermark({ ...scope, sessionId: entry.sessionId });
-    const committedEntry: InternalSessionEntry = {
-      ...entry,
-      label: "committed value",
-      activitySummary: activitySummary(entry.sessionId, "Current summary", watermark, 3),
-    };
-    await applySessionEntryExactReplacements({
-      agentId: scope.agentId,
-      storePath: suffix.storeTarget.storePath,
-      sessionKeys: [scope.sessionKey],
-      update: () => ({
-        result: undefined,
-        replacements: [{ sessionKey: scope.sessionKey, entry: committedEntry }],
-      }),
-    });
-    await resume();
-    expect(reads).toHaveLength(1);
-    expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
-      sessionKey: query.key,
-      entry: expect.objectContaining({ label: "committed value" }),
-      hasBoard: true,
-      activitySummaryWatermark: watermark,
-    });
-    expect(projection.describe(query)?.hasBoard).toBe(true);
-    expect(projection.snapshot(query).row).toMatchObject({
-      label: "committed value",
-      activitySummary: { text: "Current summary", state: "current" },
-    });
-  });
+  const acp = acpProjectionMeta("receipt-backend", "receipt-session");
+  await withAcceptedSuffix(
+    async ({ projection, suffix, scope, query, entry, reads, resume }) => {
+      const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      expect(suffix.pendingDatabaseFacts?.hasBoard).toBe(false);
+      await putBoard(query.key, "<p>current</p>");
+      await writeTranscript(
+        { ...scope, sessionId: entry.sessionId },
+        "user",
+        "Current transcript",
+        {
+          config: projection.state.cfg,
+          touchSessionEntry: false,
+          updateMode: "none",
+        },
+      );
+      const watermark = readSessionTranscriptWatermark({ ...scope, sessionId: entry.sessionId });
+      const committedEntry: InternalSessionEntry = {
+        ...entry,
+        label: "committed value",
+        activitySummary: activitySummary(entry.sessionId, "Current summary", watermark, 3, {
+          lifecycleRevision: entry.lifecycleRevision,
+        }),
+      };
+      await applySessionEntryExactReplacements({
+        agentId: scope.agentId,
+        storePath: suffix.storeTarget.storePath,
+        sessionKeys: [scope.sessionKey],
+        update: () => ({
+          result: undefined,
+          replacements: [{ sessionKey: scope.sessionKey, entry: committedEntry }],
+        }),
+      });
+      await resume();
+      expect(reads).toHaveLength(1);
+      expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
+        sessionKey: query.key,
+        entry: expect.objectContaining({ label: "committed value" }),
+        hasBoard: true,
+        activitySummaryWatermark: watermark,
+      });
+      expect(projection.describe(query)?.hasBoard).toBe(true);
+      expect(projection.snapshot(query).row).toMatchObject({
+        label: "committed value",
+        activitySummary: { text: "Current summary", state: "current" },
+      });
+      const transcriptScope = { ...scope, sessionId: entry.sessionId };
+      emitSessionTranscriptUpdate({ target: transcriptScope });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("current");
+      expect(projection.describe(query)?.pendingDatabaseFacts).toBeUndefined();
+      await writeTranscript(transcriptScope, "assistant", "Transcript-only update", {
+        touchSessionEntry: false,
+      });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+      expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
+        hasBoard: true,
+        acpMeta: acp,
+        activitySummaryWatermark: readSessionTranscriptWatermark(transcriptScope),
+      });
+      expect(reads).toHaveLength(1);
+      expect(sharedFactReads(sharedReads)).toEqual([]);
+      await writeTranscript(transcriptScope, "assistant", "Combined entry and transcript");
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+      expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
+        hasBoard: true,
+        activitySummaryWatermark: readSessionTranscriptWatermark(transcriptScope),
+      });
+      expect(reads).toHaveLength(1);
+      expect(sharedFactReads(sharedReads)).toEqual([]);
+    },
+    { acpMeta: acp },
+  );
 });
 
 it("discards invalidated presentation facts after custody release", async () => {
@@ -909,11 +855,9 @@ it.each(["runtime activity", "membership revocation"] as const)(
   },
 );
 
-it.each(["delete", "dispose", "store replacement"] as const)(
+it.each(["delete", "store replacement"] as const)(
   "does not render the accepted suffix after %s",
   async (change) => {
-    let pending: WeakRef<object> | undefined;
-    let control: WeakRef<object> | undefined;
     await withAcceptedSuffix(
       async ({ projection, suffix, scope, query, replacementPath, resume }) => {
         if (change === "delete") {
@@ -930,10 +874,6 @@ it.each(["delete", "dispose", "store replacement"] as const)(
           expect(suffix.pendingDatabaseFacts).toBe(accepted);
           renameSync(replacementPath, storePath);
           registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
-        } else {
-          pending = new WeakRef(suffix.pendingDatabaseFacts!);
-          control = new WeakRef({});
-          projection.dispose();
         }
         await resume();
         expect(projection.isCurrent(suffix)).toBe(false);
@@ -943,14 +883,6 @@ it.each(["delete", "dispose", "store replacement"] as const)(
       },
       { replacement: change === "store replacement" },
     );
-    if (change === "dispose") {
-      // Restoring spies does not clear their recorded fixture arguments or results.
-      vi.clearAllMocks();
-      await nextTurn();
-      queryObjects(WeakRef);
-      expect(control?.deref()).toBeUndefined();
-      expect(pending?.deref()).toBeUndefined();
-    }
   },
 );
 

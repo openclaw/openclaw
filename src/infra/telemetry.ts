@@ -19,6 +19,11 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import { pruneMapToMaxSize } from "./map-size.js";
+import {
+  INSTALLATION_COUNT_HEADER,
+  INSTALLATION_COUNT_USER_AGENT,
+  parseInstallationCountCapability,
+} from "./telemetry-installation-count.js";
 import type { TelemetryWorkerOperations } from "./telemetry-store.worker.js";
 import type { SuccessfulTelemetryState, TelemetryState } from "./telemetry-worker-contract.js";
 
@@ -66,7 +71,7 @@ const TelemetryResponseSchema = z.object({
 });
 
 let lastFailedAttempt: { at: number; endpoint: string; stateDirectory?: string } | undefined;
-let inFlightUpdate: Promise<TelemetryUpdate | null> | undefined;
+const inFlightUpdates = new Map<string, Promise<TelemetryUpdate | null>>();
 const pendingSuccesses = new Map<string, SuccessfulTelemetryState>();
 
 type TelemetryStorage = { databasePath: string; worker?: OpenClawStateWorkerContext };
@@ -84,23 +89,79 @@ function captureTelemetryStorage(): TelemetryStorage {
 /**
  * CI jobs are not installs. Left unchecked they outnumber operators by orders of
  * magnitude and make version and platform counts meaningless, and someone else's
- * pipeline should not report to us on every job either. A configured endpoint
- * means the caller is deliberately exercising this path, so it still reports.
+ * pipeline should not report to us on every job either. Custom test receivers
+ * can exercise the path in CI, but explicitly naming production is not an opt-in.
  */
-function isAutomatedEnvironment(): boolean {
-  if (process.env.OPENCLAW_TELEMETRY_ENDPOINT?.trim()) {
+function isAutomatedEnvironment(endpoint = resolveTelemetryEndpoint()): boolean {
+  if (!isTruthyEnvValue(process.env.CI)) {
     return false;
   }
-  return isTruthyEnvValue(process.env.CI);
+  try {
+    return (
+      new URL(endpoint).hostname.replace(/\.$/, "") === new URL(DEFAULT_TELEMETRY_ENDPOINT).hostname
+    );
+  } catch {
+    return true;
+  }
 }
 
-function isUpdateCheckDisabled(config: OpenClawConfig): boolean {
+function isUpdateCheckDisabled(
+  config: OpenClawConfig,
+  endpoint = resolveTelemetryEndpoint(),
+): boolean {
   return (
     config.update?.checkOnStart === false ||
     isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE) ||
-    isAutomatedEnvironment() ||
+    isAutomatedEnvironment(endpoint) ||
     resolveIsNixMode()
   );
+}
+
+function isInstallationCountEnabled(config: OpenClawConfig): boolean {
+  return (
+    !isDoNotTrackEnabled() &&
+    (config.telemetry?.enabled === true ||
+      (config.telemetry?.enabled !== false && !config.telemetry?.consentedAt))
+  );
+}
+
+async function reportInstallationCount(
+  context: TelemetryStorage,
+  endpoint: string,
+  day: number,
+  getConfig: () => OpenClawConfig,
+): Promise<void> {
+  try {
+    const config = getConfig();
+    if (
+      !context.worker ||
+      isUpdateCheckDisabled(config, endpoint) ||
+      !isInstallationCountEnabled(config)
+    ) {
+      return;
+    }
+    const count = await runOpenClawStateWorkerOperation(context.worker, (scope) =>
+      scope.execute({ type: "telemetry.claimInstallationCount", input: { endpoint, day } }),
+    );
+    const currentConfig = getConfig();
+    if (
+      count === null ||
+      isUpdateCheckDisabled(currentConfig, endpoint) ||
+      !isInstallationCountEnabled(currentConfig)
+    ) {
+      return;
+    }
+    // This independent, payload-free request cannot enter the receiver's raw update analytics.
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "User-Agent": INSTALLATION_COUNT_USER_AGENT, [INSTALLATION_COUNT_HEADER]: count },
+      redirect: "error",
+      signal: AbortSignal.timeout(TELEMETRY_TIMEOUT_MS),
+    });
+    await response.body?.cancel();
+  } catch {
+    // A lost count must never discard a valid version response or retry an ambiguous attempt.
+  }
 }
 
 function isDoNotTrackEnabled(): boolean {
@@ -175,6 +236,7 @@ export async function resolveTelemetryStatus(config: OpenClawConfig): Promise<{
   reason: TelemetryStatusReason;
   endpoint: string;
   lastPingAt?: number;
+  installationCountEnabled: boolean;
 }> {
   let reason: TelemetryStatusReason;
   if (isAutomatedEnvironment()) {
@@ -198,6 +260,8 @@ export async function resolveTelemetryStatus(config: OpenClawConfig): Promise<{
     reason,
     endpoint,
     ...(lastPingAt === undefined ? {} : { lastPingAt }),
+    installationCountEnabled:
+      !isUpdateCheckDisabled(config, endpoint) && isInstallationCountEnabled(config),
   };
 }
 
@@ -279,12 +343,16 @@ export async function checkTelemetryUpdate(
     return null;
   }
 
-  if (inFlightUpdate) {
-    return inFlightUpdate;
-  }
   const endpoint = resolveTelemetryEndpoint();
   const context = captureTelemetryStorage();
-  const pendingKey = JSON.stringify([endpoint, context.databasePath]);
+  const pendingKey = JSON.stringify([
+    endpoint,
+    context.worker?.admission.coordinationKey ?? context.databasePath,
+  ]);
+  const inFlight = inFlightUpdates.get(pendingKey);
+  if (inFlight) {
+    return inFlight;
+  }
   const nowMs = Date.now();
   const stateDirectory = process.env.OPENCLAW_STATE_DIR;
   const check = async (): Promise<TelemetryUpdate | null> => {
@@ -315,7 +383,12 @@ export async function checkTelemetryUpdate(
     }
 
     try {
-      const featureStatsEnabled = config.telemetry?.enabled === true && !isDoNotTrackEnabled();
+      const dispatchConfig = getConfig();
+      if (isUpdateCheckDisabled(dispatchConfig, endpoint)) {
+        return cached;
+      }
+      const featureStatsEnabled =
+        dispatchConfig.telemetry?.enabled === true && !isDoNotTrackEnabled();
       const headers: Record<string, string> = {
         "User-Agent": buildTelemetryUserAgent(),
       };
@@ -326,11 +399,11 @@ export async function checkTelemetryUpdate(
       if (featureStatsEnabled) {
         headers["Content-Type"] = "application/json";
         init.body = JSON.stringify(
-          await prepareTelemetryPayload(config, { surface: "gateway" }, context),
+          await prepareTelemetryPayload(dispatchConfig, { surface: "gateway" }, context),
         );
       }
       const currentConfig = getConfig();
-      if (isUpdateCheckDisabled(currentConfig)) {
+      if (isUpdateCheckDisabled(currentConfig, endpoint)) {
         return cached;
       }
       if (
@@ -342,8 +415,13 @@ export async function checkTelemetryUpdate(
         delete init.body;
       }
       init.signal = AbortSignal.timeout(TELEMETRY_TIMEOUT_MS);
+      // A CI test receiver must not forward update or feature reports to production.
+      init.redirect = isTruthyEnvValue(process.env.CI) ? "error" : "follow";
       const response = await fetch(endpoint, init);
       if (response.status === 200) {
+        const countDay = parseInstallationCountCapability(
+          response.headers.get(INSTALLATION_COUNT_HEADER),
+        );
         const parsed = TelemetryResponseSchema.parse(
           await readProviderJsonResponse(response, "Telemetry update response"),
         );
@@ -358,6 +436,9 @@ export async function checkTelemetryUpdate(
           context,
         );
         lastFailedAttempt = undefined;
+        if (countDay !== null && !response.redirected) {
+          await reportInstallationCount(context, endpoint, countDay, getConfig);
+        }
         return {
           version: persisted.latestVersion,
           ...(persisted.note ? { note: persisted.note } : {}),
@@ -370,9 +451,10 @@ export async function checkTelemetryUpdate(
     return cached;
   };
 
-  // Concurrent callers share one check, including its cached result.
-  inFlightUpdate = check().finally(() => {
-    inFlightUpdate = undefined;
+  // Only callers for the same endpoint and physical installation share a check.
+  const checking = check().finally(() => {
+    inFlightUpdates.delete(pendingKey);
   });
-  return inFlightUpdate;
+  inFlightUpdates.set(pendingKey, checking);
+  return checking;
 }

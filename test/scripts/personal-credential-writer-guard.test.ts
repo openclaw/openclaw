@@ -336,10 +336,10 @@ const lifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
 const sharedPublication = "src/gateway/github-publication-store.worker.ts";
 const publicationWorker = "src/state/github-publication.worker.ts";
 
-it("bounds the offline startup publication fixture to one reviewed insert and authority removal", () => {
+it("bounds the offline startup publication fixture to reviewed receipts and authority removal", () => {
   const file = "scripts/bench-gateway-startup.ts";
   const statement =
-    "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id = 'startup-publication'";
+    "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id IN ('startup-publication', 'startup-publication-0', 'startup-publication-1', 'startup-publication-2', 'startup-publication-3')";
   const insert = "insertGitHubPublicationRequest(db, request);";
   const update = `db.prepare(${JSON.stringify(statement)}).run();`;
   const sources = (body: string, caller = "seedTeamBootPublication", sourceFile = file) => ({
@@ -371,7 +371,10 @@ it("bounds the offline startup publication fixture to one reviewed insert and au
     `${statement}; ${statement}`,
     statement.replace("NULL", "'{}'"),
     statement.replace("publication_kind = 'shared' AND ", ""),
-    statement.replace(" AND request_id = 'startup-publication'", ""),
+    statement.replace(
+      " AND request_id IN ('startup-publication', 'startup-publication-0', 'startup-publication-1', 'startup-publication-2', 'startup-publication-3')",
+      "",
+    ),
     statement.replace("'startup-publication'", "'another-request'"),
   ]) {
     expect(inspect(sources(`${insert} db.prepare(${JSON.stringify(sql)}).run();`))).toContainEqual(
@@ -720,6 +723,32 @@ it("permits fixed noncredential generic writer keys without granting a caller ex
     machineStateConsumer(
       "const stateKey = 'authProfiles.state';\n        writeConfigMachineState(stateKey, {});",
     ),
+  );
+});
+
+it("permits the audited telemetry count operation without admitting an unreviewed sibling", () => {
+  const file = "src/infra/telemetry-store.worker.ts";
+  const reject = allowedGraph({
+    "src/state/config-machine-state-write.ts": `export function writeConfigMachineStateInDatabase() {}`,
+    [file]: `
+      import { writeConfigMachineStateInDatabase } from '../state/config-machine-state-write.js';
+      function installationCountStateKey(endpoint: string): string {
+        return 'telemetry.installationCount.' + endpoint;
+      }
+      export const telemetryOperations = {
+        'telemetry.claimInstallationCount': (input: { endpoint: string; day: number }) =>
+          runOpenClawStateWriteTransaction(({ db }) => {
+            const key = installationCountStateKey(input.endpoint);
+            writeConfigMachineStateInDatabase(db, key, input.day);
+          }),
+      };
+    `,
+  });
+  reject(
+    file,
+    (original) =>
+      original.replace("telemetry.claimInstallationCount", "telemetry.unreviewedSibling"),
+    "from src/infra/telemetry-store.worker.ts:telemetry.unreviewedSibling",
   );
 });
 

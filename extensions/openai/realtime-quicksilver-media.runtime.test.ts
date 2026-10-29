@@ -7,7 +7,7 @@ import {
 } from "./realtime-quicksilver-audio-buffer.js";
 import { createGatewayHarness } from "./realtime-quicksilver-gateway.test-support.js";
 import { OpenAIQuicksilverAudioPeer } from "./realtime-quicksilver-media.runtime.js";
-import { createCallResponse, FakeSocket } from "./realtime-quicksilver.test-helpers.js";
+import { createCallResponse } from "./realtime-quicksilver.test-helpers.js";
 
 type LibopusModule = typeof import("libopus-wasm");
 type LibopusDecoder = Awaited<ReturnType<LibopusModule["createDecoder"]>>;
@@ -158,12 +158,9 @@ describe("GPT-Live werift audio peer", () => {
     );
     const { bridge, onError } = createGatewayHarness({
       model: "gpt-live-test-canary",
-      voice: "marin",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
       resolveAuth: async () => ({ type: "oauth", token: "oauth-token", accountId: "account-1" }),
       createPeer,
       fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
-      webSocketFactory: () => new FakeSocket(),
     });
     const connection = bridge.connect();
     expect(bridge.connect()).toBe(connection);

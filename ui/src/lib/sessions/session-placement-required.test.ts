@@ -39,6 +39,29 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+it("reads active placement while required policy is pending, but waits for approval to send", async () => {
+  const policy = createDeferred<typeof catalog>();
+  const active = createDeferred<unknown>();
+  const request = vi.fn(async (method: string) =>
+    method === "agents.list"
+      ? policy.promise
+      : method === "sessions.describe"
+        ? active.promise
+        : { runId: "first-turn", status: "started" },
+  );
+  const pending = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "agents.list",
+    "sessions.describe",
+  ]);
+  active.resolve({ session: { placement: { state: "active" } } });
+  await Promise.resolve();
+  expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+  policy.resolve(catalog);
+  expect(await pending).toEqual({ status: "started", messageId: "first-turn" });
+  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+});
+
 it("waits for server-started placement and sends exactly once without dispatch", async () => {
   vi.useFakeTimers();
   let state = "provisioning";
@@ -94,17 +117,25 @@ it.each(["failed", "reclaimed", "local"])(
 it.each([undefined, "replacement"])(
   "does not send or dispatch when the required policy changes to %s",
   async (requiredProfile) => {
-    const request = vi.fn(async () => ({
-      sessionPlacement: {
-        requiredProfile: requiredProfile
-          ? { id: requiredProfile, providerId: "device" }
-          : undefined,
-      },
-    }));
+    const placement = createDeferred<unknown>();
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.describe"
+        ? placement.promise
+        : {
+            sessionPlacement: {
+              requiredProfile: requiredProfile
+                ? { id: requiredProfile, providerId: "device" }
+                : undefined,
+            },
+          },
+    );
     expect(
       await startSessionPlacementInitialTurn(clientWith(request), params, () => true),
     ).toMatchObject({ status: "dispatch-rejected" });
-    expect(request.mock.calls).toHaveLength(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "agents.list",
+      "sessions.describe",
+    ]);
   },
 );
 

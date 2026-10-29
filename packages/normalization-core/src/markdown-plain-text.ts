@@ -11,13 +11,65 @@ export function flattenMarkdownToPlainText(text: string): string {
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/```/g, " ")
     .replace(/`([^`]*)`/g, "$1");
-  return stripInlineLinks(withoutCode)
-    .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm, "")
-    .replace(/(\*{1,2})(?=\S)([\s\S]*?\S)\1/g, "$2")
-    .replace(/(^|[^\p{L}\p{N}])(_{1,2})(?=\S)([\s\S]*?\S)\2(?![\p{L}\p{N}])/gu, "$1$3")
-    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
+  let flattened = stripInlineLinks(withoutCode).replace(
+    /^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm,
+    "",
+  );
+  for (const marker of ["*", "_", "~"] as const) {
+    flattened = stripEmphasis(flattened, marker);
+  }
+  return flattened.replace(/\s+/g, " ").trim();
+}
+
+function stripEmphasis(text: string, marker: "*" | "_" | "~"): string {
+  const widths: readonly (1 | 2)[] = marker === "~" ? [2] : [2, 1];
+  const closers = { 1: 0, 2: 0 };
+  // Failed openers share forward-only closing searches instead of rescanning
+  // the remaining text. Width preference and the earliest close stay unchanged.
+  const findCloser = (width: 1 | 2, start: number): number => {
+    const delimiter = marker.repeat(width);
+    let index = text.indexOf(delimiter, Math.max(start, closers[width]));
+    while (index !== -1) {
+      if (
+        /\S/.test(text.charAt(index - 1)) &&
+        (marker !== "_" || !/^[\p{L}\p{N}]/u.test(text.slice(index + width, index + width + 2)))
+      ) {
+        closers[width] = index;
+        return index;
+      }
+      index = text.indexOf(delimiter, index + 1);
+    }
+    closers[width] = text.length;
+    return -1;
+  };
+  let output = "";
+  let cursor = 0;
+  for (let index = text.indexOf(marker); index !== -1; index = text.indexOf(marker, index + 1)) {
+    const previousWidth = (text.codePointAt(index - 2) ?? 0) > 0xffff ? 2 : 1;
+    // Underscore matching consumes its left boundary; a previous match's
+    // closing marker cannot become that boundary for an adjacent match.
+    if (
+      marker === "_" &&
+      index !== 0 &&
+      (index === cursor || /[\p{L}\p{N}]/u.test(text.slice(index - previousWidth, index)))
+    ) {
+      continue;
+    }
+    for (const width of widths) {
+      const start = index + width;
+      if (!text.startsWith(marker.repeat(width), index) || !/\S/.test(text.charAt(start))) {
+        continue;
+      }
+      const end = findCloser(width, start + 1);
+      if (end !== -1) {
+        output += text.slice(cursor, index) + text.slice(start, end);
+        cursor = end + width;
+        index = cursor - 1;
+        break;
+      }
+    }
+  }
+  return output + text.slice(cursor);
 }
 
 /** CommonMark link syntax only breaks on ASCII; U+00A0 and other Unicode spaces belong to the destination. */
@@ -169,7 +221,13 @@ export function stripInlineLinks(
     if (labelEnd === undefined || destinationEnd === undefined) {
       continue;
     }
-    const isImage = index > cursor && text[index - 1] === "!";
+    let isImage = index > cursor && text[index - 1] === "!";
+    // An odd backslash run escapes the bang, leaving an ordinary link.
+    if (isImage) {
+      for (let backslash = index - 2; backslash >= 0 && text[backslash] === "\\"; backslash -= 1) {
+        isImage = !isImage;
+      }
+    }
     if (!isImage && labelEnd === index + 1) {
       continue;
     }

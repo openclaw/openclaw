@@ -104,6 +104,53 @@ it("renders named scope icons and restores the selected agent avatar", async () 
   expect(trigger.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
 });
 
+it("retains agent row content while selection and roster details change", async () => {
+  const element = await createAgentSelect({
+    options: [
+      { value: "alpha", label: "Alpha", agent: { id: "alpha", identity: { emoji: "🦉" } } },
+      { value: "beta", label: "Beta", agent: { id: "beta", identity: { emoji: "🦊" } } },
+    ],
+  });
+  const alpha = element.querySelector<HTMLElement>('[data-agent-option][value="alpha"]')!;
+  const beta = element.querySelector<HTMLElement>('[data-agent-option][value="beta"]')!;
+  const alphaAvatar = alpha.querySelector(".agent-select__avatar");
+  const betaAvatar = beta.querySelector(".agent-select__avatar");
+  expect(alphaAvatar).not.toBeNull();
+  expect(betaAvatar).not.toBeNull();
+
+  element.value = "beta";
+  await waitForSolid(() => {
+    expect(beta.getAttribute("aria-checked")).toBe("true");
+    expect(alpha.getAttribute("aria-checked")).toBe("false");
+    expect(alpha.querySelector(".agent-select__avatar")).toBe(alphaAvatar);
+    expect(beta.querySelector(".agent-select__avatar")).toBe(betaAvatar);
+  });
+
+  element.options = [
+    {
+      value: "beta",
+      label: "Research",
+      description: "Updated description",
+      badge: "Default",
+      agent: { id: "beta", identity: { emoji: "🐙" } },
+    },
+    { value: "alpha", label: "Alpha", agent: { id: "alpha", identity: { emoji: "🦉" } } },
+  ];
+  await waitForSolid(() => {
+    expect([...element.querySelectorAll("[data-agent-option]")]).toEqual([beta, alpha]);
+    expect(beta.querySelector(".agent-select__option-label")?.textContent).toBe("Research");
+    expect(beta.querySelector(".agent-select__option-description")?.textContent).toBe(
+      "Updated description",
+    );
+    expect(beta.querySelector(".agent-select__badge")?.textContent).toBe("Default");
+    expect(beta.getAttribute("aria-label")).toBe("Research, Updated description, Default");
+    expect(beta.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🐙");
+    expect(alpha.querySelector(".agent-select__avatar")).toBe(alphaAvatar);
+    expect(beta.querySelector(".agent-select__avatar")).toBe(betaAvatar);
+    expect(element.querySelector(".agent-select__label")?.textContent).toBe("Research");
+  });
+});
+
 it("keeps a failed avatar on its fallback until the image changes", async () => {
   const invalidAvatar = "data:image/gif;base64,bm90LWFuLWltYWdl";
   const replacementAvatar = "data:image/png;base64,cmVwbGFjZW1lbnQ=";
@@ -132,12 +179,15 @@ it("keeps a failed avatar on its fallback until the image changes", async () => 
   expect(avatarSrc(element)).toBe(replacementAvatar);
 });
 
-it("does not let a removed option's image error poison its replacement lease", async () => {
+it("retires a missing-option fallback without poisoning its replacement image", async () => {
   const avatar = "data:image/png;base64,cmV0YWluZWQ=";
   const element = await createAvatarSelect(avatar);
   const retired = avatarImage(element, "trigger")!;
   expect(retired.getAttribute("src")).toBe(avatar);
   element.options = options.filter((option) => option.value === "beta");
+  await element.updateComplete;
+  await waitForSolid(() => expect(avatarSrc(element, "trigger")).toBe(avatar));
+
   element.value = "beta";
   await element.updateComplete;
   await waitForSolid(() => expect(avatarImage(element, "trigger")).toBeNull());
@@ -189,7 +239,7 @@ it("keeps both option routes and the selected avatar with token auth", async () 
       expect(avatarSrc(element)).toBe("blob:alpha");
       expect(element.querySelector('[value="beta"] img')?.getAttribute("src")).toBe("blob:beta");
     });
-    expect(avatar?.classList).toContain("is-pending");
+    expect(avatar?.classList).not.toContain("is-pending");
     avatar?.querySelector("img")?.dispatchEvent(new Event("load"));
     await waitForSolid(() => expect(avatar?.classList).not.toContain("is-pending"));
     element.accessibleLabel = "Choose an agent";
@@ -347,17 +397,17 @@ it.each(["fetch", "body"] as const)(
   },
 );
 
-it("fetches a local avatar image without a header when token auth is not active", async () => {
+it("fetches an unknown local avatar without an authorization header", async () => {
   stubAvatarUrls("blob:unauthenticated-avatar");
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok: true,
-    blob: async () => new Blob(["avatar"], { type: "image/png" }),
-  });
-  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+    );
+  vi.stubGlobal("fetch", fetchMock);
   const element = await createAvatarSelect();
-
   await waitForFast(() =>
-    expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
+    expect(fetchMock).toHaveBeenCalledWith(`${location.origin}/avatar/alpha`, {
       credentials: "include",
       signal: expect.any(AbortSignal),
     }),

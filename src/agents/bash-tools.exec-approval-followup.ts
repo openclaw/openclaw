@@ -16,7 +16,7 @@ import {
   readCapturedSessionActorEntry,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
+import { getGatewayLifecycleRuntime } from "../gateway/server-lifecycle-runtime-context.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
@@ -55,7 +55,7 @@ async function callExecApprovalFollowupGateway(
   timeoutMs: number,
   params: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const gatewayRuntime = getGatewayRecoveryRuntime();
+  const gatewayRuntime = getGatewayLifecycleRuntime();
   if (gatewayRuntime) {
     return method === "agent"
       ? await gatewayRuntime.dispatchAgent(

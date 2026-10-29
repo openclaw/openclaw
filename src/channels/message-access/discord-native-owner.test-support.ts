@@ -163,11 +163,8 @@ export async function withDiscordNativeAdminFixture(
     });
     await withTestChannelRegistry(discordPlugin, async () => {
       const fixture = await createFixture(state);
-      try {
-        await test(fixture);
-      } finally {
-        fixture.close();
-      }
+      using _ = { [Symbol.dispose]: () => fixture.close() };
+      await test(fixture);
     });
   });
 }

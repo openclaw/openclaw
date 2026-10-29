@@ -1,6 +1,5 @@
 import { MessagePort, Worker } from "node:worker_threads";
 import {
-  findPersistedAuthProfileCredentialAsync,
   saveAuthProfileStore,
   type AuthProfileStore,
   type OAuthCredential,
@@ -38,7 +37,6 @@ it.each(["shared", "agent"] as const)(
       await state.writeConfig(config);
       const profileId = "openai:token-sharing:authority";
       const agentDir = scope === "agent" ? state.agentDir("fixture") : undefined;
-      const persisted = () => findPersistedAuthProfileCredentialAsync({ profileId, agentDir });
       const credential: OAuthCredential = {
         type: "oauth",
         provider: "openai",
@@ -70,16 +68,10 @@ it.each(["shared", "agent"] as const)(
       });
       const prepared = await auth.resolve(false);
       expect(prepared.token).toBe("synthetic-access");
-      expect(await persisted()).toEqual(credential);
-      expectNoDatabaseWork(() => {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          prepared.assertCurrent();
-        }
-      });
+      expectNoDatabaseWork(prepared.assertCurrent);
 
       const revoked = { ...credential, authFlow: "chatgpt-identity" };
       const fetchImpl = vi.fn(async () => new Response("must not be sent"));
-      const beforeRequest = vi.fn(() => expectNoDatabaseWork(prepared.assertCurrent));
       await expect(
         fetchWithSsrFGuard({
           url: "https://public.example/responses",
@@ -90,12 +82,10 @@ it.each(["shared", "agent"] as const)(
             save({ ...store, profiles: { [profileId]: revoked } });
             return [{ address: "93.184.216.34", family: 4 }];
           },
-          beforeRequest,
+          beforeRequest: () => expectNoDatabaseWork(prepared.assertCurrent),
         }),
       ).rejects.toThrow("subscription sharing is unavailable");
-      expect(beforeRequest).toHaveBeenCalledOnce();
       expect(fetchImpl).not.toHaveBeenCalled();
-      expect(await persisted()).toEqual(revoked);
     });
   },
 );

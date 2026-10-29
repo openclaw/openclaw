@@ -1,12 +1,22 @@
+/**
+ * Worker CPU capture cost, including the live registry snapshot and revision checks.
+ * node --import ./scripts/tsx.mjs scripts/perf/worker-cpu-measure.ts \
+ *   --workers 42 --batches 2000 --yield-ms 0 --output result.json
+ * Use --allocations in a separate pass; --registry-only isolates snapshot preparation.
+ * --retained exercises the lifecycle-thread RPC used by task pools.
+ */
 import assert from "node:assert/strict";
-import { once } from "node:events";
 import { writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import type { Worker } from "node:worker_threads";
+import type { WorkerLifecycle } from "@openclaw/worker-runtime/lifecycle";
 import { createCpuTrackedWorker, getTrackedWorkerCpuSources } from "../../src/infra/worker-cpu.ts";
+import {
+  closeDefaultRetainedNativeWorkerSource,
+  createRetainedNativeWorker,
+} from "../../src/infra/worker-native-lifecycle.ts";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -17,6 +27,8 @@ const { values } = parseArgs({
     "yield-ms": { type: "string", default: "1" },
     "start-at": { type: "string", default: "0" },
     allocations: { type: "boolean", default: false },
+    "registry-only": { type: "boolean", default: false },
+    retained: { type: "boolean", default: false },
     output: { type: "string" },
   },
 });
@@ -32,19 +44,38 @@ writeFileSync(values.output, "", { flag: "wx" });
 if (values.allocations) {
   writeFileSync(`${values.output}.heapprofile`, "", { flag: "wx" });
 }
-const workers: Worker[] = [];
-const sources: ReturnType<typeof getTrackedWorkerCpuSources>["workers"] = [];
+const workers: WorkerLifecycle[] = [];
 const inspector = values.allocations ? new Session() : undefined;
 try {
   for (let index = 0; index < workerCount; index++) {
-    workers.push(createCpuTrackedWorker("setInterval(() => {}, 60_000)", { eval: true }));
-    // The factory registers synchronously; exclude unrelated loader threads.
-    sources.push(getTrackedWorkerCpuSources().workers.at(-1)!);
+    const create = values.retained ? createRetainedNativeWorker : createCpuTrackedWorker;
+    workers.push(
+      create(
+        'require("node:worker_threads").parentPort.postMessage("ready"); setInterval(() => {}, 60_000)',
+        { eval: true, execArgv: [] },
+      ),
+    );
   }
-  await Promise.all(workers.map((worker) => once(worker, "online")));
-  assert.equal(sources.length, workerCount);
-  const sample = () => Promise.all(sources.map((worker) => worker.cpuUsage()));
-  for (let index = 0; index < 100; index++) {
+  await Promise.all(
+    workers.map(
+      (worker) =>
+        new Promise<void>((resolve, reject) => {
+          worker.on("message", () => resolve());
+          worker.on("error", reject);
+        }),
+    ),
+  );
+  const trackedCount = getTrackedWorkerCpuSources().workers.length;
+  assert.ok(trackedCount >= workerCount);
+  const sample = async () => {
+    const { workers: sources, revision, currentRevision } = getTrackedWorkerCpuSources();
+    const usage = values["registry-only"]
+      ? []
+      : await Promise.all(sources.map((worker) => worker.cpuUsage()));
+    assert.equal(currentRevision(), revision, "Worker churn invalidates this measurement");
+    return usage;
+  };
+  for (let index = 0; index < (values["registry-only"] ? 10_000 : 1_000); index++) {
     await sample();
   }
   console.log("WORKER_CPU_READY");
@@ -98,9 +129,12 @@ try {
   latency.sort((left, right) => left - right);
   const result = {
     workers: workerCount,
+    trackedCount,
     batches,
     yieldMs,
     allocations: values.allocations,
+    registryOnly: values["registry-only"],
+    retained: values.retained,
     load: loadavg(),
     allocatedBytes,
     allocatedBytesPerBatch: allocatedBytes === undefined ? undefined : allocatedBytes / batches,
@@ -120,4 +154,5 @@ try {
 } finally {
   inspector?.disconnect();
   await Promise.all(workers.map((worker) => worker.terminate()));
+  await closeDefaultRetainedNativeWorkerSource();
 }

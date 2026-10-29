@@ -148,19 +148,13 @@ afterEach(async () => {
 describe("createOAuthManager", () => {
   it("serializes personal refreshes without CLI bootstrap or shared copies", async () => {
     const provider = "xai";
-    const metadata = {
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-      deviceAuthorizationEndpoint: "https://auth.x.ai/oauth2/device/authorize",
-      issuer: "https://auth.x.ai",
-      authFlow: "device-code",
-    };
     await withOAuthAgentDirs("oauth-manager-personal-", async ({ mainAgentDir, agentDir }) => {
       const cfg = {
         models: { providers: { [provider]: { auth: "oauth", baseUrl: "", models: [] } } },
       } satisfies OpenClawConfig;
-      const credential = expired({ provider, ...metadata, accountId: "acct-personal" });
+      const credential = expired({ provider, accountId: "acct-personal" });
       const { authProfileId: profileId } = connect(credential);
-      const refreshed = rotated({ provider, accountId: "acct-personal", ...metadata });
+      const refreshed = rotated({ provider, accountId: "acct-personal" });
       const refreshCredential = vi.fn(async () => refreshed);
       const readBootstrapCredential = vi
         .spyOn(externalCliSync, "readExternalCliBootstrapCredential")

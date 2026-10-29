@@ -41,6 +41,7 @@ import {
   type MediaFileRef,
   type MediaImageRef,
 } from "./images.media-refs.js";
+import { resolvePromptImageDecisions } from "./prompt-image-decisions.js";
 import {
   type ImageFactIndex,
   type MediaImageLayout,
@@ -207,8 +208,19 @@ async function loadMediaFromRef(
           inboundFallbackDir: "media/inbound",
         });
         targetPath = resolved.resolved;
-      } catch {
-        log.warn(`${label}: sandbox validation failed`);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "";
+        const reason = detail.startsWith("Sandbox media reference is not staged:")
+          ? "not-staged"
+          : /escapes|outside|not within/i.test(detail)
+            ? "outside-workspace"
+            : "invalid-path";
+        const pathClass = targetPath.startsWith("media://")
+          ? "managed-media"
+          : path.isAbsolute(targetPath)
+            ? "absolute"
+            : "relative";
+        log.warn(`${label}: sandbox validation failed (reason=${reason}, pathClass=${pathClass})`);
         return null;
       }
     } else if (!path.isAbsolute(targetPath)) {
@@ -424,7 +436,11 @@ export async function detectAndLoadPromptImages(
     const result = await sanitizeImageBlocks([entry.image], "prompt:images", imageSanitization);
     const image = result.images[0];
     if (image) {
-      sanitized.push({ image, factIndex: entry.factIndex });
+      // Attachment display metadata never belongs in the provider's image block.
+      sanitized.push({
+        image: { type: "image", data: image.data, mimeType: image.mimeType },
+        factIndex: entry.factIndex,
+      });
     }
     dropped += result.dropped;
     if (result.dropped > 0 && entry.factIndex !== null) {
@@ -455,6 +471,7 @@ type PromptMediaOptions = {
   provider?: boolean;
   signal?: AbortSignal;
   onCurrentTurnImageFailure?: (count: number) => void;
+  imageSessionKey?: string;
 };
 
 export function buildPromptImageFailureNotice(count: number): string {
@@ -522,14 +539,28 @@ async function materializePromptMediaMessages(
       ? message.content
       : [{ type: "text" as const, text: message.content }];
     const existingImages = content.filter((block): block is ImageContent => block.type === "image");
-    const result = await detectAndLoadPromptImages({
-      ...options,
-      prompt: "",
-      media: resolvedMedia,
-      existingImages,
-      existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
-      mediaImageLayout,
-    });
+    const load = (media: readonly MediaFact[], inlineImages: ImageContent[]) =>
+      detectAndLoadPromptImages({
+        ...options,
+        prompt: "",
+        media,
+        existingImages: inlineImages,
+        existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
+        mediaImageLayout,
+      });
+    const result = !options.model.input?.includes("image")
+      ? { images: [], imageFactIndexes: [], failedMediaCount: 0 }
+      : options.imageSessionKey &&
+          (existingImages.length > 0 || resolvedMedia.some(isImageMediaFact))
+        ? await resolvePromptImageDecisions({
+            sessionKey: options.imageSessionKey,
+            message,
+            messageIndex: index,
+            media: resolvedMedia,
+            existingImages,
+            load,
+          })
+        : await load(resolvedMedia, existingImages);
     const { images, imageFactIndexes } = result;
     const projectedContent = await (async (): Promise<ModelInputContent[]> => {
       const generatedMarkers = new Set<string>(Object.values(VIDEO_OMISSION));
@@ -564,16 +595,22 @@ async function materializePromptMediaMessages(
       projected.push(...factlessImages);
       return projected;
     })();
-    if (
-      (options.provider || options.onCurrentTurnImageFailure) &&
-      index === activeUserIndex &&
-      result.failedMediaCount > 0
-    ) {
-      options.onCurrentTurnImageFailure?.(result.failedMediaCount);
-      projectedContent.push({
-        type: "text",
-        text: buildPromptImageFailureNotice(result.failedMediaCount),
-      });
+    if ((options.provider || options.onCurrentTurnImageFailure) && result.failedMediaCount > 0) {
+      if (index === activeUserIndex) {
+        options.onCurrentTurnImageFailure?.(result.failedMediaCount);
+      }
+      if (
+        !projectedContent.some(
+          (block) =>
+            block.type === "text" &&
+            block.text === buildPromptImageFailureNotice(result.failedMediaCount),
+        )
+      ) {
+        projectedContent.push({
+          type: "text",
+          text: buildPromptImageFailureNotice(result.failedMediaCount),
+        });
+      }
     }
     hydrated ??= messages.slice();
     if (options.provider) {

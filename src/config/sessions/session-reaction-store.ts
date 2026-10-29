@@ -5,10 +5,8 @@ import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import {
-  acquireSessionActorStorage,
-  captureSessionActorStorageOwner,
-} from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import {

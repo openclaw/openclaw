@@ -27,6 +27,8 @@ const packageContract = "src/plugins/contracts/plugin-sdk-package-contract-guard
 const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
 const channelsConfig = "test/vitest/vitest.channels.config.ts";
 const gatewayMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
+const gatewaySubscriptions = "src/gateway/server-runtime-subscriptions.test.ts";
+const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
 const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
 const agentsCoreConfig = agentVitestProjectOwners.core.config;
 const discordCapture = "test/e2e/gateway-transcripts-discord-capture.e2e.test.ts";
@@ -36,6 +38,13 @@ it.for([
   ["ordinary infra", infraConfig, ["src/infra/node-sqlite.test.ts"], false],
   ["root config", "vitest.config.ts", [coreWorker], true],
   ["custom config", "custom.config.ts", [coreWorker], false],
+  ["gateway basename", gatewayServerConfig, [path.basename(gatewaySubscriptions)], true],
+  [
+    "gateway basename excluded",
+    gatewayServerConfig,
+    [gatewaySubscriptions, "--exclude", path.basename(gatewaySubscriptions)],
+    false,
+  ],
   ...[
     ["channels", channelsConfig, "src/channels/chat-type.test.ts"],
     ["gateway methods", gatewayMethodsConfig, "src/gateway/server-methods/health.test.ts"],
@@ -80,6 +89,7 @@ subprocess.for([
       : [
           "code-mode",
           "capture",
+          "gateway-subscriptions",
           "failure",
           "cancel",
           "excluded",
@@ -106,7 +116,9 @@ subprocess.for([
             ? [codeModeWorker, agentsCoreConfig]
             : mode === "capture"
               ? [discordCapture, e2eConfig]
-              : [coreWorker, infraConfig];
+              : mode === "gateway-subscriptions"
+                ? [gatewaySubscriptions, gatewayServerConfig]
+                : [coreWorker, infraConfig];
         const compiled = path.join(directory, "compiled.jsonl");
         const launched = path.join(directory, "launched.json");
         const compilerReceipt = path.join(directory, "compiler.json");
@@ -260,6 +272,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           "gateway-methods",
           "code-mode",
           "capture",
+          "gateway-subscriptions",
         ].includes(mode);
         const prepared = ready || mode === "failure" || mode === "cancel";
         expect(fs.existsSync(compilerReceipt)).toBe(prepared);

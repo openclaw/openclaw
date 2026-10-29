@@ -553,56 +553,36 @@ describe("searchSessionTranscripts", () => {
     expect(result.hits[0]?.messageId).toBe("m-new");
   });
 
-  it("only surfaces the active branch after a deferred leaf-control rebuild", async () => {
-    const scope = transcriptScope("session-1", "agent:main:main");
-    await replaceTranscriptEvents(scope, [
-      messageEvent("m1", null, { role: "user", content: [{ type: "text", text: "alpha origin" }] }),
-      messageEvent("m2", "m1", {
-        role: "assistant",
-        content: [{ type: "text", text: "beta abandoned" }],
-      }),
-    ] as unknown as TranscriptEvent[]);
-    await appendTranscriptEvent(scope, {
-      type: "leaf",
-      id: "leaf-1",
-      parentId: "m2",
-      targetId: "m1",
-    } as unknown as TranscriptEvent);
-
-    const dirty = search("beta");
-    expect(dirty.indexing).toBe(true);
-    expect(dirty.hits).toHaveLength(0);
-    await waitForSearchReconcile("beta");
-
-    expect(search("beta").hits).toHaveLength(0);
-    expect(search("alpha").hits).toHaveLength(1);
-  });
-
-  it("streams large searchable projections to the writer in bounded chunks", async () => {
+  it("streams bounded projections while excluding abandoned branches after a deferred rebuild", async () => {
     const scope = transcriptScope("session-1", "agent:main:main");
     const largeText = "x".repeat(140 * 1024);
-    await replaceTranscriptEvents(
-      scope,
-      ["alpha-stream", "beta-stream", "gamma-stream"].map((marker, index) =>
+    await replaceTranscriptEvents(scope, [
+      ...["alpha-stream", "beta-stream", "gamma-stream"].map((marker, index) =>
         messageEvent(`m${index + 1}`, index === 0 ? null : `m${index}`, {
           role: "user",
           content: [{ type: "text", text: `${marker} ${largeText}` }],
         }),
-      ) as unknown as TranscriptEvent[],
-    );
+      ),
+      messageEvent("abandoned", "m3", {
+        role: "assistant",
+        content: [{ type: "text", text: "abandoned branch" }],
+      }),
+    ] as unknown as TranscriptEvent[]);
     await appendTranscriptEvent(scope, {
       type: "leaf",
       id: "leaf-large",
-      parentId: "m3",
+      parentId: "abandoned",
       targetId: "m3",
     } as unknown as TranscriptEvent);
 
     expect(search("gamma-stream").indexing).toBe(true);
+    expect(search("abandoned").hits).toHaveLength(0);
     await waitForSearchReconcile("gamma-stream");
 
     expect(search("alpha-stream").hits).toHaveLength(1);
     expect(search("beta-stream").hits).toHaveLength(1);
     expect(search("gamma-stream").hits).toHaveLength(1);
+    expect(search("abandoned").hits).toHaveLength(0);
   });
 
   it("detects missing, dirty, lagging, and unclassified transcript projections", async () => {

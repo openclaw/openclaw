@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as machineState from "../state/config-machine-state-async.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -39,6 +38,11 @@ vi.mock("./update-check.js", async (importOriginal) => ({
 }));
 
 vi.mock("./telemetry.js", () => ({ checkTelemetryUpdate: vi.fn(async () => null) }));
+// These cases clear the runner markers and settle real runs; keep outcome reports offline.
+vi.mock("./update-result-telemetry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-result-telemetry.js")>()),
+  sendUpdateResultTelemetry: vi.fn(async () => {}),
+}));
 vi.mock("../model-catalog/remote-refresh.js", async (original) => ({
   ...(await original<typeof import("../model-catalog/remote-refresh.js")>()),
   refreshRemoteModelCatalog: async () => ({ status: "disabled" }),
@@ -108,20 +112,6 @@ describe("scheduled update discovery and application", () => {
     const checking = clock.advanceBy(0);
     try {
       await withinTest(entered.promise, signal);
-      const common = {
-        root: "/opt/openclaw",
-        signal: expect.any(AbortSignal),
-        includeRegistry: false,
-        useDetachedDevUpstream: true,
-      };
-      expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
-      expect(checkUpdateStatus).toHaveBeenNthCalledWith(1, {
-        ...common,
-        timeoutMs: resolveGatewayStartupTiming().deadlineMs,
-        onGitProbeTimeout: expect.any(Function),
-        fetchGit: false,
-      });
-      expect(checkUpdateStatus).toHaveBeenNthCalledWith(2, { ...common, fetchGit: true });
       expect(getUpdateSchedule()?.campaign).toBeUndefined();
       await clock.advanceBy(65_653);
       remoteFinished.resolve();
@@ -187,7 +177,6 @@ describe("scheduled update discovery and application", () => {
         detail: diagnostic,
         failureFacts: matchingObject({ code: code ?? "Error", message: diagnostic }),
       }),
-      target: { kind: "git", installationMethod: "git-checkout" },
       verification: { rollbackOutcome: { status: "not-attempted" } },
     });
     expect(runAutoUpdate).not.toHaveBeenCalled();

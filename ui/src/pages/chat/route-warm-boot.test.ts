@@ -114,9 +114,8 @@ it.each(["exact", "literal", "short", "title"] as const)(
     });
     try {
       if (exact) {
-        await Promise.resolve();
-        await Promise.resolve();
-        expect(completed).not.toHaveBeenCalled();
+        await expect(pending).resolves.toMatchObject({ kind: "session", sessionKey: row.key });
+        expect(request).not.toHaveBeenCalled();
       }
       if (!literal) {
         seed([row]);

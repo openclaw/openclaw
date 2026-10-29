@@ -3,7 +3,6 @@
 // Rejects changelog thanks entries that credit bots or internal handles.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
 import { changelogFormat, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
@@ -127,7 +126,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   main().catch((error: unknown) => {
     console.error(error);
     process.exit(1);

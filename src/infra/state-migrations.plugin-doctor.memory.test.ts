@@ -83,6 +83,11 @@ async function fixture() {
     config: { agents: { entries: { main: { workspace: path.dirname(memoryPath) } } } },
     detected: { stateDir, oauthDir: path.join(stateDir, "oauth"), doctorOnlyStateMigrations: true },
     independentMigration,
+    preserveFiles() {
+      const files = [legacyPath, agentPath, memoryPath];
+      const originals = files.map((file) => fs.readFileSync(file));
+      return () => expect(files.map((file) => fs.readFileSync(file))).toEqual(originals);
+    },
   };
 }
 
@@ -96,9 +101,7 @@ it("keeps held memory sidecars advisory while completing independent repairs", a
   );
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  const originals = [state.legacyPath, state.agentPath, state.memoryPath].map(
-    (file) => [file, fs.readFileSync(file)] as const,
-  );
+  const expectPreserved = state.preserveFiles();
   const retiredWorkspace = path.join(state.stateDir, "agents", "main", "qmd");
   fs.mkdirSync(retiredWorkspace);
   registry.entries.push({
@@ -109,23 +112,21 @@ it("keeps held memory sidecars advisory while completing independent repairs", a
 
   const result = await runPluginDoctorStateMigrationPlans(state);
 
-  expect(result.warningDisposition).toBe("recoverable");
-  expect(result.warnings).toEqual([
-    expect.stringContaining("held after deletion journal reconstruction"),
-  ]);
-  expect(result.changes).toContain(
-    `Removed empty retired Memory Core QMD workspace: ${retiredWorkspace}`,
-  );
+  expect(result).toMatchObject({
+    warningDisposition: "recoverable",
+    warnings: [expect.stringContaining("held after deletion journal reconstruction")],
+    changes: expect.arrayContaining([
+      `Removed empty retired Memory Core QMD workspace: ${retiredWorkspace}`,
+    ]),
+  });
   expect(fs.existsSync(retiredWorkspace)).toBe(false);
-  for (const [file, bytes] of originals) {
-    expect(fs.readFileSync(file)).toEqual(bytes);
-  }
+  expectPreserved();
   expect(fs.existsSync(`${state.legacyPath}.migrated`)).toBe(false);
 });
 
 it("retains a legacy memory sidecar without opening the PostgreSQL agent anchor", async () => {
   const state = await fixture();
-  const { legacyPath, agentPath, memoryPath } = state;
+  const { legacyPath, agentPath } = state;
   {
     using anchor = new DatabaseSync(agentPath);
     anchor.exec(`
@@ -133,9 +134,7 @@ it("retains a legacy memory sidecar without opening the PostgreSQL agent anchor"
       INSERT INTO openclaw_engine_anchor VALUES ('fixture-agent', 'postgres', 'fixture_agent');
     `);
   }
-  const originals = [legacyPath, agentPath, memoryPath].map(
-    (file) => [file, fs.readFileSync(file)] as const,
-  );
+  const expectPreserved = state.preserveFiles();
   const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation(() => {
     throw new Error("The skipped migration must not open SQLite");
   });
@@ -155,9 +154,7 @@ it("retains a legacy memory sidecar without opening the PostgreSQL agent anchor"
   expect(result.notices?.[0]).toContain("sidecar is retained unchanged");
   expect(result.notices?.[0]).toContain("may re-embed");
   expect(open).not.toHaveBeenCalled();
-  for (const [file, bytes] of originals) {
-    expect(fs.readFileSync(file)).toEqual(bytes);
-  }
+  expectPreserved();
   expect(fs.readdirSync(path.dirname(legacyPath))).toEqual(["main.sqlite"]);
 });
 

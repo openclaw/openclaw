@@ -4,6 +4,7 @@ import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { DEFAULT_WORKER_PENDING_TASKS, WorkerTaskError } from "@openclaw/worker-runtime";
 import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
+import { captureStateDatabaseAccess } from "../../infra/gateway-state-owner.js";
 import {
   createPostgresPoolEndpoints,
   postgresPoolTransferList,
@@ -16,7 +17,7 @@ import {
 import { trackSqliteDatabaseAdmissionWorker } from "../../infra/sqlite-database-admission.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
-import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
+import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -29,6 +30,7 @@ import {
 } from "./session-accessor.sqlite-archive-session.js";
 import type {
   MaterializedSessionStateDeletePlan,
+  SessionColdBatchInput,
   SessionHistoryEvictionArchivePlan,
   SessionStateDeletePlan,
   SqliteArchiveOneShotWorkerData,
@@ -97,6 +99,7 @@ export function createSqliteTranscriptArchiveWorker(
   }
   trackSqliteArchiveWorkerCleanup(worker);
   trackSqliteDatabaseAdmissionWorker(worker);
+  worker.on("message", (message: unknown) => receiveWorkerMemoryPort(worker, message));
   worker.once("exit", finish);
   return worker;
 }
@@ -192,7 +195,12 @@ function runSqliteColdMutation<Result>(
     }),
   };
   return withSqliteTranscriptArchiveSession(params.workerData.plan.databaseOptions, () =>
-    runExclusiveSqliteTranscriptArchiveWorker(() => {
+    runExclusiveSqliteTranscriptArchiveWorker(async () => {
+      params.assertCurrent?.();
+      const stateAccess = await captureStateDatabaseAccess(
+        params.stateContext.admission.databasePath,
+      );
+      params.stateContext.admission.assertCurrent();
       params.assertCurrent?.();
       return runScopedSqliteArchiveMutation(
         params.workerData,
@@ -214,7 +222,7 @@ function runSqliteColdMutation<Result>(
                 operationId: transport.initialOperationId,
                 completion: "exit",
                 databaseAuthority: {
-                  databasePath: params.stateContext.admission.databasePath,
+                  stateAccess,
                   maintenanceScope: params.stateContext.maintenanceScope,
                   creationPaths: [
                     params.workerData.plan.databaseOptions.path,
@@ -351,6 +359,25 @@ export function runSqliteTranscriptArchiveWorkerOperation<Result>(
     params.assertCurrent?.();
     return spawnSqliteTranscriptArchiveWorkerOperation<Result>(params);
   }, params.signal);
+}
+
+export function prepareSqliteColdArchiveBatch(
+  input: SessionColdBatchInput,
+  assertCurrent: () => void,
+  signal: AbortSignal,
+) {
+  return withSqliteTranscriptArchiveSession(input.databaseOptions, async () => {
+    const result = await runScopedSqliteArchiveOperation(
+      { operation: "cold-prepare", input },
+      createSqliteTranscriptArchiveWorker,
+      (run) =>
+        runExclusiveSqliteTranscriptArchiveWorker(() => {
+          assertCurrent();
+          return run();
+        }, signal),
+    );
+    return result!.results;
+  });
 }
 
 function runSqliteTranscriptArchiveWorker(

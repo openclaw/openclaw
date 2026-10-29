@@ -1,10 +1,15 @@
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import type {
   SessionEntryMaintenanceInput,
   SessionEntryMaintenancePlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import type { SessionEntryReplacement, TranscriptEvent } from "./session-accessor.types.js";
+import type {
+  SessionEntryCommitContext,
+  SessionEntryReplacement,
+  TranscriptEvent,
+} from "./session-accessor.types.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionNativeBindingParticipants } from "./session-native-binding.types.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
@@ -44,6 +49,17 @@ export type SessionEntryReplacementCommitted = {
 
 export type SessionEntryReplacementCandidate = {
   kind: "session-entry-replacements";
-  result: SessionEntryReplacementCommitted;
+  result: Pick<SessionEntryReplacementCommitted, "maintenancePlans">;
   publication: SessionEntryReplacementPublication;
+};
+
+export type SessionEntryWorkerLifecycle<T = unknown> = {
+  identityAgentId: string;
+  onResult?: (value: T | undefined) => void;
+  beforeCommit?: (
+    publication: SessionEntryReplacementPublication,
+    operation: RetainedWorkerTransactionAdmission,
+  ) => void;
+  afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
+  onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
 };

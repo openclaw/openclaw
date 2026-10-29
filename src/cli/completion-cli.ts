@@ -164,9 +164,9 @@ function generateZshCompletion(program: Command): string {
   return `
 #compdef ${rootCmd}
 
-${generateZshCommandGroup(program, `_${rootCmd}_root_completion`, `_${rootCmd}`)}
+${generateZshCommandGroup(program, `_${rootCmd}_root_completion`, `_${rootCmd}_command`)}
 
-${generateZshSubcommands(program, rootCmd)}
+${generateZshSubcommands(program, `_${rootCmd}_command`)}
 
 _${rootCmd}_register_completion() {
   if (( ! $+functions[compdef] )); then
@@ -201,10 +201,12 @@ function generateZshArgs(cmd: Command): string {
         opt.required || opt.optional
           ? `${opt.optional ? "::" : ":"}${opt.attributeName()}:${choices ? `(${choices})` : ""}`
           : "";
+      // `=` permits long-option values both after an equals sign and in the next word.
+      const optionSpec = (flag: string) => (argument && flag.startsWith("--") ? `${flag}=` : flag);
       if (alternate) {
-        return `"${visibility}(${name} ${alternate})"{${name},${alternate}}"[${desc}]${argument}"`;
+        return `"${visibility}(${name} ${alternate})"{${optionSpec(name)},${optionSpec(alternate)}}"[${desc}]${argument}"`;
       }
-      return `"${visibility}${name}[${desc}]${argument}"`;
+      return `"${visibility}${optionSpec(name)}[${desc}]${argument}"`;
     })
     .join(" \\\n    ");
 }
@@ -216,6 +218,11 @@ function escapeZshCompletionChoice(choice: string): string {
 
 function escapeZshDoubleQuotedDescription(description: string): string {
   return description.replace(/[\\$"`[\]]/g, "\\$&");
+}
+
+function zshSubcommandFunctionName(parentFunctionName: string, index: number): string {
+  // Sibling indices preserve node identity across hyphens, underscores, and nested paths.
+  return `${parentFunctionName}_${index}`;
 }
 
 function generateZshCommandGroup(
@@ -242,18 +249,17 @@ function generateZshCommandGroup(
   case $state in
     (args)
       case $line[1] in
-        ${command.commands.map((cmd) => `(${commandNameVariants(cmd).join("|")}) ${childPrefix}_${cmd.name().replace(/-/g, "_")} ;;`).join("\n        ")}
+        ${command.commands.map((cmd, index) => `(${commandNameVariants(cmd).join("|")}) ${zshSubcommandFunctionName(childPrefix, index)} ;;`).join("\n        ")}
       esac
       ;;
   esac
 }`;
 }
 
-function generateZshSubcommands(program: Command, prefix: string): string {
+function generateZshSubcommands(program: Command, parentFunctionName: string): string {
   return program.commands
-    .map((cmd) => {
-      const nextPrefix = `${prefix}_${cmd.name().replace(/-/g, "_")}`;
-      const funcName = `_${nextPrefix}`;
+    .map((cmd, index) => {
+      const funcName = zshSubcommandFunctionName(parentFunctionName, index);
       const body =
         cmd.commands.length > 0
           ? `\n${generateZshCommandGroup(cmd, funcName)}\n`
@@ -263,7 +269,7 @@ ${funcName}() {
     ${generateZshArgs(cmd)}
 }
 `;
-      return generateZshSubcommands(cmd, nextPrefix) + body;
+      return generateZshSubcommands(cmd, funcName) + body;
     })
     .join("");
 }

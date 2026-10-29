@@ -167,33 +167,16 @@ export function expectedPluginIndexRecord(params: {
   packageName?: string;
   packageVersion?: string;
 }) {
-  return {
+  return expect.objectContaining({
     pluginId: params.pluginId,
     ...(params.packageName ? { packageName: params.packageName } : {}),
     ...(params.packageVersion ? { packageVersion: params.packageVersion } : {}),
     manifestPath: path.join(params.rootDir, "openclaw.plugin.json"),
     manifestHash: expect.any(String),
-    manifestFile: {
-      size: expect.any(Number),
-      mtimeMs: expect.any(Number),
-      ctimeMs: expect.any(Number),
-    },
     source: path.join(params.rootDir, "index.ts"),
     rootDir: params.rootDir,
     origin: params.origin,
     enabled: true,
-    startup: { sidecar: false, memory: false, configPaths: [], agentHarnesses: [] },
-    contributions: {
-      channels: [],
-      channelConfigs: [],
-      providers: [params.pluginId],
-      modelCatalogProviders: [],
-      modelSupportPrefixes: [],
-      modelSupportPatterns: [],
-      autoEnableProviderIds: [],
-      commandAliases: [],
-      contracts: {},
-    },
-    compat: [],
-  };
+    contributions: expect.objectContaining({ providers: [params.pluginId] }),
+  });
 }

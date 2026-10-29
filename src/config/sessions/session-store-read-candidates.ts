@@ -84,6 +84,13 @@ export function isSessionStoreReadCandidateCurrent(candidate: SessionStoreReadCa
     candidate.path,
     candidate.scope,
   ).physicalPath;
+  return matchesSessionStoreReadCandidatePhysicalPath(candidate, currentPhysicalPath);
+}
+
+function matchesSessionStoreReadCandidatePhysicalPath(
+  candidate: SessionStoreReadCandidate,
+  currentPhysicalPath: string,
+): boolean {
   const capturedPhysicalPath = resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate);
   if (currentPhysicalPath === capturedPhysicalPath) {
     return true;
@@ -177,7 +184,10 @@ export function assertSessionStoreReadCandidate(
           { ...candidate, path: resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate) },
           physicalPath,
         )) &&
-      isSessionStoreReadCandidateCurrent(candidate)
+      // The exact selected path was resolved above in this synchronous assertion.
+      (!candidate.scope && candidate.path === path.resolve(pathname)
+        ? matchesSessionStoreReadCandidatePhysicalPath(candidate, physicalPath)
+        : isSessionStoreReadCandidateCurrent(candidate))
     ) {
       return physicalPath;
     }

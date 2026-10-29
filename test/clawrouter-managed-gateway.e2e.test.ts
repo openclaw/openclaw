@@ -43,6 +43,8 @@ describe("ClawRouter managed gateway contract", () => {
       },
     });
     instances.push(instance);
+    // Test Gateways skip process locks; target this listener instead of offline catalog fallback.
+    instance.env.OPENCLAW_GATEWAY_PORT = String(instance.port);
     const logFile = path.join(instance.stateDir, "clawrouter.log");
     const cliOutput: string[] = [];
     const cli = async (args: string[]) => {
@@ -104,9 +106,10 @@ describe("ClawRouter managed gateway contract", () => {
     const gatewayReadiness = await waitForGatewayReadiness(instance);
     expect(gatewayReadiness).toMatchObject({ ready: true, failing: [] });
 
-    expect(
+    const listedModels = JSON.parse(
       await cli(["models", "list", "--all", "--provider", "clawrouter", "--refresh", "--json"]),
-    ).toContain(MODEL_REF);
+    );
+    expect(listedModels.models).toEqual([expect.objectContaining({ key: MODEL_REF })]);
 
     const probe = await cli([
       "models",

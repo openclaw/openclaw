@@ -7,6 +7,11 @@ import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import type { RequestFrame } from "../../packages/gateway-protocol/src/index.js";
+import {
+  closeMinimalGatewayServer,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "../gateway/minimal-gateway.test-helpers.js";
 import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { configureNodeHost, loadNodeHostConfig } from "../node-host/config.js";
@@ -91,31 +96,21 @@ describe("connect setup-code replay", () => {
         const targetFile = state.path("setup-code");
         await fs.writeFile(targetFile, code, { mode: 0o600 });
         server.on("connection", (socket) => {
-          socket.send(
-            JSON.stringify({
-              type: "event",
-              event: "connect.challenge",
-              payload: { nonce: "synthetic-challenge", ts: Date.now() },
-            }),
-          );
+          sendMinimalGatewayConnectChallenge(socket, "synthetic-challenge");
           socket.on("message", (data) => {
             const frame = JSON.parse(rawDataToString(data)) as RequestFrame;
             frames.push(frame);
-            socket.send(
-              JSON.stringify({
-                type: "res",
-                id: frame.id,
-                ok: true,
-                payload:
-                  frame.method === "connect"
-                    ? {
-                        type: "hello-ok",
-                        protocol: 4,
-                        features: { methods: [], events: [] },
-                        policy: { tickIntervalMs: 30_000 },
-                      }
-                    : {},
-              }),
+            sendMinimalGatewayResponse(
+              socket,
+              frame.id,
+              frame.method === "connect"
+                ? {
+                    type: "hello-ok",
+                    protocol: 4,
+                    features: { methods: [], events: [] },
+                    policy: { tickIntervalMs: 30_000 },
+                  }
+                : {},
             );
           });
         });
@@ -145,12 +140,7 @@ describe("connect setup-code replay", () => {
         stop();
         await running;
         fixture.connected.mockReset();
-        for (const socket of server.clients) {
-          socket.terminate();
-        }
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeMinimalGatewayServer(server);
         await claim.release();
         process.exitCode = previousExitCode;
       }

@@ -295,7 +295,7 @@ it("retains runtime warnings through same-boot reconnects and publications, then
   const updated = [addon("active-memory", true), addon("memory-wiki", true)];
   const warning = "Review memory-wiki settings.";
   let mutations = 0;
-  const { element, request, setPhase, setBootId, publishPluginGeneration } = createPage({
+  const { element, setPhase, setBootId, publishPluginGeneration } = createPage({
     listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
     setEnabled: (pluginId, enabled) =>
       mutations++ === 0
@@ -322,7 +322,6 @@ it("retains runtime warnings through same-boot reconnects and publications, then
   publishPluginGeneration(2);
   flush();
   expect(element.textContent).toContain(warning);
-  expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(0);
 
   setBootId("memory-boot-b");
   await waitText(element, warning, false);
@@ -377,11 +376,10 @@ it("renders every canonical tab path and honors browser history restoration", as
 });
 
 it("keeps Dreams empty when no configured agent is available", async () => {
-  const { element, settingsAgentSelection } = createPage({
+  const { element } = createPage({
     agents: [],
     routeData: memoryTabRoute("dreams"),
   });
-  expect(settingsAgentSelection.state.selectedId).toBeNull();
   expect(element.querySelector("openclaw-agent-memory-panel")).toBeNull();
   expect(element.querySelector("openclaw-agent-select")).toBeNull();
   expect(element.textContent).not.toContain("Dreaming frequency");

@@ -110,10 +110,7 @@ describe("worker environment service", () => {
       placements,
       environments: service,
       dispatch: {
-        resumeProvisioning: async () => {
-          throw new Error("Idle environment must not provision");
-        },
-        hasPendingPlacementLifecycleOperation: () => false,
+        isPlacementOperationInFlight: () => false,
       },
       isStopping: service.isStopping,
     });

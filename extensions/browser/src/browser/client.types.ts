@@ -23,7 +23,7 @@ export type ProfileStatus = {
 
 export type BrowserGraphicsAcceleration = "hardware" | "software" | "unknown";
 
-export type BrowserGraphicsDevice = {
+type BrowserGraphicsDevice = {
   vendorId: number;
   deviceId: number;
   vendor: string;

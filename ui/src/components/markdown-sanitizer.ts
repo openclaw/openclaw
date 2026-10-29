@@ -61,6 +61,7 @@ const allowedAttrs = [
   "data-file-kind",
   "data-file-line",
   "data-file-path",
+  "data-file-document-relative",
   "data-link-favicon-host",
   "data-session-key",
   "data-session-href",
@@ -85,6 +86,27 @@ const progressSanitizeOptions = {
 const sanitizers = new Map<typeof sanitizeOptions, ReturnType<typeof DOMPurify>>();
 
 const DOCS_ORIGIN = "https://docs.openclaw.ai";
+// Published docs sections win over owner/name syntax in root-relative Markdown.
+// Explicit absolute or mounted app URLs remain available for colliding owner names.
+const DOCS_PLUGIN_SECTIONS = new Set([
+  "architecture-internals",
+  "codex-harness",
+  "codex-harness-reference",
+  "codex-harness-runtime",
+  "google-meet",
+  "hooks",
+  "knowledge",
+  "manifest",
+  "reference",
+  "sdk-agent-harness",
+  "sdk-channel-plugins",
+  "sdk-entrypoints",
+  "sdk-migration",
+  "sdk-overview",
+  "sdk-provider-plugins",
+  "sdk-runtime",
+  "voice-call",
+]);
 const DOCS_ROOT_SEGMENTS = new Set([
   "agent-runtime-architecture",
   "announcements",
@@ -373,10 +395,13 @@ export function normalizeDocsRootHref(href: string): string {
       return href;
     }
     const normalizedPath = url.pathname.replace(/\/+$/, "") || "/";
+    const segments = pathSegments(normalizedPath);
+    if (segments[0] === "plugins" && DOCS_PLUGIN_SECTIONS.has(segments[1] ?? "")) {
+      return url.href;
+    }
     if (isControlUiRoutePath(normalizedPath)) {
       return href;
     }
-    const segments = pathSegments(normalizedPath);
     const resourceSegments = stripCurrentControlUiBasePath(normalizedPath);
     if (isControlUiResourcePath(resourceSegments)) {
       return href;

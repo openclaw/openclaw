@@ -109,7 +109,7 @@ export function getActiveOpenClawStateDatabaseReadSnapshot(
   options: OpenClawStateDatabaseOptions = {},
 ): Readonly<{ location: string; cleanClose?: boolean }> | undefined {
   const current = stateSnapshotReads.getStore();
-  return current?.path === resolveReadOnlyPath(options) ? current.readSource() : undefined;
+  return current?.path === resolveOpenClawStateReadPath(options) ? current.readSource() : undefined;
 }
 
 /** Prepare lazy snapshot bytes without blocking asynchronous discovery callers. */
@@ -117,7 +117,7 @@ export async function getActiveOpenClawStateDatabaseReadSnapshotAsync(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<Readonly<{ location: string; cleanClose?: boolean }> | undefined> {
   const current = stateSnapshotReads.getStore();
-  if (current?.path !== resolveReadOnlyPath(options)) {
+  if (current?.path !== resolveOpenClawStateReadPath(options)) {
     return undefined;
   }
   // Retain preparation through cancellation/drainage, then recheck read admission
@@ -133,7 +133,7 @@ export async function getActiveOpenClawStateDatabaseReadSnapshotAsync(
 export async function forkActiveOpenClawStateDatabaseReadSnapshot(
   options: OpenClawStateDatabaseOptions = {},
 ) {
-  const pathname = resolveReadOnlyPath(options);
+  const pathname = resolveOpenClawStateReadPath(options);
   const current = stateSnapshotReads.getStore();
   if (current?.path !== pathname) {
     return undefined;
@@ -166,7 +166,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   if (!postgres) {
     assertStateFileSnapshotAllowed();
   }
-  const pathname = resolveReadOnlyPath(options);
+  const pathname = resolveOpenClawStateReadPath(options);
   const current = stateSnapshotReads.getStore();
   const lazy = options.lazy === true && !postgres;
   if (
@@ -233,7 +233,7 @@ export async function withDisposableOpenClawStateReads<T>(
   pathname: string,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const resolvedPath = resolveReadOnlyPath({ path: pathname });
+  const resolvedPath = resolveOpenClawStateReadPath({ path: pathname });
   const scope = createRetainedReadScope(
     resolvedPath,
     captureOpenClawStateDatabaseReadAdmission(resolvedPath).identity,
@@ -273,7 +273,7 @@ export function withSynchronousArtifactPreservingStateSnapshot<T>(
 ): T {
   if (options?.current) {
     // Check inherited admission before selecting fresh bytes for this assertion.
-    const pathname = resolveReadOnlyPath(options.current);
+    const pathname = resolveOpenClawStateReadPath(options.current);
     const inherited = synchronousReadSnapshots.current;
     const inheritedAuthority = synchronousReadSnapshots.currentAuthorityPath;
     if (inherited && inheritedAuthority === pathname) {
@@ -309,14 +309,20 @@ export function withSynchronousArtifactPreservingStateSnapshot<T>(
   );
 }
 
-function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
+export function resolveOpenClawStateReadPath(options: OpenClawStateDatabaseOptions): string {
   const pathname = resolveDatabasePath(options);
-  assertRetainedReadScopeAdmission(pathname, [
-    stateSnapshotReads.getStore(),
-    ...(disposableStateReads.getStore() ?? []),
-  ]);
-  isExistingOpenClawStateSchema(pathname);
+  assertOpenClawStateReadPathCurrent(pathname);
   return pathname;
+}
+
+/** Prepared paths still honor the invoking reader and schema owner's live admission. */
+export function assertOpenClawStateReadPathCurrent(pathname: string): void {
+  const snapshot = stateSnapshotReads.getStore();
+  const disposable = disposableStateReads.getStore();
+  if (snapshot || disposable?.length) {
+    assertRetainedReadScopeAdmission(pathname, [snapshot, ...(disposable ?? [])]);
+  }
+  isExistingOpenClawStateSchema(pathname);
 }
 
 function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
@@ -413,7 +419,7 @@ export function withOpenClawStateDatabaseReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T {
-  const pathname = resolveReadOnlyPath(options);
+  const pathname = resolveOpenClawStateReadPath(options);
   // Reusing a handle this process already holds keeps row loops cheap: opening
   // and closing a connection per call made shared-state reads scale with row
   // count. An in-flight transaction is skipped so callers never observe
@@ -433,7 +439,7 @@ export function isOpenClawStateDatabaseDefinitelyAbsent(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   try {
-    const pathname = resolveReadOnlyPath({ env });
+    const pathname = resolveOpenClawStateReadPath({ env });
     const snapshot = stateSnapshotReads.getStore();
     if (
       synchronousReadSnapshots.current?.has(pathname) ||
@@ -459,7 +465,7 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T | undefined {
-  const pathname = resolveReadOnlyPath(options);
+  const pathname = resolveOpenClawStateReadPath(options);
   if (synchronousReadSnapshots.current?.has(pathname)) {
     return withFreshOpenClawStateDatabaseReadOnly(operation, options, pathname);
   }
@@ -536,7 +542,7 @@ function startRetainedOpenClawStateRead(
   }: OpenClawStateReadOptions,
 ): OpenClawStateReadCompletion {
   const currentRead = current || live;
-  const pathname = resolveReadOnlyPath(options);
+  const pathname = resolveOpenClawStateReadPath(options);
   const inherited = stateSnapshotReads.getStore();
   const snapshot = inherited?.active && inherited.path === pathname ? inherited : undefined;
   const scopes: RetainedReadScope[] = [
@@ -659,7 +665,7 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
   } = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): T | undefined {
-  const pathname = resolveReadOnlyPath(options);
+  const pathname = resolveOpenClawStateReadPath(options);
   return exitStateReadSnapshot(() => {
     // Maintenance admission belongs to a fresh private reader, never a cached writer.
     if (!openStateSchemaReadAdmission) {
@@ -697,7 +703,7 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<T | undefined> {
   return withArtifactPreservingStateReads(async () => {
-    const pathname = resolveReadOnlyPath(options);
+    const pathname = resolveOpenClawStateReadPath(options);
     const snapshot = stateSnapshotReads.getStore();
     if (snapshot?.path === pathname && snapshot.prepareSource) {
       return snapshot.work.track(async () => {
@@ -736,7 +742,7 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
 export function readCurrentOpenClawStateDatabaseContentVersion(
   options: OpenClawStateDatabaseOptions = {},
 ): string | undefined {
-  const pathname = resolveReadOnlyPath(options);
+  const pathname = resolveOpenClawStateReadPath(options);
   const env = options.env ?? process.env;
   return exitStateReadSnapshot(() => readAdmittedStateContentVersion(pathname, env));
 }
@@ -746,6 +752,6 @@ export function withCurrentOpenClawStateReadScope<T>(
   options: OpenClawStateDatabaseOptions,
   operation: (pathname: string) => T,
 ): T {
-  const pathname = resolveReadOnlyPath(options);
+  const pathname = resolveOpenClawStateReadPath(options);
   return exitStateReadSnapshot(() => operation(pathname));
 }

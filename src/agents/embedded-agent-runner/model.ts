@@ -6,10 +6,12 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
+import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey, type ModelRef } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { buildSuppressedBuiltInModelError } from "../model-suppression.js";
+import { readCapturedPreparedModelRuntimeCatalog } from "../prepared-model-runtime.capture.js";
 import {
   getPreparedModelRuntimeSnapshot,
   loadPreparedModelRuntimeSnapshot,
@@ -144,10 +146,16 @@ export async function resolveModelAsync(
         ? stores.modelRegistry.fork(authStorage)
         : stores.modelRegistry;
     }
-    const declared = preparedModelRuntime?.modelCatalog.entries.find(
-      (entry) => entry.provider === normalizedRef.provider && entry.id === normalizedRef.model,
-    );
-    if (declared?.inference?.chat === false) {
+    const matchesSelectedModel = (entry: { provider: string; id: string }) =>
+      entry.provider === normalizedRef.provider && entry.id === normalizedRef.model;
+    const declared = preparedModelRuntime?.modelCatalog.entries.find(matchesSelectedModel);
+    // An admitted grant replaces static support only for its own physical route.
+    const captured =
+      preparedModelRuntime &&
+      readCapturedPreparedModelRuntimeCatalog(preparedModelRuntime)?.entries.find(
+        (entry) => matchesSelectedModel(entry) && modelTransportRoutesMatch(entry, declared ?? {}),
+      );
+    if ((captured?.inference?.chat ?? declared?.inference?.chat) === false) {
       return {
         error: `Model ${normalizedRef.provider}/${normalizedRef.model} does not support chat inference`,
         authStorage,

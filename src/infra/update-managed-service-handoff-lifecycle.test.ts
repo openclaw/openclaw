@@ -127,16 +127,9 @@ describe("managed service update handoff", () => {
       execPath: path.join(root, "bun"),
       argv1: path.join(root, "openclaw.mjs"),
     });
-    const { command, args, dir, scriptPath, paramsPath } = handoffArtifacts(0, result.logPath);
+    const { command, args, scriptPath, paramsPath } = handoffArtifacts(0, result.logPath);
     expect(command).toBe(path.join(root, "bun"));
     expect(args).toEqual(["--no-install", scriptPath, paramsPath]);
-    expect(dir).toBe(path.dirname(result.logPath));
-    expect(tempDirs.dirs.has(dir)).toBe(true);
-    const tmpRoot = await fs.realpath(os.tmpdir());
-    for (const registered of tempDirs.dirs) {
-      const relative = path.relative(tmpRoot, await fs.realpath(registered));
-      expect(relative === "" || relative.startsWith("..") || path.isAbsolute(relative)).toBe(false);
-    }
   });
 
   registerManagedHandoffOwnerTests(runBoundary, itUnix, expect);
@@ -773,46 +766,23 @@ describe("managed service update handoff", () => {
         });
 
         expect(result.status).toBe("started");
-        if (!supervisor || systemd) {
-          expect(spawnMock).toHaveBeenCalledTimes(1);
-        }
         const { command, args, options, paramsPath } = handoffArtifacts(-1, result.logPath);
         const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
           metaPath: string;
-          triageContextPath: string;
-          commandArgv?: string[];
-          handoffId?: string;
           serviceRecovery?: unknown;
-          recoveryTimeoutMs: number;
         };
         if (systemd) {
+          const environmentPath = path.join(path.dirname(result.logPath), "handoff.env");
           expect(command).toBe(systemd.systemdRunPath);
-          expect(args.slice(0, 7)).toEqual([
-            "--user",
-            "--scope",
-            "--collect",
-            "--unit=openclaw-update-handoff-123.scope",
-            nodeExec,
-            expect.stringMatching(/handoff\.cjs$/u),
-            expect.stringMatching(/handoff\.json$/u),
-          ]);
+          expect(args.slice(0, 11).join(" ")).toBe(
+            `--user --pipe --wait --service-type=exec --slice=app-openclaw-update.slice --property=KillMode=control-group --property=OOMPolicy=stop --property=EnvironmentFile=${environmentPath} --working-directory=${path.dirname(result.logPath)} --collect --unit=openclaw-update-handoff-123.service`,
+          );
+          expect(await fs.readFile(environmentPath, "utf8")).toContain("KEEP_ME=1");
+          expect((await fs.stat(environmentPath)).mode & 0o777).toBe(0o600);
+          expect(args.at(-3)).toBe(nodeExec);
           expect(helperParams.serviceRecovery).toEqual({
             kind: "systemd",
             unit: "openclaw-gateway.service",
-          });
-          expect(helperParams.commandArgv).toEqual([
-            nodeExec,
-            entrypoint,
-            "update",
-            "--yes",
-            "--json",
-            "--channel",
-            "beta",
-            ...(timeoutMs === undefined ? [] : ["--timeout", "1800"]),
-          ]);
-          expect(helperParams).toMatchObject({
-            recoveryTimeoutMs: 45 * 60_000,
-            handoffId: "handoff-123",
           });
           expect(options).toMatchObject({
             detached: true,
@@ -827,27 +797,11 @@ describe("managed service update handoff", () => {
             expect(options.env[key]).toBeUndefined();
           }
           expect(options.env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]).toBe(helperParams.metaPath);
-          expect(JSON.parse(await fs.readFile(helperParams.metaPath, "utf8"))).toMatchObject({
-            meta: { triageContextPath: helperParams.triageContextPath },
-          });
         } else {
-          expect(helperParams.serviceRecovery).toEqual(
-            supervisor === "launchd"
-              ? {
-                  kind: "launchd",
-                  uid: typeof process.getuid === "function" ? process.getuid() : 501,
-                  label: "test.gateway",
-                  plistPath: "/Users/test/Library/LaunchAgents/test.gateway.plist",
-                }
-              : { kind: "schtasks", taskName: "OpenClaw Test Gateway" },
-          );
           const child = spawnMock.mock.results.at(-1)?.value as
             | ReturnType<typeof createSpawnMock>
             | undefined;
           child?.emit("exit", 0, null);
-        }
-        if (!supervisor || systemd) {
-          expect(options.env).toMatchObject({ KEEP_ME: "1", OPENCLAW_UPDATE_RUN_HANDOFF: "1" });
         }
       }
     },

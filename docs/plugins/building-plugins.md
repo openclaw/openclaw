@@ -27,7 +27,7 @@ from npm, or `clawhub:<package>` to select ClawHub explicitly.
 
 - All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
   Pin your OpenClaw host version and test each version you declare compatible.
-- Node 24.16+ or Node 26.1+, and `npm` or `pnpm`.
+- Node 24.22.1+ or Node 26.12.1+, and `npm` or `pnpm`.
 - TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
   Source-checkout plugin development is pnpm-only because OpenClaw discovers
@@ -436,6 +436,7 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 
 <Check>**package.json** has correct `openclaw` metadata</Check>
 <Check>**openclaw.plugin.json** manifest is present and valid</Check>
+<Check>Manifest declares `reload.turnHandover` if the plugin keeps no per-turn in-memory state ([Reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins))</Check>
 <Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
 <Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>
 <Check>Internal imports use local modules, not SDK self-imports</Check>

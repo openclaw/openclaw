@@ -102,15 +102,16 @@ it("routes root memory before budgeting and keeps nested memory as context", asy
   expect(context.memoryToolRoutedBootstrapFiles).toEqual([rootMemory]);
   expect(context.promptContextFiles).toEqual([contextFile(nestedMemory)]);
   expect(context.instructionSnapshot.files).toEqual([contextFile(instructions)]);
-  expect(context.instructionSnapshot.instructions).toContain("Keep the bounded operating rules.");
 });
 
 it("passes agent context to memory guidance without MEMORY.md", async () => {
-  const promptBuilder = vi.fn((context: { agentId?: string; agentSessionKey?: string }) => [
-    "## Agent Memory",
-    `agent=${context.agentId} session=${context.agentSessionKey}`,
-    "",
-  ]);
+  const promptBuilder = (context: {
+    agentId?: string;
+    agentSessionKey?: string;
+    sandboxed?: boolean;
+  }) => [
+    `agent=${context.agentId} session=${context.agentSessionKey} sandboxed=${context.sandboxed}`,
+  ];
   registerMemoryCapability("memory-core", { promptBuilder });
   const context = await prepare([], {
     agentId: "marketing-agent",
@@ -118,15 +119,8 @@ it("passes agent context to memory guidance without MEMORY.md", async () => {
     memoryToolRouted: true,
     memoryTools: { toolNames: ["memory_search", "memory_get"], sandboxed: true },
   });
-  expect(promptBuilder).toHaveBeenCalledWith(
-    expect.objectContaining({
-      agentId: "marketing-agent",
-      agentSessionKey: "agent:marketing-agent:session-1",
-      sandboxed: true,
-    }),
-  );
   expect(context.memoryRecallInstructions).toContain(
-    "agent=marketing-agent session=agent:marketing-agent:session-1",
+    "agent=marketing-agent session=agent:marketing-agent:session-1 sandboxed=true",
   );
 });
 

@@ -133,25 +133,11 @@ vi.mock("../model-runtime-aliases.js", async () => {
   const actual = await vi.importActual<typeof import("../model-runtime-aliases.js")>(
     "../model-runtime-aliases.js",
   );
+  const { createCliRuntimeExecutionProviderMock } =
+    await import("./attempt-execution.model-runtime.test-support.js");
   return {
     ...actual,
-    resolveCliRuntimeExecutionProvider: ({
-      provider,
-      cfg,
-      modelId,
-    }: {
-      provider?: string;
-      cfg?: OpenClawConfig;
-      modelId?: string;
-    }) => {
-      const key = provider && modelId ? `${provider}/${modelId}` : undefined;
-      // Runtime alias tests only need the model-level runtime override path;
-      // keeping the mock narrow avoids loading provider catalogs here.
-      const runtime = key
-        ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
-        : undefined;
-      return runtime || provider;
-    },
+    resolveCliRuntimeExecutionProvider: createCliRuntimeExecutionProviderMock(),
   };
 });
 
@@ -1843,7 +1829,7 @@ describe("CLI attempt execution", () => {
         : testCase.requireExplicitMessageTarget,
       toolsAllow: testCase.expectedToolsAllow,
       disableTools: testCase.expectedDisableTools,
-      terminalReplyExpectation: "required",
+      terminalReplyExpectation: "optional",
       ...(!cli
         ? {
             disableMessageTool: testCase.disableMessageTool || undefined,
@@ -2090,7 +2076,7 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
-    expect(embeddedArg.terminalReplyExpectation).toBe("result-required");
+    expect(embeddedArg.terminalReplyExpectation).toBe("optional");
     expect(embeddedArg.cronCreatorAuthorityCapability).toBe(capability);
     const callback = embeddedArg.onExecutionStarted;
     if (typeof callback !== "function") {

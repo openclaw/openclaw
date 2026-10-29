@@ -19,6 +19,7 @@ import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permi
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   assertDatabasePortRecoveryAllowed,
   assertDatabasePortStartupAllowed,
@@ -452,6 +453,7 @@ export async function acquireGatewayLock(
     stateDir: paths.stateDir,
     role,
     processNamespace: readGatewayLockProcessNamespace(),
+    machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     ...(role === "gateway" ? { cronOwnerProjection: "dynamic-default-v1" as const } : {}),
     ...(typeof opts.port === "number" &&
     Number.isInteger(opts.port) &&

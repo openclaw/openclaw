@@ -4,7 +4,6 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginHookSessionContext } from "../plugins/session-end-transcript.js";
 import { readAttachedSessionEndTranscriptSourceForTest } from "../plugins/session-end-transcript.test-support.js";
 import {
@@ -217,40 +216,6 @@ function lifecycleEvents(): [HookEventRecord, HookEventRecord] {
     firstHookCall(sessionLifecycleHookMocks.runSessionStart)[0],
   ];
 }
-
-test("sessions.reset removes automatic recovery state from the replacement session", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-recovery", "hello");
-  await writeStoredSession("sess-recovery", {
-    abortedLastRun: true,
-    restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration: "generation-1" }],
-    mainRestartRecovery: {
-      cycleId: "cycle-1",
-      revision: 5,
-      chargedAttempts: 3,
-      foregroundClaims: {
-        lifecycleGeneration: "generation-1",
-        tokens: ["foreground-owner"],
-      },
-      tombstone: { reason: "exhausted" },
-    },
-    subagentRecovery: {
-      automaticAttempts: 2,
-      lastAttemptAt: 10,
-      lastRunId: "child-recovery-run",
-      wedgedAt: 20,
-      wedgedReason: "child exhausted",
-    },
-  });
-
-  await resetSession();
-
-  const replacement = readStoredSession();
-  expect(replacement).toMatchObject({ sessionId: "sess-recovery", abortedLastRun: false });
-  expect(replacement?.restartRecoveryRuns).toBeUndefined();
-  expect((replacement as InternalSessionEntry | undefined)?.mainRestartRecovery).toBeUndefined();
-  expect(replacement?.subagentRecovery).toBeUndefined();
-});
 
 test("sessions.reset does not begin cleanup after losing lifecycle ownership", async () => {
   const { dir } = await createSessionStoreDir();

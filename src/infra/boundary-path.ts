@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { resolvePathViaExistingAncestorSync as resolvePathViaExistingAncestorSyncRaw } from "@openclaw/fs-safe/advanced";
 import { safeRealpathSync } from "@openclaw/fs-safe/path";
-import { realpathExistingAncestorSync } from "./path-existence.js";
+import { realpathExistingAncestor, realpathExistingAncestorSync } from "./path-existence.js";
 export { safeRealpathSync } from "@openclaw/fs-safe/path";
 
 // Bun follow-up: Remove this stable frame after fs-safe drops its N-API realpath
@@ -25,6 +25,11 @@ export function resolveIdentityPathViaExistingAncestorSync(targetPath: string): 
   // Identity aliases must converge even after an intermediate realpath failure,
   // or ownership and lock callers can split one resource into separate identities.
   return realpathExistingAncestorSync(fallback) ?? fallback;
+}
+
+export async function resolveIdentityPathViaExistingAncestor(targetPath: string): Promise<string> {
+  const fallback = path.resolve(targetPath);
+  return (await realpathExistingAncestor(fallback)) ?? fallback;
 }
 
 // Boundary path resolution keeps alias expansion and realpath checks in one

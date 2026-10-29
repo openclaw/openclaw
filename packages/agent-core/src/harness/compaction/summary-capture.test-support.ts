@@ -1,4 +1,3 @@
-import { expect } from "vitest";
 import type { AssistantMessage, Model } from "../../llm.js";
 import type { SessionTreeEntry } from "../types.js";
 import { createMessageEntry } from "./compaction.test-support.js";
@@ -25,15 +24,4 @@ export function compactionEntry(
     tokensBefore: 200_000,
     ...overrides,
   };
-}
-
-export function contains(value: string, ...parts: string[]) {
-  for (const part of parts) {
-    expect(value).toContain(part);
-  }
-}
-export function excludes(value: string, ...parts: string[]) {
-  for (const part of parts) {
-    expect(value).not.toContain(part);
-  }
 }

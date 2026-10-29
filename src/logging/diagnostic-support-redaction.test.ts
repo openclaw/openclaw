@@ -195,7 +195,7 @@ describe("diagnostic support redaction", () => {
     ["SQLite file generation changed while reading", ": /private/example/openclaw.sqlite"],
     ["SQLite file generation did not stabilize", " during confirmation: /private/example/a.sqlite"],
     [
-      "SQLite source did not stabilize",
+      "SQLite source did not stabilize; (reason=wal-copy-unstable, attempts=10)",
       " after 3 read-only inspection attempts: /private/x.sqlite",
     ],
     ["SQLite WAL commit header is unavailable or changing", ": /private/example/a.sqlite"],
@@ -215,6 +215,10 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    "(reason=private-customer, attempts=10)",
+    "(reason=source-disappeared, attempts=1000)",
+    "(reason=source-disappeared, attempts=1.5)",
+    "(reason=source-disappeared, attempts=0)",
     "ERR_PNPM_PRIVATE_CUSTOMER",
     "ERR_OSSL_PRIVATE_CUSTOMER",
     "EPRIVATE_CUSTOMER",

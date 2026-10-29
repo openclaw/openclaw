@@ -8,7 +8,7 @@ import {
   waitForPatch,
 } from "./session-management.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
   it("keeps the drag source still while promoting a nested conversation with a native pointer", async () => {

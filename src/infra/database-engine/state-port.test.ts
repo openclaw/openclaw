@@ -259,3 +259,54 @@ it("preserves v30 workspace recovery shape and admits incremental storage only a
     "sqlite_stat4",
   ]);
 });
+
+it("preserves schema 33/34 workspace inputs and ports shared digests and fingerprints at schema 35", async () => {
+  for (const version of [33, 34, 35]) {
+    const descriptor = await loadStatePortDescriptor(version);
+    const workspace = descriptor.fragments!.find(
+      (fragment) => fragment.id === "local_workspace_projections",
+    )!;
+    using source = openNodeSqliteDatabase(":memory:");
+    source.exec(workspace.sqlite);
+    const columns = new Set(
+      source
+        .prepare("PRAGMA table_info(local_workspace_projections)")
+        .all()
+        .map((column) => column.name),
+    );
+    for (const column of [
+      "tree_root_digest",
+      "source_paths_digest",
+      "canonical_fingerprints",
+      "projection_fingerprints",
+    ]) {
+      expect(columns.has(column)).toBe(version === 35);
+    }
+    for (const table of ["local_workspace_tree_packs", "local_workspace_source_path_sets"]) {
+      expect(
+        source.prepare(`SELECT name FROM sqlite_schema WHERE name = ?`).get(table) !== undefined,
+      ).toBe(version === 35);
+      expect(workspace.tables.some((entry) => entry.name === table)).toBe(version === 35);
+      if (version === 35) {
+        expect(workspace.tables.find((entry) => entry.name === table)?.pk).toEqual([
+          table === "local_workspace_tree_packs" ? "tree_digest" : "path_digest",
+        ]);
+      }
+      expect((workspace.preData + workspace.postData).includes(`CREATE TABLE "${table}"`)).toBe(
+        version === 35,
+      );
+    }
+    // The online converter still needs its retained source at both versions.
+    expect(source.prepare("PRAGMA table_info(local_workspace_manifest_nodes)").all()).toHaveLength(
+      3,
+    );
+  }
+  expect(backupTables(34, 35)).toEqual([
+    "config_machine_state",
+    "local_workspace_manifest_nodes",
+    "local_workspace_projections",
+    "local_workspace_source_path_sets",
+    "local_workspace_tree_packs",
+    "schema_meta",
+  ]);
+});

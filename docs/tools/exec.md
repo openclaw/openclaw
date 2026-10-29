@@ -8,9 +8,11 @@ title: "Exec tool"
 
 Run shell commands in the workspace. `exec` is a mutating shell surface: commands can create, edit, or delete files wherever the selected host or sandbox filesystem permits. Disabling OpenClaw filesystem tools such as `write`, `edit`, or `apply_patch` does not make `exec` read-only.
 
-Gateway, sandbox, and worker-local execution support foreground and background execution via `process`. Remote `host=node` execution uses synchronous `system.run` and never creates a `process` session, even when `process` is enabled. If `process` is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped per agent. `process` only sees sessions from the same agent.
+Gateway, sandbox, and worker-local execution support foreground and background execution via `process`. Remote `host=node` execution uses synchronous `system.run` and never creates a `process` session, even when `process` is enabled. If `process` is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped to their originating session. Child sessions can also manage ancestor processes within the same agent; unrelated session trees and other agents cannot access them.
 
 Completed calls return command output directly. Use `process` only when `exec` reports that a command is still running and provides a `sessionId`; an identifier printed by the command is ordinary output, not a process handle.
+
+Workdir errors and failed foreground process results on the Gateway or in its sandbox include a concise diagnostic in `message`, separate from command output in `aggregated`. Code Mode receives both fields, so it can inspect failures and recovery guidance without duplicating the command output. Ordinary completed commands keep their existing output and exit-code behavior.
 
 Headless node-host commands terminated by an operating-system signal include the signal name in the result, even when no numeric exit code is available. Output printed before termination does not mean the command succeeded.
 
@@ -109,6 +111,7 @@ Notes:
 - For long-running work that starts now, start it once. When enabled, automatic completion wake can happen after the command exits. New output while the command is still running does not start another turn. Use `process` for logs, status, input, or intervention. Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
 
 - When `tools.exec.notifyOnExit=false`, a running result explicitly says that automatic completion wake is disabled, in both its text and structured `followUp`. Later `process poll`, `log`, and `list` results preserve that guidance while the command is running, using the policy captured when it started. If the task needs the result, collect it with `process poll` and a timeout before ending the turn, unless another continuation is already arranged. A running process or active session goal does not arrange that continuation.
+- Running results preserve execution warnings in structured `warningText` as well as visible text, so Code Mode callers can follow guidance such as using a noninteractive command when sandbox PTY is unavailable. Calls without warnings omit this field.
 - A background command continuation keeps the original requester's still-current authority, including permitted reviewer models. Another participant's permissions do not replace it, and revoked authority prevents further execution.
 - When an approved async command completes, its continuation uses the normal agent run timeout from `agents.defaults.timeoutSeconds`. The follow-up observer can finish waiting while the accepted agent run continues.
 - Subagent sessions do not receive automatic background-exec wakes. Collect the result with `process poll` before yielding without another completion source.
@@ -356,7 +359,7 @@ Notes:
 - `deny: ["write"]` does not deny `apply_patch`. Deny `apply_patch` explicitly or use `deny: ["group:fs"]` when patch writes should also be blocked.
 - Config lives under `tools.exec.applyPatch`.
 - `tools.exec.applyPatch.enabled` defaults to `true`. Set it to `false` to disable the tool.
-- `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
+- `tools.exec.applyPatch.workspaceOnly` defaults to `false` for host execution. Set it to `true` to restrict patches to the workspace. Required roots, session restrictions, and sandbox filesystem boundaries remain authoritative.
 - `tools.exec.applyPatch.allowModels` is an optional allowlist of model ids (raw, like `gpt-5.4`, or full, like `openai/gpt-5.4`). When set, only matching models get the tool. When unset, all models get it.
 
 ## Related

@@ -279,6 +279,7 @@ export async function agentExecCommand(
           cleanupBundleMcpOnRunEnd: true,
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
+          operatorDirectRoot: true,
           abortSignal,
           onModelFallbackExhausted: () => {
             fallbackExhausted = true;

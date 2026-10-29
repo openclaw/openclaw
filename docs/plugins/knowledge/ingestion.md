@@ -130,6 +130,10 @@ mutation:
 - Upload originals first; batches take no inline source text.
 - Duplicate keys or targets and missing references reject before anything is
   saved. Required fields and evidence stay required.
+- Page items are subject to the [page budget](/plugins/knowledge/tools#page-budgets).
+  A batch with an over-budget page returns `state: "rejected"` and saves none of
+  its items, claims included; resubmit the claims alone or with
+  `knowledge_remember`.
 
 All items are validated together against one authorized snapshot and accepted
 into one journal entry. Retry with the same UUID and payload after an uncertain

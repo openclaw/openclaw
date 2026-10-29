@@ -336,11 +336,7 @@ function mediaReferenceSet(mediaUrls: readonly string[]) {
 
 function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   events: readonly TranscriptEvent[],
-  params: {
-    assistantMessageIndex: number;
-    mediaUrls: readonly string[];
-    rejectedMediaCount: number;
-  },
+  params: Parameters<typeof rewriteAssistantTranscriptMessageByTurnIndexAndMedia>[0],
 ): { messageId: string; message: Record<string, unknown> } | null {
   const expectedMedia = mediaReferenceSet(params.mediaUrls);
   if (

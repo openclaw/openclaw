@@ -14,9 +14,9 @@ import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import {
   activePlacementSession,
   createPaneHeaderWorkspaceFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { openSlot } from "../sidebar-layout.ts";
 import {
@@ -271,7 +271,7 @@ describe("chat pane header", () => {
     });
     const menu = container.querySelector(".chat-pane__layout-menu")!;
     expect(readShortcut).not.toHaveBeenCalled();
-    await openNativeMenu(menu);
+    await openNativeMenu(menu, "terminal");
     const shortcut = menu.querySelector('[data-value="terminal"] kbd');
     expect(shortcut).not.toBeNull();
     update({ panelMenuActions: [action("Open terminal")] });

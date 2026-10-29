@@ -35,12 +35,10 @@ function expectModelPlan(
     modelApplied: true,
     initialSessionPatch: { modelProvider: provider, model, modelOverrideSource: source },
   });
-  expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe(
-    hasOrigin ? provider : undefined,
-  );
-  expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe(
-    hasOrigin ? model : undefined,
-  );
+  expect([
+    plan.initialSessionPatch.modelOverrideFallbackOriginProvider,
+    plan.initialSessionPatch.modelOverrideFallbackOriginModel,
+  ]).toEqual(hasOrigin ? [provider, model] : [undefined, undefined]);
 }
 
 it("threads explicit fast mode into the initial child session patch", async () => {

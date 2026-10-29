@@ -1,15 +1,5 @@
-import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
-import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
-import { SessionRestartRecoveryTombstoneError } from "../../config/sessions/lifecycle.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { classifySessionStateActor } from "../../sessions/session-state-events.js";
-import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import { createInboundMessageAuditTerminal } from "./dispatch-from-config.audit.js";
@@ -30,18 +20,6 @@ import { prepareInternalGetReplyOptions } from "./get-reply.types.js";
 import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
-
-type RecoveryNotice = {
-  sessionId: string;
-  cycleId: string;
-};
-
-const MAX_RECOVERY_NOTICES = 1_024;
-const log = createSubsystemLogger("auto-reply/reply-turn-admission");
-const notices = resolveGlobalMap<string, RecoveryNotice>(
-  Symbol.for("openclaw.replyRestartRecoveryNotices"),
-  "close-and-restart",
-);
 
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
@@ -181,90 +159,6 @@ async function dispatchReplyFromConfigInner(
         markIdle("message_error");
       }
       failDispatchReplyOperation(err);
-      if (
-        err instanceof SessionRestartRecoveryTombstoneError &&
-        params.ctx.InboundAccessAuthorized === true &&
-        params.ctx.InboundEventKind !== "room_event" &&
-        params.ctx.InternalTurnSource === undefined &&
-        classifySessionStateActor({ inputProvenance: params.ctx.InputProvenance }).actorType ===
-          "human" &&
-        !errorState.isInternalWebchatTurn &&
-        !errorState.sendPolicyDenied &&
-        !errorState.suppressAcpChildUserDelivery &&
-        params.replyOptions?.abortSignal?.aborted !== true &&
-        errorState.dispatchOperationSessionKey &&
-        errorState.operationSessionStoreEntry.storePath
-      ) {
-        const agentId = errorState.operationSessionStoreEntry.agentId ?? errorState.sessionAgentId;
-        const cfg = errorState.cfg;
-        const channel = errorState.deliveryChannel;
-        const sessionKey = errorState.dispatchOperationSessionKey;
-        const storePath = errorState.operationSessionStoreEntry.storePath;
-        try {
-          const currentAcpSession = await readAcpSessionEntryAsync({ cfg, agentId, sessionKey });
-          // Admission may have waited while reset or deletion changed the session.
-          const entry: InternalSessionEntry | undefined = await readSessionEntryReadOnlyInWorker({
-            agentId,
-            sessionKey,
-            storePath,
-            readConsistency: "latest",
-          });
-          const recovery = entry?.mainRestartRecovery;
-          if (
-            entry &&
-            recovery?.tombstone &&
-            !isParentOwnedBackgroundAcpSession(
-              currentAcpSession?.entry
-                ? { ...currentAcpSession.entry, acp: currentAcpSession.acp }
-                : undefined,
-            ) &&
-            resolveSendPolicy({
-              cfg,
-              entry,
-              sessionKey,
-              channel,
-              chatType: entry.chatType,
-            }) !== "deny"
-          ) {
-            const key = JSON.stringify([agentId, storePath, sessionKey]);
-            const previous = notices.get(key);
-            if (
-              !(previous?.sessionId === entry.sessionId && previous.cycleId === recovery.cycleId)
-            ) {
-              notices.delete(key);
-              pruneMapToMaxSize(notices, MAX_RECOVERY_NOTICES - 1);
-              // Claim before awaiting delivery; ambiguous failures must not produce a notice storm.
-              notices.set(key, { sessionId: entry.sessionId, cycleId: recovery.cycleId });
-              const hint =
-                entry.modelSelectionLocked === true
-                  ? "Open it in WebChat and use Resume."
-                  : "Use Resume in WebChat, or /reset or /new to start a replacement session.";
-              const payload = {
-                text: `My session in this room ended during restart recovery. ${hint}`,
-                isError: true,
-              };
-              const routed = await errorState.routeReplyToOriginating(payload, { mirror: false });
-              let delivered = false;
-              if (routed) {
-                delivered = errorState.isRoutedReplyDelivered(routed);
-              } else if (params.dispatcher.sendFinalReply(payload)) {
-                const receipt = await params.dispatcher.waitForIdle();
-                // Ambiguous sends suppress retries but do not confirm notice delivery.
-                delivered = receipt ? receipt.counts.final.delivered > 0 : false;
-              }
-              if (!delivered) {
-                log.warn(
-                  `restart recovery notice delivery was not confirmed for session ${sessionKey}`,
-                );
-              }
-            }
-          }
-        } catch (error) {
-          log.warn(
-            `failed to deliver restart recovery notice for session ${sessionKey}: ${String(error)}`,
-          );
-        }
-      }
       throw err;
     }
   };

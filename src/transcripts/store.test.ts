@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -637,6 +639,95 @@ it.runIf(process.platform !== "win32")(
     await expectLegacyRejection(target);
   },
 );
+
+it("refuses read-only artifact export before committing lease state", async () => {
+  const target = await admit();
+  const readonly = new TranscriptsStore(path.join(suiteStateDir, "transcripts"), {
+    ...databaseOptions(),
+    readOnly: true,
+  });
+  using reader = new DatabaseSync(openOpenClawStateDatabase(databaseOptions()).path, {
+    readOnly: true,
+  });
+  const revision = reader.prepare("PRAGMA data_version").get();
+  await expect(readonly.materializeSessionArtifacts(target, "all")).rejects.toThrow(
+    "State lease acquisition requires writable storage",
+  );
+  expect(reader.prepare("PRAGMA data_version").get()).toEqual(revision);
+  expect(fs.existsSync(readonly.sessionDir(target))).toBe(false);
+});
+
+it("exports artifacts without host ownership filesystem checks or SQLite work", async () => {
+  const owner = acquireGatewayStateOwner({
+    databasePath: openOpenClawStateDatabase(databaseOptions()).path,
+    payload: {
+      role: "gateway",
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: path.join(suiteStateDir, "openclaw.json"),
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+  const target = await admit(session("async-export"), ["Saved speech"]);
+  const lstat = fs.lstatSync;
+  const ownerReads: Array<string | undefined> = [];
+  const probe = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
+    if (String(pathname) === owner.path) {
+      ownerReads.push(new Error("Host ownership filesystem read").stack);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    return lstat(pathname, options);
+  });
+  const sql = observeMainThreadSql();
+  try {
+    const artifacts = await store.materializeSessionArtifacts(target, "all");
+    expect(readText(artifacts.transcriptPath)).toContain("Saved speech");
+    expect(ownerReads).toEqual([]);
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+    probe.mockRestore();
+    await closeDatabase();
+    owner.release();
+  }
+});
+
+it("refuses artifact publication when ownership changes during staging", async () => {
+  const owner = acquireGatewayStateOwner({
+    databasePath: openOpenClawStateDatabase(databaseOptions()).path,
+    payload: {
+      role: "gateway",
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: path.join(suiteStateDir, "openclaw.json"),
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+  const originalOwner = fs.readFileSync(owner.path);
+  const target = await admit({ ...session("revoked-export"), title: "Original" });
+  const artifacts = await store.materializeSessionArtifacts(target, "metadata");
+  const originalMetadata = readText(artifacts.metadataPath);
+  await store.writeSession({ ...target, title: "Changed" });
+  const write = fs.promises.writeFile;
+  let staged = false;
+  const probe = vi.spyOn(fs.promises, "writeFile").mockImplementation(async (...args) => {
+    await write(...args);
+    if (typeof args[0] === "string" && path.basename(args[0]) === "metadata.json") {
+      staged = true;
+      fs.writeFileSync(owner.path, "replacement");
+    }
+  });
+  try {
+    await expect(store.materializeSessionArtifacts(target, "metadata")).rejects.toThrow();
+    expect(staged).toBe(true);
+    expect(readText(artifacts.metadataPath)).toBe(originalMetadata);
+  } finally {
+    probe.mockRestore();
+    fs.writeFileSync(owner.path, originalOwner);
+    owner.release();
+    await closeDatabase();
+  }
+});
 
 it("exports canonical durable notes, recovers concurrent manifests, and preserves externally edited artifacts", async () => {
   const exportRoot = path.join(suiteStateDir, "transcripts");

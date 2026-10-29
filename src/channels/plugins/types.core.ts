@@ -617,6 +617,8 @@ export type ChannelMessagingAdapter = {
     };
     replyToId?: string | null;
     threadId?: string | number | null;
+    /** Revalidates transport authority before new route-discovery network requests. */
+    assertDirectAdapterHandoff?: () => void;
   }) => ChannelOutboundSessionRoute | Promise<ChannelOutboundSessionRoute | null> | null;
 };
 
@@ -842,6 +844,7 @@ export type ChannelPollContext = Pick<
   | "silent"
   | "isAnonymous"
   | "gatewayClientScopes"
+  | "signal"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"
 > & {

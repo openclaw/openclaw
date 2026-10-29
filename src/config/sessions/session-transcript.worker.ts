@@ -556,8 +556,9 @@ serveOwnedWorkerTasks(
       if (request.kind === "goal-operation-receipt") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { readSessionGoalOperationInDatabase, SessionGoalOperationError } =
-          await import("./goals-operations.js");
+        const { readSessionGoalOperationInDatabase } =
+          await import("./goals-operation-receipts.js");
+        const { SessionGoalOperationError } = await import("./goals-operations.types.js");
         const { assertSessionGoalOperationTime } = await import("./goals-operation-policy.js");
         try {
           assertSessionGoalOperationTime(request.operation, Date.now());
@@ -690,7 +691,10 @@ serveOwnedWorkerTasks(
             ? value.result.response?.body
             : undefined;
       const deflated = value.kind === "rpc" ? value.page.encodedMessagesDeflate : undefined;
-      return [...(body ? [body.buffer] : []), ...(deflated ? [deflated.buffer] : [])];
+      const activity = value.kind === "rpc" ? value.page.encodedResponse?.activity : undefined;
+      return [body?.buffer, deflated?.buffer, activity?.buffer].filter(
+        (buffer) => buffer !== undefined,
+      );
     },
     closeResource: (key) => {
       const request = decodeAgentDatabaseReaderRequest(key);

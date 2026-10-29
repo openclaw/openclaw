@@ -150,7 +150,7 @@ suite.define(() => {
     },
   );
 
-  it("ignores a restored cloud preference for a write-scoped caller", async () => {
+  it("ignores a restored cloud preference without a profile grant", async () => {
     const page = await openPage();
     await seedLocalPreferences(page, { where: { kind: "cloud", id: "aws" } });
     const gateway = await installMockGateway(page, {
@@ -170,6 +170,7 @@ suite.define(() => {
             },
           ],
           profiles: [{ id: "aws", providerId: "crabbox" }],
+          dispatchableProfileIds: [],
         },
         "worktrees.branches": GIT_BRANCHES,
       },

@@ -6,7 +6,6 @@ ui/src/components/desktop/desktop-session-owner.ts	1
 ui/src/components/terminal/terminal-connection.ts	1
 ui/src/lib/board/gateway-provider.ts	1
 ui/src/lib/reactive/listener.ts	1
-ui/src/main.ts	2
 ui/src/pages/chat/components/chat-attachment-image.worker.ts	1
 ui/src/pages/chat/components/chat-attachment-video.worker.ts	1
 ui/src/pages/chat/composer-dictation-session.ts	2

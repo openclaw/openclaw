@@ -1,6 +1,10 @@
 import { expect, it, onTestFinished } from "vitest";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
-import { createRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -29,7 +33,6 @@ function runError(
     resolveVisibleReplyDelivery: async () => false,
 
     replyExpectation: "required",
-    isRestartRecoveryArmed: async () => false,
     replyOperation,
     resolvedVerboseLevel: "off",
     returnWithQueuedFollowupDrain: (value) => value,
@@ -38,25 +41,22 @@ function runError(
   });
 }
 
-it.each([{ armed: false }, { armed: true }, { claimChanged: true }])(
-  "resolves restart recovery before choosing guidance: %j",
-  async ({ armed, claimChanged }) => {
-    const reply = await runError(
-      claimChanged ? createRestartRecoveryClaimChangedError() : new Error("restart"),
-      { isRestartRecoveryArmed: async () => armed ?? false },
-      !claimChanged,
-    );
-    const expected = claimChanged
-      ? "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed."
-      : armed
-        ? undefined
-        : "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
-    expect(reply?.text).toBe(expected);
-    if (claimChanged) {
-      expect(reply?.isError).toBe(true);
-    }
-  },
-);
+it("ends shutdown quietly with an already aborted operation", async () => {
+  expect(await runError(new GatewayDrainingError(), {}, true)).toEqual({});
+});
+
+it("ends a live restart refusal quietly before the operation is aborted", async () => {
+  onTestFinished(resetGatewayWorkAdmission);
+  markGatewayRestartDraining();
+  expect(await runError(new GatewayDrainingError())).toEqual({});
+});
+
+it("reports a stale drain refusal when no restart owns the operation", async () => {
+  expect(await runError(new GatewayDrainingError())).toMatchObject({
+    isError: true,
+    text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+  });
+});
 
 it.each([false, true])(
   "keeps setup failures retryable only before durable acceptance (%s)",

@@ -1,10 +1,13 @@
 // Real built UI, Gateway persistence, queue admission and OpenAI plugin; only external I/O is synthetic.
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { zstdDecompressSync } from "node:zlib";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
@@ -12,19 +15,27 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.js";
+import type { ModelCatalogResult, SessionsListResult } from "../api/types.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let owner: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
+const call = <T = unknown>(method: string, params: Record<string, unknown>) =>
+  client.request<T>(method, params);
 let dir: string;
 let programs: string[] | undefined = ["standard", "daybreak_blue", "daybreak_red"];
 let reasoningEfforts = ["medium"];
-const receipts: Array<{ model: string; access?: unknown; tier?: string }> = [];
+const receipts: Array<{ model: string; access?: unknown; tier?: string; credential: string }> = [];
+let preparationGate: ServerResponse | undefined;
+const unentitledKey = "sk-synthetic-unentitled-fixture";
 const held = new Map<number, ServerResponse>();
 let holdNext = false;
 let inferenceRequests = 0;
@@ -42,6 +53,14 @@ const reply = (response: ServerResponse, index: number) =>
 const suite = createControlUiE2eSuite({
   name: "Daybreak through a real built Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(owner, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     dir = createControlUiE2eArtifactDir("daybreak-real-gateway");
     const provider = await reserveTestPortListener({
@@ -50,6 +69,13 @@ const suite = createControlUiE2eSuite({
         createServer((request, response) => {
           void (async () => {
             const url = new URL(request.url ?? "/", "http://fixture");
+            if (url.pathname === "/fixture/preparation-gate") {
+              request.resume();
+              preparationGate = response;
+              return;
+            }
+            const advertised =
+              request.headers.authorization === "Bearer " + unentitledKey ? [] : programs;
             if (url.pathname === "/v1/models") {
               response.setHeader("content-type", "application/json");
               response.end(JSON.stringify({ data: [{ id: "gpt-6.1-sol", object: "model" }] }));
@@ -71,7 +97,7 @@ const suite = createControlUiE2eSuite({
                         description: effort,
                       })),
                       service_tiers: [{ id: "priority" }, { id: "ultrafast" }],
-                      ...(programs ? { available_access_programs: { cyber: programs } } : {}),
+                      ...(advertised ? { available_access_programs: { cyber: advertised } } : {}),
                     },
                   ],
                 }),
@@ -100,6 +126,14 @@ const suite = createControlUiE2eSuite({
                 model: body.model,
                 access: body.access_programs,
                 tier: body.service_tier,
+                credential:
+                  request.headers.authorization === "Bearer sk-synthetic-configured-fixture"
+                    ? "configured"
+                    : request.headers.authorization === "Bearer " + unentitledKey
+                      ? "unentitled"
+                      : request.headers.authorization === "Bearer sk-synthetic-platform-fixture"
+                        ? "saved-profile"
+                        : "subscription",
               });
               if (holdNext) {
                 holdNext = false;
@@ -120,15 +154,46 @@ const suite = createControlUiE2eSuite({
     const preload = path.join(dir, "provider-network-fixture.cjs");
     await writeFile(
       preload,
-      `const undici = require("undici/index.js");
+      `const undici = require(${JSON.stringify(createRequire(import.meta.url).resolve("undici/index.js"))});
 // Keep fetch and its dispatcher on the same Undici version.
 const original = undici.fetch;
 const localDispatcher = new undici.Agent();
-globalThis.fetch = (input, init) => { const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url); if (url.hostname === "chatgpt.com" || url.hostname === "api.openai.com") { const local = "http://127.0.0.1:PORT" + url.pathname + url.search; const { dispatcher, ...localInit } = init ?? {}; return original(typeof input === "string" || input instanceof URL ? local : new Request(local, input), { ...localInit, dispatcher: localDispatcher }); } if (url.hostname === "127.0.0.1" || url.hostname === "localhost") return original(input, init); throw new Error("External network forbidden in Daybreak fixture: " + url.hostname); };
+globalThis.fetch = (input, init) => { const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url); if (url.hostname === "chatgpt.com" || url.hostname === "api.openai.com") { const local = "http://127.0.0.1:PORT" + url.pathname + url.search; const { dispatcher, ...localInit } = init ?? {}; return original(typeof input === "string" || input instanceof URL ? local : new Request(local, input), { ...localInit, dispatcher: localDispatcher }); } if (url.hostname === "127.0.0.1" || url.hostname === "localhost") return original(input, { ...init, dispatcher: localDispatcher }); throw new Error("External network forbidden in Daybreak fixture: " + url.hostname); };
 // Cover native dispatcher fetch as well as global fetch; no provider I/O leaves the fixture.
 globalThis.fetch.mock = {};
 globalThis.__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__ = { ...undici, fetch: globalThis.fetch };
 `.replace("PORT", String(provider.claim.port)),
+    );
+    const gatePlugin = path.join(dir, "preparation-gate");
+    await mkdir(gatePlugin);
+    await writeFile(
+      path.join(gatePlugin, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "daybreak-proof-gate",
+        activation: { onStartup: true },
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+    );
+    await writeFile(
+      path.join(gatePlugin, "package.json"),
+      JSON.stringify({
+        name: "daybreak-proof-gate",
+        version: "0.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.js"] },
+      }),
+    );
+    await writeFile(
+      path.join(gatePlugin, "index.js"),
+      `export default { id: "daybreak-proof-gate", register(api) {
+      api.on("before_agent_run", async (event) => {
+        if (event.prompt.includes("DAYBREAK_REPLACEMENT_BARRIER")) {
+          const response = await fetch(${JSON.stringify("http://127.0.0.1:" + provider.claim.port + "/fixture/preparation-gate")}, {method:"POST"});
+          if (!response.ok) throw new Error("Preparation barrier failed");
+          await response.text();
+        }
+      });
+    } };`,
     );
     owner = await createOpenClawTestInstance({
       name: "daybreak-real-gateway",
@@ -161,8 +226,26 @@ globalThis.__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__ = { ...undici, fetch: globalThi
             },
           },
         },
-        plugins: { allow: ["openai"], entries: { codex: { enabled: false } } },
-        models: { catalogRefresh: { enabled: false } },
+        plugins: {
+          allow: ["openai", "daybreak-proof-gate"],
+          load: { paths: [gatePlugin] },
+          entries: {
+            codex: { enabled: false },
+            "daybreak-proof-gate": { enabled: true, hooks: { allowConversationAccess: true } },
+          },
+        },
+        models: {
+          catalogRefresh: { enabled: false },
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-responses",
+              auth: "api-key",
+              apiKey: "sk-synthetic-configured-fixture",
+              models: [],
+            },
+          },
+        },
       },
     });
     const token =
@@ -197,6 +280,8 @@ globalThis.__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__ = { ...undici, fetch: globalThi
         await writeFile(path.join(dir, "gateway.private.log"), owner.logs());
         await owner.cleanup();
       } finally {
+        preparationGate?.destroy();
+        preparationGate = undefined;
         for (const response of held.values()) {
           response.destroy();
         }
@@ -221,19 +306,14 @@ globalThis.__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__ = { ...undici, fetch: globalThi
 });
 
 suite.define(() => {
-  it("discovers Platform programs in the UI without submitting an inference request", async () => {
+  it("discovers configured-key programs in the UI and submits the selected access", async () => {
     const runCli = async (args: string[]) => {
       const result = await owner.cli(args);
       expect(result.code, result.stderr).toBe(0);
       return result.stdout;
     };
-    const call = async (method: string, params: Record<string, unknown>) =>
-      JSON.parse(
-        await runCli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
-      );
     const key = "agent:main:platform-discovery";
     await call("sessions.create", { key, agentId: "main", label: "Platform discovery" });
-    await call("sessions.patch", { key, model: "openai/gpt-6.1-sol@openai:platform-fixture" });
     const inferenceCount = inferenceRequests;
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, colorScheme: "dark" },
@@ -246,7 +326,7 @@ suite.define(() => {
           ["standard", "daybreak_red"],
         ]) {
           programs = advertised;
-          const result = await call("models.list", {
+          const result = await call<ModelCatalogResult>("models.list", {
             agentId: "main",
             sessionKey: key,
             view: "configured",
@@ -255,7 +335,6 @@ suite.define(() => {
           expect(result.providerOutcomes).toContainEqual(
             expect.objectContaining({
               provider: "openai",
-              profileId: "openai:platform-fixture",
               status: "ready",
             }),
           );
@@ -283,231 +362,517 @@ suite.define(() => {
                   nodes.map((node) => node.getAttribute("data-chat-access-option")),
                 ),
             )
-            .toEqual(advertised ?? []);
+            .toEqual(advertised?.filter((program) => program !== "standard") ?? []);
+          await expect
+            .poll(() => picker.getByRole("switch", { name: "Daybreak", exact: true }).count())
+            .toBe(advertised?.some((program) => program !== "standard") ? 1 : 0);
+          expect(inferenceRequests).toBe(inferenceCount);
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            picker.locator(".chat-controls__effort-menu"),
+            [],
+            { animations: "disabled" },
+          );
+          await writeFile(
+            path.join(dir, "configured-key-" + (advertised?.at(-1) ?? "unknown") + ".png"),
+            frame.png,
+          );
         }
+        const picker = page.locator(".chat-controls__effort-picker").first();
+        const toggle = picker.getByRole("switch", { name: "Daybreak", exact: true });
+        await toggle.check();
+        await expect.poll(() => toggle.isChecked()).toBe(true);
+        await expect
+          .poll(() =>
+            picker.locator('[data-chat-access-option="daybreak_red"]').getAttribute("aria-pressed"),
+          )
+          .toBe("true");
+        await expect
+          .poll(async () => {
+            const result = await call<SessionsListResult>("sessions.list", { agentId: "main" });
+            return result.sessions.find((session) => session.key === key)?.cyberAccessProgram;
+          })
+          .toBe("daybreak_red");
+        const index = receipts.length;
+        await evaluateControlUiContext(
+          page,
+          async (context, data) =>
+            context.gateway.snapshot.client!.request("chat.send", {
+              sessionKey: data.key,
+              message: "Reply with the fixture result.",
+              idempotencyKey: data.id,
+            }),
+          { key, id: randomUUID() },
+        );
+        await expect.poll(() => receipts.length).toBe(index + 1);
+        expect(receipts[index]?.access).toEqual({ cyber: "daybreak_red" });
+        await expect
+          .poll(async () => {
+            const result = await call<SessionsListResult>("sessions.list", { agentId: "main" });
+            return Boolean(result.sessions.find((session) => session.key === key)?.hasActiveRun);
+          })
+          .toBe(false);
       },
     );
-    expect(inferenceRequests).toBe(inferenceCount);
-    proof.platformDiscovery = { complete: true, inferenceRequests: 0 };
+    proof.platformDiscovery = {
+      complete: true,
+      discoveryInferenceRequests: 0,
+      selectedAccessRequests: 1,
+    };
   }, 90_000);
 
-  it("persists visible selections and refreshes queued requests on desktop and mobile", async () => {
+  it("rejects foreign grants and credential replacement before final Responses dispatch", async () => {
+    programs = ["standard", "daybreak_blue"];
+    const configureKey = async (apiKey: string) => {
+      const config = await call<{ hash: string }>("config.get", {});
+      await call("config.patch", {
+        baseHash: config.hash,
+        raw: JSON.stringify({ models: { providers: { openai: { apiKey } } } }),
+        response: "summary",
+      });
+      await call("models.list", { agentId: "main", provider: "openai", refresh: true });
+    };
+    const catalog = async (key: string) =>
+      (
+        await call<ModelCatalogResult>("models.list", {
+          sessionKey: key,
+          view: "configured",
+          provider: "openai",
+          refresh: true,
+        })
+      ).models.find((model) => model.id === "gpt-6.1-sol")?.availableAccessPrograms?.cyber;
+    const create = async (key: string) => {
+      await call("sessions.create", { key, agentId: "main", label: key });
+      await call("sessions.patch", { key, cyberAccessProgram: "daybreak_blue" });
+    };
+    await configureKey("sk-synthetic-configured-fixture");
+    const control = "agent:main:dispatch-control";
+    await create(control);
+    const donor = "agent:main:dispatch-donor";
+    await call("sessions.create", {
+      key: donor,
+      agentId: "main",
+      label: "Independent saved account",
+    });
+    await call("sessions.patch", {
+      key: donor,
+      model: "openai/gpt-6.1-sol@openai:platform-fixture",
+    });
     const runCli = async (args: string[]) => {
       const result = await owner.cli(args);
       expect(result.code, result.stderr).toBe(0);
       return result.stdout;
     };
-    const call = async (method: string, params: Record<string, unknown>) =>
-      JSON.parse(
-        await runCli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
-      );
-    for (const mobile of [false, true]) {
-      const name = mobile ? "mobile" : "desktop";
-      const key = "agent:main:daybreak-" + name;
-      programs = ["standard", "daybreak_blue", "daybreak_red"];
-      reasoningEfforts = ["medium"];
-      proof.initialCatalog = await call("models.list", { agentId: "main", refresh: true });
-      await call("sessions.create", { key, agentId: "main", label: "Daybreak " + name });
-      await suite.withPage(
-        {
-          viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
-          colorScheme: "dark",
-        },
-        async ({ page }) => {
-          await pairControlUiPage(page, runCli);
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
-          await waitForControlUiGatewayReady(page);
-          const picker = page.locator(".chat-controls__effort-picker").first();
-          const menu = picker.locator(".chat-controls__effort-menu");
-          const select = picker.locator("[data-chat-access-program]");
-          const open = async () => {
-            // The mobile toolbar is revealed by the real composer focus interaction.
-            if (mobile && !(await picker.locator("summary").isVisible())) {
-              await page.locator(".agent-chat__input textarea").click();
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      await pairControlUiPage(page, runCli);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, control));
+      await waitForControlUiGatewayReady(page);
+      const send = (key: string, message: string) =>
+        evaluateControlUiContext(
+          page,
+          async (context, data) =>
+            context.gateway.snapshot.client!.request<{ runId: string }>("chat.send", {
+              sessionKey: data.key,
+              message: data.message,
+              idempotencyKey: data.id,
+            }),
+          { key, message, id: randomUUID() },
+        );
+      const wait = (runId: string) =>
+        call<{ status: string; error?: string }>("agent.wait", { runId, timeoutMs: 10_000 });
+      const initialRequests = receipts.length;
+      const positive = await send(control, "Daybreak dispatch positive control.");
+      expect((await wait(positive.runId)).status).toBe("ok");
+      expect(receipts.slice(initialRequests)).toEqual([
+        expect.objectContaining({ credential: "configured", access: { cyber: "daybreak_blue" } }),
+      ]);
+      const trace = [];
+      for (const phase of ["before-admission", "during-preparation"] as const) {
+        await configureKey("sk-synthetic-configured-fixture");
+        const key = "agent:main:dispatch-" + phase;
+        await create(key);
+        expect(await catalog(key)).toEqual(["standard", "daybreak_blue"]);
+        const before = receipts.length;
+        let runId: string;
+        if (phase === "during-preparation") {
+          preparationGate = undefined;
+          runId = (await send(key, "DAYBREAK_REPLACEMENT_BARRIER")).runId;
+          await expect.poll(() => Boolean(preparationGate)).toBe(true);
+          expect(receipts).toHaveLength(before);
+        }
+        await configureKey(unentitledKey);
+        const selectedPrograms = await catalog(key);
+        const foreignPrograms = await catalog(donor);
+        expect(selectedPrograms).toEqual([]);
+        expect(foreignPrograms).toEqual(["standard", "daybreak_blue"]);
+        if (phase === "during-preparation") {
+          preparationGate!.end("released");
+          preparationGate = undefined;
+        } else {
+          runId = (await send(key, "Reject the unentitled configured credential.")).runId;
+        }
+        const terminal = await wait(runId!);
+        expect(["ok", "error"]).toContain(terminal.status);
+        const history = await call("chat.history", { sessionKey: key, limit: 20 });
+        // Replacement retires the prepared runtime before transport; a fresh run reaches Access.
+        const rejection =
+          phase === "during-preparation"
+            ? "prepared model runtime publication was superseded"
+            : "not advertised for the current account";
+        expect(JSON.stringify({ terminal, history })).toContain(rejection);
+        expect(receipts).toHaveLength(before);
+        trace.push({
+          phase,
+          selectedPrograms,
+          foreignPrograms,
+          terminal: terminal.status,
+          rejection,
+          preparationBarrierObserved: phase === "during-preparation",
+          outboundResponsesRequests: receipts.length - before,
+        });
+      }
+      proof.directCredentialAuthority = { complete: true, positiveRequests: 1, cases: trace };
+    });
+  }, 90_000);
+
+  it("persists visible selections and refreshes queued requests on desktop", async () => {
+    // The subscription scenario owns its original route, independently of the configured-key case.
+    const config = await call<{ hash: string }>("config.get", {});
+    await call("config.patch", {
+      baseHash: config.hash,
+      raw: JSON.stringify({ models: { providers: { openai: null } } }),
+      replacePaths: ["models.providers.openai.models"],
+      response: "summary",
+    });
+    const runCli = async (args: string[]) => {
+      const result = await owner.cli(args);
+      expect(result.code, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    const name = "desktop";
+    const key = "agent:main:daybreak-" + name;
+    programs = ["standard", "daybreak_blue", "daybreak_red"];
+    reasoningEfforts = ["medium"];
+    proof.initialCatalog = await call("models.list", { agentId: "main", refresh: true });
+    expect(proof.initialCatalog).toMatchObject({
+      providerOutcomes: expect.arrayContaining([
+        expect.objectContaining({ profileId: "openai:daybreak-fixture", status: "ready" }),
+      ]),
+    });
+    await call("sessions.create", { key, agentId: "main", label: "Daybreak " + name });
+    await suite.withPage(
+      {
+        viewport: { width: 1440, height: 900 },
+        colorScheme: "dark",
+      },
+      async ({ page }) => {
+        let choice = 0;
+        let preferencePatch = { sent: 0, acknowledged: 0, rejected: 0, automatic: false };
+        const pendingPreferences = new Map<string, number>();
+        page.on("websocket", (socket) => {
+          socket.on("framesent", ({ payload }) => {
+            let frame: ReturnType<typeof asOptionalRecord>;
+            try {
+              frame = asOptionalRecord(JSON.parse(String(payload)));
+            } catch {
+              return;
             }
-            await expect
-              .poll(() => picker.locator("summary").getAttribute("aria-disabled"))
-              .toBe("false");
-            if (!(await menu.isVisible())) {
-              await picker.locator("summary").click();
+            const params = asOptionalRecord(frame?.params);
+            if (
+              frame?.type === "req" &&
+              frame.method === "sessions.patch" &&
+              typeof frame.id === "string" &&
+              params?.key === key &&
+              Object.hasOwn(params, "cyberAccessProgram")
+            ) {
+              if (pendingPreferences.size === 32) {
+                pendingPreferences.delete(pendingPreferences.keys().next().value!);
+              }
+              pendingPreferences.set(frame.id, choice);
+              preferencePatch.sent += 1;
+              preferencePatch.automatic = params.cyberAccessProgram === null;
+              recordControlUiE2eFailureFacts(page, { preferencePatch });
             }
-            await menu.waitFor();
-          };
-          const snapshot = async (stage: string) => {
-            const frame = await takeControlUiScreenshotFrame(page, menu, [], {
-              animations: "disabled",
-            });
-            await writeFile(path.join(dir, name + "-" + stage + ".png"), frame.png);
-          };
-          const row = async () => {
-            const result = await call("sessions.list", { agentId: "main", limit: 100 });
-            return result.sessions.find((entry: { key: string }) => entry.key === key);
-          };
-          const choose = async (value: string) => {
-            await open();
-            if (value) {
-              await select.locator(`[data-chat-access-option="${value}"]`).click();
-            } else {
-              await picker.locator("[data-chat-access-default]").click();
+          });
+          socket.on("framereceived", ({ payload }) => {
+            let frame: ReturnType<typeof asOptionalRecord>;
+            try {
+              frame = asOptionalRecord(JSON.parse(String(payload)));
+            } catch {
+              return;
             }
+            if (frame?.type !== "res" || typeof frame.id !== "string") {
+              return;
+            }
+            const attemptedChoice = pendingPreferences.get(frame.id);
+            pendingPreferences.delete(frame.id);
+            if (attemptedChoice === choice) {
+              preferencePatch[frame.ok === true ? "acknowledged" : "rejected"] += 1;
+              recordControlUiE2eFailureFacts(page, { preferencePatch });
+            }
+          });
+          socket.on("close", () => pendingPreferences.clear());
+        });
+        await pairControlUiPage(page, runCli);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+        await waitForControlUiGatewayReady(page);
+        const picker = page.locator(".chat-controls__effort-picker").first();
+        const menu = picker.locator(".chat-controls__effort-menu");
+        const select = picker.locator("[data-chat-access-program]");
+        const toggle = menu.getByRole("switch", { name: "Daybreak", exact: true });
+        const open = async () => {
+          await expect
+            .poll(() => picker.locator("summary").getAttribute("aria-disabled"))
+            .toBe("false");
+          if (!(await menu.isVisible())) {
+            await picker.locator("summary").click();
+          }
+          await menu.waitFor();
+        };
+        const snapshot = async (stage: string) => {
+          const frame = await takeControlUiScreenshotFrame(page, menu, [], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(dir, name + "-" + stage + ".png"), frame.png);
+        };
+        const row = async () => {
+          const result = await call<SessionsListResult>("sessions.list", {
+            agentId: "main",
+            limit: 100,
+          });
+          return result.sessions.find((entry) => entry.key === key)!;
+        };
+        const choose = async (value: string) => {
+          choice += 1;
+          preferencePatch = { sent: 0, acknowledged: 0, rejected: 0, automatic: false };
+          recordControlUiE2eFailureFacts(page, {
+            preferenceChoice: choice,
+            preferenceExpectedAutomatic: value === "",
+            preferenceMobile: false,
+            preferencePatch,
+          });
+          await open();
+          if (value === "standard") {
+            await toggle.uncheck();
+          } else if (value) {
+            await toggle.check();
+            await select.locator(`[data-chat-access-option="${value}"]`).click();
+          } else {
+            // Automatic is an owner-level reset; the picker now offers an explicit on/off choice.
+            await evaluateControlUiContext(
+              page,
+              (context, sessionKey) =>
+                context.sessions.patch(sessionKey, { cyberAccessProgram: null }),
+              key,
+            );
+          }
+          try {
             await expect
               .poll(async () => (await row()).cyberAccessProgram)
               .toBe(value || undefined);
-          };
-          const send = async (text: string) =>
-            evaluateControlUiContext(
-              page,
-              async (context, data) =>
-                context.gateway.snapshot.client!.request("chat.send", {
-                  sessionKey: data.key,
-                  message: data.text,
-                  queueMode: "followup",
-                  idempotencyKey: data.id,
+            await expect
+              .poll(() => toggle.isChecked())
+              .toBe(Boolean(value && value !== "standard"));
+          } catch (error) {
+            await withTimeout(
+              page.evaluate((expected) => {
+                const element = document.querySelector(".chat-controls__effort-picker");
+                const selected = [
+                  ...(element?.querySelectorAll('[data-chat-access-option][aria-pressed="true"]') ??
+                    []),
+                ];
+                return {
+                  preferencePickerPresent: Boolean(element),
+                  preferenceMenuOpen: element?.hasAttribute("open") ?? false,
+                  preferenceToggleDisabled:
+                    element?.querySelector<HTMLInputElement>('[role="switch"]')?.disabled ?? null,
+                  preferenceToggleChecked:
+                    element?.querySelector<HTMLInputElement>('[role="switch"]')?.checked ?? null,
+                  preferenceAnyPressed: selected.length > 0,
+                  preferenceExpectedPressed:
+                    Boolean(element) &&
+                    (expected && expected !== "standard"
+                      ? selected.some(
+                          (option) => option.getAttribute("data-chat-access-option") === expected,
+                        )
+                      : selected.length === 0),
+                  preferenceSnapshot: Boolean(element?.closest("[data-composer-catalog-state]")),
+                };
+              }, value),
+              500,
+            )
+              .then((facts) =>
+                recordControlUiE2eFailureFacts(page, {
+                  ...facts,
+                  preferenceDomRead: true,
                 }),
-              { key, text, id: randomUUID() },
-            );
-          await open();
-          await expect.poll(() => select.count()).toBe(1);
-          expect(
-            await select
-              .locator("[data-chat-access-option]")
-              .evaluateAll((nodes) =>
-                nodes.map((node) => node.getAttribute("data-chat-access-option")),
-              ),
-          ).toEqual(["standard", "daybreak_blue", "daybreak_red"]);
-          const script = await page
-            .locator('script[type="module"][src]')
-            .first()
-            .getAttribute("src");
-          const bytes = await (
-            await page.request.get(new URL(script!, suite.server.baseUrl).href)
-          ).body();
-          expect(bytes.equals(await readFile(path.join("dist/control-ui", script!.slice(1))))).toBe(
-            true,
-          );
-          proof.uiAsset = {
-            path: script,
-            sha256: createHash("sha256").update(bytes).digest("hex"),
-          };
-          const slider = picker.locator("[data-chat-thinking-slider]");
-          await expect.poll(() => slider.inputValue()).toBe("0");
-          expect(await slider.getAttribute("data-chat-thinking-values")).toBe("medium,ultra");
-          expect(await slider.getAttribute("data-effort-boost")).toBe("");
-          expect(
-            await slider.evaluate(
-              (input) => getComputedStyle(input.parentElement!).backgroundImage,
-            ),
-          ).toBe("none");
-          proof[name + "-narrowed-effort"] = await slider.evaluate((input: HTMLInputElement) => ({
-            values: input.dataset.chatThinkingValues,
-            value: input.value,
-            fill: input.style.getPropertyValue("--reasoning-fill"),
-            boost: input.dataset.effortBoost,
-          }));
-          await snapshot("both");
-          const red = select.locator('[data-chat-access-option="daybreak_red"]');
-          await red.focus();
-          await red.press("Home");
-          await expect.poll(async () => (await row()).cyberAccessProgram).toBe("standard");
-          await select.locator('[data-chat-access-option="standard"]').press("ArrowRight");
-          await expect.poll(async () => (await row()).cyberAccessProgram).toBe("daybreak_blue");
-          await choose("");
-          for (const target of ["standard", ""]) {
-            await choose("daybreak_blue");
-            const first = receipts.length;
-            holdNext = true;
-            await send("Hold this fixture turn.");
-            await expect.poll(() => held.has(first)).toBe(true);
-            expect(receipts[first]?.access).toEqual({ cyber: "daybreak_blue" });
-            await send("Use the preference saved before this queued turn starts.");
-            proof.persistedDuringRun = (await row()).cyberAccessProgram;
-            proof.afterSendCatalog = await call("models.list", {
-              agentId: "main",
-              sessionKey: key,
-            });
-            await choose(target);
-            expect(receipts).toHaveLength(first + 1);
-            const response = held.get(first)!;
-            held.delete(first);
-            reply(response, first);
-            await expect.poll(() => receipts.length).toBe(first + 2);
-            expect(receipts[first + 1]?.access).toEqual(target ? { cyber: target } : undefined);
-            await expect.poll(async () => Boolean((await row()).hasActiveRun)).toBe(false);
-            proof[name + "-queued-" + (target || "cleared")] = receipts.slice(first, first + 2);
+              )
+              .catch(() => recordControlUiE2eFailureFacts(page, { preferenceDomRead: false }));
+            throw error;
           }
-          reasoningEfforts = ["low", "medium", "high"];
-          await call("models.list", { agentId: "main", refresh: true });
-          await page.reload();
-          await waitForControlUiGatewayReady(page);
-          await open();
-          await expect
-            .poll(() => slider.getAttribute("data-chat-thinking-values"))
-            .toBe("low,medium,high,ultra");
-          await slider.press("Home");
-          await expect.poll(async () => (await row()).thinkingLevel).toBe("low");
-          await slider.press("ArrowRight");
-          await expect.poll(async () => (await row()).thinkingLevel).toBe("medium");
-          await expect.poll(() => slider.inputValue()).toBe("1");
-          expect(await slider.getAttribute("data-effort-boost")).toBe("");
-          await snapshot("multilevel-medium");
-          const bounds = await slider.boundingBox();
-          expect(bounds).not.toBeNull();
-          await slider.click({ position: { x: (bounds!.width * 2) / 3, y: bounds!.height / 2 } });
-          await expect.poll(async () => (await row()).thinkingLevel).toBe("high");
-          await slider.press("End");
-          await expect.poll(async () => (await row()).thinkingLevel).toBe("ultra");
-          await expect.poll(() => slider.inputValue()).toBe("3");
-          expect(await slider.getAttribute("data-effort-boost")).toBe("ultra");
-          await call("sessions.patch", { key, thinkingLevel: "medium" });
-          reasoningEfforts = ["medium"];
-          await choose("daybreak_blue");
-          programs = ["standard", "daybreak_blue"];
-          await call("models.list", { agentId: "main", refresh: true });
-          await page.reload();
-          await waitForControlUiGatewayReady(page);
-          await open();
-          await expect
-            .poll(() => select.locator('[data-chat-access-option="daybreak_red"]').count())
-            .toBe(0);
-          await snapshot("blue-only");
-          programs = [];
-          await call("models.list", { agentId: "main", refresh: true });
-          await page.reload();
-          await waitForControlUiGatewayReady(page);
-          await open();
-          await expect.poll(() => select.count()).toBe(0);
-          expect((await row()).cyberAccessProgram).toBe("daybreak_blue");
-          await snapshot("no-access");
-          programs = undefined;
-          await call("models.list", { agentId: "main", refresh: true });
-          await page.reload();
-          await waitForControlUiGatewayReady(page);
-          await open();
-          expect(await select.count()).toBe(0);
-          await snapshot("unknown");
-          await picker.locator("summary").click();
-          const modelPicker = page.locator(".chat-controls__model-picker").first();
-          await modelPicker.locator("summary").click();
-          const recovery = modelPicker.getByRole("button", { name: "Clear saved Access" });
-          await recovery.waitFor();
-          const stale = await takeControlUiScreenshotFrame(
+        };
+        const send = async (text: string) =>
+          evaluateControlUiContext(
             page,
-            modelPicker.locator(".chat-controls__model-menu"),
-            [],
-            { animations: "disabled" },
+            async (context, data) =>
+              context.gateway.snapshot.client!.request("chat.send", {
+                sessionKey: data.key,
+                message: data.text,
+                queueMode: "followup",
+                idempotencyKey: data.id,
+              }),
+            { key, text, id: randomUUID() },
           );
-          await writeFile(path.join(dir, name + "-stale-selection.png"), stale.png);
-          await recovery.click();
-          await expect.poll(async () => (await row()).cyberAccessProgram).toBeUndefined();
-          await expect.poll(() => recovery.count()).toBe(0);
-          const before = receipts.length;
-          await send("Continue after clearing stale Access.");
-          await expect.poll(() => receipts.length).toBe(before + 1);
-          expect(receipts[before]?.access).toBeUndefined();
+        await open();
+        await expect.poll(() => select.count()).toBe(1);
+        expect(
+          await select
+            .locator("[data-chat-access-option]")
+            .evaluateAll((nodes) =>
+              nodes.map((node) => node.getAttribute("data-chat-access-option")),
+            ),
+        ).toEqual(["daybreak_blue", "daybreak_red"]);
+        await expect.poll(() => toggle.isChecked()).toBe(false);
+        const script = await page.locator('script[type="module"][src]').first().getAttribute("src");
+        const bytes = await (
+          await page.request.get(new URL(script!, suite.server.baseUrl).href)
+        ).body();
+        expect(bytes.equals(await readFile(path.join("dist/control-ui", script!.slice(1))))).toBe(
+          true,
+        );
+        proof.uiAsset = {
+          path: script,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        };
+        const slider = picker.locator("[data-chat-thinking-slider]");
+        await expect.poll(() => slider.inputValue()).toBe("0");
+        expect(await slider.getAttribute("data-chat-thinking-values")).toBe("medium,ultra");
+        await expect.poll(() => slider.getAttribute("aria-valuetext")).toMatch(/^Default \(.+\)$/);
+        proof[name + "-narrowed-effort"] = await slider.evaluate((input: HTMLInputElement) => ({
+          values: input.dataset.chatThinkingValues,
+          value: input.value,
+          fill: input.parentElement!.style.getPropertyValue("--reasoning-fill"),
+          valueText: input.getAttribute("aria-valuetext"),
+        }));
+        await snapshot("both");
+        // Another session can have saved a different preferred program.
+        await choose("daybreak_blue");
+        await choose("standard");
+        await toggle.focus();
+        await toggle.press("Space");
+        await expect.poll(async () => (await row()).cyberAccessProgram).toBe("daybreak_blue");
+        const red = select.locator('[data-chat-access-option="daybreak_red"]');
+        await red.focus();
+        await red.press("Enter");
+        await expect.poll(async () => (await row()).cyberAccessProgram).toBe("daybreak_red");
+        await expect
+          .poll(() => red.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        await expect.poll(() => red.getAttribute("aria-pressed")).toBe("true");
+        await toggle.press("Space");
+        await expect.poll(async () => (await row()).cyberAccessProgram).toBe("standard");
+        await expect.poll(() => toggle.isChecked()).toBe(false);
+        await toggle.press("Space");
+        await expect.poll(async () => (await row()).cyberAccessProgram).toBe("daybreak_red");
+        await expect.poll(() => red.getAttribute("aria-pressed")).toBe("true");
+        const blue = select.locator('[data-chat-access-option="daybreak_blue"]');
+        await blue.press("Space");
+        await expect.poll(async () => (await row()).cyberAccessProgram).toBe("daybreak_blue");
+        await expect.poll(() => blue.getAttribute("aria-pressed")).toBe("true");
+        await choose("");
+        for (const target of ["standard", ""]) {
+          await choose("daybreak_blue");
+          const first = receipts.length;
+          holdNext = true;
+          await send("Hold this fixture turn.");
+          await expect.poll(() => held.has(first)).toBe(true);
+          expect(receipts[first]?.access).toEqual({ cyber: "daybreak_blue" });
+          await send("Use the preference saved before this queued turn starts.");
+          proof.persistedDuringRun = (await row()).cyberAccessProgram;
+          proof.afterSendCatalog = await call("models.list", {
+            agentId: "main",
+            sessionKey: key,
+          });
+          await choose(target);
+          expect(receipts).toHaveLength(first + 1);
+          const response = held.get(first)!;
+          held.delete(first);
+          reply(response, first);
+          await expect.poll(() => receipts.length).toBe(first + 2);
+          // An automatic preference inherits the same Standard baseline as an explicit off.
+          expect(receipts[first + 1]?.access).toEqual({ cyber: "standard" });
+          expect((await row()).cyberAccessProgram).toBe(target || undefined);
           await expect.poll(async () => Boolean((await row()).hasActiveRun)).toBe(false);
-        },
-      );
-    }
+          proof[name + "-queued-" + (target || "cleared")] = receipts.slice(first, first + 2);
+        }
+        reasoningEfforts = ["low", "medium", "high"];
+        await call("models.list", { agentId: "main", refresh: true });
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await open();
+        await expect
+          .poll(() => slider.getAttribute("data-chat-thinking-values"))
+          .toBe("low,medium,high,ultra");
+        await slider.press("Home");
+        await expect.poll(async () => (await row()).thinkingLevel).toBe("low");
+        await slider.press("ArrowRight");
+        await expect.poll(async () => (await row()).thinkingLevel).toBe("medium");
+        await expect.poll(() => slider.inputValue()).toBe("1");
+        await expect.poll(() => slider.getAttribute("aria-valuetext")).toBe("Medium");
+        await snapshot("multilevel-medium");
+        const bounds = await slider.boundingBox();
+        expect(bounds).not.toBeNull();
+        await slider.click({ position: { x: (bounds!.width * 2) / 3, y: bounds!.height / 2 } });
+        await expect.poll(async () => (await row()).thinkingLevel).toBe("high");
+        await slider.press("End");
+        await expect.poll(async () => (await row()).thinkingLevel).toBe("ultra");
+        await expect.poll(() => slider.inputValue()).toBe("3");
+        await expect.poll(() => slider.getAttribute("aria-valuetext")).toBe("Ultra");
+        await call("sessions.patch", { key, thinkingLevel: "medium" });
+        reasoningEfforts = ["medium"];
+        await choose("daybreak_blue");
+        programs = ["standard", "daybreak_blue"];
+        await call("models.list", { agentId: "main", refresh: true });
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await open();
+        await expect
+          .poll(() => select.locator('[data-chat-access-option="daybreak_red"]').count())
+          .toBe(0);
+        await snapshot("blue-only");
+        programs = [];
+        await call("models.list", { agentId: "main", refresh: true });
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await open();
+        await expect.poll(() => select.locator("[data-chat-access-option]").count()).toBe(0);
+        await expect.poll(() => toggle.isChecked()).toBe(true);
+        await expect
+          .poll(() => menu.getByText("Blue (unavailable)", { exact: true }).isVisible())
+          .toBe(true);
+        expect((await row()).cyberAccessProgram).toBe("daybreak_blue");
+        await snapshot("no-access");
+        programs = undefined;
+        await call("models.list", { agentId: "main", refresh: true });
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await open();
+        await expect.poll(() => select.locator("[data-chat-access-option]").count()).toBe(0);
+        await expect.poll(() => toggle.isChecked()).toBe(true);
+        expect((await row()).cyberAccessProgram).toBe("daybreak_blue");
+        await snapshot("unknown");
+        // Turning off the last stale selection removes this switch.
+        await toggle.press("Space");
+        await expect.poll(async () => (await row()).cyberAccessProgram).toBe("standard");
+        await expect.poll(() => toggle.count()).toBe(0);
+        await snapshot("stale-selection");
+        const before = receipts.length;
+        await send("Continue after disabling stale Access.");
+        await expect.poll(() => receipts.length).toBe(before + 1);
+        expect(receipts[before]?.access).toEqual({ cyber: "standard" });
+        await expect.poll(async () => Boolean((await row()).hasActiveRun)).toBe(false);
+      },
+    );
     proof.complete = true;
   }, 180_000);
 });
