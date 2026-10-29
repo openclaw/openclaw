@@ -257,7 +257,7 @@ suite.define(() => {
         await page
           .getByText("Synthetic final reply: the report is ready.", { exact: true })
           .waitFor();
-        await page.getByText("Worked for 3 minutes", { exact: true }).waitFor();
+        await page.getByText("Done in 3 minutes", { exact: true }).waitFor();
         await page.locator(".chat-reply-attribution__name").filter({ hasText: "Avery" }).waitFor();
         const progress = await openChatTaskProgress(page);
         await progress
@@ -302,7 +302,7 @@ suite.define(() => {
                 pane?.querySelector(".chat-pane__session-title-text")?.textContent?.trim() ?? null,
               top: thread.scrollTop,
               max: thread.scrollHeight - thread.clientHeight,
-              duration: thread.textContent.includes("Worked for 3 minutes"),
+              duration: thread.textContent.includes("Done in 3 minutes"),
               reply: Array.from(thread.querySelectorAll(".chat-reply-attribution__name")).some(
                 (element) => element.textContent?.trim() === "Avery",
               ),

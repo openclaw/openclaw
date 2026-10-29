@@ -597,21 +597,21 @@ describe("openclaw launcher", () => {
     expect(result.stdout).toBe("diagnostic-entry\n");
   });
 
-  it("requires the TLS security release floor even when SQLite is lossless", async () => {
+  it("admits compatible Node below the recommended security patches with lossless SQLite", async () => {
     await writeEntry('process.stdout.write("runtime-loaded\\n");\n');
-    for (const version of ["24.22.0", "24.22.1"]) {
+    for (const version of ["24.15.9", "24.16.0", "24.22.0", "26.1.0"]) {
       const result = await runPreloadedLauncher(
         `Object.defineProperty(process.versions, "node", { value: ${JSON.stringify(version)} });`,
         ["gateway", "start"],
       );
 
-      if (version === "24.22.1") {
+      if (version !== "24.15.9") {
         expect(result.status, version).toBe(0);
         expect(result.stdout, version).toContain("runtime-loaded");
       } else {
         expect(result.status, version).toBe(1);
         expect(result.stderr, version).toContain(
-          `openclaw: Node ${version}: openclaw requires Node >=24.22.1 <25, or >=26.12.1.`,
+          `openclaw: Node ${version}: openclaw requires Node >=24.16.0 <25, or >=26.1.0`,
         );
       }
     }

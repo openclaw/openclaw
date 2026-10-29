@@ -14,7 +14,6 @@ import {
 } from "./control-ui-gateway.e2e.test-support.ts";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
 import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.ts";
-import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.ts";
 import {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
@@ -111,12 +110,12 @@ function startGateway(
         ...toolPolicy,
         codeMode: false,
         toolSearch: false,
-        // Ordinary full-access recovery retains non-replay-safe automations.
+        // Ordinary full-access turns can create disabled automations.
         ...(!transport ? { exec: { mode: "full" as const } } : {}),
       };
       const entries = ((cfg.agents ??= {}).entries ??= {});
       const agent = (entries.qa ??= {});
-      agent.identity = { name: transport ? "Automation proof" : "Recovery proof" };
+      agent.identity = { name: transport ? "Automation proof" : "Resume proof" };
       agent.tools = toolPolicy;
       return cfg;
     },
@@ -165,7 +164,7 @@ const withAutomationGateway =
       },
       () =>
         stopQaGatewayFixture(owner, {
-          preserveToDir: path.join(suite.artifactDir, channel ? "gateway" : "recovery-gateway"),
+          preserveToDir: path.join(suite.artifactDir, channel ? "gateway" : "resume-gateway"),
         }),
       () => acquiredTransport?.cleanupAfterGatewayStop(),
       () => provider.stop(),
@@ -177,11 +176,20 @@ suite.define(() => {
     "an ordinary Control UI turn creates a disabled automation after its Gateway is replaced",
     { timeout: 240_000 },
     withAutomationGateway(false, async (gateway, provider) => {
-      const marker = "recovered-create";
+      const marker = "resumed-create";
       const checkpoint = provider.holdInitialRequestForRestart(marker);
-      const jobName = "Disabled restart recovery proof";
-      provider.requests.set(marker, disabledJob(jobName, "Synthetic disabled recovery reminder."));
-      const sessionKey = `agent:qa:dashboard:operator-recovery-${randomUUID()}`;
+      const jobName = "Disabled restart resume proof";
+      provider.requests.set(marker, disabledJob(jobName, "Synthetic disabled resume reminder."));
+      const principal = await gateway.call("users.self", {});
+      if (
+        !isRecord(principal) ||
+        !isRecord(principal.profile) ||
+        typeof principal.profile.id !== "string"
+      ) {
+        throw new Error("Automation resume proof requires the authenticated Gateway owner profile");
+      }
+      const principalId = principal.profile.id;
+      const sessionKey = `agent:qa:dashboard:operator-resume-${randomUUID()}`;
       await gateway.call("sessions.create", {
         key: sessionKey,
         label: "Restart automation proof",
@@ -192,27 +200,27 @@ suite.define(() => {
         await page.getByRole("button", { name: "Send message" }).click();
         await poll(() => checkpoint.reached).toBe(true);
         await poll(async () => {
-          const entry = (await readRawQaSessionStore({ gateway }))[sessionKey];
           const transcript = await readSessionTranscriptSummary({ gateway }, sessionKey);
-          return Boolean(entry?.restartRecoveryDeliveryRunId) && transcript.userMessageCount === 1;
+          return transcript.userMessageCount === 1;
         }, 30_000).toBe(true);
         expect(provider.results.has(marker)).toBe(false);
         const before = (await readRawQaSessionStore({ gateway }))[sessionKey];
-        if (!before?.restartRecoveryDeliveryRunId) {
-          throw new Error("Original Control UI admission lost its recovery claim");
+        if (!before?.sessionId) {
+          throw new Error("Original Control UI admission has no persisted session");
         }
-        const originalRunId = before.restartRecoveryDeliveryRunId;
-        await screenshot(page, "recovery-before-restart");
+        expect(before.createdActor).toMatchObject({
+          type: "human",
+          source: "profile",
+          id: principalId,
+        });
+        await screenshot(page, "resume-before-restart");
         const originalPid = gateway.pid;
         if (originalPid === null) {
           throw new Error("Owned Gateway has no process identity");
         }
-        // Replace the exact owned process group, not an operator service.
-        // Startup reconciles the real chat admission; no claim is seeded.
-        expect(signalQaPosixProcessGroup(originalPid, "SIGKILL")).toBeUndefined();
-        await poll(() => isQaPosixProcessGroupAlive(originalPid), 30_000).toBe(false);
-        checkpoint.recovering = true;
-        await gateway.restartAfterStateMutation(async () => {});
+        await gateway.restartAfterStateMutation(async () => {
+          checkpoint.recovering = true;
+        });
         expect(gateway.pid).not.toBe(originalPid);
         await poll(() => provider.results.has(marker), 90_000).toBe(true);
         const created = readResult(provider.results.get(marker) ?? "null");
@@ -228,25 +236,20 @@ suite.define(() => {
           return {
             sessionId: after?.sessionId,
             status: after?.status,
-            originalTurnSettled: after?.restartRecoveryTerminalRunIds?.includes(originalRunId),
-            recoveryClaimCleared: after?.restartRecoveryDeliveryRunId === undefined,
           };
         }, 30_000).toEqual({
           sessionId: before.sessionId,
           status: "done",
-          originalTurnSettled: true,
-          recoveryClaimCleared: true,
         });
         const history = await gateway.call("chat.history", { sessionKey, limit: 30 });
         if (!isRecord(history) || !Array.isArray(history.messages)) {
-          throw new Error("Recovered session returned no history");
+          throw new Error("Resumed session returned no history");
         }
-        // Recovery persists an internal continuation as role:user too; count
-        // the exact original ingress, not every user-shaped system input.
-        const originalInputs = history.messages.filter(isRecord).filter(
-          ({ role, content }) =>
-            role === "user" &&
-            (typeof content === "string"
+        const userInputs = history.messages
+          .filter(isRecord)
+          .filter(({ role }) => role === "user")
+          .map(({ content }) =>
+            typeof content === "string"
               ? content
               : Array.isArray(content)
                 ? content
@@ -254,11 +257,14 @@ suite.define(() => {
                     .filter((block) => block.type === "text" && typeof block.text === "string")
                     .map((block) => block.text)
                     .join("\n")
-                : undefined) === prompt,
-        );
-        expect(originalInputs).toHaveLength(1);
+                : "",
+          );
+        expect(userInputs.filter((text) => text === prompt)).toHaveLength(1);
+        const resumeText =
+          "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+        expect(userInputs.filter((text) => text.includes(resumeText))).toHaveLength(1);
         await waitForReply(page, marker);
-        await screenshot(page, "recovery-created-disabled-automation");
+        await screenshot(page, "resume-created-disabled-automation");
       });
     }),
   );

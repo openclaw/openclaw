@@ -399,7 +399,7 @@ function readCompactionLifecyclePhases(): Array<string | undefined> {
 
 const COMPACTION_ERROR =
   "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.";
-const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined, {}] as const;
+const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined] as const;
 
 // Vitest rewrites imported references, but not re-export specifiers. Materialize
 // these runtime bindings after its hoisted mocks register, or exports become undefined.

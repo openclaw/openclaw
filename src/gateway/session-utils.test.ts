@@ -345,25 +345,6 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("projects restart recovery tombstones", () => {
-    const row = buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
-      key: "agent:main:dashboard:tombstoned",
-      entry: makeSession("session-tombstoned", {
-        mainRestartRecovery: {
-          cycleId: "cycle-tombstoned",
-          revision: 1,
-          chargedAttempts: 3,
-          tombstone: { reason: "automatic recovery exhausted" },
-        },
-      }),
-    });
-
-    for (const value of [row, buildGatewaySessionSnapshot({ sessionRow: row })]) {
-      expect(value.restartRecoveryStatus).toBe("tombstoned");
-    }
-  });
-
   test("projects the compact persisted observer digest", () => {
     const expected = {
       runId: "run-1",

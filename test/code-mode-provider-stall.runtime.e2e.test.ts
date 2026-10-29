@@ -1,18 +1,21 @@
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
-import { afterEach, expect, it } from "vitest";
-import { startGatewayWithClient } from "../src/gateway/test-helpers.e2e.js";
+import { expect, it } from "vitest";
 import { createTrackedProvider } from "../src/gateway/test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { captureEnv, setTestEnvValue } from "../src/test-utils/env.js";
+import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
+import { connectProofClient } from "./helpers/gateway-integration-fixtures.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "./helpers/openai-responses-sse.js";
+import {
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
-import { useRuntimeProofFixture } from "./runtime-proof.test-support.js";
+import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-const createFixture = useRuntimeProofFixture(afterEach);
 const TOKEN = "code-mode-stall-proof-token";
 const MARKER = "CODE_MODE_STALL_RECOVERED_42";
 type InputItem = { type?: string; call_id?: string; output?: string; name?: string };
@@ -56,9 +59,9 @@ function sendExec(response: Parameters<typeof writeOpenAiResponsesSse>[0], corre
 it(
   "continues a failed Code Mode result after a provider request stalls before headers",
   { timeout: 60_000 },
-  async ({ signal }) => {
-    const fixture = await createFixture("openclaw-code-mode-stall-", TOKEN);
-    const proxyEnv = captureEnv(["NO_PROXY", "no_proxy"]);
+  async ({ signal, onTestFailed }) => {
+    const testStartedAt = performance.now();
+    const phases: Record<string, number> = {};
     const requests: ProviderRequest[] = [];
     const closedAfterMs: number[] = [];
     const firstStallClosed = createDeferred();
@@ -90,111 +93,148 @@ it(
       },
       { signal },
     );
-    let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    let gateway: OpenClawTestInstance | undefined;
+    let client: Awaited<ReturnType<typeof connectProofClient>> | undefined;
     const events: Array<{ event?: string; payload?: unknown }> = [];
-    try {
-      const baseUrl = await provider.listen();
-      // Bypass an inherited outbound proxy only for this fixture endpoint, not the production guard.
-      for (const key of ["NO_PROXY", "no_proxy"]) {
-        setTestEnvValue(key, [process.env[key], new URL(baseUrl).host].filter(Boolean).join(","));
-      }
-      const providerModel = buildMockOpenAiResponsesProvider(baseUrl);
-      const mock = { ...providerModel, config: { ...providerModel.config, timeoutSeconds: 2 } };
-      const cfg = fixture.config(
-        mock,
-        {
-          timeoutSeconds: 900,
-          models: { [mock.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } } },
-        },
-        { tools: { profile: "full", codeMode: { enabled: true, timeoutMs: 10_000 } } },
-      );
-      gateway = await startGatewayWithClient({
-        cfg,
-        configPath: fixture.configPath,
-        token: TOKEN,
-        onEvent: (event) => events.push(event),
-      });
-      await gateway.server.startupSettled;
-      const sessionKey = "agent:main:code-mode-stall-recovery";
-      const startedAt = performance.now();
-      const started = await gateway.client.request<{ runId: string; status: string }>("chat.send", {
-        sessionKey,
-        message: "Run the synthetic Code Mode proof and finish with its result.",
-        deliver: false,
-        idempotencyKey: "code-mode-stall-recovery-run",
-      });
-      expect(started.status).toBe("started");
-      const waited = await gateway.client.request<{
-        status: string;
-        error?: string;
-        terminalReply?: { text?: string };
-      }>("agent.wait", { runId: started.runId, timeoutMs: 30_000 }, { timeoutMs: 35_000 });
-      const elapsedMs = performance.now() - startedAt;
-      expect(waited.status).toBe("ok");
-      expect(elapsedMs).toBeLessThan(35_000);
-      await withinTest(firstStallClosed.promise, signal);
-      expect(requests).toHaveLength(4);
-      expect(closedAfterMs).toHaveLength(1);
-      for (const elapsed of closedAfterMs) {
-        expect(elapsed).toBeGreaterThan(500);
-        expect(elapsed).toBeLessThan(10_000);
-      }
-      const outputs = requests.map(
-        (body) => body.input?.filter((item) => item.type === "function_call_output") ?? [],
-      );
-      expect(outputs.map((items) => items.length)).toEqual([0, 1, 1, 2]);
-      const invalidOutput = outputs[1]?.[0]?.output;
-      assert.ok(invalidOutput);
-      expect(JSON.parse(invalidOutput)).toMatchObject({
-        status: "failed",
-        code: "invalid_input",
-        failurePhase: "input",
-        bridgeDispatchStarted: false,
-        output: [],
-      });
-      for (const output of outputs.slice(2)) {
-        expect(output[0]?.output).toBe(invalidOutput);
-      }
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          event: "agent",
-          payload: expect.objectContaining({
-            stream: "run_status",
-            data: expect.objectContaining({ phase: "retrying", reason: "timeout" }),
-          }),
-        }),
-      );
-      const history = await gateway.client.request<{ messages: unknown[] }>("chat.history", {
-        sessionKey,
-        limit: 30,
-      });
-      const serialized = JSON.stringify(history.messages);
-      const correctedOutput = outputs[3]?.[1]?.output;
-      assert.ok(correctedOutput);
-      expect(JSON.parse(correctedOutput)).toMatchObject({ status: "completed", value: 42 });
-      expect(
-        requests.map(
-          (body) => body.input?.filter((item) => item.type === "function_call").length ?? 0,
-        ),
-      ).toEqual([0, 1, 1, 2]);
-      expect(waited.terminalReply?.text).toBe(MARKER);
-      expect(serialized).toContain(MARKER);
-      console.log(
+    onTestFailed(() => {
+      // The e2e lane silences console calls, including diagnostics from a failed test.
+      process.stderr.write(
         JSON.stringify({
-          proof: "stall-recovery",
+          proof: "stall-recovery-progress",
+          phases,
           requests: requests.length,
           closedAfterMs,
-          elapsedMs,
-          status: waited.status,
-        }),
+          providerErrors: provider.errors.map(String),
+        }) + "\n",
       );
-    } finally {
-      try {
-        await fixture.close(gateway, undefined);
-        await provider.close();
-      } finally {
-        proxyEnv.restore();
-      }
-    }
+    });
+    const recordPhase = (phase: string) => {
+      phases[phase] = performance.now() - testStartedAt;
+    };
+    recordPhase("fixtureReadyMs");
+    await runQaGatewayFixture(
+      async () => {
+        const baseUrl = await provider.listen();
+        const providerModel = buildMockOpenAiResponsesProvider(baseUrl);
+        const mock = { ...providerModel, config: { ...providerModel.config, timeoutSeconds: 2 } };
+        gateway = await createOpenClawTestInstance({
+          name: "code-mode-stall",
+          gatewayToken: TOKEN,
+          signal,
+          config: {
+            agents: {
+              defaults: {
+                workspace: "~/workspace",
+                skipBootstrap: true,
+                model: { primary: mock.modelRef },
+                timeoutSeconds: 900,
+                models: {
+                  [mock.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
+                },
+              },
+              entries: { main: {} },
+            },
+            models: { mode: "replace", providers: { [mock.providerId]: mock.config } },
+            tools: { profile: "full", codeMode: { enabled: true, timeoutMs: 10_000 } },
+          },
+          env: {
+            OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+            OPENCLAW_AGENT_RUNTIME: undefined,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            // Bypass inherited proxies only for this fixture endpoint.
+            NO_PROXY: [process.env.NO_PROXY, new URL(baseUrl).host].filter(Boolean).join(","),
+            no_proxy: [process.env.no_proxy, new URL(baseUrl).host].filter(Boolean).join(","),
+          },
+        });
+        recordPhase("startupStartedMs");
+        await gateway.startGateway();
+        client = await connectProofClient(gateway, {
+          deviceIdentity: loadOrCreateDeviceIdentity({
+            path: gateway.state.path("stall-client", "client", "credentials.sqlite"),
+          }),
+          signal,
+          onEvent: (event) => events.push(event),
+        });
+        recordPhase("startupSettledMs");
+        const sessionKey = "agent:main:code-mode-stall-recovery";
+        const startedAt = performance.now();
+        const started = await client.request<{ runId: string; status: string }>("chat.send", {
+          sessionKey,
+          message: "Run the synthetic Code Mode proof and finish with its result.",
+          deliver: false,
+          idempotencyKey: "code-mode-stall-recovery-run",
+        });
+        recordPhase("chatAcceptedMs");
+        expect(started.status).toBe("started");
+        const waited = await client.request<{
+          status: string;
+          error?: string;
+          terminalReply?: { text?: string };
+        }>("agent.wait", { runId: started.runId, timeoutMs: 30_000 }, { timeoutMs: 35_000 });
+        recordPhase("agentWaitSettledMs");
+        const elapsedMs = performance.now() - startedAt;
+        expect(waited.status).toBe("ok");
+        expect(elapsedMs).toBeLessThan(35_000);
+        await withinTest(firstStallClosed.promise, signal);
+        expect(requests).toHaveLength(4);
+        expect(closedAfterMs).toHaveLength(1);
+        for (const elapsed of closedAfterMs) {
+          expect(elapsed).toBeGreaterThan(500);
+          expect(elapsed).toBeLessThan(10_000);
+        }
+        const outputs = requests.map(
+          (body) => body.input?.filter((item) => item.type === "function_call_output") ?? [],
+        );
+        expect(outputs.map((items) => items.length)).toEqual([0, 1, 1, 2]);
+        const invalidOutput = outputs[1]?.[0]?.output;
+        assert.ok(invalidOutput);
+        expect(JSON.parse(invalidOutput)).toMatchObject({
+          status: "failed",
+          code: "invalid_input",
+          failurePhase: "input",
+          bridgeDispatchStarted: false,
+          output: [],
+        });
+        for (const output of outputs.slice(2)) {
+          expect(output[0]?.output).toBe(invalidOutput);
+        }
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            event: "agent",
+            payload: expect.objectContaining({
+              stream: "run_status",
+              data: expect.objectContaining({ phase: "retrying", reason: "timeout" }),
+            }),
+          }),
+        );
+        const history = await client.request<{ messages: unknown[] }>("chat.history", {
+          sessionKey,
+          limit: 30,
+        });
+        const serialized = JSON.stringify(history.messages);
+        const correctedOutput = outputs[3]?.[1]?.output;
+        assert.ok(correctedOutput);
+        expect(JSON.parse(correctedOutput)).toMatchObject({ status: "completed", value: 42 });
+        expect(
+          requests.map(
+            (body) => body.input?.filter((item) => item.type === "function_call").length ?? 0,
+          ),
+        ).toEqual([0, 1, 1, 2]);
+        expect(waited.terminalReply?.text).toBe(MARKER);
+        expect(serialized).toContain(MARKER);
+        console.log(
+          JSON.stringify({
+            proof: "stall-recovery",
+            requests: requests.length,
+            closedAfterMs,
+            elapsedMs,
+            status: waited.status,
+          }),
+        );
+      },
+      () => client?.stopAndWait(),
+      () => gateway?.cleanup(),
+      () => provider.close(),
+    );
   },
 );

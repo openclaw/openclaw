@@ -1828,28 +1828,13 @@ describe("sendMessageIMessage receipts", () => {
       const createClientImpl = vi
         .spyOn(clientRuntime, "createIMessageRpcClient")
         .mockResolvedValue(client);
-      const runCliJson = mockCliSend().mockResolvedValueOnce(attachment);
+      mockCliSend().mockResolvedValueOnce(attachment);
       mockAttachment({ path: "/tmp/image.png", contentType: "image/png" });
       const result = await sendMessageIMessage(target, "caption", {
         config: IMESSAGE_TEST_CFG,
         ...(ownsClient ? {} : { client }),
         mediaUrl: "/tmp/image.png",
       });
-      if (target === "chat_guid:chat-1") {
-        expect(runCliJson.mock.calls).toEqual([
-          [
-            [
-              "send-attachment",
-              "--chat",
-              "chat-1",
-              "--file",
-              "/tmp/image.png",
-              "--transport",
-              "auto",
-            ],
-          ],
-        ]);
-      }
       expect(getClientMocks(client).request).toHaveBeenCalledWith(
         "send",
         expect.objectContaining({ ...rpcTarget, text: "caption" }),

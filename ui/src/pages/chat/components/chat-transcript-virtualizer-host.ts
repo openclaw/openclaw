@@ -416,6 +416,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
 
   dispose(): void {
     this.disconnect();
+    // Temporary disconnect preserves restoration facts; terminal disposal releases their owner.
+    Object.assign(this.layout, { rows: [], rowLayout: undefined });
     this.renderer.dispose();
     this.messageElements.dispose();
     this.rowRefs.clear();

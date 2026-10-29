@@ -66,6 +66,7 @@ it.each<[string | string[], string, boolean?]>([
   [["docs/ci.md", "docs/docs.json", "README.md"], ""],
   [["src/config/defaults.ts", "docs/docs.json"], "Node"],
   [".crabbox.yaml", "Node"],
+  ["config/test-lines-allocations/regression.txt", "Node"],
   ["src/skills/runtime/refresh.ts", "Node MacosNode Windows"],
   [".github/actions/setup-android-toolchain/action.yml", "Node Android"],
   ["apps/macos/Sources/Foo.swift", "Macos MacosNode"],

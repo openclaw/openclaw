@@ -141,9 +141,11 @@ sidebarTitle: "Troubleshooting"
     keep their configured behavior. Direct exposure does not enable a denied
     tool, enable memory, or configure a web-search provider.
 
-    OpenClaw stops after three consecutive identical failures for the same tool
-    and arguments, including repeated unknown tool IDs. This protection is always
-    active; enabling `tools.loopDetection` is not required.
+    After three consecutive identical failures for the same tool and arguments,
+    OpenClaw blocks that exact action and gives the model one chance to replan.
+    An unchanged retry ends the turn without executing the call again. Unknown
+    tool IDs also count. This protection is always active; enabling
+    `tools.loopDetection` is not required.
 
     Ollama 0.40's generic parser can mistake a chat-template marker for an
     advertised tool name. Tool Search uses the collision-free `dispatch_action`
@@ -157,10 +159,12 @@ sidebarTitle: "Troubleshooting"
     OpenAI-compatible chat-completions route. Other providers are unchanged.
     Custom Ollama templates with different markers may need separate diagnosis.
 
-    Check the arguments in the recorded error. If the model repeatedly invents
-    tool names or cannot use the exposed schemas, switch to a model with native
-    tool calling and start a new turn. Changed errors and successful retries
-    reset the count. See [Tool-loop detection](/tools/loop-detection).
+    Check the named tool's inputs or service. If a failed action may have partly
+    applied, inspect its state before choosing another action. If the model
+    repeatedly invents tool names or cannot use exposed schemas, consider a model
+    with native tool calling. Changed errors and successes reset the streak but
+    do not release an already blocked action. A committed new user message
+    starts a fresh recovery allowance. See [Tool-loop detection](/tools/loop-detection).
 
   </Accordion>
 

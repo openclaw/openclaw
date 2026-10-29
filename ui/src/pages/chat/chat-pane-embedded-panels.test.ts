@@ -552,6 +552,7 @@ it("retains default Review content and collapsed files while switching tabs, foc
     const definitions = sidebarPanelDefinitions(
       sidebarPanelFixtureParams(state, {
         panePresentation: { owner, isPresented: () => presented },
+        workspace: createSessionWorkspaceProps(state, { presentation: "desktop" }),
       }),
     );
     await renderPanelFixture(mount, layout, definitions);
@@ -611,6 +612,7 @@ it("retains default Review content and collapsed files while switching tabs, foc
   await renderPanels(filesLayout);
   expect(files.querySelector("openclaw-chat-detail-panel")).toBeNull();
   expect(files.querySelector(".chat-files-panel__page")).toBe(browser);
+  expect(element(files, ".workspace-desktop").hidden).toBe(false);
   await renderPanels(closeSlot(review, "detail"));
   expect(query("openclaw-session-diff")).toBeNull();
   expect(request).toHaveBeenCalledExactlyOnceWith("sessions.diff", {

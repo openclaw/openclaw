@@ -427,7 +427,7 @@ function shouldHideProjectedHistoryMessage(
 }
 
 /** Identifies the hidden native input that starts a heartbeat-driven turn. */
-export function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
+function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
   const record = readRecord(message);
   if (!record || isForwardedUserMessage(record)) {
     return false;

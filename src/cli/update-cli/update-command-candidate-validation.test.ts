@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as canaryProcess from "../../infra/update-candidate-canary-process.js";
-import { createCanaryProcessFixture } from "../../infra/update-candidate-canary.test-support.js";
+import {
+  createCanaryProcessFixture,
+  createCanaryStartupRuntimeFixture,
+} from "../../infra/update-candidate-canary.test-support.js";
 import * as rehearsals from "../../infra/update-candidate-rehearsal.js";
 import { createUpdateRun, getUpdateRunAsync } from "../../infra/update-run-ledger.js";
 import * as exec from "../../process/exec.js";
@@ -55,10 +58,11 @@ if (args.includes("--help")) {
     env,
   };
   const guards = createUpdateCommandExecutionGuards({ run }, root);
-  const validate = () =>
+  const validate = (gatewayStartupRuntime?: string) =>
     validateUpdateCandidateWithProgress(
       {
         root,
+        gatewayStartupRuntime,
         config: {},
         env,
         assertCurrent: guards.assertCurrent,
@@ -67,7 +71,7 @@ if (args.includes("--help")) {
       { opts: { json: true, fullIntegrityCheck }, progress: {} },
       run,
     );
-  return { validate, snapshot, rehearsal, run };
+  return { root, validate, snapshot, rehearsal, run };
 }
 
 it("preserves each size-aware check budget after a long snapshot and Doctor", async () => {
@@ -159,5 +163,37 @@ it.each(["doctor", "lint"] as const)(
     } finally {
       deadline.dispose();
     }
+  },
+);
+
+it.skipIf(process.platform === "win32").each([false, true])(
+  "uses the service executable only for Gateway startup (incompatible=%s)",
+  async (incompatible) => {
+    const { root, validate, snapshot } = await prepareValidation();
+    const { runner, dispatched } = await createCanaryStartupRuntimeFixture(root, incompatible);
+    const launch = vi.spyOn(canaryProcess, "launchCanary");
+
+    const result = await validate(runner);
+
+    expect(snapshot).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ nodeRunner: undefined }),
+    );
+    const calls = launch.mock.calls.map(([params]) => params);
+    const startup = calls.filter(({ args }) => args.includes("gateway"));
+    expect(startup).toHaveLength(1);
+    expect(startup[0]?.nodeRunner).toBe(runner);
+    expect(JSON.parse(await fs.readFile(dispatched, "utf8"))).toEqual(
+      expect.arrayContaining(["--no-install", "gateway", "run"]),
+    );
+    const maintenance = calls.filter(({ args }) => !args.includes("gateway"));
+    expect(maintenance.length).toBeGreaterThanOrEqual(5);
+    expect(maintenance.every(({ nodeRunner }) => nodeRunner === undefined)).toBe(true);
+    expect(result).toMatchObject({
+      status: incompatible ? "error" : "ok",
+      phase: incompatible ? "startup" : "readiness",
+    });
+    expect(result.steps.find(({ name }) => name === "candidate-gateway-startup")?.exitCode).toBe(
+      incompatible ? 1 : 0,
+    );
   },
 );

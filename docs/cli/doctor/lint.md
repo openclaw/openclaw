@@ -103,6 +103,15 @@ Explicit lint exit codes:
 
 When the updater runs lint, warning-severity findings below its error threshold are retained in a separate JSON `warnings` array. They do not change the lint exit code. The updater records these advisories in its run history, including intentional open channel policies, so they remain available in `openclaw update status`. Ordinary standalone lint keeps the selected output threshold.
 
+Agent stores held after deletion-journal reconstruction appear under
+`core/doctor/agent-deletion-journal`, with the store path, an `errorCode`, and a
+`fixHint`. The existing `core/doctor/state-schema` check reads these holds and
+missing or unreadable history from its shared-state snapshot; lint does not repeat
+Doctor's database discovery or reconstruction. Run `openclaw doctor --fix` to restore verified configured stores after
+backups; stores whose ownership cannot be verified remain preserved with explicit
+restoration guidance. Dead-holder database leases are reclaimable during repair
+and do not by themselves require adopting or deleting an agent.
+
 If a caller cancels state-lease acquisition before an inspection starts, Doctor records
 an informational diagnostic with `errorCode: OPENCLAW_STATE_LEASE_ABORTED`, the elapsed
 time, and the caller's signal as its cause. Below the selected threshold, this diagnostic
@@ -131,7 +140,7 @@ and error message, and provide a recovery hint for the affected path.
 The updater retains the warning and continues. Doctor preserves settings whose
 plugin owner could not be inspected; see [Plugin repair warnings](/install/update-troubleshooting#plugin-repair-warnings).
 
-Bare `openclaw doctor --json` exits `0` once it emits a findings payload, including when `ok` is `false`. Argument errors remain nonzero. If the lint runner fails before producing a report, Doctor exits `2` and emits one redacted JSON document with `ok: false`, `checksRun: 0`, and an error finding under `core/doctor/lint-inspection`. It retains the `error: { type: "cli_error", message }` field for existing consumers. This readiness shape is accepted by published updaters, including 2026.9.5, without treating an inspection failure as a successful check.
+Bare `openclaw doctor --json` exits `0` once it emits a findings payload, including when `ok` is `false`. Argument errors remain nonzero. If config parsing or database target selection blocks inspection, JSON includes `status: "blocked"`, `ok: false`, and an error finding explaining the reason, and Doctor exits `2`. If the lint runner fails before producing a report, Doctor exits `2` and emits one redacted JSON document with `ok: false`, `checksRun: 0`, and an error finding under `core/doctor/lint-inspection`. It retains the `error: { type: "cli_error", message }` field for existing consumers. This readiness shape is accepted by published updaters, including 2026.9.5, without treating an inspection failure as a successful check.
 
 `--all` controls which checks are selected before severity filtering. The default lint run excludes checks that are deep, historical, or more likely to surface repairable legacy residue; use `--all` for the complete inventory. `--only <id>` is the most precise selector and can run any registered check by id.
 

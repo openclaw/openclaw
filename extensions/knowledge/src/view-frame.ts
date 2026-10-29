@@ -4,14 +4,39 @@ import type { Page } from "./page-context.js";
 import { button, el } from "./page-dom.js";
 import { loadingLabel } from "./page-state.js";
 
+// Views kept for returning to; older ones are dropped first.
+const RETAINED_VIEWS = 4;
+
+// Keep the committed view being left so returning to it shows its last rows while they refresh.
+function retainView(ui: Page) {
+  const { s, content } = ui;
+  if (!s.viewReady || !s.displayView || !content.children.length) {
+    return;
+  }
+  s.retainedViews.delete(s.displayView);
+  s.retainedViews.set(s.displayView, [...content.childNodes]);
+  for (const key of s.retainedViews.keys()) {
+    if (s.retainedViews.size <= RETAINED_VIEWS) {
+      break;
+    }
+    s.retainedViews.delete(key);
+  }
+}
+
 /** Acknowledge a load in the destination pane while keeping readable content in place. */
 export function prepareLoading(ui: Page, n: number) {
   const { s, content, loading, announce } = ui;
   const screen = JSON.stringify([s.tab, s.selectedId]);
   if (s.mountedScreen !== screen || !content.children.length) {
+    retainView(ui);
     s.viewReady = false;
     s.mountedScreen = screen;
-    if (!s.selectedId && s.tab === "browse") {
+    // Only the exact view returns: same scope, tab, record, filters and page.
+    const retained = s.retainedViews.get(ui.viewKey());
+    s.retainedViews.delete(ui.viewKey());
+    if (retained) {
+      content.replaceChildren(...retained);
+    } else if (!s.selectedId && s.tab === "browse") {
       renderBrowse(ui, n, content);
     } else {
       const placeholder = loadingPlaceholder(

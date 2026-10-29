@@ -134,6 +134,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   if (
+    // A deliberate handoff continues this turn; an empty final is not a failed model.
+    params.result.meta.yielded === true ||
     params.result.meta.intentionalTerminalCompletion === "tool-batch" ||
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||

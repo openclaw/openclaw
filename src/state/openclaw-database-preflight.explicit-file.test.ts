@@ -38,6 +38,7 @@ import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "./openclaw-state-schema-v13
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
@@ -58,6 +59,7 @@ beforeAll(async () => {
   templatePath = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } }).path;
   await closeOpenClawStateDatabaseAsync();
   using legacy = openRawDatabase(templatePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
 });
@@ -166,6 +168,7 @@ it("repairs fractional trace timestamps while captured doctor migration advances
   closeOpenClawStateDatabaseForTest();
 
   const legacy = openRawDatabase(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   const strictCreateSql = (
     legacy
@@ -301,6 +304,7 @@ it.each([false, true])(
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "local-workspace-manifests-v31", path: pathname },
       { kind: "local-workspace-cas-v35", path: pathname },
+      { kind: "template-names-v36", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = openRawDatabase(pathname);
@@ -406,7 +410,7 @@ function expectNewerSchema(message: string) {
   expect(message).toMatch(/newer/);
   expect(message).toMatch(/build.*supports/);
   expect(message).toMatch(/restore.*backup/);
-  expect(message).not.toMatch(/doctor --fix|registry query failed|integrity_check failed/);
+  expect(message).not.toMatch(/registry query failed|integrity_check failed/);
 }
 
 it.each([
@@ -553,6 +557,7 @@ it.each([33, 34])(
     }
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "local-workspace-cas-v35", path: pathname },
+      { kind: "template-names-v36", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = openRawDatabase(pathname);

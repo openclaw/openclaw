@@ -1,4 +1,3 @@
-import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -8,7 +7,6 @@ import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity
 import { getPairedDevice } from "../infra/device-pairing.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../plugins/types.js";
@@ -24,6 +22,7 @@ import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import { createWorkerRuntimeInstallProgressPublisher } from "./server-worker-runtime-install-progress.js";
+import { retryGatewayWorkerStartupRecovery } from "./server-worker-startup-recovery.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import {
@@ -57,9 +56,6 @@ import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bun
 type WorkerEnvironmentLogger = {
   child: (name: string) => { info: (message: string) => void; warn: (message: string) => void };
 };
-
-// Five existing SQLite busy waits plus capped backoff allow about 37s for a competing writer.
-const WORKER_STARTUP_RECOVERY_ATTEMPTS = 5;
 
 export type GatewayWorkerEnvironmentStartupState = Awaited<
   ReturnType<typeof loadGatewayWorkerEnvironmentStartupState>
@@ -179,27 +175,11 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   // process are gone. Resolve their ambiguous effects before placement
   // reconciliation attempts to release the owning worker claims.
   const workerEnvironmentLog = params.log.child("worker-environments");
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
-      break;
-    } catch (error) {
-      if (!isSqliteLockError(error)) {
-        throw error;
-      }
-      if (attempt === WORKER_STARTUP_RECOVERY_ATTEMPTS) {
-        throw new Error(
-          `placementTools.recover failed after ${attempt} attempts: the database is locked by another process or connection. Run openclaw doctor or openclaw gateway status --deep to diagnose the lock.`,
-          { cause: error },
-        );
-      }
-      const waitMs = Math.min(1_000 * 2 ** (attempt - 1), 5_000);
-      workerEnvironmentLog.warn(
-        `placementTools.recover: database is locked; retrying attempt ${attempt + 1}/${WORKER_STARTUP_RECOVERY_ATTEMPTS} in ${waitMs} ms.`,
-      );
-      await delay(waitMs);
-    }
-  }
+  await retryGatewayWorkerStartupRecovery({
+    operation: "placementTools.recover",
+    run: () => params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart(),
+    warn: (message) => workerEnvironmentLog.warn(message),
+  });
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
   await params.startup.placementStore.clearLocalTurnClaimsAfterRestartAsync();
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {

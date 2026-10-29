@@ -809,7 +809,7 @@ describe("scheduled message actions", () => {
         }
         const completion = await waitFor(finished.promise);
         if (!disableBeforeResponse) {
-          expect(completion).toMatchObject({ status: "ok" });
+          expect(completion, JSON.stringify(completion)).toMatchObject({ status: "ok" });
         }
         let text: string | undefined;
         if (runtime === "claude-cli") {

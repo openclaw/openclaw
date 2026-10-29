@@ -93,6 +93,28 @@ export function captureSubagentExecution(params: {
   return { entry, runId: entry.runId, execution };
 }
 
+/** Validate the captured controller owner after its asynchronous cancellation cleanup. */
+export function assertCapturedSubagentExecutionCurrent(
+  captured: CapturedSubagentExecution,
+  selectedEntry: SubagentRunRecord,
+): void {
+  const input = captured.execution.input;
+  // Async cleanup keeps a consumed input resident until its settlement receipt completes.
+  const cleanupSettled = input.phase === "consumed" && !input.mailbox.entries.includes(input);
+  if (!cleanupSettled) {
+    const entry = getCurrentSubagentRunOwner(subagentRuns, selectedEntry) ?? captured.entry;
+    const target = input.target;
+    const rpcSource =
+      target && getRpcSourceForGateway(captured.runId, getGatewayContextResolver(input), target);
+    if (
+      entry.runId !== captured.runId ||
+      (rpcSource !== undefined && rpcSource !== captured.execution)
+    ) {
+      throw new Error("Subagent execution owner changed during cancellation");
+    }
+  }
+}
+
 /** Retires the registry projection; controller source settlement retains physical cleanup. */
 export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void {
   const entry = getCurrentSubagentRunOwner(subagentRuns, observed) ?? observed;

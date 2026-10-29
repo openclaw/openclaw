@@ -221,8 +221,8 @@ load "apps/android/fastlane/Fastfile"
 def validate_android_release_preflight!(metadata); end
 def capture_android_screenshots!; end
 def screenshots; $lanes.fetch(:screenshots).call; end
-def build_release_artifacts!
-  raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run")
+def build_release_artifacts!(artifact: "all")
+  raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--artifact", artifact, "--dry-run")
   FileUtils.mkdir_p("apps/android/build/release-artifacts")
   %w(play wear).each do |audience|
     file = "apps/android/build/release-artifacts/openclaw-2026.9.20-#{audience}-release.aab"
@@ -368,13 +368,10 @@ describe("mobile release CLI", () => {
         destination,
         sourceSha: f.base,
       });
-      for (const line of [
-        "Android versionName: 2026.9.20",
-        "Android versionCode: 2026090250",
-        "Android Wear versionCode: 2026090251",
-      ]) {
-        expect(result.stdout).toContain(line);
-      }
+      expect(result.stdout.match(/^Release artifact: .+$/gm)).toEqual([
+        "Release artifact: wear aab",
+        "Release artifact: play aab",
+      ]);
       expect(f.audit()[0]).toMatchObject({
         version: "2026.9.20",
         versionCode: 2026090250,
@@ -404,6 +401,7 @@ describe("mobile release CLI", () => {
       );
       expectResult(rebuilt, 0);
       expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
+      expect(rebuilt.stdout).toContain("Release artifact: third-party apk");
       expect(git(f.root, "status", "--porcelain")).toBe("");
     },
   );

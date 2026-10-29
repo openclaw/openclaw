@@ -30,8 +30,8 @@ type SeedRun = Omit<FixtureRun, "sessionEntry" | "childAgentId" | "requesterSess
     lifecycleRevision?: string;
   };
 
-vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../server-recovery-runtime-context.js")>()),
+vi.mock("../server-lifecycle-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-lifecycle-runtime-context.js")>()),
   bindGatewayLifecycleRequest:
     () =>
     async ({ method }: { method: string }) => {

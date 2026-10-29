@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
-import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../../sessions/input-provenance.js";
 import { resolveEmbeddedRunSessionLanePolicy } from "./lane-runtime.js";
 
 afterEach(() => {
@@ -10,26 +9,14 @@ afterEach(() => {
 });
 
 describe("embedded run lane priority", () => {
-  it("runs a foreground user turn before queued restart recovery and inter-session work", async () => {
-    const lane = "test:restart-recovery-priority";
+  it("runs a foreground user turn before queued inter-session work", async () => {
+    const lane = "test:inter-session-priority";
     setCommandLaneConcurrency(lane, 1);
     const { promise: blockerGate, resolve: releaseBlocker } = createDeferred();
     const blocker = enqueueCommandInLane(lane, async () => {
       await blockerGate;
     });
     const order: string[] = [];
-    const restartRecovery = enqueueCommandInLane(
-      lane,
-      async () => {
-        order.push("restart-recovery");
-      },
-      {
-        priority: resolveEmbeddedRunSessionLanePolicy("user", {
-          kind: "internal_system",
-          sourceTool: MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL,
-        }).priority,
-      },
-    );
     const interSession = enqueueCommandInLane(
       lane,
       async () => {
@@ -51,8 +38,8 @@ describe("embedded run lane priority", () => {
     );
 
     releaseBlocker();
-    await Promise.all([blocker, foreground, restartRecovery, interSession]);
+    await Promise.all([blocker, foreground, interSession]);
 
-    expect(order).toEqual(["foreground-user", "restart-recovery", "inter-session"]);
+    expect(order).toEqual(["foreground-user", "inter-session"]);
   });
 });

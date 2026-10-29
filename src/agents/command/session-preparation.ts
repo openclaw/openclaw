@@ -11,11 +11,6 @@ import { prepareReplyConversation } from "../../auto-reply/reply/prompt-session-
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
-import {
-  buildRestartRecoveryClaimCleanupPatch,
-  isMainRestartRecoveryCandidate,
-  normalizeMainSessionRecoveryRunFences,
-} from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,130 +27,13 @@ import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
-import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
-import { isInternalMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
-import {
-  buildCurrentRunRestartRecoveryClaim,
-  canReplaceTerminalCommandRecoveryClaim,
-  prepareCommandHarnessCompletionRecovery,
-} from "../agent-command-restart-recovery.js";
+import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
-import { createRestartRecoveryOperatorSource } from "../operator-run-recovery-source.js";
 import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
-import { createRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-export function prepareCommandSessionRecoveryEntry(
-  params: Omit<
-    Parameters<typeof prepareCommandHarnessCompletionRecovery>[0],
-    "hasDeliveryContext"
-  > & {
-    deliveryContext?: DeliveryContext;
-    now: number;
-    lifecycleGeneration: string;
-    isSessionRollover: boolean;
-  },
-) {
-  const { sessionId, runId, opts, now, isSessionRollover } = params;
-  const entry = canReplaceTerminalCommandRecoveryClaim(params.entry, runId)
-    ? {
-        ...params.entry,
-        ...buildRestartRecoveryClaimCleanupPatch({
-          entry: params.entry,
-          recordTerminalSource: false,
-        }),
-      }
-    : params.entry;
-  const { harnessCompletion, guardedHarnessCompletion, sourceOptions, isCompletionCurrent } =
-    prepareCommandHarnessCompletionRecovery({
-      ...params,
-      entry,
-      hasDeliveryContext: Boolean(params.deliveryContext),
-    });
-  const operatorSource =
-    entry.restartRecoveryDeliveryRunId !== runId
-      ? createRestartRecoveryOperatorSource({
-          authority: opts.operatorAuthority,
-          entry: { ...entry, sessionId },
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sourceRunId: sourceOptions.sourceRunId ?? runId,
-          inputProvenance: opts.inputProvenance,
-          requesterOrigin: opts.requesterOrigin,
-        })
-      : undefined;
-  const requesterSource =
-    entry.restartRecoveryDeliveryRunId !== runId
-      ? createRestartRecoveryRequesterSource({
-          requesterOrigin: opts.requesterOrigin,
-          entry: { ...entry, sessionId },
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sourceRunId: sourceOptions.sourceRunId ?? runId,
-        })
-      : undefined;
-  const sourceIngress =
-    sourceOptions.sourceIngress ??
-    (opts.inputProvenance && opts.inputProvenance.kind !== "external_user"
-      ? ("internal" as const)
-      : (operatorSource?.snapshot.sourceIngress ??
-        (requesterSource?.requesterOrigin.messageProvider &&
-        !isInternalMessageChannel(requesterSource.requesterOrigin.messageProvider)
-          ? ("channel" as const)
-          : ("internal" as const))));
-  return {
-    guardedHarnessCompletion,
-    isCompletionCurrent,
-    nextEntry: {
-      ...entry,
-      sessionId,
-      updatedAt: now,
-      status: undefined,
-      abortedLastRun: false,
-      endedAt: undefined,
-      lastRunError: undefined,
-      restartRecoveryRuns: isMainRestartRecoveryCandidate(entry, params.sessionKey)
-        ? normalizeMainSessionRecoveryRunFences([
-            ...(entry.restartRecoveryRuns ?? []),
-            { runId, lifecycleGeneration: params.lifecycleGeneration },
-          ])
-        : entry.restartRecoveryRuns,
-      sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
-      lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
-      ...buildCurrentRunRestartRecoveryClaim({
-        deliveryContext: params.deliveryContext,
-        disableMessageTool: opts.disableMessageTool,
-        entry,
-        forceRestartSafeTools: opts.forceRestartSafeTools,
-        runId,
-        harnessCompletion,
-        sourceMessageChannel:
-          resolveMessageChannel(
-            opts.runContext?.messageChannel ?? opts.messageChannel,
-            opts.replyChannel ?? opts.channel,
-          ) ?? null,
-        ...sourceOptions,
-        ...(requesterSource
-          ? {
-              requesterSource,
-              sourceRunId: requesterSource.sourceRunId,
-              sourceIngress,
-            }
-          : {}),
-        ...(operatorSource
-          ? {
-              operatorSource,
-              sourceRunId: operatorSource.sourceRunId,
-              sourceIngress,
-            }
-          : {}),
-      }),
-    },
-  };
-}
 
 export async function prepareCommandSessionDiffBaseline(
   params: Parameters<typeof ensureSessionDiffBaseline>[0] & {

@@ -209,7 +209,12 @@ it.each([
   }
   expect(fixture.card().open).toBe(false);
   context.readingHistory = false;
-  const revised = { ...progressCard, revision: 3, markdown: "Revised progress" };
+  const revised = {
+    ...progressCard,
+    revision: 3,
+    markdown: "**Updated progress**",
+    steps: [{ step: "Wire the updated checklist", status: "in_progress" as const }],
+  };
   for (const [status, remount] of [
     ["running", false],
     ["done", false],
@@ -220,6 +225,8 @@ it.each([
     }
     fixture.show(revised, status);
     expect(fixture.card().open).toBe(false);
+    expect(fixture.card().textContent).toContain("Wire the updated checklist");
+    expect(fixture.card().querySelector("strong")?.textContent).toBe("Updated progress");
   }
   fixture.show({ ...revised, revision: 4 });
   expect(fixture.card().open).toBe(false);

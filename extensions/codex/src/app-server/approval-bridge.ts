@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   type AgentApprovalEventData,
   type BeforeToolCallFailureDisposition,
+  embeddedAgentLog,
   type ExecApprovalDecision,
   formatApprovalDisplayPath,
   hasNativeHookRelayInvocation,
@@ -199,7 +200,18 @@ export async function handleCodexAppServerApprovalRequest(params: {
         cwd,
       });
       if (!prepared.ok) {
-        return await resolvePolicyApproval("denied", prepared.message);
+        params.signal?.throwIfAborted();
+        // Codex's decline carries no reason and reads as a user rejection, so
+        // record why no approval was offered where operators and clients see it.
+        embeddedAgentLog.warn("codex app-server command approval could not bind the command", {
+          itemId: context.itemId,
+          reason: prepared.message,
+        });
+        recordNativeToolFailureDisposition(params, context, "failed");
+        return finishApproval("denied", {
+          status: "unavailable",
+          message: `Approval could not bind this command, so no approval was requested (${prepared.message}). Retry with a simpler command (for example, without shell operators) or ask an operator.`,
+        });
       }
       mutableFileApprovalRequiresOneShot = prepared.requiresOneShot;
       revalidateMutableFileApproval = prepared.revalidate;

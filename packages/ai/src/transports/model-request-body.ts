@@ -98,6 +98,8 @@ export function withModelRequestBodyBytes(
   return (input, init) => {
     if (typeof init?.body === "string") {
       state.onBytes?.(Buffer.byteLength(init.body, "utf8"));
+    } else if (init?.body instanceof Blob) {
+      state.onBytes?.(init.body.size);
     }
     return fetch(input, init);
   };
@@ -131,6 +133,10 @@ export function serializeModelRequestBody(
 
 const encodedBodyStreams = new WeakMap<object, boolean>();
 
+export function markEncodedModelRequestBody(body: Blob, stream: boolean): void {
+  encodedBodyStreams.set(body, stream);
+}
+
 export function encodedModelRequestBodyStream(body: unknown): boolean | undefined {
   return typeof body === "object" && body !== null ? encodedBodyStreams.get(body) : undefined;
 }
@@ -145,7 +151,7 @@ export function prepareModelRequestBody(options: object | undefined) {
     const body = new Blob([encoded.body]);
     state.onEncoded?.(body, payload);
     state.onBytes?.(body.size);
-    encodedBodyStreams.set(body, encoded.stream);
+    markEncodedModelRequestBody(body, encoded.stream);
     return { body, headers: { "content-type": "application/json" } };
   };
 }

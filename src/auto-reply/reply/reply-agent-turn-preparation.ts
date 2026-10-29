@@ -42,7 +42,10 @@ import {
 } from "./compaction-notice.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { isGoalContinuationCurrent, isSupportedWorkerGoalPlacement } from "./goal-continuation.js";
+import {
+  isGoalContinuationCurrent,
+  isGoalContinuationPlacementCurrent,
+} from "./goal-continuation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { getFollowupQueueDepth } from "./queue/enqueue.js";
 import {
@@ -53,7 +56,6 @@ import {
 import { prepareReplySourceAdmission } from "./reply-source-admission.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import type { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
-import type { ReplyRestartRecoveryClaimController } from "./restart-recovery-claim.types.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import type { TypingController } from "./typing.js";
 
@@ -87,7 +89,6 @@ export type AdmittedFollowupTurn = {
   memoryFlushAttempted?: boolean;
   preflightFailurePayload?: ReplyPayload;
   preflightError?: Error;
-  restartRecovery?: ReplyRestartRecoveryClaimController;
   releaseSourceAdmission?: () => Promise<void>;
 };
 
@@ -107,7 +108,6 @@ type PrepareReplyAgentTurnParams<TConfigured> = {
   queued: FollowupRun;
   defaults: FollowupRunnerParams;
   kind?: ReplyTurnKind;
-  recoveryAdmissionRunId?: string;
   resetTriggered?: boolean;
   routeThreadId?: string | number;
   providedReplyOperation?: ReplyOperation;
@@ -186,7 +186,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
         }
       : await admitReplyTurn({
           mailboxClaim,
-          recoveryAdmissionRunId: params.recoveryAdmissionRunId,
           rotationEvidence: params.rotationEvidence,
           runId: params.queued.controllerInput?.protocolRunId,
           onDatabaseRegistration: params.defaults.opts?.onDatabaseRegistration,
@@ -636,17 +635,16 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 sessionKey: replySessionKey,
               })
             : session.current();
-        const workerPlacementCurrent =
-          !goalContinuation.workerGoal ||
-          (Boolean(params.queued.operatorAuthority) &&
-            (await isSupportedWorkerGoalPlacement({
-              agentId: run.agentId,
-              sessionKey: replySessionKey ?? "",
-              sessionId: goalContinuation.sessionId,
-            })));
+        const placementCurrent = await isGoalContinuationPlacementCurrent({
+          continuation: goalContinuation,
+          agentId: run.agentId,
+          sessionKey: replySessionKey ?? "",
+          hasOperatorAuthority: Boolean(params.queued.operatorAuthority),
+          requiresWorker: Boolean(run.config?.cloudWorkers?.requiredProfile),
+        });
         assertOperatorCurrent();
         if (
-          !workerPlacementCurrent ||
+          !placementCurrent ||
           operation.abortSignal.aborted ||
           !isGoalContinuationCurrent(goalContinuation, currentEntry) ||
           getFollowupQueueDepth(replySessionKey ?? "") > 0

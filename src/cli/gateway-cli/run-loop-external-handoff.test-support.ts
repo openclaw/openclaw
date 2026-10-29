@@ -46,7 +46,7 @@ export function registerExternalHandoffShutdownTests(f: UpdateRespawnFixtures): 
         expect(close).toHaveBeenCalledOnce();
         sigterm();
         expect(host?.externalRestart?.isCurrent()).toBe(false);
-        expectUncalled(f.waitForGatewayActiveWork, runtime.exit, f.cancelShutdownHardExitWatchdog);
+        expectUncalled(runtime.exit, f.cancelShutdownHardExitWatchdog);
       } finally {
         if (fails) {
           cleanup.reject(new Error("external cleanup failed"));
@@ -61,7 +61,7 @@ export function registerExternalHandoffShutdownTests(f: UpdateRespawnFixtures): 
         f.respawnGatewayProcessForUpdate,
         f.writeGatewayRestartHandoff,
       );
-      expect(f.cancelShutdownHardExitWatchdog).toHaveBeenCalledOnce();
+      expect(f.cancelShutdownHardExitWatchdog).toHaveBeenCalledTimes(fails ? 0 : 1);
     }, true);
   });
 
@@ -109,13 +109,12 @@ export function registerExternalHandoffShutdownTests(f: UpdateRespawnFixtures): 
     },
   );
 
-  it("keeps the ordinary drain when a handoff refuses late terminal persistence", async () => {
+  it("still stops when a handoff refuses late terminal persistence", async () => {
     await f.withRunningGateway(async ({ captureSignal, close, exited }) => {
       const error = "gateway terminal persistence is still pending";
       f.consumeGatewaySuspendHandoff.mockReturnValueOnce({ ok: false, error });
       captureSignal("SIGTERM")();
       await expect(exited).resolves.toBe(0);
-      expect(f.waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, expect.any(Object));
       expectStopCloseCall(close);
       expect(f.gatewayLog.warn).toHaveBeenCalledWith(`external restart handoff refused: ${error}`);
     }, true);

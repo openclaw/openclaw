@@ -5,6 +5,7 @@ import * as officialCatalog from "../plugins/official-external-plugin-catalog.js
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as pluginRuntime from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -16,6 +17,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
+import { sqliteWorkerOwnerProbe } from "./sqlite-worker-owner-probe.test-support.js";
+import { installationCountStateKey } from "./telemetry-installation-count.js";
 import {
   buildTelemetryPayload,
   checkTelemetryUpdate,
@@ -32,6 +35,14 @@ const update = { version: "2026.8.24" };
 
 function respond(version = update.version, url = TELEMETRY_URL) {
   mockHttp.intercept({ url, reply: { json: { version } } });
+}
+
+function createCountingReceiver(getDay = () => 20688) {
+  return vi.fn<typeof fetch>(async (_url, init) =>
+    new Headers(init?.headers).has("OpenClaw-Installation-Count")
+      ? new Response(null, { status: 204 })
+      : Response.json(update, { headers: { "OpenClaw-Installation-Count": "1;" + getDay() } }),
+  );
 }
 
 function readState() {
@@ -142,6 +153,245 @@ describe("anonymous telemetry", () => {
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     await testState.cleanup();
+  });
+
+  it.each([false, true])(
+    "counts a server-authorized day separately without changing the 24-hour cache (feature consent %s)",
+    async (featureStats) => {
+      let serverDay = 20688;
+      const fetchImpl = createCountingReceiver(() => serverDay);
+      const config = featureStats ? createFeatureConfig() : {};
+      await expect(checkUpdate(config, NOW, fetchImpl)).resolves.toEqual(update);
+      await expect(checkUpdate(config, NOW + DAY_MS - 1)).resolves.toEqual(update);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      const [updateRequest, countRequest] = fetchImpl.mock.calls.map(([, init]) => init);
+      expect(new Headers(updateRequest?.headers).has("OpenClaw-Installation-Count")).toBe(false);
+      expect(updateRequest?.method).toBe(featureStats ? "POST" : "GET");
+      expect(countRequest).toEqual({
+        method: "POST",
+        redirect: "error",
+        signal: expect.any(AbortSignal),
+        headers: {
+          "User-Agent": "openclaw-installation-count/1",
+          "OpenClaw-Installation-Count": "1;20688;31",
+        },
+      });
+      expect(readConfigMachineState(installationCountStateKey(TELEMETRY_URL))).toBe(20688);
+      serverDay = 20689;
+      await expect(checkUpdate({}, NOW + DAY_MS)).resolves.toEqual(update);
+      expect(fetchImpl).toHaveBeenCalledTimes(4);
+      expect(
+        new Headers(fetchImpl.mock.calls[3]?.[1]?.headers).get("OpenClaw-Installation-Count"),
+      ).toBe("1;20689;1");
+    },
+  );
+
+  it("does not send or claim any installation metadata to a legacy receiver", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json(update));
+    await expect(checkUpdate({}, NOW, fetchImpl)).resolves.toEqual(update);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(
+      new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).has("OpenClaw-Installation-Count"),
+    ).toBe(false);
+    expect(readConfigMachineState(installationCountStateKey(TELEMETRY_URL))).toBeUndefined();
+  });
+
+  it.each(["endpoint", "state directory"] as const)(
+    "does not join concurrent update/count cycles for a different %s",
+    async (scope) => {
+      const response = createDeferredCore<Response>();
+      const started = createDeferredCore();
+      const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+        if (new Headers(init?.headers).has("OpenClaw-Installation-Count")) {
+          return new Response(null, { status: 204 });
+        }
+        started.resolve();
+        return (await response.promise).clone();
+      });
+      const first = checkUpdate({}, NOW, fetchImpl);
+      await started.promise;
+      if (scope === "endpoint") {
+        setTestEnvValue(
+          "OPENCLAW_TELEMETRY_ENDPOINT",
+          "https://other.example.invalid/api/latest-version",
+        );
+      } else {
+        setTestEnvValue("OPENCLAW_STATE_DIR", testState.path("other-installation"));
+      }
+      const second = checkTelemetryUpdate(() => ({}));
+      response.resolve(
+        Response.json(update, { headers: { "OpenClaw-Installation-Count": "1;20688" } }),
+      );
+      expect(await Promise.all([first, second])).toEqual([update, update]);
+      expect(fetchImpl).toHaveBeenCalledTimes(4);
+      expect(
+        fetchImpl.mock.calls
+          .map(([, init]) => new Headers(init?.headers).get("OpenClaw-Installation-Count"))
+          .filter(Boolean),
+      ).toEqual(["1;20688;31", "1;20688;31"]);
+      testState.applyEnv();
+    },
+  );
+
+  it("cancels an unexpected count-response stream without losing the valid version answer", async () => {
+    let canceled = false;
+    const receiver = createCountingReceiver();
+    const fetchImpl = vi.fn<typeof fetch>(async (...args) =>
+      new Headers(args[1]?.headers).has("OpenClaw-Installation-Count")
+        ? new Response(
+            new ReadableStream({
+              cancel() {
+                canceled = true;
+              },
+            }),
+          )
+        : receiver(...args),
+    );
+    await expect(checkUpdate({}, NOW, fetchImpl)).resolves.toEqual(update);
+    expect(canceled).toBe(true);
+    expectState(NOW);
+  });
+
+  it.each(["response loss", "HTTP error"])(
+    "retains the valid version and never retries its count after %s",
+    async (failure) => {
+      let serverDay = 20688;
+      const receiver = createCountingReceiver(() => serverDay);
+      const fetchImpl = vi.fn<typeof fetch>(async (...args) => {
+        const init = args[1];
+        if (new Headers(init?.headers).has("OpenClaw-Installation-Count")) {
+          if (failure === "HTTP error") {
+            return new Response(null, { status: 503 });
+          }
+          throw new Error(failure);
+        }
+        return receiver(...args);
+      });
+      await expect(checkUpdate({}, NOW, fetchImpl)).resolves.toEqual(update);
+      // A full cache interval can elapse on a skewed client without advancing the receiver day.
+      await expect(checkUpdate({}, NOW + DAY_MS)).resolves.toEqual(update);
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      serverDay = 20738;
+      await expect(checkUpdate({}, NOW + 50 * DAY_MS)).resolves.toEqual(update);
+      expect(
+        fetchImpl.mock.calls.map(([, init]) =>
+          new Headers(init?.headers).get("OpenClaw-Installation-Count"),
+        ),
+      ).toEqual([null, "1;20688;31", null, null, "1;20738;31"]);
+    },
+  );
+
+  it("keeps a redirected update answer without authorizing a count upload to its source", async () => {
+    const target = "https://other.example.invalid/api/latest-version";
+    mockHttp.intercept({
+      url: TELEMETRY_URL,
+      method: "GET",
+      reply: {
+        status: 302,
+        headers: { location: target },
+        body: "",
+      },
+    });
+    mockHttp.intercept({
+      url: target,
+      method: "GET",
+      reply: {
+        json: update,
+        headers: { "OpenClaw-Installation-Count": "1;20688" },
+      },
+    });
+    await expect(checkUpdate()).resolves.toEqual(update);
+    expect(mockHttp.requests()).toHaveLength(2);
+    expect(readConfigMachineState(installationCountStateKey(TELEMETRY_URL))).toBeUndefined();
+    expectState(NOW);
+  });
+
+  it("does not follow a count redirect or discard its accepted update answer", async () => {
+    mockHttp.intercept({
+      url: TELEMETRY_URL,
+      method: "GET",
+      reply: {
+        json: update,
+        headers: { "OpenClaw-Installation-Count": "1;20688" },
+      },
+    });
+    mockHttp.intercept({
+      url: TELEMETRY_URL,
+      method: "POST",
+      reply: {
+        status: 307,
+        headers: { location: "https://other.example.invalid/count" },
+        body: "",
+      },
+    });
+    await expect(checkUpdate()).resolves.toEqual(update);
+    expect(mockHttp.requests()).toHaveLength(2);
+    expectState(NOW);
+  });
+
+  it.each([null, "2;20688", "1;020688", "1;-1", "1;20688;31", "1;20688.5", "1;100000000"])(
+    "never claims or sends a count for unsupported capability %j",
+    async (capability) => {
+      const fetchImpl = vi.fn<typeof fetch>(async () =>
+        Response.json(update, {
+          headers: capability === null ? {} : { "OpenClaw-Installation-Count": capability },
+        }),
+      );
+      await expect(checkUpdate({}, NOW, fetchImpl)).resolves.toEqual(update);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(readConfigMachineState(installationCountStateKey(TELEMETRY_URL))).toBeUndefined();
+    },
+  );
+
+  it.each([200, 503])("does not count an invalid update answer with HTTP %s", async (status) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json(status === 200 ? { noVersion: true } : update, {
+        status,
+        headers: { "OpenClaw-Installation-Count": "1;20688" },
+      }),
+    );
+    await expect(checkUpdate({}, NOW, fetchImpl)).resolves.toBeNull();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(readConfigMachineState(installationCountStateKey(TELEMETRY_URL))).toBeUndefined();
+  });
+
+  it.each([
+    { config: { telemetry: { enabled: false } }, dnt: undefined },
+    { config: { telemetry: { consentedAt: "2026-08-01T00:00:00Z" } }, dnt: undefined },
+    { config: { telemetry: { enabled: true } }, dnt: "1" },
+    { config: {}, dnt: "true" },
+  ] satisfies { config: OpenClawConfig; dnt: string | undefined }[])(
+    "omits counts and feature inventory for declined policy %j",
+    async ({ config, dnt }) => {
+      if (dnt !== undefined) {
+        setTestEnvValue("DO_NOT_TRACK", dnt);
+      }
+      const fetchImpl = createCountingReceiver();
+      await expect(checkUpdate(config, NOW, fetchImpl)).resolves.toEqual(update);
+      const init = fetchImpl.mock.calls[0]?.[1];
+      expect(init?.method).toBe("GET");
+      expect(init?.body).toBeUndefined();
+      expect(new Headers(init?.headers).get("OpenClaw-Installation-Count")).toBeNull();
+      expect(readConfigMachineState(installationCountStateKey(TELEMETRY_URL))).toBeUndefined();
+    },
+  );
+
+  it("keeps update results available without sending a count when its atomic claim fails", async () => {
+    sqliteWorkerOwnerProbe.command(workerStore, (command, options, scope) =>
+      command.type === "telemetry.claimInstallationCount"
+        ? Promise.reject(new Error("Counting storage unavailable"))
+        : scope.execute(command, options),
+    );
+    const fetchImpl = createCountingReceiver();
+    await expect(checkUpdate({}, NOW, fetchImpl)).resolves.toEqual(update);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("inspects counting eligibility without inventing a receiver day, claiming, or requesting HTTP", async () => {
+    const status = await resolveTelemetryStatus({});
+    expect(status.installationCountEnabled).toBe(true);
+    expect(readConfigMachineState(installationCountStateKey(TELEMETRY_URL))).toBeUndefined();
+    expect(mockHttp.requests()).toHaveLength(0);
   });
 
   it("builds deterministic feature facts without credentials, identities, paths, or hostnames", async () => {
@@ -470,7 +720,9 @@ describe("anonymous telemetry", () => {
       url: TELEMETRY_URL,
       method: "POST",
       requestBody: expectedBody,
-      requestHeaders: { "content-type": /^application\/json(?:\s*;.*)?$/u },
+      requestHeaders: {
+        "content-type": /^application\/json(?:\s*;.*)?$/u,
+      },
       reply: { json: update },
     });
 
@@ -495,15 +747,46 @@ describe("anonymous telemetry", () => {
     }
   });
 
-  it("still reports from an automated environment when an endpoint is configured for it", async () => {
-    const customEndpoint = "https://telemetry.example.invalid/api/latest-version";
+  it.each([TELEMETRY_URL, "https://TELEMETRY.OPENCLAW.AI.:443/another-path?test=1"])(
+    "never reports from CI with an explicit production endpoint: %s",
+    async (endpoint) => {
+      setTestEnvValue("CI", "true");
+      setTestEnvValue("OPENCLAW_TELEMETRY_ENDPOINT", endpoint);
+
+      await expect(checkUpdate(createFeatureConfig())).resolves.toBeNull();
+
+      expect(mockHttp.requests()).toHaveLength(0);
+      expect(readState()).toBeUndefined();
+      expect((await resolveTelemetryStatus(createFeatureConfig())).reason).toBe(
+        "automated-environment",
+      );
+    },
+  );
+
+  it("still reports to a custom test receiver in CI", async () => {
+    const endpoint = "https://telemetry.example.invalid/api/latest-version";
     setTestEnvValue("CI", "true");
-    setTestEnvValue("OPENCLAW_TELEMETRY_ENDPOINT", customEndpoint);
-    respond(update.version, customEndpoint);
+    setTestEnvValue("OPENCLAW_TELEMETRY_ENDPOINT", endpoint);
+    respond(update.version, endpoint);
 
     await expect(checkUpdate()).resolves.toEqual(update);
 
     expect(mockHttp.requests()).toHaveLength(1);
+  });
+
+  it("never follows a test receiver redirect to production in CI", async () => {
+    const endpoint = "https://telemetry.example.invalid/api/latest-version";
+    setTestEnvValue("CI", "true");
+    setTestEnvValue("OPENCLAW_TELEMETRY_ENDPOINT", endpoint);
+    mockHttp.intercept({
+      url: endpoint,
+      reply: { status: 307, headers: { location: TELEMETRY_URL }, body: "" },
+    });
+
+    await expect(checkUpdate()).resolves.toBeNull();
+
+    expect(mockHttp.requests()).toHaveLength(1);
+    expect(readState()).toBeUndefined();
   });
 
   it("never accesses the network in a test environment", async () => {

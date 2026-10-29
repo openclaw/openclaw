@@ -1,6 +1,7 @@
 /** Real embedded subscriber/catalog executor shared by bridge lifecycle regressions. */
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
 import { createReplyOperation } from "../sessions/session-controller.js";
+import type { CodeModeExecutorId } from "./code-mode-executor-types.js";
 import { createCodeModeTools } from "./code-mode.js";
 import {
   createAttemptNestedToolActivityState,
@@ -17,6 +18,7 @@ import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-searc
 
 export function createSubscribedCodeModeHarness(params: {
   name: string;
+  executor?: CodeModeExecutorId;
   sessionManager?: SessionManager;
   agent?: Agent;
   onBlockReplyFlush?: () => Promise<void>;
@@ -32,7 +34,14 @@ export function createSubscribedCodeModeHarness(params: {
   const sessionId = `session-code-mode-${params.name}`;
   const sessionKey = `agent:main:${params.name}`;
   const config = {
-    tools: { codeMode: { enabled: true, timeoutMs: params.timeoutMs ?? 1_500 } },
+    tools: {
+      codeMode: {
+        enabled: true,
+        executor: params.executor,
+        // Lifecycle cases use product admission defaults; deadline tests opt into their own budget.
+        timeoutMs: params.timeoutMs,
+      },
+    },
   } as never;
   const catalogRef = createToolSearchCatalogRef();
   const runAbortController = new AbortController();

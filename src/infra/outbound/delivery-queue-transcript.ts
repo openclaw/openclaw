@@ -50,6 +50,7 @@ export async function commitRecoveredVisibleMessages(
       accountId: entry.accountId,
       threadId: entry.threadId,
       producer: entry.session,
+      provenance: entry.transcriptProvenance,
       expectedGeneration: entry.sessionGeneration
         ? {
             sessionKey: entry.sessionGeneration.sessionKey,

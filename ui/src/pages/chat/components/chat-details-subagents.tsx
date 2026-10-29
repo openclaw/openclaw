@@ -7,16 +7,20 @@ import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-details-subagents.css";
 import "./chat-subagents-working.css";
-import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
+import {
+  isDetailsSubagentWorking as isWorking,
+  projectDetailsSubagents,
+  type DetailsSubagent as Subagent,
+  type DetailsSubagents,
+} from "../chat-details-snapshot.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
 
-type Subagent = Pick<ChatSubagentActivity, "key" | "label" | "status">;
-
 export type ChatDetailsSubagentsProps = {
   /** Collection members, in native launch order. The caller owns roster selection. */
   rows: readonly Subagent[];
+  presentation?: DetailsSubagents;
   /** Native mobile presentation, not the width of a desktop pane. */
   mobile: boolean;
   /** Render in the section header's trailing slot when its body is collapsed. */
@@ -35,11 +39,6 @@ const STATUS_KEYS = {
   failed: "common.failed",
   stopped: "chat.sessionDetails.stopped",
 } as const;
-const SUMMARY_ORDER = ["running", "waiting", "queued", "done", "stopped"] as const;
-
-function isWorking(row: Subagent) {
-  return row.status === "running" || row.status === "waiting";
-}
 
 function statusLabel(row: Subagent, workingLabel: string) {
   return row.status === "running" ? workingLabel : t(STATUS_KEYS[row.status]);
@@ -104,32 +103,27 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
 
 /** Controlled Details content. The parent owns section chrome and navigation. */
 export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
-  const working = createMemo(() => props.rows.filter(isWorking));
-  const ordered = createMemo(() => [...working(), ...props.rows.filter((row) => !isWorking(row))]);
-  const counts = createMemo(() =>
-    SUMMARY_ORDER.map((status) => ({
-      status,
-      // Done summarizes settled work here; individual rows retain their real outcome.
-      count: props.rows.filter((row) => (row.status === "failed" ? "done" : row.status) === status)
-        .length,
-    })).filter((entry) => entry.count > 0),
+  const presentation = createMemo(
+    () => props.presentation ?? projectDetailsSubagents(props.rows, props.mobile),
   );
+  const workingCount = () =>
+    presentation().counts.reduce((sum, row) => sum + (isWorking(row) ? row.count : 0), 0);
   const countLabel = (status: Subagent["status"]) =>
     status === "running" ? props.workingLabel : t(STATUS_KEYS[status]);
 
   return (
-    <Show when={props.rows.length > 0}>
+    <Show when={presentation().total > 0}>
       <Show
         when={!props.collapsed}
         fallback={
-          <Show when={working().length > 0}>
+          <Show when={workingCount() > 0}>
             <span
               class="chat-details-subagents__collapsed"
               role="img"
               aria-label={
-                working().length === 1
+                workingCount() === 1
                   ? t("chat.subagentsRunningOne")
-                  : t("chat.subagentsRunning", { count: String(working().length) })
+                  : t("chat.subagentsRunning", { count: String(workingCount()) })
               }
             >
               <span class="session-run-spinner" aria-hidden="true" />
@@ -139,14 +133,14 @@ export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
       >
         <div class={["chat-details-subagents", { "chat-details-subagents--mobile": props.mobile }]}>
           <Show
-            when={props.rows.length > (props.mobile ? 3 : 5)}
+            when={presentation().total > (props.mobile ? 3 : 5)}
             fallback={
               <div
                 class="chat-details-subagents__list"
                 role="list"
                 aria-label={t("chat.sessionDetails.subagents")}
               >
-                <For each={ordered()} keyed={(row) => row.key}>
+                <For each={presentation().rows} keyed={(row) => row.key}>
                   {(row) => <SubagentRow {...props} row={row()} />}
                 </For>
               </div>
@@ -156,17 +150,17 @@ export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
               type="button"
               class="chat-details-subagents__row chat-details-subagents__summary"
               onClick={() => props.onOpenSubagents()}
-              aria-label={`${t("chat.sessionDetails.allSubagents")}. ${counts()
-                .map((entry) => `${entry.count} ${countLabel(entry.status)}`)
+              aria-label={`${t("chat.sessionDetails.allSubagents")}. ${presentation()
+                .counts.map((entry) => `${entry.count} ${countLabel(entry.status)}`)
                 .join(", ")}`}
             >
               <span class="chat-details-subagents__stack" aria-hidden="true">
-                <For each={ordered().slice(0, 4)} keyed={(row) => row.key}>
+                <For each={presentation().rows} keyed={(row) => row.key}>
                   {(row) => <SubagentAvatar row={row()} summary />}
                 </For>
               </span>
               <span class="chat-details-subagents__counts">
-                <For each={counts()} keyed={(entry) => entry.status}>
+                <For each={presentation().counts} keyed={(entry) => entry.status}>
                   {(entry) => (
                     <span class="chat-details-subagents__count" data-status={entry().status}>
                       <span>{entry().count}</span>{" "}

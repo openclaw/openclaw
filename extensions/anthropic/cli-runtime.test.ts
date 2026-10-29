@@ -5,6 +5,7 @@ import type {
   CliBackendExecuteContext,
   CliBackendMessageInjection,
   CliBackendToolPermissionResult,
+  CliBackendTurnStatus,
 } from "openclaw/plugin-sdk/cli-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -453,7 +454,11 @@ describe("Claude native stdio boundary", () => {
     "restarts fresh after pending Bash %s",
     async (termination, { signal }) => {
       const controller = new AbortController();
+      let status: CliBackendTurnStatus | undefined;
       const context = await createContext("background-bash-success", {
+        registerTurnStatus: (value) => {
+          status = value;
+        },
         abortSignal: controller.signal,
       });
       const { liveSession } = context;
@@ -464,12 +469,19 @@ describe("Claude native stdio boundary", () => {
         await fixtureReadyBeforeSettlement(context, "background.ready", running, signal);
         firstPid = Number(await readFixture(context, "fixture.pid"));
         expect(liveSession.current()?.isIdle()).toBe(false);
+        const assessment = status!.capture()!;
         if (termination === "abort") {
           controller.abort(new Error("Synthetic background turn cancelled."));
         } else {
           process.kill(firstPid, "SIGTERM");
         }
         expect(await withinTest(outcome, signal)).toBeInstanceOf(Error);
+        expect(status!.capture() === undefined).toBe(termination === "abort");
+        await expect(assessment.assess({ signal })).resolves.toEqual(
+          termination === "process exit"
+            ? { state: "closed", basis: "transport_closed" }
+            : { state: "unknown", basis: "status_unsupported" },
+        );
       } finally {
         controller.abort();
       }
@@ -563,7 +575,7 @@ describe("Claude native stdio boundary", () => {
       sessionId: SESSION_ID,
       useResume: true,
       promptContext: { prependContext: "private prefix", appendContext: "private suffix" },
-      toolAvailability: { native: ["Read"], openClaw: ["message"] },
+      toolAvailability: { native: ["Read"], discovery: ["ToolSearch"], openClaw: ["message"] },
     });
     const nativeArgs = ["--fork-session", "--plugin-dir", "/tmp/synthetic-skills"];
     context.args = [
@@ -598,7 +610,7 @@ describe("Claude native stdio boundary", () => {
     expect(args).not.toContain("bypassPermissions");
     expect([flag("--permission-mode"), flag("--tools"), flag("--allowedTools")]).toEqual([
       ["default"],
-      ["Read"],
+      ["Read", "ToolSearch"],
       ["mcp__openclaw__message"],
     ]);
     expect(detail).toMatchObject({
@@ -660,7 +672,6 @@ describe("Claude native stdio boundary", () => {
         expect(detail.priorResponses).toMatchObject({
           "prior-pre": { hookSpecificOutput: { permissionDecision: "deny" } },
           "prior-permission": { behavior: "deny" },
-          "prior-context": {},
         });
         expect((detail.priorResponses as Record<string, unknown>)["prior-context"]).toEqual({});
       }
@@ -680,8 +691,18 @@ describe("Claude native stdio boundary", () => {
   ])(
     "isolates steering context ($scenario, same prompt: $samePrompt)",
     async ({ scenario, results, samePrompt }) => {
+      let status: CliBackendTurnStatus | undefined;
       const { context, running, injection } = await startInjection(scenario, {
         promptContext: { prependContext: PRIVATE },
+        registerTurnStatus: (value) => {
+          status = value;
+        },
+      });
+      const captured = status!.capture()!;
+      expect(captured.isCurrent()).toBe(true);
+      await expect(captured.assess({ signal: new AbortController().signal })).resolves.toEqual({
+        state: "unknown",
+        basis: "process_present",
       });
       const notificationReplay = scenario.includes("notification-replay");
       const input = samePrompt
@@ -691,7 +712,14 @@ describe("Claude native stdio boundary", () => {
           : "steering input";
       const hook = scenario.startsWith("steer-hook-");
       const steering = { promptContext: { prependContext: "STEERING_PRIVATE_CONTEXT" } };
-      await injection.queueMessage(input, async (submit) => submit(), hook ? steering : undefined);
+      await injection.queueMessage(
+        input,
+        async (submit) => {
+          submit();
+          expect(captured.isCurrent()).toBe(false);
+        },
+        hook ? steering : undefined,
+      );
       const records = await running;
       const tagged = records.filter((record) => record.user_message_uuid !== undefined);
       expect(tagged.map((record) => record.type)).toEqual(
@@ -701,6 +729,16 @@ describe("Claude native stdio boundary", () => {
       expectFinalResults(records, results);
       const detail = resultDetail(records);
       expect(detail).toMatchObject({ user: input, privateContext: PRIVATE });
+      if (scenario === "steer-merged") {
+        expect(detail.hostFrames).toEqual([
+          "control_request:initialize",
+          "user",
+          "control_response",
+          "user",
+          "control_response",
+        ]);
+      }
+      expect(status!.capture()).toBeUndefined();
       if (notificationReplay) {
         expect(detail.finalBackgroundAnswer).toBe(true);
       }
@@ -905,19 +943,30 @@ describe("Claude native stdio boundary", () => {
     expect(secondPid).not.toBe(firstPid);
     expect(context.liveSession.current()).toBeUndefined();
   });
-  it("withholds private context when its authority is revoked after sending the prompt", async () => {
-    let checks = 0;
-    const context = await createContext("normal", {
+  it("withholds private context when its authority is revoked after sending the prompt", async ({
+    signal,
+  }) => {
+    let active = true;
+    const context = await createContext("revoked-prompt", {
       prompt: "Remember orange.",
       promptContext: { prependContext: "saved private context" },
-      // The first check guards the prompt send; the login changes from there on.
       assertPrivateInputCurrent: () => {
-        if (++checks > 1) {
+        if (!active) {
           throw new Error("Synthetic account reassigned after send.");
         }
       },
     });
-    const detail = await runDetail(context);
+    const running = collect(context);
+    const outcome = running.catch((error: unknown) => error);
+    try {
+      await fixtureReadyBeforeSettlement(context, "prompt.ready", running, signal);
+      expect(await readFixture(context, "user.received")).toBe("Remember orange.");
+      active = false;
+    } finally {
+      await releaseFixture(context, "prompt");
+      await withinTest(outcome, signal);
+    }
+    const detail = resultDetail(await running);
     expect(detail).toMatchObject({ turn: 1, user: "Remember orange." });
     expect(detail.privateContext).toBeUndefined();
   });

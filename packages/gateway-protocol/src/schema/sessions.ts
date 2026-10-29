@@ -8,7 +8,6 @@ import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema, ChatHistoryParamsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
-import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
 import { SessionOwnerSchema } from "./sessions-row.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
@@ -31,7 +30,6 @@ export {
   type SessionsListParams,
   type SessionOwnerSessionCount,
 } from "./sessions-list.js";
-export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
 export {
   SessionParticipantIdentitySchema,
   SessionParticipantSchema,
@@ -769,8 +767,6 @@ export type SessionsBranchesSwitchParams = Static<typeof SessionsBranchesSwitchP
 export type SessionsBranchesSwitchResult = Static<typeof SessionsBranchesSwitchResultSchema>;
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
-export type SessionsRecoverParams = Static<typeof SessionsRecoverParamsSchema>;
-export type SessionsRecoverResult = Static<typeof SessionsRecoverResultSchema>;
 export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
 export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
 export type SessionNarrationEvent = Static<typeof SessionNarrationEventSchema>;

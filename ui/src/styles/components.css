@@ -3033,6 +3033,8 @@ td.data-table-key-col {
   transition: transform 180ms ease-out;
 }
 
+/* Automation titles keep their final fade before overflow observation. */
+.chat-summary__automation-title,
 .hover-marquee--overflowing {
   mask-image: linear-gradient(
     var(--hover-marquee-fade-direction),

@@ -63,11 +63,7 @@ export type {
   SandboxContainerEngine,
   SandboxContainerEngineTarget,
 } from "./container-engine.js";
-export {
-  bindPodmanSandboxEngine,
-  resolvePodmanSandboxRuntimeInfo,
-  validateSandboxContainerEngineTarget,
-} from "./podman-runtime.js";
+export { bindPodmanSandboxEngine, validateSandboxContainerEngineTarget } from "./podman-runtime.js";
 export {
   containerState,
   dockerContainerState,

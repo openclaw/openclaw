@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const CHECK_ID = "core/doctor/native-status";
@@ -18,11 +19,27 @@ export const nativeStatusCheck: HealthCheck = {
     ]);
     return statuses.map((status, index): HealthFinding => {
       const library = index === 0 ? "fs-safe" : "proc-safe";
+      const linuxProcessLoadFailure =
+        library === "proc-safe" && process.platform === "linux" && status.reason === "load-failed";
+      let runtime = "";
+      if (linuxProcessLoadFailure) {
+        try {
+          const report = process.report.getReport();
+          const header = isRecord(report) ? report.header : undefined;
+          if (isRecord(header) && typeof header.glibcVersionRuntime === "string") {
+            runtime = ` (glibc ${header.glibcVersionRuntime})`;
+          }
+        } catch {
+          // Runtime diagnostics must not prevent Doctor from reporting the remedy.
+        }
+      }
       return {
         checkId: CHECK_ID,
         severity: status.loaded || status.mode === "off" ? "info" : "warning",
-        message: `${library}: ${status.reason}`,
-        fixHint: status.guidance,
+        message: `${library}: ${status.reason}${runtime}`,
+        fixHint: linuxProcessLoadFailure
+          ? `${status.guidance ? `${status.guidance} ` : ""}Linux update ancestry can use /proc/<pid>/stat without the native helper. If ancestry remains unavailable, restore readable /proc or install a compatible process helper; after the recorded update driver exits, run \`openclaw update repair\`.`
+          : status.guidance,
       };
     });
   },

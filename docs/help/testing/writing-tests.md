@@ -31,6 +31,12 @@ Measure every new or changed test file with
 `pnpm test <file> --maxWorkers=1`; report wall time and CI seconds once available;
 PRs state both.
 
+For justified net regression growth, add a separate tracked
+`config/test-lines-allocations/<change>.txt` record and state its necessity in the
+PR. Keep the shared scalar unchanged. See the
+[test-line ratchet](/ci/local-proof#test-line-budget) for record format,
+comparison rules, and pruning.
+
 - Seconds-long tests must prove a contract no cheaper layer can. Long end-to-end
   compositions belong in the release-only tier.
 - Target under 5 seconds of test time per file. Above 30 seconds, explain the

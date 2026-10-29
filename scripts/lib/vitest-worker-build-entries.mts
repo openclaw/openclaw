@@ -28,7 +28,6 @@ import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-co
 import { agentProcessTestEntrypoints } from "../../src/agents/process-runtime.test-support.ts";
 import { sdkStateOwnerFixtureEntrypoint } from "../../src/agents/sandbox/sdk-state-owner-runtime.test-support.ts";
 import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
-import { clawProjectBuildEntrypoint } from "../../src/claws/project-runtime.test-support.ts";
 import {
   adminStateOwnerFixtureEntrypoint,
   cliMessageExitEntrypoints,
@@ -99,6 +98,7 @@ import {
   stateLeaseRetentionRuntimeEntrypoint,
 } from "../../src/state/openclaw-state-lease-runtime.test-support.ts";
 import { groqSetupSdkEntrypoints } from "../../src/system-agent/setup-inference-groq-sdk.test-support.ts";
+import { templateProjectBuildEntrypoint } from "../../src/templates/project-runtime.test-support.ts";
 import { tempDirEntrypoint } from "../../src/test-helpers/temp-dir-runtime.test-support.ts";
 import { transcriptLibraryTimezoneEntrypoint } from "../../src/transcripts/library-timezone-runtime.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
@@ -308,7 +308,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(proxyCaptureNativeProcessEntrypoints),
     ...Object.values(serviceProcessEnvEntrypoints),
     workerBundleArchiveEntrypoint,
-    clawProjectBuildEntrypoint,
+    templateProjectBuildEntrypoint,
     tempDirEntrypoint,
     ...Object.values(deliveryQueueProcessEntrypoints),
     ...Object.values(externalProxyTestEntrypoints),

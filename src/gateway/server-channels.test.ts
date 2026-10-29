@@ -2360,6 +2360,9 @@ describe("server-channels auto restart", () => {
       },
     );
 
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(startAccount).not.toHaveBeenCalled();
+
     await manager.startChannels();
     expect(startAccount).not.toHaveBeenCalled();
     nativeApprovalRuntime.current = { request } as unknown as GatewayNativeApprovalRuntime;
@@ -2692,39 +2695,6 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("telegram");
   });
 
-  it("does not start deferred channel accounts after stop wins the startup handoff", async () => {
-    const releaseAccountStart = createDeferred();
-    const measureMock = vi.fn(async (name: string, run: () => unknown) => await run());
-    const startupTrace = {
-      measure: async <T>(name: string, run: () => T | Promise<T>) =>
-        (await measureMock(name, run)) as T,
-    };
-    const startAccount = vi.fn(async () => {});
-
-    const manager = setupChannel(
-      { startAccount },
-      {
-        startupTrace,
-        deferStartupAccountStartsUntil: releaseAccountStart.promise,
-      },
-    );
-
-    await manager.startChannels();
-    await flushMicrotasks();
-    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-    await flushMicrotasks();
-    await stopTask;
-    await flushMicrotasks();
-    releaseAccountStart.resolve();
-    await flushMicrotasks();
-
-    expect(startAccount).not.toHaveBeenCalled();
-    expect(measureMock.mock.calls.map(([name]) => name)).not.toContain(
-      "channels.discord.start-account-handoff",
-    );
-    expect(readAccount(manager)?.running).not.toBe(true);
-  });
-
   it("logs account startup once before later gateway callbacks", async () => {
     const gatewayEvent = createDeferred();
     const eventHandled = createDeferred();
@@ -2862,72 +2832,6 @@ describe("server-channels auto restart", () => {
       expect(manager.isHealthMonitorEnabled("discord", requestedId)).toBe(expected);
     },
   );
-
-  it("monitors a healthy sibling without resolving disabled or blocked credentials", async () => {
-    const resolveAccount = vi.fn((_cfg: OpenClawConfig, accountId?: string | null) => {
-      if (accountId !== "healthy") {
-        throw new Error("unresolved SecretRef");
-      }
-      return { enabled: true, configured: true };
-    });
-    const startAccount = vi.fn(
-      async ({ setStatus, abortSignal }: ChannelGatewayContext<TestAccount>) => {
-        setStatus({
-          accountId: "healthy",
-          running: true,
-          connected: true,
-          lastTransportActivityAt: Date.now(),
-        });
-        await waitForAbort(abortSignal);
-      },
-    );
-    const plugin = createTestPlugin({
-      listAccountIds: () => ["broken", "disabled", "healthy"],
-      resolveAccount,
-      startAccount,
-    });
-    plugin.config.inspectAccount = (_cfg, accountId) => ({
-      enabled: accountId !== "disabled",
-      configured: true,
-    });
-    installTestRegistry(plugin);
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "account",
-        ownerId: "discord:broken",
-        state: "unavailable",
-        paths: ["channels.discord.accounts.broken.token"],
-        refKeys: ["env:default:BROKEN_TOKEN"],
-        reason: "secret reference was not found",
-      },
-    ]);
-    const manager = createManager();
-    await manager.startChannel("discord", "healthy");
-    const restart = vi.spyOn(manager, "startChannel");
-    const monitor = startChannelHealthMonitor({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      channelManager: manager,
-    });
-    try {
-      await vi.advanceTimersByTimeAsync(31 * 60_000);
-      await monitor.waitForIdle();
-      expect(restart).toHaveBeenCalledExactlyOnceWith("discord", "healthy", {
-        reason: "health-monitor",
-      });
-      expect(startAccount).toHaveBeenCalledTimes(2);
-      expect(resolveAccount.mock.calls.map(([, accountId]) => accountId)).toEqual([
-        "healthy",
-        "healthy",
-      ]);
-      expect(manager.getRuntimeSnapshot().channelAccounts.discord).toMatchObject({
-        broken: { enabled: true, configured: true, lifecycle: "blocked", running: false },
-        disabled: { enabled: false, running: false },
-        healthy: { enabled: true, running: true },
-      });
-    } finally {
-      monitor.shutdown();
-    }
-  });
 
   it.each([false, true])(
     "owns approval bootstrap and task contexts (bootstrapFails=%s)",

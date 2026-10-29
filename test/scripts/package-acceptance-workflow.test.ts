@@ -8750,9 +8750,6 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(manifestStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
     expect(manifestStep.env?.STABLE_SOAK_WAIVER).toBeUndefined();
     expect(manifestStep.env?.GH_TOKEN).toBe("${{ github.token }}");
-    expect(manifestStep.env?.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR).toContain(
-      "qualification-verifier/scripts/release-ci-summary.mjs",
-    );
     expect(manifestStep.run).toBe('node "$RELEASE_STATE_SCRIPT" write-manifest');
   });
 

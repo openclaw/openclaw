@@ -29,7 +29,10 @@ const coreEntrySpecs: readonly (readonly [
     async (program) => (await import("./register.configure.js")).registerConfigureCommand(program),
   ],
   [["config"], async (program) => (await import("../config-cli.js")).registerConfigCli(program)],
-  [["claws"], async (program) => (await import("../claws-cli.js")).registerClawsCli(program)],
+  [
+    ["templates"],
+    async (program) => (await import("../templates-cli.js")).registerTemplatesCli(program),
+  ],
   [
     ["backup"],
     async (program) => (await import("./register.backup.js")).registerBackupCommand(program),

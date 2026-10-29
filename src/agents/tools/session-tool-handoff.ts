@@ -227,6 +227,8 @@ export async function handoffSessionTool(
                     agentId: caller.agentId,
                     sessionKey: caller.sessionKey,
                     source: "tool_handoff",
+                    // A yielded subagent task resumes as itself only from its own run's handoff.
+                    sourceRunId: params.runId,
                     contextKey,
                     expectedTarget: target,
                     assertCurrent: retained.assertCurrent,
@@ -240,7 +242,7 @@ export async function handoffSessionTool(
                 throw new Error(accepted.error);
               }
               const outcome = await receipt.settled;
-              // Once execution starts, the resumed turn owns its failure/restart recovery.
+              // Once execution starts, the ordinary turn owns its failure.
               // It is no longer an undelivered tool result.
               if (outcome.status === "failed" && !outcome.executionStarted) {
                 throw new Error(outcome.error ?? "Tool result resume failed");
