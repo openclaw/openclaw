@@ -68,6 +68,25 @@ async function runProgram(args: string[]): Promise<string> {
   }
 }
 
+function expectArchivedReleaseNotes(archived: string, format: "text" | "json") {
+  if (format === "json") {
+    expect(JSON.parse(archived)).toMatchObject({
+      change: {
+        agentId: "writer",
+        skillName: "release-notes",
+        action: "archive",
+        actor: "user",
+        summary: "archived: superseded",
+        versionId: expect.stringMatching(/^\d{8}T\d{9}Z-archive$/),
+      },
+    });
+  } else {
+    expect(archived).toBe(
+      "Archived release-notes. Undo with: openclaw skills workshop restore release-notes --agent writer\n",
+    );
+  }
+}
+
 async function dispatch(config: OpenClawConfig, method: string, params: unknown) {
   let payload: unknown;
   let failure: unknown;
@@ -381,22 +400,7 @@ describe("openclaw skills workshop persisted CLI contract", () => {
           "superseded",
           ...output,
         ]);
-        if (format === "json") {
-          expect(JSON.parse(archived)).toMatchObject({
-            change: {
-              agentId: "writer",
-              skillName: "release-notes",
-              action: "archive",
-              actor: "user",
-              summary: "archived: superseded",
-              versionId: expect.stringMatching(/^\d{8}T\d{9}Z-archive$/),
-            },
-          });
-        } else {
-          expect(archived).toBe(
-            "Archived release-notes. Undo with: openclaw skills workshop restore release-notes --agent writer\n",
-          );
-        }
+        expectArchivedReleaseNotes(archived, format);
         const live = path.join(state.agentDir("writer"), "workshop-skills", "release-notes");
         await expect(fs.stat(live)).rejects.toMatchObject({ code: "ENOENT" });
         const rows = await persistedChanges(state);
@@ -460,22 +464,7 @@ describe("openclaw skills workshop persisted CLI contract", () => {
             "superseded",
             ...output,
           ]);
-          if (format === "json") {
-            expect(JSON.parse(archived)).toMatchObject({
-              change: {
-                agentId: "writer",
-                skillName: "release-notes",
-                action: "archive",
-                actor: "user",
-                summary: "archived: superseded",
-                versionId: expect.stringMatching(/^\d{8}T\d{9}Z-archive$/),
-              },
-            });
-          } else {
-            expect(archived).toBe(
-              "Archived release-notes. Undo with: openclaw skills workshop restore release-notes --agent writer\n",
-            );
-          }
+          expectArchivedReleaseNotes(archived, format);
           await expect(fs.stat(live)).rejects.toMatchObject({ code: "ENOENT" });
           const restored = await runProgram([
             "restore",
