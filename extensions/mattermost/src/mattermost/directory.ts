@@ -135,8 +135,7 @@ export async function listMattermostDirectoryPeers(
       return [];
     }
     const teamId = team.id;
-    // The server matches stored user names; forward the canonical form the caller typed.
-    const q = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
+    const q = normalizeLowercaseStringOrEmpty(params.query);
 
     let users: MattermostUser[];
     if (q) {

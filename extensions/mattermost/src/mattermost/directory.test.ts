@@ -150,7 +150,9 @@ describe("mattermost directory", () => {
       token: "token-default",
       request: vi
         .fn()
-        .mockResolvedValueOnce([{ id: "chan-nfd", type: "O", name: "general", display_name: displayName }]),
+        .mockResolvedValueOnce([
+          { id: "chan-nfd", type: "O", name: "general", display_name: displayName },
+        ]),
     };
 
     mockDefaultAccount();
@@ -162,27 +164,6 @@ describe("mattermost directory", () => {
     ).resolves.toEqual([
       { kind: "channel", id: "channel:chan-nfd", name: "general", handle: displayName },
     ]);
-  });
-
-  it("forwards a canonical peer search term for server-side matching", async () => {
-    const client = {
-      token: "token-default",
-      request: vi
-        .fn()
-        .mockResolvedValueOnce([{ id: "team-1" }])
-        .mockResolvedValueOnce([{ id: "user-1", username: "mueller" }]),
-    };
-
-    mockDefaultAccount();
-    createMattermostClientMock.mockReturnValue(client);
-    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
-
-    await listMattermostDirectoryPeers({ cfg: {} as never, runtime: {} as never, query: "Mu\u0308ller" });
-
-    expect(client.request).toHaveBeenNthCalledWith(2, "/users/search", {
-      method: "POST",
-      body: JSON.stringify({ term: "müller", team_id: "team-1" }),
-    });
   });
 
   it("labels public O channels as channel and private P channels as group (#95646)", async () => {
