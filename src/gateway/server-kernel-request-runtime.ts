@@ -84,6 +84,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   let requestRuntimeReady: Promise<void> | undefined;
   const projectionLifetime: { closing: boolean; detach?: () => void } = { closing: false };
   runtime.registerGatewayLifetimeSidecars({
+    name: "request-runtime",
     stop: async () => {
       projectionLifetime.closing = true;
       // Received mutations and their finalizers join before lifetime sidecars stop.

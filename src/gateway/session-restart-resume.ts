@@ -13,6 +13,10 @@ import { applySessionEntryReplacements } from "../config/sessions/session-access
 import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
 import {
+  interruptOrphanedSessionPendingInputs,
+  listOrphanedSessionPendingInputTargets,
+} from "../config/sessions/session-pending-input-withdrawal.js";
+import {
   captureSessionStoreEnvironment,
   captureSessionStoreReadCandidates,
   prepareSessionStoreTargetInventory,
@@ -269,13 +273,16 @@ export async function resumeMarkedSessions(params: {
     ),
   );
   const targets = await inventory.withRead(
-    async (snapshot) => snapshot.agents.flatMap(({ reads }) => reads.map(({ target }) => target)),
+    async (snapshot) =>
+      snapshot.agents.flatMap(({ reads }) =>
+        reads.map(({ target, database }) => ({ ...target, storePath: database.path })),
+      ),
     () => signal.throwIfAborted(),
     signal,
   );
   const visited = new Set<string>();
   for (const target of targets) {
-    const targetKey = JSON.stringify([target.agentId, target.storePath]);
+    const targetKey = target.storePath;
     if (visited.has(targetKey)) {
       continue;
     }
@@ -288,6 +295,29 @@ export async function resumeMarkedSessions(params: {
       signal.throwIfAborted();
       log.warn(`Skipped restart resume for agent ${target.agentId}: ${String(error)}`);
       continue;
+    }
+    try {
+      const orphaned = await listOrphanedSessionPendingInputTargets(
+        target,
+        entries.flatMap(({ entry }) => entry.resumeAfterRestart?.queuedInputIds ?? []),
+      );
+      for (const session of orphaned) {
+        try {
+          await interruptOrphanedSessionPendingInputs({ ...target, ...session }, () =>
+            signal.throwIfAborted(),
+          );
+        } catch (error) {
+          signal.throwIfAborted();
+          log.warn(
+            `Skipped interrupted input settlement for ${session.sessionKey}: ${String(error)}`,
+          );
+        }
+      }
+    } catch (error) {
+      signal.throwIfAborted();
+      log.warn(
+        `Skipped interrupted input settlement for agent ${target.agentId}: ${String(error)}`,
+      );
     }
     for (const { sessionKey, entry: marked } of entries) {
       if (!marked.resumeAfterRestart) {

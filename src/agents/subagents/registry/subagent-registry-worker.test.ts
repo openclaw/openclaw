@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-context-binding.js";
+import * as gatewayAdmission from "../../../process/gateway-work-admission.js";
 import * as sessionStateNotices from "../../../sessions/session-state-notices.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { clearOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.js";
@@ -27,6 +29,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -209,7 +212,7 @@ function interceptWrites(callback: (phase: "before" | "after") => void | Promise
   });
 }
 
-function holdFirstAck(onWrite = () => {}) {
+function holdFirstAck(onWrite = () => {}, waitForRelease = true) {
   const reached = createDeferredCore();
   const release = createDeferredCore();
   let held = false;
@@ -217,7 +220,7 @@ function holdFirstAck(onWrite = () => {}) {
     if (phase === "before") {
       onWrite();
     }
-    if (phase === "after" && !held) {
+    if (phase === "after" && !held && waitForRelease) {
       held = true;
       reached.resolve();
       await release.promise;
@@ -490,7 +493,7 @@ it("serializes opposite multi-row orders without a lock-order deadlock", async (
   ]);
 });
 
-it("settles a requester cohort while many children finish and one is killed", async () => {
+it("settles a requester cohort and killed-child cleanup after shutdown closes admission", async () => {
   const children = Array.from({ length: 18 }, (_, index) =>
     entry(`child-${index}`, {
       completion: { required: true },
@@ -499,15 +502,20 @@ it("settles a requester cohort while many children finish and one is killed", as
     }),
   );
   const stopped = entry("killed", {
+    attachmentId: "cc30d548-d417-46f1-a15f-f057e136f3ba",
     childSessionIdentity: { sessionId: "killed-session" },
     collect: true,
-    execution: {
-      status: "running" as const,
-      startedAt: 1,
-      suppressSessionEffects: true as const,
-    },
+    execution: { status: "running", startedAt: 1, suppressSessionEffects: true },
   });
   await register(...children, stopped);
+  const attachmentDir = path.join(
+    resolveSubagentSessionAttachmentRootDir({
+      agentId: "main",
+      childSessionKey: stopped.childSessionKey,
+    }),
+    stopped.attachmentId!,
+  );
+  await fs.mkdir(attachmentDir, { recursive: true });
   const manager = createSubagentRunManager(
     createSubagentManagerTestOptions(subagentRuns, async () => {
       throw new Error("Stress fixture unexpectedly called the Gateway");
@@ -525,8 +533,6 @@ it("settles a requester cohort while many children finish and one is killed", as
       entries: [child],
       context,
       assertCurrent: () => {},
-      onCommitted: () => {},
-      onPublished: () => {},
       operation: {
         kind: "transition",
         state: { status: "dispatching", attemptCount: 1, rearmGeneration: 1 },
@@ -535,25 +541,23 @@ it("settles a requester cohort while many children finish and one is killed", as
   );
   const settlement = Promise.all(wakes).then(() =>
     mutateRequesterCompletionBatch({
-      entries: children.map(({ runId }) => {
-        const subagent = subagentRuns.get(runId);
-        if (!subagent) {
-          throw new Error("Requester wake lost its acknowledged child");
-        }
-        return subagent;
-      }),
+      entries: [...subagentRuns.values()].filter(({ runId }) => runId !== stopped.runId),
       context,
       operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
       assertCurrent: () => {},
     }),
   );
+  gatewayAdmission.markGatewayRestartDraining("stop (SIGTERM)");
   const killed = manager.markSubagentRunTerminated({
     runId: stopped.runId,
     reason: "synthetic kill",
     suppressTaskDelivery: true,
   });
-  const results = await Promise.allSettled([...completions, settlement, killed]);
+  const results = await Promise.allSettled([...completions, settlement, killed]).finally(
+    gatewayAdmission.resetGatewayWorkAdmission,
+  );
   expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+  await expect(fs.stat(attachmentDir)).rejects.toMatchObject({ code: "ENOENT" });
   const saved = loadSubagentRegistryFromSqlite();
   expect(saved.size).toBe(children.length + 1);
   for (const child of children) {
@@ -683,30 +687,21 @@ it.each(["before ACK", "inside failing callback"] as const)(
   "keeps an old-source commit from notifying a replacement database (%s)",
   async (transition) => {
     await register(entry("source"));
-    const reached = createDeferredCore();
-    const release = createDeferredCore();
+    const { reached, release } = holdFirstAck(undefined, transition === "before ACK");
     const observed = vi.fn();
     const stop = subscribeSubagentRunChanges("persistence", observed);
     const revision = getSubagentRegistryPublicationRevision();
     const replaceSource = () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixture.state.stateDir, "replacement"));
     };
-    interceptWrites(async (phase) => {
-      if (phase === "after" && transition === "before ACK") {
-        reached.resolve();
-        await release.promise;
-      }
-    });
     const pending = change(
       "source",
       { label: "old database commit" },
       {
         onPublished: () => {
-          if (transition !== "before ACK") {
+          if (transition === "inside failing callback") {
             replaceSource();
-            if (transition === "inside failing callback") {
-              throw new Error("Synthetic custody failure after source replacement");
-            }
+            throw new Error("Synthetic custody failure after source replacement");
           }
         },
       },

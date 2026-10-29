@@ -56,7 +56,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.operation == 'release'))))
     permissions:
       contents: write
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 120
     environment: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'internal') && 'android-internal' || 'android-store-release' }}
     steps:

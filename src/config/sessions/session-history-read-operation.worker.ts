@@ -334,6 +334,14 @@ async function prepareHistoryRead(
       );
       return () => ({ kind: request.kind, present: read() });
     }
+    case "session-pending-input-orphans": {
+      const { readOrphanedSessionPendingInputTargetsInWorker } =
+        await import("./session-pending-input-withdrawal.worker.js");
+      return () => ({
+        kind: request.kind,
+        targets: readOrphanedSessionPendingInputTargetsInWorker(request),
+      });
+    }
     case "session-pending-input-receipts": {
       const { listSessionPendingInputReceipts } =
         await import("./session-accessor.sqlite-pending-input-receipts.js");

@@ -28,3 +28,13 @@ export type PendingInputHistoryWorkerInput = {
   query: PendingInputHistoryQuery;
   source: import("./session-entry-read-source.types.js").CapturedSessionEntryReadSource;
 };
+
+export type PendingInputOrphansWorkerInput = Omit<
+  PendingInputHistoryWorkerInput,
+  "kind" | "query"
+> & {
+  kind: "session-pending-input-orphans";
+  lifecycleGeneration: string;
+  queuedInputIds: readonly string[];
+};
+export type PendingInputOrphanTarget = { sessionKey: string; sessionId: string };

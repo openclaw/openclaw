@@ -536,9 +536,10 @@ send that can be resent. New input uses normal steering and queue rules while th
 resumed run works.
 
 A crash or forced kill does not resume work automatically. Stored conversations
-remain available for a new message. Legacy interrupted or ownerless queued inputs
-are inert and do not produce restart banners, pending counts, or history notices.
-The browser preserves submission IDs when reconciling uncertain sends.
+remain available for a new message. At startup, accepted queued input without a
+live owner or graceful-restart marker becomes a cancelled send with its text intact,
+so you can review and resend it. It does not count as pending work. Legacy interrupted
+input remains inert. The browser preserves submission IDs when reconciling uncertain sends.
 
 When the Gateway acknowledges a send, including a duplicate submission, the
 Control UI marks it sent. The browser keeps any payload needed to display

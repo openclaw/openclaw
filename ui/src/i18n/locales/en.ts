@@ -1580,9 +1580,9 @@ const startupEnglish = {
     sessionsPaused: "{count} paused",
     sessionPausedNote: "{name} is paused",
     sessionsPausedNote: "{count} sessions are paused",
-    handoffResumed: "Resumed · {duration} later",
-    handoffSessionsOne: "1 session",
-    handoffSessions: "{count} sessions",
+    handoffResumed: "Resumed · {duration} Later",
+    handoffSessionsOne: "1 Session",
+    handoffSessions: "{count} Sessions",
     handoffSessionStatus: {
       attention: "Needs your input",
       paused: "Paused",

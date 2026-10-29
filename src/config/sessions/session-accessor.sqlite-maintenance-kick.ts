@@ -40,6 +40,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
+  canDeferMaintenance,
   capturePendingSessionMaintenanceAgeChanges,
   observeSessionEntryMaintenanceAgeChanges,
   restartSessionMaintenanceAgeScan,
@@ -128,14 +129,9 @@ export function kickSessionEntryMaintenanceAfterWrite(
     const fact = owner.ageFact;
     if (
       !owner.running &&
-      fact?.entryCount !== undefined &&
-      isDeepStrictEqual(fact.maintenance, maintenance) &&
-      Date.now() < Math.min(fact.next.at, fact.recheckAt) &&
-      (owner.noCandidates ||
-        !shouldRunSessionEntryMaintenance({
-          entryCount: fact.entryCount,
-          maxEntries: maintenance.maxEntries,
-        }))
+      fact &&
+      canDeferMaintenance(fact, maintenance, owner.noCandidates) &&
+      Date.now() < Math.min(fact.next.at, fact.recheckAt)
     ) {
       // Acknowledged activity cannot require a scan before this conservative deadline.
       owner.activeSessionKeys.clear();
@@ -477,6 +473,7 @@ async function runPendingMaintenance(
   let nextMaintenanceAt: number | undefined = Infinity;
   let planningChanged = false;
   let finalized = false;
+  let failed = false;
   let preservation: Awaited<ReturnType<typeof prepareSessionMaintenancePreservation>> | undefined;
   try {
     owner.execution ??= owner.captureExecution();
@@ -676,6 +673,7 @@ async function runPendingMaintenance(
       return;
     }
   } catch (error) {
+    failed = true;
     const log = getChildLogger({ subsystem: "session-sqlite" });
     const details = { error: formatErrorMessage(error, { includeCode: true }), path: databasePath };
     owner.noCandidates = false;
@@ -719,8 +717,8 @@ async function runPendingMaintenance(
   if (!isCurrent()) {
     return retireMaintenanceOwner(databasePath, owner);
   }
-  const fact = owner.ageFact;
-  if (fact && hasCurrentNoCandidates()) {
+  const fact = failed ? undefined : owner.ageFact;
+  if (fact && canDeferMaintenance(fact, resolveOwnerMaintenance(owner), owner.noCandidates)) {
     owner.activeSessionKeys.clear();
     nextMaintenanceAt = Math.min(fact.next.at, fact.recheckAt);
   } else if (owner.generation !== generation || owner.ageChanges.size > 0) {
