@@ -13,6 +13,7 @@ type StartupState = {
   delayMs: number;
   retryAfterMs: number;
   message: string;
+  errorCode?: "mcp-service-unavailable";
   pending?: Promise<void>;
   authorization?: AuthorizationObservation & { error: Error };
 };
@@ -42,6 +43,7 @@ let errorModule: Promise<typeof import("./mcp-error.js")> | undefined;
 export class McpStartupBackoffError extends Error {
   readonly retryAfterMs: number;
   readonly authorizationRequired: boolean;
+  readonly errorCode?: "mcp-service-unavailable";
 
   constructor(
     state: StartupState,
@@ -62,6 +64,7 @@ export class McpStartupBackoffError extends Error {
     );
     this.retryAfterMs = retryAfterMs;
     this.authorizationRequired = state.authorization !== undefined;
+    this.errorCode = state.errorCode;
   }
 }
 
@@ -100,9 +103,11 @@ async function connectWithMcpStartupBackoff(
   signal: AbortSignal,
   connect: () => Promise<void>,
   recoveryRetryMs: number,
+  transportType: "stdio" | "sse" | "streamable-http",
   authorizationKey = key,
 ): Promise<void> {
-  const { redactMcpDiagnosticError } = await (errorModule ??= import("./mcp-error.js"));
+  const { isMcpServiceAvailabilityError, redactMcpDiagnosticError } = await (errorModule ??=
+    import("./mcp-error.js"));
   // Serialize startup, not transport ownership: healthy sessions still connect independently.
   while (startups.get(key)?.pending) {
     await racePromiseWithAbortSignal(
@@ -153,6 +158,9 @@ async function connectWithMcpStartupBackoff(
     state.delayMs = Math.min(state.delayMs * 2, 600_000);
     state.retryAfterMs = Date.now() + state.delayMs;
     state.message = redactMcpDiagnosticError(error);
+    state.errorCode = isMcpServiceAvailabilityError(error, transportType)
+      ? "mcp-service-unavailable"
+      : undefined;
     const reportFailure =
       !state.authorization ||
       !startups.has(authorizationKey) ||
@@ -200,12 +208,14 @@ export function createMcpStartupBackoff(params: {
   const authorizationKey = JSON.stringify([...params.identity.slice(2), "oauth-authorization"]);
   return {
     get: () => getMcpStartupBackoff(key, params.signal, params.recoveryRetryMs, authorizationKey),
-    connect: (connect: () => Promise<void>) =>
+    // Transport is resolved per catalog load, so it classifies failures without keying state.
+    connect: (connect: () => Promise<void>, transportType: "stdio" | "sse" | "streamable-http") =>
       connectWithMcpStartupBackoff(
         key,
         params.signal,
         connect,
         params.recoveryRetryMs,
+        transportType,
         authorizationKey,
       ),
     reset() {

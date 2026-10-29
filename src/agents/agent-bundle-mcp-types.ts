@@ -119,6 +119,7 @@ export type McpToolCatalogDiagnostic = {
   safeServerName: string;
   launchSummary: string;
   message: string;
+  errorCode?: "mcp-service-unavailable";
 };
 
 export type McpRequestOptions = {

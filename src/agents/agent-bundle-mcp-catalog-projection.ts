@@ -4,7 +4,12 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import { logWarn } from "../logger.js";
-import type { McpCatalogTool, McpServerCatalog, McpToolCatalog } from "./agent-bundle-mcp-types.js";
+import type {
+  McpCatalogTool,
+  McpServerCatalog,
+  McpToolCatalog,
+  McpToolCatalogDiagnostic,
+} from "./agent-bundle-mcp-types.js";
 import {
   readMcpAppIcons,
   readMcpAppSettingsCapability,
@@ -14,13 +19,31 @@ import {
   normalizeMcpCodexToolAnnotations,
   resolveProjectedMcpCodexToolApprovalMode,
 } from "./mcp-codex-tool-approval.js";
+import { isMcpServiceAvailabilityError, redactMcpDiagnosticError } from "./mcp-error.js";
 import {
   normalizeToolUiVisibility,
   sanitizeMcpMetadataText,
   summarizeServerCapabilities,
 } from "./mcp-metadata.js";
+import { McpStartupBackoffError } from "./mcp-startup-backoff.js";
 import { createMcpToolFilter, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
 import { normalizeMcpToolCatalog } from "./mcp-tool-metadata.js";
+
+export function describeBundleMcpCatalogError(
+  error: unknown,
+  transportType: "stdio" | "sse" | "streamable-http",
+): Pick<McpToolCatalogDiagnostic, "message" | "errorCode"> {
+  const errorCode =
+    error instanceof McpStartupBackoffError
+      ? error.errorCode
+      : isMcpServiceAvailabilityError(error, transportType)
+        ? ("mcp-service-unavailable" as const)
+        : undefined;
+  return {
+    message: redactMcpDiagnosticError(error),
+    ...(errorCode ? { errorCode } : {}),
+  };
+}
 
 export function projectBundleMcpServerCatalog({
   serverName,
