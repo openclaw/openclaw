@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
-import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
+import {
+  prepareGitHubPublicationSessionLifecycle,
+  readGitHubPublicationSessionLifecycleInWorker,
+} from "../state/github-publication-session-lifecycles.js";
 import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createPersonalGitHubPublicationCoordinator } from "./github-personal-publication.js";
@@ -50,6 +53,7 @@ import {
   createGitHubPublicationExecutionStoreAsync,
   deferGitHubPublicationRequestsAsync,
   readGitHubPublicationRequestAsync,
+  readRepositoryGitHubPublicationAsync,
   runGitHubPublicationMaintenanceAsync,
 } from "./github-publication-store-async.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
@@ -674,6 +678,24 @@ export function createGitHubPublicationCoordinator(params: {
     },
     async readAsync(requestId: string) {
       return (await repository.readAsync(requestId)) ?? methods.readAsync(requestId);
+    },
+    async readReportLifecycleAsync(report: GitHubPublicationTranscriptReport) {
+      const requestId = report.result.requestId;
+      const row = await readRepositoryGitHubPublicationAsync(requestId);
+      assertCurrent();
+      if (row) {
+        return row.session_lifecycle_revision;
+      }
+      const lifecycle = await prepareGitHubPublicationSessionLifecycle({
+        publicationKind: report.result.publisher?.source === "personal" ? "personal" : "shared",
+        requestId,
+      });
+      assertCurrent();
+      const binding = lifecycle.readCurrent();
+      if (!binding) {
+        throw new Error("GitHub publication transcript lifecycle is unavailable.");
+      }
+      return binding.lifecycle_revision;
     },
     /** @deprecated Use markReportedAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     markReported(_requestId: string): void {

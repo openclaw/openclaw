@@ -385,9 +385,10 @@ describe("session PR actions through the agent tool and registered Gateway metho
       ).toMatchObject({ title: "Clarify the existing PR", publication: f.publication });
       expect((await f.invoke("admin", { action: "inspect" })).details).toMatchObject({
         state: "draft",
-        publication: { requestId: f.publication.requestId },
+        publication: f.publication,
       });
       expect(await f.action("guest", "ready")).toMatchObject({ state: "open" });
+      expect(f.writes[0]).toEqual({ action: "edit", input: { title: "Clarify the existing PR" } });
       expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready"]);
     },
   );
