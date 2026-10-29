@@ -727,6 +727,7 @@ describe("Vercel Container Registry publishing", () => {
         "sha512-IAK/mosn92E9yZzvzcDQ1z9eMEMMKzidGlb6FrwBBF3uMDbaWCsdtpRmb9DcOX8+VvCuMhPx7j5fpSmH1cM3Cg==",
       version: "4.9.0",
     });
+    expect(packageLock.packages?.["node_modules/fast-uri"]?.version).toBe("3.1.9");
     const lockSha256 = createHash("sha256").update(packageLockBytes).digest("hex");
     expect(materialize).toContain(`expected_lock_sha256="${lockSha256}"`);
     expect(materialize).toContain("npm ci \\\n");
