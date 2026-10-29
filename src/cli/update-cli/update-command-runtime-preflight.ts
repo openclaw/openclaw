@@ -40,6 +40,7 @@ import type { PreManagedServiceStop } from "./update-command-service-context-typ
 import { resolveServiceRecoveryContext } from "./update-command-service-env.js";
 import {
   gatewayServiceCommandUsesRoot,
+  isGatewayServiceManagementAllowedForUpdate,
   tryRealpathOrResolve,
 } from "./update-command-service-plan.js";
 
@@ -179,8 +180,24 @@ export async function resolvePackageRuntimePreflight(params: {
     }
     const canRefreshCurrentService =
       params.service?.running && verdict?.kind === "owned" && verdict.refreshDefinition;
+    // Engine admission may select an existing executable, never provision one.
+    // A path match alone is not permission to rewrite a managed service.
+    const canRefreshAtAdmission =
+      !process.versions.bun &&
+      params.shouldRestart &&
+      params.service?.inspected === true &&
+      params.service.runtimeInspected &&
+      params.service.serviceMutationAllowed !== false &&
+      isGatewayServiceManagementAllowedForUpdate(params.service.serviceEnv ?? process.env) &&
+      canRefreshCurrentService &&
+      !verdict.requiresInstallRootRefresh &&
+      params.root !== undefined &&
+      (await tryRealpathOrResolve(verdict.root)) === (await tryRealpathOrResolve(params.root)) &&
+      params.service.serviceNodeRunner === nodeRunner;
     const fallbackNodeRunner = params.engineOnly
-      ? undefined
+      ? canRefreshAtAdmission
+        ? resolveNodeRunner()
+        : undefined
       : (params.fallbackNodeRunner ??
         (params.shouldRestart &&
         !process.versions.bun &&
@@ -199,19 +216,33 @@ export async function resolvePackageRuntimePreflight(params: {
       const fallbackSatisfies = fallbackRuntime.failure
         ? false
         : nodeVersionSatisfiesEngine(fallbackRuntime.version, target.nodeEngine);
-      if (fallbackSatisfies === true) {
-        return runtimeResult(fallbackActivationRuntime, fallbackNodeRunner, nodeRunner);
+      if (fallbackSatisfies === true && fallbackActivationRuntime) {
+        // A successful probe does not authorize a replaced executable.
+        const current = captureRuntime(fallbackNodeRunner);
+        if (
+          current?.path === fallbackActivationRuntime.path &&
+          current.identity === fallbackActivationRuntime.identity
+        ) {
+          return runtimeResult(fallbackActivationRuntime, fallbackNodeRunner, nodeRunner);
+        }
+        return resultError("Selected Node changed during target compatibility probing.");
       }
     }
     if (satisfies !== false) {
       return params.engineOnly ? ok(unchanged()) : runtimeResult(activationRuntime);
     }
-    if (!params.engineOnly && params.runtimeRecovery && target.nodeEngine) {
+    // Admission may discover an existing runtime, but never supplies install authority.
+    const recovery = params.engineOnly
+      ? canRefreshAtAdmission
+        ? { env: params.service?.serviceEnv ?? process.env }
+        : undefined
+      : params.runtimeRecovery;
+    if (recovery && target.nodeEngine) {
       const { resolveTargetNodeRuntime } =
         await import("./update-command-node-runtime-resolution.js");
       const recovered = await resolveTargetNodeRuntime({
         engine: target.nodeEngine,
-        recovery: params.runtimeRecovery,
+        recovery,
         timeoutMs: params.timeoutMs,
       });
       if (recovered) {
@@ -219,7 +250,19 @@ export async function resolvePackageRuntimePreflight(params: {
         if (!recoveredRuntime) {
           return runtimeResult(recoveredRuntime);
         }
-        return runtimeResult(recoveredRuntime, recovered, nodeRunner ?? resolveNodeRunner());
+        const probe = await resolvePackageRuntimeForPreflight({
+          nodeRunner: recoveredRuntime.path,
+          timeoutMs: params.timeoutMs,
+        });
+        const current = captureRuntime(recovered);
+        if (
+          !probe.failure &&
+          nodeVersionSatisfiesEngine(probe.version, target.nodeEngine) === true &&
+          current?.path === recoveredRuntime.path &&
+          current.identity === recoveredRuntime.identity
+        ) {
+          return runtimeResult(recoveredRuntime, recovered, nodeRunner ?? resolveNodeRunner());
+        }
       }
     }
     const runtimePath = runtime.nodeRunner ?? process.execPath;

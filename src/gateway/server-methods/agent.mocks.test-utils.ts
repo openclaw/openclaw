@@ -182,6 +182,7 @@ vi.mock("../../config/sessions/session-accessor.lifecycle.js", async (importOrig
   resetSessionEntryLifecycle: mocks.resetSessionEntryLifecycle,
 }));
 
+// mock-isolation: Handler lifecycle timestamps come from fixture mocks without reading real transcripts.
 vi.mock("../../config/sessions/lifecycle-read.js", () => ({
   hasTerminalMainSessionTranscriptNewerThanRegistryAsync: async () => false,
   resolveSessionLifecycleTimestampsAsync: async (
@@ -558,7 +559,7 @@ function selectFreshestTargetFixtureEntry(
 export function resetSessionAccessorMocks() {
   mocks.resetSessionEntryLifecycle
     .mockReset()
-    .mockImplementation(createSessionResetFixture(mocks.updateSessionStore));
+    .mockImplementation(createSessionResetFixture(mocks.patchSessionEntryTarget));
   // These handler fixtures own an in-memory store. Real admission durability
   // and execution-time promotion are covered by the gateway-server suites.
   mocks.stageSessionPendingInput.mockReset().mockImplementation(async (_scope, options) => {

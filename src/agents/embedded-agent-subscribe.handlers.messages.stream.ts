@@ -5,10 +5,7 @@ import {
   asOptionalRecord as asRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  parseReplyDirectives,
-  type ReplyDirectiveParseResult,
-} from "../auto-reply/reply/reply-directives.js";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
 import {
@@ -18,16 +15,18 @@ import {
 import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
 import { downgradedToolCallTextFilter } from "../shared/text/downgraded-tool-call-text.js";
 import { createTextProjection, trimTextPreservingCode } from "../shared/text/text-projection.js";
-import {
-  findDirectiveCodePrefix,
-  type StreamDirectiveCodePrefix,
-} from "../utils/directive-tags.js";
+import { findDirectiveCodePrefix } from "../utils/directive-tags.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { hasReplyDirectiveMetadata } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import type {
+  StreamingReplyParams,
+  StreamingReplyResolver,
+  StreamingReplyResult,
+} from "./embedded-agent-subscribe.streaming-reply.types.js";
 import {
   extractAssistantCommentaryText,
   stripDowngradedToolCallText,
@@ -293,27 +292,7 @@ export function resolveAssistantTextChunk(params: {
   return accumulatedText.includes(content) ? "" : content;
 }
 
-export function resolveStreamingReply(params: {
-  evtType: "text_delta" | "text_start" | "text_end";
-  next: string;
-  previousText: string;
-  previousCleaned: string;
-  visibleDelta: string;
-  appendDelta: string | null;
-  parsedStreamDirectives: ReplyDirectiveParseResult | null;
-  previousAudioDirectiveCount: number;
-  rawDirectiveSource?: string;
-  rawProjectionText?: string;
-  directiveCodePrefix?: StreamDirectiveCodePrefix;
-}): {
-  text: string;
-  delta: string;
-  replace: boolean;
-  hasText: boolean;
-  replyDirectives: ReplyDirectiveParseResult | null;
-  audioDirectiveCount: number;
-  directiveCodePrefix?: StreamDirectiveCodePrefix;
-} {
+export function resolveStreamingReply(params: StreamingReplyParams): StreamingReplyResult {
   let directiveCodePrefix = params.appendDelta !== null ? params.directiveCodePrefix : undefined;
   if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
     const text = params.previousCleaned;
@@ -461,12 +440,12 @@ export function resolveStreamingReply(params: {
 }
 
 /** Retain raw pre-trim XML ownership independently of visible directive trimming. */
-export function createStreamingReplyResolver() {
+export function createStreamingReplyResolver(): StreamingReplyResolver {
   const rawProjection = createTextProjection([
     downgradedToolCallTextFilter(),
     toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }, true),
   ]);
-  return (params: Parameters<typeof resolveStreamingReply>[0] & { rawDirectiveDelta?: string }) => {
+  return (params) => {
     const rawProjectionText =
       params.rawDirectiveSource === undefined
         ? undefined

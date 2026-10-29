@@ -105,6 +105,7 @@ export async function executeMutableUpdate(
   } = params.executionGuards;
   let retentionInstallTarget = params.packageInstallTarget;
   const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv, activationTimeoutMs?: number) => {
+    await params.assertPackageRuntimeCurrent?.();
     assertExecutionCurrent();
     await params.prepareMutableUpdate(
       env,
@@ -363,6 +364,7 @@ export async function executeMutableUpdate(
   let failure: MutableUpdateExecutionResult["failure"];
   let mutationStarted = false;
   const validateCandidate = async (root: string) => {
+    await params.assertPackageRuntimeCurrent?.();
     assertUpdateCommandRecovery(opts);
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
     await recordPhase("validating");
@@ -586,6 +588,7 @@ export async function executeMutableUpdate(
         managedServiceEnv: preManagedServiceStop?.serviceEnv,
         onTransaction,
       };
+      await params.assertPackageRuntimeCurrent?.();
       result = await withMutableUpdateForwardScope(opts, () =>
         params.stagedPackage
           ? params.stagedPackage.run(packageUpdate)
@@ -646,6 +649,7 @@ export async function executeMutableUpdate(
           await beforeActivate(gitMutationRoots ?? [params.root]);
         },
       };
+      await params.assertPackageRuntimeCurrent?.();
       result = await withMutableUpdateForwardScope(opts, () => updateGitInstall(gitUpdate));
     }
   } catch (err) {

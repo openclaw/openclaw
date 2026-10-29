@@ -456,6 +456,15 @@ engine range, selected Node version, and an upgrade command. If the Gateway
 service pins a Node executable, update that service definition too; changing
 the shell's Node alone does not change the service. The updater keeps the
 requested OpenClaw target and does not select another release automatically.
+When the same-root managed service is running and its definition is authoritatively
+writable, a restart-enabled update can select a compatible current Node or use
+read-only discovery of an already-installed Node from the service account environment.
+Discovery does not permit a download or installation. The updater retains the original
+executable identity and service authority, and rechecks both before runtime preparation,
+candidate validation, and package staging. A writable definition alone does not
+permit staging under an incompatible runtime: fresh Doctor and automatic Node
+provisioning cannot bootstrap this admission check. Manual recovery retains the
+verified service's state, configuration, profile, and native service selectors.
 Later runtime capability checks can still produce `node-runtime-preflight`.
 npm directory permission failures produce `global-install-permission-denied`,
 naming the directory, its owner when available, and the next action. Dry-run JSON
