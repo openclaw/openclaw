@@ -281,7 +281,23 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
       );
       finalExitCode = 1;
     }
-    return { ...exit, updaterOutput: Buffer.concat(updaterChunks).toString(), outputOverflow };
+    let updaterOutput;
+    try {
+      updaterOutput = decodeUtf8Input(
+        Buffer.concat(updaterChunks),
+        "managed update updater stdout",
+      );
+    } catch (error) {
+      if (!(error instanceof Utf8InputError)) {
+        throw error;
+      }
+      // The updater emitted bytes that are not valid UTF-8. Retain a lossy copy so
+      // the string/JSON contract and diagnostics still work, but surface the
+      // corruption instead of silently replacing bytes with U+FFFD.
+      appendLog("managed update updater stdout contained invalid UTF-8; retained a lossy copy");
+      updaterOutput = Buffer.concat(updaterChunks).toString("utf8");
+    }
+    return { ...exit, updaterOutput, outputOverflow };
   } finally {
     activeCommand = undefined;
     clearTimeout(timeout);

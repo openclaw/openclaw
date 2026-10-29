@@ -8,6 +8,7 @@ import { HANDOFF_OWNED_COMMAND_SCRIPT } from "./update-managed-service-handoff-c
 import { MANAGED_HANDOFF_LEASE_SOURCE } from "./update-managed-service-handoff-lease-source.js";
 import { MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE } from "./update-managed-service-handoff-native-scope-source.js";
 import { MANAGED_HANDOFF_RESULT_SOURCE } from "./update-managed-service-handoff-result-source.js";
+import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
 
 const helperSource = readFileSync(
   new URL("./update-managed-service-handoff.ts", import.meta.url),
@@ -153,6 +154,26 @@ function createBoundary(action: "update" | "triage" = "update") {
     void Promise.resolve().then(() => child.emit("spawn"));
     return child;
   });
+  const sandbox = {
+    params,
+    process: processFixture,
+    fs,
+    leaseStore,
+    initialLease: lease,
+    spawn,
+    path,
+    runWarnings: new Map(),
+    Buffer,
+    captured: undefined,
+    decodeUtf8Input,
+    Utf8InputError,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    appendLog: (line: string) => logs.push(line),
+    killOwnedCommand: (child: ReturnType<typeof makeCommand>) => child.kill("SIGKILL"),
+  };
   const boundary: { settle: () => Promise<void>; command: () => Promise<void> } = runInNewContext(
     `
     let restorationArmed = true;
@@ -177,25 +198,11 @@ function createBoundary(action: "update" | "triage" = "update") {
       ${finalizerSource}
     }
     ({ settle: () => complete(async () => {}),
-      command: () => complete(async () => { ${sourceBetween("    const exit = await runOwnedUpdateCommand(params.action,", "    if (updateCancelled || activationRejected)")} }), });
+      command: () => complete(async () => {
+        ${sourceBetween("    const exit = await runOwnedUpdateCommand(params.action,", "    if (updateCancelled || activationRejected)").replace("const exit = await runOwnedUpdateCommand(", "const exit = captured = await runOwnedUpdateCommand(")}
+      }), });
     `,
-    {
-      params,
-      process: processFixture,
-      fs,
-      leaseStore,
-      initialLease: lease,
-      spawn,
-      path,
-      runWarnings: new Map(),
-      Buffer,
-      setTimeout,
-      clearTimeout,
-      setInterval,
-      clearInterval,
-      appendLog: (line: string) => logs.push(line),
-      killOwnedCommand: (child: ReturnType<typeof makeCommand>) => child.kill("SIGKILL"),
-    },
+    sandbox,
   );
   return {
     ...boundary,
@@ -213,6 +220,7 @@ function createBoundary(action: "update" | "triage" = "update") {
     leaseStore,
     authority,
     process: processFixture,
+    captured: (): unknown => sandbox.captured,
   };
 }
 
@@ -237,11 +245,7 @@ it.each(["finalization", "diagnostics"] as const)(
     const { fixture, completed } = await startSettlement();
     if (stage === "diagnostics") {
       fixture.terminalFinished.resolve();
-      await awaitGateBeforeSettlement(
-        fixture.diagnosticStarted.promise,
-        completed,
-        "diagnostics not reached",
-      );
+      await awaitGateBeforeSettlement(fixture.diagnosticStarted.promise, completed, "no diag");
     }
     fixture.process.emit("SIGTERM");
     expect(fixture.children.at(-1)?.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
@@ -252,14 +256,11 @@ it.each(["finalization", "diagnostics"] as const)(
     fixture.diagnosticFinished.resolve();
     await completed;
     expectNoReplacement(fixture);
-    expect(fixture.order).toEqual([
-      "terminal:start",
-      "terminal:done",
-      ...(stage === "diagnostics" ? ["diagnostic:start", "diagnostic:done"] : []),
-      "release",
-      "cleanup",
-      "cleanup",
-    ]);
+    const expectedOrder = ["terminal:start", "terminal:done"];
+    if (stage === "diagnostics") {
+      expectedOrder.push("diagnostic:start", "diagnostic:done");
+    }
+    expect(fixture.order).toEqual([...expectedOrder, "release", "cleanup", "cleanup"]);
     expect(fixture.logs).toContain("managed update helper completed code=143");
     expect(fixture.process.exitCode).toBe(143);
     expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
@@ -299,26 +300,25 @@ it.each(["current", "lost-before-diagnostics", "lost-before-admission"] as const
   },
 );
 
-it.each([0, 7])(
-  "preserves failed admission through outer finalization when triage exits %s",
+it.each([0, 7, "utf8"] as const)(
+  "preserves failed admission through outer finalization for triage case %s",
   async (code) => {
+    const invalidUtf8 = code === "utf8";
+    const exitCode = typeof code === "number" ? code : 0;
     const fixture = createBoundary("triage");
     const completed = fixture.command();
-    await awaitGateBeforeSettlement(
-      fixture.commandAdmitted.promise,
-      completed,
-      "command not admitted",
-    );
+    await awaitGateBeforeSettlement(fixture.commandAdmitted.promise, completed, "not admitted");
     const child = fixture.children[0]!;
-    child.exitCode = code;
-    child.emit("exit", code, null);
-    child.emit("close", code, null);
+    child.stdout.emit("data", Buffer.from(invalidUtf8 ? [0xff] : []));
+    child.exitCode = exitCode;
+    child.emit("exit", exitCode, null);
+    child.emit("close", exitCode, null);
     await completed;
-    expect(fixture.logs).toContain(
-      "The installed update does not support automatic diagnostics. Run openclaw triage manually.",
-    );
-    expect(fixture.logs).toContain("managed update helper completed code=" + (code || 1));
-    expect(fixture.process.exitCode).toBe(code || 1);
+    expect(fixture.logs.join("")).toContain("does not support automatic diagnostics");
+    expect(fixture.logs).toContain("managed update helper completed code=" + (exitCode || 1));
+    expect(fixture.captured()).toMatchObject({ updaterOutput: invalidUtf8 ? "\ufffd" : "" });
+    expect(fixture.logs.some((line) => line.includes("invalid UTF-8"))).toBe(invalidUtf8);
+    expect(fixture.process.exitCode).toBe(exitCode || 1);
     expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
     expect(fixture.fs.closeSync).toHaveBeenCalledWith(9);
     expect(fixture.fs.rmSync).toHaveBeenCalledWith("/fixture/params.json", { force: true });
