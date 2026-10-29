@@ -59,6 +59,8 @@ const createSnapshot = (
     configPath,
     fs: {
       writeFile: fs.writeFile,
+      rename: fs.rename,
+      rm: fs.rm,
       readFile: fs.readFile,
       existsSync: fsNode.existsSync,
       ...overrides,
@@ -304,6 +306,33 @@ describe("config backup rotation", () => {
 
         await expectFile(`${configPath}.pre-update`, content);
       }
+    });
+  });
+
+  it("keeps the previous snapshot intact when a snapshot attempt fails mid-publication", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const snapshotPath = `${configPath}.pre-update`;
+      // A snapshot from a previous process, plus newer config content to capture.
+      await fs.writeFile(configPath, "second", { mode: 0o600 });
+      await fs.writeFile(snapshotPath, "current", { mode: 0o600 });
+
+      await createSnapshot(configPath, {
+        rename: async () => {
+          throw new Error("transient rename failure");
+        },
+      });
+
+      // The failed attempt must not tear the published rollback point.
+      await expectFile(snapshotPath, "current");
+      const siblings = (await fs.readdir(path.dirname(configPath))).filter((entry) =>
+        entry.includes(".pre-update"),
+      );
+      expect(siblings).toEqual([path.basename(snapshotPath)]);
+
+      // The next attempt after the transient failure publishes the newer content.
+      await createSnapshot(configPath);
+      await expectFile(snapshotPath, "second");
     });
   });
 });
