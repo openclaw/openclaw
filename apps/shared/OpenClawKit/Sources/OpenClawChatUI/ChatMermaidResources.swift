@@ -35,7 +35,7 @@ final class ChatMermaidSchemeHandler: NSObject, WKURLSchemeHandler {
         var resources: [String: Resource] = [:]
         let assets = try FileManager.default.contentsOfDirectory(
             atPath: directory.appendingPathComponent("assets", isDirectory: true).path)
-            .filter { $0.hasPrefix("mermaid.min-") && $0.hasSuffix(".js") }
+            .filter { $0.hasPrefix("pele.min-") && $0.hasSuffix(".js") }
             .sorted()
         guard !assets.isEmpty else { throw ChatMermaidFailure.unavailable }
         let filenames = ["index.html", "native.js", "frame.js"] + assets.map { "assets/\($0)" }

@@ -46,6 +46,7 @@ export type { SubagentRunRecord } from "./subagent-registry.types.js";
 export {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
+  isSubagentRunPausedForContinuation,
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
 

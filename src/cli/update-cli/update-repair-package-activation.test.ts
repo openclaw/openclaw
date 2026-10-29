@@ -324,20 +324,35 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
   });
 
-  it.each(supersessionReasons)("keeps unfinished rollback armed after %s", async (reason) => {
-    const f = await preparedOwnershipMismatch();
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(f.packageRoot);
-      const journal = openPackageActivationJournal(f.anchor);
-      journal.transition(journal.read(), "rollback-in-progress", null, fence.assertCurrent);
-    });
-    await obsoleteRecovery(f, reason);
-    const journal = fs.readFileSync(f.journal);
-    await expect(repair()).rejects.toThrow(/restoration|rollback/iu);
-    expect(fs.readFileSync(f.journal)).toEqual(journal);
-    expect(fs.existsSync(f.retained)).toBe(false);
-    expect(mocks.finalize).not.toHaveBeenCalled();
-  });
+  it.each(supersessionReasons)(
+    "settles rollback only after its installation is replaced: %s",
+    async (reason) => {
+      const f = await preparedOwnershipMismatch();
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        const journal = openPackageActivationJournal(f.anchor);
+        journal.transition(journal.read(), "rollback-in-progress", null, fence.assertCurrent);
+      });
+      await obsoleteRecovery(f, reason);
+      if (reason === "superseded-by-manual-install") {
+        const installed = await createPackageIntegrityReader().tree(f.packageRoot);
+        await repair();
+        expect(readArchivedSettlement(f.anchor, f.operationId).intent).toMatchObject({
+          kind: reason,
+          settled: true,
+        });
+        expect(await createPackageIntegrityReader().tree(f.packageRoot)).toEqual(installed);
+        expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+        expect(mocks.finalize).toHaveBeenCalledOnce();
+        return;
+      }
+      const journal = fs.readFileSync(f.journal);
+      await expect(repair()).rejects.toThrow(/restoration|rollback/iu);
+      expect(fs.readFileSync(f.journal)).toEqual(journal);
+      expect(fs.existsSync(f.retained)).toBe(false);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { field: "exports", value: { ".": { import: "./dist/index.js", default: "./missing.js" } } },

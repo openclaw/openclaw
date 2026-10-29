@@ -437,72 +437,53 @@ describe("device worker placement dispatch", () => {
     expect(harness.log.filter((entry) => entry === "sync")).toHaveLength(0);
   });
 
-  it("rejects a cloud node re-paired while its managed workspace is synchronizing", async () => {
-    let currentNode = deviceProof(0);
-    const harness = await createHarness(database, placementStore, {
-      isCurrentNodePlacement: (node) =>
-        node.nodeId === currentNode.nodeId &&
-        node.connId === currentNode.connId &&
-        node.pairingGeneration === currentNode.pairingGeneration,
-    });
-    bindDeviceWorkerAvailability(harness.environments, async () => ({
-      available: true,
-      node: currentNode,
-    }));
-    const request = prepareCloudNodeDispatch(harness);
+  it.each(["starting", "activation"] as const)(
+    "rejects a cloud node re-paired during %s",
+    async (stage) => {
+      let currentNode = deviceProof(0);
+      const rePairNode = () => {
+        currentNode = {
+          ...currentNode,
+          connId: "replacement-connection",
+          pairingGeneration: "replacement-generation",
+        };
+      };
+      const harness = await createHarness(database, placementStore, {
+        isCurrentNodePlacement: (node) =>
+          node.nodeId === currentNode.nodeId &&
+          node.connId === currentNode.connId &&
+          node.pairingGeneration === currentNode.pairingGeneration,
+      });
+      bindDeviceWorkerAvailability(harness.environments, async () => ({
+        available: true,
+        node: currentNode,
+      }));
+      const request = prepareCloudNodeDispatch(harness);
+      let isStarting = false;
 
-    await expect(
-      harness.service.dispatch(request, (placement) => {
-        if (placement.state === "starting") {
-          currentNode = {
-            ...currentNode,
-            connId: "replacement-connection",
-            pairingGeneration: "replacement-generation",
-          };
-        }
-      }),
-    ).rejects.toThrow();
+      await expect(
+        harness.service.dispatch(
+          request,
+          (placement) => {
+            isStarting = placement.state === "starting";
+            if (isStarting && stage === "starting") {
+              rePairNode();
+            }
+          },
+          stage === "activation"
+            ? () => {
+                if (isStarting) {
+                  rePairNode();
+                }
+              }
+            : undefined,
+        ),
+      ).rejects.toThrow(stage === "activation" ? "pairing generation" : undefined);
 
-    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
-    expect(harness.placements.current()).toMatchObject({ state: "failed" });
-  });
-
-  it("fences a cloud node re-paired inside the synchronous activation callback", async () => {
-    let currentNode = deviceProof(0);
-    const harness = await createHarness(database, placementStore, {
-      isCurrentNodePlacement: (node) =>
-        node.nodeId === currentNode.nodeId &&
-        node.connId === currentNode.connId &&
-        node.pairingGeneration === currentNode.pairingGeneration,
-    });
-    bindDeviceWorkerAvailability(harness.environments, async () => ({
-      available: true,
-      node: currentNode,
-    }));
-    const request = prepareCloudNodeDispatch(harness);
-    let isStarting = false;
-
-    await expect(
-      harness.service.dispatch(
-        request,
-        (placement) => {
-          isStarting = placement.state === "starting";
-        },
-        () => {
-          if (isStarting) {
-            currentNode = {
-              ...currentNode,
-              connId: "replacement-connection",
-              pairingGeneration: "replacement-generation",
-            };
-          }
-        },
-      ),
-    ).rejects.toThrow("pairing generation");
-
-    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
-    expect(harness.placements.current()).toMatchObject({ state: "failed" });
-  });
+      expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
+      expect(harness.placements.current()).toMatchObject({ state: "failed" });
+    },
+  );
 
   it.each([
     { name: "withdraws its required node command", revocation: "command" as const },

@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { prefValuesEqual } from "../app/server-prefs-state.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
@@ -16,7 +16,7 @@ import { showPersonalSessionGroupDialog } from "./personal-session-group-dialog.
 import { Icon } from "./solid/icon.tsx";
 import { Menu } from "./solid/menu.tsx";
 
-registerEnglishCatalog(registerSessionOrganizationEnglish);
+registerEnglishCatalog(registerSessionOrganizationSharedEnglish);
 
 const GROUP_DRAG_TYPE = "application/x-openclaw-personal-session-group";
 

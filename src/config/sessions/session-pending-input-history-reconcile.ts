@@ -14,11 +14,11 @@ export function interruptPendingInputHistoryInDatabase(
   input: { sessionKey: string; sessionId: string; ids: string[] },
   admit: (stage: "commit", publication: PendingInputHistoryReceipt) => void,
   publish: (receipt: PendingInputHistoryReceipt) => void,
-): PendingInputHistoryReceipt {
+): void {
   if (input.ids.length > 20) {
     throw new Error("Pending input reconciliation exceeds its page bound");
   }
-  return runOpenClawAgentWriteTransaction(
+  runOpenClawAgentWriteTransaction(
     (current) => {
       if (current.db !== database.db) {
         throw new Error("Pending input history lost its database owner");
@@ -44,7 +44,6 @@ export function interruptPendingInputHistoryInDatabase(
       };
       publish(receipt);
       admit("commit", receipt);
-      return receipt;
     },
     options,
     { operationLabel: "session.pending-input.interrupt-stale" },

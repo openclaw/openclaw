@@ -17,6 +17,7 @@ import { createReplyOperation } from "../../sessions/session-controller.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
+import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import {
   advancePlacementFixtureToActive,
@@ -514,11 +515,32 @@ describe("worker pre-launch claim recovery", () => {
         "worker settled before reaching cancellation gate",
       );
       const oldClaim = currentClaim();
+      const currentPlacement = placements.get(SESSION_ID);
+      const oldWorkerClaim = currentPlacement && projectWorkerSessionTurnClaim(currentPlacement);
       expect(oldClaim?.runId).toBe("blocked-second");
-      // Pre-turn input refresh fences its workspace result before entering the workspace queue.
+      if (!oldClaim || !oldWorkerClaim) {
+        throw new Error("Expected the blocked turn claim");
+      }
       const fenced =
         stage === "workspace queue" || stage === "workspace mutation" || stage === "pending result";
-      expect(await pendingResults()).toHaveLength(fenced ? 1 : 0);
+      const pendingBeforeCancellation = await pendingResults();
+      if (fenced) {
+        expect(pendingBeforeCancellation).toMatchObject([
+          {
+            sessionId: SESSION_ID,
+            environmentId: ENVIRONMENT_ID,
+            ownerEpoch: OWNER_EPOCH,
+            placementGeneration: oldWorkerClaim.placementGeneration,
+            claimId: oldWorkerClaim.claimId,
+            runId: oldWorkerClaim.runId,
+            workspaceAcceptedAtMs: null,
+            recoveryRequestedAtMs: null,
+            stagedResultRef: null,
+          },
+        ]);
+      } else {
+        expect(pendingBeforeCancellation).toEqual([]);
+      }
       const dispatched =
         stage === "dispatch boundary" ||
         stage === "dispatch" ||
@@ -590,11 +612,15 @@ describe("worker pre-launch claim recovery", () => {
         return;
       }
       if (fenced) {
-        // The fenced result keeps exact turn custody until its recovery owner settles it.
         expect(currentClaim()).toEqual(oldClaim);
         const pending = (await pendingResults())[0]!;
-        expect(pending.claimId).toBe(oldClaim?.claimId);
-        expect(pending.recoveryRequestedAtMs).not.toBeNull();
+        expect(pending).toMatchObject({
+          claimId: oldWorkerClaim.claimId,
+          runId: oldWorkerClaim.runId,
+          placementGeneration: oldWorkerClaim.placementGeneration,
+          recoveryRequestedAtMs: expect.any(Number),
+          workspaceAcceptedAtMs: null,
+        });
         expect(environments.destroy).not.toHaveBeenCalled();
         return;
       }

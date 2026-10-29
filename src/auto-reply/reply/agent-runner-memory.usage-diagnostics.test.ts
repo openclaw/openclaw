@@ -35,18 +35,7 @@ it.each([false, true])("settles usage independently of a returned error: %s", as
   });
   runEntry.mockReset().mockImplementation(
     memoryFixture.createMemoryRunEntryMockImplementation({
-      runWithModelFallback: async ({ provider = "openai", model = "usage-fixture", run }) => ({
-        result: await run(provider, model, {
-          modelRoutingProvenance: {
-            requestedProvider: provider,
-            requestedModel: model,
-            stage: "initial",
-          },
-        }),
-        provider,
-        model,
-        attempts: [],
-      }),
+      runWithModelFallback: memoryFixture.runSelectedMemoryModel,
       ensureSelectedAgentHarnessPlugin: vi.fn().mockResolvedValue(undefined),
     }),
   );

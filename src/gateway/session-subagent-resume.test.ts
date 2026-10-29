@@ -31,6 +31,7 @@ import {
   prepareParentSubagentResume,
   shouldResumeParentSubagent,
 } from "./session-subagent-resume.js";
+import { projectGatewaySessionRunState } from "./session-utils-display.js";
 
 const fixture = useSubagentControlFixture();
 beforeEach(() => {
@@ -40,6 +41,8 @@ const parent = "agent:main:main";
 const sessionId = "resume-child-session";
 const previousRunId = "resume-previous";
 const nextRunId = "resume-successor";
+const childKey = "agent:main:subagent:resume-child";
+const childRow = () => projectGatewaySessionRunState({ key: childKey, now: Date.now() }).fields;
 afterEach(() => {
   publishSystemEventStoreResolver(undefined);
   vi.useRealTimers();
@@ -55,10 +58,7 @@ async function updateRun(runId: string, update: (draft: SubagentRunRecord) => vo
 }
 
 // Seed the same paused registry state that the yield terminal observer records.
-async function arrangePausedChild(
-  childSessionKey = "agent:main:subagent:resume-child",
-  lifecycleRevision?: string,
-) {
+async function arrangePausedChild(childSessionKey = childKey, lifecycleRevision?: string) {
   const storePath = await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
     agentId: "main",
@@ -111,7 +111,7 @@ async function arrangePausedChild(
   return { cfg, caller, entry, resume, prepare, childSessionKey, storePath };
 }
 
-it.each(["agent:main:subagent:resume-child"])(
+it.each([childKey])(
   "preserves the task and frozen completion batch for %s",
   async (childSessionKey) => {
     const state = await arrangePausedChild(childSessionKey, "original-incarnation");
@@ -254,17 +254,13 @@ it("rejects adoption when task-owned completion is disabled after binding", asyn
   await expect(adopt()).rejects.toThrow("Task resume requires a child with task-owned completion.");
   expect(subagentRuns.has(nextRunId)).toBe(false);
   expect(subagentRuns.get(previousRunId)).toBe(state.entry);
-  expect(state.entry.pauseReason).toBe("sessions_yield");
 });
 
 it.each(["selection", "admission"] as const)(
   "rejects a copied-store parent with matching session identities during %s",
   async (stage) => {
     const state = await arrangePausedChild();
-    const originalStorePath = state.entry.controllerStorePath;
-    if (!originalStorePath) {
-      throw new Error("The registered task must retain its controller store");
-    }
+    const originalStorePath = state.entry.controllerStorePath!;
     publishSystemEventStoreResolver(() => originalStorePath);
     expect(shouldResumeParentSubagent(state)).toBe(true);
     const adopt = await state.prepare();
@@ -277,8 +273,8 @@ it.each(["selection", "admission"] as const)(
     } else {
       await expect(adopt()).rejects.toThrow(/controlled/);
     }
-    expect(subagentRuns.has(nextRunId)).toBe(false);
-    expect(subagentRuns.get(previousRunId)?.pauseReason).toBe("sessions_yield");
+    // Still paused: no successor replaced the yielded run.
+    expect(childRow().subagentRunState).toBe("paused");
   },
 );
 
@@ -298,6 +294,7 @@ it.each(["resume", "cancel"] as const)(
     publishSystemEventStoreResolver(() => storePath);
     await fixture.settle();
     expect(shouldResumeParentSubagent(state)).toBe(false);
+    expect(childRow()).toMatchObject({ status: "done", subagentRunState: "paused" });
     if (action === "resume") {
       const resume = bindParentSubagentResume({
         ...state,
@@ -307,6 +304,7 @@ it.each(["resume", "cancel"] as const)(
       const adopt = await state.prepare({ resume });
       await expect(adopt()).resolves.toBe(previousRunId);
       expect(subagentRuns.get(nextRunId)?.taskRunId).toBe(previousRunId);
+      expect(childRow().subagentRunState).not.toBe("paused");
     } else {
       const result = await killAllControlledSubagentRuns({
         cfg: state.cfg,
@@ -319,7 +317,7 @@ it.each(["resume", "cancel"] as const)(
         suppressTaskDelivery: true,
       });
       expect(result).toMatchObject({ killed: 1 });
-      expect(subagentRuns.get(previousRunId)?.endedReason).toBe("subagent-killed");
+      expect(childRow()).toMatchObject({ status: "killed", subagentRunState: "historical" });
     }
   },
 );

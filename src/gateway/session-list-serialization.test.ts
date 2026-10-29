@@ -144,6 +144,50 @@ it("packs equal fields by their recipient rows without changing the input or wir
   }
 });
 
+it("reuses packed row bytes across sibling changes without retaining another viewer's layout", () => {
+  const row = (key: string, label: string, sharingRole: "owner" | "viewer") =>
+    Object.freeze({
+      key,
+      kind: "direct" as const,
+      updatedAt: 1,
+      rowMode: "sidebar" as const,
+      label,
+      visibility: "shared" as const,
+      sharingRole,
+    });
+  const ownerRows = [row("a", "A", "owner"), row("b", "B", "owner"), row("c", "C", "owner")];
+  const viewerRows = ownerRows.map((value) => row(value.key, value.label, "viewer"));
+  const first = shareSidebarSessionRows(ownerRows);
+  const viewer = shareSidebarSessionRows(viewerRows);
+  expect(JSON.stringify(first.sessions)).toBe(
+    '[{"key":"a","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"A","sharedFacts":[0]},{"key":"b","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"B","sharedFacts":[0]},{"key":"c","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"C","sharedFacts":[0]}]',
+  );
+  expect(first.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "owner" }]);
+  expect(viewer.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "viewer" }]);
+  using stringify = vi.spyOn(JSON, "stringify");
+  const changed = shareSidebarSessionRows([row("a", "Changed", "owner"), ...ownerRows.slice(1)]);
+  expect(changed.sessions[0]).not.toBe(first.sessions[0]);
+  expect(changed.sessions[1]).toBe(first.sessions[1]);
+  expect(changed.sessions[2]).toBe(first.sessions[2]);
+  expect(
+    stringify.mock.calls.filter(([value]) => value && typeof value === "object" && "key" in value),
+  ).toHaveLength(2);
+  stringify.mockRestore();
+  // A sibling joining a singleton fact changes the unchanged row's reference layout.
+  const regrouped = shareSidebarSessionRows([row("a", "B", "owner"), ...ownerRows.slice(1)]);
+  expect(regrouped.sessions[1]).not.toBe(first.sessions[1]);
+  expect(regrouped.sharedFacts).toEqual([
+    { label: "B" },
+    { visibility: "shared", sharingRole: "owner" },
+  ]);
+  expect(regrouped.sessions[1]?.sharedFacts).toEqual([0, 1]);
+  expect(shareSidebarSessionRows([...viewerRows]).sessions[1]).toBe(viewer.sessions[1]);
+  for (const payload of [first, viewer, changed, regrouped]) {
+    const frame = { type: "res", id: "rows", ok: true, payload };
+    expect(serializeGatewayFrame(frame).toString()).toBe(JSON.stringify(frame));
+  }
+});
+
 it.each(["sidebar", "dashboard"] as const)(
   "keeps %s display facts while bounding the wire payload",
   (mode) =>

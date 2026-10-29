@@ -90,7 +90,7 @@ async function readRestartApprovalOutcomes(params: RestartApprovalSource): Promi
 }
 
 /** Runtime-authored recovery outcome, not a grant or prediction about execution. */
-export function formatRestartRecoveryAdmission(): string {
+function formatRestartRecoveryAdmission(): string {
   return "OpenClaw admitted a continuation of this request after the Gateway restarted. Recovery did not grant new permission or confirm that earlier work finished.";
 }
 

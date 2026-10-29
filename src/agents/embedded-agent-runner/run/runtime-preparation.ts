@@ -200,7 +200,8 @@ export async function prepareEmbeddedRunTransport(input: {
   let { activePreparedAuthPlan } = preparedAuthPlan;
   preparedThinkingCapabilityReady = true;
   applyResolvedRuntimeModel(models.runtime);
-  const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
+  const genericCompactionRecoveryAllowed =
+    !pluginHarnessOwnsTransport && !params.disableCompactionRecovery;
   const profileCandidates = preparedAuthAttempts.map((attempt) => attempt.profileId);
   const forwardedPluginHarnessProfileId = pluginHarnessOwnsTransport
     ? activePreparedAuthPlan.forwardedAuthProfileId

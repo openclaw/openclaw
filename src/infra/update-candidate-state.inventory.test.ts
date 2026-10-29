@@ -279,9 +279,11 @@ describe("snapshot legacy cron identity", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["original", "moved", "released envelope", "explicit config"])(
-    "preserves source cron partition selection (%s)",
+  it.each(["original", "moved", "released envelope", "bound released envelope", "explicit config"])(
+    "preserves only proven source cron partition selection (%s)",
     async (selector) => {
+      const released = selector.includes("released envelope");
+      const bound = selector === "bound released envelope";
       const root = await fs.realpath(dirs.make("candidate-cron-identity-"));
       const stateDir = path.join(root, "source");
       const targetStateDir = path.join(root, "rehearsal");
@@ -292,7 +294,7 @@ describe("snapshot legacy cron identity", () => {
       const storeKey = path.join(
         selector === "moved"
           ? path.join(root, "prior")
-          : selector === "explicit config"
+          : selector === "explicit config" || bound
             ? configDir
             : stateDir,
         "cron",
@@ -308,23 +310,29 @@ describe("snapshot legacy cron identity", () => {
         (store_key, job_id, content, revision, updated_at_ms) VALUES (?, 'retained', NULL, 1, 1)`).run(
           storeKey,
         );
-        if (selector === "explicit config") {
+        if (selector === "explicit config" || bound) {
           db.prepare(`INSERT INTO cron_job_scratch
           (store_key, job_id, content, revision, updated_at_ms) VALUES (?, 'custom', NULL, 1, 1)`).run(
             path.join(stateDir, "cron", "jobs.json"),
           );
         }
+        if (bound) {
+          db.prepare(`INSERT INTO config_machine_state
+          (state_key, value_json, updated_at_ms) VALUES ('cron.defaultStoreKey', ?, 1)`).run(
+            JSON.stringify(storeKey),
+          );
+        }
       }
       const original = await fs.readFile(source);
       const input = createStateSnapshotInput(root, stateDir, targetStateDir);
-      if (selector === "released envelope" || selector === "explicit config") {
+      if (released || selector === "explicit config") {
         vi.stubEnv("OPENCLAW_STATE_DIR", targetStateDir);
         vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(targetStateDir, "openclaw.json"));
       }
       await runUpdateCandidateSnapshotWorker({
         ...input,
         // Released parents omit source selectors and launch with the rehearsal environment.
-        ...(selector === "released envelope" || selector === "explicit config"
+        ...(released || selector === "explicit config"
           ? {
               env: {
                 HOME: root,
@@ -345,7 +353,9 @@ describe("snapshot legacy cron identity", () => {
         ),
       );
       expect(selection).toMatchObject(
-        selector === "moved" ? { status: "unresolved" } : { status: "ready", storeKey },
+        selector === "moved" || selector === "released envelope"
+          ? { status: "unresolved" }
+          : { status: "ready", storeKey },
       );
       expect(await fs.readFile(source)).toEqual(original);
     },

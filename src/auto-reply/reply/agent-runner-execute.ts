@@ -138,6 +138,7 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     isRestartRecoveryArmed: () => Promise<boolean>;
     onCompactionNoticePayload: (payload: ReplyPayload) => void;
     preflightCompactionApplied: boolean;
+    recoveryMemoryFlushAttempted?: boolean;
     setRunFollowupTurn: (runner: FinalizeReplyAgentRunInput["runFollowupTurn"]) => void;
     shouldEmitToolOutput: () => boolean;
     shouldEmitToolResult: () => boolean;

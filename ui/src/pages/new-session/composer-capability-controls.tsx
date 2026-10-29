@@ -7,7 +7,7 @@ import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts"
 import { ChatComposerPlusMenu } from "../chat/components/chat-composer-plus-menu.tsx";
 import type {
   ChatComposerPlusMenuProps,
-  ChatComposerCapabilityMenuProps,
+  ChatComposerCapabilityMenuSource,
 } from "../chat/components/chat-composer-plus-menu.types.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
@@ -19,7 +19,7 @@ type NewSessionComposerCapabilityOptions = {
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
-  capabilityMenu?: ChatComposerCapabilityMenuProps;
+  capabilityMenu?: ChatComposerCapabilityMenuSource;
   toolOverrides?: SessionToolOverrides | null;
   onChange: () => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;

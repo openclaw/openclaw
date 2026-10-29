@@ -21,6 +21,7 @@ import {
   writeCodexAppServerBinding,
 } from "./run-attempt.context-engine.test-support.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import { isCodexTurnContextHandoff } from "./test-support.js";
 
 setupRunAttemptTestHooks();
 
@@ -57,11 +58,20 @@ function seedParams(mode: "thread_bootstrap" | "per_turn" = "per_turn") {
 
 function selectedItems(requests: RecordedRequest[]): JsonValue[] {
   return requests
-    .filter(({ method }) => method === "thread/inject_items")
+    .filter(
+      ({ method, params }) =>
+        method === "thread/inject_items" && !isCodexTurnContextHandoff(params),
+    )
     .flatMap(({ params }) =>
       isJsonObject(params) && Array.isArray(params.items) ? params.items : [],
     )
     .filter((item) => isJsonObject(item) && item.role === "user");
+}
+
+function selectedHistoryRequests(requests: RecordedRequest[]): RecordedRequest[] {
+  return requests.filter(
+    ({ method, params }) => method === "thread/inject_items" && !isCodexTurnContextHandoff(params),
+  );
 }
 
 const partText = (part: JsonValue): string =>
@@ -232,7 +242,7 @@ it.each(["thread_bootstrap", "per_turn"] as const)(
     });
     const replacement = await runTurn(params, harness, "rewrite", "thread-selected-2");
     expect(replacement.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-    expect(replacement.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    expect(selectedHistoryRequests(replacement)).toHaveLength(1);
     const text = JSON.stringify(selectedItems(replacement));
     expect(text).toContain("REWRITTEN_SELECTED_HISTORY");
     expect(text).toContain(appended);
@@ -299,7 +309,7 @@ it.each(["fresh", "reused"] as const)(
     }
     const retry = selectedHarness("thread-retry");
     const requests = await runTurn(params, retry, "retry", "thread-retry");
-    expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    expect(selectedHistoryRequests(requests)).toHaveLength(1);
     const restored = JSON.stringify(selectedItems(requests));
     expect(restored.split(original)).toHaveLength(2);
     if (ownership === "reused") {
@@ -330,7 +340,7 @@ it.each(["legacy-engine-fingerprint", "pending:selection-v1:interrupted"])(
     });
     const replacement = await runTurn(params, harness, "upgrade", "thread-selected-2");
     expect(replacement.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-    expect(replacement.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    expect(selectedHistoryRequests(replacement)).toHaveLength(1);
     expect(JSON.stringify(selectedItems(replacement))).toContain(original);
     const unchanged = await runTurn(params, harness, "after-upgrade", "thread-selected-2");
     expect(unchanged.some(({ method }) => method === "thread/start")).toBe(false);

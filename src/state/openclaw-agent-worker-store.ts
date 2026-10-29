@@ -4,6 +4,7 @@ import { deserialize, serialize } from "node:v8";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import {
@@ -270,6 +271,7 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       return;
     }
     const reason = error instanceof Error ? error : new Error(formatErrorMessage(error));
+    materializeErrorStack(reason);
     terminalReason = reason;
     revoked = true;
     // Publications include result delivery and executor release, beyond native settlement.

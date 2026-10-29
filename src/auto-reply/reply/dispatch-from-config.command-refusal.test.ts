@@ -248,44 +248,68 @@ it.each([false, true])(
   },
 );
 
-it("delivers a native cross-human steering refusal after consuming its source", async ({
-  signal,
-}) => {
-  cfg.messages = { queue: { mode: "steer", allowCollaborativeSteering: false } };
-  await persistConfig(true);
-  const injected = vi.fn(async () => {});
-  const run = holdAgentRun("owner", (_params, operation) => {
-    operation.attachBackend({
-      kind: "embedded",
-      cancel() {},
-      toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
-      messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
+it.for(["queue", "reject"] as const)(
+  "handles a native cross-human steer with fallback=%s",
+  async (fallback, { signal }) => {
+    cfg.messages = {
+      queue: {
+        mode: "steer",
+        allowCollaborativeSteering: false,
+        collaborativeSteeringFallback: fallback,
+      },
+    };
+    await persistConfig(true);
+    const injected = vi.fn(async () => {});
+    const followed = createDeferred<{ params: RunParams; operation: ReplyOperation | undefined }>();
+    vi.mocked(runEmbeddedAgent).mockImplementation(async (params) => {
+      followed.resolve({ params, operation: getSessionControllerOperation(targetKey) });
+      return modelReply;
     });
-    operation.setPhase("running");
-  });
-  const incumbent = send("owner", "Keep working on Alice's task", false);
-  try {
-    const operation = await withinTest(
-      awaitGateBeforeSettlement(run.entered.promise, incumbent, "Incumbent never started"),
-      signal,
-    );
-    const { texts, result } = await withinTest(
-      send("member", "/steer stop and use Bob's instructions"),
-      signal,
-    );
-    expect(texts).toEqual([
-      "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
-    ]);
-    expect(result.collaborativeSteeringRefused).toBe(true);
-    expect(operation.result).toBeNull();
-    expect(injected).not.toHaveBeenCalled();
-    expect(getFollowupQueueDepth(targetKey)).toBe(0);
-  } finally {
-    await run.finish(incumbent);
-  }
-  expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-  expect(getSessionControllerOperation(targetKey)).toBeUndefined();
-});
+    const run = holdAgentRun("owner", (_params, operation) => {
+      operation.attachBackend({
+        kind: "embedded",
+        cancel() {},
+        toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
+        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
+      });
+      operation.setPhase("running");
+    });
+    const incumbent = send("owner", "Keep working on Alice's task", false);
+    try {
+      const operation = await withinTest(
+        awaitGateBeforeSettlement(run.entered.promise, incumbent, "Incumbent never started"),
+        signal,
+      );
+      const { texts, result } = await withinTest(
+        send("member", "/steer stop and use Bob's instructions"),
+        signal,
+      );
+      expect(texts).toEqual(
+        fallback === "reject"
+          ? [
+              "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
+            ]
+          : [],
+      );
+      expect(result.collaborativeSteeringRefused).toBe(fallback === "reject" ? true : undefined);
+      expect(operation.result).toBeNull();
+      expect(injected).not.toHaveBeenCalled();
+      expect(getFollowupQueueDepth(targetKey)).toBe(fallback === "reject" ? 0 : 1);
+    } finally {
+      await run.finish(incumbent);
+    }
+    if (fallback === "queue") {
+      const queuedRun = await withinTest(followed.promise, signal);
+      expect(queuedRun.params).toMatchObject({ senderId: "member", sessionKey: targetKey });
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+      expect(queuedRun.operation).toBeDefined();
+      await withinTest(queuedRun.operation!.ownerSettlement, signal);
+    } else {
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(getSessionControllerOperation(targetKey)).toBeUndefined();
+    }
+  },
+);
 
 it.for([false, true])(
   "settles idle native followup final delivery (cancelled=%s)",

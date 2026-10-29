@@ -1,3 +1,4 @@
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import {
   getProcessCleanupBudget,
   runWithProcessCleanupBudget,
@@ -68,6 +69,7 @@ export function createGatewaySidecarStopOwner() {
               rejected?.reason instanceof Error
                 ? rejected.reason
                 : new Error(String(rejected?.reason));
+            materializeErrorStack(failure);
             for (const sidecar of pending) {
               failedSidecars.add(sidecar);
             }
@@ -94,6 +96,7 @@ export function createGatewaySidecarStopOwner() {
         await pending;
       } catch (error) {
         failure ??= error instanceof Error ? error : new Error(String(error));
+        materializeErrorStack(failure);
       }
     }
     phase = "sealed";

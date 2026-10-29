@@ -238,11 +238,17 @@ describe("gateway telemetry maintenance", () => {
       const check = createDeferredCore<null>();
       const thaw = createDeferredCore<boolean>();
       checkTelemetryUpdateMock.mockReturnValue(check.promise);
-      const restartRunningChannels = vi.fn<TimerOptions["restartRunningChannels"]>(
+      const restartRunningChannels = vi.fn<(shouldContinue: () => boolean) => Promise<boolean>>(
         () => thaw.promise,
       );
       const state = createMaintenanceDeps();
-      const timers = await startMaintenance({ ...state, restartRunningChannels });
+      const timers = await startMaintenance({
+        ...state,
+        channelManager: {
+          ...state.channelManager,
+          captureAccountRestart: () => restartRunningChannels,
+        },
+      });
       try {
         vi.setSystemTime(Date.now() + 75_000);
         await vi.advanceTimersByTimeAsync(30_000);
@@ -252,7 +258,7 @@ describe("gateway telemetry maintenance", () => {
           markGatewayRestartDraining();
         } else if (drain === "scheduler") {
           state.scheduler.beginClose();
-          expect(restartRunningChannels.mock.calls[0]?.[1]?.()).toBe(false);
+          expect(restartRunningChannels.mock.calls[0]?.[0]?.()).toBe(false);
         }
         const stopped = vi.fn();
         const stopping = timers.stopPeriodicTasks().finally(stopped);
@@ -276,7 +282,7 @@ describe("gateway telemetry maintenance", () => {
         expect(state.refreshGatewayHealthSnapshot).toHaveBeenCalledOnce();
         expect(checkTelemetryUpdateMock).toHaveBeenCalledOnce();
         expect(state.dedupe.has("retained-during-drain")).toBe(true);
-        expect(restartRunningChannels.mock.calls[0]?.[1]?.()).toBe(false);
+        expect(restartRunningChannels.mock.calls[0]?.[0]?.()).toBe(false);
         await vi.advanceTimersByTimeAsync(0);
         expect(stopped).not.toHaveBeenCalled();
         check.resolve(null);

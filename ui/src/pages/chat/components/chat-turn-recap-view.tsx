@@ -10,38 +10,31 @@ registerEnglishCatalog(registerChatSessionEnglish);
 
 export function TurnRecapRow(props: {
   recap: TurnRecap;
-  hideDuration?: boolean;
   presentation?: "standalone" | "continuation";
 }) {
   const branding = themeBrandingProjection;
   const duration = () =>
     formatDurationLong(Math.max(1, Math.round(props.recap.runtimeMs / 1_000)) * 1_000) ?? "";
   return (
-    <Show when={!props.hideDuration || typeof props.recap.outputTokens === "number"}>
-      <div
-        class={[
-          "chat-turn-recap",
-          { "chat-turn-recap--continuation": props.presentation === "continuation" },
-        ]}
-        role="status"
-      >
-        <Show when={props.presentation !== "continuation"}>
-          <span class="chat-turn-recap__claw" aria-hidden="true">
-            <WorkingBrandGlyph branding={branding.read()} claw="claw" />
-          </span>
-        </Show>
-        <Show when={typeof props.recap.outputTokens === "number"}>
-          <span>{outputTokensLabel(props.recap.outputTokens!)}</span>
-          <Show when={!props.hideDuration}>
-            <span class="chat-turn-recap__sep" aria-hidden="true">
-              ·
-            </span>
-          </Show>
-        </Show>
-        <Show when={!props.hideDuration}>
-          <span>{t("chat.turnRecap.doneIn", { duration: duration() })}</span>
-        </Show>
-      </div>
-    </Show>
+    <div
+      class={[
+        "chat-turn-recap",
+        { "chat-turn-recap--continuation": props.presentation === "continuation" },
+      ]}
+      role="status"
+    >
+      <Show when={props.presentation !== "continuation"}>
+        <span class="chat-turn-recap__claw" aria-hidden="true">
+          <WorkingBrandGlyph branding={branding.read()} claw="claw" />
+        </span>
+      </Show>
+      <Show when={typeof props.recap.outputTokens === "number"}>
+        <span>{outputTokensLabel(props.recap.outputTokens!)}</span>
+        <span class="chat-turn-recap__sep" aria-hidden="true">
+          ·
+        </span>
+      </Show>
+      <span>{t("chat.turnRecap.doneIn", { duration: duration() })}</span>
+    </div>
   );
 }

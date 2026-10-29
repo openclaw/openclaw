@@ -58,11 +58,12 @@ export type MessageRenderOptions = {
 
 export type GroupedMessageOptions = MessageRenderOptions & {
   isStreaming: boolean;
+  /** Split envelopes publish their terminal tail once. */
+  ownsTerminalStatus?: boolean;
   isForwarded?: boolean;
   /** Search reveals matching transcript text inside disclosures. */
   searchResult?: boolean;
   transcriptVisible?: PresentationValue;
-  duplicateCount?: number;
   showReasoning: boolean;
   bubbleMode?: boolean;
   /** First visible message of the containing group/frame; null means none. */

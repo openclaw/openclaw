@@ -13,8 +13,9 @@ import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
-import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
+import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "../../../styles/chat/composer-context-strip.css";
+import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
@@ -24,13 +25,12 @@ import {
   renderChatAbortActionSolid,
   renderChatPrimaryActionsSolid as ChatPrimaryActions,
 } from "./chat-composer-controls.tsx";
-import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import "../../../styles/chat/emoji-menu.css";
 import "../../../styles/chat/mention-menu.css";
+import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import type { ChatComposerPlusMenuView } from "./chat-composer-plus-menu.types.ts";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
@@ -160,10 +160,18 @@ export function renderChatComposerView(
               <button
                 type="button"
                 class={["btn btn--sm", banner().actionStyle]}
-                disabled={Boolean(banner().disabledReason) || banner().busy}
+                disabled={
+                  !banner().actionPending && (Boolean(banner().disabledReason) || banner().busy)
+                }
+                aria-disabled={banner().actionPending ? "true" : undefined}
+                data-authority-pending={banner().actionPending ? "" : undefined}
                 aria-busy={banner().busy ? "true" : "false"}
                 title={banner().disabledReason ?? undefined}
-                onClick={() => onAction()()}
+                onClick={() => {
+                  if (!banner().actionPending && !banner().disabledReason && !banner().busy) {
+                    onAction()();
+                  }
+                }}
               >
                 {banner().busy ? (
                   <>

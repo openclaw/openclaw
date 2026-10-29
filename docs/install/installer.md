@@ -171,6 +171,10 @@ checks also default to five minutes.
   </Step>
 </Steps>
 
+For zsh, PATH setup uses `${ZDOTDIR:-$HOME}/.zshrc` and
+`${ZDOTDIR:-$HOME}/.zprofile`. Export `ZDOTDIR` before running the installer if
+you use a custom startup directory. With `ZDOTDIR` unset, zsh uses `$HOME`.
+
 ### Bun runtime
 
 ```sh

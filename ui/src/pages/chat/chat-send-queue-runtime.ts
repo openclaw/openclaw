@@ -103,6 +103,13 @@ export function settleQueuedChatSendFailure(
       err.message === "gateway not connected";
     const retryDelayMs = retryableGatewayDelayMs(err);
     const safelyRejected = failedBeforeTransport || retryDelayMs !== null;
+    // A live receipt or another pane can retire this row while the request was
+    // in flight. Missing custody is not a failed delivery: never resurrect the
+    // row into the composer or report a storage failure for it.
+    if (!readQueuedMessageById(host, id)) {
+      finishScopedChatSending(host, scope);
+      return "pending";
+    }
     const rollbackAttempt = safelyRejected
       ? {
           sendAttempts: queued.sendAttempts,

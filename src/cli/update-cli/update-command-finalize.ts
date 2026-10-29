@@ -389,6 +389,7 @@ async function updateFinalizeCommandInternal(
       options: { repair: true, nonInteractive: true, json: opts.json },
       runtime: { ...defaultRuntime, log: defaultRuntime.error },
       serviceInspectionDeadlineAtMs,
+      reportStoppedService: lifecycle.ownsUpdateRepairRun,
     });
     lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
     // Fresh Doctor owns database fences; the parent retains service custody.

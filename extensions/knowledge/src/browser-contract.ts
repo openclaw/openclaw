@@ -30,6 +30,7 @@ export const browserContract = {
     withdraw: { kind: "action" },
     merge: { kind: "action" },
     unmerge: { kind: "action" },
+    supersede: { kind: "action" },
     recall: { kind: "action" },
     connections: { kind: "query" },
     resume: { kind: "action" },

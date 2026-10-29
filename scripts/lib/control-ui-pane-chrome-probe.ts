@@ -5,10 +5,12 @@ export function installPaneChromeProbe() {
     composerControls: ".chat-controls__session, .chat-controls__permission-picker",
     workspace: ".chat-pane__workspace-chip",
     details: ".chat-details",
+    breadcrumb: ".chat-pane__parent-session",
+    composerState: ".agent-chat__disabled-banner, .agent-chat__input",
   };
   type Region = keyof typeof selectors;
   type Signature = { nodes: number; hash: number; truncated: boolean };
-  type Frame = { at: number; regions: Record<Region, Signature> };
+  type Frame = { at: number; regions: Record<Region, Signature>; composerHeight: number };
   const frames: Frame[] = [];
   const shifts: Array<{ at: number; value: number; regions: Region[] }> = [];
   const nodeRegions = new WeakMap<Node, Region>();
@@ -121,7 +123,14 @@ export function installPaneChromeProbe() {
         truncated = true;
         return;
       }
-      frames.push({ at, regions: next });
+      frames.push({
+        at,
+        regions: next,
+        composerHeight:
+          document
+            .querySelector(".chat-pane-cache__pane--active .agent-chat__composer-shell")
+            ?.getBoundingClientRect().height ?? 0,
+      });
     },
     read(firstTranscriptPaint: number | null) {
       observer.disconnect();

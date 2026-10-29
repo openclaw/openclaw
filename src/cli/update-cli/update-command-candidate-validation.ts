@@ -4,15 +4,16 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryReadJson } from "../../infra/json-files.js";
+import { withSqliteDatabaseAdmissionWait } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
 import { assertUpdateDatabaseEngineContexts } from "../../infra/update-database-engine-admission.js";
 import { createUpdateDoctorConfigWarningStep } from "../../infra/update-doctor-config.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
-import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { recordUpdateRunStepAsync } from "../../infra/update-run-write.async.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
+import { resolveCommandProcessSignal, withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   parsePackageOpenClawSchemaVersions,
@@ -27,7 +28,6 @@ import type { createUpdateCommandExecutionGuards } from "./update-command-execut
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
-import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
 export async function preflightUpdateCandidatePlugins(
   execution: Pick<MutableUpdateExecutionParams, "channel" | "opts" | "updateStepTimeoutMs">,
@@ -76,91 +76,103 @@ export async function validateUpdateCandidateWithProgress(
   },
   run: UpdateCommandOptions["run"],
 ) {
-  const timeoutMs = execution.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
-  const deadline = createUpdateOperationDeadline();
-  deadline.start(
-    new Error(`Update candidate validation exceeded its ${timeoutMs / 1000}-second budget.`),
-    timeoutMs,
-  );
-  return deadline.run(async () => {
+  // Canary owns size-aware snapshot and per-check budgets. Only the admitted
+  // operator deadline may limit their combined duration; keep its cancellation
+  // and process settlement through the progress writer and raw canary children.
+  return withCommandProcessScope(async () => {
+    const signal = resolveCommandProcessSignal();
     const assertCurrent = () => {
-      deadline.assertCurrent();
+      signal?.throwIfAborted();
       params.assertCurrent();
-      deadline.assertCurrent();
+      signal?.throwIfAborted();
     };
-    const writeOptions = run ? { ...params.writeOptions, signal: deadline.signal } : undefined;
-    const originalContext = writeOptions?.context;
-    const source = originalContext
-      ? prepareOpenClawStateReadSource({
-          path: originalContext.admission.databasePath,
-          env: writeOptions?.env,
-        })
-      : undefined;
-    if (originalContext && source) {
-      const initial = source.current();
-      originalContext.admission.assertCurrent();
-      if (
-        initial.admission.identity.key !== originalContext.admission.identity.key ||
-        initial.admission.identity.birthtime !== originalContext.admission.identity.birthtime ||
-        initial.maintenanceScope !== originalContext.maintenanceScope ||
-        initial.existingSchemaPath !== originalContext.existingSchemaPath
-      ) {
-        throw new Error("Candidate progress lost its original state source.");
-      }
-    }
-    const validate = () =>
-      validateUpdateCandidateCanary({
-        ...params,
-        sourceBundledPlugins: params.sourcePackageRoot
-          ? {
-              packageRoot: params.sourcePackageRoot,
-              directory: resolveBundledPluginsDir(params.env),
-            }
-          : undefined,
-        assertCurrent,
-        stateDir: resolveStateDir(params.env),
-        nodeRunner: execution.packageUpdateNodeRunner,
-        timeoutMs,
-        signal: deadline.signal,
-        fullIntegrityCheck: execution.opts.fullIntegrityCheck,
-        onProgress: async (step) => {
-          assertCurrent();
-          if (run) {
-            await recordUpdateRunStepAsync(run.runId, step, {
-              ...writeOptions,
-              context: source?.workerContext(),
-            });
-          }
-          assertCurrent();
-          defaultRuntime[execution.opts.json ? "error" : "log"](
-            `${step.step}: ${step.detail ?? step.status}`,
-          );
+    return withSqliteDatabaseAdmissionWait(
+      {
+        get deadlineAtMs() {
+          return run?.deadline ? Date.now() + run.deadline.remainingMs() : undefined;
         },
-        onStep: (step) =>
-          reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 }),
-      });
-    const validation =
-      source && run
-        ? await runOpenClawStateWorkerOperation(
-            source.workerContext(),
-            // Keep the actual progress writer alive throughout even a silent copy.
-            validate,
-            { existingOnly: true, assertCurrent, signal: deadline.signal },
-          )
-        : await validate();
-    if (!validation) {
-      throw new Error("Candidate progress database disappeared before snapshot admission.");
-    }
-    assertCurrent();
-    const changes = validation.doctorConfigChanges ?? [];
-    if (validation.status === "ok" && validation.doctorConfigWrites !== true && changes.length) {
-      const warning = createUpdateDoctorConfigWarningStep(params.root, changes);
-      validation.steps.push(warning);
-      await reportUpdateStepCompletion(execution.progress, { ...warning, index: 0, total: 0 });
-      assertCurrent();
-    }
-    return validation;
-  });
+        assertActive: assertCurrent,
+      },
+      async () => {
+        const writeOptions = run ? { ...params.writeOptions, signal } : undefined;
+        const originalContext = writeOptions?.context;
+        const source = originalContext
+          ? prepareOpenClawStateReadSource({
+              path: originalContext.admission.databasePath,
+              env: writeOptions?.env,
+            })
+          : undefined;
+        if (originalContext && source) {
+          const initial = source.current();
+          originalContext.admission.assertCurrent();
+          if (
+            initial.admission.identity.key !== originalContext.admission.identity.key ||
+            initial.admission.identity.birthtime !== originalContext.admission.identity.birthtime ||
+            initial.maintenanceScope !== originalContext.maintenanceScope ||
+            initial.existingSchemaPath !== originalContext.existingSchemaPath
+          ) {
+            throw new Error("Candidate progress lost its original state source.");
+          }
+        }
+        const validate = () =>
+          validateUpdateCandidateCanary({
+            ...params,
+            sourceBundledPlugins: params.sourcePackageRoot
+              ? {
+                  packageRoot: params.sourcePackageRoot,
+                  directory: resolveBundledPluginsDir(params.env),
+                }
+              : undefined,
+            assertCurrent,
+            stateDir: resolveStateDir(params.env),
+            nodeRunner: execution.packageUpdateNodeRunner,
+            timeoutMs: execution.timeoutMs,
+            signal,
+            fullIntegrityCheck: execution.opts.fullIntegrityCheck,
+            onProgress: async (step) => {
+              assertCurrent();
+              if (run) {
+                await recordUpdateRunStepAsync(run.runId, step, {
+                  ...writeOptions,
+                  context: source?.workerContext(),
+                });
+              }
+              assertCurrent();
+              defaultRuntime[execution.opts.json ? "error" : "log"](
+                `${step.step}: ${step.detail ?? step.status}`,
+              );
+            },
+            onStep: (step) =>
+              reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 }),
+          });
+        const validation =
+          source && run
+            ? await runOpenClawStateWorkerOperation(
+                source.workerContext(),
+                // Keep the actual progress writer alive throughout even a silent copy.
+                validate,
+                { existingOnly: true, assertCurrent, signal },
+              )
+            : await validate();
+        if (!validation) {
+          throw new Error("Candidate progress database disappeared before snapshot admission.");
+        }
+        assertCurrent();
+        const changes = validation.doctorConfigChanges ?? [];
+        if (
+          validation.status === "ok" &&
+          validation.doctorConfigWrites !== true &&
+          changes.length
+        ) {
+          const warning = createUpdateDoctorConfigWarningStep(params.root, changes);
+          validation.steps.push(warning);
+          await reportUpdateStepCompletion(execution.progress, { ...warning, index: 0, total: 0 });
+          assertCurrent();
+        }
+        return validation;
+      },
+    );
+  }, run?.deadline?.signal);
 }
 
 export function assertUpdateCandidateSteps(steps: UpdateRunResult["steps"]): void {

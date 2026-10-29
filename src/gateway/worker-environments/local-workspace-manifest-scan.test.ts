@@ -171,16 +171,29 @@ async function repairFixture() {
       canonical_fingerprints: null,
       projection_fingerprints: null,
       pending_ref: "refs/openclaw/results/preserved",
+      checkpoint_json: null as string | null,
     },
     records: new Map(),
   };
-  return { projection, canonical, snapshot, treeRoot };
+  return { projection, canonical, snapshot, treeRoot, records };
 }
 
-it.each(["projection", "canonical"] as const)(
-  "reconstructs a collected baseline only when the %s filesystem has the exact saved tree digest",
+it.each(["projection", "canonical", "checkpoint"] as const)(
+  "reconstructs a collected baseline from the verified %s filesystem",
   async (matching) => {
-    const { projection, canonical, snapshot, treeRoot } = await repairFixture();
+    const { projection, canonical, snapshot, treeRoot, records } = await repairFixture();
+    if (matching === "checkpoint") {
+      await fs.writeFile(path.join(canonical, "nested/file.txt"), "pending edit");
+      const scan = await executeLocalWorkspaceManifestRead(
+        { ...snapshot, records },
+        {
+          kind: "scan",
+          target: "projection",
+          canonicalRoot: canonical,
+        },
+      );
+      snapshot.row.checkpoint_json = JSON.stringify(scan);
+    }
     const divergent = matching === "projection" ? canonical : projection;
     await fs.writeFile(path.join(divergent, "nested/file.txt"), "preserved live edit");
     const result = await executeLocalWorkspaceManifestRead(snapshot, {

@@ -126,6 +126,8 @@ export type ReplyAgentTurnContext = {
 
 /** Inputs shared by direct and queued agent-turn execution. */
 export type AgentTurnParams = ReplyAgentTurnContext & {
+  /** Shared by fallback candidates; required preflight already attempted its checkpoint. */
+  recoveryMemoryFlushAttempted?: boolean;
   /** The admitted queued delivery owner settles every terminal outcome. */
   completionSource?: "reply-dispatch";
   replyThreading?: TemplateContext["ReplyThreading"];

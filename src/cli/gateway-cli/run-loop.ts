@@ -987,6 +987,17 @@ export async function runGatewayLoop(params: {
         runAcceptedRequest(acceptedRequest);
         return;
       }
+      if (
+        action === "stop" &&
+        !hostExitRequested &&
+        currentRestartRequest?.action === "restart" &&
+        !currentRestartRequest.restartIntent?.successorOwner
+      ) {
+        // A stop that lands while an in-place restart drains must not be lost:
+        // the restart's continuation exits instead of starting a new iteration.
+        hostExitRequested = true;
+        hostExitReason ??= loopCompletion.formatShutdownReason(acceptedRequest);
+      }
       gatewayLog.info(
         `received ${trigger} during shutdown; ${hostExitRequested ? "finishing shutdown without restart" : "ignoring"}`,
       );

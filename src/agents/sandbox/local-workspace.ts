@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { localWorkspaceProjectionPath } from "../../gateway/worker-environments/local-workspace-checkout.js";
 import {
   checkpointLocalWorkspace,
   resolveLocalWorkspaceOwner,
@@ -17,6 +18,7 @@ import {
   bindSandboxPersistentExecCapability,
   getSandboxPersistentExecCapability,
 } from "./persistent-exec.types.js";
+import { acquireSandboxRuntimeUse } from "./registry-lifecycle.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
 
 export function assertLocalSandboxWorkspaceBackend(backend: SandboxConfig["backend"]) {
@@ -49,9 +51,11 @@ export async function prepareLocalSandboxWorkspace(params: {
   }
   let disposed = false;
   let retained = 0;
+  const lifetime = new DisposableStack();
+  lifetime.use(owner);
   const releaseOwner = () => {
     if (disposed && retained === 0) {
-      owner[Symbol.dispose]();
+      lifetime.dispose();
     }
   };
   const retainOwner = () => {
@@ -80,6 +84,9 @@ export async function prepareLocalSandboxWorkspace(params: {
   };
   const checkpoint = () => checkpointLocalWorkspace(owner);
   try {
+    lifetime.use(
+      await acquireSandboxRuntimeUse({ workspaceDir: localWorkspaceProjectionPath(owner) }),
+    );
     assertCurrent();
     markManagedWorktreePreparation();
     assertLocalSandboxWorkspaceBackend(params.sandbox.backend);
@@ -121,7 +128,11 @@ export async function prepareLocalSandboxWorkspace(params: {
             allocated();
             phases.mark("attempt.setup.sandbox.workspace_selection.prepare.acquire");
             return withLocalWorkspaceProjection(
-              { ...executionOwner, workerAuthority: allocation.workerAuthority },
+              {
+                ...executionOwner,
+                assertCurrent: allocation.commitGuard,
+                workerAuthority: allocation.workerAuthority,
+              },
               async (state) => {
                 phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
                 try {
@@ -145,6 +156,16 @@ export async function prepareLocalSandboxWorkspace(params: {
         path.relative(owner.worktree.path, params.workspaceDir ?? owner.worktree.path),
       ),
       assertCurrent,
+      protectRuntimeScope: async (scopeKey: string) => {
+        const use = await acquireSandboxRuntimeUse({ scopeKey });
+        try {
+          assertCurrent();
+          lifetime.use(use);
+        } catch (error) {
+          use[Symbol.dispose]();
+          throw error;
+        }
+      },
       retain: () => {
         assertCurrent();
         return retainOwner();
@@ -179,7 +200,7 @@ export async function prepareLocalSandboxWorkspace(params: {
       },
     };
   } catch (error) {
-    owner[Symbol.dispose]();
+    lifetime.dispose();
     throw error;
   }
 }
@@ -187,7 +208,10 @@ export async function prepareLocalSandboxWorkspace(params: {
 /** All harnesses use the same backend/bridge, including native Codex execution. */
 export function bindLocalSandboxWorkspace(
   sandbox: SandboxContext,
-  projection: NonNullable<Awaited<ReturnType<typeof prepareLocalSandboxWorkspace>>>,
+  projection: Omit<
+    NonNullable<Awaited<ReturnType<typeof prepareLocalSandboxWorkspace>>>,
+    "protectRuntimeScope"
+  >,
 ) {
   const backend = sandbox.backend;
   if (!backend) {

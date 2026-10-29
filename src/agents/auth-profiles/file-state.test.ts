@@ -212,7 +212,7 @@ function closeFiles(paths: string[], retainedPaths?: string[]) {
   });
 }
 
-it("ignores database content events but observes replacement and nameless invalidation", async () => {
+it("ignores content and sidecar events but observes replacement and nameless invalidation", async () => {
   const { databasePath } = fixture({ existing: true });
   const watcher = Object.assign(new EventEmitter(), { close() {} });
   const watch = vi.spyOn(directoryWatch, "watchDirectory").mockReturnValue(watcher);
@@ -222,7 +222,7 @@ it("ignores database content events but observes replacement and nameless invali
   syncBuiltinESMExports();
   for (let index = 0; index < 100; index++) {
     changed("change", path.basename(databasePath));
-    changed("change", `${path.basename(databasePath)}-wal`);
+    changed("rename", `${path.basename(databasePath)}-wal`);
   }
   await Promise.resolve();
   expect(stat).not.toHaveBeenCalled();

@@ -193,11 +193,14 @@ export async function buildAgentSessionPatch(params: {
     deliveryContextFromSession(params.freshEntry),
     params.requestDeliveryHint,
   );
-  const delivery = normalizeSessionDeliveryState({
-    route: sessionDeliveryRoute(params.freshEntry),
-    context: effectiveDelivery,
-    origin: sessionDeliveryOrigin(params.freshEntry),
-  });
+  const delivery =
+    !params.requestDeliveryHint && params.freshEntry?.delivery
+      ? params.freshEntry.delivery
+      : normalizeSessionDeliveryState({
+          route: sessionDeliveryRoute(params.freshEntry),
+          context: effectiveDelivery,
+          origin: sessionDeliveryOrigin(params.freshEntry),
+        });
   const labelValue = normalizeOptionalString(params.requestLabel) || params.freshEntry?.label;
   const explicitSessionDisplayName =
     params.freshEntry === undefined &&

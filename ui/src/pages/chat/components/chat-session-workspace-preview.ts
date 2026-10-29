@@ -2,7 +2,6 @@ import { toErrorObject } from "@openclaw/normalization-core";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { readFileDraft } from "./chat-file-drafts.ts";
 import {
-  clearSessionWorkspaceError,
   captureSessionWorkspaceNavigation,
   setSessionWorkspaceError,
   isCurrentSessionWorkspace,
@@ -15,7 +14,7 @@ import type {
 } from "./chat-session-workspace-types.ts";
 import type { SessionWorkspacePreview, SidebarContent } from "./chat-sidebar-content-types.ts";
 
-type PreviewRead = {
+export type PreviewRead = {
   order: number;
   published?: ReturnType<typeof capturePreview>;
   settled?: Promise<SessionWorkspacePreview | undefined>;
@@ -146,7 +145,13 @@ export function openWorkspaceItem<T>(
     read.settled = (async () => {
       setSessionWorkspaceError(workspace, null);
       try {
-        const result = await readResult(controller.signal);
+        const resultPromise = readResult(controller.signal);
+        const [result, applyPreview] = await Promise.all([
+          resultPromise,
+          import("./chat-session-workspace-preview.runtime.ts").then(
+            ({ applyWorkspacePreview }) => applyWorkspacePreview,
+          ),
+        ]);
         const content = result == null ? null : render(result);
         const label = result == null ? undefined : options.resolveLabel?.(result);
         const canonicalKey = result == null ? undefined : options.resolveKey?.(result);
@@ -155,68 +160,18 @@ export function openWorkspaceItem<T>(
           return undefined;
         }
         if (isCurrent()) {
-          if (workspace.activeId === selectionId && canonicalKey) {
-            workspace.activeId = canonicalKey;
-          }
-          const canonical = canonicalKey
-            ? workspace.previews.find(
-                (entry) => entry !== preview && entry.canonicalKey === canonicalKey,
-              )
-            : undefined;
-          if (canonical) {
-            canonical.requestIds = [
-              ...new Set([
-                ...(canonical.requestIds ?? []),
-                preview.id,
-                ...(preview.requestIds ?? []),
-              ]),
-            ];
-            if (
-              preview.navigation &&
-              (preview.navigationOrder ?? 0) > (canonical.navigationOrder ?? 0)
-            ) {
-              canonical.navigation = preview.navigation;
-              canonical.navigationOrder = preview.navigationOrder;
-              if (canonical.content.kind === "file") {
-                canonical.content.navigation = canonical.navigation;
-              }
-            }
-            const captured = candidates.get(canonical);
-            const currentRead = previewReads.get(canonical);
-            const snapshot =
-              currentRead === captured?.read && currentRead?.published === captured?.published
-                ? captured?.snapshot
-                : currentRead?.published;
-            if (
-              options.revalidate &&
-              (currentRead?.order ?? 0) <= read.order &&
-              canReplacePreview(canonical, snapshot)
-            ) {
-              updatePreviewContent(canonical, content, label);
-              if (currentRead) {
-                clearSessionWorkspaceError(workspace, currentRead);
-              }
-              // Even unchanged bytes settle newer intent and retire older alias reads.
-              read.published = capturePreview(canonical);
-              previewReads.set(canonical, read);
-              canonical.readResult = read.settled;
-            }
-            if (preview.pinned === true) {
-              canonical.pinned = true;
-            }
-            workspace.previews = workspace.previews.filter((entry) => entry !== preview);
-            if (workspace.activePreviewId === preview.id) {
-              canonical.catalogNavigation =
-                preview.catalogNavigation ?? canonical.catalogNavigation;
-              workspace.activePreviewId = canonical.id;
-            }
-            return canonical;
-          }
-          preview.canonicalKey = canonicalKey;
-          updatePreviewContent(preview, content, label);
-          read.published = capturePreview(preview);
-          workspace.previews = [...workspace.previews];
-          return preview;
+          return applyPreview({
+            workspace,
+            preview,
+            read,
+            previewReads,
+            candidates,
+            selectionId,
+            canonicalKey,
+            content,
+            label,
+            revalidate: options.revalidate,
+          });
         }
       } catch (error) {
         fail(options.resolveError?.(error) ?? formatUiError(error));
@@ -270,7 +225,7 @@ export function openWorkspaceItem<T>(
   return begin(load);
 }
 
-function capturePreview(preview: SessionWorkspacePreview) {
+export function capturePreview(preview: SessionWorkspacePreview) {
   const content = preview.content;
   return {
     content,
@@ -279,7 +234,7 @@ function capturePreview(preview: SessionWorkspacePreview) {
   };
 }
 
-function canReplacePreview(
+export function canReplacePreview(
   preview: SessionWorkspacePreview,
   captured: ReturnType<typeof capturePreview> | undefined,
 ) {
@@ -292,32 +247,4 @@ function canReplacePreview(
         content.content === captured.text &&
         content.edit?.hash === captured.hash))
   );
-}
-
-function updatePreviewContent(
-  preview: SessionWorkspacePreview,
-  content: SidebarContent,
-  label: string | undefined,
-) {
-  const previous = preview.content;
-  if (content.kind === "file" && preview.navigation) {
-    content.line = preview.navigation.line;
-    content.navigation = preview.navigation;
-  }
-  // A confirming read must preserve the mounted editor, cursor, and undo history.
-  if (
-    !(
-      previous.kind === "file" &&
-      content.kind === "file" &&
-      previous.content === content.content &&
-      previous.edit?.hash === content.edit?.hash &&
-      previous.draftKey === content.draftKey &&
-      previous.path === content.path &&
-      previous.root === content.root &&
-      previous.mimeType === content.mimeType
-    )
-  ) {
-    preview.content = content;
-  }
-  preview.label = label || preview.label;
 }

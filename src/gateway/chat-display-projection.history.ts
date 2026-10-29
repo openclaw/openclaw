@@ -31,6 +31,7 @@ import {
   isProjectedForwardedMessage,
   isForwardedUserMessage,
   isCronRunMessage,
+  userMessageStartsDisplayTurn,
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
@@ -435,6 +436,24 @@ export function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean
   return roleContent?.role === "user" && isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT);
 }
 
+/** Hidden heartbeat or exec input that must keep the next reply in its own turn. */
+export function isProjectedHistoryTurnBoundaryMessage(message: unknown): boolean {
+  if (isHeartbeatHistoryTurnBoundaryMessage(message)) {
+    return true;
+  }
+  const record = readRecord(message);
+  if (!record || isForwardedUserMessage(record)) {
+    return false;
+  }
+  const roleContent = asRoleContentMessage(record);
+  const provenance = normalizeInputProvenance(record.provenance);
+  return (
+    roleContent?.role === "user" &&
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === "exec"
+  );
+}
+
 function attachProjectedTurnBoundary(message: Record<string, unknown>): Record<string, unknown> {
   const metadata = readRecord(message["__openclaw"]);
   if (metadata?.turnBoundary === true) {
@@ -567,7 +586,7 @@ export function filterVisibleProjectedHistoryMessages(
     }
     if (shouldHideProjectedHistoryMessage(current, currentRoleContent, heartbeatUser)) {
       changed = true;
-      pendingTurnBoundary ||= heartbeatUser && !isForwardedUserMessage(current);
+      pendingTurnBoundary ||= isProjectedHistoryTurnBoundaryMessage(current);
       continue;
     }
     const mirrorSourceId = readRecord(current.openclawDeliveryMirror)?.sourceAssistantMessageId;
@@ -577,7 +596,16 @@ export function filterVisibleProjectedHistoryMessages(
       changed = true;
       continue;
     }
-    if (pendingTurnBoundary && canCarryProjectedTurnBoundary(currentRoleContent)) {
+    if (
+      pendingTurnBoundary &&
+      currentRoleContent?.role === "user" &&
+      userMessageStartsDisplayTurn(current)
+    ) {
+      // Plain user text already starts the next turn. Drop the boundary so
+      // this turn's assistant stays with that user.
+      pendingTurnBoundary = false;
+      visible.push(current);
+    } else if (pendingTurnBoundary && canCarryProjectedTurnBoundary(currentRoleContent)) {
       visible.push(attachProjectedTurnBoundary(current));
       pendingTurnBoundary = false;
       changed = true;

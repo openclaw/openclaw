@@ -13,6 +13,8 @@
 // --device-role operator|node signs device challenges; --seed-devices replaces the offline fixture
 // pairing records with approved devices whose old token issuer forces fresh issuance.
 // --interval-ms spaces reconnects; use >=1000 first/warm samples before interpreting p99.
+// --auth cloudflare --identity-delay-ms 250 injects synthetic Access/GitHub responses in the
+// child (all other non-loopback fetches fail). Roles force identity preparation before hello.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
@@ -59,10 +61,12 @@ const { values } = parseArgs({
     "device-role": { type: "string" },
     "interval-ms": { type: "string", default: "0" },
     "seed-devices": { type: "boolean", default: false },
+    "identity-delay-ms": { type: "string", default: "0" },
   },
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
-assert(values.auth === "password" || values.auth === "trusted-proxy", "unknown --auth mode");
+assert(["password", "trusted-proxy", "cloudflare"].includes(values.auth), "unknown --auth mode");
+const cloudflare = values.auth === "cloudflare";
 assert(
   !values["device-role"] ||
     (values.auth === "password" && ["operator", "node"].includes(values["device-role"])),
@@ -91,6 +95,9 @@ const clientCount = integer(values.clients, "--clients", 0);
 const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
 const pollMs = integer(values["poll-ms"], "--poll-ms", 1);
 const intervalMs = integer(values["interval-ms"], "--interval-ms", 0);
+const identityDelayMs = integer(values["identity-delay-ms"], "--identity-delay-ms", 0);
+assert(identityDelayMs <= 4_000, "--identity-delay-ms must not exceed 4000");
+assert(cloudflare || identityDelayMs === 0, "--identity-delay-ms requires --auth cloudflare");
 const identityPrefix = values["identity-prefix"];
 assert(
   /^[a-z0-9][a-z0-9-]{0,47}$/iu.test(identityPrefix),
@@ -181,6 +188,19 @@ const residentIdentities = Array.from(
   (_, i) => `${identityPrefix}-resident-${i}@example.com`,
 );
 const allowedIdentities = [...identities, ...residentIdentities];
+const assertions = new Map(
+  allowedIdentities.map((email, index) => [
+    email,
+    `synthetic.${Buffer.from(
+      JSON.stringify({
+        iss: "https://connect-profile.cloudflareaccess.com",
+        exp: Math.floor(Date.now() / 1_000) + 3_600,
+        email,
+        accountId: index + 1,
+      }),
+    ).toString("base64url")}.synthetic`,
+  ]),
+);
 const scopes: OperatorScope[] = ["operator.admin", "operator.read", "operator.write"];
 const cfg: OpenClawConfig = JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf8"));
 const agentIds = ["main", "reviewer", "researcher", "planner"];
@@ -255,14 +275,24 @@ cfg.gateway = {
             allowedIdentities.map((identity) => [identity, scopes]),
           ),
           trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
+            userHeader: cloudflare ? "cf-access-authenticated-user-email" : "x-forwarded-user",
+            requiredHeaders: [
+              "x-forwarded-proto",
+              "x-forwarded-host",
+              ...(cloudflare ? ["cf-access-jwt-assertion"] : []),
+            ],
             allowUsers: allowedIdentities,
             allowLoopback: true,
           },
         },
   controlUi: { enabled: false, allowedOrigins: [origin] },
 };
+if (cloudflare) {
+  cfg.gateway.roles = {
+    default: "synthetic",
+    definitions: { synthetic: { sessions: { others: "view" }, agents: "*", scopes } },
+  };
+}
 cfg.logging = {
   ...cfg.logging,
   file: path.join(output, "gateway-file.log"),
@@ -298,6 +328,9 @@ const child = spawn(
   [
     "--import",
     stopPreload.href,
+    ...(cloudflare
+      ? ["--import", new URL("./connect-profile-preload.mjs", import.meta.url).href]
+      : []),
     ...(values["gateway-preload"]
       ? ["--import", pathToFileURL(path.resolve(values["gateway-preload"])).href]
       : []),
@@ -309,7 +342,7 @@ const child = spawn(
     "--bind",
     "loopback",
     "--auth",
-    values.auth,
+    cloudflare ? "trusted-proxy" : values.auth,
     "--tailscale",
     "off",
     "--allow-unconfigured",
@@ -325,6 +358,7 @@ const child = spawn(
         TMPDIR: path.join(output, "tmp"),
         OPENCLAW_SKIP_CHANNELS: "1",
         OPENAI_API_KEY: "synthetic-local-only",
+        ...(cloudflare ? { OPENCLAW_BENCH_IDENTITY_DELAY_MS: String(identityDelayMs) } : {}),
       },
     }),
     detached: true,
@@ -449,7 +483,7 @@ async function closePeer(client: Peer) {
 async function connect(identityEmail: string, deviceIndex?: number) {
   const started = performance.now();
   const startedAtMs = Date.now();
-  const proxy = values.auth === "trusted-proxy";
+  const proxy = values.auth !== "password";
   const device = deviceIndex === undefined ? undefined : devices[deviceIndex];
   const role = device ? values["device-role"]! : "operator";
   const requestedScopes = role === "node" ? [] : proxy ? ["operator.read"] : scopes;
@@ -479,7 +513,12 @@ async function connect(identityEmail: string, deviceIndex?: number) {
       ? {
           origin,
           headers: {
-            "x-forwarded-user": identityEmail,
+            ...(cloudflare
+              ? {
+                  "cf-access-authenticated-user-email": identityEmail,
+                  "cf-access-jwt-assertion": assertions.get(identityEmail)!,
+                }
+              : { "x-forwarded-user": identityEmail }),
             "x-forwarded-for": "192.0.2.10",
             "x-forwarded-proto": "https",
             "x-forwarded-host": "connect-tail.example",
@@ -709,6 +748,11 @@ try {
     buildId,
     entry,
     auth: values.auth,
+    identityDelayMs,
+    identityDependency:
+      cloudflare && existsSync(path.join(output, "identity-dependency.json"))
+        ? JSON.parse(readFileSync(path.join(output, "identity-dependency.json"), "utf8"))
+        : undefined,
     deviceRole: values["device-role"],
     seededDevices: values["seed-devices"],
     fixture,

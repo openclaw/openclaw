@@ -90,6 +90,9 @@ sandbox while moving the file and leaves other source edits and the pending
 checkpoint intact. Retry the session afterward to settle the remaining changes;
 repeat for another oversized file if needed.
 
+Recovery also works across filesystem mounts: it copies, syncs, and verifies the
+file before removing the source when a rename cannot cross the mount boundary.
+
 Only new retained regular files larger than 64 MiB qualify. Already-admitted source
 files, excluded caches, Git metadata, symlinks, and hardlinks are refused. This
 command does not increase limits, change ignore rules, delete files, or reset the

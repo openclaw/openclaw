@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import "./detached-async-context.js";
 import { runWithAsyncStore } from "./async-store.js";
 import { createDeferredCore } from "./deferred.js";
@@ -94,7 +95,10 @@ export class AsyncWorkScope {
       () => this.pending.delete(operation.promise),
       (error: unknown) => {
         this.pending.delete(operation.promise);
-        this.failures?.add(error);
+        if (this.failures) {
+          materializeErrorStack(error);
+          this.failures.add(error);
+        }
       },
     );
     try {
@@ -111,6 +115,7 @@ export class AsyncWorkScope {
     }
     this.phase = "closing";
     this.controller.abort(reason);
+    materializeErrorStack(this.controller.signal.reason);
   }
 
   /** Starts the next phase in the same continuation that observes settled pending work. */

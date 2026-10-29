@@ -177,6 +177,7 @@ async function expectWindow(page: Page, first: number, last: number) {
       const rows = document.querySelectorAll(selector);
       return (
         rows.length === count &&
+        [...rows].every((row) => row.querySelector(".activity-entry__body")) &&
         rows[0]?.textContent?.includes(firstId) &&
         rows[rows.length - 1]?.textContent?.includes(lastId)
       );

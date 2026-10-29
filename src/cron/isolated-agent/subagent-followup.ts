@@ -1,4 +1,5 @@
 import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
+import { readSubagentRunFinalAnswer } from "../../agents/subagents/announce/subagent-announce-output.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { isRetainedUnendedSubagentRun } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { bindAgentToolGatewayRequest } from "../../agents/tools/in-process-gateway.js";
@@ -33,7 +34,12 @@ export async function readDescendantSubagentFallbackReply(params: {
     if (terminalReply?.disposition !== "visible" || !terminalReply.text) {
       continue;
     }
-    replies.push(terminalReply.text);
+    // The lifecycle preview is capped at 4,096 characters; deliver the run's complete answer.
+    const answer =
+      terminalReply.text.endsWith("…") && entry.execution.outcome?.status === "ok"
+        ? await readSubagentRunFinalAnswer(entry).catch(() => undefined)
+        : undefined;
+    replies.push(answer?.trim() || terminalReply.text);
   }
   return replies.length ? replies.join("\n\n") : undefined;
 }

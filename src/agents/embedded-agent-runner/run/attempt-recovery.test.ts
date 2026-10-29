@@ -360,8 +360,8 @@ describe("recoverEmbeddedRunAttempt", () => {
   it.each([outputLimitScenario, emptyLengthScenario])(
     "continues slow output generation without consuming the transient outage window",
     async (scenario) => {
-      const startedAt = Date.now();
-      using now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+      const startedAt = performance.now();
+      using now = vi.spyOn(performance, "now").mockReturnValue(startedAt);
       const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
         await recoverAfterTransportDrop(scenario);
       expect(recovery.action).toBe("retry");

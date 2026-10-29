@@ -30,6 +30,7 @@ it("rejects unsafe ports and refuses to overwrite existing state", async () => {
     expect(() => parseTeamShapeOptions(["--state-dir", "/unused", "--port", port])).toThrow();
   }
   for (const args of [
+    ["--agents", "0"],
     ["--long-transcript-entries", "1000000"],
     ["--worktree-files", "500001"],
     ["--projects", "0", "--worktree-files", "1"],
@@ -312,7 +313,7 @@ it("seeds the stress category mix with readable collector parents and settled un
   const { summary } = await generateTeamShapeFixture(
     options(
       stateDir,
-      "--sessions 108 --runs 43 --settled-runs --team-stress --approvals 0 --cron 0 --projects 0 --transcript-mib 1",
+      "--sessions 108 --runs 43 --settled-runs --team-stress --agents 8 --approvals 0 --cron 0 --projects 0 --transcript-mib 1",
     ),
   );
   expect(summary.stressCounts).toMatchObject({
@@ -357,5 +358,9 @@ it("seeds the stress category mix with readable collector parents and settled un
   const agentConfig = readJson(path.join(stateDir, "openclaw.json")).agents;
   expect(agentConfig.defaults.subagents.archiveAfterMinutes).toBeGreaterThanOrEqual(120);
   const agents = agentConfig.entries;
-  expect(Object.keys(agents).toSorted()).toEqual(["main", "planner", "researcher", "reviewer"]);
+  expect(Object.keys(agents).join(",")).toBe(
+    "main,reviewer,researcher,planner,agent-5,agent-6,agent-7,agent-8",
+  );
+  expect(summary.agentCount).toBe(8);
+  expect(fs.statSync(agents["agent-8"].workspace).isDirectory()).toBe(true);
 });

@@ -7,6 +7,7 @@ import {
   type JSONRPCMessage,
 } from "@modelcontextprotocol/client";
 import { ResultSchema } from "@modelcontextprotocol/core";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import {
   appendCapturedOutput,
   createCapturedOutputBuffers,
@@ -176,6 +177,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
           transportType: "stdio",
           detachStderr: () => transport.stderr.off("data", onStderr),
           onCleanupError: (error) => {
+            materializeErrorStack(error);
             cleanupError = error;
           },
         }),
@@ -185,13 +187,14 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
           throw errors.unavailable("proxy cleanup could not be confirmed", cleanupError);
         }
       });
-    void shutdown.catch(() => {});
+    void shutdown.catch(materializeErrorStack);
   }
 
   function fail(error: Error): void {
     if (failure || stopped) {
       return;
     }
+    materializeErrorStack(error);
     failure = error;
     // Retirement flushes SDK requests immediately while disposal retains process ownership.
     void transport.terminate().catch(() => undefined);
@@ -251,6 +254,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
     async stop() {
       stopped = true;
       failure ??= errors.unavailable("proxy is stopping");
+      materializeErrorStack(failure);
       void transport.retire().catch(() => undefined);
       beginShutdown();
       await startup.catch(() => undefined);

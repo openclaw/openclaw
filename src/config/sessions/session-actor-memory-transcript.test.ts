@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   SessionActorAppend,
   SessionActorOutcome,
@@ -127,11 +127,7 @@ async function fixture(
   let command = 0;
   const append = (plan: SessionTurnPlan) =>
     actor.appendToolResult(
-      {
-        commandId: `append-${++command}`,
-        phaseId: "turn",
-        turn: plan,
-      },
+      { commandId: `append-${++command}`, phaseId: "turn", turn: plan },
       authority,
     );
   return {
@@ -192,7 +188,10 @@ describe("memory actor transcript", () => {
       ...messageInput("assistant-1", "user-1", messageJson),
       view: { loadedVersion: { generation: null, rawSeq: null, updatedAt: null } },
     };
+    using parse = vi.spyOn(JSON, "parse");
     const first = committed(await metadata("metadata", input));
+    // Decode once for admission and once for the detached result; reload uses the envelope.
+    expect(parse.mock.calls.filter(([json]) => json === messageJson).length).toBeLessThanOrEqual(2);
     const result = metadataResult(first);
     assert(result.reload?.ok && result.reload.value.kind === "full");
     expect(result.reload.value.snapshot.eventJson?.at(-1)).toContain(`"message":${messageJson}}`);

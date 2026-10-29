@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { managedGitHubIdentityEnvironment } from "../github-tool-identity-env.js";
 import type { CreateSandboxBackendParams, SandboxBackendHandle } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import type { SandboxContainerEngineTarget } from "./container-engine.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -15,7 +16,6 @@ const mocks = vi.hoisted(() => ({
   ensureSandboxContainer: vi.fn(),
   execContainer: vi.fn(),
   execContainerRaw: vi.fn(),
-  resolvePodmanSandboxRuntimeInfo: vi.fn(),
   validateSandboxContainerEngineTarget: vi.fn(),
 }));
 
@@ -51,7 +51,7 @@ const readOnlyResourceMounts = [
   { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
 ];
 const completed = { status: "completed", exitCode: 0, timedOut: false } as const;
-const localTarget = { key: "local", globalArgs: [] };
+const localTarget: SandboxContainerEngineTarget = { key: "local", globalArgs: [] };
 
 function createConfig(backend?: "docker" | "podman", browserEnabled = true): OpenClawConfig {
   const sandbox = {
@@ -107,8 +107,8 @@ function assertMasked(bridge: Bridge, paths: string[]) {
   }
 }
 
-function provision(containerName = "sandbox-container") {
-  mocks.ensureSandboxContainer.mockResolvedValueOnce({ containerName, containerId });
+function provision(containerName = "sandbox-container", podmanTarget?: typeof localTarget) {
+  mocks.ensureSandboxContainer.mockResolvedValueOnce({ containerName, containerId, podmanTarget });
 }
 
 const bind = (source: string, target: string, writable: boolean) => ({ source, target, writable });
@@ -203,11 +203,6 @@ beforeEach(() => {
           : "unused-image",
     stderr: "",
   }));
-  mocks.resolvePodmanSandboxRuntimeInfo.mockResolvedValue({
-    machine: false,
-    rootless: true,
-    target: localTarget,
-  });
 });
 
 it.each(["allocation", "mount inspection", "engine validation"] as const)(
@@ -410,7 +405,6 @@ it("rejects an unreadable filesystem snapshot", async () => {
 });
 
 it("binds Podman provisioning and later execs to the resolved target", async () => {
-  provision("sandbox-podman");
   const podmanTarget = {
     key: `machine:${"a".repeat(32)}`,
     globalArgs: [
@@ -420,11 +414,7 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
       "/tmp/podman-machine-key",
     ],
   };
-  mocks.resolvePodmanSandboxRuntimeInfo.mockResolvedValueOnce({
-    machine: true,
-    rootless: true,
-    target: podmanTarget,
-  });
+  provision("sandbox-podman", podmanTarget);
   const backend = await createPodmanSandboxBackend(
     backendParams({
       scopeKey,
@@ -435,7 +425,11 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
   const execSpec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
 
   expect(mocks.ensureSandboxContainer).toHaveBeenCalledWith(
-    expect.objectContaining({ podmanTarget, scopeKey, readOnlyResourceMounts }),
+    expect.objectContaining({
+      engine: expect.objectContaining({ id: "podman" }),
+      scopeKey,
+      readOnlyResourceMounts,
+    }),
   );
   expect(mocks.execContainer).toHaveBeenCalledWith(
     expect.objectContaining({ id: "podman", globalArgs: podmanTarget.globalArgs }),
@@ -488,7 +482,7 @@ process.stdout.write(JSON.stringify({
 `,
       { mode: 0o700 },
     );
-    provision("sandbox-github");
+    provision("sandbox-github", engine === "podman" ? localTarget : undefined);
     const createBackend =
       engine === "docker" ? createDockerSandboxBackend : createPodmanSandboxBackend;
     const backend = await createBackend(
@@ -577,13 +571,20 @@ process.stdout.write(JSON.stringify({
 );
 
 it.each([
-  { configLabelKind: "BrowserImage", image: "openclaw-sandbox-browser:trixie-slim" },
-  { configLabelKind: undefined, image: "openclaw-sandbox:trixie-slim" },
-])("matches configured $configLabelKind image", async ({ configLabelKind, image }) => {
-  mocks.execContainer.mockResolvedValueOnce(engineResult(`${image}\n`));
+  { backend: "docker", kind: "BrowserImage", image: "openclaw-sandbox-browser:trixie-slim" },
+  { backend: "docker", kind: undefined, image: "openclaw-sandbox:trixie-slim" },
+  { backend: "podman", kind: "Image", image: "localhost/openclaw-sandbox:trixie-slim" },
+])("matches $backend $kind image identity", async ({ backend, kind, image }) => {
+  mocks.execContainer.mockResolvedValueOnce(
+    engineResult(backend === "podman" ? `${image}\tsha256:abc123\n` : `${image}\n`),
+  );
+  if (backend === "podman") {
+    mocks.execContainer.mockResolvedValueOnce(engineResult("abc123\n"));
+  }
+  const manager = backend === "podman" ? podmanSandboxBackendManager : dockerSandboxBackendManager;
   await expect(
-    dockerSandboxBackendManager.describeRuntime({
-      entry: { ...runtimeEntry(), image: "stale-entry-image", configLabelKind },
+    manager.describeRuntime({
+      entry: { ...runtimeEntry(backend), image: "stale-entry-image", configLabelKind: kind },
       config: createConfig(),
       agentId: "coder",
     }),
@@ -657,22 +658,4 @@ it("rejects browser sandboxing on the explicit Podman backend", async () => {
   );
 
   expect(mocks.ensureSandboxContainer).not.toHaveBeenCalled();
-});
-
-it("matches canonical Podman identity for an expanded image name", async () => {
-  mocks.execContainer
-    .mockResolvedValueOnce(engineResult("localhost/openclaw-sandbox:trixie-slim\tsha256:abc123\n"))
-    .mockResolvedValueOnce(engineResult("abc123\n"));
-
-  await expect(
-    podmanSandboxBackendManager.describeRuntime({
-      entry: { ...runtimeEntry("podman"), configLabelKind: "Image" },
-      config: createConfig(),
-      agentId: "coder",
-    }),
-  ).resolves.toEqual({
-    running: true,
-    actualConfigLabel: "localhost/openclaw-sandbox:trixie-slim",
-    configLabelMatch: true,
-  });
 });

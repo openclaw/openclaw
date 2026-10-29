@@ -14,6 +14,7 @@ import {
   createSqliteDatabaseAdmissionRelay,
   type SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
+import { classifyWorkerRequest } from "./sqlite-worker-request-class.js";
 import {
   attributeWorkerToPool,
   createCpuTrackedWorker,
@@ -28,11 +29,7 @@ import {
   createRetainedNativeWorker,
 } from "./worker-native-lifecycle.js";
 import { resolveWorkerPoolSize, type WorkerPoolClass } from "./worker-pool-sizing.js";
-import {
-  captureWorkerStartObserver,
-  classifyWorkerRequest,
-  trackWorkerRequest,
-} from "./worker-request-diagnostics.js";
+import { captureWorkerStartObserver, trackWorkerRequest } from "./worker-request-diagnostics.js";
 import { workerRequestKind } from "./worker-request-kind.js";
 import { getWorkerComputeCapacity } from "./worker-task-capacity.js";
 import { liveWorkerTaskPools } from "./worker-task-pool-registry.js";

@@ -121,7 +121,7 @@ it("publishes scope discovery and reference installs without revisiting unchange
     {
       ...record,
       facts: new Map(),
-      writeScopes: new Map(),
+      writeScopes: [],
       references: new Map([[123, references]]),
     },
   ]);
@@ -134,15 +134,17 @@ it("publishes scope discovery and reference installs without revisiting unchange
     ":memory:",
     "imported",
   );
-  registry.install([{ ...record, writeScopes: importer.writeScopes }]);
+  registry.install([{ ...record, writeScopes: [importer.writeScopes] }]);
   expect(visited).toBe(0);
-  expect([...registry.capture(cursor)[0]!.writeScopes.keys()]).toEqual(['["key","imported"]']);
+  expect(
+    registry.capture(cursor)[0]!.writeScopes.flatMap((bucket) => Array.from(bucket.keys())),
+  ).toEqual(['["key","imported"]']);
 
   registry.install([
     {
       ...record,
       facts: new Map(),
-      writeScopes: new Map(),
+      writeScopes: [],
       references: new Map([[124, references]]),
     },
   ]);
@@ -154,18 +156,24 @@ it("publishes scope discovery and reference installs without revisiting unchange
   const added = receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new");
   expect(visited).toBe(0);
   const [delta] = registry.capture(cursor);
-  expect([...delta!.writeScopes.keys()]).toEqual(['["key","new"]']);
-  expect(before!.writeScopes.size).toBe(256);
+  expect(delta!.writeScopes.flatMap((bucket) => Array.from(bucket.keys()))).toEqual([
+    '["key","new"]',
+  ]);
+  expect(before!.writeScopes.reduce((size, bucket) => size + bucket.size, 0)).toBe(256);
   expect(receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "existing-0")).toBe(
     initial![0],
   );
 
   using database = new DatabaseSync(":memory:");
   receipts.retireSqliteDatabaseWriteScopes(database, ["new"]);
-  expect(Atomics.load(delta!.writeScopes.get('["key","new"]')!.state, 1)).toBe(1);
-  expect(registry.capture()[0]!.writeScopes.size).toBe(257);
+  expect(Atomics.load(delta!.writeScopes[0]!.get('["key","new"]')!.state, 1)).toBe(1);
+  expect(registry.capture()[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0)).toBe(
+    257,
+  );
   expect(receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new")).not.toBe(added);
-  expect([...registry.capture(cursor)[0]!.writeScopes.keys()]).toEqual(['["key","new"]']);
+  expect(
+    registry.capture(cursor)[0]!.writeScopes.flatMap((bucket) => Array.from(bucket.keys())),
+  ).toEqual(['["key","new"]']);
 });
 
 it("sweeps remote retirements after keyed publication and imports new scope cells", () => {
@@ -189,21 +197,26 @@ it("sweeps remote retirements after keyed publication and imports new scope cell
     {
       ...record,
       facts: new Map(),
-      writeScopes: new Map(),
+      writeScopes: [],
       references: new Map([[123, references]]),
     },
   ]);
   expect([...record.writeScopes.keys()]).toEqual(['["key","local"]']);
-  expect([...registry.capture(undefined, { admissions: [record] })[0]!.writeScopes.keys()]).toEqual(
-    ['["key","local"]'],
-  );
+  expect(
+    registry
+      .capture(undefined, { admissions: [record] })[0]!
+      .writeScopes.flatMap((bucket) => Array.from(bucket.keys())),
+  ).toEqual(['["key","local"]']);
   const importer = { ...record, writeScopes: new Map() };
   createReceipts(importer, { publish: () => {} }).readSqliteDatabaseScopedWriteTokenForPath(
     ":memory:",
     "imported",
   );
-  registry.install([importer]);
+  registry.install([{ ...importer, writeScopes: [importer.writeScopes] }]);
   expect(
-    [...registry.capture(undefined, { admissions: [record] })[0]!.writeScopes.keys()].toSorted(),
+    registry
+      .capture(undefined, { admissions: [record] })[0]!
+      .writeScopes.flatMap((bucket) => Array.from(bucket.keys()))
+      .toSorted(),
   ).toEqual(['["key","imported"]', '["key","local"]']);
 });

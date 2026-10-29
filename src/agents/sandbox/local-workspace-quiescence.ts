@@ -209,6 +209,10 @@ export async function quiesceLocalWorkspace(params: {
   const releases: Array<() => Promise<void>> = [];
   const retirements: Array<() => Promise<void>> = [];
   for (const { runtime, bridges } of selected) {
+    // Stopped custody proves removal of this exact child, but still blocks retirement.
+    if (runtime.kind === "persistent" && runtime.record.phase === "stopped") {
+      continue;
+    }
     const { engine, backendTarget, containerName, expectedId } =
       localWorkspaceRuntimeEngine(runtime);
     // Stopped allocations remain owned resources, but were never live writers.

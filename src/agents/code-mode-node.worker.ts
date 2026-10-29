@@ -47,6 +47,7 @@ type NodeCell = {
   replies?: SettledBridgeRequest[];
   replyIndex: number;
   rejections: Map<Promise<unknown>, unknown>;
+  moduleImportRejected?: boolean;
   outcome?: GuestOutcome;
   admissionError?: string;
   networkContentObserved?: true;
@@ -135,8 +136,18 @@ function isBridgeMethod(method: string): method is PendingBridgeRequest["method"
   return bridgeMethods.has(method);
 }
 
+function rejectModuleImport(): never {
+  if (cell) {
+    cell.moduleImportRejected = true;
+  }
+  throw new Error(CODE_MODE_MODULE_ACCESS_ERROR);
+}
+
 function compileController(source: string): Script {
-  return new Script(source, { filename: "openclaw-code-mode:controller.js" });
+  return new Script(source, {
+    filename: "openclaw-code-mode:controller.js",
+    importModuleDynamically: rejectModuleImport,
+  });
 }
 
 // Compile trusted control scripts once per worker; each cell still owns a fresh context.
@@ -238,7 +249,10 @@ function createCell(
     throw new CodeModeHeadlessTimeoutError();
   }
   const program = buildUserSource(source, input.prelude, "utf16");
-  const context = createContext(Object.create(null), { microtaskMode: "afterEvaluate" });
+  const context = createContext(Object.create(null), {
+    microtaskMode: "afterEvaluate",
+    importModuleDynamically: rejectModuleImport,
+  });
   cellCount++;
   const current: NodeCell = {
     context,
@@ -316,7 +330,13 @@ function createCell(
   progress.deadline = performance.timeOrigin + deadline;
   consumed?.();
   evaluate(current, initializeScript);
-  evaluate(current, new Script(program.source, { filename: USER_SOURCE_FILE }));
+  evaluate(
+    current,
+    new Script(program.source, {
+      filename: USER_SOURCE_FILE,
+      importModuleDynamically: rejectModuleImport,
+    }),
+  );
   evaluate(current, observeResultScript);
   return current;
 }
@@ -422,6 +442,11 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       }
       // Native rejection/handled notifications arrive at the end of the turn.
       await setImmediate();
+      // Import rejection crosses Node's loader microtasks before guest catch/await can run.
+      if (current.moduleImportRejected) {
+        current.moduleImportRejected = false;
+        continue;
+      }
       output = progress.output();
       const pending = !current.outcome;
       if (pending && current.pendingRequests.length === 0) {

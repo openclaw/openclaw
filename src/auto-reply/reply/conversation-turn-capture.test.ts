@@ -17,6 +17,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as transcriptEvent from "../../config/sessions/session-transcript-event.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readConversationDeliveryStateForTest } from "../../gateway/conversation-delivery.test-support.js";
@@ -671,38 +672,31 @@ describe("conversation turn capture", () => {
 
   it("completes the durable reply when optional audit persistence throws", async () => {
     const setup = await setupReefConversation();
-    const database = openOpenClawAgentDatabase(
-      toDatabaseOptions(resolveSqliteReadScope(setup.scope)),
-    );
-    database.db.exec(`
-      CREATE TRIGGER refuse_reply_audit BEFORE INSERT ON transcript_events
-      WHEN json_extract(NEW.event_json, '$.customType') = 'openclaw.conversation-turn-reply'
-      BEGIN SELECT RAISE(ABORT, 'audit store unavailable'); END;
-    `);
     const operationId = "turn-audit-failure";
-    const outboundMessageId = "reef-outbound-audit-failure";
-    const pending = await registerCapture(setup, operationId, {
-      outboundMessageId,
-      timeoutMs: 5_000,
-    });
+    const pending = await registerCapture(setup, operationId, { timeoutMs: 5_000 });
     pending.markReady();
+    // mock-isolation: Fail only the optional audit append, preserving canonical schema admission.
+    const appendAudit = vi
+      .spyOn(transcriptEvent, "appendPreparedTranscriptEvent")
+      .mockRejectedValueOnce(new Error("audit store unavailable"));
     await expect(
       capturePendingConversationTurnReply({
         cfg: setup.cfg,
-        ctx: inboundReply(
-          setup,
-          outboundMessageId,
-          { MessageSidFull: "reef-inbound-audit-failure" },
-          "reply survives audit failure",
-        ),
+        ctx: inboundReply(setup, operationId),
       }),
     ).resolves.toBe(true);
     const reply = await pending.wait();
-    expect(reply).toMatchObject({ text: "reply survives audit failure" });
+    expect(reply).toMatchObject({ text: "ordinary reply" });
     expect(reply).not.toHaveProperty("transcriptArtifactId");
     expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
       status: "replied",
-      reply: { text: "reply survives audit failure" },
+      reply: { text: "ordinary reply" },
+    });
+    expect(appendAudit).toHaveBeenCalledOnce();
+    expect(appendAudit.mock.calls[0]?.[1]).toMatchObject({
+      customType: "openclaw.conversation-turn-reply",
+      appendMode: "side",
+      data: { turnId: operationId },
     });
   });
 

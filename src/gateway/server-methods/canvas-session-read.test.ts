@@ -202,7 +202,8 @@ it("reads retained widget receipts and waits only for current live presentations
           reader.readColdMetadata({ sessionId: scope.sessionId, env: state.env });
         expect((await readCold()).archive).toBeDefined();
         expect((await view(bound))[1]).toEqual(first[1]);
-        expect((await readCold()).archive).toBeUndefined();
+        // Read-only probes stream the verified archive without restoring it (#185955).
+        expect((await readCold()).archive).toBeDefined();
       });
 
       const unbound = await createCanvasDocument({

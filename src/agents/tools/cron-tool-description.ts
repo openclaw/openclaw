@@ -62,7 +62,7 @@ STREAM CONSENT: creation, source changes and reactivation require current creato
   const scriptCue = params.triggersEnabled
     ? " Use triggers/script payloads to skip the model on quiet checks. Scripts reach MCP only through toolsAllow entries <server>__tool or <server>__*. Throw to record script failure (returning {error} succeeds); recurring-job failure alerts wait for consecutive failures, run output follows delivery."
     : "";
-  const description = `Schedule reminders, delayed self-wakeups, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
+  return `Schedule reminders, delayed self-wakeups, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
 ACTIONS: status | list (enabled-only summaries by default; includeDisabled:true includes paused records; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId runId? (history) | wake text (caller-owned session; mode defaults to next-heartbeat) | bind jobId (owner turn in the automation's parent conversation; links a key-only automation to this conversation). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
 
@@ -98,6 +98,7 @@ FAILURE ALERTS: routed jobs default to 2 consecutive execution failures and 1h c
 
 Optional job policy: activeHours{start,end,timezone?} is an end-exclusive execution window (including manual runs); idleOnly yields to foreground work. delivery.target:"owner" resolves the owner DM dynamically, never the last group; delivery.directPolicy:"block" prohibits DMs. agentTurn skipIfScratchEmpty skips an explicitly empty checklist, not missing scratch.
 
-Main-job wakeMode: "now"(default)|"next-heartbeat". Scheduled runs: self status/list/get/runs/remove + own next_check only. Use jobId. contextMessages 0-10 embeds recent chat lines in reminder text.`;
-  return description + commandPolicySuffix;
+Main-job wakeMode: "now"(default)|"next-heartbeat". contextMessages 0-10 embeds recent chat lines in reminder text.
+
+Inside a scheduled run only: ${buildCronSelfDescription({ activeRun: true, nextCheckEnabled: true })}${commandPolicySuffix}`;
 }

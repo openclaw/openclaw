@@ -14,7 +14,6 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import { KeyboardShortcut } from "./solid/kbd.tsx";
-import "./kbd.css";
 import "./keyboard-shortcuts-dialog.css";
 import "./modal-dialog.tsx";
 

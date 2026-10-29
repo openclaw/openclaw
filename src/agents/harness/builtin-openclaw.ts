@@ -1,4 +1,5 @@
 import { readGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
+import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
 import { BUILTIN_AGENT_HARNESS_METADATA } from "./builtin-openclaw-metadata.js";
@@ -15,7 +16,7 @@ const builtInOpenClawHarnesses = new WeakSet<object>();
 
 function buildRestrictedFinalizationAttempt(
   attempt: AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2>,
-): EmbeddedRunAttemptParams {
+): EmbeddedRunAttemptInternalParams {
   const internalAttempt =
     attempt as AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2> &
       Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "replyOperation">;
@@ -105,10 +106,23 @@ export function createOpenClawAgentHarness(): AgentHarnessV2 {
       return runEmbeddedAttempt(attempt);
     },
     runIsolatedCompletionV2: runHostPreparedIsolatedCompletion,
-    finalizeSettledTurn: async ({ attempt }) => {
+    finalizeSettledTurn: async ({ attempt, settledAttempt }) => {
+      const context = settledAttempt.settledTurnFinalizationContext;
+      const messages =
+        context?.source === "openclaw-transcript"
+          ? context.messages
+          : context === undefined
+            ? settledAttempt.messagesSnapshot
+            : undefined;
+      if (!messages) {
+        throw new Error("OpenClaw finalization requires the settled attempt transcript view");
+      }
       // Preserve only transcript/model transport state. The operation-specific
       // runner path suppresses every ambient prompt and capability contributor.
-      const restrictedAttempt = buildRestrictedFinalizationAttempt(attempt);
+      const restrictedAttempt = {
+        ...buildRestrictedFinalizationAttempt(attempt),
+        settledTurnFinalizationMessages: Object.freeze([...messages]),
+      };
       const { runEmbeddedAttempt } = await import("../embedded-agent-runner/run/attempt.js");
       const result = await runEmbeddedAttempt(restrictedAttempt);
       return projectSettledTurnFinalizationAttemptResult(result);

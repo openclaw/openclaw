@@ -17,7 +17,7 @@ import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixStreamingConfig } from "../../types.js";
-import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
+import type { MatrixReplyDispatchInfo } from "./handler-draft-controller.js";
 import { registerMatrixLiveAllowlistTests } from "./handler.live-allowlist.test-support.js";
 import { registerMatrixPreviewDeliveryTests } from "./handler.preview-delivery.test-support.js";
 import {
@@ -185,12 +185,6 @@ function matrixEditOptions(eventId: string, body: string, roomId = ROOM) {
     )?.[3],
     `edit options for ${eventId}`,
   );
-}
-
-function expectFinalizedPreviewEdit(eventId: string, text: string) {
-  expect(matrixEditOptions(eventId, text).extraContent).toEqual({
-    [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
-  });
 }
 
 function expectDeliveredMediaReply() {
@@ -746,7 +740,7 @@ describe("matrix monitor handler failure handling", () => {
 });
 
 describe("matrix monitor handler draft streaming", () => {
-  type DeliverFn = (payload: ReplyPayload, info: { kind: string }) => Promise<unknown>;
+  type DeliverFn = (payload: ReplyPayload, info: MatrixReplyDispatchInfo) => Promise<unknown>;
 
   const waitForDrafts = (count = 1) =>
     waitForState(() => expect(sendDraftMock).toHaveBeenCalledTimes(count));
@@ -1050,7 +1044,6 @@ describe("matrix monitor handler draft streaming", () => {
     await waitForDrafts(1);
     await opts.onPartialReply?.({ text: "AlphaBeta" });
     await waitForState(() => matrixEditOptions("$draft1", "AlphaBeta"));
-    await opts.onBlockReplyQueued?.({ text: "Alpha" });
     await deliverBlock(deliver, "Alpha", "$draft2", "Beta");
     matrixEditOptions("$draft1", "Alpha");
     expectNoCalls(sendMock, redactEventMock);
@@ -1080,7 +1073,7 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("queues late block boundaries against the source assistant message", async () => {
+  it("keeps late block delivery scoped to its source assistant message", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { redactEventMock, deliver, opts, finish } = await startStreaming({
       blockStreamingEnabled: true,
@@ -1089,7 +1082,6 @@ describe("matrix monitor handler draft streaming", () => {
       await opts.onAssistantMessageStart?.();
       await sendPreview(opts, "Alpha");
       await opts.onAssistantMessageStart?.();
-      await opts.onBlockReplyQueued?.({ text: "Alpha" }, { assistantMessageIndex: 1 });
       await opts.onPartialReply?.({ text: "Beta" });
 
       // Drive the draft throttle before checking queued-block ordering.
@@ -1097,7 +1089,10 @@ describe("matrix monitor handler draft streaming", () => {
       matrixEditOptions("$draft1", "Beta");
 
       nextDraft("$draft2");
-      await deliver({ text: "Alpha" }, { kind: "block" });
+      await deliver(
+        { text: "Alpha" },
+        { kind: "block", assistantMessageIndex: 1, blockSourceRange: [0, 5] },
+      );
       matrixEditOptions("$draft1", "Alpha");
       expectNoCalls(sendMock, redactEventMock);
       await waitForDrafts(1);
@@ -1108,25 +1103,6 @@ describe("matrix monitor handler draft streaming", () => {
     } finally {
       await finish();
     }
-  });
-
-  it("keeps queued block boundaries ordered while Matrix deliveries drain", async () => {
-    const { deliver, opts, finish } = await startPreview("Alpha", { blockStreamingEnabled: true });
-    expect(draftBody()).toBe("Alpha");
-
-    await opts.onBlockReplyQueued?.({ text: "Alpha" });
-    await opts.onPartialReply?.({ text: "AlphaBeta" });
-    await opts.onBlockReplyQueued?.({ text: "Beta" });
-    await opts.onPartialReply?.({ text: "AlphaBetaGamma" });
-    expect(sendDraftMock).toHaveBeenCalledTimes(1);
-    expect(editMock).not.toHaveBeenCalled();
-
-    await deliverBlock(deliver, "Alpha", "$draft2", "Beta");
-    expectFinalizedPreviewEdit("$draft1", "Alpha");
-
-    await deliverBlock(deliver, "Beta", "$draft3", "Gamma");
-    expectFinalizedPreviewEdit("$draft2", "Beta");
-    await finish();
   });
 
   it.each(["quiet", "partial"] as const)(

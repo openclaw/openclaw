@@ -166,6 +166,7 @@ export function postgresSchemaSql(
       shared,
       schema.postgresVectorDecoderVersion,
       schema.postgresVectorSearchVersion,
+      schema.postgresTextSearchVersion,
     );
     shared.text ||= Object.keys(definition.text ?? {}).length > 0;
     shared.vector ||=

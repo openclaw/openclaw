@@ -57,6 +57,7 @@ const WRITE_TOOLS = new Set([
   "knowledge_save_page",
   "knowledge_correct",
   "knowledge_withdraw",
+  "knowledge_supersede",
   "knowledge_merge",
   "knowledge_unmerge",
   "knowledge_recall",
@@ -354,6 +355,7 @@ export function createKnowledgeService(
       create_relationship: authored("createRelationship"),
       correct: agentChange("correct"),
       withdraw: agentChange("withdraw"),
+      supersede: agentChange("supersede"),
       merge: agentChange("merge"),
       unmerge: agentChange("unmerge"),
       recall: (input, context) => {

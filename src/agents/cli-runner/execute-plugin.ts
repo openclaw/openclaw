@@ -19,6 +19,7 @@ import type {
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
+import { isHostGeneratedInputProvenance } from "../../sessions/input-provenance.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import {
@@ -556,7 +557,7 @@ export async function executePluginOwnedProcess(params: {
         env: params.env,
         prompt: params.prompt,
         ...(params.promptContext ? { promptContext: params.promptContext } : {}),
-        ...(params.context.params.inputProvenance?.kind === "internal_system"
+        ...(isHostGeneratedInputProvenance(params.context.params.inputProvenance)
           ? { promptOrigin: "host" as const }
           : {}),
         modelId: params.context.normalizedModel,

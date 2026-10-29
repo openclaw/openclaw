@@ -48,7 +48,13 @@ let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
 const sent: Array<
   Pick<
     CliBackendExecuteContext,
-    "args" | "sessionId" | "useResume" | "systemPrompt" | "prompt" | "toolAvailability"
+    | "args"
+    | "sessionId"
+    | "useResume"
+    | "systemPrompt"
+    | "prompt"
+    | "promptContext"
+    | "toolAvailability"
   >
 > = [];
 
@@ -77,6 +83,7 @@ function installBackend(args?: string[]) {
               useResume: input.useResume,
               systemPrompt: input.systemPrompt,
               prompt: input.prompt,
+              promptContext: input.promptContext,
               toolAvailability: input.toolAvailability,
             });
             yield {
@@ -280,6 +287,7 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
   const prepareTurn = (
     completion: boolean,
     cliSessionBinding: ReturnType<typeof getCliSessionBinding>,
+    changedPrompt = false,
   ) => {
     const sessionEntry = loadSessionEntry(sessionTarget);
     expect(sessionEntry).toMatchObject({
@@ -298,6 +306,12 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
       prompt: completion ? "The child completed." : "What did I ask you to remember?",
       skillsSnapshot: skills.snapshot,
       sourceReplyDeliveryMode: "automatic",
+      ...(changedPrompt
+        ? {
+            extraSystemPrompt: "Updated instructions.",
+            extraSystemPromptStatic: "Updated instructions.",
+          }
+        : {}),
       ...(completion
         ? {
             trustedInternalHandoff: {
@@ -346,7 +360,15 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
     await completion.preparedBackend.cleanup?.();
   }
 
-  expect(sent).toHaveLength(2);
+  const drifted = await prepareTurn(false, upgradedBinding, true);
+  try {
+    expect(drifted.reusableCliSession).toMatchObject({ mode: "reuse-with-drift" });
+    await executePreparedCliRun(drifted, nativeSessionId);
+  } finally {
+    await drifted.preparedBackend.cleanup?.();
+  }
+
+  expect(sent).toHaveLength(3);
   expect(sent[0]?.useResume).toBe(false);
   expect(sent[0]?.args).not.toContain("--resume");
   expect(sent[1]?.sessionId).toBe(nativeSessionId);
@@ -372,8 +394,12 @@ it("keeps a stored Claude conversation across the upgrade while excluding native
   }
   expect(nativeSkillsPlugin).not.toHaveBeenCalled();
   // A fresh session learns the chat has history without taking another account's text.
-  expect(sent[0]?.prompt).toContain("2 earlier messages in this chat");
-  expect(sent[0]?.prompt.endsWith("What did I ask you to remember?")).toBe(true);
+  expect(sent[0]?.promptContext?.prependContext).toContain("2 earlier messages in this chat");
+  expect(sent[0]?.prompt).toBe("What did I ask you to remember?");
+  expect(sent[2]?.promptContext?.prependContext).toContain(
+    "OpenClaw resumed this CLI session after prompt content changed.",
+  );
+  expect(sent[2]?.prompt).toBe("What did I ask you to remember?");
   expect(sent[1]?.prompt).toContain(`[Inter-session message] sourceSession=${childSessionKey}`);
   expect(sent[1]?.prompt.endsWith("The child completed.")).toBe(true);
   expect(sent[1]?.systemPrompt).toBe(sent[0]?.systemPrompt);

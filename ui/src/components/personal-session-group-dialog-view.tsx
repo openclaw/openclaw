@@ -1,8 +1,11 @@
 import "./personal-session-group-dialog.css";
 import { createMemo, createSignal, For, Show } from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+
+registerEnglishCatalog(registerSessionOrganizationEnglish);
 
 export type PersonalSessionGroupDialogOptions = {
   group?: PersonalSessionGroup;

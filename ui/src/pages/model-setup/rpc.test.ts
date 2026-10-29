@@ -44,9 +44,8 @@ it.each([
       const frames = () => socket.sent.map((raw): RequestFrame => JSON.parse(raw));
       socket.emitOpen();
       socket.emitConnectChallenge({ nonce: "test-nonce", ts: Date.now() });
-      await vi.waitFor(() =>
-        expect(frames().some((frame) => frame.method === "connect")).toBe(true),
-      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(frames().some((frame) => frame.method === "connect")).toBe(true);
       const connect = frames().find((frame) => frame.method === "connect")!;
       socket.emitMessage({
         type: "res",
@@ -59,6 +58,7 @@ it.each([
           policy: { tickIntervalMs: 10_000 },
         },
       });
+      await vi.advanceTimersByTimeAsync(0);
       const runVerification = createRoot((dispose) => {
         stop = dispose;
         return createModelSetupVerifyRequest();

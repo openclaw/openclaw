@@ -357,6 +357,65 @@ describe("live pending inputs at the attempt boundary", () => {
     });
   });
 
+  it("includes accepted steering that was pending during boundary preparation", async () => {
+    await withLiveInput(async (target) => {
+      const receipt = expectDefined(
+        await stageSessionPendingInput(target, {
+          runId: "early-steer",
+          message: {
+            role: "user",
+            content: "early steering instruction",
+            timestamp: 2,
+            idempotencyKey: "early-steer:user",
+          },
+          assertCurrent: () => {},
+        }),
+        "Expected early input custody",
+      );
+      const recorder = createUserTurnTranscriptRecorder({
+        message: receipt.message,
+        target: { ...target, sessionEntry: undefined },
+        updateMode: "none",
+      });
+      const manager = guardSessionManager(await SessionManager.openAsync(target), {
+        runId: "active-run",
+      });
+      const { session: activeSession } = await createTestSession({
+        model: testModel,
+        sessionManager: manager,
+      });
+      try {
+        await prepareBoundary(activeSession, target, "original request");
+        // Preparation samples the separate pending source before native steering
+        // admission joins that input to this runtime before its first call.
+        expect(
+          JSON.stringify(
+            await activeSession.agent.convertToLlm(manager.buildSessionContext().messages),
+          ),
+        ).not.toContain("early steering instruction");
+        await activeSession.steer(
+          "early steering instruction",
+          undefined,
+          recorder,
+          undefined,
+          undefined,
+          "early-steering-identity",
+        );
+        replyWith("early steering answered");
+        await receipt.run(() =>
+          activeSession.prompt("original request", { expandPromptTemplates: false }),
+        );
+        expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+        const modelInput = JSON.stringify(streamMocks.streamSimple.mock.calls[0]?.[1].messages);
+        expect(modelInput.match(/early steering instruction/g) ?? []).toHaveLength(1);
+        expect(activeSession.getLastAssistantText()).toBe("early steering answered");
+      } finally {
+        activeSession.dispose();
+        receipt.finish("interrupted");
+      }
+    });
+  });
+
   it("keeps live foreign input out of an already persisted current turn", async () => {
     await withLiveInput(async (target) => {
       const foreign = expectDefined(

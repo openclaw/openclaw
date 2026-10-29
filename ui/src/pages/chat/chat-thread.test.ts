@@ -389,13 +389,11 @@ describe("collapseCompletedTurnWork", () => {
         assistant("All done.", 4_000),
       ],
     });
-    expectKinds(items, ["group", "work-group", "group", "group"]);
-    expect(canvasBlocksIn(requireGroup(items[2]))).toHaveLength(1);
-    expect(requireWorkGroup(items[1]).groups.map((group) => group.role)).toEqual([
-      "assistant",
-      "tool",
-    ]);
-    expect(messageRecord(requireGroup(items[3])).content).toBe("All done.");
+    expectKinds(items, ["group", "group", "group", "work-group", "group"]);
+    expect(canvasBlocksIn(requireGroup(items[1]))).toHaveLength(1);
+    expect(messageRecord(requireGroup(items[2])).content).toBe("Checking the details.");
+    expect(requireWorkGroup(items[3]).groups.map((group) => group.role)).toEqual(["tool"]);
+    expect(messageRecord(requireGroup(items[4])).content).toBe("All done.");
   });
 
   it("keeps completed work expanded for non-dashboard session", () => {
@@ -438,8 +436,8 @@ describe("collapseCompletedTurnWork", () => {
     ).toBe(false);
 
     const completed = collapsedItems({ messages });
-    expectKinds(completed, ["group", "work-group", "group", "group", "group", "group"]);
-    expect(messagesIn(requireWorkGroup(completed[1]).groups)).toEqual([messages[2]]);
+    expectKinds(completed, ["group", "group", "work-group", "group", "group", "group"]);
+    expect(messagesIn(requireWorkGroup(completed[2]).groups)).toEqual([messages[2]]);
     expect(messagesIn(groupsIn(completed))).toEqual(messages.filter((_, index) => index !== 2));
   });
 
@@ -484,7 +482,9 @@ describe("collapseCompletedTurnWork", () => {
       messages: [...messages, assistant("Recovered via another route.", 7_000)],
     });
     expect(messagesIn(groupsIn(recovered))).not.toContain(failed);
-    expect(messagesIn(requireWorkGroup(recovered[1]).groups)).toContain(failed);
+    expect(
+      messagesIn(recovered.flatMap((item) => (item.kind === "work-group" ? item.groups : []))),
+    ).toContain(failed);
   });
 });
 
@@ -982,7 +982,7 @@ describe("buildCachedChatItems", () => {
     expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([textBlock("Ship it.")]);
   });
 
-  it.each(["incomplete imports", "canonical replay"])(
+  it.each(["incomplete imports", "canonical replay", "distinct IDs", "missing IDs"])(
     "deduplicates user prompts only with proven identity: %s",
     (source) => {
       const canonical = {
@@ -994,24 +994,27 @@ describe("buildCachedChatItems", () => {
         messages: [1, 2].map((timestamp) =>
           user([textBlock("Same prompt")], timestamp, {
             __openclaw:
-              source === "canonical replay"
-                ? { ...canonical }
-                : {
-                    id: "provider-local-user",
-                    externalId: "provider-local-user",
-                    importedFrom: "claude-cli",
-                  },
+              source === "missing IDs"
+                ? undefined
+                : source === "incomplete imports"
+                  ? {
+                      id: "provider-local-user",
+                      externalId: "provider-local-user",
+                      importedFrom: "claude-cli",
+                    }
+                  : {
+                      ...canonical,
+                      id: source === "distinct IDs" ? `user-${timestamp}` : canonical.id,
+                    },
           }),
         ),
       });
       expect(groups).toHaveLength(1);
       const group = groupAt(groups, 0);
-      expect(group.messages).toHaveLength(source === "canonical replay" ? 1 : 2);
-      if (source === "incomplete imports") {
-        expect(group.messages.map((entry) => entry.duplicateCount)).toEqual([undefined, undefined]);
-      } else {
-        expect(group.role).toBe("user");
-        expect(group.messages).toMatchObject([{ duplicateCount: 2 }]);
+      expect(group.messages.map((entry) => normalizeMessage(entry.message).timestamp)).toEqual(
+        source === "canonical replay" ? [1] : [1, 2],
+      );
+      if (source === "canonical replay") {
         expect(persistedMessageEntryId(messageRecord(group))).toBe(canonical.id);
       }
     },

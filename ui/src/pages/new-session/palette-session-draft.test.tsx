@@ -93,7 +93,9 @@ describe("PaletteSessionDraft", () => {
       new File(["cold attachment"], "cold.txt", { type: "text/plain" }),
     ]);
     await waitForSolid(() => {
-      expect(host.querySelector('.chat-attachment-loading[data-state="ready"]')).not.toBeNull();
+      expect(
+        host.querySelector('.chat-attachment-thumb[aria-busy="false"]')?.textContent,
+      ).toContain("cold.txt");
     });
     host.observeColdSubmission = true;
     host.draft.submitCold();

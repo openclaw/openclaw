@@ -53,6 +53,22 @@ const failedEntry: SessionEntry = {
   agentStatus: { note: "Need a password", attention: "key", expiresAt: 61_000 },
 };
 
+it("retains internal session delivery across channel-less agent turns", async () => {
+  const freshEntry: SessionEntry = { ...failedEntry, delivery: { kind: "internal" } };
+  const { patch } = await buildCreationPatch({ freshEntry });
+  expect(patch.delivery).toEqual({ kind: "internal" });
+
+  const routed = await buildCreationPatch({
+    freshEntry,
+    requestDeliveryHint: { channel: "telegram", to: "123" },
+  });
+  expect(routed.patch.delivery).toMatchObject({
+    kind: "external",
+    context: { channel: "telegram", to: "123" },
+  });
+  expect((await buildCreationPatch({})).patch.delivery).toEqual({ kind: "none" });
+});
+
 it("clears agent status at the next human interaction boundary", async () => {
   const { patch } = await buildCreationPatch({
     freshEntry: failedEntry,

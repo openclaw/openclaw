@@ -89,9 +89,21 @@ export async function proveOversizedWorkspaceRecovery({
   expect(String(linkedFailure)).not.toContain("openclaw sandbox recover");
   await fs.unlink(path.join(projection, "hardlink"));
   const recovered = await recover();
+  expect(recovered).toEqual({
+    path: path.join(
+      stateRoot,
+      "workspace-recovery",
+      owner.worktree.id,
+      recovery.recoveryId,
+      relativePath,
+    ),
+    bytes: oversizedBytes,
+  });
+  const originalBytes = Buffer.alloc(oversizedBytes);
+  originalBytes.write("retained binary contents\n");
+  expect((await fs.readFile(recovered.path)).equals(originalBytes)).toBe(true);
   expect(await recover()).toEqual(recovered);
   const relocated = recovered.path;
-  expect(recovered.bytes).toBe(oversizedBytes);
   await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
   using resumed = await prepareSandbox();
   expect(resumed).toBeDefined();

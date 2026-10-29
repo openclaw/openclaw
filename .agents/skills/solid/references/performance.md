@@ -72,6 +72,7 @@ These are results for the cited workloads, not universal speedups.
 
 ### WebKit
 
+- Nested grid intrinsic sizing (`auto`, `min-content`, or `max-content` tracks inside grid items) can hang WebKit on large content; use explicit track sizes such as `minmax(0, 1fr)` ([#185997](https://github.com/openclaw/openclaw/pull/185997)).
 - Keep container queries and size containment on the smallest element that needs them. Moving containment from repeated Board reports to their toolbars cut WebKit opening time by 60% ([#185587](https://github.com/openclaw/openclaw/pull/185587)).
 - Avoid relational `:has()` selectors over frequently mutated elements. Derive the state in the existing owner: replacing position-rail sibling queries halved the median scroll frame gap ([#185727](https://github.com/openclaw/openclaw/pull/185727)).
 - Check for redundant `content-visibility` alongside containment. Removing it from virtualized transcript rows improved WebKit fast scrolling ([#185665](https://github.com/openclaw/openclaw/pull/185665)); preserve offscreen geometry and verify both engines.

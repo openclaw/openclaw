@@ -31,7 +31,6 @@ import { hydrateLinkFavicons, releaseLinkFavicons } from "../link-favicon-loader
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
-  type DuplicateSuffix,
   type MessageTextOptions,
   prepareMessageMarkdown,
 } from "./chat-message-text-preparation.ts";
@@ -74,7 +73,6 @@ export type MessageMarkdownProps = {
   messageKey: string;
   options: MessageTextOptions;
   markdownOptions: MarkdownRenderOptions;
-  duplicateSuffix?: DuplicateSuffix;
   media?: MarkdownMedia;
 };
 
@@ -92,7 +90,6 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
       props.messageKey,
       props.options,
       props.markdownOptions,
-      props.duplicateSuffix,
       latest(streaming)?.toStreamingMarkdownDomParts,
       props.options.isStreaming && !latest(streaming),
     ),

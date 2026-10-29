@@ -327,7 +327,7 @@ describe("agents skills panel (browser)", () => {
     },
   );
 
-  it("shows matches from default-collapsed groups while filtering", async () => {
+  it("retains matching controls while filtering and restores removed skills after clearing", async () => {
     const view = mountSkills([
       createSkill({ name: "Unique Built In Match", source: "openclaw-bundled", bundled: true }),
       createSkill({ name: "Installed Distractor", source: "openclaw-managed" }),
@@ -336,15 +336,79 @@ describe("agents skills panel (browser)", () => {
     await waitForSolid(() =>
       expect(container.querySelector<HTMLDetailsElement>(".agent-skills-group")?.open).toBe(false),
     );
+    const matchedRow = view.rows()[0]!;
+    const matchedControl = matchedRow.querySelector("input");
+    const filter = view.filter();
+
+    view.update({ ...params, filter: "Unique" });
+    await waitForSolid(() => expect(view.rows()).toHaveLength(1));
+    const filteredGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
+    expect(filteredGroup?.open).toBe(true);
+    expect(view.rows()[0]).toBe(matchedRow);
+    expect(matchedRow.querySelector("input")).toBe(matchedControl);
+    expect(container.textContent).not.toContain("Installed Distractor");
 
     view.update({ ...params, filter: "Unique Built In Match" });
     await waitForSolid(() => expect(container.textContent).toContain("1 shown"));
-    const filteredGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
-    expect(filteredGroup?.open).toBe(true);
-    expect(filteredGroup?.querySelector(".agent-skill-row")?.textContent).toContain(
-      "Unique Built In Match",
-    );
+    expect(view.rows()[0]).toBe(matchedRow);
+    expect(view.filter()).toBe(filter);
+
+    view.update({ ...params, filter: "No matching skill" });
+    await waitForSolid(() => expect(container.textContent).toContain("0 shown"));
+    expect(view.rows()).toHaveLength(0);
+    expect(container.querySelectorAll(".agent-skills-group")).toHaveLength(0);
+    expect(view.filter()).toBe(filter);
+
+    view.update({ ...params, filter: "" });
+    await waitForSolid(() => expect(view.rows()).toHaveLength(2));
+    expect(container.textContent).toContain("Unique Built In Match");
+    expect(container.textContent).toContain("Installed Distractor");
+    expect(view.checked()).toEqual([true, true]);
+    expect(view.filter()).toBe(filter);
   });
+
+  it.each(["initial", "agent", "connection"])(
+    "only mounts matching controls when the %s scope starts filtered",
+    async (scope) => {
+      const view = mountSkills(
+        [
+          createSkill({ name: "Matching skill", source: "openclaw-managed" }),
+          createSkill({ name: "Unrelated skill", source: "openclaw-managed" }),
+        ],
+        { filter: scope === "initial" ? "Matching" : "" },
+      );
+      const { container, params } = view;
+      await waitForSolid(() => expect(view.rows()).toHaveLength(scope === "initial" ? 1 : 2));
+      const oldRows = view.rows();
+      const agentId = scope === "agent" ? "research" : "main";
+      const filtered = {
+        ...params,
+        agentId,
+        agentSkillsAgentId: agentId,
+        filter: "Matching",
+        ...(scope === "connection"
+          ? { readData: () => ({ ...params.readData(), requestGeneration: 1 }) }
+          : {}),
+      };
+      view.update(filtered);
+      await waitForSolid(() => {
+        expect(view.rows()).toHaveLength(1);
+        expect(container.querySelectorAll(".agent-skill-row input")).toHaveLength(1);
+        expect(container.textContent).not.toContain("Unrelated skill");
+      });
+      if (scope !== "initial") {
+        expect(oldRows.every((row) => !container.contains(row))).toBe(true);
+      }
+
+      view.update({ ...filtered, filter: "" });
+      await waitForSolid(() => expect(view.rows()).toHaveLength(2));
+      view.update(filtered);
+      await waitForSolid(() => {
+        expect(view.rows()).toHaveLength(1);
+        expect(container.textContent).not.toContain("Unrelated skill");
+      });
+    },
+  );
 
   it("retires optimistic reset presentation when the selected agent changes", async () => {
     const completion = deferred();

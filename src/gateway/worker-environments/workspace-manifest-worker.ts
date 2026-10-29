@@ -48,6 +48,8 @@ function transferableManifestInput(command: GitWorkerCommand): ArrayBuffer[] {
     return [command.input.payload.buffer];
   }
   switch (command.type) {
+    case "workspace.manifest.local":
+      return [command.input.snapshot.buffer];
     case "workspace.manifest.paths":
     case "workspace.manifest.parse":
       return [command.input.raw.buffer];

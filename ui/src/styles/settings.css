@@ -968,6 +968,27 @@ textarea.settings-input {
   }
 }
 
+/* Narrow screens stack the Recovery row, so its actions get the full width.
+   Whole buttons wrap and grow to fill each line; the primary retry leads on
+   its own line. Wide screens keep the single right-aligned row. */
+@media (max-width: 768px) {
+  .updates-recovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+
+    > .btn {
+      flex: 1 1 auto;
+      min-height: 40px;
+    }
+
+    > .btn.primary {
+      flex-basis: 100%;
+      order: -1;
+    }
+  }
+}
+
 .updates-status-check-failed .settings-status {
   color: var(--warn);
 }

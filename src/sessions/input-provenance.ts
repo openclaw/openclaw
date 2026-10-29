@@ -21,6 +21,13 @@ export type InputProvenance = {
   runId?: string;
 };
 
+/** Native input attribution, not canonical chat visibility or execution authority. */
+export function isHostGeneratedInputProvenance(provenance: InputProvenance | undefined): boolean {
+  // Forwarded inputs retain their sender in the canonical transcript; their native
+  // copy must not invent another message authored by this session's operator.
+  return provenance?.kind === "internal_system" || provenance?.kind === "inter_session";
+}
+
 export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
 
 export const PROGRESS_CARD_REFRESH_SOURCE_TOOL = "progress_card_refresh" as const;

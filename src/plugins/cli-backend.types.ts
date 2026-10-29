@@ -210,7 +210,12 @@ export type CliBackendMessageInjection = {
    * Ask the host to prepare current authority and invoke the synchronous native write.
    * Resolve only after the runtime acknowledges consumption, not after the write.
    */
-  queueMessage(text: string, withCurrent: (submit: () => void) => Promise<void>): Promise<void>;
+  queueMessage(
+    text: string,
+    withCurrent: (submit: () => void) => Promise<void>,
+    /** Per-input attribution and private context; never inherit the initial turn's. */
+    options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext">,
+  ): Promise<void>;
 };
 
 /** Graceful end of the admitted turn without retiring its reusable native session. */
@@ -236,8 +241,9 @@ export type CliBackendExecuteContext = {
   prompt: string;
   promptContext?: CliBackendPromptContext;
   /**
-   * `host`: OpenClaw generated this prompt (for example a command completion, cron run or recovery);
-   * no person typed it. Backends with a native non-user input marker should apply it.
+   * `host`: OpenClaw generated or forwarded this input, rather than a person
+   * typing it in this session. Apply the native non-user input marker when available.
+   * Canonical transcript provenance owns its visibility and sender attribution.
    */
   promptOrigin?: "host";
   modelId: string;

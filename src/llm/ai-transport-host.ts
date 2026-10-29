@@ -18,6 +18,7 @@ import { getProviderAuthAuthority } from "../plugins/provider-auth-authority.js"
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { formatModelTransportContext } from "./model-transport-context.js";
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
@@ -34,6 +35,7 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
 }
 
 configureAiTransportHost({
+  immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
   runInDetachedAsyncContext,
   observePendingProviderWork: (pending) => {
     void trackAsyncWork(() => pending).catch(() => {});

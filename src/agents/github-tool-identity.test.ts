@@ -21,6 +21,7 @@ import {
   installManagedGitHubProfile,
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
+  prepareGitHubPublicationOptionsIdentity,
   prepareGitHubToolEnvironment,
   refreshManagedGitHubProfile,
   resolveGitHubToolIdentityStatus,
@@ -318,9 +319,9 @@ describe("GitHub tool identity", () => {
         accessExpiresAtMs,
       },
     });
-    const preparing = prepareGitHubPublicationIdentity({
+    const params = {
       config: {
-        tools: { github: { profileId, kind: "oauth" } },
+        tools: { github: { profileId, kind: "oauth" as const } },
         ...previewConfig("resolved-preview-token"),
       },
       sourceConfig: {
@@ -329,7 +330,8 @@ describe("GitHub tool identity", () => {
       },
       agentId: "main",
       env,
-    });
+    };
+    const preparing = prepareGitHubPublicationIdentity(params);
     env.GIT_EDITOR = "synthetic-after-preparation";
     const identity = await preparing;
     const childEnv = resolveCommandEnv({
@@ -348,6 +350,7 @@ describe("GitHub tool identity", () => {
       PREVIEW_SERVICE_TOKEN: undefined,
     };
     expect(identity).toMatchObject({ env: expectedEnv, accessExpiresAtMs });
+    expect(oauthMocks.inspect).toHaveBeenCalledTimes(2);
     expect(Object.isFrozen(identity)).toBe(true);
     expect(Object.isFrozen(identity.env)).toBe(true);
     expect(
@@ -363,6 +366,12 @@ describe("GitHub tool identity", () => {
     expect(matches("ghp_cccccccccccccccccccccccccccccccc")).toBe(false);
     expect(run).not.toHaveBeenCalled();
     expectVerifiedToken("managed-publication-token");
+    oauthMocks.inspect.mockClear();
+    expect(await prepareGitHubPublicationOptionsIdentity(params)).toEqual({
+      source: "system-configured",
+      account: { accountId: 202, login: "managed-user", avatarUrl: null },
+    });
+    expect(oauthMocks.inspect).not.toHaveBeenCalled();
   });
 
   it("reports a managed unverified transport failure honestly", async () => {

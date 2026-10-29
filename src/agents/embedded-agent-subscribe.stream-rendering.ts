@@ -684,6 +684,7 @@ export function createStreamRendering({
     state.streamBlockText = "";
     state.streamBlockFinal = false;
     state.blockReplyScopeStart = undefined;
+    state.blockReplyTextUnsettled = false;
     state.thinkingTagStream = createThinkingTagStreamState();
     state.deltaBufferIsCommentary = false;
     state.hasFlushedPartialText = false;

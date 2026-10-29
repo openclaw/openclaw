@@ -28,10 +28,10 @@ export type MemoryRebuildEmbeddingQuery = {
   dimensions?: number;
 };
 
-/** Read only this rebuild batch, using the published source/path index on either engine. */
+/** Read only the requested batch, using the published source/path index on either engine. */
 export function loadMemoryRebuildEmbeddings(params: {
   db: EngineConnection;
-  identity: MemoryIndexProviderIdentity;
+  identities: MemoryIndexProviderIdentity[];
   query: MemoryRebuildEmbeddingQuery;
   cached: Map<string, number[]>;
 }): void {
@@ -74,19 +74,24 @@ export function loadMemoryRebuildEmbeddings(params: {
   } catch {
     return;
   }
-  const { identity, query } = params;
+  const { query } = params;
   if (
     !Value.Check(rebuildIdentitySchema, meta) ||
     meta.model === "fts-only" ||
-    meta.provider !== identity.provider ||
-    meta.model !== identity.model ||
-    meta.providerKey !== identity.providerKey ||
-    (meta.embeddingInputFormatVersion ?? 0) !==
-      resolveEmbeddingInputFormatVersion(identity.model) ||
+    !params.identities.some(
+      (identity) =>
+        meta.provider === identity.provider &&
+        meta.model === identity.model &&
+        meta.providerKey === identity.providerKey,
+    ) ||
+    (meta.embeddingInputFormatVersion ?? 0) !== resolveEmbeddingInputFormatVersion(meta.model) ||
     (query.dimensions !== undefined && query.dimensions !== meta.vectorDims)
   ) {
     return;
   }
+  // Do not choose a vector until all published rows in the requested scope agree.
+  const vectors = new Map<string, Uint8Array>();
+  const ambiguous = new Set<string>();
   for (const source of sources.values()) {
     const hashes = [...source.hashes].filter((hash) => !params.cached.has(hash));
     for (let start = 0; start < hashes.length; start += 400) {
@@ -108,11 +113,22 @@ export function loadMemoryRebuildEmbeddings(params: {
           ),
         );
       for (const chunk of iterateSqliteQuerySync(params.db, rows)) {
-        const embedding = decodeMemoryEmbedding(chunk.embedding);
-        if (!params.cached.has(chunk.hash) && isValidMemoryEmbedding(embedding, meta.vectorDims)) {
-          params.cached.set(chunk.hash, embedding);
+        const previous = vectors.get(chunk.hash);
+        if (previous && Buffer.compare(previous, chunk.embedding) !== 0) {
+          ambiguous.add(chunk.hash);
+        } else if (!previous) {
+          vectors.set(chunk.hash, chunk.embedding);
         }
       }
+    }
+  }
+  for (const [hash, bytes] of vectors) {
+    if (ambiguous.has(hash)) {
+      continue;
+    }
+    const embedding = decodeMemoryEmbedding(bytes);
+    if (isValidMemoryEmbedding(embedding, meta.vectorDims)) {
+      params.cached.set(hash, embedding);
     }
   }
 }

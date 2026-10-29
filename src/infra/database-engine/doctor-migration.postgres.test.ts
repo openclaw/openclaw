@@ -640,6 +640,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         ...migration.fromSchema,
         postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
         postgresVectorSearchVersion: migration.fromSchema.postgresVectorSearchVersion,
+        postgresTextSearchVersion: migration.fromSchema.postgresTextSearchVersion,
         postgresMigrations: [],
       };
       // Build the actual historical layout; dropping current columns would leave

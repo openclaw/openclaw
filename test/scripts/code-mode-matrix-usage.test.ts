@@ -397,7 +397,7 @@ describe("matrix task billing", () => {
   );
 });
 
-function modeRow(mode: "code" | "direct", repetition = 1) {
+function modeRow(mode: "code" | "direct" | "auto", repetition = 1) {
   return {
     id: `${mode}-${repetition}`,
     mode,
@@ -432,6 +432,30 @@ function comparePairs(...codeRows: ReturnType<typeof modeRow>[]) {
 }
 
 describe("same-source mode comparisons", () => {
+  it("keeps the omitted-default treatment labeled auto rather than forced code", () => {
+    const report = comparePairs(modeRow("auto"));
+    expect(report).toMatchObject({ treatmentMode: "auto", incompletePairs: [] });
+    expect(report.byTask[0]).toMatchObject({
+      treatmentMode: "auto",
+      pairs: 1,
+      direct: { attempts: 1 },
+      auto: { attempts: 1 },
+    });
+    expect(report.byTask[0]).not.toHaveProperty("code");
+    expect(report.pairs[0]).toMatchObject({
+      directId: "direct-1",
+      autoId: "auto-1",
+      totalTokens: { direct: 24, auto: 24, delta: 0, ratio: 1 },
+    });
+    expect(report.pairs[0]).not.toHaveProperty("codeId");
+  });
+
+  it("rejects mixing default and forced treatments into one comparison", () => {
+    expect(() =>
+      compareCodeModeMatrixModes([modeRow("direct"), modeRow("auto"), modeRow("code")]),
+    ).toThrow("one treatment");
+  });
+
   it("charges failed attempts to completed tasks and exposes auditable empirical pairs", () => {
     const completedWithErrors = modeRow("code", 1);
     completedWithErrors.accounting.toolFailures = 1;

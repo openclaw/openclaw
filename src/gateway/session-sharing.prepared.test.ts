@@ -25,9 +25,12 @@ it("reuses interleaved audience keys and copies scope snapshots without iteratio
   const initial = clients.map(key);
   const scopes = clients[0]!.connect.scopes!;
   const iterate = vi.spyOn(scopes, Symbol.iterator);
-  for (let i = 0; i < 3; i++) {
-    expect(clients.map(key)).toEqual(initial);
-  }
+  const sets = vi.spyOn(globalThis, "Set");
+  const reused = clients.map(key);
+  const allocations = sets.mock.calls.length;
+  sets.mockRestore();
+  expect(reused).toEqual(initial);
+  expect(allocations).toBe(0);
   // A publication retires the keys; native array copying avoids iterable expansion.
   revision = {};
   expect(clients.map(key)).toEqual(initial);

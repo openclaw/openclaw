@@ -38,6 +38,10 @@ const CRON_ACTIONS = [
   "runs",
   "wake",
   "bind",
+  "scratch_get",
+  "scratch_set",
+  "record_result",
+  "next_check",
 ] as const;
 
 const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs"] as const;

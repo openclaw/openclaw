@@ -172,7 +172,10 @@ export function repairOpenClawStateDatabaseReadabilityForDoctor(
 
 /** Prepare schema and retire resources only when the admitted operation actually repairs it. */
 export async function prepareOpenClawStateDatabaseSchema(
-  options: OpenClawStateDatabaseOptions & { integrityCheck?: "quick" | "full" } = {},
+  options: OpenClawStateDatabaseOptions & {
+    integrityCheck?: "quick" | "full";
+    legacyCronDefaultStoreKey?: string;
+  } = {},
   mode: "automatic" | "doctor-preparation" | "doctor" = "automatic",
 ): Promise<{
   changes: string[];
@@ -220,7 +223,13 @@ export async function prepareOpenClawStateDatabaseSchema(
     // private repair handle validates its source and acquires exclusive custody.
     await closeOpenClawStateDatabaseByPathAsync(pathname);
     return withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () =>
-      repairStateSchema(pathname, env, scope, options.integrityCheck),
+      repairStateSchema(
+        pathname,
+        env,
+        scope,
+        options.integrityCheck,
+        options.legacyCronDefaultStoreKey,
+      ),
     );
   } finally {
     // Readiness checks borrow the live generation; only admitted repair retires it.

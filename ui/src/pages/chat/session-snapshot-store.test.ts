@@ -31,6 +31,7 @@ import {
 } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-projection.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 /* @vitest-environment jsdom */
 import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
@@ -99,8 +100,8 @@ async function persist(store: SessionSnapshotStore, cacheKey: string, value: Cha
   writeSnapshotFixture(store, cacheKey, value);
   await store.flush();
 }
-const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 5) => ({
-  projectionVersion,
+const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion?: number) => ({
+  projectionVersion: projectionVersion ?? CHAT_SNAPSHOT_PROJECTION_VERSION,
   sessionKey: cacheKey,
   savedAt: 1,
   sessionId: "session-1",
@@ -643,7 +644,15 @@ describe("persistent chat session snapshots", () => {
   it.each(["unrelated", "session", "cache-eviction", "all"] as const)(
     "settles an in-flight transcript through %s invalidation",
     async (scope) => {
-      const value = snapshot("important transcript");
+      const value: ChatSessionSnapshot = {
+        ...snapshot("important transcript"),
+        headerSharing: "public",
+        headerViewers: {
+          users: [{ id: "peer", avatarUrl: "/peer.png" }],
+          totalCount: 5,
+          ownerViewing: true,
+        },
+      };
       writer.connect();
       connected.add(writer);
       writeSnapshotFixture(writer, sessionKey, value);

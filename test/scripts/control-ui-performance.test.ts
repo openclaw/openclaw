@@ -377,9 +377,9 @@ describe("Control UI performance budgets", () => {
 
   it("rejects the renderer in route boot preloads", () => {
     const { distDir, writeAsset, writeHtml } = createStartupFixture();
-    writeHtml(startupHtml + routeTemplate("chat", [preload("mermaid.min-a.js")]));
+    writeHtml(startupHtml + routeTemplate("chat", [preload("pele.min-a.js")]));
     writeAsset("lazy-b.js", 200, 70, 55);
-    writeAsset("mermaid.min-a.js", 200, 200_000, 100);
+    writeAsset("pele.min-a.js", 200, 200_000, 100);
     const metrics = collectMetrics(distDir);
     expect(evaluateBudgets(metrics).map((entry) => entry.metric)).toEqual([
       "startup Mermaid JS assets",

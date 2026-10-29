@@ -23,15 +23,16 @@ import {
 import type {
   LocalWorkspaceBaselineDocument,
   LocalWorkspaceManifestAction,
-  LocalWorkspaceManifestValue,
 } from "./local-workspace-manifest-scan.js";
 import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceManifestMutation,
+  LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
   LocalWorkspacePreparedUpdate,
   LocalWorkspaceProjection,
 } from "./local-workspace-store.types.js";
+import { computeWorkspaceManifest } from "./workspace-manifest-worker.js";
 
 export type { LocalWorkspaceProjection } from "./local-workspace-store.types.js";
 
@@ -50,6 +51,7 @@ export type LocalWorkspaceStore = {
   signal: AbortSignal;
   workerAuthority: WorktreeWorkerAuthority;
   assertCurrent: () => void;
+  /** Custody-owned row; projection callers separately check their selected session/worktree owner. */
   get: () => LocalWorkspaceProjection | undefined;
   manifest: (
     row: LocalWorkspaceProjection,
@@ -112,12 +114,15 @@ export function withLocalWorkspaceStore<T>(
           const assertOwner = params.workerAuthority
             ? params.workerAuthority.assertCurrent
             : params.assertCurrent;
-          const assertHost = () => {
+          const assertCustody = () => {
             captured.admission.assertCurrent();
             authority.assertCurrent();
             if (!active) {
               throw new Error("Local workspace custody has ended");
             }
+          };
+          const assertHost = () => {
+            assertCustody();
             assertOwner?.();
           };
           const assertCurrent = () => {
@@ -168,10 +173,12 @@ export function withLocalWorkspaceStore<T>(
                   } while (more);
                 };
                 await pruneLegacy();
+                // Observations may commit while a scan still owns unaccepted packs.
+                let preparationEpoch: number | undefined;
                 const prepare = async (preparations: readonly Uint8Array[]) => {
                   for (const preparation of preparations) {
                     assertCurrent();
-                    await runOpenClawStateWorkerOperation(
+                    const epoch = await runOpenClawStateWorkerOperation(
                       context,
                       (scope) =>
                         scope.execute({
@@ -180,6 +187,7 @@ export function withLocalWorkspaceStore<T>(
                         }),
                       { assertCurrent },
                     );
+                    preparationEpoch = Math.min(preparationEpoch ?? epoch, epoch);
                   }
                   assertCurrent();
                 };
@@ -240,6 +248,7 @@ export function withLocalWorkspaceStore<T>(
                               input: {
                                 id: params.worktreeId,
                                 mutation: wireMutation!,
+                                preparationEpoch,
                                 predicates,
                                 leases: write.identities,
                               },
@@ -322,7 +331,11 @@ export function withLocalWorkspaceStore<T>(
                   if (!result) {
                     throw new Error("Local workspace manifest is unavailable");
                   }
-                  const value = result.value;
+                  const value = await computeWorkspaceManifest(
+                    { type: "workspace.manifest.local", input: { snapshot: result.snapshot } },
+                    lease.signal,
+                  );
+                  assertCurrent();
                   if (value.kind === "scan") {
                     await prepare(value.preparations ?? []);
                     const { preparations: _preparations, ...checkpoint } = value;
@@ -355,7 +368,7 @@ export function withLocalWorkspaceStore<T>(
                     assertCurrent: assertHost,
                   },
                   get: () => {
-                    assertHost();
+                    assertCustody();
                     return row;
                   },
                   manifest: readManifest,

@@ -58,6 +58,7 @@ import {
 } from "./device-revocation.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
+import * as sourcePolicy from "./operator-role-source-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
   decodeQueuedOperatorRecoverySource,
@@ -944,19 +945,21 @@ describe("restart recovery authenticated operator source", () => {
       }),
   );
 
-  it("restores only the admitted scopes and keeps them live until a role removes one", () =>
+  it.each(["gateway", "runtime"])("refreshes source policy on %s publication", (publication) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const profile = ensureProfileForEmail("role-recovery@example.test");
-      const cfg: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "operator",
-            definitions: {
-              operator: { agents: "*", sessions: { others: "none" }, scopes: ["operator.admin"] },
-            },
-          },
-        },
+      const operator: GatewayOperatorRoleDefinition = {
+        agents: "*",
+        sessions: { others: "none" },
+        scopes: ["operator.admin"],
       };
+      const cfg: OpenClawConfig = {
+        gateway: { roles: { default: "operator", definitions: { operator } } },
+      };
+      const publish = () =>
+        publication === "gateway"
+          ? publishOperatorRoleConfigChange(fixture.context)
+          : setRuntimeConfigSnapshot(fixture.context.getRuntimeConfig());
       const fixture = await recoveryFixture(state.stateDir, profile.id, {
         config: cfg,
         scopes: ["operator.write"],
@@ -967,21 +970,25 @@ describe("restart recovery authenticated operator source", () => {
       using restored = await restoreFixture(fixture);
 
       expect(restored.authority.scopes).toEqual(["operator.write"]);
-      expectCurrent(restored.authority);
+      using derive = vi.spyOn(sourcePolicy, "sourceRolePolicy");
+      using compare = vi.spyOn(sourcePolicy, "isOperatorRoleSourcePolicyCurrent");
+      restored.authority.assertCurrent();
+      restored.assertPolicyCurrent();
+      expect([derive.mock.calls, compare.mock.calls]).toEqual([[], []]);
       const widened = structuredClone(cfg);
       fixture.setConfig(widened);
-      publishOperatorRoleConfigChange(fixture.context);
+      publish();
       expectCurrent(restored.authority);
-      const narrowed = structuredClone(cfg);
-      narrowed.gateway!.roles!.definitions.operator!.scopes = ["operator.read"];
-      fixture.setConfig(narrowed);
-      publishOperatorRoleConfigChange(fixture.context);
-      expect(restored.authority.signal?.aborted).toBe(true);
-      expect(restored.authority.assertCurrent).toThrow();
+      // Committed publication must invalidate even when the config identity is retained.
+      widened.gateway!.roles!.definitions.operator!.scopes = ["operator.read"];
+      publish();
+      expect(restored.authority.signal?.aborted).toBe(publication === "gateway");
+      expectRevoked(restored.authority);
       fixture.setConfig(cfg);
-      publishOperatorRoleConfigChange(fixture.context);
+      publish();
       expect(restored.authority.assertCurrent).toThrow();
-    }));
+    }),
+  );
 
   it("intersects the original model ceiling with current policy without widening the admitted role", () =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {

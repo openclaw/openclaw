@@ -53,8 +53,12 @@ async function resolveCommit(repoRoot: string, ref: string): Promise<string> {
   ]);
 }
 
-async function hydrateCommitObjects(repoRoot: string, commit: string): Promise<void> {
-  const missing = await missingCommitObjects(repoRoot, commit);
+async function hydrateCommitObjects(
+  repoRoot: string,
+  commit: string,
+  knownMissing?: string[],
+): Promise<void> {
+  const missing = knownMissing ?? (await missingCommitObjects(repoRoot, commit));
   if (missing.length > 0) {
     const remote =
       (await readOptionalGitConfig(repoRoot, ["--get", "extensions.partialclone"])) ||
@@ -156,44 +160,55 @@ async function commitObjectBytes(
     }
   }
 
-  await hydrateCommitObjects(repoRoot, commit);
+  let hydrated = Boolean(cached || previous);
+  if (hydrated) {
+    await hydrateCommitObjects(repoRoot, commit);
+  }
   if (cached && cacheKey) {
     const refreshed = { ...cached, preparationKey };
     checkoutSizeFacts.set(cacheKey, refreshed);
     return refreshed;
   }
 
-  try {
-    let size = previous ? await advanceCheckoutSize(repoRoot, previous, commit) : undefined;
-    if (!size) {
-      const sizes = (
-        await requireGitBuffer(
-          repoRoot,
-          ["ls-tree", "-r", "--format=%(objectsize)", commit, "--"],
-          {
-            env: { GIT_NO_LAZY_FETCH: "1" },
-          },
-        )
-      ).toString("utf8");
-      let bytes = 0;
-      for (const value of sizes.split("\n")) {
-        if (value && value !== "-") {
-          bytes += allocatedBlobBytes(value);
+  // A complete size scan already proves local object availability. Only missing
+  // objects justify one hydration retry; cached and incremental totals need the census.
+  for (;;) {
+    try {
+      let size = previous ? await advanceCheckoutSize(repoRoot, previous, commit) : undefined;
+      if (!size) {
+        const sizes = (
+          await requireGitBuffer(
+            repoRoot,
+            ["ls-tree", "-r", "--format=%(objectsize)", commit, "--"],
+            {
+              env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+            },
+          )
+        ).toString("utf8");
+        let bytes = 0;
+        for (const value of sizes.split("\n")) {
+          if (value && value !== "-") {
+            bytes += allocatedBlobBytes(value);
+          }
         }
+        size = { bytes };
       }
-      size = { bytes };
+      if (cacheKey && repositoryKey) {
+        checkoutSizeFacts.set(cacheKey, { ...size, repositoryKey, commit, preparationKey });
+        pruneMapToMaxSize(checkoutSizeFacts, MAX_CHECKOUT_SIZE_FACTS);
+      }
+      return size;
+    } catch (error) {
+      const remaining = await missingCommitObjects(repoRoot, commit);
+      if (remaining.length === 0) {
+        throw error;
+      }
+      if (hydrated) {
+        throw missingObjectsError(commit, remaining.length);
+      }
+      hydrated = true;
+      await hydrateCommitObjects(repoRoot, commit, remaining);
     }
-    if (cacheKey && repositoryKey) {
-      checkoutSizeFacts.set(cacheKey, { ...size, repositoryKey, commit, preparationKey });
-      pruneMapToMaxSize(checkoutSizeFacts, MAX_CHECKOUT_SIZE_FACTS);
-    }
-    return size;
-  } catch (error) {
-    const remaining = await missingCommitObjects(repoRoot, commit);
-    if (remaining.length > 0) {
-      throw missingObjectsError(commit, remaining.length);
-    }
-    throw error;
   }
 }
 

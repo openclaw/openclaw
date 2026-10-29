@@ -27,7 +27,7 @@ import {
 import type { SessionListModelCatalog } from "./session-utils.types.js";
 
 /** A conservative vocabulary of admitted identities; never reconstruct thinking facts to reject a query. */
-export function mayMatchSessionRowModelSearch(
+export function prepareSessionRowModelSearch(
   params: Pick<
     Parameters<typeof readSessionRowModelFacts>[0],
     "cfg" | "modelCatalog" | "rowContext"
@@ -52,8 +52,7 @@ export function mayMatchSessionRowModelSearch(
       }
     >;
   },
-  search: string,
-): boolean {
+): (search: string) => boolean {
   const fields = new Set<string>(["openclaw", "codex", "auto", "acpx", "-"]);
   const providers = new Set<string>();
   const models = new Set<string>();
@@ -198,12 +197,6 @@ export function mayMatchSessionRowModelSearch(
       ref(undefined, run.model);
     }
   }
-  for (const backend of resolveRuntimeCliBackends("metadata")) {
-    runtime(backend.id);
-  }
-  for (const { harness } of listRegisteredAgentHarnesses()) {
-    runtime(harness.id);
-  }
   for (const snapshot of metadata) {
     for (const plugin of snapshot?.plugins ?? []) {
       for (const id of [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])]) {
@@ -251,22 +244,34 @@ export function mayMatchSessionRowModelSearch(
   for (const field of modelFields) {
     add(field);
   }
-  if ([...fields].some((field) => field.includes(search))) {
-    return true;
-  }
-  // Bare historical models can infer a provider; rejection must cover every possible pairing.
-  if (search.includes("/")) {
-    for (const provider of providers) {
-      for (const model of models) {
-        modelFields.length = 0;
-        addSessionListSearchModelFields(modelFields, { provider, model });
-        if (modelFields.some((field) => field?.includes(search))) {
-          return true;
+  return (search) => {
+    for (const field of fields) {
+      if (field.includes(search)) {
+        return true;
+      }
+    }
+    // Direct runtime registration is live within a retained registry generation.
+    const matchesRuntime = (id: string) =>
+      normalizeLowercaseStringOrEmpty(id).includes(search) ||
+      normalizeLowercaseStringOrEmpty(normalizeOptionalAgentRuntimeId(id)).includes(search);
+    if (
+      resolveRuntimeCliBackends("metadata").some((backend) => matchesRuntime(backend.id)) ||
+      listRegisteredAgentHarnesses().some(({ harness }) => matchesRuntime(harness.id))
+    ) {
+      return true;
+    }
+    // Bare historical models can infer a provider; rejection covers every possible pairing.
+    if (search.includes("/")) {
+      for (const provider of providers) {
+        for (const model of models) {
+          if (`${provider}/${model}`.includes(search)) {
+            return true;
+          }
         }
       }
     }
-  }
-  return false;
+    return false;
+  };
 }
 
 /** Search and row presentation share model policy without preparing unrelated row fields. */

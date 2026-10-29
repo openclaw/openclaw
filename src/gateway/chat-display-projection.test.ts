@@ -525,19 +525,18 @@ it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
 );
 
 it("retains complete structured tool previews and tool arguments under a smaller text cap", () => {
-  const payload = JSON.stringify({
-    kind: "canvas",
-    view: { id: "preview", title: "x".repeat(3_000) },
-  });
+  const payload = JSON.stringify({ view: { title: "x".repeat(3_000) } });
   const call = { type: "toolCall", id: "structured", name: "exec", arguments: { input: payload } };
-  const result = { type: "toolResult", toolCallId: "structured", content: [text(payload)] };
+  const readText = vi.fn(() => payload);
+  const output = Object.defineProperty(text(payload), "text", { get: readText });
+  const result = { type: "toolResult", toolCallId: "structured", content: [output] };
   const messages = [
     { role: "toolResult", content: result.content },
     { role: "assistant", content: [call, result] },
   ];
-  expect(sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 })).toEqual(
-    messages,
-  );
+  const projected = sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 });
+  expect(readText).toHaveBeenCalledTimes(2);
+  expect(projected).toEqual(messages);
 });
 
 const user = userRow("hello", { seq: 1 });

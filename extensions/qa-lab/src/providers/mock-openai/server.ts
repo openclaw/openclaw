@@ -183,7 +183,7 @@ import {
   buildSlackOwnedRequesterEvents,
   readSlackProgressTurn,
 } from "./mock-openai-slack-requester.js";
-import { resolveMockSubagentHandoff } from "./mock-openai-subagent-completion.js";
+import * as mockSubagent from "./mock-openai-subagent-completion.js";
 import {
   QA_CODE_MODE_TARGET_MARKER,
   encodeCodeModeTarget,
@@ -872,7 +872,7 @@ async function buildResponsesPayload(
   const terminalCompletionCase = terminalTurn?.caseName;
   const current = terminalTurn?.text ?? "";
   if (terminalCompletionCase && terminalTurn?.kind === "settled") {
-    return buildAssistantEvents("Completion processed.");
+    return buildAssistantEvents(mockSubagent.resolveMockSettledReply(terminalCompletionCase));
   }
   if (terminalCompletionCase === "private") {
     const nonce = QA_SUBAGENT_PRIVATE_RESULT_RE.exec(current)?.[0];
@@ -937,8 +937,6 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents(visibleRepresentation);
     }
-    // Empty parent output settles quietly. Leave a visible answer unsent so
-    // direct-message fallback must deliver the child result or failure notice.
     return buildAssistantEvents("The child run ended. Report its outcome to the requester.");
   }
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
@@ -1941,7 +1939,7 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("read", { path: "FOLLOWTHROUGH_NOTE.md" });
     }
   }
-  const handoff = resolveMockSubagentHandoff({
+  const handoff = mockSubagent.resolveMockSubagentHandoff({
     input,
     body,
     state: scenarioState,

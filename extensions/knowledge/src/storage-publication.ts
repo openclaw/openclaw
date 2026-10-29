@@ -624,6 +624,24 @@ export class StoragePublication extends StorageJournal {
         receipt.reason = prepared.merge.reason;
         receipt.merge = prepared.merge.report;
       }
+      const changed = [prepared.record, ...(prepared.additional ?? []).map((c) => c.after)];
+      if (prepared.supersede) {
+        const { operation, by, reason, impact } = prepared.supersede;
+        receipt.operation = operation;
+        receipt.targetId = prepared.record.id;
+        receipt.replacementId = by;
+        receipt.reason = reason;
+        receipt.items = changed.map((r) => ({
+          key: operation === "supersede" ? "superseded" : "restored",
+          id: r.id,
+          path: r.path,
+          revision: r.revision,
+          hash: r.hash,
+        }));
+        if (impact) {
+          receipt.impact = impact;
+        }
+      }
       const plan: Plan = {
         descriptors,
         activity: access.activity,
@@ -636,7 +654,10 @@ export class StoragePublication extends StorageJournal {
         scope,
         source: prepared.batch?.source,
         record: prepared.record,
-        records: [prepared.record, ...(prepared.additional ?? []).map((c) => c.after)],
+        records: changed,
+        ...(prepared.supersede?.operation === "unsupersede"
+          ? { restored: changed.map((r) => r.id) }
+          : {}),
       };
       access.assertCurrent();
       db.prepare("INSERT INTO mutations VALUES (?,?,?,?,?,?)").run(

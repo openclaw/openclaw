@@ -19,6 +19,7 @@
  * default 100 mixes misses with transcript-only hits. --gc-markers brackets
  * each measured pass for --trace-gc-nvp main-thread promotion/survival
  * totals; run that separately from timing and allocation sampling.
+ * --shared-owner matches unprofiled shared-secret/admin stress clients.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -44,6 +45,7 @@ const { values } = parseArgs({
     "max-bytes-per-audience": { type: "string" },
     "revision-every": { type: "string", default: "100" },
     "gc-markers": { type: "boolean", default: false },
+    "shared-owner": { type: "boolean", default: false },
   },
 });
 const events = Number(values.events);
@@ -115,6 +117,15 @@ const clients: GatewayClient[] = Array.from({ length: 65 }, (_, i) => {
     },
   };
 });
+if (values["shared-owner"]) {
+  delete cfg.gateway!.roles;
+  for (const client of clients) {
+    client.connect.scopes = ["operator.admin"];
+    delete client.authenticatedUserId;
+    delete client.authenticatedUserProfile;
+    delete client.preparedSessionProfile;
+  }
+}
 const targets: SessionSharingTarget[] = Array.from({ length: 10_000 }, (_, i) => ({
   agentId: "main",
   storePath: "/synthetic/sessions",
@@ -143,7 +154,7 @@ async function measure(owner: (typeof owners)[number], pair: number, arm: string
       });
       const key = sharing.getCacheKey(revision);
       const role = sharing.roleForTarget(target);
-      assert.equal(role, member ? "member" : "viewer");
+      assert.equal(role, values["shared-owner"] ? "admin" : member ? "member" : "viewer");
       checksum += key.length + role.length;
       digest?.update(key).update(role);
     }
@@ -168,7 +179,7 @@ async function measure(owner: (typeof owners)[number], pair: number, arm: string
         digest?.update(target.canonicalKey).update(role);
       }
       assert.equal(visible, targets.length);
-      assert.equal(members, member ? targets.length : 0);
+      assert.equal(members, member && !values["shared-owner"] ? targets.length : 0);
     }
   }
   const run = workload === "events" ? publish : listRows;
@@ -222,6 +233,7 @@ async function measure(owner: (typeof owners)[number], pair: number, arm: string
       arm,
       node: process.version,
       workload,
+      sharedOwner: values["shared-owner"],
       events,
       clients: clients.length,
       broadcasts: workload === "events" ? events : 0,

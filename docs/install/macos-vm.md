@@ -61,7 +61,7 @@ Once you have SSH access to a macOS VM, continue at [Install OpenClaw](#6-instal
 If `~/.local/bin` is not in your PATH:
 
 ```bash
-echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.zshrc && source ~/.zshrc
+echo 'export PATH="$PATH:$HOME/.local/bin"' >> "${ZDOTDIR:-$HOME}/.zshrc" && source "${ZDOTDIR:-$HOME}/.zshrc"
 ```
 
 Verify:

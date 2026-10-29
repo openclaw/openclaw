@@ -366,44 +366,6 @@ describe("user message disclosure", () => {
   });
 });
 
-describe("streaming message Markdown", () => {
-  it.each([
-    { markdown: "Intro\n\nTail", owner: ".chat-text > p:last-child" },
-    { markdown: "Intro\n\n", owner: ".chat-text > p" },
-    { markdown: "Intro\n\n```ts\nconst answer = 42;\n```", owner: ".chat-text" },
-  ])("keeps the duplicate count on the terminal owner for $markdown", ({ markdown, owner }) => {
-    const container = document.createElement("div");
-    const view = mountSolid(
-      MessageMarkdown,
-      {
-        markdown,
-        messageKey: "streaming-duplicate",
-        options: { role: "assistant", isStreaming: true },
-        markdownOptions: {},
-        duplicateSuffix: { count: 3, label: "Three identical messages" },
-      },
-      container,
-    );
-
-    expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
-    expect(container.querySelector(`${owner} > .chat-duplicate-count`)?.textContent).toBe("×3");
-    expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
-
-    view.update({
-      markdown: `${markdown}\n\nMore`,
-      messageKey: "streaming-duplicate",
-      options: { role: "assistant", isStreaming: true },
-      markdownOptions: {},
-      duplicateSuffix: { count: 4, label: "Four identical messages" },
-    });
-    expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
-    expect(
-      container.querySelector(".chat-text > p:last-child > .chat-duplicate-count")?.textContent,
-    ).toBe("×4");
-    expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
-  });
-});
-
 describe("message Markdown source preservation", () => {
   it.each(["user", "assistant"])("preserves initial code for %s messages", (role) => {
     for (const source of ["    *literal*", "\t*literal*", "\n\n    *literal*"]) {

@@ -12,6 +12,7 @@ import {
 } from "./session-actor-receipt.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 
 // mock-isolation: Count real receipt encodings separately from residency/transport work.
 vi.mock("node:v8", async (importOriginal) => {
@@ -271,11 +272,10 @@ it.each([false, true])("restores only an exact preimage (delta=%s)", (changed) =
     expect(wire.receipt.postimage.entry).toBeUndefined();
   }
   expect(restoreSessionActorCommittedOutcome(wire, before).receipt.postimage.entry).toEqual(entry);
-  expect(before.entry?.label).toBe("removed");
-  expect(before.entry?.updatedAt).toBe(1);
+  expect(before.entry).toMatchObject({ label: "removed", updatedAt: 1 });
 });
 
-it.each(["append", "patch"] as const)(
+it.each(["append", "tool", "patch", "adopt"] as const)(
   "bounds receipts against the exact preimage held by a %s command",
   (phase) =>
     withActor(async (f) => {
@@ -283,44 +283,67 @@ it.each(["append", "patch"] as const)(
       f.writeEntry({ ...f.nativeEntry()!, skillsSnapshot: { prompt, skills: [] } });
       for (const mode of ["matching", "stale", "changed"] as const) {
         const before = f.read();
+        const updatedAt = mode === "changed" ? 20 : before.entry!.updatedAt;
         const input = {
           target: f.target,
+          sessionId: f.scope.sessionId,
+          expectedState: buildRestartRecoveryExpectedState(before.entry!),
+          lifecycle: {},
           commandId: `resident-${phase}-${mode}`,
           phaseId: "turn",
           entryReference: mode === "stale" ? "stale-token" : before.writeToken,
-          reducers: [
-            {
-              kind: "activity" as const,
-              updatedAt: mode === "changed" ? 20 : before.entry!.updatedAt,
-            },
-          ],
+          reducers: [{ kind: "activity" as const, updatedAt }],
         };
         const selected: Mutation =
-          phase === "patch"
-            ? { type: "session.actor.patch", input }
-            : {
-                type: "session.actor.appendTranscriptEvent",
-                input: {
-                  ...input,
-                  sessionId: f.scope.sessionId,
-                  lifecycleRevision: null,
-                  eventJson: JSON.stringify({
-                    type: "custom",
-                    customType: "synthetic-receipt",
-                    id: `new-event-${mode}`,
-                    parentId: null,
-                    data: { content: "x".repeat(6 * 1024) },
-                  }),
-                },
-              };
+          phase === "patch" || phase === "adopt"
+            ? { type: phase === "patch" ? "session.actor.patch" : "session.actor.adoptRun", input }
+            : phase === "tool"
+              ? {
+                  type: "session.actor.appendToolResult",
+                  input: {
+                    ...input,
+                    append: {
+                      kind: "message",
+                      input: {
+                        scope: f.scope,
+                        cwd: "/synthetic",
+                        messageJson: JSON.stringify({
+                          role: "toolResult",
+                          toolCallId: `tool-${mode}`,
+                          toolName: "synthetic",
+                          content: [{ type: "text", text: "x".repeat(1024) }],
+                          isError: false,
+                          timestamp: 1,
+                        }),
+                      },
+                    },
+                  },
+                }
+              : {
+                  type: "session.actor.appendTranscriptEvent",
+                  input: {
+                    ...input,
+                    lifecycleRevision: null,
+                    eventJson: JSON.stringify({
+                      type: "custom",
+                      customType: "synthetic-receipt",
+                      id: `new-event-${mode}`,
+                      parentId: null,
+                      data: { content: "x".repeat(6 * 1024) },
+                    }),
+                  },
+                };
         await f.prepare(selected);
         const outcome = f.mutate(selected);
         assert(outcome.kind === "committed");
-        if (mode === "matching" || (phase === "patch" && mode === "changed")) {
+        if (mode !== "stale") {
           expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
           const restored = restoreSessionActorCommittedOutcome(outcome, before);
 
           expect(restored.receipt.postimage).toEqual(f.read());
+          expect(restored.receipt.postimage.entry?.skillsSnapshot).toBe(
+            before.entry?.skillsSnapshot,
+          );
         } else {
           expect(outcome.receipt.postimage).toEqual(f.read());
           outcome.receipt.postimage.entry!.skillsSnapshot!.prompt = "caller edit";
@@ -328,7 +351,7 @@ it.each(["append", "patch"] as const)(
         expect(before.entry?.skillsSnapshot?.prompt).toBe(prompt);
         expect(f.read().entry?.skillsSnapshot?.prompt).toBe(prompt);
         expect(f.nativeEntry()?.skillsSnapshot?.prompt).toBe(prompt);
-        expect(f.nativeEntry()?.updatedAt).toBe(mode === "changed" ? 20 : before.entry?.updatedAt);
+        expect(f.nativeEntry()?.updatedAt).toBe(updatedAt);
       }
     }),
 );

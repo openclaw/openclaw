@@ -278,7 +278,6 @@ export function bootstrapApplication(
       seedUserPreferences(snapshot.client, profileId, PROFILE_UI_PREFERENCE_KEYS, entries);
     }
   });
-  const agentIdentity = createAgentIdentityCapability(gateway);
   const theme = createApplicationTheme(settings, gateway);
   const agentSelection = createAgentSelectionCapability(
     gateway,
@@ -540,7 +539,7 @@ export function bootstrapApplication(
         ? (bootRecordPersistence?.readSessionDefaults() ?? null)
         : null;
     },
-    agentIdentity,
+    agentIdentity: createAgentIdentityCapability(gateway, bootRecordPersistence?.readAgentIdentity),
     agentSelection,
     settingsAgentSelection,
     acquireChannels,

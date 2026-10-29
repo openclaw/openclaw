@@ -296,10 +296,10 @@ the ordinary `prompt`. Saved notes are quoted reference data and may repeat on
 resumed turns; they do not assert that a native turn previously consumed them. Transport
 them through the native runtime's private context mechanism; never record them as
 operator-authored input. OpenClaw's policy and observation hooks still receive the
-complete logical prompt. `promptOrigin: "host"` marks a prompt OpenClaw
-generated, such as a command completion, cron run or restart recovery; mark it with the native
-runtime's non-user input marker, if it has one, so native history does not
-attribute it to the operator. Native tool actions must use the provided, run-bound
+complete logical prompt. `promptOrigin: "host"` marks input OpenClaw generated
+or forwarded from another session, such as a command completion, cron run, restart
+recovery or subagent completion; mark it with the native runtime's non-user input
+marker, if it has one, so native history does not attribute it to the operator. Native tool actions must use the provided, run-bound
 `requestToolPermission` callback rather than creating independent approval
 authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
 grant ownership. Paired-node execution and
@@ -317,14 +317,17 @@ A runtime that can accept user input into a turn already in flight offers it
 through `ctx.registerMessageInjection`. Call it once the turn is ready to take
 input; the host then exposes same-turn steering for that run instead of queueing
 the message as a separate turn. The sink answers `isAvailable()` for admission
-and resolves `queueMessage(text, withCurrent)` only after the runtime has
+and resolves `queueMessage(text, withCurrent, options)` only after the runtime has
 acknowledged consumption, not merely after writing to stdin. Pass the synchronous
 native write to `await withCurrent(submit)`: the host prepares current source and
 tool authority before invoking it. Recheck native availability inside `submit`,
 so a turn that finalized during preparation refuses before writing. Reject when
 the input never started, so the host replays it as an ordinary queued turn rather
 than losing it; the host records a started input in the session transcript, so a
-runtime must not also write it there. The registration lives as long as the run.
+runtime must not also write it there. `options.promptOrigin` and
+`options.promptContext` belong to that queued input, with the same contracts as the
+initial prompt: deliver its context through the native private context mechanism,
+and never inherit the running turn's origin. The registration lives as long as the run.
 
 A runtime that can end its current turn without closing the session can offer
 `ctx.registerTurnInterrupt({ interrupt })`; `interrupt("yield")` requests a graceful

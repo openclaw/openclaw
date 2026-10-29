@@ -9,6 +9,7 @@ export type SessionRowDeltaFields = {
 type SessionRowDelta = { set: Record<string, unknown>; remove: string[] };
 
 const preparedRows = new WeakMap<object, SessionRowDeltaFields>();
+const revisionSamples = new WeakMap<object, WeakRef<Record<string, unknown>>>();
 
 /** Keep JSON's omission/null semantics while ignoring nested object key order. */
 function canonicalJson(value: unknown): string | undefined {
@@ -51,14 +52,27 @@ const fingerprintObject = memoizeFrozenPlainDataProjection((value: object) =>
 );
 
 /** Presented row identity is immutable; fingerprints retain no row objects or text. */
-export function prepareSessionRowDeltaFields(row: Record<string, unknown>): SessionRowDeltaFields {
+export function prepareSessionRowDeltaFields(
+  row: Record<string, unknown>,
+  source?: Record<string, unknown>,
+): SessionRowDeltaFields {
   const cached = preparedRows.get(row);
   if (cached) {
     return cached;
   }
+  // Reuse an existing presentation's vector without retaining its row or a second source vector.
+  const sample = source && revisionSamples.get(source)?.deref();
+  const sampleFields = sample && preparedRows.get(sample);
   const fingerprints = new Map<string, number | boolean | null | bigint>();
   for (const field of Object.keys(row)) {
     const value = row[field];
+    if (sampleFields && value === sample[field]) {
+      const fingerprint = sampleFields.fingerprints.get(field);
+      if (fingerprint !== undefined) {
+        fingerprints.set(field, fingerprint);
+      }
+      continue;
+    }
     if (value === null || typeof value === "boolean") {
       fingerprints.set(field, value);
     } else if (typeof value === "number") {
@@ -74,6 +88,10 @@ export function prepareSessionRowDeltaFields(row: Record<string, unknown>): Sess
   }
   const prepared = { fingerprints, fieldCount: fingerprints.size };
   preparedRows.set(row, prepared);
+  // Keep one weak sample per immutable materialized revision; collected samples recompute normally.
+  if (source && !sample) {
+    revisionSamples.set(source, new WeakRef(row));
+  }
   return prepared;
 }
 

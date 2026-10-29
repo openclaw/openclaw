@@ -42,6 +42,13 @@ const isEntry = (entries: readonly string[], file: string) =>
 afterEach(() => vi.restoreAllMocks());
 
 describe("check-deadcode-exports", () => {
+  it("models the renderer and path-selected native compiler as executable roots", () => {
+    expect(knipConfig.workspaces).toHaveProperty(
+      "packages/mermaid-renderer.entry",
+      expect.arrayContaining(["src/renderer.ts!", "src/native.ts!", "src/pele.min.ts!"]),
+    );
+  });
+
   it("models the PostgreSQL broker fixture only when both consumers exist", () => {
     const compile = knipConfig.compilers.mjs;
     const filePath = "config/knip-dynamic-consumers.mjs";

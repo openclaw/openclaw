@@ -45,7 +45,6 @@ import {
   startGitHubIdentityOperation,
   type GitHubIdentityPreparation,
   type GitHubReadIdentityPreparation,
-  type GitHubReadIdentityStarter,
   type PreparedGitHubReadIdentity,
   type PreparedGitHubSourceReadIdentity,
 } from "./github-read-identity.js";
@@ -62,6 +61,7 @@ import type {
   PersonalGitHubIdentityPreparation,
   PreparedGitHubPublicationIdentity,
   PreparedGitHubToolEnvironment,
+  SharedGitHubIdentityPreparation,
 } from "./github-tool-identity.types.js";
 import { writeManagedGitHubProfileFiles } from "./github-tool-profile-files.js";
 import { resolveManagedGitHubProfileDir } from "./github-tool-profile-path.js";
@@ -442,25 +442,13 @@ export function matchesPreparedGitHubPublicationIdentity(params: {
 }
 
 async function prepareSharedGitHubIdentity(
-  params: GitHubIdentityPreparation & {
-    assertCurrent?: () => void;
-    startCurrent?: GitHubReadIdentityStarter;
-    allowAnonymous?: boolean;
-    allowAppInstallation?: boolean;
-    requestedRepository?: string;
-    allowStale?: boolean;
-  },
+  params: SharedGitHubIdentityPreparation,
   identity: ResolvedGitHubToolIdentity,
   readNativeToken = readNativeGitHubToken,
   host = resolveGitHubHost(),
   apiBaseUrl = resolveGitHubApiBaseUrl(),
 ) {
   const managed = identity.source !== "system-detected";
-  const readOAuth = () =>
-    managed && identity.config.kind === "oauth"
-      ? inspectGitHubOAuthRecord(identity.config.profileId)
-      : undefined;
-  const oauthAtStart = await startGitHubIdentityOperation(readOAuth, params);
   if (managed && identity.config.kind === "app-installation") {
     return await prepareAppGitHubIdentity(
       params,
@@ -501,17 +489,10 @@ async function prepareSharedGitHubIdentity(
     () => verifyGitHubCredential(token, { apiBaseUrl, allowStale: params.allowStale }),
     params,
   );
-  return startGitHubIdentityOperation(async () => {
+  return startGitHubIdentityOperation(() => {
     if (probe.status !== "available") {
       throw new GitHubIdentityError(probe.status);
     }
-    const oauth = await readOAuth();
-    params.assertCurrent?.();
-    const accessExpiresAtMs = resolveGitHubPublicationAccessExpiry(
-      oauthAtStart,
-      oauth,
-      probe.account.accountId,
-    );
     const prepared: Omit<PreparedGitHubPublicationIdentity, "env" | "source"> & {
       source: "system-detected" | "system-configured" | "agent-override";
       revoke?: () => Promise<void>;
@@ -520,7 +501,6 @@ async function prepareSharedGitHubIdentity(
       ...(managed ? { profileId: identity.config.profileId } : {}),
       host,
       account: probe.account,
-      ...(accessExpiresAtMs !== undefined ? { accessExpiresAtMs } : {}),
     };
     return { prepared, token, readToken, ...(probe.stale ? { stale: true as const } : {}) };
   }, params);
@@ -534,11 +514,31 @@ export async function prepareGitHubPublicationIdentity(
   // Capture the child environment before awaiting credentials; retirement cannot
   // redirect an already-admitted publication to another profile.
   const env = { ...githubIdentityProbeEnvironment(params, identity), GH_PROMPT_DISABLED: "1" };
-  const { prepared, token } = await prepareSharedGitHubIdentity(params, identity);
+  // Only publication consumes expiry; bind it to the credential's rotation window.
+  const readOAuth = () =>
+    identity.source !== "system-detected" && identity.config.kind === "oauth"
+      ? inspectGitHubOAuthRecord(identity.config.profileId)
+      : undefined;
+  const host = resolveGitHubHost();
+  const apiBaseUrl = resolveGitHubApiBaseUrl();
+  const oauthAtStart = await startGitHubIdentityOperation(readOAuth, params);
+  const shared = await prepareSharedGitHubIdentity(params, identity, undefined, host, apiBaseUrl);
+  const { prepared, token } = shared;
   if (!prepared || token === undefined) {
     throw new GitHubIdentityError("unavailable");
   }
-  return Object.freeze({ ...prepared, env: Object.freeze(withGitHubToken(env, token)) });
+  const oauth = await startGitHubIdentityOperation(readOAuth, params);
+  params.assertCurrent?.();
+  const accessExpiresAtMs = resolveGitHubPublicationAccessExpiry(
+    oauthAtStart,
+    oauth,
+    prepared.account.accountId,
+  );
+  return Object.freeze({
+    ...prepared,
+    ...(accessExpiresAtMs !== undefined ? { accessExpiresAtMs } : {}),
+    env: Object.freeze(withGitHubToken(env, token)),
+  });
 }
 
 /** Options expose account facts only; publication obtains its own live credential. */

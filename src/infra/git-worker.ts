@@ -85,6 +85,7 @@ const SPAWN_OPERATIONS = {
   "workspace.inventory.existing": "workspace.inventory",
   "workspace.inventory.paths": "workspace.inventory",
   "workspace.inventory.staged-directories": "workspace.inventory",
+  "workspace.manifest.local": "workspace.manifest",
   "workspace.manifest.capture": "workspace.manifest",
   "workspace.manifest.base-refresh": "workspace.manifest",
   "workspace.manifest.equal": "workspace.manifest",

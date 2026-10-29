@@ -390,12 +390,38 @@ suite.define(() => {
             }
           });
         }
+        if (profile === "offline" || profile === "matching") {
+          // The service worker's offline document has no embedded bootstrap identity,
+          // and an unreachable Gateway cannot answer the bootstrap config fetch.
+          await page.route("**/control-ui-config.json", (route) => route.abort());
+          await page.addInitScript(() => {
+            const names: string[] = [];
+            sessionStorage.setItem("openclaw.identity-proof.placeholders", "[]");
+            new MutationObserver(() => {
+              const composer = document.querySelector<HTMLTextAreaElement>(
+                ".agent-chat__composer-combobox textarea",
+              );
+              if (composer && names.at(-1) !== composer.placeholder) {
+                names.push(composer.placeholder);
+                sessionStorage.setItem(
+                  "openclaw.identity-proof.placeholders",
+                  JSON.stringify(names),
+                );
+              }
+            }).observe(document, { subtree: true, childList: true, attributes: true });
+          });
+        }
         if (profile === "offline") {
           await gateway.setOnline(false);
           await page.reload();
           await transcript.getByText(transcriptText, { exact: true }).waitFor();
           await sidebar.getByText("Cached only session", { exact: true }).waitFor();
           await page.locator(".chat-pane__connection-state").waitFor({ state: "visible" });
+          expect(
+            await page.evaluate(() =>
+              JSON.parse(sessionStorage.getItem("openclaw.identity-proof.placeholders") ?? "null"),
+            ),
+          ).toEqual(["Message Observatory"]);
           expect(await page.locator(".chat-pane-cache__pane--active .skeleton").count()).toBe(0);
           expect(await gateway.getRequests("connect")).toEqual([]);
           expect(await gateway.getRequests("chat.send")).toEqual([]);
@@ -533,6 +559,13 @@ suite.define(() => {
         const finalText =
           profile === "different" ? "This is profile B's conversation." : transcriptText;
         await transcript.getByText(finalText, { exact: true }).waitFor();
+        if (profile === "matching") {
+          expect(
+            await page.evaluate(() =>
+              JSON.parse(sessionStorage.getItem("openclaw.identity-proof.placeholders") ?? "null"),
+            ),
+          ).toEqual(["Message Observatory"]);
+        }
         await capture(`warm-${profile}-after-hello.png`);
         if (profile === "large" || shortTail || imported) {
           await waitForChatScrollIdle(page);

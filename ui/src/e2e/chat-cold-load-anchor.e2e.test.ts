@@ -228,7 +228,7 @@ suite.define(() => {
           subscriptionInitialHistory: false,
           authMode: "trusted-proxy",
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-          heldMethods: ["connect", "sessions.messages.unsubscribe"],
+          heldMethods: ["connect"],
           sessions: [session],
           sessionInfo: session,
           historyMessages,
@@ -254,9 +254,6 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
-        if ((await gateway.getRequests("sessions.messages.unsubscribe")).length > 0) {
-          await gateway.resolveDeferred("sessions.messages.unsubscribe");
-        }
         await page
           .getByText("Synthetic final reply: the report is ready.", { exact: true })
           .waitFor();
@@ -396,14 +393,16 @@ suite.define(() => {
         expect(titleWrites?.[0]?.title).toBe("expected-title");
         expect(titleWrites?.some((event) => event.title === "New session")).toBe(false);
         expectFrames(samples, session.label);
+        expect(await gateway.getRequests("sessions.messages.unsubscribe")).toHaveLength(0);
         await gateway.waitForRequest("connect");
         await page.evaluate(() => {
           window.coldLoadReconcileStart = window.coldLoadSamples?.length ?? 0;
           window.coldLoadTitleTrace?.mark("reconcile");
         });
-        await gateway.waitForRequest("sessions.messages.unsubscribe");
+        // Cached presentation must not send subscription traffic before hello admission.
+        expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.messages.unsubscribe")).toHaveLength(0);
         await gateway.resolveDeferred("connect");
-        await gateway.resolveDeferred("sessions.messages.unsubscribe");
         await gateway.waitForRequest("chat.startup");
         await gateway.waitForRequest("progressCard.get");
         await page.waitForFunction(() => {

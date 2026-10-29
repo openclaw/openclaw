@@ -13,6 +13,7 @@ import {
 } from "../components/solid/new-session-link.tsx";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { registerToastContainer } from "../lib/toast.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
@@ -95,6 +96,10 @@ export function ApplicationShell(props: {
     props.host.shellRevision();
     return readShellView(props.host);
   });
+  const sessionOwner = createMemo(() => view().context.sessions);
+  const sessionRows = createMemo(() =>
+    projectOwner(sessionOwner(), (sessions) => sessions.state.result?.sessions),
+  );
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
   const footerStatus = createMemo(() =>
     shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
@@ -465,6 +470,8 @@ export function ApplicationShell(props: {
               canGrant: view().overlaySnapshot.approvalCanGrant,
               errors: view().overlaySnapshot.approvalErrors,
               nodeNames: view().overlaySnapshot.approvalNodeNames,
+              sessions: sessionRows().read(),
+              currentSessionKey: view().sessionRoute ? props.host.activeSessionKey : undefined,
               onDecision: (
                 approvalId: string,
                 decision: Parameters<

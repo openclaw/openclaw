@@ -3,6 +3,7 @@ import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, ModelRequestHeaders } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { notifyListeners } from "../../shared/listeners.js";
+import { gateAgentToolExecution } from "../agent-tool-availability.js";
 import {
   getSteeringRuntimeContext,
   shouldRetainSteeringRuntimeContext,
@@ -604,16 +605,25 @@ export abstract class AgentSessionBase {
   /**
    * Set active tools by name.
    * Only tools in the registry can be enabled. Unknown tool names are ignored.
+   * An execution cap preserves these definitions and refuses denied calls.
    * Refreshes extension prompt metadata while preserving the runtime-owned prompt.
    * Changes take effect on the next agent turn.
    */
-  setActiveToolsByName(toolNames: string[]): void {
+  setActiveToolsByName(toolNames: string[], callableToolNames?: readonly string[]): void {
     const tools: AgentTool[] = [];
     const validToolNames: string[] = [];
+    const callable = callableToolNames ? new Set(callableToolNames) : undefined;
     for (const name of toolNames) {
       const tool = this.toolRegistry.get(name);
       if (tool) {
-        tools.push(tool);
+        tools.push(
+          !callable || callable.has(name)
+            ? tool
+            : gateAgentToolExecution(
+                tool,
+                `${name} is not available in this turn. Do not retry ${name}.`,
+              ),
+        );
         validToolNames.push(name);
       }
     }

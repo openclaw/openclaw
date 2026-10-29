@@ -21,6 +21,7 @@ import {
 } from "../image-sanitization.js";
 import { readNodePermissionError } from "../node-permission-error.js";
 import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
+import { markToolExecutionRefused } from "../tool-effect-receipt.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { ComputerToolSession } from "./computer-tool-node.js";
@@ -51,7 +52,7 @@ import {
   getInProcessGatewayToolContext,
   runWithGatewayToolCleanupContext,
 } from "./in-process-gateway.js";
-import { textResult } from "./tool-results.js";
+import { jsonResult, textResult } from "./tool-results.js";
 
 export type { ComputerContextEpoch, ComputerToolTransport } from "./computer-tool-shared.js";
 
@@ -353,14 +354,25 @@ export function createComputerTool(options?: {
     availableActions(options?.transport?.computerUse?.actions ?? initialPairedActions),
     targetScope,
   );
+  let capabilityNotice: string | undefined;
   // Serialize execute() per tool instance. This runtime can dispatch parallel
   // tool calls (some providers enable it by default), but desktop input and the
   // shared target/frame/button state must apply in model order, not completion
   // order: a click racing a type could type into the wrong app, and split
   // mouse down/move/up could interleave. Chaining preserves invocation order.
   let opQueue: Promise<unknown> = Promise.resolve();
-  const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
-    const result = opQueue.then(fn, fn);
+  const serialize = (
+    fn: () => Promise<AgentToolResult<unknown>>,
+  ): Promise<AgentToolResult<unknown>> => {
+    const run = async () => {
+      const result = await fn();
+      if (capabilityNotice) {
+        result.content.push({ type: "text", text: capabilityNotice });
+        capabilityNotice = undefined;
+      }
+      return result;
+    };
+    const result = opQueue.then(run, run);
     opQueue = result.then(
       () => undefined,
       () => undefined,
@@ -375,11 +387,13 @@ export function createComputerTool(options?: {
     transport: options?.transport,
     gatewayStatus: options?.pairedNodeComputerUse?.gateway,
     onCapabilitiesChanged: (capabilities) => {
-      tool.parameters = createComputerToolSchema(
-        availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS),
-        targetScope,
-      );
-      tool.description = buildComputerToolDescription(capabilities, targetScope);
+      // Live target facts append to history, never rewrite the provider prefix.
+      capabilityNotice = `Current computer capabilities: ${JSON.stringify({
+        actions: availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS),
+        targets: capabilities?.targets,
+        observations: capabilities?.observations,
+        deliveryModes: capabilities?.deliveryModes,
+      })}`;
     },
     registerRunCleanup: options?.registerRunCleanup,
     getOperationQueue: () => opQueue,
@@ -486,6 +500,17 @@ export function createComputerTool(options?: {
           gatewayOpts,
           signal,
         });
+        if ("unavailableAction" in resolved) {
+          return markToolExecutionRefused(
+            jsonResult({
+              status: "refused",
+              reason: "action_unavailable",
+              action: resolved.unavailableAction,
+              availableActions: resolved.availableActions,
+            }),
+            { kind: "gated", reason: "action_unavailable" },
+          );
+        }
         const deliverObservation = async (
           result: ComputerActResult,
           observationAction = action,

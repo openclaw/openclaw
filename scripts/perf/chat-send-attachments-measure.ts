@@ -9,6 +9,10 @@
  * stage-sandbox-media.ts under their original src/ paths; imports keep their URL.
  * --workload image|pdf|many|mixed selects a 1200x1200 PNG, 1 MiB PDF, twelve 4 KiB
  * text files, or their round-robin mix. Every operation verifies byte preservation.
+ * --workload inline selects three 700x700 PNGs below the image offload threshold
+ * and includes real transcript persistence in the measured preparation interval.
+ * Run inline against actual base/candidate source: --owner-dir hooks do not reach
+ * attachment-processor worker isolates and cannot compare their decode behavior.
  * Fresh synthetic state only; preparation is real, admission is a fixed test fixture.
  * Latency/CPU cover preparation; allocation/GC cover the entire loop including
  * verification and deletion. Setup, warm-up and state teardown are excluded.
@@ -43,7 +47,11 @@ const { values } = parseArgs({
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0, "--iterations must be positive");
-assert(["image", "pdf", "many", "mixed"].includes(values.workload), "invalid --workload");
+assert(["image", "inline", "pdf", "many", "mixed"].includes(values.workload), "invalid --workload");
+assert(
+  values.workload !== "inline" || !values["owner-dir"],
+  "inline requires actual base/candidate source; --owner-dir does not override attachment workers",
+);
 const root = path.resolve(values["state-dir"]);
 const output = path.resolve(values.output);
 await fs.mkdir(path.dirname(output), { recursive: true });
@@ -107,7 +115,8 @@ const { normalizeChatSendRequest } =
   await import("../../src/gateway/server-methods/chat-send-request.js");
 const { prepareChatSendAttachments } =
   await import("../../src/gateway/server-methods/chat-send-attachments.js");
-const { discardPreparedInboundMedia } = await import("../../src/gateway/chat-attachments.js");
+const { discardPreparedInboundMedia, persistInboundImagesForTranscript } =
+  await import("../../src/gateway/chat-attachments.js");
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 const { createSubsystemLogger } = await import("../../src/logging/subsystem.js");
 const { encodePngRgb } = await import("../../src/media/png-encode.js");
@@ -124,6 +133,7 @@ for (let index = 0; index < pixels.length; index++) {
   pixels[index] = seed & 255;
 }
 const png = encodePngRgb(pixels, 1200, 1200);
+const inlinePng = encodePngRgb(pixels.subarray(0, 700 * 700 * 3), 700, 700);
 const stream = `BT /F1 12 Tf 72 720 Td (Synthetic attachment benchmark) Tj ET\n%${" ".repeat(1024 * 1024)}\n`;
 const objects = [
   "<< /Type /Catalog /Pages 2 0 R >>",
@@ -148,6 +158,12 @@ const attachment = (fileName: string, mimeType: string, bytes: Buffer) =>
   }) satisfies Attachment;
 const workloads = [
   { name: "image", files: [attachment("synthetic.png", "image/png", png)] },
+  {
+    name: "inline",
+    files: Array.from({ length: 3 }, (_, index) =>
+      attachment(`synthetic-inline-${index}.png`, "image/png", inlinePng),
+    ),
+  },
   { name: "pdf", files: [attachment("synthetic.pdf", "application/pdf", Buffer.from(pdf))] },
   {
     name: "many",
@@ -155,7 +171,9 @@ const workloads = [
       attachment(`synthetic-${index}.txt`, "text/plain", Buffer.alloc(4096, `file ${index}\n`)),
     ),
   },
-].filter((workload) => values.workload === "mixed" || values.workload === workload.name);
+].filter((workload) =>
+  values.workload === "mixed" ? workload.name !== "inline" : values.workload === workload.name,
+);
 const expected = new Map(
   workloads.flatMap(({ files }) =>
     files.map((file) => [file.fileName, digest(Buffer.from(file.content, "base64"))] as const),
@@ -242,19 +260,46 @@ await withOpenClawTestState({ label: "attachment-measure" }, async (state) => {
     const cpuBefore = process.cpuUsage();
     const started = performance.now();
     const result = await prepareChatSendAttachments(params);
+    assert(result.ok, "attachment preparation failed");
+    const persisted =
+      workload.name === "inline"
+        ? await persistInboundImagesForTranscript({
+            images: result.value.parsedImages,
+            offloadedRefs: result.value.offloadedRefs,
+            log: params.context.logGateway,
+            logContext: "synthetic attachment benchmark",
+            assertCurrent: () => controller.signal.throwIfAborted(),
+          })
+        : undefined;
     const elapsed = performance.now() - started;
     const threadCpu = process.threadCpuUsage(threadBefore);
     const cpu = process.cpuUsage(cpuBefore);
-    assert(result.ok, "attachment preparation failed");
     if (measured) {
       timings.get(workload.name)!.push(elapsed);
       threadCpuUs += threadCpu.user + threadCpu.system;
       processCpuUs += cpu.user + cpu.system;
     }
-    assert.equal(result.value.offloadedRefs.length, workload.files.length);
+    assert.equal(
+      result.value.offloadedRefs.length,
+      workload.name === "inline" ? 0 : workload.files.length,
+    );
+    if (persisted) {
+      assert.equal(persisted.omission, "none");
+      assert.equal(persisted.entries.length, workload.files.length);
+      assert.deepEqual(
+        persisted.entries.map((entry) => entry.sourceIndex),
+        workload.files.map((_file, attachmentIndex) => attachmentIndex),
+      );
+      for (const entry of persisted.entries) {
+        assert.equal(entry.imageKind, "inline");
+        assert.equal(digest(await fs.readFile(entry.path)), expected.get(entry.fact.fileName!));
+      }
+    }
     assert.deepEqual(
       result.value.mediaPathOffloads.map((fact) => fact.fileName),
-      workload.name === "image" ? [] : workload.files.map((file) => file.fileName),
+      workload.name === "image" || workload.name === "inline"
+        ? []
+        : workload.files.map((file) => file.fileName),
       "staging must preserve every expected attachment in request order",
     );
     const stagedDirectories = new Set<string>();
@@ -269,6 +314,9 @@ await withOpenClawTestState({ label: "attachment-measure" }, async (state) => {
       stagedDirectories.add(path.dirname(staged));
     }
     await discardPreparedInboundMedia(result.value.offloadedRefs);
+    if (persisted) {
+      await discardPreparedInboundMedia(persisted.entries);
+    }
     for (const directory of stagedDirectories) {
       await fs.rm(directory, { recursive: true });
     }

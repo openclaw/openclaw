@@ -67,19 +67,19 @@ import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import type {
   GatewaySessionModelSource,
+  SessionChildActivity,
   SessionListRowContext,
 } from "./session-utils-contracts.js";
 import {
   resolveEstimatedSessionCostUsd,
   readStoreChildSessionLinks,
   type SessionChildLink,
-  resolveSessionChildOwners,
   resolveSessionChildController,
-  shouldPropagateChildActivity,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
   projectGatewaySessionRunState,
+  projectPreparedSessionChild,
   resolveGatewaySessionKind,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
@@ -633,7 +633,10 @@ export function replaceSessionRowFacts(
 
 export function presentSessionRow(
   materialized: ReturnType<typeof materializeSessionRow>,
-  options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & { now: number },
+  options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & {
+    now: number;
+    childActivity?: SessionChildActivity;
+  },
 ): GatewaySessionRow {
   const row = { ...materialized.row };
   const { source } = materialized;
@@ -674,36 +677,30 @@ export function presentSessionRow(
   row.estimatedCostUsd =
     source.estimatedCostUsd ??
     asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
-  const children = source.childLinks?.flatMap((child) => {
-    const { key, entry: childEntry } = child;
-    if (options.excludedChildKeys?.has(key)) {
-      return [];
-    }
-    const childActive = projectGatewaySessionRunState({
-      ...child,
-      now,
-      rowContext: {
+  let children = options.childActivity;
+  if (!children) {
+    const keys: string[] = [];
+    let active = false;
+    for (const child of source.childLinks ?? []) {
+      if (options.excludedChildKeys?.has(child.key)) {
+        continue;
+      }
+      const contribution = projectPreparedSessionChild(child, row.key, now, {
         subagentRuns,
         projectedAgentRuns: options.projectedAgentRuns,
         projectedSubagentActivity: options.projectedSubagentActivity,
-      },
-    }).fields.hasActiveSubagentRun;
-    if (
-      !resolveSessionChildOwners({
-        ...child,
-        now,
-        subagentRuns,
-        hasActiveRun: childActive,
-      }).includes(row.key)
-    ) {
-      return [];
+      });
+      if (contribution.included) {
+        keys.push(child.key);
+        active ||= contribution.active === true;
+      }
     }
-    if (childActive && shouldPropagateChildActivity(key, childEntry, row.key)) {
-      row.hasActiveSubagentRun = true;
-    }
-    return [key];
-  });
-  row.childSessions = children?.length ? children : undefined;
+    children = { childSessions: keys.length ? keys : undefined, hasActiveSubagentRun: active };
+  }
+  row.childSessions = children.childSessions;
+  if (children.hasActiveSubagentRun) {
+    row.hasActiveSubagentRun = true;
+  }
   row.activeModelProvider = options.activeModel?.provider;
   row.activeModel = options.activeModel?.model;
   return row;

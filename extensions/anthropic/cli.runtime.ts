@@ -54,6 +54,7 @@ type ClaudeCliTurn = {
     string,
     {
       text: string;
+      promptContext?: CliBackendExecuteContext["promptContext"];
       started: ReturnType<typeof createDeferred<void>>;
     }
   >;
@@ -169,18 +170,18 @@ async function authorizeTool(
   }
 }
 
-function isInjectedPrompt(turn: ClaudeCliTurn, prompt: unknown): boolean {
+function resolvePromptContext(turn: ClaudeCliTurn, prompt: unknown) {
   if (turn.promptInputUuid !== turn.inputUuid) {
-    return true;
+    return turn.injectedInputs.get(turn.promptInputUuid)?.promptContext;
   }
   // Some native versions submit hooks before the started receipt. Match only the
   // first pass; subsequent passes belong to that UUID even when text is rewritten.
   const injected = [...turn.injectedInputs].find(([, input]) => input.text === prompt);
   if (!injected) {
-    return false;
+    return turn.context.promptContext;
   }
   turn.promptInputUuid = injected[0];
-  return true;
+  return injected[1].promptContext;
 }
 
 async function handleRequest(
@@ -197,14 +198,12 @@ async function handleRequest(
   const input = request.input;
   const turn = activeTurn(session);
   if (request.callback_id === "UserPromptSubmit" && input.hook_event_name === "UserPromptSubmit") {
-    if (!turn || signal.aborted || isInjectedPrompt(turn, input.prompt)) {
+    if (!turn || signal.aborted) {
       return {};
     }
     turn.promptSubmitted = true;
-    const additionalContext = [
-      turn.context.promptContext?.prependContext,
-      turn.context.promptContext?.appendContext,
-    ]
+    const promptContext = resolvePromptContext(turn, input.prompt);
+    const additionalContext = [promptContext?.prependContext, promptContext?.appendContext]
       .filter(Boolean)
       .join("\n\n");
     // Native can rewrite the prompt and rerun hooks; only its final pass is persisted.
@@ -268,11 +267,16 @@ function rejectInjectedInputs(turn: ClaudeCliTurn, error: Error) {
   }
 }
 
+function canInjectInput(session: ClaudeCliSession, turn: ClaudeCliTurn): boolean {
+  return session.hasInputLifecycle && turn.promptSubmitted && activeTurn(session) === turn;
+}
+
 async function injectInput(
   session: ClaudeCliSession,
   turn: ClaudeCliTurn,
   text: string,
   withCurrent: (submit: () => void) => Promise<void>,
+  options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext">,
 ): Promise<void> {
   const uuid = randomUUID();
   const started = createDeferred<void>();
@@ -281,17 +285,14 @@ async function injectInput(
   let written: Promise<void> | undefined;
   await withCurrent(() => {
     // Native lifecycle is the receipt; recheck availability after host preparation.
-    if (
-      !session.hasInputLifecycle ||
-      !session.transport ||
-      !turn.promptSubmitted ||
-      activeTurn(session) !== turn
-    ) {
+    if (!session.transport || !canInjectInput(session, turn)) {
       throw new Error("The Claude CLI turn cannot accept more input.");
     }
-    turn.injectedInputs.set(uuid, { text, started });
+    turn.injectedInputs.set(uuid, { text, started, promptContext: options?.promptContext });
     turn.submittedInputUuids.add(uuid);
-    written = session.transport.send(createUserInput(turn.context, text, uuid));
+    written = session.transport.send(
+      createUserInput(turn.context, text, uuid, options?.promptOrigin === "host"),
+    );
     // Host admission cleanup may await after the synchronous write.
     void written.catch(() => {});
   });
@@ -745,12 +746,9 @@ export async function* executeClaudeCli(
       const hostGenerated = context.promptOrigin === "host";
       await transport.send(createUserInput(context, context.prompt, turn.inputUuid, hostGenerated));
       context.registerMessageInjection?.({
-        isAvailable: () =>
-          session.hasInputLifecycle &&
-          turn.inputStarted &&
-          turn.promptSubmitted &&
-          activeTurn(session) === turn,
-        queueMessage: (text, withCurrent) => injectInput(session, turn, text, withCurrent),
+        isAvailable: () => canInjectInput(session, turn),
+        queueMessage: (text, withCurrent, options) =>
+          injectInput(session, turn, text, withCurrent, options),
       });
     })().catch((error: unknown) => session.handle.close("abort", error));
     for await (const record of turn.events) {

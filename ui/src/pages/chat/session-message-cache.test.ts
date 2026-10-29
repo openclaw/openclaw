@@ -24,6 +24,7 @@ function createCacheContext(
   const write = (snapshot: ChatSessionSnapshot, sessionKey = "home") =>
     cacheChatSessionSnapshot(cache, host, target(sessionKey), snapshot);
   return {
+    cache,
     read,
     write,
     messages: (sessionKey: string, agentId?: string) =>
@@ -49,29 +50,36 @@ const widgetSnapshot = (
 ): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
-  it("retains reaction facts only across the same session incarnation", () => {
-    const { read, write } = createCacheContext();
-    const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }];
-    write(widgetSnapshot(["first"], "session-1", { messageReactions: { reply: summaries } }));
-    write(widgetSnapshot(["new history"], "session-1"));
-    expect(read()?.messageReactions).toEqual({ reply: summaries });
-    write(widgetSnapshot(["replacement"], "session-2"));
-    expect(read()?.messageReactions).toBeUndefined();
+  it("persists changed session display facts once without repeating unchanged writes", () => {
+    const { cache, write, read } = createCacheContext();
+    const persisted = vi.fn();
+    observeChatCache(cache, { write: persisted, delete: vi.fn() });
+    const sessionState = { archived: true, unarchiveAllowed: true, parentSession: null };
+    const snapshot = widgetSnapshot(["saved conversation"], "session-1", { sessionState });
+    write(snapshot);
+    write({ ...snapshot, sessionState: { ...sessionState } });
+    expect(persisted).toHaveBeenCalledTimes(1);
+    write({ ...snapshot, sessionState: { ...sessionState, archived: false } });
+    expect(persisted).toHaveBeenCalledTimes(2);
+    expect(read()?.sessionState?.archived).toBe(false);
   });
-
-  it("retains composer display facts only for the same session incarnation", () => {
+  it.each([
+    { messageReactions: { reply: [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }] } },
+    { composer: { id: "saved", provider: "example", name: "Saved", permissionMode: "full" } },
+    {
+      headerViewers: { users: [{ id: "peer", name: "Peer" }], totalCount: 5, ownerViewing: false },
+      headerSharing: "public",
+      sessionState: { archived: true, unarchiveAllowed: false },
+    },
+  ] satisfies Partial<ChatSessionSnapshot>[])("retains %j across the same incarnation", (facts) => {
     const { read, write } = createCacheContext();
-    const composer = {
-      id: "saved",
-      provider: "example",
-      name: "Saved",
-      permissionMode: "full" as const,
-    };
-    write(widgetSnapshot(["cached"], "session-1", { composer }));
+    write(widgetSnapshot(["cached"], "session-1", facts));
     write(widgetSnapshot(["live"], "session-1"));
-    expect(read()?.composer).toEqual(composer);
+    expect(read()).toMatchObject(facts);
     write(widgetSnapshot(["reset"], "session-2"));
-    expect(read()?.composer).toBeUndefined();
+    for (const field of Object.keys(facts)) {
+      expect(read()).not.toHaveProperty(field);
+    }
   });
 
   it("publishes a footprint batch once and rejects a retired session's deferred batch", () => {
@@ -116,17 +124,19 @@ describe("session message cache", () => {
       cache,
       host,
       target,
-      widgetSnapshot([], "one", { widgetHeights: { [row]: 100 } }),
+      widgetSnapshot([], "one", { widgetHeights: { [row]: 100 }, headerSharing: "public" }),
     );
     const layout = createChatWidgetLayout()(cache, host, target);
     expect(layout.readRows()).toEqual({ [row]: 100 });
     host.client.recoveryScope = "account-b";
+    expect(readChatSessionSnapshot(cache, host, target)).toBeNull();
     cacheChatSessionSnapshot(
       cache,
       host,
       target,
       widgetSnapshot([], "one", { widgetHeights: { [row]: 200 } }),
     );
+    expect(readChatSessionSnapshot(cache, host, target)?.headerSharing).toBeUndefined();
     expect(layout.readRows()).toBeUndefined();
     expect(layout.read(row)).toBeUndefined();
     expect(createChatWidgetLayout()(cache, host, target).readRows()).toEqual({ [row]: 200 });

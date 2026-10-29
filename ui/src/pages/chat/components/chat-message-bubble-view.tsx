@@ -104,7 +104,13 @@ export function GroupedMessage(props: {
     <Show
       when={state().workspaceConflict}
       fallback={
-        <Show when={!state().empty}>
+        <Show
+          when={
+            !state().empty ||
+            (props.options.ownsTerminalStatus === true &&
+              assistantMessageIsInterrupted(state().message))
+          }
+        >
           {(_visible) => {
             const entryRef = messageElements?.forKey(initialMessageKey);
             const bindEntry = elementRef((element) => {
@@ -164,6 +170,7 @@ export function GroupedMessage(props: {
                   </Switch>
                   <Show
                     when={
+                      props.options.ownsTerminalStatus !== false &&
                       state().sourceRole === "assistant" &&
                       assistantMessageIsInterrupted(state().message)
                     }
@@ -173,18 +180,6 @@ export function GroupedMessage(props: {
                       role="status"
                     >
                       {t("chat.composer.runInterrupted")}
-                    </div>
-                  </Show>
-                  <Show
-                    when={state().duplicateCount > 1 && (!state().markdown || state().jsonResult)}
-                  >
-                    <div
-                      class="chat-duplicate-count"
-                      aria-label={t("chat.messages.duplicatesCollapsed", {
-                        count: String(state().duplicateCount),
-                      })}
-                    >
-                      ×{state().duplicateCount}
                     </div>
                   </Show>
                 </div>
@@ -275,7 +270,6 @@ function MessageText(props: ContentProps) {
           messageKey={props.messageKey}
           options={prepared().options}
           markdownOptions={props.state().markdownRenderOptions}
-          duplicateSuffix={props.state().duplicateSuffix}
           media={prepared().media}
         />
       </Match>

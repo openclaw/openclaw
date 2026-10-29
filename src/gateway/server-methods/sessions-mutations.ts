@@ -90,6 +90,7 @@ function createSessionPatchHandler(
         request = { many: false, params };
       }
       const inputPatch = request.many ? request.params.patch : request.params;
+      diagnostics.describeRequest(request.many ? request.params.targets.length : 1, inputPatch);
       const scopes = client?.connect.scopes ?? [];
       if (
         (inputPatch.permissionMode === "full" ||
