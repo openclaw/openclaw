@@ -10,21 +10,28 @@ const fixture = vi.hoisted(() => ({
   isEnabled: vi.fn(),
 }));
 vi.mock("node:fs/promises", () => ({ default: { readFile: fixture.readFile } }));
-vi.mock("./gateway-run-argv.js", () => ({ isGatewayRunInvocationArgv: () => fixture.gateway }));
-vi.mock("../daemon/service.js", () => ({
+vi.mock("./gateway-run-argv.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-run-argv.js")>()),
+  isGatewayRunInvocationArgv: () => fixture.gateway,
+}));
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
   resolveGatewayService: () => fixture,
   readGatewayServiceState: fixture.readFullState,
 }));
-vi.mock("../daemon/systemd-service-files.js", () => ({
+vi.mock("../daemon/systemd-service-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd-service-files.js")>()),
   resolveSystemdUnitPathForName: (_env: unknown, name: string) =>
     "/home/example/.config/systemd/user/" + name + ".service",
   readSystemdServiceCommandLocation: fixture.readLocation,
 }));
-vi.mock("../daemon/systemd-runtime.js", () => ({
+vi.mock("../daemon/systemd-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd-runtime.js")>()),
   readSystemdServiceRuntime: fixture.readRuntime,
   isSystemdServiceEnabled: fixture.isEnabled,
 }));
-vi.mock("../daemon/service-layout.js", () => ({
+vi.mock("../daemon/service-layout.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service-layout.js")>()),
   summarizeGatewayServiceLayout: async (command: { fixtureScope: string }) => command,
   inspectGatewayServiceInstallationDrift: async (command: { fixtureScope: string } | undefined) =>
     command
@@ -34,17 +41,26 @@ vi.mock("../daemon/service-layout.js", () => ({
         }
       : undefined,
 }));
-vi.mock("../infra/openclaw-root.js", () => ({ resolveOpenClawPackageRoot: async () => "/cli" }));
-vi.mock("../infra/boundary-path.js", () => ({
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
+  resolveOpenClawPackageRoot: async () => "/cli",
+}));
+vi.mock("../infra/boundary-path.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/boundary-path.js")>()),
   resolveIdentityPathViaExistingAncestorSync: (p: string) => p,
 }));
-vi.mock("../infra/npm-registry-spec.js", () => ({
+vi.mock("../infra/npm-registry-spec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/npm-registry-spec.js")>()),
   compareOpenClawReleaseVersions: (a: string, b: string) => a.localeCompare(b),
 }));
-vi.mock("../state/openclaw-state-db.paths.js", () => ({
+vi.mock("../state/openclaw-state-db.paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db.paths.js")>()),
   resolveOpenClawStateSqlitePath: () => "/state.sqlite",
 }));
-vi.mock("../version.js", () => ({ VERSION: "2026.10.8" }));
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.10.8",
+}));
 import { inspectCliGatewayServiceInstallation } from "./run-main-service-installation.js";
 const command = { fixtureScope: "system", programArguments: ["node", "/system/dist/index.js"] };
 function runtime(
