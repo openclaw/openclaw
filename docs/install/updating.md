@@ -85,6 +85,16 @@ compatible process helper, wait for the recorded driver to exit, then run
 `openclaw update repair`. Doctor reports the native load failure and runtime
 glibc version when available.
 
+SQLite update backup admission measures database and journal families, reserves the
+retained backup and writable rollback images, and sizes history scratch from shared
+state rather than a large agent database. Actual rollback output space is checked
+again before current databases move. A disk-space refusal retains the required and
+available capacity and the backup or rollback volume role in the package-swap failure
+fact without exposing private paths. The candidate worker and installed updater
+must contain the diagnostic repair; an older updater cannot gain it from a newer
+candidate alone. If capture refuses before the package changes, final recovery
+restarts and verifies the previous owned Gateway unless recorded data is at risk.
+
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
 update failures retain the final consistency reason code and attempt count in
 `openclaw update status` and the prepared failure report. The candidate worker
