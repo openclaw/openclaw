@@ -79,66 +79,15 @@ describe("Microsoft Teams drain claim ownership", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it.each(["batched text", "HTML attachment"])(
-    "preserves user mentions in agent input from %s",
-    async (mode) => {
-      vi.useFakeTimers();
-      const clock = createDebounceControl();
-      const handler = createHandler(openDM, clock.createDebouncer);
-      const bot = "<at>Bot</at>";
-      const user = "<at>Other User</at>";
-      const html = mode === "HTML attachment";
-      const first = {
-        ...directActivity("first", html ? "" : `${bot} so ${user} and Third Person can use you.`),
-        entities: [
-          { type: "mention", text: user, mentioned: { id: "other-user-id" } },
-          { type: "mention", text: bot, mentioned: { id: "bot-id" } },
-        ],
-        ...(html
-          ? {
-              attachments: [
-                {
-                  contentType: "text/html",
-                  content:
-                    `${bot}<p>ask ${user}; literal &lt;at&gt;Typed&lt;/at&gt;; once &amp;lt;tag&amp;gt; ` +
-                    '<img src="https://statics.teams.cdn.office.net/emoji/smile.png" alt="🙂"></p>',
-                },
-              ],
-            }
-          : {}),
-      };
-      const claims = [createLifecycle(), createLifecycle()];
-      try {
-        await handler(context(first), claims[0]);
-        if (!html) {
-          expect(dispatch).not.toHaveBeenCalled();
-          await handler(
-            context(directActivity("second", "also ask <at>Unidentified User</at>")),
-            claims[1],
-          );
-          expect(dispatch).not.toHaveBeenCalled();
-        }
-        await clock.flush(40);
-        expect(dispatch).toHaveBeenCalledTimes(1);
-        expect(dispatch.mock.calls[0]?.[0].ctx.BodyForAgent).toBe(
-          html
-            ? "ask @Other User; literal <at>Typed</at>; once &lt;tag&gt; 🙂"
-            : "so @Other User and Third Person can use you.\nalso ask @Unidentified User",
-        );
-        for (const claim of claims.slice(0, html ? 1 : 2)) {
-          expectAdopted(claim);
-        }
-      } finally {
-        await clock.flush(40);
-      }
-    },
-  );
-
   it.each(["batched", "gated", "html"])("settles %s claims once", async (mode) => {
     vi.useFakeTimers();
     const clock = createDebounceControl();
     const gated = mode === "gated";
     const html = mode === "html";
+    const mentions = [
+      { type: "mention", text: "<at>Bot</at>", mentioned: { id: "bot-id" } },
+      { type: "mention", text: "<at>Other User</at>", mentioned: { id: "other-user-id" } },
+    ];
     const cfg: OpenClawConfig = gated
       ? { channels: { msteams: { groupPolicy: "open", requireMention: true } } }
       : openDM;
@@ -148,16 +97,25 @@ describe("Microsoft Teams drain claim ownership", () => {
         ? [
             {
               ...directActivity("html", ""),
+              entities: mentions,
               attachments: [
                 {
                   contentType: "TEXT/HTML",
                   content:
-                    "<at>Bot</at><p>Use x &lt; 5 &copy;; literal &lt;at&gt;Alice&lt;/at&gt;</p>",
+                    "<at>Bot</at><p>Use x &lt; 5 &copy;; literal &lt;at&gt;Alice&lt;/at&gt;; " +
+                    "ask <at>Other User</at>; once &amp;lt;tag&amp;gt; " +
+                    '<img src="https://statics.teams.cdn.office.net/emoji/smile.png" alt="🙂"></p>',
                 },
               ],
             },
           ]
-        : [directActivity("first", "part one"), directActivity("second", "part two")];
+        : [
+            {
+              ...directActivity("first", "<at>Bot</at> part one <at>Other User</at>"),
+              entities: mentions,
+            },
+            directActivity("second", "part two <at>Unidentified User</at>"),
+          ];
     const handler = createHandler(cfg, clock.createDebouncer);
     const claims = messages.map(() => createLifecycle());
     try {
@@ -175,9 +133,9 @@ describe("Microsoft Teams drain claim ownership", () => {
       if (!gated) {
         expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
           ctx: {
-            BodyForAgent: expect.stringContaining(
-              html ? "Use x < 5 ©; literal <at>Alice</at>" : "part one\npart two",
-            ),
+            BodyForAgent: html
+              ? "Use x < 5 ©; literal <at>Alice</at>; ask @Other User; once &lt;tag&gt; 🙂"
+              : "part one @Other User\npart two @Unidentified User",
           },
           replyOptions: { turnAdoptionLifecycle: { admission: "exclusive" } },
         });
