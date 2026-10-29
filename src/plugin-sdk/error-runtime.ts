@@ -30,5 +30,9 @@ export {
   coerceErrorMessage,
   toStringifiedError,
 } from "../../packages/normalization-core/src/error-coercion.js";
+// Policy-free structural formatting for log-bound warnings: logs are written raw
+// and masked only at the egress sinks, so warning text must keep the full cause
+// chain without applying a redaction policy here.
+export { formatErrorMessage as formatErrorMessageRaw } from "../../packages/normalization-core/src/error-coercion.js";
 export { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 export { isApprovalNotFoundError } from "../infra/approval-errors.ts";

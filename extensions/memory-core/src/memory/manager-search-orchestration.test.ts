@@ -685,3 +685,71 @@ describe("memory index", () => {
     }
   });
 });
+
+describe("memory search sync warnings", () => {
+  const { createConfig: createCfg, getPersistentManager } = createManagerIndexFixture(memory);
+
+  function renderedWarnings(): string {
+    return memoryWarnings.mock.calls.map((call) => String(call[0])).join("\n");
+  }
+
+  it("keeps nested causes in the background search sync warning", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
+    await manager.sync({ reason: "test" });
+    const servingFields = manager as unknown as {
+      dirty: boolean;
+      awaitManagerIdle: () => Promise<void>;
+    };
+    servingFields.dirty = true;
+    const cause = Object.assign(new Error("database is not open"), { code: "ERR_INVALID_STATE" });
+    const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
+    const getSpy = vi
+      .spyOn(MemoryIndexManager, "get")
+      .mockImplementation(async (params) =>
+        params.purpose === "maintenance"
+          ? Promise.reject(new Error("memory index maintenance failed", { cause }))
+          : originalGet(params),
+      );
+
+    try {
+      memoryWarnings.mockClear();
+      await manager.search("zebra", { maxResults: 5, minScore: 0 });
+      await servingFields.awaitManagerIdle();
+      const warning = renderedWarnings();
+      expect(warning).toContain("memory sync failed (search)");
+      expect(warning).toContain("memory index maintenance failed");
+      expect(warning).toContain("database is not open");
+      expect(warning).toContain("ERR_INVALID_STATE");
+    } finally {
+      getSpy.mockRestore();
+      memoryWarnings.mockClear();
+    }
+  });
+
+  it("keeps nested causes in the search-bootstrap sync warning", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
+    const cause = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
+    const syncAdmittedSpy = vi
+      .spyOn(
+        MemoryIndexManager.prototype as unknown as {
+          syncAdmitted: (params: unknown, opts?: unknown) => Promise<unknown>;
+        },
+        "syncAdmitted",
+      )
+      .mockRejectedValue(new Error("bootstrap sync failed", { cause }));
+
+    try {
+      memoryWarnings.mockClear();
+      const results = await manager.search("zebra", { maxResults: 5, minScore: 0 });
+      expect(results).toEqual([]);
+      const warning = renderedWarnings();
+      expect(warning).toContain("memory sync failed (search-bootstrap)");
+      expect(warning).toContain("bootstrap sync failed");
+      expect(warning).toContain("disk I/O error");
+      expect(warning).toContain("SQLITE_IOERR");
+    } finally {
+      syncAdmittedSpy.mockRestore();
+      memoryWarnings.mockClear();
+    }
+  });
+});
