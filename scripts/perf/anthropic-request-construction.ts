@@ -5,6 +5,8 @@
  * Repeat with --messages 150. --mode build omits serialization; --mode serialize
  * reuses one prepared body. Full mode changes the mutable tail and max_tokens each call.
  * --retained measures real projection/fragment ownership and release (use --expose-gc).
+ * --images uses 48 messages with 12 frozen 64 KiB inline images (user + tool results),
+ * the real host image normalizer and existing serialization on both revisions.
  * All non-build modes consume contiguous bytes, matching the guarded Blob body path.
  * scenarioHashes must match across revisions: tool turns, moved cache boundaries, hook edits.
  * Run five alternating base/candidate arms per workload and instrumentation mode.
@@ -31,6 +33,7 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "2000" },
     allocation: { type: "boolean", default: false },
     retained: { type: "boolean", default: false },
+    images: { type: "boolean", default: false },
     "baseline-dir": { type: "string" },
   },
 });
@@ -39,7 +42,7 @@ assert(
   values.mode === "full" || values.mode === "build" || values.mode === "serialize",
   "--mode must be full, build or serialize",
 );
-const messageCount = Number(values.messages);
+const messageCount = values.images ? 48 : Number(values.messages);
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
   fallback: 2000,
@@ -57,7 +60,10 @@ const { transformTransportMessages } =
   await import("../../src/agents/transport-message-transform.js");
 const { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData } =
   await import("../../src/shared/immutable-data.js");
+const { normalizeAnthropicInlineContentBlocks } =
+  await import("../../src/media/anthropic-inline-images.js");
 configureAiTransportHost({
+  normalizeAnthropicInlineContentBlocks,
   transformTransportMessages,
   immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData },
 });
@@ -68,7 +74,7 @@ const model: Model<"anthropic-messages"> = {
   api: "anthropic-messages",
   baseUrl: "https://api.anthropic.com",
   reasoning: true,
-  input: ["text"],
+  input: values.images ? ["text", "image"] : ["text"],
   contextWindow: 200000,
   maxTokens: 1024,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -111,6 +117,24 @@ for (let index = 0; index < messageCount; index++) {
     });
   }
 }
+if (values.images) {
+  // Synthetic PNG headers exercise MIME sniffing without invoking a native image codec.
+  const bytes = Buffer.alloc(64 * 1024, 0xa7);
+  Buffer.from("89504e470d0a1a0a0000000d49484452", "hex").copy(bytes);
+  for (let index = 0; index < 36; index += 6) {
+    for (const offset of [0, 2]) {
+      const message = messages[index + offset]!;
+      assert(message.role === "toolResult" || message.role === "user");
+      assert(Array.isArray(message.content));
+      bytes.writeUInt32BE(index + offset, 32);
+      message.content.push({
+        type: "image",
+        data: bytes.toString("base64"),
+        mimeType: "image/png",
+      });
+    }
+  }
+}
 messages.slice(0, -1).forEach(freezeJsonSnapshot);
 let context: Context | undefined = {
   systemPrompt: "Synthetic system block. ".repeat(100),
@@ -132,10 +156,11 @@ const options: AnthropicOptions = {
   thinkingEnabled: true,
   onPayload: () => undefined,
 };
-const serialize = values["baseline-dir"]
-  ? undefined
-  : (await import("../../packages/ai/src/transports/anthropic-request-body.js"))
-      .serializeAnthropicRequestBody;
+const serialize =
+  values["baseline-dir"] && !values.images
+    ? undefined
+    : (await import("../../packages/ai/src/transports/anthropic-request-body.js"))
+        .serializeAnthropicRequestBody;
 type Prepared = Awaited<ReturnType<typeof prepareAnthropicRequest>>;
 async function build(requestOptions = options): Promise<Prepared> {
   assert(context);
@@ -360,6 +385,7 @@ console.log(
   JSON.stringify({
     messages: messageCount,
     mode: values.mode,
+    images: values.images ? 12 : 0,
     allocation: values.allocation,
     iterations,
     scenarioHashes,

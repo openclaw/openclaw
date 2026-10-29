@@ -177,9 +177,54 @@ and completion-only commands do not provision a worktree for this acquisition.
 `prepare-push --resume-crabbox-run` requires the existing authenticated tracking
 anchor and refuses cold acquisition before any fetch.
 
+Confirmed prior-CI admin first admission may explicitly select current official
+main with `merge-run --current-workflow --admin-evidence <file>
+--confirmed-operator-admin` when no outcome or unresolved capture exists.
+The native selection descriptor and locked source verification preserve the exact
+original binding. Additive `workflowAdmission` provenance retains both sources
+through outcome ancestry, including successors written by older bound tooling.
+This is per-invocation selection, not a permanent rebind; see
+[artifact-build admission](/reference/scripts/prior-ci#artifact-build-failure-with-successful-primary-ci).
+
 Only verified native merge completion retires the exact workflow binding.
 Failures and pending completion preserve it. Repeating completion reconciles
 the merge outcome without repeating publication, comments, or cleanup.
+
+### Continue a correction with repaired workflow code
+
+An unfinished correction can need a landed tooling repair before its retained
+workflow can finish preparation. Use the explicit successor command from the
+current qualified canonical wrapper:
+
+```bash
+scripts/pr prepare-workflow-successor <PR> \
+  --expected-binding <binding-OID> --from-workflow <old-SHA> --to-workflow <current-main-SHA> \
+  --expected-head <local-head> --expected-tree <tree-OID> \
+  --expected-review <correction-review-blob-OID> --expected-hosted-head <hosted-head>
+```
+
+First establish that every tool from an interrupted operation has finished and
+use its reported exact-OID `lock-recover` command. Succession does not recover
+locks or infer quiescence. It requires the existing registered correction
+checkout, unchanged clean source, approved correction review, exact hosted
+publication authority, and no merge outcome, unresolved capture, or pending
+dispatch. The destination must be the authenticated current official main;
+unlanded code, arbitrary revisions, and admin admission flags are not accepted.
+
+The normal supervisor and PR operation lock protect this transition. It retains
+and verifies preparation evidence, preserves `prep.env` and all review/source
+facts, then removes only `gates.env`. A single Git transaction verifies the
+operation owner and advances the exact predecessor binding. The new binding
+retains the old binding, both source identities, local/hosted commits, and the
+review snapshot. Existing version-1 bindings remain valid historical authority.
+
+An interruption before the binding transaction preserves the old binding; one
+after it can leave the new binding even without a successful return. Inspect
+the exact retained binding and evidence before continuing; do not blindly repeat
+the transition or restore an archived gate stamp. Both states require fresh
+ordinary `prepare-gates` before correction publication or merge. This command
+does not change the candidate, publish it, waive CI/security/review requirements,
+or authorize a merge.
 
 ## Reconcile a completed CI review
 
@@ -312,11 +357,12 @@ ambiguous directories remain preserved; recovery never deletes their seed branch
 
 ## Captured baseline evidence hashes
 
-Read-only baseline evidence hashes pass the already-captured bytes to the selected
-Git executable through a complete, private temporary file. The writer closes before
-a fresh read-only descriptor is opened at offset zero; on the supported POSIX
-host the pathname and directory are removed before Git starts. Write hashes,
-signatures, authority checks, and operation supervision are unchanged.
+Baseline evidence hashes and reconstructed blobs pass the already-captured bytes
+to the selected Git executable through a complete, private temporary file. The
+writer closes before a fresh read-only descriptor is opened at offset zero; on
+the supported POSIX host the pathname and directory are removed before Git starts.
+Reconstructed blobs still use Git's `-w` object write; signatures, authority checks,
+and operation supervision are unchanged.
 
 Temporary storage must accommodate the largest individual captured file. Ordinary
 write, spawn, and Git failures fail closed and clean up owned resources. Unlinking

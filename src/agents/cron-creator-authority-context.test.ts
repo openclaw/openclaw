@@ -13,12 +13,14 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   bindActiveOperatorTurnAuthority,
   bindActiveCronAuthorityCurrentness,
   bindActiveCronCreatorAuthorityResolver,
   bindCronManagementGrant,
+  bindCronManagementToolConstruction,
   bindCronRequesterGrant,
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -93,6 +95,45 @@ function creatorFixture(
   });
   return { resolve, creator };
 }
+
+it("retains management construction before late admission without granting another caller or settled turn", async () => {
+  const runId = "late-cli-owner";
+  const caller = admittedCaller(runId);
+  let ownerCurrent = true;
+  const scope = createCronCreatorAuthorityCapability(
+    runId,
+    { kind: "unknown" },
+    {
+      source: "channel-owner",
+      isCurrent: () => ownerCurrent,
+    },
+  )!;
+  let construct: ReturnType<typeof bindCronManagementToolConstruction>;
+  await runWithCronCreatorAuthorityCapability(scope, async () => {
+    expect(bindCronManagementToolConstruction("other-run")).toBeUndefined();
+    // CLI preparation can precede the native runtime's delegated caller admission.
+    construct = withoutGatewayToolCallerIdentity(() => bindCronManagementToolConstruction(runId));
+    expect(construct).toBeTypeOf("function");
+    await runInDetachedAsyncContext(async () => {
+      expect(construct!(() => bindCronManagementGrant(runId))).toBeUndefined();
+      await withGatewayToolCallerIdentity(admittedCaller("other-run"), () => {
+        expect(construct!(() => bindCronManagementGrant(runId))).toBeUndefined();
+      });
+      await withGatewayToolCallerIdentity(caller, () => {
+        expect(construct!(() => bindCronManagementGrant(runId))?.managementOnly).toBe(true);
+        ownerCurrent = false;
+        expect(construct!(() => bindCronManagementGrant(runId))).toBeUndefined();
+      });
+    });
+  });
+  ownerCurrent = true;
+  const later = admittedFixture("later-owner");
+  await later.run(() => {
+    expect(bindCronManagementGrant(later.scope.runId)).toBeDefined();
+    // An expired callback cannot fall through to an unrelated ambient management scope.
+    expect(construct!(() => bindCronManagementGrant(later.scope.runId))).toBeUndefined();
+  });
+});
 
 it("retains the original caller predicate and rejects resolver use after revocation", async () => {
   let current = true;

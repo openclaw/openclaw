@@ -18,10 +18,15 @@ import {
   mkdirs,
 } from "./backup-create-family.test-support.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
-import { listArchiveEntryDetails } from "./backup-create.test-support.js";
+import {
+  listArchiveEntryDetails,
+  useIsolatedBackupTempRoot,
+} from "./backup-create.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
+
+useIsolatedBackupTempRoot();
 
 afterEach(() => vi.restoreAllMocks());
 

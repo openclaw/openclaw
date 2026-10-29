@@ -232,6 +232,10 @@ Import from explicitly configured local paths (`unsafeLocal.paths`) in `unsafe-l
 
 Import a ChatGPT export into draft wiki source pages.
 
+`--export` accepts a JSON file or a directory containing `conversations.json`.
+The path's file type determines which is used, so renamed JSON files and
+directories whose names end in `.json` work the same way.
+
 Imported transcript text preserves line breaks, code indentation, and internal
 spacing, including text parts stored as serialized JSON in the export.
 

@@ -439,6 +439,10 @@ export type SessionEffectRef = {
   run: <T>(run: () => Promise<T>) => Promise<T>;
 };
 export type Effect = {
+  admissionTransitions?: Map<
+    object,
+    (transition: SessionAdmissionTransition, isActive: SessionEffectRef["isActive"]) => void
+  >;
   diagnostic?: LifecycleDiagnosticOperation;
   sourceInput?: SessionControllerInput;
   agent?: AgentWorkAdmissionIdentity;
@@ -650,6 +654,8 @@ export type SessionControllerWithdrawalHold = (() => void) & {
 export const inputCancellation = Symbol.for("openclaw.sessionControllerInputCancellation");
 
 export type FollowupRun = FollowupRunPayload & {
+  /** @internal Host-only fallback eligibility; false preserves a caller without a profile grant. */
+  sessionPrincipalTurn?: boolean;
   run: FollowupRunPayload["run"] & {
     /** Observe admission without transferring the runner's settlement custody. */
     onOperationAdmitted?: (operation: ReplyOperation) => void;

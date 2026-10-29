@@ -42,7 +42,7 @@ it("refreshes composer recall after leaving a round", async () => {
     expect.objectContaining({
       sessionKey: state.sessionKey,
       limit: 1000,
-      offset: 2,
+      cursor: "older-2",
     }),
     { signal: expect.any(AbortSignal) },
   );

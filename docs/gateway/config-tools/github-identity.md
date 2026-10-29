@@ -128,7 +128,16 @@ it checks the selected publisher at the publication boundary. A bot-authored PR
 from another conversation is not eligible for own-PR import just because the
 publisher created it; continue in its original publication conversation.
 
-To continue that PR in the same local conversation, use `github_publish` with
+For an open PR originally published from this conversation, `refresh_base`
+selects its current GitHub destination before integrating the base into the
+managed workspace. This includes a base branch changed outside the conversation.
+Ordinary publication then continues the same PR and head branch. The Gateway
+checks the current workspace, requester and shared publisher; an original
+publication receipt does not grant permission to import another person's PR.
+Prior receipts retain the destination recorded for their own publication, and
+recovery verifies accepted effects against the original PR before another write.
+
+To import your own existing PR into a local conversation, use `github_publish` with
 `action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
 sessions with a writable managed sandbox or an ordinary local Docker or Podman
 sandbox; sessions that run directly on the host do not see it. A separate
@@ -235,9 +244,13 @@ Keep the updated Gateway when continuing an imported workspace; older versions
 do not understand this association.
 
 Use `github_publish` with `action: "edit"` to change the current session's shared
-PR title or description without publishing source. Call it without `title`/`body`
-to read the current metadata, then send `requestId`, `expectedHeadCommit`, and only
-the fields to change, each paired with its observed `expectedTitle`/`expectedBody`.
+PR title or description without publishing source. Read the current metadata with
+`{ "action": "edit" }`, omitting `expectedHeadCommit`, `title`/`body` and
+`expectedTitle`/`expectedBody`. Then send its top-level `headCommit` as
+`expectedHeadCommit`, its publication `requestId`, and only the fields to change,
+each paired with its observed `expectedTitle`/`expectedBody`. The observed head can
+be newer than `publication.headCommit`; editing metadata does not rewrite that
+historical receipt. Other receipt-backed actions still require the receipt head.
 Keep the attribution, publication marker and footer unchanged in the full body.
 Omitted fields stay unchanged. Guests can edit their own session's PR; no child or
 arbitrary PR selector is accepted. Edit never synchronizes, stages, commits or
@@ -245,10 +258,13 @@ pushes workspace files, and never changes PR lifecycle state. Closed PRs are rea
 An unsuccessful later source publication does not hide the existing PR from edit.
 
 Stale observed values are rejected. This is not atomic GitHub compare-and-swap:
-external edits can race the PATCH. After a lost response, the Gateway rereads the
-same PR; already-applied values need no second write. Read with `edit` before
-retrying uncertainty. Omitted action or `publish` still publishes workspace source;
-its title/body are creation-only and do not edit an existing PR.
+external edits or pushes can race the PATCH. A head change detected after dispatch
+can mean the metadata was applied but confirmation failed. After a lost response,
+the Gateway rereads the same PR; already-applied values need no second write.
+Before retrying uncertainty, read again with only `{ "action": "edit" }`, without
+reusing the previous write preconditions. Omitted action or `publish` still
+publishes workspace source; its title/body are creation-only and do not edit an
+existing PR.
 
 Guests can mark their own current session's shared draft ready for review with
 `github_publish` and `action: "ready"`. First read its state with `action: "edit"`,

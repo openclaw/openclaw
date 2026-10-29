@@ -408,7 +408,7 @@ describe("createGatewayKernel", () => {
         ok: true,
         payload: { runId, status: "ok" },
       });
-      kernel.kernel.unlockStartupMethods({ keepChatSendUnavailable: true });
+      kernel.kernel.unlockStartupMethods();
       kernel.kernel.markSidecarsReady();
 
       expect(getReadiness()).toMatchObject(notReady);
@@ -417,17 +417,6 @@ describe("createGatewayKernel", () => {
         ok: true,
         status: "started",
       });
-      expect(getReadiness()).toMatchObject({
-        ready: false,
-        coreReady: false,
-        failing: ["chat-recovery"],
-      });
-      await expect(dispatch("chat.send", chatParams)).rejects.toThrow(
-        "chat.send unavailable during gateway startup",
-      );
-
-      kernel.kernel.unlockStartupMethods();
-      kernel.kernel.unlockStartupMethods();
       expectCoreAgentDatabaseReadiness(getReadiness, state);
       await expect(dispatch("chat.send", chatParams)).resolves.toEqual({ runId, status: "ok" });
 
@@ -596,7 +585,7 @@ describe("createGatewayKernel", () => {
         payload: { runId: "kernel-run", status: "ok", summary: "cached" },
       });
       await expect(
-        kernel.gatewayInstanceRuntime.recovery.dispatchAgent({
+        kernel.gatewayInstanceRuntime.lifecycle.dispatchAgent({
           message: "kernel factory proof",
           idempotencyKey,
         }),

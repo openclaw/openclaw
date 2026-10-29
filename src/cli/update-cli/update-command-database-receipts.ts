@@ -6,7 +6,6 @@ import {
   type UpdateDoctorHistoricalScans,
 } from "../../infra/update-doctor-scan-receipts.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
-import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 
@@ -24,7 +23,7 @@ export async function observeUpdateParentDatabaseWrites(
   },
 ): Promise<void> {
   const pathname = resolveOpenClawStateSqlitePath(options.env);
-  if (isStatePostgres() || !Object.hasOwn(backup.sourceGenerations, pathname)) {
+  if (!Object.hasOwn(backup.sourceGenerations, pathname)) {
     return;
   }
   options.assertCurrent?.();
@@ -33,7 +32,10 @@ export async function observeUpdateParentDatabaseWrites(
     await closeOpenClawStateDatabaseByPathAsync(pathname);
     const { readUpdateDatabaseGenerationsIsolated } =
       await import("../../infra/update-candidate-state.js");
-    const generations = await readUpdateDatabaseGenerationsIsolated([pathname], options);
+    const generations = await readUpdateDatabaseGenerationsIsolated([pathname], {
+      ...options,
+      pluginOwners: backup.pluginOwners,
+    });
     options.assertCurrent?.();
     if (typeof generations[pathname] !== "string") {
       throw new Error("Update ledger database is unavailable before Doctor admission.");

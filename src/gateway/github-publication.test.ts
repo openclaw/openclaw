@@ -333,8 +333,8 @@ describe("Gateway GitHub publication", () => {
 
   it("rejects an effective clean filter before snapshotting workspace content", async () => {
     overrideCommands((_command, argv) => {
-      if (argv.includes("ls-tree")) {
-        return commandResult(`100644 blob ${"f".repeat(40)}\t.GITATTRIBUTES\0`);
+      if (argv.includes("ls-files")) {
+        return commandResult(`${"f".repeat(40)}\n`);
       }
       if (argv.includes("cat-file") && argv.includes("blob")) {
         return commandResult("*.bin filter=lfs\n");

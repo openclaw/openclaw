@@ -11,6 +11,10 @@ import {
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  resolveMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../gateway/message-action-turn-capability.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import { localPlacement } from "../../gateway/worker-environments/placement-suite.test-support.js";
@@ -26,6 +30,7 @@ import {
   stopSession,
 } from "../../sessions/session-controller.stop.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import { mintReplyMessageActionTurnCapability } from "./agent-runner-utils.js";
 import {
   bindGoalContinuationExecution,
   promoteGoalContinuationYield,
@@ -39,6 +44,7 @@ import {
 import {
   enqueueGoalContinuation,
   isGoalContinuationCurrent,
+  isGoalContinuationPlacementCurrent,
   createGoalContinuationReturn,
 } from "./goal-continuation.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
@@ -172,6 +178,8 @@ function fixture() {
 beforeEach(() => {
   vi.useFakeTimers();
   children.mockResolvedValue([]);
+  workerPlacement.supported = true;
+  workerPlacement.current.mockReset();
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(getFollowupQueueDepth).mockReturnValue(0);
   vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(entry());
@@ -197,77 +205,101 @@ afterEach(async () => {
 
 describe("Goal continuation eligibility", () => {
   it.each([
-    "remote-exec",
-    "local",
-    "worker-turn",
-    "wrong-session",
-    "unsupported",
-    "no-authority",
-  ] as const)("binds Codex continuation to supported placement facts (%s)", async (mode) => {
+    [true, "remote-exec", "workerGoal"],
+    [true, "local", "localCodexGoal"],
+    [true, "worker-turn", undefined],
+    [true, "wrong-session", undefined],
+    [true, "unsupported", undefined],
+    [true, "no-authority", undefined],
+    [false, "local", "localCodexGoal"],
+    [false, "worker-required", undefined],
+    [false, "no-authority", undefined],
+    [false, "revoked", undefined],
+  ] as const)("checks Codex Goal admission (placed=%s, %s)", async (placed, mode, marker) => {
     const f = fixture();
-    f.params.base.operatorAuthority = {
-      profileId: "operator",
-      scopes: ["operator.admin"],
-      assertCurrent: () => {},
-    };
-    if (mode === "no-authority") {
-      f.params.base.operatorAuthority = undefined;
-    }
-    vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue({
-      ...entry(),
-      agentHarnessId: "codex",
-    });
+    const codexSession = { ...entry(), agentHarnessId: "codex" };
+    vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(codexSession);
     workerPlacement.supported = mode !== "unsupported";
-    workerPlacement.current.mockReturnValue({
-      ...localPlacement(identity.sessionId),
-      agentId: "main",
-      sessionKey: mode === "wrong-session" ? "other" : f.params.sessionKey,
-      sessionId: identity.sessionId,
-      state: mode === "local" ? "local" : "requested",
-      executionMode: mode === "worker-turn" ? "worker-turn" : "remote-exec",
-    });
-    expect(await enqueueGoalContinuation(f.params)).toBe(mode === "remote-exec");
-    if (mode === "remote-exec") {
-      expect(vi.mocked(enqueueFollowupRun).mock.calls[0]![1].goalContinuation).toEqual({
-        ...identity,
-        workerGoal: true,
+    if (placed) {
+      workerPlacement.current.mockReturnValue({
+        ...localPlacement(identity.sessionId),
+        sessionKey: mode === "wrong-session" ? "other" : f.params.sessionKey,
+        state: mode === "local" ? "local" : "requested",
+        executionMode: mode === "worker-turn" ? "worker-turn" : "remote-exec",
       });
+    }
+    if (mode !== "no-authority") {
+      f.params.base.operatorAuthority = {
+        profileId: "operator",
+        scopes: ["operator.admin"],
+        assertCurrent: () => {
+          if (mode === "revoked") {
+            throw new Error("operator revoked");
+          }
+        },
+      };
+    }
+    if (mode === "worker-required") {
+      f.params.base.run.config = { cloudWorkers: { requiredProfile: "worker" } };
+    }
+    if (mode === "revoked") {
+      await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("operator revoked");
     } else {
-      expect(enqueueFollowupRun).not.toHaveBeenCalled();
+      expect(await enqueueGoalContinuation(f.params)).toBe(Boolean(marker));
+    }
+    expect(enqueueFollowupRun).toHaveBeenCalledTimes(marker ? 1 : 0);
+    if (marker) {
+      const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];
+      expect(queued.goalContinuation).toEqual({ ...identity, [marker]: true });
     }
   });
-  it("does not resume paused goals", () => {
+  it.each([
+    ["localCodexGoal", "local", false, true],
+    ["localCodexGoal", "worker", false, false],
+    ["workerGoal", "local", false, false],
+    ["workerGoal", "worker", false, true],
+    ["localCodexGoal", "local", true, false],
+  ] as const)(
+    "checks %s Codex placement against %s (requires worker=%s)",
+    async (marker, current, requiresWorker, expected) => {
+      workerPlacement.current.mockReturnValue({
+        ...localPlacement(identity.sessionId),
+        sessionKey: "agent:main:goal",
+        state: current === "local" ? "local" : "requested",
+        executionMode: "remote-exec",
+      });
+      await expect(
+        isGoalContinuationPlacementCurrent({
+          continuation: { ...identity, [marker]: true },
+          agentId: "main",
+          sessionKey: "agent:main:goal",
+          hasOperatorAuthority: true,
+          requiresWorker,
+        }),
+      ).resolves.toBe(expected);
+    },
+  );
+  it("checks current Goal, incarnation, stop and runtime facts before continuing", () => {
     const current = entry();
-    current.goal!.status = "paused";
-    expect(isGoalContinuationCurrent(identity, current)).toBe(false);
-  });
-  it("rejects replaced, cleared, reset, stopped and external-runtime sessions", () => {
-    const current = entry();
-    expect(isGoalContinuationCurrent(identity, current)).toBe(true);
     expect(isGoalContinuationCurrent(identity, undefined)).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, goal: undefined })).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, sessionId: "replacement" })).toBe(
-      false,
-    );
-    expect(
-      isGoalContinuationCurrent(identity, { ...current, lifecycleRevision: "revision-3" }),
-    ).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, abortedLastRun: true })).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, agentHarnessId: "codex" })).toBe(
-      false,
-    );
-    expect(
-      isGoalContinuationCurrent(identity, {
-        ...current,
-        goal: { ...current.goal!, id: "new-goal" },
-      }),
-    ).toBe(false);
-    expect(
-      isGoalContinuationCurrent(identity, {
-        ...current,
-        goal: { ...current.goal!, updatedAt: 3000 },
-      }),
-    ).toBe(true);
+    for (const [patch, expected, continuation] of [
+      [{}, true],
+      [{ goal: undefined }, false],
+      [{ goal: { ...current.goal!, status: "paused" } }, false],
+      [{ sessionId: "replacement" }, false],
+      [{ lifecycleRevision: "revision-3" }, false],
+      [{ abortedLastRun: true }, false],
+      [{ agentHarnessId: "codex" }, false],
+      [{ agentHarnessId: "codex" }, true, { localCodexGoal: true }],
+      [{ agentHarnessId: "external" }, false],
+      [{ goal: { ...current.goal!, id: "new-goal" } }, false],
+      [{ goal: { ...current.goal!, updatedAt: 3000 } }, true],
+    ] satisfies Array<[Partial<SessionEntry>, boolean, { localCodexGoal: true }?]>) {
+      expect(
+        isGoalContinuationCurrent({ ...identity, ...continuation }, { ...current, ...patch }),
+        JSON.stringify(patch),
+      ).toBe(expected);
+    }
   });
   it("observes fresh token exhaustion before scheduling another turn", () => {
     const current = entry();
@@ -279,25 +311,20 @@ describe("Goal continuation eligibility", () => {
     expect(current.goal!.status).toBe("active");
   });
   it.each([
-    { aborted: true },
-    { yielded: true },
-    { continuationPending: true as const },
-    { timeoutPhase: "provider" as const },
-    { error: { kind: "hook_block" as const, message: "Blocked" } },
-    { pendingToolCalls: [{ id: "tool-1", name: "exec", arguments: "{}" }] },
-    { stopReason: "refusal" },
-  ])("preserves an existing continuation or failure owner: %j", async (meta) => {
+    { meta: { aborted: true } },
+    { meta: { yielded: true } },
+    { meta: { continuationPending: true as const } },
+    { meta: { timeoutPhase: "provider" as const } },
+    { meta: { error: { kind: "hook_block" as const, message: "Blocked" } } },
+    { meta: { pendingToolCalls: [{ id: "tool-1", name: "exec", arguments: "{}" }] } },
+    { meta: { stopReason: "refusal" } },
+    { didSendDeterministicApprovalPrompt: true },
+    { payloads: [{ text: "failed", isError: true }] },
+  ])("preserves an existing continuation, failure or approval owner: %j", async (result) => {
     const f = fixture();
-    f.params.result = { ...normal, meta: { ...normal.meta, ...meta } };
+    f.params.result = { ...normal, ...result, meta: { ...normal.meta, ...result.meta } };
     expect(await enqueueGoalContinuation(f.params)).toBe(false);
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
-  });
-  it("does not nudge deterministic approval prompts or returned errors", async () => {
-    const f = fixture();
-    f.params.result = { ...normal, didSendDeterministicApprovalPrompt: true };
-    expect(await enqueueGoalContinuation(f.params)).toBe(false);
-    f.params.result = { ...normal, payloads: [{ text: "failed", isError: true }] };
-    expect(await enqueueGoalContinuation(f.params)).toBe(false);
   });
 });
 
@@ -322,6 +349,47 @@ describe("Goal queue custody", () => {
     ]);
     f.operation.complete();
     expect(queued.abortSignal?.aborted).toBe(false);
+  });
+  it.each([
+    { source: "a user turn", event: undefined },
+    { source: "a background completion", event: {} },
+    { source: "a silent completion", event: { deliver: false } },
+  ] as const)("binds channel-turn authority only for successors of $source", async ({ event }) => {
+    const f = fixture();
+    const { base } = f.params;
+    Object.assign(base.run, { messageProvider: "discord", agentAccountId: "default" });
+    Object.assign(base, { originatingChannel: "discord", originatingTo: "channel:123" });
+    if (event) {
+      base.run.internalEventExecution = { ...event, onStarted: vi.fn(), onTerminal: vi.fn() };
+    }
+    expect(await enqueueGoalContinuation(f.params)).toBe(true);
+    const queued = vi.mocked(enqueueFollowupRun).mock.calls[0]![1];
+    const runId = "goal-successor";
+    const sessionCtx = { Provider: "discord", To: "channel:123", AccountId: "default" };
+    const token = mintReplyMessageActionTurnCapability(
+      { followupRun: queued, sessionCtx, opts: { runId } },
+      runId,
+    );
+    try {
+      const lookup = { token, agentId: "main", runId, sessionKey: "agent:main:goal" };
+      Object.assign(lookup, { sessionId: identity.sessionId });
+      if (event) {
+        // The event's captured route never becomes current-conversation authority.
+        expect(token).toBeUndefined();
+        expect(queued.run.internalEventExecution).toBeUndefined();
+        expect(queued.run.sessionEventOrigin).toEqual(event);
+      } else {
+        expect(resolveMessageActionTurnCapability(lookup)).toMatchObject({
+          toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
+        });
+        const otherSession = { ...lookup, sessionKey: "agent:main:other" };
+        expect(resolveMessageActionTurnCapability(otherSession)).toBeUndefined();
+        revokeMessageActionTurnCapability(token);
+        expect(resolveMessageActionTurnCapability(lookup)).toBeUndefined();
+      }
+    } finally {
+      revokeMessageActionTurnCapability(token);
+    }
   });
   it("leaves announcing children from earlier turns with their continuation owner", async () => {
     const f = fixture();
@@ -665,33 +733,19 @@ describe("Goal return from committed child custody", () => {
   );
 
   it.each([
-    "paused",
-    "blocked",
-    "complete",
-    "usage_limited",
-    "budget_limited",
-    "cleared",
-    "replaced",
-    "reset",
-    "stopped",
-  ] as const)("rechecks %s after the command final and batch commit", async (change) => {
+    ...(["paused", "blocked", "complete", "usage_limited", "budget_limited"] as const).map(
+      (status) => ({ change: status, patch: { goal: { ...entry().goal!, status } } }),
+    ),
+    { change: "cleared", patch: { goal: undefined } },
+    { change: "replaced", patch: { goal: { ...entry().goal!, id: "new-goal" } } },
+    { change: "reset", patch: { lifecycleRevision: "new-revision" } },
+    { change: "stopped", patch: { abortedLastRun: true } },
+  ])("rechecks $change after the command final and batch commit", async ({ patch }) => {
     const f = retainedGoal();
     f.retain();
     f.operation.complete();
     f.publish();
-    const current = entry();
-    if (change === "cleared") {
-      current.goal = undefined;
-    } else if (change === "replaced") {
-      current.goal!.id = "new-goal";
-    } else if (change === "reset") {
-      current.lifecycleRevision = "new-revision";
-    } else if (change === "stopped") {
-      current.abortedLastRun = true;
-    } else {
-      current.goal!.status = change;
-    }
-    vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(current);
+    vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue({ ...entry(), ...patch });
     await f.finish();
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });

@@ -659,8 +659,6 @@ const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
   ["src/cli/plugins-cli.update.test.ts", 9.511],
   ["src/state/openclaw-agent-participants-migration.test.ts", 9.279],
   ["src/agents/tools/transcripts-tool.selection.test.ts", 14.535],
-  ["src/agents/main-session-recovery/main-session-restart-recovery-admission.test.ts", 16.187],
-  ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", 279.963],
   ["test/runtime-agent.codex-initialization.integration.test.ts", 45.303],
   ["src/tasks/task-executor.test.ts", 7.528],
   ["src/agents/agent-harness-native-custody.test.ts", 27.986],
@@ -1600,10 +1598,6 @@ export function createUiRealGatewayTestShards(
     [
       resolveUiTypeScriptPath("ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts"),
       env.OPENCLAW_DEEPSEEK_UI_LIVE === "1",
-    ],
-    [
-      resolveUiTypeScriptPath("ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts"),
-      env.OPENCLAW_PEER_RESTART_LIVE === "1",
     ],
     [
       resolveUiTypeScriptPath("ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts"),
@@ -3351,6 +3345,7 @@ const RELEASE_TIMING_CONTINUITY_SHARDS = new Set([
 
 // Preserve existing whole-job headroom until these owners have complete timings.
 const LONG_UNFITTED_RELEASE_SHARDS = new Set([
+  "agentic-agents-support",
   "agentic-cli-process",
   "agentic-control-plane-agent-chat",
   "core-runtime-config",

@@ -1816,7 +1816,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           request: { message: "hello", idempotencyKey: runId },
           hasRestoredCronContinuation: false,
           isOneShotModelRun: false,
-          isRestartRecoveryResumeRun: false,
         }),
       ).toEqual(remote ? undefined : { runId, callerOrigin: { kind: "local" } });
     },
@@ -1844,7 +1843,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             request: { message: "manage an automation", idempotencyKey: "control-ui-admin-run" },
             hasRestoredCronContinuation: false,
             isOneShotModelRun: false,
-            isRestartRecoveryResumeRun: false,
           });
           const expected = allowed
             ? {

@@ -1040,7 +1040,6 @@ describe("image tool implicit imageModel config", () => {
 
   it.each<{
     name: string;
-    primary?: string;
     imageModel: { primary: string; fallbacks?: string[] };
     providers?: string[];
     models?: string[];
@@ -1058,10 +1057,10 @@ describe("image tool implicit imageModel config", () => {
       imageModel: { primary: "gpt-5.4-mini" },
       expected: "openai/gpt-5.4-mini",
     },
-  ])("resolves $name", async ({ primary, imageModel, providers, models, expected }) => {
+  ])("resolves $name", async ({ imageModel, providers, models, expected }) => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { ...(primary ? { model: { primary } } : {}), imageModel } },
+        agents: { defaults: { imageModel } },
         ...(providers
           ? {
               models: {
@@ -1251,8 +1250,6 @@ describe("image tool implicit imageModel config", () => {
             const withWorkspace = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
             await expectImageToolExecOk(withWorkspace, imagePath);
             expect(fetch).toHaveBeenCalledTimes(1);
-          } else if (!workspaceOnly) {
-            expect(fetch).not.toHaveBeenCalled();
           }
         });
       });
@@ -1707,7 +1704,7 @@ describe("image compression policy", () => {
 
   it.each([{ label: "static catalog", runtimeAugment: false, staticMaxSidePx: undefined }])(
     "keeps image policy pinned to the prepared generation: $label",
-    async ({ runtimeAugment, staticMaxSidePx }) => {
+    async ({ runtimeAugment }) => {
       const state = await createOpenClawTestState({ label: "image-model-generation" });
       try {
         const provider = "prepared-image-provider";
@@ -1723,7 +1720,6 @@ describe("image compression policy", () => {
           modelId: model,
           runtimeAugment,
           staticImagePolicy: {
-            ...(staticMaxSidePx === undefined ? {} : { maxSidePx: staticMaxSidePx }),
             maxBytes: 1_000_000,
             preferredSidePx: 1_280,
             tokenMode: "detail",
@@ -1772,9 +1768,7 @@ describe("image compression policy", () => {
             },
           ],
         });
-        expect(generationA.resolveDynamicModel).toHaveBeenCalledTimes(
-          staticMaxSidePx === undefined ? 1 : 0,
-        );
+        expect(generationA.resolveDynamicModel).toHaveBeenCalledTimes(1);
         expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
       } finally {
         resetModelGenerationFixtureState();
@@ -1883,8 +1877,7 @@ describe("image compression policy", () => {
           ...(supplied === "none"
             ? {}
             : {
-                preparedModelRuntime: (supplied === "captured" ? captured : ambient)
-                  .preparedModelRuntime,
+                preparedModelRuntime: captured.preparedModelRuntime,
               }),
         });
         const source = createLargeColorBlockPng(256);

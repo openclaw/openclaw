@@ -221,7 +221,8 @@ const numbered = (steps: string[]) =>
  * jobs of other conversations (carrying a pause over), add, then check the target. `keep` is a
  * repair's condition for leaving a healthy automation alone.
  */
-function automationSteps(scribe: ScribeDefinition, schedule: string, keep = "") {
+// `enabled` is how the added automation's enabled flag is set: setup keeps a pause, repair turns it on.
+function automationSteps(scribe: ScribeDefinition, schedule: string, enabled: string, keep = "") {
   const key = scribeDeclarationKey(scribe.id);
   return [
     `With the automations tool, list automations including disabled ones and take those with declaration key \`${key}\`.${keep} Remove each one owned by another conversation, noting whether it was paused. If this conversation owns one that targets another session, update its session target to this conversation.`,
@@ -233,7 +234,7 @@ function automationSteps(scribe: ScribeDefinition, schedule: string, keep = "") 
       "- session target: `session:` followed by this conversation's session key (from Runtime)",
       "- payload: an agent turn whose message is the run message below, exactly as written inside the fence",
       "- delivery: none; failure alert after 2 failed runs",
-      "Adding with an existing declaration key updates this conversation's automation in place. Pass `enabled: false` only when a removed automation was paused and this conversation had none, so the pause carries over. Otherwise leave `enabled` out: never turn on a paused automation.",
+      `Adding with an existing declaration key updates this conversation's automation in place. ${enabled}`,
     ].join("\n"),
     "Get the automation and check that it targets this conversation.",
   ];
@@ -310,7 +311,11 @@ export function setupPrompt(setup: ScribeSetup) {
     "Steps:",
     ...numbered([
       access,
-      ...automationSteps(scribe, "the cron expression and time zone in the settings"),
+      ...automationSteps(
+        scribe,
+        "the cron expression and time zone in the settings",
+        "Pass `enabled: false` only when a removed automation was paused and this conversation had none, so the pause carries over. Otherwise leave `enabled` out: never turn on a paused automation.",
+      ),
       "Don't start a run from this turn: a run started here is skipped when the turn ends. The Scribes page starts the first run.",
       `Report the automation's ID and next run time. ${endStep("on", "one sentence: the automation and its next run")}`,
     ]),
@@ -357,9 +362,10 @@ export function repairPrompt(id: ScribeId, current: RepairSource) {
       ...automationSteps(
         scribe,
         "the schedule in the settings",
-        " If exactly one exists, this conversation owns it and it targets this conversation, leave it as it is and go to the last step.",
+        "Pass `enabled: true`: a repair turns the scribe back on, even when the scheduler paused it after failed runs.",
+        " If exactly one exists, this conversation owns it, it targets this conversation and it is enabled, leave it as it is and go to the last step.",
       ),
-      `Report whether the automation is enabled; never turn on a paused one. ${endStep("on", "one sentence: whether the automation is enabled")}`,
+      endStep("on", "one sentence: what the repair changed"),
     ]),
     "",
     FAILED,

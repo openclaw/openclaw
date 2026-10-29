@@ -4,7 +4,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { retainCurrentDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
+import { retainCurrentDeferredUpdateWarnings } from "../../infra/deferred-update-warnings.js";
 import { readInstallOwner } from "../../infra/install-owner.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
@@ -15,6 +15,7 @@ import {
 } from "../../infra/update-channels.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { resolveDoctorUpdateRun } from "../../infra/update-deferred-model-retirement.js";
 import {
   DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
@@ -60,6 +61,7 @@ import {
   readPostCorePreUpdateSourceConfig,
   readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -99,6 +101,17 @@ export async function updateFinalizeCommand(
   recoveryRunIds?: readonly string[],
   handoff?: ManagedHandoffRepair,
   // Finalization can succeed while repair-retained custody still blocks the next update.
+  retained?: RetainedUpdateCustodyReport,
+): Promise<void> {
+  await withUpdateDatabaseEngine(process.env, () =>
+    finalizeUpdate(opts, recoveryRunIds, handoff, retained),
+  );
+}
+
+async function finalizeUpdate(
+  opts: UpdateFinalizeOptions,
+  recoveryRunIds?: readonly string[],
+  handoff?: ManagedHandoffRepair,
   retained?: RetainedUpdateCustodyReport,
 ): Promise<void> {
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
@@ -481,10 +494,10 @@ async function updateFinalizeCommandInternal(
             warning.reason === "doctor-advisory" && warning.pluginId ? [warning.pluginId] : [],
           ),
         );
-        doctorWarnings = await retainCurrentDeferredPluginMigrationWarnings(
-          doctorWarnings,
+        doctorWarnings = await retainCurrentDeferredUpdateWarnings(doctorWarnings, {
           finallyReportedPluginIds,
-        );
+          readUpdateRun: () => resolveDoctorUpdateRun(process.env, invokingRunId),
+        });
         phase.assertCurrent();
         lifecycle.recordWarnings(doctorWarnings);
         await persistValidatedDowngradeConfig(result.configSnapshot, phase.assertCurrent);

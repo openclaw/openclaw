@@ -11,7 +11,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getPluginServiceSchedulerBinding } from "../../plugins/service-scheduler-binding.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
-import { waitForAgentInputRecovery } from "../../state/agent-input-recovery-context.js";
 import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
@@ -201,12 +200,6 @@ export async function runPreparedChannelTurnCore<
               reason: "agent-database-preparation-pending",
             });
             await preparation;
-          }
-          const recovery = waitForAgentInputRecovery(agentId, {
-            signal: getPluginServiceSchedulerBinding()?.().signal,
-          });
-          if (recovery) {
-            await recovery;
           }
         }
         params.assertAuthority?.();

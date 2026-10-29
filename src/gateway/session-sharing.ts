@@ -24,7 +24,6 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   expectedSessionMutationTargetError,
   createSessionCreationAuthorizationRecorder,
-  withCurrentSessionSharingSource,
   assertSessionMutationProjectionCurrent,
   findPreparedSharingTarget,
   resolvePreparedTalkAuthorizationTarget,
@@ -57,6 +56,7 @@ import {
 } from "./session-sharing-read.js";
 import {
   captureSessionSharingTalkAuthority,
+  createAdmittedSessionSharingAuthority,
   isSameSessionSharingSource,
   resolveSessionSharingMembership,
   withPreparedSessionSharingSource,
@@ -448,6 +448,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
             : (() => {
                 throw targetChanged(targetRef.sessionKey);
               })();
+    params.assertPrincipalTargetCurrent?.(current);
     // Ensure may mint an absent row/id, never replace an admitted session.
     const ensuredTarget =
       talkSessionTarget && authorizesAgentRun && expected?.sessionId === null && ensuredSessionId
@@ -470,10 +471,10 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           current.canonicalKey === expectedResolved.canonicalKey &&
           current.storeKey === expectedResolved.storeKey &&
           isSameSessionSharingSource(current, expectedResolved) &&
-          (!bindSessionIdentity ||
-            ((current.entry.sessionId?.trim() || null) === expectedSessionId &&
-              (!(bindsLifecycle || expected.created) ||
-                current.entry.lifecycleRevision === expected.lifecycleRevision))));
+          ((!bindSessionIdentity && expected.lifecycleRevision !== undefined) ||
+            (current.entry.sessionId?.trim() || null) === expectedSessionId) &&
+          (!(bindsLifecycle || expected.created) ||
+            current.entry.lifecycleRevision === expected.lifecycleRevision));
     if (!sameResolvedTarget) {
       throw targetChanged(targetRef.sessionKey);
     }
@@ -504,40 +505,26 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     if (error) {
       throw new SessionMutationAuthorizationChangedError(error);
     }
+    if (bindSessionIdentity) {
+      admittedInput.bindCurrentEffect();
+    }
   };
   const chatTarget =
     params.method === "chat.send" && authorizedTargets.length === 1 && !talkSessionTarget
       ? authorizedTargets[0]
       : undefined;
-  // Reply admission owns compaction and rollover identity; custody rechecks access in the same store.
-  const assertAdmittedTargetCurrent = (
-    target: AuthorizedSessionMutationTarget,
-    cfg: OpenClawConfig,
-  ) => assertTargetCurrent(target, target, cfg, undefined, undefined, undefined, undefined, false);
-  const assertAdmittedInputCurrent =
-    chatTarget && !isIncognitoSessionKey(chatTarget.sessionKey)
-      ? () =>
-          withSelectedStorage(() =>
-            assertAdmittedTargetCurrent(chatTarget, params.context.getRuntimeConfig()),
-          )
-      : undefined;
-  const withCurrentSessionSource = chatTarget
-    ? <T>(
-        consume: () => T,
-        assertCurrent = () =>
-          assertTargetCurrent(chatTarget, chatTarget, params.context.getRuntimeConfig()),
-      ): Promise<T> =>
-        withSelectedStorage(() =>
-          withCurrentSessionSharingSource({
-            request: params,
-            target: chatTarget,
-            changed: () => targetChanged(chatTarget.sessionKey),
-            consumeSharing,
-            assertCurrent,
-            consume,
-          }),
-        )
-    : undefined;
+  const admittedInput = createAdmittedSessionSharingAuthority({
+    target: chatTarget,
+    request: params,
+    ownSessionProfileId,
+    consumeSharing,
+    assertTargetCurrent,
+    changed: targetChanged,
+    getConfig: () => params.context.getRuntimeConfig(),
+    withStorage: withSelectedStorage,
+  });
+  const { assertAdmittedTargetCurrent, assertAdmittedInputCurrent, withCurrentSessionSource } =
+    admittedInput;
   const withPreparedCurrent = <T>(
     facts: SessionPendingInputAuthorityFacts,
     consume: () => T,

@@ -19,7 +19,7 @@ import { orderSessionPullRequests } from "../../lib/session-pull-request-present
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { listDismissablePendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import { listSubagents, projectProgressCardRuntime } from "./chat-subagent-wait.ts";
@@ -140,29 +140,11 @@ function ChatFooterContent(
   },
 ) {
   const pendingInputs = () => input.frame.pendingInputs;
-  const dismissableInputIds = () => {
-    const view = pendingInputs();
-    return input.frame.dismissPendingInputs && view
-      ? listDismissablePendingInputs(view).map((pending) => pending.id)
-      : [];
-  };
   return (
     <>
-      <Show when={pendingInputs()?.error || dismissableInputIds().length}>
+      <Show when={pendingInputs()?.error}>
         <div class="chat-pending-inputs" role="status">
-          <Show when={pendingInputs()?.error}>
-            <span>{pendingInputs()?.error}</span>
-          </Show>
-          <Show when={dismissableInputIds().length}>
-            <button
-              class="btn btn--sm"
-              type="button"
-              aria-label={t("chat.pendingInputs.dismissAllLabel")}
-              onClick={() => input.frame.dismissPendingInputs?.(dismissableInputIds())}
-            >
-              {t("chat.pendingInputs.dismissAll")}
-            </button>
-          </Show>
+          <span>{pendingInputs()?.error}</span>
         </div>
       </Show>
       <Show

@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
@@ -111,8 +108,6 @@ export function createChatSendMessageInjectionStarter(params: {
       agentId,
       sessionKey,
       storePath,
-      sessionId: entry?.sessionId,
-      sourceTurnId: normalizeOptionalString(target.sourceTurnId),
       entry,
       assertCurrent,
     });
@@ -431,7 +426,6 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       channel,
       chatId,
       messageId,
-      sessionId: entry?.sessionId,
       sessionKey,
       durationMs: Math.max(0, Date.now() - params.startedAt),
       outcome: indeterminate ? "error" : "completed",

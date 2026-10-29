@@ -73,7 +73,7 @@ it.each(["exec", "wait", "headless"] as const)(
   },
 );
 
-it.each(["abort", "restart-safe"])("shares the output budget with %s diagnostics", async (mode) => {
+it("shares the output budget with abort diagnostics", async () => {
   const controller = new AbortController();
   const fixture = codeMode.pluginToolWithExecute("output_fixture", "Output fixture", async () => {
     controller.abort();
@@ -87,16 +87,15 @@ it.each(["abort", "restart-safe"])("shares the output budget with %s diagnostics
       "failure",
       {
         code: 'text("🦞".repeat(1000)); await output_fixture({}); return true;',
-        restartSafe: mode === "restart-safe",
       },
       controller.signal,
     ),
   );
   expect(result).toMatchObject({
     status: "failed",
-    code: mode === "abort" ? "aborted" : "invalid_input",
+    code: "aborted",
   });
-  expect(fixture.execute).toHaveBeenCalledTimes(mode === "abort" ? 1 : 0);
+  expect(fixture.execute).toHaveBeenCalledOnce();
   codeMode.expectOriginalCodeModeMarker(
     (result.output as unknown[])[0],
     textOutput("🦞".repeat(1000)),

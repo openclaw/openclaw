@@ -11,7 +11,6 @@ import { hasSqliteDatabaseSchemaAdmissionForIdentity } from "../infra/sqlite-dat
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   type SqliteWorkerCommand,
-  type SqliteWorkerStore,
 } from "../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -23,6 +22,7 @@ import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-rea
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import {
   canRejectResidentPluginStateClaim,
   ensurePluginStateNamespace,
@@ -51,6 +51,7 @@ import {
   type PluginStatePublicationEffect,
   type PluginStatePublicationScope,
 } from "./plugin-state-publication.js";
+import { preparePluginStateReceiptInput } from "./plugin-state-receipt-input.js";
 import { wrapPluginStateError } from "./plugin-state-store.database.js";
 import {
   assertPluginStateKey,
@@ -64,7 +65,6 @@ import {
   isPluginStateReadCommand,
   type PluginStateWorkerOperations,
   type PluginStateWorkerRequests,
-  type PluginStateWriteOperations,
 } from "./plugin-state-worker-contract.js";
 import {
   capturePluginStateWorkerFailure,
@@ -73,7 +73,6 @@ import {
 } from "./plugin-state-worker-errors.js";
 import { selectRuntimeHealthClearKeys } from "./runtime-health-records.js";
 
-type Scope = Pick<SqliteWorkerStore<PluginStateWriteOperations>, "execute">;
 type HostAdmission = {
   context?: OpenClawStateWorkerContext;
   env?: NodeJS.ProcessEnv;
@@ -511,7 +510,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       import("../infra/sqlite-worker-store.js"),
       import("../infra/sqlite-worker-operation-admission.js"),
     ]);
-    const operation = async (scope: Scope) => {
+    const operation = async (scope: DomainScope) => {
       operationStarted = true;
       const result = await scope.execute({
         type: typedCommand.type,
@@ -569,6 +568,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       createAdmission: withPluginStatePublication(
         baseAdmission,
         context,
+        preparePluginStateReceiptInput(typedCommand),
         onCommitted,
         writeScope,
         effect,
@@ -608,11 +608,10 @@ export function executePluginStateOperationInWorker(
   },
 ): Promise<PluginStateOperationResult> {
   const { env, assertActive, assertCurrent, sessionEntryCurrent, context, ...input } = params;
-  const readOnly = input.writeStores.length === 0;
   return execute(
     { env, assertActive, sessionEntryCurrent, context },
     { type: "pluginState.executeOperation", input },
-    readOnly
+    input.writeStores.length === 0
       ? (options.missing ??
           (() => {
             throw new Error("Plugin state operation source does not exist");

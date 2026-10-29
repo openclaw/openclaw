@@ -122,7 +122,6 @@ export async function finishGatewayStartup(params: {
     unregisterConnectionDependentSidecar,
     chatMetadataLifecycle,
     gatewayRequestContext,
-    gatewayInstanceRuntime,
     getPluginMetadataSnapshot,
     getPluginNodeCapabilities,
   } = runtime;
@@ -177,7 +176,6 @@ export async function finishGatewayStartup(params: {
   );
   await startupTrace.measure("http.listen", () => runtime.startListening());
   startupTrace.mark("http.bound");
-  const mainSessionRecoveryStartupCheckedStorePaths = new Set<string>();
   // Join independent preparation before channels start or failure cleanup retires its owners.
   const requestRuntimeReady = runtime.ensureRequestRuntimeReady().then(() => {
     kernel.setDispatchReady(true);
@@ -222,7 +220,6 @@ export async function finishGatewayStartup(params: {
         cfgAtStart,
         deps,
         sessionDeliveryRecoveryMaxEnqueuedAt,
-        sessionRecoveryReady: postAttachHandles.subagentRecoverySettled,
         log,
         resolveGatewayContext: resolvePluginGatewayContext,
       });
@@ -270,14 +267,10 @@ export async function finishGatewayStartup(params: {
           defaultWorkspaceDir,
           deps,
           startChannels,
-          recoveryRuntime: gatewayInstanceRuntime.recovery,
-          mainSessionRecoveryStartupCheckedStorePaths,
-          isRestartRecoverySuppressed: () => channelManager.getAutostartSuppression() !== null,
           resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
           logHooks,
           logChannels,
           unlockStartupMethods: kernel.unlockStartupMethods,
-          trackInputRecovery: kernel.trackInputRecovery,
           refreshChatMetadata: chatMetadataLifecycle.refresh,
           loadStartupPlugins: async () => {
             const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");

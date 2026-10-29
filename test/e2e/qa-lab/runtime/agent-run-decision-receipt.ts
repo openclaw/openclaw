@@ -21,18 +21,13 @@ import {
   startGatewayClientWhenEventLoopReady,
 } from "../../../../src/plugin-sdk/gateway-runtime.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
+import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { produceQaScriptProof } from "./script-proof.js";
 
 const SCENARIO_ID = "agent-run-decision-receipt";
 const SNAPSHOT_FILE = `${SCENARIO_ID}-summary.json`;
 
 type ProducerOptions = { artifactBase: string; repoRoot: string };
-type ProofResult = {
-  artifacts?: Array<{ filePath: string; kind: string }>;
-  details?: string;
-  durationMs: number;
-  status: QaScriptEvidenceStatus;
-};
 type PendingApproval = { id: string; request?: { command?: string } };
 
 function parseOptions(argv: readonly string[]): ProducerOptions {
@@ -389,24 +384,6 @@ async function runProof(options: ProducerOptions): Promise<string> {
   }
 }
 
-async function produceProof(options: ProducerOptions): Promise<ProofResult> {
-  const startedAt = Date.now();
-  try {
-    return {
-      artifacts: [{ filePath: SNAPSHOT_FILE, kind: "summary" }],
-      details: await runProof(options),
-      durationMs: Math.max(1, Date.now() - startedAt),
-      status: "pass",
-    };
-  } catch (error) {
-    return {
-      details: formatErrorMessage(error),
-      durationMs: Math.max(1, Date.now() - startedAt),
-      status: "fail",
-    };
-  }
-}
-
 async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
@@ -427,7 +404,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
       ],
     },
   });
-  const result = await produceProof(options);
+  const result = await produceQaScriptProof(options, runProof, SNAPSHOT_FILE);
   writer.appendLog(`${result.status}: ${result.details ?? "no details"}\n`);
   return await writer.write(result);
 }

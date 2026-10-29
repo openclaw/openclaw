@@ -309,6 +309,7 @@ it("keeps host previews bounded and classifies image and unsupported bytes", asy
         type: "session_file_too_large",
         maxPreviewBytes: 256 * 1024,
         size: bytes.length,
+        root: workspaceRoot,
       });
     } else {
       const { file } = expectOkPayload(result);

@@ -221,7 +221,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_row_selection_resets_total`             | counter   | none                                                                                      |
 | `openclaw_session_row_partition_cache_total`              | counter   | `task`, `outcome`                                                                         |
 | `openclaw_session_row_partition_revisions_total`          | counter   | `reason`                                                                                  |
-| `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`, `request_class` (SQLite only)                                        |
+| `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`, `request_class` (SQLite and authority)                               |
 | `openclaw_worker_message_unmeasured_total`                | counter   | `kind`, `direction`                                                                       |
 | `openclaw_child_process_spawn_total`                      | counter   | `family`, `operation`                                                                     |
 | `openclaw_memory_rss_bytes`                               | histogram | none                                                                                      |
@@ -241,17 +241,23 @@ when a later read fails, rather than reported as zero or retained from an older
 sample. Other platforms do not expose these gauges. OpenClaw does not currently
 expose a total SQLite or jemalloc allocation counter.
 
-SQLite `sqlite_request` and `sqlite_reply` payload byte series add `request_class`
-from the active writer job, using the same closed vocabulary as
+SQLite `sqlite_request`, `sqlite_reply`, and `authority` payload byte series add
+`request_class` from the owning writer job, using the same closed vocabulary as
 `openclaw_worker_request_seconds{kind="sqlite_writer"}`. Unknown or unattributed
-classes use `other`; continuation frames keep their job's class. Other message
-kinds and the message-count/unmeasured-count metrics retain their existing labels.
+classes use `other`; continuation frames and private admission-port commit and
+settlement receipts keep their job's class. Other message kinds and the
+message-count/unmeasured-count metrics retain their existing labels.
 No payload decoding or extra serialization is performed for attribution.
 
 ```promql
 # Known SQLite request payload MB/min by bounded request class
 sum by (request_class) (
   rate(openclaw_worker_message_payload_bytes_total{kind="sqlite_request",direction="to_worker"}[5m])
+) * 60 / 1e6
+
+# Known authority receipt payload MB/min by bounded request class
+sum by (request_class) (
+  rate(openclaw_worker_message_payload_bytes_total{kind="authority",direction="from_worker"}[5m])
 ) * 60 / 1e6
 ```
 

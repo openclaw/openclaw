@@ -98,6 +98,13 @@
   font-size: 13px;
   line-height: 1.55;
 }
+/* Agent-dependent copy keeps its space but stays unseen until the agent is known. */
+.knowledge-copy-pending .knowledge-subtitle {
+  visibility: hidden;
+}
+.knowledge-copy-pending .knowledge-search input::placeholder {
+  color: transparent;
+}
 .knowledge-actions {
   display: flex;
   align-items: center;
@@ -147,6 +154,10 @@
   font-size: 10px;
   font-weight: 700;
   line-height: 16px;
+}
+/* Reserves a count's width before it is known. */
+.knowledge-tab-count-pending {
+  min-width: 24px;
 }
 .knowledge-tabs button[aria-pressed="true"] .knowledge-tab-count {
   background: var(--accent-subtle);
@@ -2355,15 +2366,23 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 .knowledge-store-slot:empty {
   display: none;
 }
+/* One row of fixed height: wrapping would move the whole page when the tabs widen. */
 .knowledge-store-bar {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px 16px;
+  gap: 16px;
+  min-width: 0;
+  min-height: 32px;
   margin-top: 10px;
   font-size: 13px;
 }
+/* A long agent name shortens instead of crowding out the store context. */
+.knowledge-store-bar .knowledge-select select {
+  max-width: 14em;
+  text-overflow: ellipsis;
+}
 .knowledge-agent-select {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -2394,6 +2413,8 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   color: var(--muted);
 }
 .knowledge-page .knowledge-store-context {
+  min-width: 0;
+  overflow: hidden;
   gap: 8px;
   padding: 2px 0;
   border: 0;
@@ -2409,7 +2430,14 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   color: var(--text-strong, var(--text));
   font-weight: 600;
 }
+.knowledge-store-context :is(strong, span) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .knowledge-store-context span {
+  flex: 0 1000 auto;
   color: var(--muted);
 }
 .knowledge-settings {
@@ -2644,11 +2672,20 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   padding: 11px 14px;
   font-size: 12.5px;
 }
+/* Head and actions stay pinned; the body scrolls within the visible viewport (dvh excludes mobile browser chrome). */
 .knowledge-store-dialog {
   width: min(520px, calc(100vw - 32px));
   max-height: 90vh;
+  max-height: 90dvh;
   padding: 0;
   color: var(--text);
+}
+.knowledge-store-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.knowledge-store-dialog > * {
+  flex: none;
 }
 .knowledge-store-dialog::backdrop {
   background: color-mix(in srgb, var(--bg) 55%, transparent);
@@ -2671,6 +2708,11 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   gap: 16px;
   padding: 16px 20px;
   overflow: auto;
+  overscroll-behavior: contain;
+}
+.knowledge-store-dialog > .knowledge-store-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .knowledge-store-dialog > .knowledge-actions {
   display: flex;
@@ -3193,20 +3235,49 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   margin: 6px 0 0;
 }
 
-/* Loading is static and pane-local: stable geometry, no shimmer or full-view fade. */
+/* Loading is static and pane-local: no shimmer or full-view fade. The status
+   floats over the top of the pane's data: its negative margin cancels its own
+   height, so showing or clearing it never moves the content below. */
 .knowledge-pane-status {
-  min-height: 30px;
-  padding: 5px 12px;
-  border-bottom: 1px solid var(--knowledge-hairline);
+  position: relative;
+  top: 6px;
+  right: 8px;
+  z-index: 2;
+  width: fit-content;
+  max-width: calc(100% - 16px);
+  height: 26px;
+  margin: 0 0 -26px auto;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
   color: var(--muted);
   font-size: 12px;
+  line-height: 24px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Transparent rather than hidden, so the live region stays in the accessibility tree. */
+.knowledge-pane-status:empty {
+  opacity: 0;
+  pointer-events: none;
+}
+/* A terminal error with Retry needs attention and room, so it joins the flow. */
+.knowledge-pane-status:has(.knowledge-error) {
+  inset: auto;
+  max-width: 100%;
+  height: auto;
+  margin: 0 0 8px;
+  padding: 8px 12px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-}
-.knowledge-pane-status:empty::after {
-  content: "\00a0";
+  line-height: normal;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
 }
 .knowledge-browse-data {
   min-height: 390px;
@@ -3290,10 +3361,7 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   }
 }
 
-/* Reserve the agent/store row before its scope is known. */
-.knowledge-store-placeholder {
-  min-height: 36px;
-}
+/* Reserve the agent/store row before its scope is known; it shares the bar's height. */
 .knowledge-store-placeholder .knowledge-skeleton {
   width: 110px;
   height: 24px;

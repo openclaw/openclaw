@@ -48,9 +48,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Streaming token-to-DOM: 1,274,050 B measured + the existing 811 B headroom.
-  // Peter accepted chat growth for less streaming CPU and HTML parsing.
-  chatBootJsGzipBytes: 1_274_861,
+  // Streaming token-to-DOM plus complete cached rows: 1,275,858 B measured.
+  // Preserve the existing 811 B headroom for the accepted rendering improvements.
+  chatBootJsGzipBytes: 1_276_669,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
@@ -68,7 +68,9 @@ const controlUiPerformanceBudgets = {
   largestCssGzipBytes: 58_315,
   // Lazy automation feed: 308,234 B CSS for 8.35% faster remote readiness,
   // one fewer request and 9,859 fewer encoded bytes. Retain 64 B build variance.
-  totalCssGzipBytes: 308_298,
+  // The lazily loaded Sections editor measures 308,462 B (#186229); Vyctor Brzezowski
+  // approved the increase on 2026-10-28. Retain 64 B build variance.
+  totalCssGzipBytes: 308_526,
   // Logs windowing adds 38 B raw / 11 B gzip for 17% lower first-render task CPU
   // and 42% lower filter task CPU at 4x. Measured raw total plus 64 B variance.
   totalCssRawBytes: 1_597_676,

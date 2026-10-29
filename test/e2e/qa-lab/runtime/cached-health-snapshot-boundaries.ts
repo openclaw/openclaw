@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { HealthSummary } from "../../../../src/gateway/health/types.js";
 import { healthHandlers } from "../../../../src/gateway/server-methods/health.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { withFixturePlugin } from "./fixture-plugin-config.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.ts";
@@ -230,25 +230,6 @@ async function createFixturePlugin() {
   return { pluginDir, cleanup: () => fs.rm(root, { recursive: true, force: true }) };
 }
 
-function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      enabled: true,
-      allow: [...new Set([...(config.plugins?.allow ?? []), FIXTURE_PLUGIN_ID])],
-      load: {
-        ...config.plugins?.load,
-        paths: [...new Set([...(config.plugins?.load?.paths ?? []), pluginDir])],
-      },
-      entries: {
-        ...config.plugins?.entries,
-        [FIXTURE_PLUGIN_ID]: { enabled: true },
-      },
-    },
-  };
-}
-
 function containsString(value: unknown, needle: string): boolean {
   if (typeof value === "string") {
     return value.includes(needle);
@@ -274,7 +255,7 @@ async function runPluginToolProof(repoRoot: string) {
       transportBaseUrl: "http://127.0.0.1",
       providerMode: "mock-openai",
       controlUiEnabled: false,
-      mutateConfig: (config) => withFixturePlugin(config, fixture.pluginDir),
+      mutateConfig: (config) => withFixturePlugin(config, fixture.pluginDir, FIXTURE_PLUGIN_ID),
     });
     const before = (await gateway.call("health", { probe: true })) as HealthSummary;
     const catalog = await gateway.call("tools.catalog", { includePlugins: true });
