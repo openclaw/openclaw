@@ -48,10 +48,21 @@ describe("createEmbeddedLobsterRunner", () => {
 
   it("applies a numeric-string output limit through the tool to embedded workflows", async () => {
     runRequest.mockResolvedValue({ ...success, output: ["x".repeat(1024)] });
-    const { filePath } = await createWorkflow();
-    await expect(run({ pipeline: filePath, maxStdoutBytes: "1024" })).rejects.toThrow(
-      "lobster runtime result exceeded maxStdoutBytes",
-    );
+    const { cwd } = await createWorkflow();
+    await fs.writeFile(path.join(cwd, " workflow.lobster"), "steps: []\n");
+    const currentDirectory = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    try {
+      for (const pipeline of ["workflow.lobster", " workflow.lobster"]) {
+        await expect(run({ pipeline, maxStdoutBytes: "1024" })).rejects.toThrow(
+          "lobster runtime result exceeded maxStdoutBytes",
+        );
+        expect(runRequest).toHaveBeenLastCalledWith(
+          expect.objectContaining({ filePath: path.join(cwd, pipeline) }),
+        );
+      }
+    } finally {
+      currentDirectory.mockRestore();
+    }
   });
 
   it("runs inline pipelines with file-like arguments through the embedded runtime", async () => {
@@ -78,29 +89,6 @@ describe("createEmbeddedLobsterRunner", () => {
       expect(runRequest).not.toHaveBeenCalled();
     },
   );
-
-  it("resolves literal workflow file paths without trimming whitespace", async () => {
-    runRequest.mockResolvedValue({ ...success });
-    const relativeDir = path.join(
-      "node_modules",
-      ".cache",
-      `openclaw-lobster-literal-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    const absoluteDir = path.resolve(relativeDir);
-    await fs.mkdir(absoluteDir, { recursive: true });
-    try {
-      await fs.writeFile(path.join(absoluteDir, " wf.lobster"), "steps: []\n", "utf8");
-      await fs.writeFile(path.join(absoluteDir, "wf.lobster"), "steps: []\n", "utf8");
-
-      await run({ pipeline: " wf.lobster", cwd: relativeDir });
-
-      expect(runRequest).toHaveBeenCalledWith(
-        expect.objectContaining({ filePath: path.join(absoluteDir, " wf.lobster") }),
-      );
-    } finally {
-      await fs.rm(absoluteDir, { recursive: true, force: true });
-    }
-  });
 
   it("rejects an input request without a resumable checkpoint", async () => {
     runRequest.mockResolvedValue({ ...success, status: "needs_input" });
