@@ -343,11 +343,12 @@ function createAsyncKeyedStore<T>(
       });
     },
     entries: async () => {
-      // SAFETY: Entries come from this namespace and retain the caller's JSON value type.
-      return (await listPluginStateInWorker({
+      const entries = await listPluginStateInWorker({
         ...scope,
         signal: getAsyncWorkSignal(),
-      })) as PluginStateEntry<T>[];
+      });
+      // SAFETY: Entries come from this namespace and retain the caller's JSON value type.
+      return entries as PluginStateEntry<T>[];
     },
     entriesInKeyRange: async (range) => {
       const params = {
