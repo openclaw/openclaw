@@ -27,6 +27,7 @@ type HomeWire = {
   sourceHomeId?: string;
   changeHomeBeforeHistory?: string;
   secondPageHome?: string;
+  sessionCwd?: string;
 };
 const marker = { sourceHostId: hostId, sourceThreadId: threadId, nodeId };
 const importHistory = transcriptMirrorMocks.importCodexThreadHistoryToTranscript;
@@ -50,7 +51,16 @@ function createHomeFixture(options: HomeWire = {}, entries: EntrySummary[] = [])
         canContinueCodex: true,
         sessions: hasSecondPage
           ? []
-          : [{ threadId, name: "Copied task", status: "idle", source: "cli", archived: false }],
+          : [
+              {
+                threadId,
+                name: "Copied task",
+                status: "idle",
+                source: "cli",
+                archived: false,
+                ...(wire.sessionCwd ? { cwd: wire.sessionCwd } : {}),
+              },
+            ],
         ...(hasSecondPage ? { nextCursor: "second-page" } : {}),
       };
       if (hasSecondPage) {
@@ -130,6 +140,16 @@ function createHomeFixture(options: HomeWire = {}, entries: EntrySummary[] = [])
       expect(readNodeSessionMarker(entry(sessionKey))).toMatchObject({ ...marker, sourceHomeId }),
   };
 }
+
+it("preserves literal whitespace in the adopted node session cwd", async () => {
+  const fixture = createHomeFixture({ sessionCwd: " /tmp/oc-proof " });
+  await fixture.adopt(homeA);
+
+  // The transcript header cwd feeds the session manager's filesystem identity;
+  // the session-entry spawnedCwd is normalized by the core session owner and is
+  // intentionally out of scope for this owner.
+  expect(importHistory).toHaveBeenCalledWith(expect.objectContaining({ cwd: " /tmp/oc-proof " }));
+});
 
 it("rejects stale locators and keeps copied ids in separate chats with their own history", async () => {
   const fixture = createHomeFixture();

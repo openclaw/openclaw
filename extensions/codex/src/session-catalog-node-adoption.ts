@@ -316,7 +316,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
           sessionId: entry.sessionId,
           sessionKey: entry.key,
           agentId: entry.agentId,
-          ...(params.record.cwd?.trim() ? { cwd: params.record.cwd.trim() } : {}),
+          ...(params.record.cwd?.trim() ? { cwd: params.record.cwd } : {}),
           modelProvider: params.record.modelProvider,
           config: params.config,
         });
