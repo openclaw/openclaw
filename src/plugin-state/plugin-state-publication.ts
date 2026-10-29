@@ -6,10 +6,7 @@ import type { Selectable } from "kysely";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import type { SqliteCommitReceipt, SqliteCommittedFact } from "../infra/sqlite-commit-receipt.js";
-import {
-  SQLITE_WORKER_MAX_MESSAGE_BYTES,
-  type SqliteWorkerCommand,
-} from "../infra/sqlite-worker-contract.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../infra/sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
   observeSqliteWorkerCommittedFacts,
@@ -23,40 +20,12 @@ import {
   createKeyedStateDomainPublication,
   type StateDomainChange,
 } from "../state/state-domain-publication.js";
-import type { PluginStateWorkerOperations } from "./plugin-state-worker-contract.js";
 
 type PluginStateRow = Selectable<DB["plugin_state_entries"]>;
 type EntryKey = Pick<PluginStateRow, "plugin_id" | "namespace" | "entry_key">;
 type Receipt = SqliteCommitReceipt<PluginStateRow>;
 type PluginStateChange = StateDomainChange<PluginStateRow>;
-type PluginStateCommand = SqliteWorkerCommand<PluginStateWorkerOperations>;
 type SubmittedFact = { kind: "submitted"; value: Omit<PluginStateRow, "value_json"> };
-
-/** References live only in the admission carrying this already serialized command. */
-function submittedValues(command: PluginStateCommand): ReadonlyMap<string, string> | undefined {
-  switch (command.type) {
-    case "pluginState.register":
-    case "pluginState.registerIfAbsent":
-    case "pluginState.replaceEntry":
-    case "pluginState.compareUpdate":
-    case "pluginState.replace": {
-      const input = command.input;
-      const entries = "entries" in input ? input.entries : "valueJson" in input ? [input] : [];
-      return new Map(
-        entries.map((entry) => [
-          pluginStatePublicationKey({
-            plugin_id: input.pluginId,
-            namespace: input.namespace,
-            entry_key: entry.key,
-          }),
-          entry.valueJson,
-        ]),
-      );
-    }
-    default:
-      return undefined;
-  }
-}
 
 function resolveSubmittedReceipt(
   receipt: unknown,
@@ -276,14 +245,13 @@ export function capturePluginStateReceipt<T>(db: EngineConnection, write: () => 
 /** Capture the whole native transaction before COMMIT, including keys changed by retention. */
 export function withPluginStateWorkerReceipt<T>(
   db: EngineConnection,
-  command: PluginStateCommand,
+  submitted: ReadonlyMap<string, string> | undefined,
   write: () => T,
   additionalFacts?: (result: T) => Record<string, unknown>,
 ): T {
   const { result, receipt: captured } = capturePluginStateReceipt(db, write);
   // Empty receipts distinguish a confirmed no-op from missing commit evidence.
   const metadata = additionalFacts?.(result);
-  const submitted = submittedValues(command);
   const facts = submitted
     ? new Map<string, SqliteCommittedFact<PluginStateRow> | SubmittedFact>(
         [...captured.facts].map(([key, fact]) => {
@@ -433,12 +401,12 @@ export function beginPluginStatePublication(
 export function withPluginStatePublication(
   createAdmission: SqliteWorkerAdmissionFactory,
   context: OpenClawStateWorkerContext,
-  command: PluginStateCommand,
+  values: ReadonlyMap<string, string> | undefined,
   onCommitted?: (facts: unknown) => void,
   scope?: PluginStatePublicationScope,
   effect?: PluginStatePublicationEffect,
 ): SqliteWorkerAdmissionFactory {
-  let submitted = submittedValues(command);
+  let submitted = values;
   return (operation) => {
     const owner = createAdmission(operation);
     let pending: ReturnType<typeof beginPluginStatePublication>;
