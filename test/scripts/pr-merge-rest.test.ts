@@ -96,9 +96,17 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       args,
       fault === "empty" ? "" : fault === "malformed" ? "{" : JSON.stringify(envelope),
     );
-    expect(result.status, result.output).not.toBe(0);
+    expect(result.status, result.output).toBe(fault === "utf8" ? 1 : 65);
     expect(f.state()).toMatchObject({ calls: [], mutations: 0 });
-    expect(() => f.record()).toThrow();
+    expect(result.stderr).toContain(
+      fault === "utf8"
+        ? "The encoded data was not valid for encoding utf-8"
+        : fault === "legacy"
+          ? "invalid command arguments"
+          : ["checksum", "base64", "nul"].includes(fault)
+            ? "merge body snapshot checksum does not match"
+            : "invalid merge dispatch envelope",
+    );
   });
 
   it("accepts exactly four merge arguments with an explicit empty body", () => {

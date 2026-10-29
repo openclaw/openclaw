@@ -189,7 +189,6 @@ console.log(JSON.stringify(page));
   const shell = `
 set -euo pipefail
 source "$BODY_MERGE_SCRIPT"
-# Observe only the golden case; tee forwards the exact bytes to the real composer.
 node() {
   if [ "\${2:-}" = compose ] && [ -n "$BODY_COMPOSE_INPUT" ]; then
     command tee "$BODY_COMPOSE_INPUT" | command node "$@"
@@ -207,7 +206,7 @@ PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main)
 merge_read() {
   [ "$*" = "preview 123" ] || return 99
   [ "$BODY_PREVIEW_ERROR" = false ] || { printf 'preview-read\\n' >> "$BODY_FAILURE_TRACE"; return 1; }
-  cat "$BODY_PREVIEW"
+  printf '%s\\n' "$BODY_PREVIEW"
 }
 mktemp() { [ "$BODY_WRITE_ERROR" = false ] || { printf 'body-write\\n' >> "$BODY_FAILURE_TRACE"; return 1; }; command mktemp "$@"; }
 snapshot=""
@@ -257,34 +256,27 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
       BODY_AUTHOR_TRACE: authorTrace,
       BODY_FAILURE_TRACE: failureTrace,
       BODY_COMMITS: commitsPath,
-      BODY_PREVIEW: (() => {
-        const path = join(root, "preview.json");
-        writeFileSync(
-          path,
-          JSON.stringify({
-            transport: scenario.restPreview ? "rest" : "graphql",
-            payload: {
-              data: {
-                repository: {
-                  squashMergeCommitTitle: scenario.squashTitle ?? "PR_TITLE",
-                  squashMergeCommitMessage: scenario.squashMessage ?? "PR_BODY",
-                  pullRequest: {
-                    author: { login: scenario.prAuthor ?? "maintainer", __typename: "User" },
-                    headRefOid: scenario.previewHead ?? publishedHead,
-                    isMergeQueueEnabled: scenario.previewQueue ?? false,
-                    viewerMergeHeadlineText: "Fixture merge headline",
-                    viewerMergeBodyText:
-                      scenario.previewBody === undefined
-                        ? "Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n\n"
-                        : scenario.previewBody,
-                  },
-                },
+      BODY_PREVIEW: JSON.stringify({
+        transport: scenario.restPreview ? "rest" : "graphql",
+        payload: {
+          data: {
+            repository: {
+              squashMergeCommitTitle: scenario.squashTitle ?? "PR_TITLE",
+              squashMergeCommitMessage: scenario.squashMessage ?? "PR_BODY",
+              pullRequest: {
+                author: { login: scenario.prAuthor ?? "maintainer", __typename: "User" },
+                headRefOid: scenario.previewHead ?? publishedHead,
+                isMergeQueueEnabled: scenario.previewQueue ?? false,
+                viewerMergeHeadlineText: "Fixture merge headline",
+                viewerMergeBodyText:
+                  scenario.previewBody === undefined
+                    ? "Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n\n"
+                    : scenario.previewBody,
               },
             },
-          }),
-        );
-        return path;
-      })(),
+          },
+        },
+      }),
     },
   });
   return {
@@ -403,14 +395,6 @@ describePosix("native squash attribution", () => {
       expect(result.mergeBody).toBe(expected);
     },
   );
-
-  it("removes an unusable body after composition refuses machine credit", () => {
-    const result = prepareBody({ overrideBody: "Reviewed\n\n" + machineTrailer + "\n" });
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("--body-file");
-    expect(result.mergeBody).toBeNull();
-    expect(result.bodyFiles).toEqual([]);
-  });
 
   it("composes the real body despite unrelated inherited PR controls and gh selectors", () => {
     const result = prepareBody(
@@ -790,7 +774,7 @@ describePosix("native squash attribution", () => {
     ],
   ])("%s", (_name, scenario, diagnostic) => {
     const result = prepareBody(scenario);
-    expect(result, result.stderr).toMatchObject({ status: 1, mergeBody: null });
+    expect(result, result.stderr).toMatchObject({ status: 1, mergeBody: null, bodyFiles: [] });
     expect(result.stderr).toContain(diagnostic);
   });
 
@@ -1022,7 +1006,7 @@ describePosix("native squash attribution", () => {
       previewBody: `Server description\n\n${machineCredit}`,
       overrideBody,
     });
-    expect(result).toMatchObject({ status: 1, mergeBody: null });
+    expect(result).toMatchObject({ status: 1, mergeBody: null, bodyFiles: [] });
     expect(result.stderr).toContain("--body-file");
   });
 
@@ -1192,7 +1176,7 @@ describePosix("native squash attribution", () => {
         overrideBody,
         ...failure,
       });
-      expect(result, result.stderr).toMatchObject({ status: 1, mergeBody: null });
+      expect(result, result.stderr).toMatchObject({ status: 1, mergeBody: null, bodyFiles: [] });
       const injectedFailure = failure.sourceReadError
         ? "source-read"
         : failure.authorReadError
