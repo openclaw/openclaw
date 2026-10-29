@@ -665,6 +665,10 @@ describe("public yielded settle replay with real Gateway admission", () => {
       };
       const batchRunIds = [child.runId, sibling.runId].toSorted();
       for (const entry of [child, sibling]) {
+        // Missing-answer recovery still owes a reply while a child result is undelivered.
+        if (reply === "progress only") {
+          entry.delivery = { status: "pending" };
+        }
         entry.cleanupCompletedAt = Date.now();
         entry.requesterSettleWake = {
           ...child.requesterSettleWake!,
