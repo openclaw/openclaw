@@ -1783,8 +1783,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("passes explicit timeout overrides into agent attempts", async () => {
     // Freeze preflight elapsed time to keep the forwarding assertions exact.
-    const now = Date.now();
-    vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    vi.spyOn(performance, "now").mockReturnValue(0);
     setupSuccessfulAttempt();
 
     await runBasicAgentCommand({
