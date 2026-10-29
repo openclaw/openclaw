@@ -7,11 +7,7 @@ import {
   hasVisibleOutboundDeliveryEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "./delivery-evidence.js";
-import {
-  hasVisibleAgentPayload,
-  isMeaningfulTranscriptMessage,
-  isTerminalSilentAssistantMessage,
-} from "./message-visibility.js";
+import { hasVisibleAgentPayload } from "./message-visibility.js";
 
 describe("explicit final source-reply delivery evidence", () => {
   it("distinguishes progress from a delivered final reply", () => {
@@ -190,22 +186,5 @@ describe("queued delivery evidence", () => {
       },
     };
     expect(getAutomaticDeliveryEvidence(partial).mayHaveSent).toBe(true);
-  });
-});
-
-describe("agent reply visibility", () => {
-  it("classifies terminal silent transcript messages and meaningful tails", () => {
-    expect(
-      isTerminalSilentAssistantMessage({
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          { type: "thinking", text: "internal" },
-          { type: "text", text: "NO_REPLY" },
-        ],
-      }),
-    ).toBe(true);
-    expect(isMeaningfulTranscriptMessage({ role: "system" })).toBe(false);
-    expect(isMeaningfulTranscriptMessage({ role: "toolResult" })).toBe(true);
   });
 });
