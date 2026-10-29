@@ -1515,11 +1515,11 @@ describe("scripts/test-projects changed-target routing", () => {
       });
     },
   );
-
   it.each([
     "src/gateway/health/collector.queue-health.test.ts",
     "src/gateway/server-methods/server-methods.test.ts",
-  ])("routes health SQLite consumer %s exactly once to its broker owner", (testFile) => {
+    "src/gateway/tool-resolution.test.ts",
+  ])("routes Gateway SQLite consumer %s exactly once to its broker owner", (testFile) => {
     expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
       config: "test/vitest/vitest.gateway-database-workers.config.ts",
       includePatterns: [testFile],

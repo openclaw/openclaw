@@ -211,6 +211,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/talk/relay/index.test.ts",
   "src/gateway/test-helpers.acquisition.test.ts",
   "src/gateway/tool-resolution.cron-capture.test.ts",
+  // Persistent tool effects must open shared state on the process-main-thread broker.
+  "src/gateway/tool-resolution.test.ts",
   "src/gateway/tools-invoke-authorization.test.ts",
   "src/gateway/tools-invoke-http.test.ts",
   "src/gateway/tui-session-description-wire.test.ts",
