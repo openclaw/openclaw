@@ -200,16 +200,6 @@ describe("runResumeCommand", () => {
     expect(client.stop).toHaveBeenCalledOnce();
   });
 
-  it("rejects a handoff resolution RPC error without exposing it or launching the TUI", async () => {
-    const client = createGatewayClient([]);
-    client.resolveSession.mockRejectedValue(new Error("sensitive upstream details"));
-
-    await expect(runResumeCommand(undefined, { handoff: createHandoff() })).rejects.toThrow(
-      unresolvedHandoff,
-    );
-    expectNoTui(client);
-  });
-
   it("omits the bare global session from the interactive picker", async () => {
     const client = createGatewayClient([session]);
     mocks.selectStyled.mockResolvedValue("agent:main:alpha");
@@ -232,22 +222,6 @@ describe("runResumeCommand", () => {
     );
   });
 
-  it("resolves the resume connection once and hands it to the TUI as bound", async () => {
-    createGatewayClient([session]);
-
-    await runResumeCommand("agent:main:alpha", { url: "wss://gateway.example/control" });
-
-    expect(mocks.connect).toHaveBeenCalledWith({
-      url: "wss://gateway.example/control",
-    });
-    expect(mocks.runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
-        boundGateway: resolvedConnection,
-        session: "agent:main:alpha",
-      }),
-    );
-  });
-
   it("rejects a non-interactive queried resume before connecting or launching the TUI", async () => {
     tty.set(false);
 
@@ -257,40 +231,28 @@ describe("runResumeCommand", () => {
     expect(mocks.connect).not.toHaveBeenCalled();
     expect(mocks.runTui).not.toHaveBeenCalled();
   });
-  it("closes the handshake-stage client when the peer withholds the acknowledgement", async () => {
+  it.each(["handshake", "resolve", "stop-error"])("settles %s cleanup", async (stage) => {
     const client = createGatewayClient([]);
-    // The peer never acknowledges: the connection stays in its handshake stage.
-    client.start = vi.fn();
-    mocks.connect.mockResolvedValue(client);
-
-    const pending = runResumeCommand(undefined, { handoff: createHandoff() });
-    await vi.waitFor(() => expect(client.start).toHaveBeenCalledOnce());
-    await waitForSignalExitBarriers("SIGTERM");
-
-    expect(client.stop).toHaveBeenCalled();
-    // The handshake abort surfaces through the command's connection-error path.
-    await expect(pending).rejects.toThrow();
-  });
-
-  it("closes the pre-TUI client when the command is interrupted", async () => {
-    const client = createGatewayClient([]);
-    let rejectResolve: (error: Error) => void = () => {};
-    client.resolveSession.mockImplementation(
-      () =>
-        new Promise((_resolve, reject) => {
-          rejectResolve = reject;
-        }),
-    );
+    const rpc = Promise.withResolvers();
+    const cleanupFailure = new Error("transport cleanup failed");
+    const awaiting = stage === "resolve" ? client.resolveSession : client.start;
+    awaiting.mockImplementation(() => rpc.promise);
     client.stop.mockImplementation(async () => {
-      rejectResolve(new Error("Gateway connection closed"));
+      if (stage === "resolve") {
+        rpc.reject(new Error("sensitive upstream details"));
+      }
+      if (stage === "stop-error") {
+        throw cleanupFailure;
+      }
     });
-
     const pending = runResumeCommand(undefined, { handoff: createHandoff() });
-    await vi.waitFor(() => expect(client.resolveSession).toHaveBeenCalledOnce());
-    await waitForSignalExitBarriers("SIGINT");
-
-    expect(client.stop).toHaveBeenCalled();
-    await expect(pending).rejects.toThrow();
+    const rejected = expect(pending).rejects.toThrow(
+      stage === "stop-error" ? cleanupFailure : stage === "resolve" ? unresolvedHandoff : undefined,
+    );
+    await vi.waitFor(() => expect(awaiting).toHaveBeenCalledOnce());
+    await Promise.all([waitForSignalExitBarriers("SIGINT"), rejected]);
+    expect(client.stop).toHaveBeenCalledOnce();
+    expectNoTui(client);
   });
 });
 

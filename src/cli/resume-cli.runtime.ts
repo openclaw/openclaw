@@ -5,6 +5,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { decodeResumeHandoff } from "../shared/resume-handoff.js";
+import type { GatewayChatClient } from "../tui/gateway-chat.js";
 import {
   buildSessionChoices,
   loadRecentSessions,
@@ -56,7 +57,7 @@ async function connectResumeGateway(opts: ResumeCliOptions, handoffTarget: boole
   const interruptedWait = new Promise<void>((resolve) => {
     signalInterrupted = resolve;
   });
-  const releaseClientGate = trackResumeClientGate(client, () => {
+  const clientOwner = trackResumeClientGate(client, () => {
     interrupted = true;
     signalInterrupted();
   });
@@ -71,36 +72,35 @@ async function connectResumeGateway(opts: ResumeCliOptions, handoffTarget: boole
     if (interrupted) {
       throw new Error("Gateway connection interrupted.");
     }
-    return { client, releaseClientGate };
+    return { client, clientOwner };
   } catch (error) {
     try {
-      await client.stop();
+      await clientOwner.stop();
     } finally {
-      releaseClientGate();
+      clientOwner.release();
     }
     throw await formatResumeConnectionError(error);
   }
 }
 
-/** The pre-TUI client has no cancellation owner yet, so an accepted CLI interruption
- *  closes it here instead of leaving the transport open behind the signal barrier. */
-function trackResumeClientGate(
-  client: { stop: () => Promise<void> },
-  onInterrupt?: () => void,
-): () => void {
+/** Retain transport cleanup until its owning branch settles, even if stop rejects. */
+function trackResumeClientGate(client: GatewayChatClient, onInterrupt: () => void) {
   let releaseGate = () => {};
   const gateFinished = new Promise<void>((resolve) => {
     releaseGate = resolve;
   });
+  let stopping: Promise<void> | undefined;
+  const stop = () => (stopping ??= Promise.resolve().then(() => client.stop()));
   const unregisterGate = registerSignalExitGate(gateFinished, () => {
-    // The owning branch awaits the same shutdown; keep an interruption from
-    // raising an unhandled rejection when the transport teardown fails.
-    void client.stop().catch(() => undefined);
-    onInterrupt?.();
+    onInterrupt();
+    void stop().catch(() => undefined);
   });
-  return () => {
-    releaseGate();
-    unregisterGate();
+  return {
+    stop,
+    release() {
+      releaseGate();
+      unregisterGate();
+    },
   };
 }
 
@@ -122,11 +122,11 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
   const resolvedQuery = query?.trim();
   const parsedQuery = parseAgentSessionKey(resolvedQuery);
   const explicitGlobalSession = parsedQuery?.rest === "global" ? parsedQuery : undefined;
-  let connection: Awaited<ReturnType<typeof connectResumeGateway>>["connection"];
+  let connection: GatewayChatClient["connection"];
   let sessionKey: string | null;
   if (handoff) {
     const parsed = parseAgentSessionKey(handoff.sessionKey)!;
-    const { client, releaseClientGate } = await connectResumeGateway(
+    const { client, clientOwner } = await connectResumeGateway(
       { ...connectionOptions, url: handoff.gatewayUrl },
       true,
     );
@@ -153,13 +153,13 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       sessionKey = result.key;
     } finally {
       try {
-        await client.stop();
+        await clientOwner.stop();
       } finally {
-        releaseClientGate();
+        clientOwner.release();
       }
     }
   } else {
-    const { client, releaseClientGate } = await connectResumeGateway(connectionOptions, false);
+    const { client, clientOwner } = await connectResumeGateway(connectionOptions, false);
     let sessions: Awaited<ReturnType<typeof loadRecentSessions>>;
     try {
       connection = client.connection;
@@ -173,9 +173,9 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       throw await formatResumeConnectionError(error);
     } finally {
       try {
-        await client.stop();
+        await clientOwner.stop();
       } finally {
-        releaseClientGate();
+        clientOwner.release();
       }
     }
     if (explicitGlobalSession) {
