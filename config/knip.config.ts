@@ -701,6 +701,8 @@ const ignoredTestSupportFiles = [
   "**/*.test-mocks.ts",
   "**/*.test-utils.ts",
   "test/helpers/live-image-probe.ts",
+  // Live-test response observers are not production runtime entrypoints.
+  "src/agents/tool-search.live-diagnostics.ts",
   // Legacy test-only owners whose filenames predate the test-support convention.
   "src/plugins/contracts/host-hook-fixture.ts",
   "src/plugins/contracts/tts-contract-suites.ts",
