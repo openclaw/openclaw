@@ -35,6 +35,27 @@ describe("brew helpers", () => {
     });
   });
 
+  it("does not resolve a brew from whitespace-padded PATH entries", async () => {
+    await withBrewDir(async (tmp) => {
+      const bin = path.join(tmp, "pad", "bin");
+      const executable = path.join(bin, "brew");
+      await writeExecutable(executable);
+
+      for (const paddedEntry of [` ${bin}`, `${bin} `]) {
+        await withEnvAsync(
+          { PATH: `${paddedEntry}${path.delimiter}/nonexistent-openclaw-bin` },
+          async () => {
+            expect(resolveBrewExecutable({ homeDir: path.join(tmp, "home") })).toBeUndefined();
+          },
+        );
+      }
+
+      await withEnvAsync({ PATH: bin }, async () => {
+        expect(resolveBrewExecutable({ homeDir: path.join(tmp, "home") })).toBe(executable);
+      });
+    });
+  });
+
   it("ignores Homebrew executable, selector, and prefix env overrides by default", async () => {
     await withBrewDir(async (tmp) => {
       const explicit = path.join(tmp, "custom", "brew");

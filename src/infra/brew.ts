@@ -33,11 +33,12 @@ export function resolveBrewExecutable(opts?: BrewResolutionOptions): string | un
   // Use the real process PATH, not opts.env, because callers may pass workspace
   // env loaded from untrusted project state.
   for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
-    const trimmed = dir.trim();
-    if (!trimmed || !path.isAbsolute(trimmed)) {
+    // PATH entries are filesystem identities: the OS exec lookup never trims
+    // them, so resolving a padded entry would pick a brew the shell would not.
+    if (!dir || !path.isAbsolute(dir)) {
       continue;
     }
-    const candidate = path.join(trimmed, "brew");
+    const candidate = path.join(dir, "brew");
     if (canAccessSync(candidate, fs.constants.X_OK)) {
       return candidate;
     }
