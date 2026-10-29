@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -26,7 +27,9 @@ import {
   inspectNewerRecoveryHistory,
   needsPostCoreRepair,
   isFreshUnacknowledgedAbandonedUpdateRun,
+  recordedUpdateRunDrivers,
 } from "../../infra/update-run-activity.js";
+import { inspectUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   acknowledgeAbandonedUpdateRun,
   createUpdateRun,
@@ -63,6 +66,7 @@ import {
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
@@ -94,9 +98,45 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     env,
     recoverOrphanedSidecars: false,
   });
-  const activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
+  let activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
   const inheritedRunId = env[UPDATE_RUN_ID_ENV];
-  const admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
+  let admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
+  if (
+    admission.kind === "conflict" &&
+    !inheritedRunId &&
+    activeRuns.some((run) =>
+      recordedUpdateRunDrivers(run).some((driver) => inspectUpdateRunDriver(driver) === "unknown"),
+    )
+  ) {
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const repairOwnership = await executor
+        .enter(resolveUpdateInstallRoot(discoveredRoot))
+        .catch((error: unknown) => {
+          throw new Error(
+            `Repair could not acquire exclusive update ownership. Wait for the update or stop it through its owning host or supervisor, then retry openclaw update repair. ${String(error)}`,
+            { cause: error },
+          );
+        });
+      // Settle independently: an unresolved sibling must not discard proven progress.
+      for (const run of activeRuns) {
+        const reconciled = await reconcileAbandonedUpdateRunsAsync(
+          { explicit: true, runIds: [run.runId] },
+          { ...options, repairOwnership },
+        );
+        for (const retired of reconciled) {
+          const hosts = recordedUpdateRunDrivers(retired)
+            .map((driver) => driver.host)
+            .join(", ");
+          const age = Math.max(0, Math.floor((Date.now() - retired.createdAtMs) / 1_000));
+          defaultRuntime.error(
+            `Warning: abandoned update ${retired.runId} on ${hosts || "an unrecorded host"} (age ${age}s); retired under exclusive update and state ownership.`,
+          );
+        }
+      }
+    });
+    activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
+    admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
+  }
   if (admission.kind === "conflict") {
     throw new Error(admission.message);
   }

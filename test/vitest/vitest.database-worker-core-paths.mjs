@@ -807,6 +807,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-config-provenance.integration.test.ts",
   "src/cli/update-cli/update-load-path-finalization.integration.test.ts",
   "src/cli/update-cli/update-repair-command.test.ts",
+  "src/cli/update-cli/update-repair-package-activation.test.ts",
   "src/cli/update-cli/update-repair-history.test.ts",
   "src/cli/update-cli/update-repair-handoff.test.ts",
   "src/cli/update-cli/update-repair-cancellation.test.ts",

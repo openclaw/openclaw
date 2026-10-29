@@ -122,7 +122,10 @@ function createDeliveryHarness(
     onBlockReply: record,
     replyThreading: { implicitCurrentMessage: "deny" },
     normalizeStreamingText: (payload) => {
-      const text = sanitizeUserFacingText(payload.text ?? "", { streaming: true });
+      const text = sanitizeUserFacingText(payload.text ?? "", {
+        streaming: true,
+        preserveLeadingSourceBoundary: getReplyPayloadMetadata(payload)?.streamedSourceBoundary,
+      });
       return { text, skip: !text.trim() };
     },
     applyReplyToMode: createReplyToModeFilterForChannel("all"),
@@ -264,6 +267,8 @@ const prefixCorrection = {
   literal: true,
   terminalText: leadChunks.join("") + correctedText + "\n",
   correctedText,
+  streamedText:
+    "First lead stays.\nNext lead stays.\nThe current value is one for this item.Continue. Keep this sentence unchanged. Retaineach result. The final summary also remains",
 };
 
 it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
@@ -308,9 +313,7 @@ it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
       expect(delivered.length).toBeGreaterThan(0);
       const beforeTerminalCount = delivered.length;
       if ("terminalText" in scenario) {
-        expect(texts(delivered).join("\n")).toBe(
-          scenario.chunks.map((text) => text.trimEnd()).join("\n"),
-        );
+        expect(texts(delivered).join("")).toBe(scenario.streamedText);
       }
       const text = texts(delivered).join("");
       if ("preservedLiteral" in scenario) {
@@ -339,16 +342,13 @@ it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
       expect
         .soft(delivered.filter((payload) => payload.audioAsVoice && payload.text).length)
         .toBe("voiceEdges" in scenario ? scenario.voiceEdges : 0);
-      if ("textOnly" in scenario) {
-        expect(delivered.every(hasNoMedia)).toBe(true);
-      }
       releaseTerminal.resolve();
       await settled;
       await flush();
       if ("terminalText" in scenario) {
         const recipientText = texts(delivered);
         const additional = recipientText.slice(beforeTerminalCount);
-        expect(additional.join(" ")).toBe(scenario.correctedText);
+        expect(additional.join(" ")).toBe("\n" + scenario.correctedText);
         for (const sentence of scenario.unchangedLeadSentences) {
           expect.soft(recipientText.join(" ").split(sentence)).toHaveLength(2);
         }

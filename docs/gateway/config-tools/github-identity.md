@@ -137,6 +137,15 @@ publication receipt does not grant permission to import another person's PR.
 Prior receipts retain the destination recorded for their own publication, and
 recovery verifies accepted effects against the original PR before another write.
 
+If someone else pushes to that PR's head branch, publication refuses to overwrite
+their commits. Call `prepare_pr` with the PR URL in the same conversation. It
+starts from the head this conversation last published, merges the newer head into
+the saved work, and returns any conflicts. The next publication appends to the
+same PR. This also works when the managed publisher authored the PR, as long as
+the PR author is the publisher account recorded for this conversation's
+publication. Assigning a new session owner does not change who can prepare it:
+only the person who started the conversation can.
+
 To import your own existing PR into a local conversation, use `github_publish` with
 `action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
 sessions with a writable managed sandbox or an ordinary local Docker or Podman
@@ -164,7 +173,7 @@ Input already being prepared retains its original source. New input after
 adoption uses the PR workspace.
 
 Initial preparation of an already managed workspace requires a clean workspace without dirty, untracked, or
-unpublished work. Otherwise it preserves that work and asks you to keep or finish
+unpublished work, except for a PR this conversation published, described above. Otherwise it preserves that work and asks you to keep or finish
 it separately before continuing. A clean workspace receives exactly the verified
 PR head's files, even when the selected project's base is newer. Preparation
 keeps an already managed directory and sandbox scope, and records the original PR

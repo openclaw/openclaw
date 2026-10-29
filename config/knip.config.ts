@@ -70,6 +70,8 @@ const repositoryScriptEntries = [
   "scripts/perf/worktree-creation-measure.ts!",
   // The source header documents this matched Code Mode engine probe by path.
   "scripts/perf/code-mode-engine-measure.ts!",
+  // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
+  "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.

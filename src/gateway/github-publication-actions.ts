@@ -213,7 +213,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     if (binding && !fullWrite) {
       inspection = await inspectOwnGitHubPullRequest({
         pullRequestUrl: binding.url,
-        agentId: session.agentId,
+        session,
         requester: admitted.requester,
         assertCurrent: assertIdentity,
       });

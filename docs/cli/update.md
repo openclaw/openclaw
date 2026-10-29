@@ -156,8 +156,11 @@ The local diagnostic identifies invalid fields and recommends
 keeps this guidance in its JSON `notes` without changing the configuration, even
 when the authored file cannot be parsed. In that case, preview leaves the database
 engine unresolved instead of assuming a backend; actual updates still refuse admission.
-Malformed-config previews do not inspect databases or create profile, cache, or
-scratch artifacts. Preview plans do not save update reports or support bundles.
+For malformed source, text and JSON previews do not inspect runtime databases or
+create profile, cache, or scratch artifacts. They do not save diagnostic reports.
+Package-manager probes that create caches wait until the source is readable.
+Native ownership and recovery refusals still apply. Previews with readable
+configuration retain their existing diagnostics.
 Public failure reports retain the rejected schema area, such as `gateway.*`,
 while hiding operator-defined keys and rejected values. Admission still runs
 when the selected package version matches the installed version; the no-op

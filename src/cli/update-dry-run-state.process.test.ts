@@ -69,7 +69,11 @@ function runMigrationPlan(
 }
 
 function runPreview(root: string, command = "update") {
-  return runUpdateProcess(root, [command, "--dry-run", "--no-restart", "--timeout", "1", "--json"]);
+  return runUpdateProcess(
+    root,
+    [command, "--dry-run", "--no-restart", "--timeout", "1", "--json"],
+    { XDG_CACHE_HOME: path.join(root, "cache"), TMPDIR: path.join(root, "tmp") },
+  );
 }
 
 async function snapshotTree(root: string): Promise<string[]> {
@@ -234,9 +238,10 @@ setLoggerOverride({ file: ${JSON.stringify(path.join(logs, "openclaw.log"))} });
     { initialized: false, json: true },
     { initialized: true, json: false },
     { initialized: true, json: true },
+    { initialized: true, json: true, channel: "stable" },
   ])(
-    "keeps malformed previews artifact-free (DB=$initialized, JSON=$json)",
-    async ({ initialized, json }) => {
+    "keeps malformed previews artifact-free (DB=$initialized, JSON=$json, channel=$channel)",
+    async ({ initialized, json, channel }) => {
       const { root, stateDir } = await createStateFixture(
         "openclaw-update-malformed-",
         "{ definitely-not-json\n",
@@ -261,24 +266,41 @@ channel("sqlite.db.query").subscribe(({ database }) => {
       const before = await snapshotTree(root);
       const result = await runUpdateProcess(
         root,
-        ["update", "--dry-run", "--no-restart", "--timeout", "1", ...(json ? ["--json"] : [])],
+        [
+          "update",
+          "--dry-run",
+          "--no-restart",
+          "--timeout",
+          "1",
+          ...(json ? ["--json"] : []),
+          ...(channel ? ["--channel", channel] : []),
+        ],
         { XDG_CACHE_HOME: path.join(root, "cache"), TMPDIR: path.join(root, "tmp") },
         preload,
       );
       expect(result.code, result.stderr).toBe(0);
       expect(result.stdout).toContain("Would refuse update:");
       if (json) {
-        expect(JSON.parse(result.stdout)).toMatchObject({
+        const preview = JSON.parse(result.stdout);
+        expect(preview).toMatchObject({
           dryRun: true,
           runId: expect.any(String),
           actions: expect.arrayContaining([expect.any(String)]),
+          notes: expect.arrayContaining([expect.stringContaining("Would refuse update:")]),
         });
+        expect(preview.run).toBeUndefined();
+      } else {
+        expect(result.stdout).toContain("Update dry-run");
       }
       expect(result.stderr).not.toContain("DATABASE_INSPECTION");
       for (const artifact of ["update-reports", "logs/support"]) {
         expect(await fs.stat(path.join(stateDir, artifact)).catch(() => undefined)).toBeUndefined();
       }
-      expect(await snapshotTree(root)).toEqual(before);
+      if (initialized) {
+        await expectUnrecordedPreview(root, before);
+      } else {
+        expect(await snapshotTree(root)).toEqual(before);
+      }
     },
   );
 
@@ -287,6 +309,8 @@ channel("sqlite.db.query").subscribe(({ database }) => {
       "openclaw-update-migration-pending-",
       '{ "heartbeat": { "model": "anthropic/claude-3-5-haiku-20241022", "every": "30m" } }\n',
     );
+    await fs.mkdir(path.join(root, "cache"));
+    await fs.mkdir(path.join(root, "tmp"));
     const legacyStore = path.join(stateDir, "tasks", "runs.sqlite");
     await writeFixture(`${legacyStore}.migrated`, "legacy migration marker\n");
     await writeFixture(`${legacyStore}-wal`, "legacy WAL marker\n");

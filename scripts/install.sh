@@ -1625,17 +1625,25 @@ node_components_satisfy_package_engine() {
 }
 
 resolve_node_package_engine() {
-    [[ "$INSTALL_METHOD" == npm ]] || return 0
-    # Consume --beta here so admission and installation use the same selected target.
-    if [[ "$USE_BETA" == 1 ]]; then
-        OPENCLAW_VERSION="$(bounded_probe_output 'beta tag' resolve_beta_version || true)"
-        OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
-        USE_BETA=0
-    fi
     local engine="" verdict=0
-    if can_resolve_registry_package_version "$OPENCLAW_VERSION"; then
-        if ! engine="$(bounded_probe_output 'package Node requirement' npm view "openclaw@${OPENCLAW_VERSION}" engines.node --fetch-timeout=5000 --fetch-retries=0)"; then
-            engine=""
+    if [[ "$INSTALL_METHOD" == git ]]; then
+        # Read the selected checkout without requiring Node to be installed first.
+        local manifest="" pattern='"engines"[[:space:]]*:[[:space:]]*\{[^}]*"node"[[:space:]]*:[[:space:]]*"([^"]+)"'
+        manifest="$(cat "$1/package.json" 2>/dev/null || true)"
+        if [[ "$manifest" =~ $pattern ]]; then
+            engine="${BASH_REMATCH[1]}"
+        fi
+    else
+        # Consume --beta here so admission and installation use the same selected target.
+        if [[ "$USE_BETA" == 1 ]]; then
+            OPENCLAW_VERSION="$(bounded_probe_output 'beta tag' resolve_beta_version || true)"
+            OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
+            USE_BETA=0
+        fi
+        if can_resolve_registry_package_version "$OPENCLAW_VERSION"; then
+            if ! engine="$(bounded_probe_output 'package Node requirement' npm view "openclaw@${OPENCLAW_VERSION}" engines.node --fetch-timeout=5000 --fetch-retries=0)"; then
+                engine=""
+            fi
         fi
     fi
     if [[ -n "$engine" ]]; then
@@ -1660,6 +1668,25 @@ node_binary_is_supported() {
     node_version_components_are_supported "$major" "$minor" "$patch" &&
         node_components_satisfy_package_engine "$major" "$minor" "$patch" "$NODE_PACKAGE_ENGINE" &&
         node_binary_has_safe_sqlite "$node_bin"
+}
+
+ensure_node() {
+    load_nvm_for_node_detection || return 1
+    resolve_node_package_engine "$@"
+    if ! node_binary_is_supported node; then
+        use_supported_nvm_node || promote_supported_node_binary || true
+    fi
+    if ! check_node; then
+        if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
+            install_node_with_existing_nvm || return 1
+        else
+            install_homebrew || return 1
+            install_node || return 1
+        fi
+    fi
+    if ! ensure_default_node_active_shell; then
+        return 1
+    fi
 }
 
 prepend_path_dir() {
@@ -2954,6 +2981,7 @@ install_openclaw_from_git() {
         fi
     fi
 
+    ensure_node "$repo_dir" || return 1
     ensure_pnpm "$repo_dir"
 
     local install_lockfile_flag
@@ -3846,40 +3874,20 @@ main() {
 
     ui_stage "Preparing environment"
 
-    # Step 1: Node.js. macOS package-manager branches install Homebrew lazily
-    # only when they are about to call brew.
-    load_nvm_for_node_detection || exit 1
-    resolve_node_package_engine
-    if ! node_binary_is_supported node; then
-        use_supported_nvm_node || promote_supported_node_binary || true
-    fi
-    if ! check_node; then
-        if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
-            install_node_with_existing_nvm || exit 1
-        else
-            install_homebrew
-            install_node
-        fi
-    fi
-    if ! ensure_default_node_active_shell; then
-        exit 1
+    if [[ "$INSTALL_METHOD" == npm ]]; then
+        ensure_node || return 1
     fi
 
     ui_stage "Installing OpenClaw"
 
     local final_git_dir=""
     if [[ "$INSTALL_METHOD" == "git" ]]; then
-        local had_npm_owner=false
-        if npm list -g openclaw &>/dev/null; then
-            had_npm_owner=true
-        fi
-
         final_git_dir="$GIT_DIR"
         if [[ -z "$GIT_DIR_EXPLICIT" && -n "$detected_checkout" ]]; then
             final_git_dir="$detected_checkout"
         fi
         install_openclaw_from_git "$final_git_dir"
-        if [[ "$had_npm_owner" == "true" ]]; then
+        if npm list -g openclaw &>/dev/null; then
             retire_npm_owner_after_git_install || return $?
         fi
     else

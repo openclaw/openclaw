@@ -291,6 +291,7 @@ export async function prepareResult(
     nextAction?: string;
     record?: UpdateRunRecord;
     readHistory?: boolean;
+    writeArtifacts?: boolean;
   } = {},
   assertCurrent?: () => void,
 ): Promise<(additionalSteps?: readonly UpdateStepResult[]) => void> {
@@ -325,7 +326,7 @@ export async function prepareResult(
     return report;
   };
   const reportPath =
-    result.reason === "dry-run"
+    reportHints.writeArtifacts === false
       ? undefined
       : await writeUpdateRunReportArtifact({
           result,
