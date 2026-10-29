@@ -56,6 +56,7 @@ vi.mock("../../internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession: vi.fn(),
 }));
 vi.mock("../requester-cron-authority.js", () => ({
+  retireRequesterFollowupAuthority: vi.fn(),
   revokeRequesterCronAuthorityBatch: vi.fn(),
 }));
 vi.mock("../../../runtime.js", () => ({ defaultRuntime: { log: vi.fn() } }));
