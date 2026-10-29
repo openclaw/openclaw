@@ -5,7 +5,11 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { z } from "zod";
 import type { DoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openClawStateDatabaseCache,
+} from "../state/openclaw-state-db-cache.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerHasSourceCustody,
@@ -467,6 +471,51 @@ export async function createUpdateDatabaseBackup({
   rehearsal?: DoctorRehearsalDatabaseCoverage;
   retryAdvice?: boolean;
 }): Promise<UpdateDatabaseBackup> {
+  if (
+    purpose === "original-state" &&
+    acquisition?.mode !== "maintenance-owner" &&
+    Object.values(resolveDatabaseFamilyEngines(input.config)).includes("postgres")
+  ) {
+    const { acquireGatewayLock } = await import("./gateway-lock.js");
+    const owner = await acquireGatewayLock({
+      env: input.env,
+      role: "sqlite-maintenance",
+      allowInTests: true,
+      timeoutMs: 0,
+    });
+    if (!owner) {
+      throw new Error("PostgreSQL original capture requires exclusive state ownership.");
+    }
+    let retainOwner = false;
+    try {
+      await closeOpenClawStateDatabaseByPathAsync(
+        path.join(input.stateDir, "state", "openclaw.sqlite"),
+      );
+      owner.assertCurrent();
+      return await owner.run(async () => {
+        const backup = await createUpdateDatabaseBackup({
+          ...input,
+          purpose,
+          acquisition: { mode: "maintenance-owner" },
+          nodeRunner,
+          timeoutMs,
+          signal: callerSignal,
+          rehearsal,
+          retryAdvice,
+        });
+        owner.assertCurrent();
+        return backup;
+      });
+    } catch (error) {
+      // An unjoined inspection child still owns the source read interval.
+      retainOwner = hasCommandProcessCleanupError(error);
+      throw error;
+    } finally {
+      if (!retainOwner) {
+        await owner.release();
+      }
+    }
+  }
   const controller = new AbortController();
   const { discoverBackupDatabasePaths, readBackupEngine } =
     await prepareUpdateDatabaseBackupRuntime();

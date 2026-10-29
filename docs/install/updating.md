@@ -104,6 +104,11 @@ are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+PostgreSQL original-state captures acquire offline custody before using the exact
+database backup provider. The installed updater must contain this repair.
+Update-history writes participate in PostgreSQL's generation handoff to Doctor;
+all other generation checks remain in force.
+
 During overlapping Gateway restarts, config recovery reads health facts through
 the same isolated read-only transaction used for startup plugin metadata while
 the previous database owner is verified alive. It avoids copying unrelated
