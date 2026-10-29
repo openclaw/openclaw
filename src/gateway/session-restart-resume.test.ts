@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -46,9 +47,7 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
     const runId = "completed-worker-reply";
     const { operation, releaseExecution } = await withSessionTurn(target, async (active) => {
-      if (!active) {
-        throw new Error("Expected a real reply operation");
-      }
+      assert(active, "Expected a real reply operation");
       active.attachBackend({ kind: "embedded", runId, cancel() {} });
       active.freezeAbort();
       return { operation: active, releaseExecution: active.retainExecution() };
@@ -69,9 +68,7 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
         },
         assertCurrent() {},
       });
-      if (!queued) {
-        throw new Error("Queued fixture input was not admitted");
-      }
+      assert(queued, "Queued fixture input was not admitted");
       await persistRunningSessionsForRestart({ cfg: {} });
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
         queuedInputIds: [queued.inputId],
@@ -170,9 +167,7 @@ it("settles captured queued sends as failed when the recorded owner's authority 
       },
       assertCurrent() {},
     });
-    if (!receipt) {
-      throw new Error("Queued fixture input was not admitted");
-    }
+    assert(receipt, "Queued fixture input was not admitted");
     const process = createProcessSessionFixture({ id: "revoked-owner-work", backgrounded: true });
     process.agentId = target.agentId;
     process.sessionKey = target.sessionKey;
@@ -232,9 +227,7 @@ it("fails a captured browser-copilot send instead of running without its live bi
       },
       assertCurrent() {},
     });
-    if (!receipt) {
-      throw new Error("Queued fixture input was not admitted");
-    }
+    assert(receipt, "Queued fixture input was not admitted");
     const send = vi.spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess").mockResolvedValue({});
     const context = createContext();
     try {
@@ -262,29 +255,33 @@ it("fails a captured browser-copilot send instead of running without its live bi
     }
   }));
 
-it("resumes only current legacy cycles once and settles unmarked crash inputs", () =>
+it("resumes recent interrupted legacy cycles once and settles crash inputs", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const target = { agentId: "main", sessionKey: "agent:main:crashed", sessionId: "crashed" };
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    for (const [name, abortedLastRun, tombstone] of [
-      ["legacy", true, undefined],
-      ["settled", false, undefined],
-      ["retired", true, { reason: "stopped" }],
+    for (const [name, hoursAgo, status, abortedLastRun, tombstone] of [
+      ["legacy", 1, "interrupted", true, undefined],
+      ["stale", 7, "interrupted", true, undefined],
+      ["done", 1, "done", true, undefined],
+      ["killed", 1, "killed", true, undefined],
+      ["future", -1, "interrupted", true, undefined],
+      ["settled", 1, "interrupted", false, undefined],
+      ["retired", 1, "interrupted", true, { reason: "stopped" }],
     ] as const) {
-      const sessionKey = `agent:main:${name}`;
       const entry = {
         sessionId: name,
-        updatedAt: 1,
+        updatedAt: Math.floor(performance.timeOrigin) - hoursAgo * 60 * 60 * 1000,
+        status,
         abortedLastRun,
         mainRestartRecovery: { cycleId: name, revision: 1, chargedAttempts: 0, tombstone },
       };
       database.db
         .prepare(
-          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES (?, ?, ?, 1, 1)",
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES (?, ?, ?, ?, 1)",
         )
-        .run(sessionKey, name, JSON.stringify(entry));
+        .run(`agent:main:${name}`, name, JSON.stringify(entry), entry.updatedAt);
     }
     const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
       accepted: Promise.resolve({ ok: true }),
@@ -300,9 +297,7 @@ it("resumes only current legacy cycles once and settles unmarked crash inputs", 
         assertCurrent() {},
         message: { role: "user", content: runId, timestamp: 1, idempotencyKey: `${runId}:user` },
       });
-      if (!receipt) {
-        throw new Error("Expected accepted input");
-      }
+      assert(receipt, "Expected accepted input");
       receipts.push(receipt);
     }
     const [crashed, live] = receipts;
@@ -332,10 +327,12 @@ it("resumes only current legacy cycles once and settles unmarked crash inputs", 
         "agent:main:legacy",
       ]);
       expect(resume.mock.calls[0]?.[0]).toContain("The Gateway restarted while you were working.");
-      const persisted = database.db
-        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-        .get("agent:main:legacy");
-      expect(JSON.parse(String(persisted?.entry_json))).not.toHaveProperty("mainRestartRecovery");
+      for (const name of ["legacy", "stale", "done", "killed", "future", "settled"]) {
+        const persisted = database.db
+          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+          .get(`agent:main:${name}`);
+        expect(JSON.parse(String(persisted?.entry_json))).not.toHaveProperty("mainRestartRecovery");
+      }
       expect(dispatch).not.toHaveBeenCalled();
       expect(warn).not.toHaveBeenCalled();
     } finally {

@@ -306,11 +306,15 @@ Copying one does not grant permission to restart a service.
 
 ## Automatic resume
 
-On the first upgrade from a version with legacy main-session recovery, an
-interrupted, unsettled recovery cycle becomes an ordinary resume marker. Startup
-consumes it once under the same current-authority rules below. Settled or
-tombstoned cycles remain inert; old execution and authority snapshots are not
-restored.
+On the first upgrade from a version with legacy main-session recovery, startup
+adopts an unsettled cycle only when the entry has `abortedLastRun: true`, status
+`interrupted`, and an `updatedAt` within the six hours before this process started.
+Old shutdown marking updated that timestamp. Startup clears the cycle and sends
+the same single resume input under the current-authority rules below. Stale,
+future-dated, settled, tombstoned, `done`, and `killed` entries do not resume.
+An installation stopped for longer than six hours before upgrading loses this
+one-time resume; send a new message to continue. Old execution and authority
+snapshots are not restored.
 
 Startup clears each marker and admits exactly one new input through the normal
 session-event path:

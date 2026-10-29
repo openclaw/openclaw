@@ -60,23 +60,22 @@ export function projectCanonicalSessionEntryShape(
     participantCount: _projectedParticipantCount,
     ...canonicalValue
   } = value;
-  // Upgrade bridge: remove once stable includes the graceful-restart redesign (#185730).
-  // Normalize before dropping the old cycle; the resume owner consumes the ordinary marker.
+  // Keep only the cycle for startup's upgrade bridge; never restore execution snapshots.
+  // Remove once stable includes the graceful-restart redesign (#185730).
   const recovery = canonicalValue.mainRestartRecovery;
   if (
-    !Object.hasOwn(canonicalValue, "resumeAfterRestart") &&
-    canonicalValue.abortedLastRun === true &&
     isRecord(recovery) &&
     typeof recovery.cycleId === "string" &&
     recovery.cycleId.length > 0 &&
     !recovery.tombstone
   ) {
-    canonicalValue.resumeAfterRestart = { queuedInputIds: [] };
+    canonicalValue.mainRestartRecovery = { cycleId: recovery.cycleId };
+  } else {
+    delete canonicalValue.mainRestartRecovery;
   }
   // Retired execution-recovery metadata is inert on existing installs.
   for (const key of Object.keys(canonicalValue)) {
     if (
-      key === "mainRestartRecovery" ||
       key === "pendingExecNotifications" ||
       key === "subagentRecovery" ||
       key.startsWith("restartRecovery")
