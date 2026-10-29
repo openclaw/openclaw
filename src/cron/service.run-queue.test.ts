@@ -735,6 +735,52 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
   }
 });
 
+it("keeps a committed manual run for the next drain when its drain meets a locked database", async ({
+  signal,
+}) => {
+  const job = commandJob("locked-drain");
+  const storePath = await storeJobs([job]);
+  const runCommandJob = successfulCommand();
+  const { cron, state } = service(storePath, { runCommandJob });
+  const runOperation = stateWorker.runOpenClawStateWorkerOperation;
+  let lockedDrains = 0;
+  const drains = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementation((context, operation, options) =>
+      runOperation(
+        context,
+        (scope) =>
+          operation({
+            ...scope,
+            execute: (command, executeOptions) =>
+              command.type === "cron.drainQueue" && lockedDrains++ === 0
+                ? Promise.reject(
+                    Object.assign(new Error("database is locked"), {
+                      code: "ERR_SQLITE_ERROR",
+                      errcode: 5,
+                    }),
+                  )
+                : scope.execute(command, executeOptions),
+          }),
+        options,
+      ),
+    );
+  try {
+    await cron.start();
+    const run = cron.run(job.id, "force");
+    void run.catch(() => {});
+    await vi.waitFor(() => expect(lockedDrains).toBe(1));
+    expect(runCommandJob).not.toHaveBeenCalled();
+    drains.mockRestore();
+    await drainCronRunQueue(state);
+    await expect(withinTest(run, signal)).resolves.toEqual({ ok: true, ran: true });
+    expect(runCommandJob).toHaveBeenCalledOnce();
+  } finally {
+    drains.mockRestore();
+    await stopServices(cron);
+  }
+});
+
 it("retires a stale markerless receipt at startup so the job can run again", async () => {
   const job = commandJob("markerless-receipt");
   const storePath = await storeJobs([job]);
