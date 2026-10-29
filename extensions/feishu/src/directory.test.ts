@@ -229,29 +229,19 @@ describe("feishu directory (config-backed)", () => {
       .mockResolvedValueOnce(page([{ open_id: "ou_bob", name: "Bob" }], "next/page+2="))
       .mockResolvedValueOnce(
         page([
-          { open_id: "ou_alice", name: "Alice" },
-          { open_id: "ou_alice_2", name: "Alice Two" },
+          { open_id: "ou_alice", name: "Mu\u0308ller" },
+          { open_id: "ou_alice_2", name: "Mu\u0308ller Two" },
         ]),
       );
     mockPeerList(list);
 
-    await expect(livePeers({ query: "ALICE", limit: 1, fallbackToStatic: false })).resolves.toEqual(
-      [{ kind: "user", id: "ou_alice", name: "Alice" }],
-    );
+    await expect(
+      livePeers({ query: "MÜLLER", limit: 1, fallbackToStatic: false }),
+    ).resolves.toEqual([{ kind: "user", id: "ou_alice", name: "Mu\u0308ller" }]);
     expect(list).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenLastCalledWith({
       params: { page_size: 50, page_token: "next/page+2=" },
     });
-  });
-
-  it("matches canonically equivalent live peer names", async () => {
-    mockPeerList(
-      vi.fn().mockResolvedValueOnce(page([{ open_id: "ou_mueller", name: "Mu\u0308ller" }])),
-    );
-
-    await expect(livePeers({ query: "Müller", fallbackToStatic: false })).resolves.toEqual([
-      { kind: "user", id: "ou_mueller", name: "Mu\u0308ller" },
-    ]);
   });
 
   it.each([50, 51])("returns up to %i live peers across full provider pages", async (limit) => {
