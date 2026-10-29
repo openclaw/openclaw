@@ -39,6 +39,7 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: vi.fn() }),
 }));
 
+// mock-isolation: Exercise server.ts broker/admission ownership without loading the full Gateway core.
 vi.mock("./server-start.js", () => ({
   startGatewayServerCore: async () => {
     const { runExec } = await import("../process/exec.js");
