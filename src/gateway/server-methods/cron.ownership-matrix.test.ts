@@ -538,12 +538,13 @@ describe("cron ownership access matrix", () => {
       scheduledToolPolicy: trusted,
     });
     const scratchRace = await seedService({ owner: ownerNoAccount, payload: plainPayload });
-    scratchRace.context.cron.writeScratch.mockImplementationOnce(async (_id, params) => {
+    // Real scratch persistence: the operator cap commits first, then the conversation's write
+    // reaches the service lock and its final guard sees the trusted definition.
+    scratchRace.context.cron.writeScratch.mockImplementationOnce(async (id, params) => {
       await scratchRace.cron.update(scratchRace.id, {
         payload: { kind: "agentTurn", toolsAllow: ["read"] },
       });
-      params.commitGuard?.();
-      return { ok: true, scratch: { content: params.content, revision: 1 }, currentRevision: 1 };
+      return await scratchRace.cron.writeScratch(id, params);
     });
     const racedScratch = await invokeCron(
       "cron.scratch.set",
@@ -551,5 +552,7 @@ describe("cron ownership access matrix", () => {
       { context: scratchRace.context, client: createCronCallerClient("ops", "default", S_A) },
     );
     expect(String(racedScratch.respond.mock.calls[0]?.[2]?.message)).toContain("operator access");
+    expect((await scratchRace.cron.readScratch(scratchRace.id)).scratch).toBeUndefined();
+    expect(await scratchRace.stored()).toMatchObject({ scheduledToolPolicy: trusted });
   });
 });
