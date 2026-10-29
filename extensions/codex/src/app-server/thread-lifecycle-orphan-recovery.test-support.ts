@@ -215,19 +215,41 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
         turns[0]!.status = "interrupted";
       }
       if (scenario.includes("tool rotation")) {
-        await expect(
-          fixtures.startOrResumeThread({
-            ...common,
-            dynamicTools: [
-              {
-                type: "function",
-                name: "changed_tool",
-                description: "Changed immutable catalog",
-                inputSchema: { type: "object" },
-              },
-            ],
-          }),
-        ).rejects.toThrow(/previous Codex task/);
+        const changedCatalog = {
+          ...common,
+          params: { ...common.params, trigger: "user" as const },
+          dynamicTools: [
+            {
+              type: "function" as const,
+              name: "changed_tool",
+              description: "Changed immutable catalog",
+              inputSchema: { type: "object" },
+            },
+          ],
+        };
+        await expect(fixtures.startOrResumeThread(changedCatalog)).rejects.toMatchObject({
+          name: "CodexAdoptedThreadActiveError",
+          message: expect.stringContaining("dynamic tool catalog"),
+          userMessage: expect.stringContaining("/new"),
+        });
+        if (scenario === "settling tool rotation") {
+          const beforeHeartbeat = requests.length;
+          await expect(
+            fixtures.startOrResumeThread({
+              ...changedCatalog,
+              params: { ...common.params, trigger: "heartbeat" },
+            }),
+          ).rejects.toMatchObject({
+            name: "CodexAdoptedThreadActiveError",
+            userMessage: undefined,
+          });
+          expect(
+            requests
+              .slice(beforeHeartbeat)
+              .filter((request) => /^(thread|turn)\//.test(request.method))
+              .map((request) => request.method),
+          ).toEqual(["thread/read", "thread/turns/list"]);
+        }
         expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(1);
         expect(
           requests.some((request) => ["turn/start", "thread/fork"].includes(request.method)),

@@ -74,7 +74,13 @@ export async function beginCodexAttemptSettlement(
     await state.pluginRuntimeRefreshStop.catch(() => undefined);
   }
   let readRetainedNativeCommands: (() => ReadonlyMap<string, string>) | undefined;
-  const settlement = drainNotificationQueue().then(async () => {
+  const settlement = (async () => {
+    // A terminal tool completes locally before Codex publishes its interrupted turn.
+    // Keep the receipt's projection open through that bounded native acknowledgement.
+    if (state.terminalToolInterrupt) {
+      await state.terminalToolInterrupt;
+    }
+    await drainNotificationQueue();
     const commands = activeProjector.getPendingNativeCommands();
     if (commands.size > 0 && !params.oneShotCliRun && !state.pluginRuntimeRefreshStop) {
       try {
@@ -107,7 +113,7 @@ export async function beginCodexAttemptSettlement(
     }
     await closeProjection();
     await activeProjector.settlement.drain();
-  });
+  })();
   const degradedSettlement = settlementExpired.then(() => {
     beginDrainGrace();
   });

@@ -132,6 +132,15 @@ Assistant, tool, active-item, or side-effect evidence can make replay unsafe;
 OpenClaw then reports the failure rather than automatically rerunning the work.
 Verify current state before retrying an unsafe failed turn.
 
+After a Gateway restart, send a new request in the same chat. When the tools
+and permissions are compatible and OpenClaw can verify the previous turn has
+ended, it can resume the saved thread. It records any uncertain outcome before
+submitting the new request. If the tools or permissions
+changed while an earlier action was unresolved, OpenClaw preserves the old task.
+To start with fresh model context in that chat, send `/new` followed by your new
+request. For example, send `/new Reply with READY`. In Slack, the earlier DM messages
+remain visible. OpenClaw does not resubmit the earlier tool action.
+
 The former `appServer.turnCompletionIdleTimeoutMs`,
 `appServer.turnAssistantCompletionIdleTimeoutMs`, and
 `appServer.postToolRawAssistantCompletionIdleTimeoutMs` settings are retired.

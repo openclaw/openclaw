@@ -13,6 +13,7 @@ export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
   executionStarted?: boolean;
   executedArguments?: Record<string, unknown>;
+  nativeResultAcknowledged?: boolean;
   replaySafe?: boolean;
   sideEffectEvidence?: boolean;
   terminate?: boolean;

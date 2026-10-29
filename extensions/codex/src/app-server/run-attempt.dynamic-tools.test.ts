@@ -26,6 +26,7 @@ import {
   setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
 } from "./run-attempt-test-harness.js";
+import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 function callTool(
   harness: ReturnType<typeof createStartedThreadHarness>,
@@ -50,6 +51,54 @@ function callTool(
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it.each([true, false])(
+    "settles a host-interrupted terminal tool only for its acknowledged result (acknowledged=%s)",
+    async (acknowledged) => {
+      const harness = createStartedThreadHarness();
+      const params = createTestParams();
+      params.timeoutMs = 90_000;
+      const send = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "delivered" }],
+        details: {},
+        terminate: true,
+      }));
+      setCodexTestToolFactory(params, () => [
+        { ...createRuntimeDynamicTool("deliver"), execute: send },
+      ]);
+      setCodexTestModelSupportsTools(params, true);
+      const run = runCodexAppServerAttempt(params, {
+        pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:19400" } },
+      });
+      await run.waitForTurnAccepted();
+      const result = await callTool(harness, "deliver", "send-1");
+      expect(result).toMatchObject({ success: true });
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "dynamicToolCall",
+            id: acknowledged ? "send-1" : "unrelated",
+            tool: "deliver",
+            namespace: null,
+            arguments: {},
+            status: "completed",
+            ...(result as object),
+          },
+        },
+      });
+      expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+      expect(harness.requests.filter(({ method }) => method === "turn/interrupt")).toHaveLength(1);
+      expect(send).toHaveBeenCalledOnce();
+      const binding = await readCodexAppServerBinding(params.sessionFile);
+      expect(binding?.threadId).toBe("thread-1");
+      expect(binding?.turnRecovery).toEqual(
+        acknowledged ? undefined : { turnId: "turn-1", state: "accepted" },
+      );
+    },
+  );
+
   it("retains a required command as one native pending call until terminal collection", async () => {
     const command = createRequiredExecRuntimeContract();
     const harness = createStartedThreadHarness();

@@ -77,6 +77,23 @@ openclaw logs --follow
   before saying live proof is blocked. Env checks are presence-only; never print
   secrets.
 
+## Interrupted Codex DMs
+
+For a `CodexAdoptedThreadActiveError`, correlate the failed run with the
+session generation, bound native thread, and saved recovery turn. Check the
+native turn status and whether another turn is running. A terminal or unloaded
+native thread alone cannot tell you whether an external tool action succeeded.
+
+- If the saved tools and permissions still match, verify a new request in the
+  same DM. OpenClaw can resume an owned thread after confirming settlement.
+- If the failure names a configuration change, keep the old task until the
+  owner restores compatible settings or chooses fresh context. In the same
+  DM, the owner can send `/new Reply with READY` (or the configured reset
+  trigger). If Slack intercepts the slash, mention the bot before the command.
+- Verify the bot's reply to the new request and check the old action's execution
+  or delivery record for duplicates. A reset acknowledgement alone establishes
+  only that the command was accepted. Leave uncertain receipts intact.
+
 ## Fetching Sessions and Transcripts
 
 Use these paths when a bug report references a chat session and you need the

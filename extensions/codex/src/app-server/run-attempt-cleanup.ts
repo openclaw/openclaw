@@ -54,7 +54,11 @@ export async function cleanupCodexAttempt(
     resourceState.thread.turnRecovery?.state === "accepted" &&
     terminalState.settledTurnStatus &&
     nativeTerminal?.id === activeTurnId &&
-    nativeTerminal.status === terminalState.settledTurnStatus
+    (nativeTerminal.status === terminalState.settledTurnStatus ||
+      (terminalState.settledTurnStatus === "completed" &&
+        nativeTerminal.status === "interrupted" &&
+        !runAbortController.signal.aborted &&
+        state.interruptedTerminalTool?.nativeResultAcknowledged === true))
   ) {
     await runCleanupStep("codex-accepted-turn-receipt", () =>
       clearCodexAcceptedTurn(resources, activeTurnId),

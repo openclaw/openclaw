@@ -335,11 +335,21 @@ export async function assertCodexThreadReplacementSafe(
   params: CodexStartOrResumeThreadParams,
   binding: CodexAppServerThreadBinding,
   context: CodexThreadRequestContext,
+  operation: string,
 ): Promise<void> {
-  const incompatible = () =>
-    new CodexAdoptedThreadActiveError(
-      "The previous Codex task is preserved, but the configured tool catalog or execution policy changed. Its uncertain tool effects were not replayed. Retry with the compatible configuration or explicitly start a new conversation.",
+  const incompatible = () => {
+    const { trigger, inputProvenance, config } = params.params;
+    const resetCommand =
+      config?.session?.resetTriggers?.find((command) => command.trim()) ?? "/new";
+    const userMessage =
+      trigger === "user" && (!inputProvenance || inputProvenance.kind === "external_user")
+        ? `Your previous Codex task is preserved. Its tools or execution policy changed. You can continue the old task when its settings are restored. To start with fresh context here, send ${resetCommand} followed by your new request. Starting fresh does not replay the earlier actions.`
+        : undefined;
+    return new CodexAdoptedThreadActiveError(
+      `The previous Codex task is preserved, but the configured tool catalog or execution policy changed. OpenClaw stopped while ${operation}. Its uncertain tool effects were not replayed.`,
+      userMessage,
     );
+  };
   if (
     params.appServer.start.transport !== "websocket" ||
     binding.connectionScope ||

@@ -3,6 +3,7 @@ import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import { CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS } from "./attempt-client-cleanup.js";
+import { isTerminalTurnStatus } from "./attempt-notifications.js";
 import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
 import {
   isCodexAppServerLiveThreadClaimed,
@@ -249,6 +250,16 @@ export async function settleCodexOrphanTurn(
     if (!owned) {
       throw fail();
     }
+    // A previous admission already settled this exact turn. Leave the receipt
+    // for the no-replay notice; there is no new interrupt or write to confirm.
+    if (
+      receipt.state === "settling" &&
+      (thread.status?.type === "idle" || thread.status?.type === "notLoaded") &&
+      active.length === 0 &&
+      isTerminalTurnStatus(owned.status)
+    ) {
+      return thread;
+    }
     // Native completion does not prove the lost host confirmed the task's outcome.
     // Live native cleanup clears acceptance; cold admission must preserve the
     // unresolved receipt even when every native item has already completed.
@@ -291,11 +302,7 @@ export async function settleCodexOrphanTurn(
         // Terminal can race the interrupt. Only readback may settle an ambiguous response.
         const settled = await readTurns();
         if (
-          !settled.some(
-            (turn) =>
-              turn.id === receipt.turnId &&
-              ["completed", "failed", "interrupted"].includes(turn.status ?? ""),
-          )
+          !settled.some((turn) => turn.id === receipt.turnId && isTerminalTurnStatus(turn.status))
         ) {
           throw new AgentHarnessPreflightError(
             "The previous Codex task interruption was not confirmed; no tools were retried.",
@@ -319,11 +326,7 @@ export async function settleCodexOrphanTurn(
       result.thread.id !== binding.threadId ||
       result.thread.status?.type === "active" ||
       settled.some((turn) => turn.status === "inProgress") ||
-      !settled.some(
-        (turn) =>
-          turn.id === receipt.turnId &&
-          ["completed", "failed", "interrupted"].includes(turn.status ?? ""),
-      )
+      !settled.some((turn) => turn.id === receipt.turnId && isTerminalTurnStatus(turn.status))
     ) {
       throw fail();
     }

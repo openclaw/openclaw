@@ -61,6 +61,8 @@ class CodexAttemptState {
     durationMs: number;
   };
   terminalDynamicToolReleaseCheckScheduled = false;
+  terminalToolInterrupt?: Promise<void>;
+  interruptedTerminalTool?: CodexDynamicToolRuntimeResponse;
   currentTurnHadNonTerminalDynamicToolResult = false;
 }
 

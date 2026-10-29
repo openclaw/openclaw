@@ -67,7 +67,20 @@ export function createCodexAttemptLifecycleController(
     // Interrupt drops accepted pending input. Reject unconsumed steering first so
     // completion delivery can use its fallback path instead of reporting success.
     turnRuntime.steeringQueueRef.current?.cancel();
-    void turnRuntime.interruptTurn(value.call.turnId, { locallyCompleted: true });
+    const alreadyTerminal = state.terminalTurnNotificationQueued;
+    const interrupted = turnRuntime.interruptTurn(value.call.turnId, { locallyCompleted: true });
+    const receipt = resources.state.thread.turnRecovery;
+    if (!alreadyTerminal && receipt?.state === "accepted" && receipt.turnId === value.call.turnId) {
+      state.terminalToolInterrupt = interrupted.then(
+        (confirmed) => {
+          if (confirmed) {
+            state.interruptedTerminalTool = value.response;
+          }
+        },
+        (error: unknown) =>
+          embeddedAgentLog.debug("codex terminal tool interrupt failed", { error }),
+      );
+    }
     turnRuntime.completeTurn();
   };
   const scheduleTerminalDynamicToolReleaseCheck = () => {

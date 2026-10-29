@@ -18,6 +18,7 @@ function createTerminalReleaseHarness() {
   const resolveCompletion = vi.fn();
   const state = {
     completed: false,
+    terminalTurnNotificationQueued: false,
     activeAppServerTurnRequests: 0,
     currentTurnHadNonTerminalDynamicToolResult: false,
     pendingTerminalDynamicToolRelease: undefined,
@@ -47,7 +48,10 @@ function createTerminalReleaseHarness() {
           },
         },
       },
-      state: { client },
+      state: {
+        client,
+        thread: { threadId: "thread-1", turnRecovery: { turnId: "turn-1", state: "accepted" } },
+      },
     } as never,
     {
       state,
@@ -66,6 +70,7 @@ function createTerminalReleaseHarness() {
     } as never,
   );
   const completeTurn = () => {
+    state.terminalTurnNotificationQueued = true;
     for (const handler of notificationHandlers) {
       handler({
         method: "turn/completed",
@@ -76,7 +81,7 @@ function createTerminalReleaseHarness() {
       });
     }
   };
-  return { cancel, completeTurn, controller, order, request, resolveCompletion, state };
+  return { cancel, client, completeTurn, controller, order, request, resolveCompletion, state };
 }
 
 function terminalYieldResult(success: boolean) {
@@ -134,6 +139,23 @@ describe("buildCodexLifecycleTerminalMeta", () => {
 });
 
 describe("Codex terminal dynamic-tool release", () => {
+  it("preserves the accepted receipt when native interruption preceded terminal tool release", async () => {
+    const harness = createTerminalReleaseHarness();
+    const route = getCodexAppServerTurnRouter(harness.client as never).reserveThread({
+      threadId: "thread-1",
+    });
+    try {
+      harness.completeTurn();
+      harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+      await yieldImmediate();
+      expect(harness.resolveCompletion).toHaveBeenCalledOnce();
+      expect(harness.request).not.toHaveBeenCalled();
+      expect(harness.state).not.toHaveProperty("interruptedTerminalTool");
+    } finally {
+      route.release();
+    }
+  });
+
   it("keeps native yield cleanup alive after its subscription route is released", async () => {
     const physical = createClientHarness({
       onWrite: (line, send) => {

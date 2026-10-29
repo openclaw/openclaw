@@ -242,12 +242,17 @@ export async function startOrResumeThread(
         }),
       );
     }
+    let replacementOperation = "starting a fresh native thread";
+    const checkReplacement = (current: CodexAppServerThreadBinding, operation: string) => {
+      assertCodexBindingMayBeReplaced(current, operation, expectedOwnership);
+      replacementOperation = operation;
+    };
     const stageBindingReplacement = (operation: string) => {
       const current = binding;
       if (!current?.threadId) {
         return;
       }
-      assertCodexBindingMayBeReplaced(current, operation, expectedOwnership);
+      checkReplacement(current, operation);
       assert();
       // Replacement CAS needs the predecessor row to preserve same-connection inventory.
       replacementPredecessor = current;
@@ -262,7 +267,7 @@ export async function startOrResumeThread(
         threadId: current.threadId,
         ...details,
       });
-      stageBindingReplacement("rotating a stale thread binding");
+      stageBindingReplacement(`changing ${changed}`);
     };
     const transientDelegationRestriction = params.params.delegationCapability === "report_only";
     const persistentWebSearchRestriction =
@@ -425,7 +430,7 @@ export async function startOrResumeThread(
       params.mcpServersFingerprintEvaluated === true &&
       binding.mcpServersFingerprint !== params.mcpServersFingerprint
     ) {
-      assertCodexBindingMayBeReplaced(binding, "changing MCP configuration", expectedOwnership);
+      checkReplacement(binding, "changing MCP configuration");
       if (
         !ringZeroActive &&
         (transientNativeToolRestriction ||
@@ -456,11 +461,7 @@ export async function startOrResumeThread(
       webSearchBindingChanged &&
       !deferLegacyWebSearchRotationToTransientNativeSurface
     ) {
-      assertCodexBindingMayBeReplaced(
-        binding,
-        "changing web-search configuration",
-        expectedOwnership,
-      );
+      checkReplacement(binding, "changing web-search configuration");
       if (!ringZeroActive && transientWebSearchRestriction) {
         embeddedAgentLog.debug(
           "codex app-server tool surface restricted for turn; starting transient thread",
@@ -477,11 +478,7 @@ export async function startOrResumeThread(
       binding = undefined;
     }
     if (binding?.threadId && transientNativeToolRestriction && !ringZeroActive) {
-      assertCodexBindingMayBeReplaced(
-        binding,
-        "starting a native-tool-restricted turn",
-        expectedOwnership,
-      );
+      checkReplacement(binding, "starting a native-tool-restricted turn");
       embeddedAgentLog.debug(
         "codex app-server native tool surface disabled for turn; starting transient thread",
         {
@@ -492,11 +489,7 @@ export async function startOrResumeThread(
       binding = undefined;
     }
     if (binding?.threadId && transientDelegationRestriction) {
-      assertCodexBindingMayBeReplaced(
-        binding,
-        "starting a delegation-restricted turn",
-        expectedOwnership,
-      );
+      checkReplacement(binding, "starting a delegation-restricted turn");
       // Loaded Codex threads ignore resume config overrides. Keep the normal
       // binding intact and start a transient thread with collaboration disabled.
       embeddedAgentLog.debug(
@@ -573,11 +566,7 @@ export async function startOrResumeThread(
           nextLegacy: legacyDynamicToolsFingerprint,
         })
       ) {
-        assertCodexBindingMayBeReplaced(
-          binding,
-          "changing the dynamic tool catalog",
-          expectedOwnership,
-        );
+        checkReplacement(binding, "changing the dynamic tool catalog");
         preserveExistingBinding = shouldStartTransientNoToolThread({
           previous: binding.dynamicToolsFingerprint,
           nextHasDynamicTools: params.dynamicTools.length > 0,
@@ -639,7 +628,7 @@ export async function startOrResumeThread(
     assertCodexBindingMayBeReplaced(binding, "starting a fresh native thread", expectedOwnership);
     const requestContext = await prepareRequestContext();
     if (saved) {
-      await assertCodexThreadReplacementSafe(params, saved, requestContext);
+      await assertCodexThreadReplacementSafe(params, saved, requestContext, replacementOperation);
     }
     if (initialBoundThreadId && !preserveExistingBinding && !configuredMcpOwnershipChanged) {
       await releaseRetainedThread(initialBoundThreadId);

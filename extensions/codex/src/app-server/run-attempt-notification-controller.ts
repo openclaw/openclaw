@@ -100,6 +100,9 @@ export function createCodexAttemptNotificationController(
       isDeepStrictEqual(item.contentItems, response.contentItems)
     ) {
       acknowledgeInternalToolResult(response);
+      if (response.terminate && response.success && item.status === "completed") {
+        response.nativeResultAcknowledged = true;
+      }
     }
   };
   const handleNotification = async (incomingNotification: CodexServerNotification) => {
