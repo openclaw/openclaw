@@ -30,13 +30,31 @@ const GOOGLE_VERTEX_MULTI_REGION_HOSTS = new Set([
   "aiplatform.us.rep.googleapis.com",
 ]);
 
-export function isGoogleVertexHostname(hostname: string): boolean {
+function resolveGoogleVertexHostnameLocation(hostname: string): string | undefined {
   const normalized = hostname.toLowerCase();
-  return (
-    normalized === GOOGLE_VERTEX_HOST ||
-    normalized.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX) ||
-    GOOGLE_VERTEX_MULTI_REGION_HOSTS.has(normalized)
-  );
+  if (normalized === GOOGLE_VERTEX_HOST) {
+    return "global";
+  }
+  if (GOOGLE_VERTEX_MULTI_REGION_HOSTS.has(normalized)) {
+    return normalized.split(".")[1];
+  }
+  return normalized.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX)
+    ? normalized.slice(0, -GOOGLE_VERTEX_REGION_HOST_SUFFIX.length)
+    : undefined;
+}
+
+export function isGoogleVertexHostname(hostname: string): boolean {
+  return resolveGoogleVertexHostnameLocation(hostname) !== undefined;
+}
+
+export function resolveGoogleVertexBaseUrlLocation(baseUrl?: string | null): string | undefined {
+  const raw = normalizeOptionalString(baseUrl);
+  // Template endpoints retain the explicit option or environment location.
+  if (!raw || raw.includes("{location}")) {
+    return undefined;
+  }
+  const url = URL.parse(raw);
+  return url ? resolveGoogleVertexHostnameLocation(url.hostname) : undefined;
 }
 
 export function isGoogleVertexBaseUrl(baseUrl?: string | null): boolean {
