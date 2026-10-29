@@ -63,6 +63,8 @@ beforeAll(() => {
     "scripts/lib/merge-head-diff-base.mjs",
     "scripts/lib/npm-lock-package-selection.mjs",
     "scripts/lib/npm-lock-package-selection.d.mts",
+    "scripts/lib/record-shared.mjs",
+    "scripts/lib/record-shared.d.mts",
   ]) {
     for (const directory of [cwd, harness]) {
       copy(file, directory);
@@ -150,8 +152,8 @@ it("retains unknown commands", () => {
   expect(skip()).toBe(false);
 });
 it("retains root manifest changes with the canonical command unchanged", () => {
-  const manifest = JSON.parse(readFileSync(path.join(cwd, "package.json"), "utf8"));
-  change("package.json", JSON.stringify({ ...manifest, private: true }));
+  const packageJson = JSON.parse(readFileSync(path.join(cwd, "package.json"), "utf8"));
+  change("package.json", JSON.stringify({ ...packageJson, private: true }));
   expect(skip()).toBe(false);
 });
 it.each(["OPENCLAW_NPM_LOCK_JOBS", "OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT"])(
@@ -161,18 +163,22 @@ it.each(["OPENCLAW_NPM_LOCK_JOBS", "OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT"])(
     expect(skip()).toBe(false);
   },
 );
-it.each(["packages", "scripts/lib/npm-lock-package-selection.mjs"])(
-  "retains incomplete %s inputs",
-  (file) => {
-    rmSync(path.join(cwd, file), { recursive: true, force: true });
-    expect(skip()).toBe(false);
-    expect(runAdmission()).toBe("skip=false\n");
-  },
-);
+it.each([
+  "packages",
+  "scripts/lib/npm-lock-package-selection.mjs",
+  "scripts/lib/record-shared.mjs",
+  "scripts/lib/record-shared.d.mts",
+])("retains incomplete %s inputs", (file) => {
+  rmSync(path.join(cwd, file), { recursive: true, force: true });
+  expect(skip()).toBe(false);
+  expect(runAdmission()).toBe("skip=false\n");
+});
 it.each([
   ["scripts/changed-lanes.mts", "// different historical implementation\n"],
   ["scripts/lib/npm-lock-package-selection.mjs", "// different historical selector\n"],
   ["scripts/lib/npm-lock-package-selection.d.mts", "// different historical declaration\n"],
+  ["scripts/lib/record-shared.mjs", "// different historical record guard\n"],
+  ["scripts/lib/record-shared.d.mts", "// different historical record declaration\n"],
   [manifest, "invalid JSON"],
 ])("retains invalid %s even when comparing a revision to itself", (file, content) => {
   change(file, content);

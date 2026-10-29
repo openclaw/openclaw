@@ -1239,6 +1239,8 @@ describe("scripts/changed-lanes", () => {
     for (const file of [
       "scripts/lib/npm-lock-package-selection.mjs",
       "scripts/lib/npm-lock-package-selection.d.mts",
+      "scripts/lib/record-shared.mjs",
+      "scripts/lib/record-shared.d.mts",
     ]) {
       expect(shouldRunNpmLockGuard([file])).toBe(true);
       expect(createNpmLockGuardCommand([file])).not.toBeNull();

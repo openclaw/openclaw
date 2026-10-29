@@ -34,6 +34,8 @@ export function canSkipNpmLockSetup({ cwd = process.cwd(), base = "", historical
       "scripts/lib/merge-head-diff-base.mjs",
       "scripts/lib/npm-lock-package-selection.mjs",
       "scripts/lib/npm-lock-package-selection.d.mts",
+      "scripts/lib/record-shared.mjs",
+      "scripts/lib/record-shared.d.mts",
     ]) {
       if (!readFileSync(path.join(cwd, file)).equals(readFileSync(path.join(harnessRoot, file)))) {
         return false;

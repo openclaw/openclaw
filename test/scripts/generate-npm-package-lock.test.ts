@@ -1771,6 +1771,8 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
     "scripts/generate-npm-package-lock.mts",
     "scripts/lib/npm-lock-package-selection.mjs",
     "scripts/lib/npm-lock-package-selection.d.mts",
+    "scripts/lib/record-shared.mjs",
+    "scripts/lib/record-shared.d.mts",
   ])("falls back to every npm lock when policy ownership changes: %s", (file) => {
     const packageDirs = npmLockPackageDirsForChangedPaths([file]).map(repoRelativePath);
 

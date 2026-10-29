@@ -1,8 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { isRecord } from "./record-shared.mjs";
 
-// Admission loads this before workspace dependencies exist.
-const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const recordAt = (value, key) => {
   const nested = isRecord(value) ? value[key] : undefined;
   return isRecord(nested) ? nested : undefined;
@@ -53,7 +52,9 @@ export function npmLockPackageDirsForChangedPaths(changedPaths, rootDir) {
       changedPath === "pnpm-lock.yaml" ||
       changedPath === "pnpm-workspace.yaml" ||
       changedPath === "scripts/generate-npm-package-lock.mts" ||
-      /^scripts\/lib\/npm-lock-package-selection\.(?:mjs|d\.mts)$/u.test(changedPath)
+      /^scripts\/lib\/(?:npm-lock-package-selection|record-shared)\.(?:mjs|d\.mts)$/u.test(
+        changedPath,
+      )
     ) {
       return [
         rootDir,
