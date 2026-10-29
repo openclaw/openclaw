@@ -51,8 +51,9 @@ Do not write a separate permission store or infer consent from successful login.
   with `resolveEffortThinkingProfile` instead of a hard-coded level list. See
   [runtime hooks](/plugins/sdk-provider-plugins/runtime-hooks).
 - **Connection-only setup.** Onboarding saves the endpoint and credential through
-  `createProviderConnectionPresetAppliers`; it never copies catalog rows into
-  config.
+  `createProviderConnectionPresetAppliers`. Outside `models.mode: "replace"`, which
+  keeps its documented exception, it never copies catalog rows into config. See
+  [model catalogs](/plugins/sdk-provider-plugins/model-catalogs).
 - **Docs.** Add `docs/providers/<id>.md` and list the provider in alphabetical
   order on the provider index.
 - **Proof.** Run a real agent turn on an isolated Gateway with a real key before
