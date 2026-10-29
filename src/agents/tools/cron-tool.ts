@@ -553,6 +553,14 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 params,
                 "update",
               );
+              // cron.update's closed patch schema rejects these with an opaque anyOf error.
+              for (const field of ["owner", "declarationKey"] as const) {
+                if (Object.hasOwn(canonicalPatch, field)) {
+                  throw new Error(
+                    `${field} can only be set by action="add"; remove it from the update patch`,
+                  );
+                }
+              }
               if (!managementAuthority || !allowCommandJobs) {
                 assertNoCronShellExecution(canonicalPatch);
               }
