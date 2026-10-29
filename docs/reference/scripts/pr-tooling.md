@@ -177,6 +177,15 @@ and completion-only commands do not provision a worktree for this acquisition.
 `prepare-push --resume-crabbox-run` requires the existing authenticated tracking
 anchor and refuses cold acquisition before any fetch.
 
+Confirmed prior-CI admin first admission may explicitly select current official
+main with `merge-run --current-workflow --admin-evidence <file>
+--confirmed-operator-admin` when no outcome or unresolved capture exists.
+The native selection descriptor and locked source verification preserve the exact
+original binding. Additive `workflowAdmission` provenance retains both sources
+through outcome ancestry, including successors written by older bound tooling.
+This is per-invocation selection, not a permanent rebind; see
+[artifact-build admission](/reference/scripts/prior-ci#artifact-build-failure-with-successful-primary-ci).
+
 Only verified native merge completion retires the exact workflow binding.
 Failures and pending completion preserve it. Repeating completion reconciles
 the merge outcome without repeating publication, comments, or cleanup.
@@ -312,11 +321,12 @@ ambiguous directories remain preserved; recovery never deletes their seed branch
 
 ## Captured baseline evidence hashes
 
-Read-only baseline evidence hashes pass the already-captured bytes to the selected
-Git executable through a complete, private temporary file. The writer closes before
-a fresh read-only descriptor is opened at offset zero; on the supported POSIX
-host the pathname and directory are removed before Git starts. Write hashes,
-signatures, authority checks, and operation supervision are unchanged.
+Baseline evidence hashes and reconstructed blobs pass the already-captured bytes
+to the selected Git executable through a complete, private temporary file. The
+writer closes before a fresh read-only descriptor is opened at offset zero; on
+the supported POSIX host the pathname and directory are removed before Git starts.
+Reconstructed blobs still use Git's `-w` object write; signatures, authority checks,
+and operation supervision are unchanged.
 
 Temporary storage must accommodate the largest individual captured file. Ordinary
 write, spawn, and Git failures fail closed and clean up owned resources. Unlinking

@@ -82,7 +82,6 @@ export async function runOutboundDelivery(
     ...params,
     conversationDeliveryTarget: undefined,
     sessionGeneration: undefined,
-    transcriptGeneration: undefined,
     deliveryQueueStateContext: undefined,
   });
 }

@@ -2,6 +2,7 @@ import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
+import type { CliBackendTurnStatus } from "./cli-backend-turn-status.types.js";
 
 type CliBackendNoOutputWatchdog = {
   /** Fraction of overall timeout used when fixed timeout is not set. */
@@ -264,6 +265,8 @@ export type CliBackendExecuteContext = {
   registerMessageInjection?: (injection: CliBackendMessageInjection) => void;
   /** Offers graceful turn interruption; the host drops the registration when this run closes. */
   registerTurnInterrupt?: (interrupt: CliBackendTurnInterrupt) => void;
+  /** Optional read-only assessment outside the prompt queue; the host owns its time bound. */
+  registerTurnStatus?: (status: CliBackendTurnStatus) => void;
   /** Closure-bound approval capability; retained copies fail after the run closes. */
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,

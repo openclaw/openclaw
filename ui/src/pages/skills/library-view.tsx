@@ -37,7 +37,8 @@ export function SkillLibrary(props: {
   };
   const Entries = () => {
     const list = createMemo(() => acceptedList() ?? read().list);
-    const query = createMemo(() => props.library.local.query.toLowerCase().trim());
+    // Canonical-form comparison: a composed (NFC) query must match decomposed (NFD) copy.
+    const query = createMemo(() => props.library.local.query.toLowerCase().trim().normalize("NFC"));
     const scope = createMemo(() => current().view);
     const entries = createMemo(() => {
       const snapshot = list();
@@ -53,6 +54,7 @@ export function SkillLibrary(props: {
           (!search ||
             `${entry.slug} ${entry.name} ${entry.description} ${entry.ownerLabel}`
               .toLowerCase()
+              .normalize("NFC")
               .includes(search))
         );
       });

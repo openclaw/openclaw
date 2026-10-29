@@ -27,6 +27,7 @@ import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { activateSubagentRegistry } from "../registry/subagent-registry.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -149,6 +150,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
       native: NativeSubagentRuntime;
       ordinary: AnyAgentTool;
       bound: BoundParent;
+      runtime: Awaited<ReturnType<NativePluginSpawnTestOptions["createBoundGateway"]>>["runtime"];
       modelsStarted: Promise<void>;
       makeNative: (
         parent: BoundParent,
@@ -210,6 +212,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
             makeNative,
             ordinary: expectDefined(ordinary, "ordinary spawn"),
             bound,
+            runtime,
             modelsStarted: modelsStarted.promise,
           });
         },
@@ -418,7 +421,9 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
   });
 
   it("native plugin permits task rewrites and nested ordinary noncollector calls", async () => {
-    await withRewriteFixture(async ({ native, ordinary, bound, modelsStarted }) => {
+    await withRewriteFixture(async ({ native, ordinary, bound, runtime, modelsStarted }) => {
+      vi.mocked(runtime.lifecycle.waitForAgent).mockRestore();
+      await activateSubagentRegistry(bound.resolveGatewayContext);
       let ordinaryRunId: string | undefined;
       const hook = vi.fn(async (event: { toolName: string; params: Record<string, unknown> }) => {
         if (event.toolName !== "sessions_spawn") {
@@ -479,6 +484,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
         completed: [{ runId: accepted.runId, status: "done", result: "rewrite child complete" }],
         pending: [],
       });
+      await bound.execution.runWhenIdle(() => {});
       await settleRootWork(true);
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     });

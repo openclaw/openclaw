@@ -62,6 +62,7 @@ import {
   resolveTargetVersion,
   type UpdateFinalizeOptions,
 } from "./shared.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
@@ -72,7 +73,8 @@ import {
 } from "./update-retained-custody.js";
 
 export function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
-  return repairUpdate(opts).catch((error: unknown) => {
+  const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
+  return withUpdateDatabaseEngine(env, () => repairUpdate(opts)).catch((error: unknown) => {
     throw updateMaintenanceError(error);
   });
 }

@@ -274,7 +274,6 @@ async function withMessageSendContext<T>(
           // Public SDK callers cannot select a private conversation storage target.
           conversationDeliveryTarget,
           sessionGeneration: undefined,
-          transcriptGeneration: undefined,
           payloads: rendered.payloads,
           renderedBatchPlan: rendered.plan,
           queuePolicy,

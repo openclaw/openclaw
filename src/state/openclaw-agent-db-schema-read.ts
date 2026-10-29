@@ -6,6 +6,7 @@ import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
+  readSqliteWriterAppVersion,
 } from "../infra/sqlite-user-version.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
@@ -38,6 +39,7 @@ export function assertSupportedAgentSchemaVersion(
       pathname,
       userVersion,
       OPENCLAW_AGENT_SCHEMA_VERSION,
+      readSqliteWriterAppVersion(db),
     );
   }
   return userVersion;

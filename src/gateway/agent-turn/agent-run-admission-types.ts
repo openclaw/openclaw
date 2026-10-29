@@ -3,7 +3,6 @@ import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
-import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import type {
   PreparedModelRuntimeLease,
   PreparedReplyDispatchRuntime,
@@ -57,9 +56,6 @@ export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
   unpersistedOffloadedRefs: OffloadedRef[];
   userTurn: PreparedAgentRunUserTurn;
   workspaceOverride?: string;
-  restoreAdmittedRestartRecoveryInterrupted?: () => Promise<
-    MainSessionRecoveryPendingTarget | undefined
-  >;
 };
 
 export type PrepareAgentRunDispatchParams = Omit<
@@ -96,7 +92,6 @@ export type PrepareAgentRunDispatchParams = Omit<
   ownerDeviceId?: string;
   pendingChatRun?: { sessionKey: string; agentId?: string };
   isOneShotModelRun: boolean;
-  isRestartRecoveryResumeRun: boolean;
   onUserTurnMediaPersisted: () => void;
   agentDedupeKeys: readonly string[];
   getOwnedAgentDedupeKeys: () => readonly string[];

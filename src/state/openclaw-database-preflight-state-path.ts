@@ -9,6 +9,7 @@ import type { SqliteSchemaIssue } from "../infra/sqlite-schema-contract.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
+  readSqliteWriterAppVersion,
 } from "../infra/sqlite-user-version.js";
 import { configureSqliteReadOnlyPragmas } from "../infra/sqlite-wal.js";
 import { describeDeferredStateSchemaPublication } from "./openclaw-database-preflight.messages.js";
@@ -95,6 +96,7 @@ export async function preflightOpenClawStateDatabasePath(
           resolvedPath,
           contentVersion,
           OPENCLAW_STATE_SCHEMA_VERSION,
+          readSqliteWriterAppVersion(database),
         ).message,
       });
     }

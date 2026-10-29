@@ -340,6 +340,8 @@ export function MobileWorkspaceContents(props: {
     };
     const workspaceList = workspace.list;
     const searchQuery = workspace.browserSearch.trim().toLowerCase();
+    // The server echo check below stays byte-exact; local candidate matching compares NFC.
+    const matchQuery = searchQuery.normalize("NFC");
     const browserPath = workspace.browserPath;
     const listed = workspaceList?.browser;
     const browser = searchQuery
@@ -350,7 +352,8 @@ export function MobileWorkspaceContents(props: {
         ? listed
         : workspace.cachedBrowser;
     const matches = (...values: (string | undefined)[]) =>
-      !searchQuery || values.some((value) => value?.toLowerCase().includes(searchQuery));
+      !searchQuery ||
+      values.some((value) => value?.toLowerCase().normalize("NFC").includes(matchQuery));
     const groups: SessionWorkspaceMobileGroup[] = [];
     const expandedGroups = workspace.mobileNavigation?.expandedGroups;
     if (!browserPath) {

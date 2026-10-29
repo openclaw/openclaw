@@ -183,10 +183,10 @@ describe("resource-qualified native solo timings", () => {
   const descriptor = {
     shard_name: "storage-hosted-2",
     configs: ["test/vitest/vitest.infra.config.ts"],
-    includePatterns: ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts"],
+    includePatterns: ["src/system-agent/setup-inference-activate.test.ts"],
   };
   const key =
-    "native-solo-8cpu-8workers:122cfdeb2f6b006ace10e2583ac92903cbb9137b74e884d7afba1d81560bc129";
+    "native-solo-8cpu-8workers:94be95e41d7b2c72236d1aa22e2efd41b5fb6a0c76514f70e53a92232b092bfd";
   const log = (span: number, group = descriptor) => {
     const line = (second: number, body: string) =>
       `${new Date(Date.parse("2026-08-27T23:00:00Z") + second * 1000).toISOString()} ${body}`;

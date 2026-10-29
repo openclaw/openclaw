@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../../agents/restart-recovery-prompt.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { buildRequesterSettleWakeIdentity } from "../../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -317,45 +316,6 @@ describe("requester-settle processing survives later user turns", () => {
     },
   );
 
-  it.each([false, true])(
-    "resumes interrupted input without inferring completion (consumed=%s)",
-    async (consumed) => {
-      const original = await prepare();
-      if (consumed) {
-        await original.recorder!.persistApproved();
-      } else {
-        expect(original.runtimeContextFragments).toBeUndefined();
-      }
-      await release(original);
-      rotateAgentEventLifecycleGeneration();
-      const resumed = await prepare();
-      expect(resumed.runtimeContextFragments).toEqual([
-        { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
-      ]);
-      expect(resumed.message).toBe(message);
-      expectNoReconciliation(resumed);
-      expect(await resumed.recorder!.persistApproved()).toMatchObject({ appended: !consumed });
-      if (!consumed) {
-        await complete(resumed);
-        await release(resumed);
-        await expectUserInputs(scope(), 1);
-        return;
-      }
-      await release(resumed);
-      const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
-      await appendNewerTurn(manager, "newer:user", "Newer request");
-      const before = await loadTranscriptEvents(scope());
-      rotateAgentEventLifecycleGeneration();
-      const replay = await prepare();
-      expectNoReconciliation(replay);
-      await expect(
-        manager.appendMessageAsync(replay.recorder!.getPendingInputMessage!()!),
-      ).rejects.toThrow("outside the current turn");
-      expect(await loadTranscriptEvents(scope())).toEqual(before);
-      await release(replay);
-    },
-  );
-
   it("cannot publish a cancellation after losing completion authority", async () => {
     let current = true;
     const controller = new AbortController();
@@ -442,7 +402,7 @@ describe("requester-settle processing survives later user turns", () => {
     },
   );
 
-  it("preserves durable peer-delivery success and duplicate reconciliation", async () => {
+  it("preserves live peer-delivery success and duplicate reconciliation", async () => {
     const delivery: SessionSendDelivery = {
       version: 1,
       runId,
@@ -462,7 +422,7 @@ describe("requester-settle processing survives later user turns", () => {
     await original.recorder!.persistApproved();
     expect(
       original.recorder!.getPendingInputMessage!()?.["__openclaw"]?.sessionSendDelivery,
-    ).toEqual({ ...delivery, operatorSource: null });
+    ).toBeUndefined();
     await complete(original);
     await release(original);
     const before = await loadTranscriptEvents(scope());
@@ -589,7 +549,7 @@ it.each(["Original requester", null])(
       },
       client: clientFor(original.displayName),
     });
-    const accepted = await withTurn(params, async (recorder) => {
+    await withTurn(params, async (recorder) => {
       const input = expectDefined(recorder.getPendingInputMessage?.(), "accepted input");
       expect(input["__openclaw"]).toMatchObject({ senderId: profile.id, senderIsOwner: false });
       if (originalName === null) {
@@ -597,47 +557,43 @@ it.each(["Original requester", null])(
       } else {
         expect(input["__openclaw"]).toHaveProperty("senderName", originalName);
       }
-      await recorder.completeProcessingAsync!(
-        buildAgentRunTerminalOutcome({ status: "error", stopReason: "restart" }),
-      );
-      return input;
+      const { profile: renamed } = await rename("Renamed requester");
+      const retryParams = { ...params, client: clientFor(renamed.displayName) };
+      expect(recorder.getPendingInputMessage?.()).toEqual(input);
+      const retained = await pendingInputs.listSessionPendingInputs(target);
+      expect(retained.items).toMatchObject([{ state: "queued", message: input }]);
+      const prepareAndRelease = (candidate: TurnParams) => withTurn(candidate, async () => {});
+      // A renamed connection still matches the accepted input, but cannot take its live custody.
+      await expect(prepareAndRelease(retryParams)).rejects.toThrow("already admitted");
+      for (const mismatch of [
+        { message: "Changed result", effectiveTranscriptInputText: "Changed result" },
+        { client: clientFor(original.displayName, "different-profile") },
+      ]) {
+        await expect(prepareAndRelease({ ...retryParams, ...mismatch })).rejects.toThrow(
+          "conflicts with the accepted input",
+        );
+      }
+      const readSubmitted = pendingInputs.readSessionSubmittedInput;
+      let current = true;
+      using _ = vi
+        .spyOn(pendingInputs, "readSessionSubmittedInput")
+        .mockImplementationOnce(async (...args) => {
+          const submitted = await readSubmitted(...args);
+          current = false;
+          return submitted;
+        });
+      await expect(
+        prepareAndRelease({
+          ...retryParams,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Private source revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("Private source revoked");
+      expect(await pendingInputs.listSessionPendingInputs(target)).toEqual(retained);
+      expect(await loadTranscriptEvents(target)).toEqual([]);
     });
-    const { profile: renamed } = await rename("Renamed requester");
-    const replayParams = { ...params, client: clientFor(renamed.displayName) };
-    await withTurn(replayParams, async (recorder) => {
-      expect(recorder.getPendingInputMessage?.()).toEqual(accepted);
-    });
-    const retained = await pendingInputs.listSessionPendingInputs(target);
-    expect(retained.items).toMatchObject([{ state: "interrupted", message: accepted }]);
-    const prepareAndRelease = (candidate: TurnParams) => withTurn(candidate, async () => {});
-    for (const mismatch of [
-      { message: "Changed result", effectiveTranscriptInputText: "Changed result" },
-      { client: clientFor(original.displayName, "different-profile") },
-    ]) {
-      await expect(prepareAndRelease({ ...replayParams, ...mismatch })).rejects.toThrow(
-        "conflicts with the accepted input",
-      );
-    }
-    const readSubmitted = pendingInputs.readSessionSubmittedInput;
-    let current = true;
-    using _ = vi
-      .spyOn(pendingInputs, "readSessionSubmittedInput")
-      .mockImplementationOnce(async (...args) => {
-        const submitted = await readSubmitted(...args);
-        current = false;
-        return submitted;
-      });
-    await expect(
-      prepareAndRelease({
-        ...replayParams,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Private source revoked");
-          }
-        },
-      }),
-    ).rejects.toThrow("Private source revoked");
-    expect(await pendingInputs.listSessionPendingInputs(target)).toEqual(retained);
-    expect(await loadTranscriptEvents(target)).toEqual([]);
   },
 );

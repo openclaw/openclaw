@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 
 // Older frozen collectors recognize neither namespace. Their PID-only policy
@@ -344,7 +345,7 @@ function withCacheOwner(cache, operation, initialize, readOnly = false) {
   }
   const cacheIdentity = directory(cache);
   const path = join(cache, ".metadata-lock");
-  const deadline = process.hrtime.bigint() + 1_000_000_000n;
+  const deadline = performance.now() + 1_000;
   const pause = new Int32Array(new SharedArrayBuffer(4));
   const assertCache = () => {
     if (!same(directory(cache), cacheIdentity)) {
@@ -355,7 +356,7 @@ function withCacheOwner(cache, operation, initialize, readOnly = false) {
   // while it holds the mutex; a crashed empty namespace is never adopted.
   for (;;) {
     assertCache();
-    if (process.hrtime.bigint() >= deadline) {
+    if (performance.now() >= deadline) {
       const reason = lstatSync(join(cache, ledgerName), { throwIfNoEntry: false })
         ? "metadata is busy"
         : "ledger is missing";
@@ -371,12 +372,7 @@ function withCacheOwner(cache, operation, initialize, readOnly = false) {
         }
       }
     }
-    Atomics.wait(
-      pause,
-      0,
-      0,
-      Math.max(0, Math.min(10, Number(deadline - process.hrtime.bigint()) / 1_000_000)),
-    );
+    Atomics.wait(pause, 0, 0, Math.max(0, Math.min(10, deadline - performance.now())));
   }
   assertCache();
   const identity = directory(path);

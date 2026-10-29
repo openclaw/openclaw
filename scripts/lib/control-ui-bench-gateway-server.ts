@@ -10,12 +10,16 @@ export async function startControlUiBenchGatewayServer(
   assetLatencyMs = 0,
 ) {
   let readFixture:
-    | ((pathname: string) =>
+    | ((
+        pathname: string,
+        url: URL,
+      ) =>
         | {
             body: string | Buffer;
             contentType: string;
             delayMs?: number;
             headers?: Record<string, string>;
+            status?: number;
           }
         | undefined)
     | undefined;
@@ -71,10 +75,11 @@ export async function startControlUiBenchGatewayServer(
       url: request.url ?? "/",
       navigationPreload: request.headers["service-worker-navigation-preload"] !== undefined,
     });
-    const fixture = readFixture?.(new URL(request.url ?? "/", "http://localhost").pathname);
+    const url = new URL(request.url ?? "/", "http://localhost");
+    const fixture = readFixture?.(url.pathname, url);
     if (fixture) {
       const send = () => {
-        response.writeHead(200, {
+        response.writeHead(fixture.status ?? 200, {
           "Content-Type": fixture.contentType,
           "Cache-Control": "no-store",
           "Access-Control-Allow-Origin": "*",

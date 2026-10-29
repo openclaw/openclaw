@@ -155,18 +155,15 @@ describe("server-owned pending input display", () => {
     expect(rendered).toEqual([[], [input.id], []]);
   });
 
-  it.each([
-    ["without run", "queued", undefined, undefined],
-    [
-      "interrupted",
-      "interrupted",
-      input.runId,
-      "Interrupted before the agent started it. If it does not resume, copy it and send again.",
-    ],
-  ] as const)("describes worker setup custody %s", (_name, state, runId, notice) => {
-    const items = buildPendingInputItems([{ ...input, state, runId }], [], true);
+  it("keeps legacy interrupted custody out of the conversation", () => {
+    expect(buildPendingInputItems([{ ...input, state: "interrupted" }])).toEqual([]);
+    const items = buildPendingInputItems(
+      [{ ...input, state: "queued", runId: undefined }],
+      [],
+      true,
+    );
     expect(items.some((item) => item.kind === "message")).toBe(true);
-    expect(noticeText(items)).toEqual(notice ? [notice] : []);
+    expect(noticeText(items)).toEqual([]);
   });
 
   it("keeps cached local submissions available after pane remount", async () => {

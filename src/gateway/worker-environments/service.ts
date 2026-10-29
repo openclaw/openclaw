@@ -670,7 +670,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ...turnRpc,
     fenceWorkerTurnForRecovery: (claim: WorkerSessionTurnClaim) => {
       if (!options.placementStore) {
-        throw serviceError("invalid_state", "Worker recovery requires its placement gate");
+        throw serviceError("invalid_state", "Worker result cleanup requires its placement gate");
       }
       options.placementStore.fenceWorkerTurnForRecovery(claim);
     },

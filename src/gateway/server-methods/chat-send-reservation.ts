@@ -8,6 +8,7 @@ import { readPreRegisteredRun, writePreRegisteredChatAbort } from "./chat-abort-
 import type { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import { chatSendRequestConflictError } from "./chat-send-retry-comparison.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -106,11 +107,9 @@ export function inspectGoalChatSendRetry({
   session,
   respond,
   context,
-  durableClaimAccepted,
   assertCurrent,
   prepared,
 }: ChatSendPreAdmissionParams & {
-  durableClaimAccepted?: boolean;
   prepared: Awaited<ReturnType<typeof prepareGoalChatSendRetry>>;
 }) {
   assertCurrent?.();
@@ -131,6 +130,18 @@ export function inspectGoalChatSendRetry({
       entry: context.dedupe.get(pendingChatSendKey),
     });
     const retainedIdentity = context.dedupe.get(`chat:${clientRunId}`)?.requestIdentity;
+    const submitted = prepared?.comparison?.submitted;
+    const submittedIdentity = submitted?.["__openclaw"]?.chatRequestIdentity;
+    // Goal custody retains its operation fingerprint; ordinary input retains the
+    // transcript's message fingerprint after the pending reservation is cleared.
+    const retainedGoalIdentity =
+      retainedIdentity !== undefined &&
+      typeof submittedIdentity === "string" &&
+      retainedIdentity !== submittedIdentity;
+    if (submitted && !pending?.payload.goalFingerprint && !retainedGoalIdentity) {
+      respond(false, undefined, chatSendRequestConflictError());
+      return { kind: "settled" } as const;
+    }
     const identityConflict =
       retainedIdentity !== undefined &&
       retainedIdentity !== request.goalOperation.requestFingerprint;
@@ -144,9 +155,7 @@ export function inspectGoalChatSendRetry({
       !identityConflict &&
       (pending?.payload.goalFingerprint === request.goalOperation.requestFingerprint ||
         newlyPublishedResponse ||
-        (!pending &&
-          !durableClaimAccepted &&
-          getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)))
+        (!pending && getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)))
     ) {
       respond(
         false,
@@ -160,7 +169,6 @@ export function inspectGoalChatSendRetry({
     if (
       identityConflict ||
       pending ||
-      durableClaimAccepted ||
       cachedResponse ||
       context.chatRunState.hasAbortMarker(clientRunId) ||
       getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)

@@ -1,8 +1,3 @@
-import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
-import {
-  releaseMainSessionRecoveryOwner,
-  type MainSessionRecoveryOwnerLease,
-} from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { discardPreparedInboundMedia, type OffloadedRef } from "../chat-attachments.js";
 
 /** Finish preparation custody after owner release, even when cleanup rejects. */
@@ -31,31 +26,20 @@ export async function finishAgentTurnPreparation(
   }
 }
 
-/** Release failed preparation in owner order before allowing restart recovery to wake. */
+/** Release failed preparation after its accepted persistence has settled. */
 export async function cleanupAgentTurnAdmission({
-  lease,
   cleanupRunAbort,
   releaseGatewayAdmission,
   releaseCronContinuation,
 }: {
-  lease?: MainSessionRecoveryOwnerLease;
   cleanupRunAbort?: () => void;
   releaseGatewayAdmission: () => void;
   releaseCronContinuation: () => Promise<boolean>;
 }) {
-  let pendingRecovery: Awaited<ReturnType<typeof releaseMainSessionRecoveryOwner>> = undefined;
   try {
-    pendingRecovery = await releaseMainSessionRecoveryOwner(lease);
+    cleanupRunAbort?.();
+    releaseGatewayAdmission();
   } finally {
-    try {
-      cleanupRunAbort?.();
-      releaseGatewayAdmission();
-    } finally {
-      try {
-        await releaseCronContinuation();
-      } finally {
-        scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
-      }
-    }
+    await releaseCronContinuation();
   }
 }

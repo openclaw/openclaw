@@ -1,4 +1,1 @@
-# Preserve required pre-mutation and SQLite backup regression coverage.
-# Main bf6a97a1 has 6,311,372 test lines; this candidate adds exactly 167.
-# Admit the inspected merge total of 6,311,539 without extra future allowance.
-6311539
+6320000

@@ -332,21 +332,15 @@ const enChatSession = {
     pendingInputs: {
       agentUpdate: {
         cancelled: "This agent update was cancelled before delivery.",
-        interrupted: "Delivery interrupted. This saved agent update is not scheduled to retry.",
       },
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
-      interrupted:
-        "Interrupted before the agent started it. If it does not resume, copy it and send again.",
       earlier: "Show earlier unsent messages",
       latest: "Show latest unsent messages",
       dismiss: "Dismiss",
-      dismissInterrupted: "Dismiss interrupted message: {preview}",
-      dismissCancelled: "Dismiss cancelled message: {preview}",
-      dismissAll: "Dismiss all",
-      dismissAllLabel: "Dismiss all interrupted and cancelled messages shown",
+      dismissCancelled: "Dismiss unsent message: {preview}",
       untitledInput: "message without text",
     },
     sessionSuggestions: {

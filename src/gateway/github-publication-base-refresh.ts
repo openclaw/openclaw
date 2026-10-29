@@ -106,6 +106,12 @@ export async function integrateManagedWorkspaceSource(
       }
     : await prepareGitHubPublicationTarget({
         worktree: owner.worktree,
+        session: {
+          agentId: owner.agentId,
+          sessionKey: owner.sessionKey,
+          sessionId: owner.sessionId,
+          lifecycleRevision: owner.lifecycleRevision,
+        },
         identity,
         assertCurrent,
       });

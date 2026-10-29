@@ -58,6 +58,17 @@ export function projectCanonicalSessionEntryShape(
     participantCount: _projectedParticipantCount,
     ...canonicalValue
   } = value;
+  // Retired execution-recovery metadata is inert on existing installs.
+  for (const key of Object.keys(canonicalValue)) {
+    if (
+      key === "mainRestartRecovery" ||
+      key === "pendingExecNotifications" ||
+      key === "subagentRecovery" ||
+      key.startsWith("restartRecovery")
+    ) {
+      Reflect.deleteProperty(canonicalValue, key);
+    }
+  }
   const setOptionalField = (key: keyof typeof canonicalValue, normalized: unknown) => {
     if (normalized) {
       canonicalValue[key] = normalized;
