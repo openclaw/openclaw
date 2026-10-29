@@ -171,7 +171,6 @@ export function createUsageOverview(
 ): NonNullable<UsageProps["data"]["overview"]> {
   const overview = projectUsageData([]).overview!;
   delete overview.selectedUsageComplete;
-  delete overview.usageReport;
   return Object.assign(overview, overrides);
 }
 

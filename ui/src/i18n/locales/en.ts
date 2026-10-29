@@ -1415,7 +1415,6 @@ const startupEnglish = {
     common: {
       emptyValue: "—",
       unknown: "unknown",
-      atLeast: "≥ {value}",
       approx: "≈ {value}",
     },
     loading: {

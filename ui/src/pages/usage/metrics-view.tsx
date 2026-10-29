@@ -15,8 +15,6 @@ export function UsageMosaic(props: {
     const timeZone = props.timeZone;
     const selectedHours = props.selectedHours;
     const onSelectHour = props.onSelectHour;
-    // Spans from interrupted responses still count their recorded tokens, so totals are lower bounds.
-    const report = props.overview?.usageReport;
     const stats = {
       hasData: props.overview?.hasTimelineData ?? false,
       totalTokens: props.overview?.hourTokens.reduce((sum, value) => sum + value, 0) ?? 0,
@@ -46,11 +44,11 @@ export function UsageMosaic(props: {
       // A selection takes the accent; the peak only marks itself when nothing is selected.
       peak: selectedHours.length === 0 && maxHour > 0 && value === maxHour,
       now: hour === nowHour,
-      title: `${hour}:00 · ${formatUsageTokens(value, report)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
+      title: `${hour}:00 · ${formatUsageTokens(value)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
       selected: selectedHours.includes(hour),
     }));
 
-    return { stats, timeZone, weekdays, hours, onSelectHour, report, tint };
+    return { stats, timeZone, weekdays, hours, onSelectHour, tint };
   });
   return (
     <SettingsSection
@@ -67,7 +65,7 @@ export function UsageMosaic(props: {
       }
       actions={
         <div class="usage-mosaic-total">
-          {formatUsageTokens(state().stats.hasData ? state().stats.totalTokens : 0, state().report)}{" "}
+          {formatUsageTokens(state().stats.hasData ? state().stats.totalTokens : 0)}{" "}
           {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
         </div>
       }
@@ -97,9 +95,7 @@ export function UsageMosaic(props: {
                           }}
                         />
                       </span>
-                      <span class="usage-weekday__value">
-                        {formatUsageTokens(day.tokens, state().report)}
-                      </span>
+                      <span class="usage-weekday__value">{formatUsageTokens(day.tokens)}</span>
                     </li>
                   )}
                 </For>

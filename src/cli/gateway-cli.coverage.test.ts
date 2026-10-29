@@ -214,7 +214,6 @@ describe("gateway-cli coverage", () => {
       totalTokens: 100,
       totalCost: 0.1,
       inputCost: 0.1,
-      usageReport: { state: "unavailable" },
     };
     const summary: CostUsageSummary = {
       updatedAt: 1,
@@ -233,7 +232,7 @@ describe("gateway-cli coverage", () => {
       timeoutMs: 10_000,
     });
     const output = runtimeLogs.join("\n");
-    const figures = "unavailable (known subtotal: $0.10 · 100 tokens)";
+    const figures = "$0.10 · 100 tokens";
     expect(output).toContain(`Latest day: 2026-09-01 · ${figures}`);
     expect(output).toContain(
       `Usage totals may be incomplete (partial). Run this command again later.\nTotal: ${figures}`,

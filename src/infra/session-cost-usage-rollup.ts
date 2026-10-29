@@ -311,9 +311,6 @@ function addQuarterHourTokens(
   target: SessionUtcQuarterHourTokenUsage,
   source: SessionUtcQuarterHourTokenUsage,
 ): void {
-  if (source.usageReport?.state === "unavailable") {
-    target.usageReport = { state: "unavailable" };
-  }
   target.input += source.input;
   target.output += source.output;
   target.cacheRead += source.cacheRead;
@@ -323,9 +320,6 @@ function addQuarterHourTokens(
 }
 
 function addDailyModelUsage(target: SessionDailyModelUsage, source: SessionDailyModelUsage): void {
-  if (source.usageReport?.state === "unavailable") {
-    target.usageReport = { state: "unavailable" };
-  }
   target.tokens += source.tokens;
   target.cost += source.cost;
   target.count += source.count;
@@ -585,10 +579,9 @@ export function buildSessionCostSummaryFromRollup(params: {
 
     dailyMessages.add([{ date: dayKey, ...bucket.messageCounts }]);
     quarterMessages.add([{ ...quarter, ...bucket.messageCounts }]);
-    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost, usageReport } =
-      bucket.totals;
+    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost } = bucket.totals;
     quarterTokens.add([
-      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost, usageReport },
+      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost },
     ]);
     dailyModels.add(
       bucket.models.map((model) => ({
@@ -598,7 +591,6 @@ export function buildSessionCostSummaryFromRollup(params: {
         tokens: model.totals.totalTokens,
         cost: model.totals.totalCost,
         count: model.count,
-        usageReport: model.totals.usageReport,
       })),
     );
 

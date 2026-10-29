@@ -47,7 +47,7 @@ describe("UsagePage cache convergence", () => {
     const { page } = await loadUsagePage(request);
     expect(page.querySelector(".callout.danger")).toBeNull();
     expect(
-      page.querySelector(".usage-lower-bound:not(.usage-lower-bound--off)")?.textContent,
+      page.querySelector(".usage-partial-notice:not(.usage-partial-notice--off)")?.textContent,
     ).toContain(message);
     expect(page.textContent).not.toContain("Select a date range and click Refresh");
 
@@ -55,7 +55,9 @@ describe("UsagePage cache convergence", () => {
     refreshButton(page).click();
     await vi.advanceTimersByTimeAsync(0);
     await page.updateComplete;
-    expect(page.querySelector(".usage-lower-bound")?.classList).toContain("usage-lower-bound--off");
+    expect(page.querySelector(".usage-partial-notice")?.classList).toContain(
+      "usage-partial-notice--off",
+    );
   });
 
   beforeEach(() => {

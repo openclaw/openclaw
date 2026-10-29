@@ -63,7 +63,6 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
             usageTotals = {
               ...emptyTotals(),
               ...computeUsageTokenTotals(entry.usage),
-              usageReport: entry.usage.usageReport,
             };
             const cost = entry.costBreakdown;
             if (cost?.total !== undefined) {

@@ -500,11 +500,11 @@
 }
 
 /* Visibility inherits through the display: contents tooltip host. */
-.usage-lower-bound--off {
+.usage-partial-notice--off {
   visibility: hidden;
 }
 
-.usage-lower-bound__chip {
+.usage-partial-notice__chip {
   padding: 3px 8px;
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius-full);
@@ -516,8 +516,8 @@
   cursor: help;
 }
 
-.usage-lower-bound__chip:hover,
-.usage-lower-bound__chip:focus-visible {
+.usage-partial-notice__chip:hover,
+.usage-partial-notice__chip:focus-visible {
   color: var(--text);
 }
 

@@ -67,18 +67,6 @@ describe("UsageHeatmap", () => {
     }
   });
 
-  it("keeps known tokens visible as a lower bound for interrupted responses", () => {
-    const entry = dailyEntry("2026-07-09", 20);
-    const container = mountHeatmap(
-      [{ ...entry, usageReport: { state: "unavailable" } }],
-      "2026-05-08",
-      "2026-07-09",
-    );
-    const cell = container.querySelector(".usage-heatmap__svg .usage-heatmap__cell--l4")!;
-    expect(cell.getAttribute("data-tooltip")).toContain("≥ 20 tokens");
-    expect(cell.getAttribute("aria-label")).toBe(cell.getAttribute("data-tooltip"));
-  });
-
   it("retains refreshed dates and moves overlapping cells when the visible range changes", () => {
     const [state, setState] = createSignal({
       daily: [dailyEntry("2026-07-09", 20)],
@@ -109,10 +97,7 @@ describe("UsageHeatmap", () => {
 
     setState((current) => ({
       ...current,
-      daily: [
-        dailyEntry("2026-07-08", 10),
-        { ...dailyEntry("2026-07-09", 0), usageReport: { state: "unavailable" } },
-      ],
+      daily: [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 0)],
     }));
     flush();
     expect(container.querySelector(".usage-heatmap__svg")).toBe(svg);
@@ -121,7 +106,7 @@ describe("UsageHeatmap", () => {
       expect(cell).toBe(initial[index]);
     }
     expect(last.classList.contains("usage-heatmap__cell--l0")).toBe(true);
-    expect(last.getAttribute("data-tooltip")).toContain("≥ 0 tokens");
+    expect(last.getAttribute("data-tooltip")).toContain("0 tokens");
     expect(last.getAttribute("aria-label")).toBe(last.getAttribute("data-tooltip"));
 
     setState((current) => ({ ...current, start: "2026-05-15", end: "2026-07-16" }));
@@ -155,11 +140,7 @@ describe("UsageHeatmap", () => {
     const restoreI18n = captureI18nStateForTesting();
     try {
       await i18n.setLocale("en");
-      const container = mountHeatmap(
-        [{ ...dailyEntry("2026-07-09", 1234), usageReport: { state: "unavailable" } }],
-        "2026-05-08",
-        "2026-07-09",
-      );
+      const container = mountHeatmap([dailyEntry("2026-07-09", 1234)], "2026-05-08", "2026-07-09");
       const svg = container.querySelector(".usage-heatmap__svg");
       const cells = [...container.querySelectorAll(".usage-heatmap__cell")];
       const cell = cells.at(-1)!;
@@ -186,9 +167,7 @@ describe("UsageHeatmap", () => {
           i18n.t("usage.heatmap.more"),
         );
         expect(cell.getAttribute("data-tooltip")).toBe(
-          `${dateLabel} · ${i18n.t("usage.heatmap.cellTokens", {
-            tokens: i18n.t("usage.common.atLeast", { value: hostFormattedTokens }),
-          })}`,
+          `${dateLabel} · ${i18n.t("usage.heatmap.cellTokens", { tokens: hostFormattedTokens })}`,
         );
         expect(cell.getAttribute("aria-label")).toBe(cell.getAttribute("data-tooltip"));
       };

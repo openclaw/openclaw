@@ -93,10 +93,7 @@ export function SessionDetailPanel(props: {
     const usage = session.usage;
     const { timeSeriesCursorStart, timeSeriesCursorEnd } = detail;
 
-    const hasRange =
-      detail.timeSeries?.usageReport?.state !== "unavailable" &&
-      timeSeriesCursorStart !== null &&
-      timeSeriesCursorEnd !== null;
+    const hasRange = timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null;
     const filteredUsage = series().filteredUsage;
     const headerStats = filteredUsage
       ? { totalTokens: filteredUsage.totalTokens, totalCost: filteredUsage.totalCost }
@@ -137,23 +134,12 @@ export function SessionDetailPanel(props: {
           {props.session.usage ? (
             <>
               <span>
-                <strong>
-                  {formatUsageTokens(
-                    state().headerStats.totalTokens,
-                    props.session.usage?.usageReport,
-                  )}
-                </strong>{" "}
+                <strong>{formatUsageTokens(state().headerStats.totalTokens)}</strong>{" "}
                 {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
                 {state().cursorIndicator}
               </span>
               <span>
-                <strong>
-                  {formatUsageCost(
-                    state().headerStats.totalCost,
-                    2,
-                    props.session.usage?.usageReport,
-                  )}
-                </strong>
+                <strong>{formatUsageCost(state().headerStats.totalCost)}</strong>
                 {state().cursorIndicator}
               </span>
             </>
@@ -289,10 +275,7 @@ function ContextPanel(props: {
           ...groups,
         ];
         const totalContextTokens = categories.reduce((sum, { tokens }) => sum + tokens, 0);
-        const inputTokens =
-          usage && usage.usageReport?.state !== "unavailable" && usage.totalTokens > 0
-            ? usage.input + usage.cacheRead
-            : 0;
+        const inputTokens = usage && usage.totalTokens > 0 ? usage.input + usage.cacheRead : 0;
         const contextDescription =
           inputTokens > 0
             ? `~${Math.min((totalContextTokens / inputTokens) * 100, 100).toFixed(0)}% ${t("usage.details.ofInput")}`

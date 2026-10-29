@@ -34,7 +34,6 @@ import {
   TOOLS,
   TOTAL_FIELDS,
   TOTALS_WIDTH,
-  UNAVAILABLE,
   type UsageCostQuarterBlock,
   type UsageQuarterRange,
 } from "./session-cost-usage-quarters.js";
@@ -45,15 +44,15 @@ import type { SessionUsageRollupData } from "./session-cost-usage-rollup.js";
  * call-wide model id and call-wide tool id, reset per family.
  */
 
-// Per-day vector: totals (12), messages (6), latency count/sum/min/max/p95.
+// Per-day vector: totals, messages (6), latency count/sum/min/max/p95.
 const DAY_MESSAGES = TOTALS_WIDTH;
 const DAY_LATENCY = DAY_MESSAGES + MESSAGE_FIELDS.length;
 const DAY_WIDTH = DAY_LATENCY + 5;
-// Per-model vector: totals (12) and call count.
+// Per-model vector: totals and call count.
 const MODEL_COUNT = TOTALS_WIDTH;
 const MODEL_WIDTH = TOTALS_WIDTH + 1;
-// Per day and model: tokens, cost, count, unavailable.
-const DM_WIDTH = 4;
+// Per day and model: tokens, cost, count.
+const DM_WIDTH = 3;
 // Offsets into the hour facet values.
 const HOUR_TOKENS = 0;
 const WEEKDAY_TOKENS = 24;
@@ -255,7 +254,6 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
     for (const [target, field] of [
       [0, TOKENS],
       [1, COST],
-      [3, UNAVAILABLE],
     ] as const) {
       addColumn(dayModels, DM_WIDTH, target, ownedDaySlot, ownedCount, block, ownedTotals + field);
       if (shared) {
@@ -423,9 +421,6 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
       for (const [index, field] of TOTAL_FIELDS.entries()) {
         extraTotals[index] = extraTotals[index]! + rollup.totals[field];
       }
-      if (rollup.totals.usageReport?.state === "unavailable") {
-        extraTotals[UNAVAILABLE] = 1;
-      }
       if (rollup.totals.missingCostByModel) {
         addMissing((missingState().row ??= {}), Object.entries(rollup.totals.missingCostByModel));
       }
@@ -446,9 +441,6 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
         models[base + MODEL_COUNT] = models[base + MODEL_COUNT]! + entry.count;
         for (const [index, field] of TOTAL_FIELDS.entries()) {
           models[base + index] = models[base + index]! + entry.totals[field];
-        }
-        if (entry.totals.usageReport?.state === "unavailable") {
-          models[base + UNAVAILABLE] = 1;
         }
         if (entry.totals.missingCostByModel) {
           addMissingTo(missingState().models, id, Object.entries(entry.totals.missingCostByModel));
@@ -566,7 +558,6 @@ export function createUsageOverviewFold(range: UsageQuarterRange) {
         values[cursor + 3] = dayModels[offset]!;
         values[cursor + 4] = dayModels[offset + 1]!;
         values[cursor + 5] = dayModels[offset + 2]!;
-        values[cursor + 6] = dayModels[offset + 3]! > 0 ? 1 : 0;
         cursor += ROW.DAY_MODEL_WIDTH;
       }
       if (quarters > 0) {

@@ -415,10 +415,7 @@ export async function buildStatusReplyParts(
           summary.missingCostEntries > 0
             ? `missing cost: ${formatMissingCostEntries(summary)}`
             : formatUsd(summary.totalCost);
-        const tokens =
-          summary.usageReport?.state === "unavailable"
-            ? `usage incomplete · ${formatTokenCount(summary.totalTokens)} known tokens`
-            : `${formatTokenCount(summary.totalTokens)} tok`;
+        const tokens = `${formatTokenCount(summary.totalTokens)} tok`;
         const line = `💵 ${cost ? `${cost} · ` : ""}${tokens} (today)`;
         usageLine = [usageLine, line].filter(Boolean).join("\n");
       }

@@ -9,8 +9,6 @@ type UsageHeatmapCell = {
   tokens: number;
   /** 0 = no activity, 1-4 = nonzero-quartile intensity buckets. */
   level: 0 | 1 | 2 | 3 | 4;
-  /** An interrupted response that day leaves its recorded tokens as a lower bound. */
-  partial: boolean;
   column: number;
   row: number;
 };
@@ -67,9 +65,6 @@ function buildUsageHeatmap(
   const endMs = dateToUtcNoon(rangeEndDate);
   const startMs = Math.max(dateToUtcNoon(rangeStartDate), endMs - (MAX_HEATMAP_DAYS - 1) * DAY_MS);
   const tokensByDate = new Map(daily.map((entry) => [entry.date, entry.totalTokens]));
-  const partialDates = new Set(
-    daily.filter((entry) => entry.usageReport?.state === "unavailable").map((entry) => entry.date),
-  );
   const nonZero = daily
     .filter((entry) => {
       const entryMs = dateToUtcNoon(entry.date);
@@ -99,7 +94,6 @@ function buildUsageHeatmap(
         date,
         tokens,
         level: levelFor(tokens, thresholds),
-        partial: partialDates.has(date),
         column,
         row: weekday,
       });
@@ -170,9 +164,7 @@ function HeatmapSvg(props: UsageHeatmapProps) {
           const tooltip = createMemo(
             () =>
               `${formatFullDate(day.date)} · ${t("usage.heatmap.cellTokens", {
-                tokens: day.partial
-                  ? t("usage.common.atLeast", { value: numberFormat.format(day.tokens) })
-                  : numberFormat.format(day.tokens),
+                tokens: numberFormat.format(day.tokens),
               })}`,
           );
           return (

@@ -215,10 +215,7 @@ const prepareUsageQuery = (
     return matchesEverySession;
   }
   const [getValue, matches] = numericSpec;
-  return (session) =>
-    (!(key.endsWith("tokens") || key.endsWith("cost")) ||
-      session.usage?.usageReport?.state !== "unavailable") &&
-    matches(getValue(session), threshold);
+  return (session) => matches(getValue(session), threshold);
 };
 
 const filterSessionsByQuery = (sessions: SessionUsageEntry[], query: string) => {
@@ -427,7 +424,6 @@ function compactSession(session: SessionUsageEntry, days: ReadonlySet<string>): 
   const usage = {
     ...session.usage,
     ...row,
-    usageReport: row.usageReport,
   };
   for (const field of [
     "dailyBreakdown",
@@ -601,9 +597,6 @@ export function buildUsageOverview(params: {
     const row = sessionRowTotals(session, days);
     overview.tableTotals.tokens += row.totalTokens;
     overview.tableTotals.cost += row.totalCost;
-    if (row.usageReport?.state === "unavailable") {
-      overview.tableTotals.usageReport = row.usageReport;
-    }
     overview.tableTotals.errors += session.usage?.messageCounts?.errors ?? 0;
   }
   for (const session of scoped) {
@@ -659,7 +652,6 @@ export function buildUsageOverview(params: {
       }
     }
   }
-  overview.usageReport = accumulator.totals.usageReport;
   const aggregates = accumulator.finish();
   overview.selectedSessionCount = aggregates.sessionCount ?? 0;
   if (days.size) {

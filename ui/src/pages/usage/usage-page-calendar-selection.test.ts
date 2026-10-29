@@ -37,7 +37,6 @@ async function loadCalendar(
     tokens: day.totalTokens,
     cost: day.totalCost,
     count: 1,
-    ...(day.usageReport ? { usageReport: day.usageReport } : {}),
   }));
   const result = {
     ...base,
@@ -46,7 +45,6 @@ async function loadCalendar(
       ...base.totals,
       totalTokens,
       input: pending ? base.totals.input : totalTokens,
-      usageReport: daily.find((day) => day.usageReport?.state === "unavailable")?.usageReport,
     },
     sessions: daily.map((day, index) => ({
       key: `agent:main:${day.date}`,
@@ -79,28 +77,22 @@ const labelOf = (bar: HTMLElement) => textOf(bar, ".daily-bar-label");
 const shiftClick = (bar: HTMLElement) =>
   bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
 
-it.each([false, true])(
-  "keeps calendar attribution and completeness independent of the selected summary (partial calendar: %s)",
-  async (partial) => {
-    const { page } = await loadCalendar("fresh", [
-      dailyEntry("2026-05-02", 100),
-      {
-        ...dailyEntry("2026-05-04", 900),
-        ...(partial ? { usageReport: { state: "unavailable" as const } } : {}),
-      },
-    ]);
-    const legend = () =>
-      texts(page.element, ".daily-chart-legend li", false).map((text) => text.replace(/\s+/g, ""));
-    expect(legend()).toEqual(partial ? ["Anthropic", "OpenAI"] : ["Anthropic90%", "OpenAI10%"]);
-    barsIn(page)
-      .find((bar) => bar.getAttribute("aria-label")?.startsWith("May 2, 2026:"))!
-      .click();
-    await settleUsageTimers(page);
-    expect(textOf(page, ".usage-metric-badge strong")).toBe("100");
-    expect(legend()).toEqual(partial ? ["Anthropic", "OpenAI"] : ["Anthropic90%", "OpenAI10%"]);
-    expect(texts(page.element, ".session-bar-title", false)).toEqual(["Usage on 2026-05-02"]);
-  },
-);
+it("keeps calendar attribution independent of the selected summary", async () => {
+  const { page } = await loadCalendar("fresh", [
+    dailyEntry("2026-05-02", 100),
+    dailyEntry("2026-05-04", 900),
+  ]);
+  const legend = () =>
+    texts(page.element, ".daily-chart-legend li", false).map((text) => text.replace(/\s+/g, ""));
+  expect(legend()).toEqual(["Anthropic90%", "OpenAI10%"]);
+  barsIn(page)
+    .find((bar) => bar.getAttribute("aria-label")?.startsWith("May 2, 2026:"))!
+    .click();
+  await settleUsageTimers(page);
+  expect(textOf(page, ".usage-metric-badge strong")).toBe("100");
+  expect(legend()).toEqual(["Anthropic90%", "OpenAI10%"]);
+  expect(texts(page.element, ".session-bar-title", false)).toEqual(["Usage on 2026-05-02"]);
+});
 
 it.each<["fresh" | "partial", boolean, string[]]>([
   ["fresh", false, ["May 1", "May 2", "May 3", "May 4"]],
