@@ -71,14 +71,17 @@ export function registerPendingRequesterAuthorityCases({
       const params = {
         ...turn(
           "hello",
-          { OriginatingChannel: "telegram", OriginatingTo: "chat-1", ChatType: "direct" },
           {
-            Provider: "telegram",
+            ...createProviderSurface("telegram"),
+            OriginatingChannel: "telegram",
+            OriginatingTo: "chat-1",
+            ChatType: "direct",
             SenderId: "user-42",
             SenderName: "Ada",
             SenderUsername: "ada",
             SenderIsBot: isBot,
           },
+          {},
           { InboundAccessAuthorized: true },
         ),
         sessionEntry: {

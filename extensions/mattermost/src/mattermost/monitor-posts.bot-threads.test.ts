@@ -118,7 +118,11 @@ it("retains host admission for an ordinary post in its final thread session", as
           consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(context)),
         ).toMatchObject({
           ingressState: "present",
-          invoker: { state: "present", kind: "person", rawPrincipalRef: "sender" },
+          invoker: {
+            state: "present",
+            kind: "person",
+            rawPrincipalRef: JSON.stringify(["mattermost", "default", "sender"]),
+          },
           decisionCoverage: "enforced",
         });
       },
