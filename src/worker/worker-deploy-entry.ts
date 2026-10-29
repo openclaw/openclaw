@@ -1,3 +1,4 @@
+import { ReadStream } from "node:fs";
 import { flushCompileCache } from "node:module";
 import "./worker-deploy-runtime.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
@@ -47,7 +48,11 @@ try {
 } finally {
   // Startup can fail before the worker lifetime adopts its input and IPC channel.
   // The running worker has already joined its cleanup before returning here.
-  process.stdin.destroy();
+  // Node 26 closes fd 0 when destroying a file-backed (/dev/null) stdin; libuv then
+  // reuses fd 0 for the next worker loop and aborts when that worker closes it.
+  if (!(process.stdin instanceof ReadStream)) {
+    process.stdin.destroy();
+  }
   if (process.connected) {
     process.disconnect?.();
   }
