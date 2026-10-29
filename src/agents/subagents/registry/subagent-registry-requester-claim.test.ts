@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     operationalRunInstance: { runId: "turn" },
   },
 }));
+// mock-isolation: Caller identity and reset fencing come from this test turn, not live gateway authority.
 vi.mock("../../tools/gateway-caller-context.js", () => ({
   captureGatewayToolCallerAssertion: () => () => {
     if (!mocks.current) {
@@ -22,15 +23,19 @@ vi.mock("../../tools/gateway-caller-context.js", () => ({
   },
   getGatewayToolCallerIdentity: () => mocks.caller,
 }));
+// mock-isolation: Completion retirement is observed through spies without changing live accepted-spawn state.
 vi.mock("../../accepted-session-spawn.js", () => ({
   retireAcceptedSessionSpawnCompletionForRun: mocks.retire,
   mergeAcceptedSessionSpawnsForRun: vi.fn(),
 }));
+// mock-isolation: Claims operate only on the fixture run map, not the process-wide registry.
 vi.mock("./subagent-registry-memory.js", () => ({
   subagentRuns: mocks.rows,
   getSubagentRunsForRequesterSession: () => [],
 }));
+// mock-isolation: The fixture mutation fence controls reset races without writing the real registry.
 vi.mock("./subagent-registry-persistence.js", () => ({ mutateSubagentRuns: mocks.mutate }));
+// mock-isolation: Resume and settlement must be observed without starting real subagent work.
 vi.mock("./subagent-registry.js", () => ({
   resumeSubagentRun: mocks.resume,
   settleRequesterAfterSessionSpawns: vi.fn(),

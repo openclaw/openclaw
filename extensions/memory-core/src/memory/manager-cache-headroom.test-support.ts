@@ -16,8 +16,8 @@ import {
   observePublishedReservations,
   reservePublishedWriter,
 } from "./manager-publication-observer.test-support.js";
+import type { ReindexHarness } from "./manager-reindex-harness.test-support.js";
 import type { MemoryIndexManager } from "./manager.js";
-import type { ReindexHarness } from "./manager.reindex-recovery.test.js";
 
 export function registerCacheHeadroomTests(
   getContext: () => {

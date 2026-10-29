@@ -7,9 +7,11 @@ import type {
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import { resolvePreparedRuntimeWorkspaces } from "./prepared-runtime-context.js";
 
+// mock-isolation: The borrowed generation is deliberately not the process-wide current plugin generation.
 vi.mock("../../../plugins/current-plugin-metadata-snapshot.js", () => ({
   isCurrentPluginMetadataSnapshotRuntimeGeneration: () => false,
 }));
+// mock-isolation: Borrowed inventory comes from the injected snapshot, never filesystem plugin discovery.
 vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: () => ({}),
 }));

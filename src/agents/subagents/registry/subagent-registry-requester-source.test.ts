@@ -26,15 +26,19 @@ const mocks = vi.hoisted(() => ({
   require: vi.fn(),
   retired: false,
 }));
+// mock-isolation: Requester lifecycle reads use fixture entries without opening a real session store.
 vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntryReadOnlyInWorker: mocks.read,
 }));
+// mock-isolation: Authority restoration uses the test snapshot instead of admitting a live operator source.
 vi.mock("../../../gateway/operator-run-recovery.js", () => ({
   restoreGatewayOperatorSource: mocks.restore,
 }));
+// mock-isolation: Captured continuation authority is supplied by the fixture, not the live gateway.
 vi.mock("../../../gateway/server-plugin-in-process-authority.js", () => ({
   captureOperatorToolGatewayContinuationContext: mocks.capture,
 }));
+// mock-isolation: Completion bindings and retirement state belong exclusively to the fixture maps.
 vi.mock("./subagent-registry-memory.js", () => ({
   getCurrentSubagentRunOwner: (_rows: unknown, row: SubagentRunRecord) =>
     mocks.rows.get(row.runId) === row ? row : undefined,
@@ -50,6 +54,7 @@ vi.mock("./subagent-registry-memory.js", () => ({
     ) => mocks.bindings.set(row.runId, authority),
   },
 }));
+// mock-isolation: Source fencing is controlled by the fixture without consulting live registry authority.
 vi.mock("./subagent-registry-persistence.js", () => ({
   assertSubagentRegistryWriteSourceCurrent: () => {},
 }));

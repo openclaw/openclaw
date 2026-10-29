@@ -55,16 +55,18 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
   it("ignores unsupported query keys and does not let them override dedicated fields", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ text: "hello" }));
 
+    const query = {
+      webhook: "https://example.com/hook",
+      model_id: "other_model",
+      language_code: "fr",
+    };
+    // Model malformed JavaScript input without weakening the typed request contract.
+    Object.defineProperty(query, "no_verbatim", { value: ["true"], enumerable: true });
+
     await elevenLabsMediaUnderstandingProvider.transcribeAudio!({
       ...request,
       language: "en",
-      query: {
-        webhook: "https://example.com/hook",
-        model_id: "other_model",
-        language_code: "fr",
-        // @ts-expect-error Deliberately malformed input exercises scalar-only query rejection.
-        no_verbatim: ["true"],
-      },
+      query,
       fetchFn: fetchMock,
     });
 

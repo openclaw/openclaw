@@ -187,7 +187,17 @@ describe("package runtime compatibility guidance", () => {
       execPath: path.resolve("/fixture/app-runtime"),
       versions: { ...process.versions, bun: "1.4.3" },
     });
-    vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(unsupportedServiceRuntimeFixture);
+    vi.mocked(resolveNodeRuntimeInfo).mockImplementation(async (runner) =>
+      runner === "/recovered/node"
+        ? {
+            status: "supported",
+            version: "24.22.1",
+            sqliteVersion: "3.53.0",
+            nodeSharedSqlite: false,
+            sqliteProbe: { available: true, version: "3.53.0", text: true, blob: true, json: true },
+          }
+        : unsupportedServiceRuntimeFixture,
+    );
     vi.mocked(resolveTargetNodeRuntime).mockResolvedValue("/recovered/node");
     const result = await resolvePackageRuntimePreflight({
       target: { version: "2027.1.0", nodeEngine: ">=24.22.1" },
@@ -212,7 +222,37 @@ describe("package runtime compatibility guidance", () => {
     });
     expect(vi.mocked(resolveNodeRuntimeInfo).mock.calls.map(([runner]) => runner)).toEqual([
       "/old/node",
+      "/recovered/node",
     ]);
+    expect(resolveBunRuntimeInfo).not.toHaveBeenCalled();
+    expect(resolveTargetNodeRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a recovered Node that still fails its capability probe", async () => {
+    vi.stubGlobal("process", {
+      ...process,
+      execPath: path.resolve("/fixture/app-runtime"),
+      versions: { ...process.versions, bun: "1.4.3" },
+    });
+    vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(unsupportedServiceRuntimeFixture);
+    vi.mocked(resolveTargetNodeRuntime).mockResolvedValue("/recovered/node");
+    const result = await resolvePackageRuntimePreflight({
+      target: { version: "2027.1.0", nodeEngine: ">=24.22.1" },
+      nodeRunner: "/old/node",
+      shouldRestart: true,
+      alreadyCurrent: true,
+      service: refreshableService,
+      runtimeRecovery: { env: {} },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.failureFacts).toEqual([
+      expect.objectContaining({ check: "node-runtime", code: "node-runtime-preflight" }),
+    ]);
+    expect(vi.mocked(resolveNodeRuntimeInfo).mock.calls.map(([runner]) => runner)).toEqual([
+      "/old/node",
+      "/recovered/node",
+    ]);
+    expect(resolveBunRuntimeInfo).not.toHaveBeenCalled();
   });
 
   it.each([
