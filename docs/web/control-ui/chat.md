@@ -1053,6 +1053,12 @@ toolbar. Same-origin HTML attachment previews accept UTF-8 content up to 2 MiB;
 other text attachment previews remain limited to 256 KiB. Unsupported, external,
 oversized, or unavailable attachments keep their original **Download** action. Cross-origin HTML attachments are download-only.
 
+Relative file links in a chat attachment offer **Browse files** so you can explicitly
+choose an accessible file from **Files**. The conversation and attachment tab stay
+open. Attachment links do not identify an original folder or automatically select
+a matching file; current workspace contents may differ from the delivered attachment.
+**Cancel** keeps you in the attachment.
+
 Self-contained HTML can use inline CSS and JavaScript under the default
 `scripts` sandbox setting. The page runs on the existing separate-origin sandbox
 host, not in the Control UI document. It receives no agent-prompt, tools, or

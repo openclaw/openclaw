@@ -343,7 +343,7 @@ export function createMarkdownParser(): MarkdownItParser {
 
   markdownParser.core.ruler.after("linkify-cjk-trim", "file-links", (state) => {
     const env = state.env as Partial<MarkdownRenderEnv> | undefined;
-    if (env?.fileLinks !== true) {
+    if (env?.fileLinks !== true && env?.documentFileLinks !== true) {
       return;
     }
     const decorations: MarkdownFileLinkDecoration[] = [];
@@ -391,9 +391,11 @@ export function createMarkdownParser(): MarkdownItParser {
                 : null;
               const target =
                 documentTarget ??
-                parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
-                (isHostLocalMarkdownFileHref(decodedHref)
-                  ? splitMarkdownFileLineSuffix(decodedHref.trim())
+                (env.fileLinks
+                  ? (parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
+                    (isHostLocalMarkdownFileHref(decodedHref)
+                      ? splitMarkdownFileLineSuffix(decodedHref.trim())
+                      : null))
                   : null);
               if (target) {
                 token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
@@ -416,7 +418,7 @@ export function createMarkdownParser(): MarkdownItParser {
           linkDepth = Math.max(0, linkDepth - 1);
           continue;
         }
-        if (linkDepth > 0) {
+        if (linkDepth > 0 || !env.fileLinks) {
           continue;
         }
         if (token.type === "code_inline") {

@@ -16,10 +16,7 @@ async function mountAttachment(
     sandboxPort: 8444,
   }),
 ) {
-  const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
-    content: SidebarContent;
-    updateComplete: Promise<unknown>;
-  };
+  const panel = document.createElement("openclaw-chat-detail-panel");
   const previewContext = {
     gateway: {
       snapshot: { client: { request }, phase: "connected" },
@@ -69,6 +66,9 @@ it("keeps one pending presentation through metadata and text-body loading", asyn
   const header = panel.querySelector(".chat-assistant-attachment-card__header");
   expect(fetchMock).not.toHaveBeenCalled();
   pending = false;
+  if (panel.content?.kind !== "attachment") {
+    throw new Error("Expected the mounted attachment");
+  }
   panel.content = { ...panel.content };
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   expect(panel.querySelector('[role="status"]:not([hidden])')).toBe(presentation);
@@ -167,6 +167,63 @@ it.each([
   expect(reader?.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
   expect(panel.querySelector(".sidebar-attachment-preview__text")).toBeNull();
   expect(panel.querySelector("a[download]")).not.toBeNull();
+});
+
+it("offers explicit Files selection for attachment links without reading a guessed path", async () => {
+  const text = [
+    "# Handoff",
+    "[Report](snapshot-2/dependencies.csv)",
+    "[Missing](snapshot-3/missing.csv)",
+    "[Section](#contents)",
+    "[Reference](https://example.com)",
+    "[Conversation](/chat/main/another)",
+    "`snapshot-2/dependencies.csv` stays literal.",
+  ].join("\n\n");
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(text));
+  vi.stubGlobal("fetch", fetchMock);
+  const panel = await mountAttachment({ title: "index.md", mimeType: "text/markdown" });
+  const browse = vi.fn();
+  const openFile = vi.fn();
+  panel.onBrowseFiles = browse;
+  panel.onOpenWorkspaceFile = openFile;
+  await waitForSolid(() => expect(panel.querySelector("article h1")?.textContent).toBe("Handoff"));
+  const article = panel.querySelector("article")!;
+  const link = article.querySelector<HTMLAnchorElement>("a")!;
+  expect(link.getAttribute("href")).toBeNull();
+  expect(link.getAttribute("role")).toBe("button");
+  expect(article.querySelector("code")?.closest("a")).toBeNull();
+  for (const href of ["#contents", "https://example.com", "/chat/main/another"]) {
+    expect(article.querySelector(`a[href="${href}"]`)).not.toBeNull();
+  }
+  const action = (label: string) =>
+    [...panel.querySelectorAll("button")].find((button) => button.textContent?.trim() === label)!;
+  link.click();
+  await waitForSolid(() =>
+    expect(panel.querySelector('[role="status"]:not([hidden])')?.textContent).toContain(
+      "snapshot-2/dependencies.csv",
+    ),
+  );
+  expect(document.activeElement).toBe(action("Browse files"));
+  expect(browse).not.toHaveBeenCalled();
+  expect(openFile).not.toHaveBeenCalled();
+  action("Cancel").click();
+  await waitForSolid(() => expect(panel.querySelector('[role="status"]:not([hidden])')).toBeNull());
+  expect(panel.querySelector("article")).toBe(article);
+  expect(document.activeElement).toBe(link);
+  for (const key of ["Enter", " "]) {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    link.dispatchEvent(event);
+    await waitForSolid(() => expect(action("Browse files")).toBeDefined());
+    expect(event.defaultPrevented).toBe(true);
+    action("Browse files").click();
+    await waitForSolid(() =>
+      expect(panel.querySelector('[role="status"]:not([hidden])')).toBeNull(),
+    );
+  }
+  expect(browse).toHaveBeenCalledTimes(2);
+  expect(openFile).not.toHaveBeenCalled();
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(panel.querySelector("article")).toBe(article);
 });
 
 it.each([
@@ -364,6 +421,9 @@ it.each([
     });
     await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe(text));
     const reader = panel.querySelector("openclaw-chat-text-attachment");
+    if (panel.content?.kind !== "attachment") {
+      throw new Error("Expected the mounted attachment");
+    }
     panel.content = { ...panel.content, ...change };
     await vi.waitFor(() =>
       expect(panel.textContent).toContain("Text previews require UTF-8 files up to 256 KiB"),
