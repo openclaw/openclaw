@@ -233,8 +233,10 @@ request's retained images fit the relay limit.
 
 Retrying unchanged history, restarting the Gateway, or deleting downloaded image
 files does not shrink inline image data already in the native conversation. The
-OpenClaw `maxActiveTranscriptBytes` setting is not a byte budget for an existing
-native Codex thread; see [compaction ownership](/plugins/codex-harness-runtime/compaction#compaction-and-transcript-mirror).
+OpenClaw `maxActiveTranscriptBytes` setting limits the size of the stored native
+transcript, which is checked when the thread is bound at startup; it is not a
+budget for a single inference request body. See
+[compaction ownership](/plugins/codex-harness-runtime/compaction#compaction-and-transcript-mirror).
 
 Before more image-heavy work, keep originals as files and use smaller previews or
 focused crops when the task permits. Save text findings and job checkpoints as you
