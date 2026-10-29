@@ -7,18 +7,13 @@ import type { SessionEntryCreationOperation } from "../../config/sessions/sessio
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
-import { execRequestAbortSignal, withExecRequestOwners } from "../../infra/exec-request-context.js";
+import { execRequestAbortSignal } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
-import {
-  resolveSystemEventQueueKey,
-  withSystemEventOwner,
-} from "../../infra/system-event-ownership.js";
-import {
-  claimSystemEventTurn,
-  enqueueRequiredSystemEventEntry,
-} from "../../infra/system-events.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
+import { claimSystemEventTurn } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { isCronSessionKey } from "../../routing/session-key.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -35,7 +30,7 @@ import {
   type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
 import {
-  assertSessionEventOccurrenceInput,
+  claimSessionEventOccurrenceInput,
   buildSessionEventContext,
   prepareSessionEventInput,
   resolveSessionEventExecRequestOwners,
@@ -52,6 +47,7 @@ import {
   assertSessionEventSettingsCurrent,
   captureSessionEventTargetForHost,
   getSessionEventRuntimeConfig,
+  hasSessionEventOriginatingCaller,
   intersectSessionEventToolsAllow,
   prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
@@ -98,49 +94,16 @@ function enqueueSessionEventAttempt(
     ),
   );
   signal.throwIfAborted();
-  assertSessionEventOccurrenceInput(text, options);
-  const freshOccurrence = options.occurrences
-    ? undefined
-    : enqueueRequiredSystemEventEntry(
-        text,
-        withExecRequestOwners(
-          withSystemEventOwner(
-            {
-              sessionKey,
-              contextKey: options.contextKey,
-              deliveryContext: route,
-            },
-            agentId,
-          ),
-          execRequestOwners,
-        ),
-        // Refuse matching keyed plugin and tool-handoff retries; unkeyed and host occurrences stay distinct.
-        {
-          allowDuplicate:
-            (options.source !== "plugin" && options.source !== "tool_handoff") ||
-            !options.contextKey?.trim(),
-        },
-      );
-  const occurrences = options.occurrences
-    ? [...options.occurrences]
-    : freshOccurrence
-      ? [freshOccurrence]
-      : [];
-  const occurrence = occurrences[0];
-  if (!occurrence?.id || occurrences.some((event) => !event.id)) {
-    throw new Error("Session event was not enqueued: an identical occurrence is already pending");
-  }
-  const occurrenceId = occurrence.id;
-  const eventText = occurrences.map((event) => event.text).join("\n");
-  const ownership = claimSystemEventTurn(
-    resolveSystemEventQueueKey(sessionKey, agentId),
-    occurrences,
-    () => controller.abort(),
-    agentId,
-  );
-  if (!ownership) {
-    throw new Error("Session event occurrence no longer available for admission");
-  }
+  const { occurrence, occurrences, occurrenceId, eventText, ownership } =
+    claimSessionEventOccurrenceInput({
+      text,
+      options,
+      sessionKey,
+      agentId,
+      route,
+      execRequestOwners,
+      cancel: () => controller.abort(),
+    });
   let releaseOperatorAuthority: (() => void) | undefined;
   try {
     // Transfer custody before the completed process releases its original source.
@@ -534,6 +497,10 @@ function enqueueSessionEventAttempt(
           },
         },
         replyOptions: {
+          sessionPrincipalTurn:
+            !options.scheduledAutomation &&
+            !isCronSessionKey(sessionKey) &&
+            !hasSessionEventOriginatingCaller(target),
           scheduledAutomation: options.scheduledAutomation,
           ...resolveScheduledSessionReplyOptions(options.scheduledAutomation),
           operatorAuthority: options.scheduledAutomation?.operatorAuthority ?? operatorAuthority,

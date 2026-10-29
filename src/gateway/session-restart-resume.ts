@@ -49,7 +49,7 @@ import {
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
+import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 export const GATEWAY_RESTART_RESUME_TEXT =
   "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
@@ -323,7 +323,7 @@ export async function resumeMarkedSessions(params: {
       if (!marked.resumeAfterRestart) {
         continue;
       }
-      let authority: Awaited<ReturnType<typeof prepareSessionPrincipalRunAuthority>> | undefined;
+      let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       try {
         const resumed = await applySessionEntryReplacements<
           | {
@@ -361,27 +361,14 @@ export async function resumeMarkedSessions(params: {
           continue;
         }
         try {
-          // Assigned humans are validated profile IDs; channel creators carry no profile authority.
-          const actor = entry.owner
-            ? entry.owner.actor
-            : entry.createdActor?.type === "human" && entry.createdActor.source === "profile"
-              ? entry.createdActor
-              : undefined;
-          const profileId = actor?.type === "human" ? actor.id : undefined;
-          if (actor?.type === "human" && !profileId) {
-            throw new Error("Session owner has no current profile identity");
-          }
-          if (profileId) {
-            authority = await prepareSessionPrincipalRunAuthority({
-              context,
-              profileId,
-              ...target,
-              agentId,
-              sessionKey,
-              sessionId: entry.sessionId,
-              assertCurrent: () => signal.throwIfAborted(),
-            });
-          }
+          authority = await prepareSessionSystemTurnAuthority({
+            context,
+            ...target,
+            agentId,
+            sessionKey,
+            sessionId: entry.sessionId,
+            assertCurrent: () => signal.throwIfAborted(),
+          });
           const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
             operatorAuthority: authority?.authority,
             assertCurrent: () => signal.throwIfAborted(),

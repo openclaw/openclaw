@@ -24,6 +24,13 @@ Message authors, execution authority, initiating agents, and actual approval
 responses remain separate facts. Scheduled jobs and SDK/plugin runs without turn
 participants retain their existing session access rules.
 
+System continuations, including exec completion, subagent handoffs, and Goal turns,
+keep the originating caller's current authority and policy. A guest's continuation
+stays that guest; it never inherits the session owner's privileges. Unattributed
+host events, including restart resume, use the session principal's current authority.
+Access is checked again before effects. When no person has authority, a person must
+resume the work before selecting a user. Cron retains its own authority rules.
+
 ## Available tools
 
 | Tool                 | What it does                                                                |

@@ -151,7 +151,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     publication &&
     ((params.action !== "inspect" && (!edit || editsMetadata) && !params.requestId) ||
       (params.requestId && params.requestId !== publication.requestId) ||
-      (params.expectedHeadCommit && params.expectedHeadCommit !== publication.headCommit))
+      (!editsMetadata &&
+        params.expectedHeadCommit &&
+        params.expectedHeadCommit !== publication.headCommit))
   ) {
     throw new Error(
       "The publication changed; inspect the current PR and review its head before retrying.",

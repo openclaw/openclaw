@@ -14,10 +14,12 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -993,6 +995,8 @@ describe("exportTrajectoryBundle", () => {
 
   it("exports identical complete bundles from compressed, legacy, and mixed runtime rows", async () => {
     const { tmpDir, sessionTarget, outputDir } = exportPaths();
+    sessionTarget.storePath = path.join(tmpDir, "openclaw-agent.sqlite");
+    await replaceSessionEntry(sessionTarget, { sessionId: sessionTarget.sessionId, updatedAt: 1 });
     await replaceTranscriptEvents(sessionTarget, toolCallSessionEntries(tmpDir));
 
     const runtimeEvents = runtimeSeries([
@@ -1057,10 +1061,14 @@ describe("exportTrajectoryBundle", () => {
     appendSqliteTrajectoryRuntimeEvents(sessionTarget, runtimeEvents);
 
     const exportAtFixedTime = async (directory: string, useLegacyMarker = false) => {
+      await closeOpenClawAgentDatabasesAsync();
+      if (process.platform !== "win32") {
+        fs.chmodSync(sessionTarget.storePath, 0o640);
+      }
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(new Date("2026-04-22T09:00:00.000Z"));
       try {
-        return await exportFrom(tmpDir, {
+        const bundle = await exportFrom(tmpDir, {
           outputDir: directory,
           sessionTarget: useLegacyMarker ? undefined : sessionTarget,
           sessionFile: useLegacyMarker
@@ -1070,6 +1078,14 @@ describe("exportTrajectoryBundle", () => {
           systemPrompt: "fallback prompt",
           tools: [{ name: "fallback" }],
         });
+        expect(
+          getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: sessionTarget.storePath }),
+        ).toBeUndefined();
+        expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly()).not.toThrow();
+        if (process.platform !== "win32") {
+          expect(fs.statSync(sessionTarget.storePath).mode & 0o777).toBe(0o640);
+        }
+        return bundle;
       } finally {
         vi.useRealTimers();
       }

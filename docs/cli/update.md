@@ -1011,6 +1011,13 @@ print progress steps or run the progress observer. Progress observes committed
 ledger rows through a reusable read-only worker connection instead of repeatedly
 copying shared state. This applies to updates launched by the fixed updater; a
 published older updater keeps its own progress reader until it is replaced.
+During activation and pre/post-plugin checks, the updater also prints bounded core
+Doctor phase messages to stderr before the child finishes, including with `--json`. These informational
+messages respect the console log level and JSON console style. Plugin labels and
+arbitrary child diagnostics stay in the captured output. Phase notices do not
+resume ledger observation while Doctor changes schemas, and do not indicate a
+successful outcome; the final result still owns that outcome. The pre/post-plugin
+Doctor's terminal diagnostic replay can include phases already shown live.
 State inspection and snapshot progress is advisory: a temporarily full progress
 pipe can omit an update without interrupting the underlying work. Other output
 errors still fail the affected operation and retain its diagnostic report.
