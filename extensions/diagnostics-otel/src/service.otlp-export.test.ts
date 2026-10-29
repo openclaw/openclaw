@@ -333,27 +333,30 @@ test("exports cache-write TTL facts on generic and OpenClaw usage keys", async (
   const generic = "gen_ai.usage.cache_creation.input_tokens";
   const local = "openclaw.model_call.usage.cache_creation_input_tokens";
   // The OTel GenAI conventions define no TTL attributes, so the generic TTL
-  // keys extend gen_ai.usage.* for usage-type pricing. They decompose the
-  // blended cache-write total the standard keeps authoritative, so pricing
-  // consumers sum the total or its buckets, never both.
+  // keys extend the standard's cache-write sub-namespace in the dotted
+  // breakdown shape (gen_ai.usage.cache_creation.*_input_tokens).
+  // Langfuse #19420 maps that shape to priced input_cache_creation_5m/_1h
+  // usage types and rebalances the total to its unattributed remainder, so
+  // downstream pricing counts each write once; older consumers keep the keys
+  // as unpriced pass-through buckets and the total prices exactly once.
   expect(
     attrs.map((a) => [
       a[generic],
-      a["gen_ai.usage.input_cache_creation_1h"],
-      a["gen_ai.usage.input_cache_creation_5m"],
+      a["gen_ai.usage.cache_creation.5m_input_tokens"],
+      a["gen_ai.usage.cache_creation.1h_input_tokens"],
       a[local],
       a[`${local}_1h`],
       a[`${local}_5m`],
     ]),
   ).toEqual([
-    [1_000_000, 400_000, 600_000, 1_000_000, 400_000, 600_000],
+    [1_000_000, 600_000, 400_000, 1_000_000, 400_000, 600_000],
     [0, 0, 0, 0, 0, 0],
     [1_000_000, undefined, undefined, 1_000_000, undefined, undefined],
   ]);
   const genericTtlKeys = [
     generic,
-    "gen_ai.usage.input_cache_creation_1h",
-    "gen_ai.usage.input_cache_creation_5m",
+    "gen_ai.usage.cache_creation.5m_input_tokens",
+    "gen_ai.usage.cache_creation.1h_input_tokens",
   ].toSorted();
   const localTtlKeys = [local, `${local}_1h`, `${local}_5m`].toSorted();
   expect(
