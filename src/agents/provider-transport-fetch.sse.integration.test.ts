@@ -373,7 +373,7 @@ describe.each(anthropicTransports)("guarded Anthropic $name observations", (tran
         const guard = vi.fn(() => {
           if (scenario === "refusal") {
             throw Object.assign(new Error("fixture egress refused"), {
-              code: "FIXTURE_EGRESS_REFUSED",
+              code: "ECONNREFUSED",
             });
           }
         });
@@ -420,8 +420,8 @@ describe.each(anthropicTransports)("guarded Anthropic $name observations", (tran
               : "stop",
         );
         if (scenario === "refusal") {
-          // The SDK wraps fetch errors; the terminal projection preserves the cause's code.
-          expect(result.errorCode).toBe("FIXTURE_EGRESS_REFUSED");
+          // This synthetic transport code survives the SDK cause-chain privacy projection.
+          expect(result.errorCode).toBe("ECONNREFUSED");
         } else {
           await withinTest(terminalsReceived.promise, signal);
         }
