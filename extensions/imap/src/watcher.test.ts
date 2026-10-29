@@ -333,7 +333,7 @@ describe("IMAP watcher protocol boundary", () => {
     const { server, state, context, authenticator, dispatchHookAgentTurn, waitForCursor } =
       await startWatcher({
         account: {
-          senderAuth: { min: "verified" },
+          senderAuth: { min: "verified", trustedAuthservIds: [], acceptTrustedAuthservId: false },
           addressTokens: [{ token: "secret-token", senders: ["trusted@example.com"] }],
         },
       });
