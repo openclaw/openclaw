@@ -19,13 +19,6 @@ authenticated requester facts and resolve current applicable destination policy.
 The initiating agent and parent execution remain unchanged. Children do not inherit
 the parent's participant roster, and native delegation retains the original requester.
 
-System-triggered continuations, including background command completions, use the
-session's assigned human owner, or its verified human creator when no owner is
-assigned. They resolve that person's current authority at admission and recheck
-it before effects. A revoked principal cannot authorize work. Sessions without a
-human principal cannot select a person for these tools; a person must resume the
-work. Scheduled jobs keep their own authority model.
-
 Selecting Bob does not establish that Bob requested or approved the action.
 Message authors, execution authority, initiating agents, and actual approval
 responses remain separate facts. Scheduled jobs and SDK/plugin runs without turn

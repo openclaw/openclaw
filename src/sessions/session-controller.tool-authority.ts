@@ -100,9 +100,7 @@ export function createReplyTurnParticipants(
       user === undefined ? people[0] : people.find((candidate) => candidate.profileId === user);
     if (user !== undefined && !person) {
       throw new Error(
-        choices
-          ? `User is not a participant of this turn. Choose ${choices}.`
-          : "This turn has no person authority. A person must resume this work before selecting a user.",
+        `User is not a participant of this turn.${choices ? ` Choose ${choices}.` : " Ask again from your signed-in Control UI."}`,
       );
     }
     person?.assertCurrent();

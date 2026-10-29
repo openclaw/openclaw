@@ -7,13 +7,18 @@ import type { SessionEntryCreationOperation } from "../../config/sessions/sessio
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
-import { execRequestAbortSignal } from "../../infra/exec-request-context.js";
+import { execRequestAbortSignal, withExecRequestOwners } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
-import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
-import { claimSystemEventTurn } from "../../infra/system-events.js";
+import {
+  resolveSystemEventQueueKey,
+  withSystemEventOwner,
+} from "../../infra/system-event-ownership.js";
+import {
+  claimSystemEventTurn,
+  enqueueRequiredSystemEventEntry,
+} from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
-import { isCronSessionKey } from "../../routing/session-key.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -30,7 +35,7 @@ import {
   type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
 import {
-  claimSessionEventOccurrenceInput,
+  assertSessionEventOccurrenceInput,
   buildSessionEventContext,
   prepareSessionEventInput,
   resolveSessionEventExecRequestOwners,
@@ -72,15 +77,13 @@ function enqueueSessionEventAttempt(
   text: string,
   { assertAcceptanceCurrent, ...options }: SessionEventOptions,
   readmissionAttempt: number,
-  producerAccepted = false,
 ): SessionEventReceipt {
   let acceptanceAssertion = assertAcceptanceCurrent;
   acceptanceAssertion?.();
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
   const { cfg, configPublication, agentId, sessionKey, env, storePath, operatorAuthority } =
-    prepareSessionEventInput(text, options, producerAccepted);
-  const cronTurn = Boolean(options.scheduledAutomation) || isCronSessionKey(sessionKey);
+    prepareSessionEventInput(text, options);
   const cleanupContinuation = prepareCronRunContinuationCleanup(sessionKey, storePath, env);
   let target = options.expectedTarget;
   let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;
@@ -90,24 +93,57 @@ function enqueueSessionEventAttempt(
   const execRequestOwners = resolveSessionEventExecRequestOwners(options);
   const requestSignal = execRequestAbortSignal(execRequestOwners, options.abortSignal);
   const signal = AbortSignal.any(
-    [requestSignal, controller.signal, cronTurn ? operatorAuthority?.signal : undefined].filter(
+    [requestSignal, controller.signal, operatorAuthority?.signal].filter(
       (value): value is AbortSignal => Boolean(value),
     ),
   );
   signal.throwIfAborted();
-  const { occurrence, occurrences, occurrenceId, eventText, ownership } =
-    claimSessionEventOccurrenceInput({
-      text,
-      options,
-      sessionKey,
-      agentId,
-      route,
-      execRequestOwners,
-      cancel: () => controller.abort(),
-    });
+  assertSessionEventOccurrenceInput(text, options);
+  const freshOccurrence = options.occurrences
+    ? undefined
+    : enqueueRequiredSystemEventEntry(
+        text,
+        withExecRequestOwners(
+          withSystemEventOwner(
+            {
+              sessionKey,
+              contextKey: options.contextKey,
+              deliveryContext: route,
+            },
+            agentId,
+          ),
+          execRequestOwners,
+        ),
+        // Refuse matching keyed plugin and tool-handoff retries; unkeyed and host occurrences stay distinct.
+        {
+          allowDuplicate:
+            (options.source !== "plugin" && options.source !== "tool_handoff") ||
+            !options.contextKey?.trim(),
+        },
+      );
+  const occurrences = options.occurrences
+    ? [...options.occurrences]
+    : freshOccurrence
+      ? [freshOccurrence]
+      : [];
+  const occurrence = occurrences[0];
+  if (!occurrence?.id || occurrences.some((event) => !event.id)) {
+    throw new Error("Session event was not enqueued: an identical occurrence is already pending");
+  }
+  const occurrenceId = occurrence.id;
+  const eventText = occurrences.map((event) => event.text).join("\n");
+  const ownership = claimSystemEventTurn(
+    resolveSystemEventQueueKey(sessionKey, agentId),
+    occurrences,
+    () => controller.abort(),
+    agentId,
+  );
+  if (!ownership) {
+    throw new Error("Session event occurrence no longer available for admission");
+  }
   let releaseOperatorAuthority: (() => void) | undefined;
   try {
-    // Ordinary producer custody ends at acceptance; cron retains its own authority model.
+    // Transfer custody before the completed process releases its original source.
     releaseOperatorAuthority = operatorAuthority?.retain?.();
   } catch (error) {
     ownership.cancel();
@@ -154,9 +190,7 @@ function enqueueSessionEventAttempt(
       throw new Error("Session event occurrence is settled");
     }
     signal.throwIfAborted();
-    if (!accepted || cronTurn) {
-      operatorAuthority?.assertCurrent();
-    }
+    operatorAuthority?.assertCurrent();
     if (!accepted) {
       acceptanceAssertion?.();
     }
@@ -206,10 +240,6 @@ function enqueueSessionEventAttempt(
     assertCurrent();
     accepted = true;
     acceptanceAssertion = undefined;
-    if (!cronTurn) {
-      releaseOperatorAuthority?.();
-      releaseOperatorAuthority = undefined;
-    }
     acceptance.resolve({ ok: true });
   };
   const prepareCurrent = async () => {
@@ -319,7 +349,6 @@ function enqueueSessionEventAttempt(
               preserveOccurrenceOnRejection: preservePassive,
             },
             attempt + 1,
-            accepted || producerAccepted,
           );
         } catch (error) {
           if (!preservePassive) {
@@ -505,12 +534,9 @@ function enqueueSessionEventAttempt(
           },
         },
         replyOptions: {
-          sessionPrincipalTurn: !cronTurn ? true : undefined,
           scheduledAutomation: options.scheduledAutomation,
           ...resolveScheduledSessionReplyOptions(options.scheduledAutomation),
-          operatorAuthority:
-            options.scheduledAutomation?.operatorAuthority ??
-            (cronTurn ? operatorAuthority : undefined),
+          operatorAuthority: options.scheduledAutomation?.operatorAuthority ?? operatorAuthority,
           admittedSessionSettings: settings,
           toolsAllow,
           onDeliberateSilentTerminalReply: () => {

@@ -12,7 +12,6 @@ import {
   releaseSessionSourceAuthorities,
 } from "../config/sessions/session-source-authority.js";
 import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-store-identity.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
@@ -48,25 +47,6 @@ import {
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 
-/** An explicit non-human assignment must not fall back to a former human creator. */
-export function resolveSessionSystemTurnProfileId(
-  entry: Pick<SessionEntry, "owner" | "createdActor"> | undefined,
-): string | undefined {
-  const actor = entry?.owner
-    ? entry.owner.actor
-    : entry?.createdActor?.type === "human" && entry.createdActor.source === "profile"
-      ? entry.createdActor
-      : undefined;
-  if (actor?.type !== "human") {
-    return undefined;
-  }
-  const profileId = actor.id?.trim();
-  if (!profileId) {
-    throw new Error("Session owner has no current profile identity");
-  }
-  return profileId;
-}
-
 /** Admit a new input as a recorded person using only that person's current grants. */
 export async function prepareSessionPrincipalRunAuthority(
   params: Parameters<typeof prepareSessionPrincipalRunAccess>[0],
@@ -96,8 +76,6 @@ async function prepareSessionPrincipalRunAccess(params: {
   sessionKey: string;
   sessionId: string;
   storePath?: string;
-  /** System turns retain the session's principal, rather than an explicit input sender. */
-  sessionPrincipal?: true;
   assertCurrent?: () => void;
 }) {
   params.assertCurrent?.();
@@ -172,8 +150,6 @@ async function prepareSessionPrincipalRunAccess(params: {
           !target ||
           target.agentId !== params.agentId ||
           target.entry.archivedAt !== undefined ||
-          (params.sessionPrincipal &&
-            resolveSessionSystemTurnProfileId(target.entry) !== params.profileId) ||
           (params.storePath !== undefined &&
             target.storePath !== params.storePath &&
             !sameSessionTranscriptStorePath(params.storePath, target.readSource?.path))
