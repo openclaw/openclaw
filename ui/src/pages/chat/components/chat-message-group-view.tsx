@@ -75,18 +75,21 @@ function MessageActionsRow(props: {
         {(group) => (
           <GroupMessageReactions
             group={group()}
+            messageKey={props.messageKey}
             actionDetails={props.details}
             isStreaming={false}
             options={props.options}
           />
         )}
       </Show>
-      <MessageActions
-        details={props.details}
-        options={props.options}
-        actionOwner={() => owner}
-        messageKey={props.messageKey}
-      />
+      <div class="chat-message-inline-actions">
+        <MessageActions
+          details={props.details}
+          options={props.options}
+          actionOwner={() => owner}
+          messageKey={props.messageKey}
+        />
+      </div>
     </div>
   );
 }
@@ -188,6 +191,7 @@ function PreparedMessage(props: {
       <Show when={props.showReactions !== false}>
         <GroupMessageReactions
           group={props.group}
+          messageKey={props.item.key}
           actionDetails={prepared().actions}
           isStreaming={isStreaming()}
           options={props.options}
@@ -453,6 +457,7 @@ function FramedMessage(props: {
           <div class="chat-group-footer chat-message-footer">
             <GroupMessageReactions
               group={frame().group}
+              messageKey={props.item.key}
               actionDetails={prepared().actions}
               isStreaming={false}
               options={frame().options}
@@ -562,6 +567,7 @@ function FramedMessageGroup(props: {
             <Show when={!frame().ownsRunFrame}>
               <GroupMessageReactions
                 group={props.group}
+                messageKey={frame().footerActionMessageKey}
                 actionDetails={frame().footerActionDetails}
                 isStreaming={false}
                 options={options()}

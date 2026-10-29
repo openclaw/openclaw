@@ -1,6 +1,8 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show, useContext } from "solid-js";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   type MessageReactionOptions,
@@ -8,6 +10,8 @@ import {
   ownReactionEmoji,
 } from "./chat-message-reaction-model.ts";
 import { MessageReactionPicker } from "./chat-message-reactions-view.tsx";
+import { isOwnSenderGroup } from "./chat-message-sender.ts";
+import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -25,23 +29,37 @@ function reactorsLabel(reaction: MessageReactionSummary, userId: string | null |
   });
 }
 
-type ReactionGroup = Parameters<typeof messageReactionOptions>[0];
+type ReactionGroup = Pick<MessageGroup, "role" | "sender">;
 export function GroupMessageReactions(props: {
   group: ReactionGroup;
+  messageKey?: string;
   actionDetails: { reactionMessageId?: string } | null | undefined;
   isStreaming: boolean;
   options: MessageReactionOptions;
 }) {
+  const messageElements = useContext(TranscriptMessageElementsContext);
   const messageId = () => (props.isStreaming ? undefined : props.actionDetails?.reactionMessageId);
   const options = createMemo(() => messageReactionOptions(props.group, props.options));
   const reactions = () => (messageId() ? options().messageReactions?.get(messageId()!) : undefined);
   const own = () => ownReactionEmoji(reactions(), options().userId);
+  // A group footer can advance to another message; its picker and layout lease cannot.
   return (
-    <Show when={messageId() && reactions()?.length}>
+    <Show when={reactions()?.length ? messageId() : undefined} keyed>
       <div
+        ref={[
+          elementRef<HTMLDivElement>((element) =>
+            props.messageKey
+              ? messageElements?.observeReactions(props.messageKey, element)
+              : undefined,
+          ),
+        ]}
         class={[
           "chat-message-reactions",
-          { "chat-message-reactions--single": reactions()?.length === 1 },
+          {
+            "chat-message-reactions--single": reactions()?.length === 1,
+            "chat-message-reactions--own":
+              props.group.role === "user" && isOwnSenderGroup(props.group, options().userId),
+          },
         ]}
         data-message-id={messageId()}
       >
