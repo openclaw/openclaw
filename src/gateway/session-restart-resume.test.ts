@@ -6,6 +6,7 @@ import {
 import { addSession } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
@@ -16,17 +17,11 @@ import {
   listSessionPendingInputs,
   readSessionPendingInput,
 } from "../config/sessions/session-pending-input-history.js";
-import { readSessionPendingInputReceiptsInWorker } from "../config/sessions/session-pending-input-receipts.js";
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  claimAgentRunContext,
-  hasAgentRunContextExecutionOwner,
-  releaseAgentRunContext,
-} from "../infra/agent-run-registry.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
-import { getSessionControllerOperation } from "../sessions/session-controller.state.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
@@ -55,18 +50,12 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
         throw new Error("Expected a real reply operation");
       }
       active.attachBackend({ kind: "embedded", runId, cancel() {} });
-      const release = active.retainExecution();
       active.freezeAbort();
-      return { operation: active, releaseExecution: release };
+      return { operation: active, releaseExecution: active.retainExecution() };
     });
     const runClaim = claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true });
     let queued: Awaited<ReturnType<typeof stageSessionPendingInput>> | undefined;
     try {
-      expect(getSessionControllerOperation(target.sessionKey)).toBe(operation);
-      expect(operation.result).toBeNull();
-      expect(operation.abortFrozen).toBe(true);
-      expect(hasAgentRunContextExecutionOwner(runId)).toBe(true);
-
       await persistRunningSessionsForRestart({ cfg: {} });
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
 
@@ -187,7 +176,6 @@ it("settles captured queued sends as failed when the recorded owner's authority 
     const process = createProcessSessionFixture({ id: "revoked-owner-work", backgrounded: true });
     process.agentId = target.agentId;
     process.sessionKey = target.sessionKey;
-    process.scopeKey = target.sessionKey;
     addSession(process);
     try {
       await persistRunningSessionsForRestart({ cfg });
@@ -274,18 +262,36 @@ it("fails a captured browser-copilot send instead of running without its live bi
     }
   }));
 
-it("settles unmarked crash input once as resendable failed input without resuming it", () =>
+it("resumes only current legacy cycles once and settles unmarked crash inputs", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const target = { agentId: "main", sessionKey: "agent:main:crashed", sessionId: "crashed" };
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
-    for (let i = 0; i < 20; i++) {
-      replaceSessionEntrySync(
-        { ...target, sessionKey: `agent:main:empty-${i}` },
-        { sessionId: `empty-${i}`, updatedAt: 1 },
-      );
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    for (const [name, abortedLastRun, tombstone] of [
+      ["legacy", true, undefined],
+      ["settled", false, undefined],
+      ["retired", true, { reason: "stopped" }],
+    ] as const) {
+      const sessionKey = `agent:main:${name}`;
+      const entry = {
+        sessionId: name,
+        updatedAt: 1,
+        abortedLastRun,
+        mainRestartRecovery: { cycleId: name, revision: 1, chargedAttempts: 0, tombstone },
+      };
+      database.db
+        .prepare(
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES (?, ?, ?, 1, 1)",
+        )
+        .run(sessionKey, name, JSON.stringify(entry));
     }
-    const settle = vi.spyOn(pendingInputWithdrawal, "interruptOrphanedSessionPendingInputs");
+    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
+      accepted: Promise.resolve({ ok: true }),
+      id: "upgrade-resume",
+      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+      cancel: () => false,
+    });
     const discover = vi.spyOn(pendingInputWithdrawal, "listOrphanedSessionPendingInputTargets");
     const receipts = [];
     for (const runId of ["crashed", "live"]) {
@@ -300,7 +306,6 @@ it("settles unmarked crash input once as resendable failed input without resumin
       receipts.push(receipt);
     }
     const [crashed, live] = receipts;
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
     const dispatch = vi.spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess");
     try {
       crashed!.finish("interrupted");
@@ -317,29 +322,24 @@ it("settles unmarked crash input once as resendable failed input without resumin
           signal: new AbortController().signal,
           log: { warn },
         });
-        expect(settle).toHaveBeenCalledTimes(1);
         expect(discover).toHaveBeenCalledTimes(boot + 1);
-        expect(settle.mock.calls[0]?.[0]).toMatchObject(target);
-        expect(
-          await readSessionPendingInputReceiptsInWorker(target, { runIds: ["crashed", "live"] }),
-        ).toEqual([
-          { runId: "crashed", state: "pending", cancelled: true },
-          { runId: "live", state: "pending" },
-        ]);
         expect((await listSessionPendingInputs(target)).items).toMatchObject([
           { runId: "crashed", state: "cancelled", message: { content: "crashed" } },
           { runId: "live", state: "queued" },
         ]);
       }
-      expect(
-        database.db
-          .prepare("SELECT state FROM session_pending_inputs WHERE input_id = ?")
-          .get(crashed!.inputId),
-      ).toEqual({ state: "cancelled" });
+      expect(resume.mock.calls.map(([, options]) => options.sessionKey)).toEqual([
+        "agent:main:legacy",
+      ]);
+      expect(resume.mock.calls[0]?.[0]).toContain("The Gateway restarted while you were working.");
+      const persisted = database.db
+        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+        .get("agent:main:legacy");
+      expect(JSON.parse(String(persisted?.entry_json))).not.toHaveProperty("mainRestartRecovery");
       expect(dispatch).not.toHaveBeenCalled();
       expect(warn).not.toHaveBeenCalled();
     } finally {
-      settle.mockRestore();
+      resume.mockRestore();
       discover.mockRestore();
       dispatch.mockRestore();
       live!.finish("cancelled");

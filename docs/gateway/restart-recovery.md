@@ -306,6 +306,12 @@ Copying one does not grant permission to restart a service.
 
 ## Automatic resume
 
+On the first upgrade from a version with legacy main-session recovery, an
+interrupted, unsettled recovery cycle becomes an ordinary resume marker. Startup
+consumes it once under the same current-authority rules below. Settled or
+tombstoned cycles remain inert; old execution and authority snapshots are not
+restored.
+
 Startup clears each marker and admits exactly one new input through the normal
 session-event path:
 
@@ -405,7 +411,7 @@ Marker persistence, skipped authority, and bounded shutdown leftovers are report
 in logs. A resume admission proves only that the new input was accepted; use the
 session transcript and actual delivery outcome to check whether work finished.
 
-Old restart claims, authority snapshots, interrupted pending-input rows, and queued
+Apart from that upgrade bridge, old restart claims, authority snapshots, interrupted pending-input rows, and queued
 inference records may remain in existing databases. They are ignored rather than
 reconstructed or deleted. Their text stays preserved. Legacy interrupted and
 ownerless queued inputs left by a crash do not add pending counts, notices, or
@@ -429,7 +435,7 @@ does not prove that a reply reached its channel.
 - Deleted or archived sessions, and human-owned sessions whose current principal
   cannot be admitted.
 - Gateway terminal PTYs and background OS processes.
-- Legacy inference queue entries or old execution-recovery records.
+- Legacy inference queue entries or settled old execution-recovery records.
 
 After a lossy stop, the stored conversation remains available. Send a new message
 to continue and inspect uncertain effects before repeating them.
