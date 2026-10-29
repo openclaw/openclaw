@@ -142,7 +142,7 @@ describe("provider usage auth boundary", () => {
         return token ? { token } : undefined;
       });
       const input = { providers: [provider], env: {}, agentDir: "/tmp/openclaw-agent" };
-      expect(await resolveProviderAuths({ ...input, config: prepared })).toEqual([
+      expect(await resolveProviderAuths({ ...input, config: prepared })).toMatchObject([
         { provider, token: "managed-usage-key" },
       ]);
       const unrelated = structuredClone(config);

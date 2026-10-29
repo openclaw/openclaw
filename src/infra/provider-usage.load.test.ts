@@ -1,9 +1,16 @@
 // Covers provider usage summary loading across auth and plugin paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveUsageAuthContext } from "../plugins/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
+import { fetchWithSsrFGuard } from "./net/fetch-guard.js";
+import { withGuardedFetchBeforeRequest } from "./net/fetch-request-authority.js";
 import {
   getProviderUsageAuthWithPluginMock,
   getProviderUsageSnapshotWithPluginMock,
@@ -35,6 +42,73 @@ describe("provider-usage.load", () => {
     resetProviderUsageSnapshotWithPluginMock();
   });
   afterEach(() => vi.useRealTimers());
+
+  it.each(["unchanged", "removed", "replaced"])(
+    "checks %s managed authority after resolution at guarded HTTP dispatch",
+    async (change) => {
+      const source: OpenClawConfig = {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://usage.example.test",
+              models: [],
+              apiKey: { source: "exec", provider: "default", id: "usage" },
+            },
+          },
+        },
+      };
+      const prepared = structuredClone(source);
+      prepared.models!.providers!.openrouter!.apiKey = "managed-usage-key";
+      setRuntimeConfigSnapshot(prepared, source);
+      const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+      resolveProviderUsageAuthWithPluginMock.mockImplementation(async ({ context }) => {
+        const token = (await context.resolveApiKeyCandidatesFromConfigAndStore?.())?.[0];
+        return token ? { token } : undefined;
+      });
+      resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ context }) => {
+        expect(context.token).toBe("managed-usage-key");
+        // Configured provider transports can bypass context.fetchFn. They still
+        // use the shared guarded dispatch after asynchronous DNS preparation.
+        const result = await fetchWithSsrFGuard({
+          url: "https://usage.example.test/quota",
+          lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
+          fetchImpl: globalThis.fetch,
+          init: { headers: { Authorization: `Bearer ${context.token}` } },
+        });
+        await result.release();
+        return { provider: "openrouter", displayName: "OpenRouter", windows: [] };
+      });
+      let dispatchChecks = 0;
+      try {
+        const summary = await withGuardedFetchBeforeRequest(
+          () => {
+            dispatchChecks += 1;
+            if (change === "removed") {
+              clearRuntimeConfigSnapshot();
+            }
+            if (change === "replaced") {
+              const replacement = structuredClone(prepared);
+              replacement.models!.providers!.openrouter!.apiKey = "replacement-key";
+              setRuntimeConfigSnapshot(replacement, source);
+            }
+          },
+          () =>
+            load({
+              providers: ["openrouter"],
+              config: prepared,
+              authStore: { version: 1, profiles: {} },
+            }),
+        );
+        expect(dispatchChecks).toBe(1);
+        expect(fetch).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 0);
+        if (change !== "unchanged") {
+          expect(summary.providers[0]?.error).toContain("no longer current");
+        }
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
 
   it("does not dispatch auth or fetch for an exhausted budget", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));

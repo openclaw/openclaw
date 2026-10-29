@@ -22,6 +22,7 @@ import {
   passesManifestOwnerBasePolicy,
 } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { attachProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import type { ProviderUsageAuthToken } from "../plugins/provider-runtime.types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -57,7 +58,30 @@ type UsageAuthState = {
   allowAuthProfileStore: boolean;
   getStore?: () => AuthStore | Promise<AuthStore>;
   store?: AuthStore;
+  managedApiKeys?: Map<string, string>;
 };
+
+function retainManagedUsageAuth(auth: ProviderAuth, state: UsageAuthState): ProviderAuth {
+  // Hooks may encode credential candidates in their returned token. Retain the
+  // managed inputs' owner checks independently of that provider-owned encoding.
+  const managedApiKeys = state.managedApiKeys;
+  return attachProviderAuthAuthority(
+    auth,
+    managedApiKeys?.size
+      ? () => {
+          for (const [provider, apiKey] of managedApiKeys) {
+            const current = resolveManagedSecretRefRuntimeProviderAuth({
+              cfg: state.cfg,
+              provider,
+            });
+            if (current?.apiKey !== apiKey) {
+              throw new Error("Managed provider credential is no longer current");
+            }
+          }
+        }
+      : undefined,
+  );
+}
 
 async function resolveUsageAuthStore(state: UsageAuthState): Promise<AuthStore> {
   state.store ??= await (state.getStore?.() ??
@@ -88,6 +112,7 @@ function resolveProviderApiKeyFromConfig(params: {
       provider: providerId,
     })?.apiKey;
     if (runtimeKey) {
+      params.state.managedApiKeys?.set(providerId, runtimeKey);
       return runtimeKey;
     }
     const key = resolveUsableCustomProviderApiKey({
@@ -438,6 +463,7 @@ export async function resolveProviderAuths(params: {
       const state: UsageAuthState = {
         ...authProfileSourceState,
         allowAuthProfileStore,
+        managedApiKeys: new Map(),
       };
       if (allowAuthProfileStore) {
         // Legacy callbacks are synchronous, so capture the caller-owned store before invocation.
@@ -481,14 +507,21 @@ export async function resolveProviderAuths(params: {
         params.signal?.throwIfAborted();
         if (pluginAuth) {
           if (!("handled" in pluginAuth)) {
-            auths.push({
-              provider,
-              ...projectUsageAuthToken(pluginAuth),
-            });
+            auths.push(
+              retainManagedUsageAuth(
+                {
+                  provider,
+                  ...projectUsageAuthToken(pluginAuth),
+                },
+                state,
+              ),
+            );
           }
           continue;
         }
       }
+      // An unhandled hook's candidates do not authorize the fallback credential.
+      state.managedApiKeys?.clear();
       let fallbackAuth = await resolveOAuthToken({ state, provider });
       if (!fallbackAuth && !isOAuthOnlyUsageProvider(provider)) {
         const apiKey = (
@@ -503,7 +536,7 @@ export async function resolveProviderAuths(params: {
       }
       params.signal?.throwIfAborted();
       if (fallbackAuth) {
-        auths.push(fallbackAuth);
+        auths.push(retainManagedUsageAuth(fallbackAuth, state));
       }
     } catch (error) {
       params.signal?.throwIfAborted();
