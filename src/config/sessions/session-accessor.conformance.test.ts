@@ -1,26 +1,31 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   readPersistedAuthProfileStateRaw,
   writePersistedAuthProfileStateRaw,
 } from "../../agents/auth-profiles/sqlite.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   encodeSessionArchiveContent,
   readSessionArchiveContentSync,
 } from "./archive-compression.js";
 import { isSessionArchiveArtifactName } from "./artifacts.js";
-import { closeSessionAccessorConformanceFixture } from "./session-accessor.conformance.test-support.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -37,29 +42,18 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
   upsertSessionEntryCore,
-  type ExactSessionEntry,
   type SessionAccessScope,
-  type SessionEntrySummary,
   type SessionTranscriptAccessScope,
   type SessionTranscriptReadScope,
-  type SessionTranscriptWriteScope,
-  type TranscriptEvent,
-  type TranscriptMessageAppendOptions,
-  type TranscriptMessageAppendResult,
-  type TranscriptUpdatePayload,
 } from "./session-accessor.js";
-import {
-  listSessionChildEntriesReadOnly,
-  listSessionEntryRows,
-  replaceSessionEntrySync,
-} from "./session-accessor.sqlite-entry.js";
-import {
-  observeSessionMaintenanceChanges,
-  observeSessionMaintenanceCompletion,
-} from "./session-accessor.sqlite-maintenance.test-support.js";
+import { listSessionEntryRows, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-maintenance-completion.test-support.js";
+import { observeSessionMaintenanceChanges } from "./session-accessor.sqlite-maintenance.test-support.js";
 import { forkSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
+import { listSessionChildEntriesReadOnly } from "./session-entry-children-read.js";
 import type { SessionEntry } from "./types.js";
 
 // Keep accessor conformance independent of any real openclaw.json on the machine.
@@ -70,53 +64,6 @@ vi.mock("../config.js", async () => ({
 
 import { getRuntimeConfig } from "../config.js";
 
-type AccessorAdapter = {
-  name: string;
-  entryScope(paths: TestPaths): SessionAccessScope;
-  transcriptReadScope(paths: TestPaths, id?: string): SessionTranscriptReadScope;
-  transcriptScope(paths: TestPaths, id?: string): SessionTranscriptAccessScope;
-  loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined;
-  loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined;
-  listSessionEntriesCore(
-    scope: Partial<Omit<SessionAccessScope, "sessionKey">>,
-  ): SessionEntrySummary[];
-  readSessionUpdatedAtCore(scope: SessionAccessScope): number | undefined;
-  upsertSessionEntry(
-    scope: SessionAccessScope,
-    patch: Partial<SessionEntry>,
-  ): Promise<SessionEntry | null>;
-  replaceSessionEntry(scope: SessionAccessScope, entry: SessionEntry): Promise<SessionEntry | null>;
-  patchSessionEntryCore(
-    scope: SessionAccessScope,
-    update: (
-      entry: SessionEntry,
-      context: { existingEntry?: SessionEntry },
-    ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
-    options?: { fallbackEntry?: SessionEntry; preserveActivity?: boolean; replaceEntry?: boolean },
-  ): Promise<SessionEntry | null>;
-  updateSessionEntry(
-    scope: SessionAccessScope,
-    update: (entry: SessionEntry) => Partial<SessionEntry> | null,
-  ): Promise<SessionEntry | null>;
-  cleanupSessionLifecycleArtifactsCore(params: {
-    storePath: string;
-    sessionKeySegmentPrefix: string;
-    transcriptContentMarker: string;
-    orphanTranscriptMinAgeMs: number;
-    nowMs?: number;
-  }): Promise<{ removedEntries: number; archivedTranscriptArtifacts: number }>;
-  loadTranscriptEvents(scope: SessionTranscriptReadScope): Promise<TranscriptEvent[]>;
-  appendTranscriptEvent(scope: SessionTranscriptAccessScope, event: TranscriptEvent): Promise<void>;
-  appendTranscriptMessage<TMessage>(
-    scope: SessionTranscriptWriteScope,
-    options: TranscriptMessageAppendOptions<TMessage>,
-  ): Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
-  publishTranscriptUpdate(
-    scope: SessionTranscriptWriteScope,
-    update?: TranscriptUpdatePayload,
-  ): Promise<void>;
-};
-
 type TestPaths = {
   sqlitePath: string;
   stateDir: string;
@@ -124,22 +71,91 @@ type TestPaths = {
   tempDir: string;
 };
 
-const publicAccessorAdapter: AccessorAdapter = {
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-accessor-conf-");
+
+function createTestPaths(): TestPaths {
+  const tempDir = sessionDirs.make();
+  return {
+    sqlitePath: path.join(tempDir, "openclaw-agent.sqlite"),
+    stateDir: path.join(tempDir, "state"),
+    storePath: path.join(tempDir, "sessions.json"),
+    tempDir,
+  };
+}
+
+function setMaintenance(
+  maintenance: NonNullable<
+    NonNullable<ReturnType<typeof getRuntimeConfig>["session"]>["maintenance"]
+  >,
+) {
+  vi.mocked(getRuntimeConfig).mockReturnValue({ session: { maintenance } });
+}
+
+function seedEntry(scope: SessionAccessScope, entry: SessionEntry, skipMaintenance = true) {
+  return patchSessionEntryCore(scope, () => entry, {
+    fallbackEntry: entry,
+    replaceEntry: true,
+    skipMaintenance,
+  });
+}
+
+function pauseEntryPatch(scope: SessionAccessScope, model: string) {
+  const started = createDeferred();
+  const release = createDeferred();
+  const pendingPatch = patchSessionEntryCore(scope, async () => {
+    started.resolve();
+    await release.promise;
+    return { model };
+  });
+  return { started: started.promise, release: release.resolve, pendingPatch };
+}
+
+const modelEntry = (sessionId: string, model: string, updatedAt = 10): SessionEntry => ({
+  sessionId,
+  model,
+  updatedAt,
+});
+
+function appendTrajectory(storePath: string, sessionId: string, type: string) {
+  appendSqliteTrajectoryRuntimeEvents({ sessionId, storePath }, [
+    {
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: sessionId,
+      source: "runtime",
+      type,
+      ts: "2026-07-09T00:00:00.000Z",
+      seq: 1,
+      sessionId,
+    },
+  ]);
+}
+
+function readArchive(file: string) {
+  return readSessionArchiveContentSync(file)
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
+type AccessorAdapter = typeof publicAccessorAdapter;
+
+const publicAccessorAdapter = {
   name: "public-accessor",
-  entryScope: (paths) => ({
+  entryScope: (paths: TestPaths): SessionAccessScope => ({
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
     sessionKey: "agent:main:main",
     storePath: paths.sqlitePath,
   }),
-  transcriptScope: (paths, id = "session-1") => ({
+  transcriptScope: (paths: TestPaths, id = "session-1"): SessionTranscriptAccessScope => ({
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
     sessionId: id,
     sessionKey: "agent:main:main",
     storePath: paths.sqlitePath,
   }),
-  transcriptReadScope: (paths, id = "session-1") => ({
+  transcriptReadScope: (paths: TestPaths, id = "session-1"): SessionTranscriptReadScope => ({
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
     sessionId: id,
@@ -187,27 +203,17 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
     };
 
     beforeEach(() => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-accessor-conf-"));
-      paths = {
-        sqlitePath: path.join(tempDir, "openclaw-agent.sqlite"),
-        stateDir: path.join(tempDir, "state"),
-        storePath: path.join(tempDir, "sessions.json"),
-        tempDir,
-      };
+      paths = createTestPaths();
     });
 
     afterEach(async () => {
-      await closeSessionAccessorConformanceFixture(paths.tempDir);
+      await closeOpenClawAgentDatabasesAsync(paths.tempDir);
     });
 
     it("conforms for entry load/list/timestamp/upsert/update/replace/patch", async () => {
       const scope = adapter.entryScope(paths);
 
-      await adapter.upsertSessionEntry(scope, {
-        model: "gpt-5.5",
-        sessionId: "session-1",
-        updatedAt: 10,
-      });
+      await adapter.upsertSessionEntry(scope, modelEntry("session-1", "gpt-5.5"));
 
       expect(adapter.loadSessionEntry(scope)).toMatchObject({
         model: "gpt-5.5",
@@ -218,19 +224,13 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       expect(adapter.listSessionEntriesCore(scope)).toEqual([
         {
           sessionKey: "agent:main:main",
-          entry: expect.objectContaining({
-            model: "gpt-5.5",
-            sessionId: "session-1",
-          }),
+          entry: expect.objectContaining({ model: "gpt-5.5", sessionId: "session-1" }),
         },
       ]);
 
       await expect(
         adapter.updateSessionEntry(scope, () => ({ model: "sonnet-4.6", updatedAt: 20 })),
-      ).resolves.toMatchObject({
-        model: "sonnet-4.6",
-        sessionId: "session-1",
-      });
+      ).resolves.toMatchObject({ model: "sonnet-4.6", sessionId: "session-1" });
 
       await adapter.replaceSessionEntry(scope, {
         providerOverride: "openai",
@@ -249,10 +249,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         scope,
         (entry, context) => {
           existingContext = context.existingEntry;
-          return {
-            ...entry,
-            model: "gpt-5.5",
-          };
+          return { ...entry, model: "gpt-5.5" };
         },
         { replaceEntry: true },
       );
@@ -266,10 +263,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       const beforePreservePatch = adapter.loadSessionEntry(scope);
       await adapter.patchSessionEntryCore(
         scope,
-        () => ({
-          providerOverride: "anthropic",
-          updatedAt: 40,
-        }),
+        () => ({ providerOverride: "anthropic", updatedAt: 40 }),
         { preserveActivity: true },
       );
 
@@ -281,15 +275,35 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       });
     });
 
-    it("conforms for exact persisted-key lookup without canonical alias fallback", async () => {
+    t("reads the exact timestamp without selecting or decoding cold snapshots", async () => {
+      const scope = adapter.entryScope(paths);
+      replaceSessionEntrySync(scope, {
+        sessionId: "timestamp-target",
+        updatedAt: 42,
+        skillsSnapshot: { prompt: `TIMESTAMP_COLD_PAYLOAD_${"x".repeat(65_536)}`, skills: [] },
+      });
+      const queries: string[] = [];
+      const reads = observeMainThreadSql({ onStatement: (sql) => queries.push(sql) });
+      const parse = vi.spyOn(JSON, "parse");
+      try {
+        expect(adapter.readSessionUpdatedAtCore(scope)).toBe(42);
+        const nodeQueries = queries.filter((sql) => /from "session_nodes"/i.test(sql));
+        expect(nodeQueries).toHaveLength(1);
+        expect.soft(nodeQueries.some((sql) => sql.includes("session_entry_snapshots"))).toBe(false);
+        expect(parse.mock.calls.some(([value]) => value.includes("TIMESTAMP_COLD_PAYLOAD_"))).toBe(
+          false,
+        );
+      } finally {
+        parse.mockRestore();
+        reads.restore();
+      }
+    });
+
+    t("conforms for exact persisted-key lookup without canonical alias fallback", async () => {
       const scope = adapter.entryScope(paths);
       const mixedCaseScope = { ...scope, sessionKey: "AGENT:MAIN:MAIN" };
 
-      await adapter.upsertSessionEntry(scope, {
-        model: "gpt-5.5",
-        sessionId: "exact-session",
-        updatedAt: 10,
-      });
+      await adapter.upsertSessionEntry(scope, modelEntry("exact-session", "gpt-5.5"));
 
       expect(adapter.loadSessionEntry(mixedCaseScope)).toMatchObject({
         model: "gpt-5.5",
@@ -298,14 +312,11 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       expect(adapter.loadExactSessionEntry(mixedCaseScope)).toBeUndefined();
       expect(adapter.loadExactSessionEntry(scope)).toEqual({
         sessionKey: "agent:main:main",
-        entry: expect.objectContaining({
-          model: "gpt-5.5",
-          sessionId: "exact-session",
-        }),
+        entry: expect.objectContaining({ model: "gpt-5.5", sessionId: "exact-session" }),
       });
     });
 
-    it("conforms for lifecycle entry and transcript cleanup", async () => {
+    t("conforms for lifecycle entry and transcript cleanup", async () => {
       const nowMs = Date.now();
       const oldTimestamp = nowMs - 600_000;
       const cleanupStorePath = path.join(
@@ -328,66 +339,28 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         sessionKey,
         storePath: cleanupStorePath,
       });
-      const writeTranscript = async (params: {
-        sessionKey: string;
-        sessionId: string;
-        old?: boolean;
-      }) => {
-        const timestamp = params.old ? oldTimestamp : nowMs;
-        const event = {
-          id: `${params.sessionId}-event`,
+      for (const [sessionKey, sessionId, updatedAt] of [
+        ["agent:main:lifecycle-cleanup-missing", "missing-lifecycle", oldTimestamp],
+        ["agent:main:lifecycle-cleanup-removed", "removed-lifecycle", oldTimestamp],
+        ["agent:main:lifecycle-cleanup-fresh", "fresh-lifecycle", nowMs],
+        ["agent:main:telegram:group:lifecycle-cleanup-room", "kept-by-segment", oldTimestamp],
+        ["agent:main:regular", "referenced", oldTimestamp],
+      ] as const) {
+        await adapter.replaceSessionEntry(scopedEntry(sessionKey), { sessionId, updatedAt });
+      }
+      for (const [sessionKey, sessionId, timestamp] of [
+        ["agent:main:lifecycle-cleanup-removed", "removed-lifecycle", oldTimestamp],
+        ["agent:main:lifecycle-cleanup-fresh", "fresh-lifecycle", nowMs],
+        ["agent:main:regular", "referenced", oldTimestamp],
+        ["agent:main:orphan", "orphan-lifecycle", oldTimestamp],
+      ] as const) {
+        await adapter.appendTranscriptEvent(scopedTranscript(sessionKey, sessionId), {
+          id: `${sessionId}-event`,
           marker: "lifecycle-marker-run",
           timestamp: new Date(timestamp).toISOString(),
           type: "metadata",
-        };
-        await adapter.appendTranscriptEvent(
-          scopedTranscript(params.sessionKey, params.sessionId),
-          event,
-        );
-      };
-
-      await adapter.replaceSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-missing"), {
-        sessionId: "missing-lifecycle",
-        updatedAt: oldTimestamp,
-      });
-      await adapter.replaceSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-removed"), {
-        sessionId: "removed-lifecycle",
-        updatedAt: oldTimestamp,
-      });
-      await adapter.replaceSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-fresh"), {
-        sessionId: "fresh-lifecycle",
-        updatedAt: nowMs,
-      });
-      await adapter.replaceSessionEntry(
-        scopedEntry("agent:main:telegram:group:lifecycle-cleanup-room"),
-        {
-          sessionId: "kept-by-segment",
-          updatedAt: oldTimestamp,
-        },
-      );
-      await adapter.replaceSessionEntry(scopedEntry("agent:main:regular"), {
-        sessionId: "referenced",
-        updatedAt: oldTimestamp,
-      });
-      await writeTranscript({
-        sessionKey: "agent:main:lifecycle-cleanup-removed",
-        sessionId: "removed-lifecycle",
-        old: true,
-      });
-      await writeTranscript({
-        sessionKey: "agent:main:lifecycle-cleanup-fresh",
-        sessionId: "fresh-lifecycle",
-      });
-      await writeTranscript({
-        sessionKey: "agent:main:regular",
-        sessionId: "referenced",
-        old: true,
-      });
-      await writeTranscript({
-        sessionKey: "agent:main:orphan",
-        sessionId: "orphan-lifecycle",
-        old: true,
-      });
+        });
+      }
 
       for (const sessionKey of [
         "agent:main:lifecycle-cleanup-missing",
@@ -403,18 +376,14 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
 
       await expect(
         adapter.cleanupSessionLifecycleArtifactsCore({
+          env: adapter.entryScope(paths).env,
           storePath: cleanupStorePath,
           sessionKeySegmentPrefix: "lifecycle-cleanup-",
           transcriptContentMarker: "lifecycle-marker-",
           orphanTranscriptMinAgeMs: 300_000,
           nowMs,
         }),
-      ).resolves.toEqual({
-        // Only the removed entry's transcript is archived: the orphan's node
-        // still targets it, and node-referenced history is retained.
-        removedEntries: 2,
-        archivedTranscriptArtifacts: 1,
-      });
+      ).resolves.toEqual({ removedEntries: 2, archivedTranscriptArtifacts: 1 });
 
       expect(
         adapter.loadSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-missing")),
@@ -424,9 +393,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ).toBeUndefined();
       expect(
         adapter.loadSessionEntry(scopedEntry("agent:main:lifecycle-cleanup-fresh")),
-      ).toMatchObject({
-        sessionId: "fresh-lifecycle",
-      });
+      ).toMatchObject({ sessionId: "fresh-lifecycle" });
       expect(
         adapter.loadSessionEntry(scopedEntry("agent:main:telegram:group:lifecycle-cleanup-room")),
       ).toMatchObject({ sessionId: "kept-by-segment" });
@@ -440,22 +407,18 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         path: path.join(paths.stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
       });
       const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
-      const removedRoute = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("session_nodes")
-          .select("current_session_id")
-          .where("session_key", "=", "agent:main:lifecycle-cleanup-removed"),
-      );
-      expect(removedRoute).toBeUndefined();
-      const freshRoute = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("session_nodes")
-          .select("current_session_id")
-          .where("session_key", "=", "agent:main:lifecycle-cleanup-fresh"),
-      );
-      expect(freshRoute).toEqual({ current_session_id: "fresh-lifecycle" });
+      const readRoute = (sessionKey: string) =>
+        executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("session_nodes")
+            .select("current_session_id")
+            .where("session_key", "=", sessionKey),
+        );
+      expect(readRoute("agent:main:lifecycle-cleanup-removed")).toBeUndefined();
+      expect(readRoute("agent:main:lifecycle-cleanup-fresh")).toEqual({
+        current_session_id: "fresh-lifecycle",
+      });
       await expect(
         adapter.loadTranscriptEvents(scopedTranscript("agent:main:regular", "referenced")),
       ).resolves.not.toEqual([]);
@@ -477,19 +440,12 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       await expect(
         adapter.loadTranscriptEvents(scopedTranscript("agent:main:orphan", "orphan-lifecycle")),
       ).resolves.not.toEqual([]);
-      expect(
-        readSessionArchiveContentSync(
-          path.join(path.dirname(cleanupStorePath), removedArchive ?? ""),
-        )
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line)),
-      ).toEqual([
+      expect(readArchive(path.join(path.dirname(cleanupStorePath), removedArchive ?? ""))).toEqual([
         expect.objectContaining({ id: "removed-lifecycle-event", marker: "lifecycle-marker-run" }),
       ]);
     });
 
-    it("conforms for raw transcript event load and append", async () => {
+    t("conforms for raw transcript event load and append", async () => {
       const scope = adapter.transcriptScope(paths);
       const readScope = adapter.transcriptReadScope(paths);
       const event = {
@@ -506,98 +462,47 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         { type: "session", sessionId: "session-1" },
         event,
       ]);
-    });
-
-    t("loads raw SQLite transcript events synchronously through a read scope", async () => {
-      const scope = sqliteAdapter.transcriptScope(paths);
-      const readScope = sqliteAdapter.transcriptReadScope(paths);
-      const event = {
-        id: "event-1",
-        parentId: null,
-        payload: { content: "hello" },
-        type: "metadata",
-      };
-
-      await sqliteAdapter.appendTranscriptEvent(scope, event);
-
-      expect(loadTranscriptEventsSync(readScope)).toEqual([event]);
-    });
-
-    t("maps canonical sessions.json store paths to the agent SQLite database", async () => {
-      const legacyStorePath = path.join(
-        paths.stateDir,
-        "agents",
-        "voice",
-        "sessions",
-        "sessions.json",
-      );
-      const sqlitePath = path.join(
-        paths.stateDir,
-        "agents",
-        "voice",
-        "agent",
-        "openclaw-agent.sqlite",
-      );
-      const scope = {
-        env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
-        sessionKey: "agent:voice:voice:123",
-        storePath: legacyStorePath,
-      };
-
-      await upsertSessionEntryCore(scope, {
-        model: "gpt-5.5",
-        sessionId: "session-1",
-        updatedAt: 10,
-      });
-
-      expect(loadSessionEntry({ ...scope, agentId: "voice", storePath: sqlitePath })).toMatchObject(
-        {
-          model: "gpt-5.5",
-          sessionId: "session-1",
-        },
-      );
-      expect(fs.existsSync(sqlitePath)).toBe(true);
-      expect(fs.existsSync(legacyStorePath)).toBe(false);
-      expect(
-        listSessionEntryRows({
-          env: scope.env,
-          storePath: sqlitePath,
-        }),
-      ).toEqual([
-        expect.objectContaining({
-          entry: expect.objectContaining({ sessionId: "session-1" }),
-          sessionKey: "agent:voice:voice:123",
-        }),
+      expect(loadTranscriptEventsSync(readScope)).toEqual([
+        { type: "session", sessionId: "session-1" },
+        event,
       ]);
-      expect(() => loadSessionEntry({ ...scope, agentId: "main", storePath: sqlitePath })).toThrow(
-        "belongs to agent voice; requested agent main",
-      );
     });
 
-    t("keeps custom JSON store paths beside their SQLite database", async () => {
-      const customStorePath = path.join(paths.tempDir, "custom-sessions.json");
-      const sqlitePath = path.join(paths.tempDir, "custom-sessions.voice.sqlite");
-      const scope = {
-        env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
-        sessionKey: "agent:voice:main",
-        storePath: customStorePath,
-      };
-
-      await upsertSessionEntryCore(scope, {
-        model: "gpt-5.5",
-        sessionId: "session-1",
-        updatedAt: 10,
-      });
-
-      expect(loadSessionEntry({ ...scope, agentId: "voice", storePath: sqlitePath })).toMatchObject(
-        {
-          model: "gpt-5.5",
-          sessionId: "session-1",
+    if (adapter === sqliteAdapter) {
+      it.each(["canonical", "custom"] as const)(
+        "maps %s JSON paths to the agent SQLite database",
+        async (kind) => {
+          const canonical = kind === "canonical";
+          const storePath = canonical
+            ? path.join(paths.stateDir, "agents", "voice", "sessions", "sessions.json")
+            : path.join(paths.tempDir, "custom-sessions.json");
+          const sqlitePath = canonical
+            ? path.join(paths.stateDir, "agents", "voice", "agent", "openclaw-agent.sqlite")
+            : path.join(paths.tempDir, "custom-sessions.voice.sqlite");
+          const scope = {
+            env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
+            sessionKey: canonical ? "agent:voice:voice:123" : "agent:voice:main",
+            storePath,
+          };
+          await upsertSessionEntryCore(scope, modelEntry("session-1", "gpt-5.5"));
+          expect(
+            loadSessionEntry({ ...scope, agentId: "voice", storePath: sqlitePath }),
+          ).toMatchObject({ model: "gpt-5.5", sessionId: "session-1" });
+          expect([fs.existsSync(sqlitePath), fs.existsSync(storePath)]).toEqual([true, false]);
+          if (canonical) {
+            expect(listSessionEntryRows({ env: scope.env, storePath: sqlitePath })).toEqual([
+              expect.objectContaining({
+                entry: expect.objectContaining({ sessionId: "session-1" }),
+                sessionKey: "agent:voice:voice:123",
+              }),
+            ]);
+            expect(() =>
+              loadSessionEntry({ ...scope, agentId: "main", storePath: sqlitePath }),
+            ).toThrow("belongs to agent voice; requested agent main");
+          }
         },
       );
-      expect(fs.existsSync(sqlitePath)).toBe(true);
-      expect(fs.existsSync(customStorePath)).toBe(false);
-    });
+    }
 
     t("uses the requested agent for custom sessions.json SQLite targets", async () => {
       const customStorePath = path.join(paths.tempDir, "custom-store", "sessions.json");
@@ -612,11 +517,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         storePath: customStorePath,
       };
 
-      await upsertSessionEntryCore(scope, {
-        model: "gpt-5.5",
-        sessionId: "support-session",
-        updatedAt: 10,
-      });
+      await upsertSessionEntryCore(scope, modelEntry("support-session", "gpt-5.5"));
       const runtimeTarget = await resolveSessionTranscriptRuntimeTarget({
         ...scope,
         sessionId: "support-session",
@@ -639,22 +540,11 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       const scope = sqliteAdapter.entryScope(paths);
       for (let index = 0; index < 20; index += 1) {
         await upsertSessionEntryCore(
-          {
-            ...scope,
-            sessionKey: `agent:main:unrelated-${index}`,
-          },
-          {
-            model: `model-${index}`,
-            sessionId: `unrelated-session-${index}`,
-            updatedAt: index + 1,
-          },
+          { ...scope, sessionKey: `agent:main:unrelated-${index}` },
+          modelEntry(`unrelated-session-${index}`, `model-${index}`, index + 1),
         );
       }
-      await upsertSessionEntryCore(scope, {
-        model: "target",
-        sessionId: "target-session",
-        updatedAt: 100,
-      });
+      await upsertSessionEntryCore(scope, modelEntry("target-session", "target", 100));
       const parseSpy = vi.spyOn(JSON, "parse");
       const targetEntryParseCount = () =>
         parseSpy.mock.calls.filter(
@@ -688,27 +578,16 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
 
     t("archives stale SQLite entries below the entry cap on ordinary writes", async () => {
       const scope = sqliteAdapter.entryScope(paths);
-      const staleScope = {
-        ...scope,
-        sessionKey: "agent:main:stale-under-cap",
-      };
+      const staleScope = { ...scope, sessionKey: "agent:main:stale-under-cap" };
       const staleEntry = {
         model: "stale",
         sessionId: "stale-under-cap",
         updatedAt: Date.now() - 31 * 24 * 60 * 60 * 1000,
       };
-      await patchSessionEntryCore(staleScope, () => staleEntry, {
-        fallbackEntry: staleEntry,
-        replaceEntry: true,
-        skipMaintenance: true,
-      });
+      await seedEntry(staleScope, staleEntry);
 
       const maintained = observeSessionMaintenanceChanges(paths.sqlitePath, staleScope.sessionKey);
-      await upsertSessionEntryCore(scope, {
-        model: "fresh",
-        sessionId: "fresh-session",
-        updatedAt: Date.now(),
-      });
+      await upsertSessionEntryCore(scope, modelEntry("fresh-session", "fresh", Date.now()));
 
       await maintained;
       expect(loadSessionEntry(staleScope)).toMatchObject({
@@ -716,86 +595,36 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         archivedAt: expect.any(Number),
         archiveReason: "age-retention",
       });
-      expect(loadSessionEntry(scope)).toMatchObject({
-        model: "fresh",
-        sessionId: "fresh-session",
-      });
+      expect(loadSessionEntry(scope)).toMatchObject({ model: "fresh", sessionId: "fresh-session" });
     });
 
     t("serializes concurrent SQLite entry patches", async () => {
       const scope = sqliteAdapter.entryScope(paths);
 
-      await upsertSessionEntryCore(scope, {
-        model: "base",
-        sessionId: "patch-session",
-        updatedAt: 10,
-      });
+      await upsertSessionEntryCore(scope, modelEntry("patch-session", "base"));
 
-      let firstPatch!: Promise<SessionEntry | null>;
-      let releasePatch!: () => void;
-      const patchStarted = new Promise<void>((resolve) => {
-        const blockedPatch = new Promise<void>((release) => {
-          releasePatch = release;
-        });
-        firstPatch = patchSessionEntryCore(scope, async () => {
-          resolve();
-          await blockedPatch;
-          return { model: "first" };
-        });
-      });
-      await patchStarted;
-      const secondPatch = patchSessionEntryCore(scope, () => ({
-        providerOverride: "openai",
-      }));
+      const {
+        started,
+        release: releasePatch,
+        pendingPatch: firstPatch,
+      } = pauseEntryPatch(scope, "first");
+      await started;
+      const secondPatch = patchSessionEntryCore(scope, () => ({ providerOverride: "openai" }));
       releasePatch();
       await Promise.all([firstPatch, secondPatch]);
 
-      expect(loadSessionEntry(scope)).toMatchObject({
-        model: "first",
-        providerOverride: "openai",
-      });
+      expect(loadSessionEntry(scope)).toMatchObject({ model: "first", providerOverride: "openai" });
     });
 
     t("does not hold a write transaction while awaiting a SQLite entry updater", async () => {
       const scope = sqliteAdapter.entryScope(paths);
-      await replaceSessionEntry(scope, {
-        model: "base",
-        sessionId: "transaction-gap",
-        updatedAt: 10,
-      });
+      await replaceSessionEntry(scope, modelEntry("transaction-gap", "base"));
 
-      let releaseUpdater!: () => void;
-      let markUpdaterStarted!: () => void;
-      const updaterStarted = new Promise<void>((resolve) => {
-        markUpdaterStarted = resolve;
-      });
-      const updaterGate = new Promise<void>((resolve) => {
-        releaseUpdater = resolve;
-      });
-      const pendingPatch = patchSessionEntryCore(scope, async () => {
-        markUpdaterStarted();
-        await updaterGate;
-        return { model: "patched" };
-      });
-
-      await updaterStarted;
+      const { started, release: releaseUpdater, pendingPatch } = pauseEntryPatch(scope, "patched");
+      await started;
       let unrelatedWriteError: unknown;
       try {
-        appendSqliteTrajectoryRuntimeEvents(
-          { sessionId: "transaction-gap", storePath: paths.sqlitePath },
-          [
-            {
-              traceSchema: "openclaw-trajectory",
-              schemaVersion: 1,
-              traceId: "transaction-gap",
-              source: "runtime",
-              type: "test.concurrent-write",
-              ts: "2026-07-09T00:00:00.000Z",
-              seq: 1,
-              sessionId: "transaction-gap",
-            },
-          ],
-        );
+        appendTrajectory(paths.sqlitePath, "transaction-gap", "test.concurrent-write");
       } catch (error) {
         unrelatedWriteError = error;
       } finally {
@@ -820,43 +649,12 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         sessionKey: "agent:main:shared-writers",
         storePath: conventionalStorePath,
       };
-      await replaceSessionEntry(scope, {
-        model: "base",
-        sessionId: "shared-writers",
-        updatedAt: 10,
-      });
+      await replaceSessionEntry(scope, modelEntry("shared-writers", "base"));
 
-      let releaseUpdater!: () => void;
-      let markUpdaterStarted!: () => void;
-      const updaterStarted = new Promise<void>((resolve) => {
-        markUpdaterStarted = resolve;
-      });
-      const updaterGate = new Promise<void>((resolve) => {
-        releaseUpdater = resolve;
-      });
-      const pendingPatch = patchSessionEntryCore(scope, async () => {
-        markUpdaterStarted();
-        await updaterGate;
-        return { model: "patched" };
-      });
-
-      await updaterStarted;
+      const { started, release: releaseUpdater, pendingPatch } = pauseEntryPatch(scope, "patched");
+      await started;
       writePersistedAuthProfileStateRaw({ selectedProfile: "test" }, agentDir);
-      appendSqliteTrajectoryRuntimeEvents(
-        { sessionId: "shared-writers", storePath: conventionalStorePath },
-        [
-          {
-            traceSchema: "openclaw-trajectory",
-            schemaVersion: 1,
-            traceId: "shared-writers",
-            source: "runtime",
-            type: "test.shared-writers",
-            ts: "2026-07-09T00:00:00.000Z",
-            seq: 1,
-            sessionId: "shared-writers",
-          },
-        ],
-      );
+      appendTrajectory(conventionalStorePath, "shared-writers", "test.shared-writers");
       releaseUpdater();
 
       await expect(pendingPatch).resolves.toMatchObject({ model: "patched" });
@@ -865,27 +663,11 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
 
     t("rejects a prepared SQLite entry patch when its source row changes", async () => {
       const scope = sqliteAdapter.entryScope(paths);
-      await replaceSessionEntry(scope, {
-        model: "base",
-        sessionId: "stale-prepare",
-        updatedAt: 10,
-      });
+      await replaceSessionEntry(scope, modelEntry("stale-prepare", "base"));
 
-      let releaseUpdater!: () => void;
-      let markUpdaterStarted!: () => void;
-      const updaterStarted = new Promise<void>((resolve) => {
-        markUpdaterStarted = resolve;
-      });
-      const updaterGate = new Promise<void>((resolve) => {
-        releaseUpdater = resolve;
-      });
-      const pendingPatch = patchSessionEntryCore(scope, async () => {
-        markUpdaterStarted();
-        await updaterGate;
-        return { model: "stale-patch" };
-      });
-
-      await updaterStarted;
+      const patch = pauseEntryPatch(scope, "stale-patch");
+      const { started, release: releaseUpdater, pendingPatch } = patch;
+      await started;
       let replacementError: unknown;
       try {
         replaceSessionEntrySync(scope, {
@@ -910,11 +692,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
 
     t("dedupes SQLite transcript identities inside the writer path", async () => {
       const scope = sqliteAdapter.transcriptScope(paths, "session-dedupe");
-      const event = {
-        id: "event-dedupe",
-        source: "conformance",
-        type: "metadata",
-      };
+      const event = { id: "event-dedupe", source: "conformance", type: "metadata" };
 
       await appendTranscriptEvent(scope, event);
       await appendTranscriptEvent(scope, {
@@ -925,11 +703,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         Array.from({ length: 8 }, () =>
           appendTranscriptMessage(scope, {
             idempotencyLookup: "scan",
-            message: {
-              role: "assistant",
-              content: "keyed",
-              idempotencyKey: "keyed-once",
-            },
+            message: { role: "assistant", content: "keyed", idempotencyKey: "keyed-once" },
           }),
         ),
       );
@@ -946,7 +720,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ]);
     });
 
-    it("rejects raw message transcript event writes", async () => {
+    t("rejects raw message transcript event writes", async () => {
       const scope = adapter.transcriptScope(paths, "session-raw-message");
       await expect(
         adapter.appendTranscriptEvent(scope, {
@@ -972,10 +746,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         const replayed = await appendTranscriptMessage(scope, { message });
         await expect(
           appendTranscriptMessage(scope, {
-            message: {
-              ...message,
-              content: "unchecked replay",
-            },
+            message: { ...message, content: "unchecked replay" },
           }),
         ).rejects.toThrow(/conflicts with the admitted message/u);
 
@@ -1003,34 +774,17 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       const scope = sqliteAdapter.transcriptScope(paths, "session-event-id-dedupe");
       const eventId = "message-retry-event-id";
 
-      const appended = await appendTranscriptMessage(scope, {
-        eventId,
-        message: {
-          role: "assistant",
-          content: "first attempt",
-        },
-      });
-      const replayed = await appendTranscriptMessage(scope, {
-        eventId,
-        message: {
-          role: "assistant",
-          content: "first attempt",
-        },
-      });
+      const options = { eventId, message: { role: "assistant", content: "first attempt" } };
+      const appended = await appendTranscriptMessage(scope, options);
+      const replayed = await appendTranscriptMessage(scope, options);
       await expect(
         appendTranscriptMessage(scope, {
           eventId,
-          message: {
-            role: "assistant",
-            content: "retry attempt",
-          },
+          message: { role: "assistant", content: "retry attempt" },
         }),
       ).rejects.toThrow(/conflicts with the admitted message/u);
 
-      expect(appended).toMatchObject({
-        appended: true,
-        messageId: eventId,
-      });
+      expect(appended).toMatchObject({ appended: true, messageId: eventId });
       expect(replayed).toMatchObject({
         appended: false,
         message: expect.objectContaining({ content: "first attempt" }),
@@ -1046,7 +800,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ]);
     });
 
-    it("conforms for transcript message append, idempotency, and update publication", async () => {
+    t("conforms for transcript message append, idempotency, and update publication", async () => {
       const scope = adapter.transcriptScope(paths, "session-2");
       const updates: unknown[] = [];
       const unsubscribe = onSessionTranscriptUpdate((update) => {
@@ -1054,24 +808,13 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       });
       onTestFinished(unsubscribe);
 
-      const appended = await adapter.appendTranscriptMessage(scope, {
+      const options = {
         cwd: paths.tempDir,
-        idempotencyLookup: "scan",
-        message: {
-          role: "assistant",
-          content: "hello",
-          idempotencyKey: "assistant-once",
-        },
-      });
-      const replayed = await adapter.appendTranscriptMessage(scope, {
-        cwd: paths.tempDir,
-        idempotencyLookup: "scan",
-        message: {
-          role: "assistant",
-          content: "hello",
-          idempotencyKey: "assistant-once",
-        },
-      });
+        idempotencyLookup: "scan" as const,
+        message: { role: "assistant", content: "hello", idempotencyKey: "assistant-once" },
+      };
+      const appended = await adapter.appendTranscriptMessage(scope, options);
+      const replayed = await adapter.appendTranscriptMessage(scope, options);
       await adapter.publishTranscriptUpdate(scope, {
         agentId: "main",
         message: appended?.message,
@@ -1100,10 +843,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       expect(replayed).toMatchObject({
         anchor: appended?.anchor,
         appended: false,
-        message: expect.objectContaining({
-          content: "hello",
-          idempotencyKey: "assistant-once",
-        }),
+        message: expect.objectContaining({ content: "hello", idempotencyKey: "assistant-once" }),
         messageId: appended?.messageId,
       });
       expect(replayed?.anchor).toBeDefined();
@@ -1141,60 +881,47 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
 
 describe("sqlite session normalization", () => {
   let paths: TestPaths;
+  let env: NodeJS.ProcessEnv;
+  const storeScope = () => ({ agentId: "main", env, storePath: paths.sqlitePath });
+  const scopeFor = (sessionKey: string, storePath = paths.sqlitePath): SessionAccessScope => ({
+    agentId: "main",
+    env,
+    sessionKey,
+    storePath,
+  });
+  const databaseFor = () =>
+    openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
 
   beforeEach(() => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-sqlite-norm-"));
-    paths = {
-      sqlitePath: path.join(tempDir, "openclaw-agent.sqlite"),
-      stateDir: path.join(tempDir, "state"),
-      storePath: path.join(tempDir, "sessions.json"),
-      tempDir,
-    };
+    paths = createTestPaths();
+    env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
   });
 
   afterEach(async () => {
-    await closeSessionAccessorConformanceFixture(paths.tempDir);
+    await closeOpenClawAgentDatabasesAsync(paths.tempDir);
   });
 
   it("maintains normalized session node and window rows", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    await upsertSessionEntryCore(
-      {
-        agentId: "main",
-        env,
-        sessionKey: "agent:main:group:example",
-        storePath: paths.sqlitePath,
-      },
-      {
-        agentHarnessId: "codex",
-        chatType: "group",
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            accountId: "acct-1",
-            channel: "discord",
-            threadId: "thread-1",
-            to: "group-1",
-          },
-        }),
-        displayName: "Example group",
-        endedAt: 90,
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        parentSessionKey: "agent:main:parent",
-        sessionId: "normalized-session",
-        sessionStartedAt: 50,
-        spawnedBy: "agent:main:spawner",
-        startedAt: 60,
-        status: "done",
-        updatedAt: 100,
-      },
-    );
-
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      env,
-      path: paths.sqlitePath,
+    await upsertSessionEntryCore(scopeFor("agent:main:group:example"), {
+      agentHarnessId: "codex",
+      chatType: "group",
+      delivery: normalizeSessionDeliveryState({
+        context: { accountId: "acct-1", channel: "discord", threadId: "thread-1", to: "group-1" },
+      }),
+      displayName: "Example group",
+      endedAt: 90,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      parentSessionKey: "agent:main:parent",
+      sessionId: "normalized-session",
+      sessionStartedAt: 50,
+      spawnedBy: "agent:main:spawner",
+      startedAt: 60,
+      status: "done",
+      updatedAt: 100,
     });
+
+    const database = databaseFor();
     const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
     const session = executeSqliteQueryTakeFirstSync(
       database.db,
@@ -1252,28 +979,8 @@ describe("sqlite session normalization", () => {
     });
   });
 
-  it("marks identity-only row updates pending validation", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const sessionKey = "agent:main:identity-update";
-    await replaceSessionEntry(
-      { agentId: "main", env, sessionKey, storePath: paths.sqlitePath },
-      { sessionId: "identity-session", updatedAt: 10 },
-    );
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
-    database.db
-      .prepare("UPDATE session_nodes SET updated_at = 11 WHERE session_key = ?")
-      .run(sessionKey);
-
-    expect(
-      database.db
-        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
-        .get(sessionKey),
-    ).toEqual({ entry_valid: 0 });
-  });
-
   it("writes a valid session beside an unrelated malformed legacy row", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    const database = databaseFor();
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, -1, ?)",
@@ -1281,15 +988,10 @@ describe("sqlite session normalization", () => {
       .run("agent:main:malformed", "malformed-session", "{ malformed", 0);
 
     await expect(
-      replaceSessionEntry(
-        {
-          agentId: "main",
-          env,
-          sessionKey: "agent:main:valid",
-          storePath: paths.sqlitePath,
-        },
-        { sessionId: "valid-session", updatedAt: Date.now() },
-      ),
+      replaceSessionEntry(scopeFor("agent:main:valid"), {
+        sessionId: "valid-session",
+        updatedAt: Date.now(),
+      }),
     ).resolves.toMatchObject({ sessionId: "valid-session" });
     expect(
       database.db
@@ -1299,16 +1001,10 @@ describe("sqlite session normalization", () => {
   });
 
   it("exposes same-key rollover lineage when a killed session is replaced", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sessionKey = "agent:main:telegram:group:-1003774691294:topic:29020";
     const oldSessionId = "f1321535-878b-47cd-b35e-2f5f4bae2bb5";
     const newSessionId = "c0daccb0-0555-47d8-8747-9b53addf1fe2";
-    const scope = {
-      agentId: "main",
-      env,
-      sessionKey,
-      storePath: paths.sqlitePath,
-    };
+    const scope = scopeFor(sessionKey);
 
     await upsertSessionEntryCore(scope, {
       delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
@@ -1324,11 +1020,7 @@ describe("sqlite session normalization", () => {
     });
     await appendTranscriptEvent(
       { ...scope, sessionId: oldSessionId },
-      {
-        id: "old-frontier",
-        payload: { label: "old transcript frontier" },
-        type: "metadata",
-      },
+      { id: "old-frontier", payload: { label: "old transcript frontier" }, type: "metadata" },
     );
 
     await upsertSessionEntryCore(scope, {
@@ -1336,16 +1028,12 @@ describe("sqlite session normalization", () => {
       chatType: "group",
       displayName: "telegram:g-bucephalus-+-topics",
       sessionId: newSessionId,
-      status: "running",
+      status: undefined,
       updatedAt: 1_782_997_881_018,
     });
     await appendTranscriptEvent(
       { ...scope, sessionId: newSessionId },
-      {
-        id: "new-turn",
-        payload: { label: "new active turn" },
-        type: "metadata",
-      },
+      { id: "new-turn", payload: { label: "new active turn" }, type: "metadata" },
     );
 
     await expect(loadTranscriptEvents({ ...scope, sessionId: oldSessionId })).resolves.toEqual([
@@ -1369,22 +1057,10 @@ describe("sqlite session normalization", () => {
   });
 
   it("keeps exact SQLite replacement entries free of inferred rollover lineage", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const scope = {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:restore-exact",
-      storePath: paths.sqlitePath,
-    };
+    const scope = scopeFor("agent:main:restore-exact");
 
-    await upsertSessionEntryCore(scope, {
-      sessionId: "temporary-session",
-      updatedAt: 10,
-    });
-    await replaceSessionEntry(scope, {
-      sessionId: "restored-session",
-      updatedAt: 20,
-    });
+    await upsertSessionEntryCore(scope, { sessionId: "temporary-session", updatedAt: 10 });
+    await replaceSessionEntry(scope, { sessionId: "restored-session", updatedAt: 20 });
 
     expect(loadSessionEntry(scope)).toEqual({
       sessionId: "restored-session",
@@ -1394,62 +1070,38 @@ describe("sqlite session normalization", () => {
   });
 
   it("skips parent fork when transcript rows exceed the token budget and entry totals are stale", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const parentKey = "agent:main:parent";
     const childKey = "agent:main:subagent:child";
-    await upsertSessionEntryCore(
-      {
-        agentId: "main",
-        env,
-        sessionKey: parentKey,
-        storePath: paths.sqlitePath,
-      },
-      {
-        sessionId: "parent-session",
-        totalTokens: 1,
-        totalTokensFresh: false,
-        updatedAt: 10,
-      },
-    );
-    await replaceTranscriptEvents(
-      {
-        agentId: "main",
-        env,
-        sessionId: "parent-session",
-        sessionKey: parentKey,
-        storePath: paths.sqlitePath,
-      },
-      [
-        { type: "session", id: "parent-session", cwd: paths.tempDir },
-        {
-          type: "message",
-          id: "oversized-parent",
-          parentId: null,
-          message: { role: "user", content: "x".repeat(420_000) },
-        },
-      ],
-    );
-
-    const result = await forkSessionEntryFromParentTarget({
-      fallbackEntry: { sessionId: "", updatedAt: 1 },
-      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
-      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
-      storePath: paths.sqlitePath,
-      decisionSkipPatch: () => ({ forkedFromParent: true, updatedAt: 11 }),
+    await upsertSessionEntryCore(scopeFor(parentKey), {
+      sessionId: "parent-session",
+      totalTokens: 1,
+      totalTokensFresh: false,
+      updatedAt: 10,
     });
+    await replaceTranscriptEvents({ ...scopeFor(parentKey), sessionId: "parent-session" }, [
+      { type: "session", id: "parent-session", cwd: paths.tempDir },
+      {
+        type: "message",
+        id: "oversized-parent",
+        parentId: null,
+        message: { role: "user", content: "x".repeat(420_000) },
+      },
+    ]);
+
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: paths.stateDir }, () =>
+      forkSessionEntryFromParentTarget({
+        fallbackEntry: { sessionId: "", updatedAt: 1 },
+        parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+        sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+        storePath: paths.sqlitePath,
+      }),
+    );
 
     expect(result).toMatchObject({
       status: "skipped",
       reason: "decision-skip",
-      decision: {
-        status: "skip",
-        reason: "parent-too-large",
-      },
-      sessionEntry: {
-        forkedFromParent: true,
-        sessionId: "",
-        updatedAt: expect.any(Number),
-      },
+      decision: { status: "skip", reason: "parent-too-large" },
+      sessionEntry: { sessionId: "", updatedAt: 1 },
     });
     if (result.status !== "skipped" || result.reason !== "decision-skip") {
       throw new Error(`expected decision-skip, got ${result.status}`);
@@ -1458,34 +1110,14 @@ describe("sqlite session normalization", () => {
   });
 
   it("does not move current nodes back to stale transcript session ids", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const scope = {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath: paths.sqlitePath,
-    };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "current-session",
-      updatedAt: 20,
-    });
+    const scope = scopeFor("agent:main:main");
+    await upsertSessionEntryCore(scope, { sessionId: "current-session", updatedAt: 20 });
     await appendTranscriptEvent(
-      {
-        ...scope,
-        sessionId: "stale-session",
-      },
-      {
-        id: "stale-event",
-        timestamp: new Date(10).toISOString(),
-        type: "metadata",
-      },
+      { ...scope, sessionId: "stale-session" },
+      { id: "stale-event", timestamp: new Date(10).toISOString(), type: "metadata" },
     );
 
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      env,
-      path: paths.sqlitePath,
-    });
+    const database = databaseFor();
     const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
     const route = executeSqliteQueryTakeFirstSync(
       database.db,
@@ -1498,22 +1130,7 @@ describe("sqlite session normalization", () => {
   });
 
   it("applies SQLite session-entry maintenance after entry writes", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "1d",
-          maxEntries: 2,
-        },
-      },
-    });
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const scopeFor = (sessionKey: string) => ({
-      agentId: "main",
-      env,
-      sessionKey,
-      storePath: paths.sqlitePath,
-    });
+    setMaintenance({ mode: "enforce", pruneAfter: "1d", maxEntries: 2 });
     const oldUpdatedAt = Date.now() - 2 * 24 * 60 * 60 * 1000;
 
     for (const [key, updatedAt] of [
@@ -1522,15 +1139,7 @@ describe("sqlite session normalization", () => {
       ["active", Date.now()],
     ] as const) {
       const entry = { sessionId: `${key}-session`, updatedAt };
-      await patchSessionEntryCore(
-        scopeFor(`agent:main:${key === "active" ? key : `subagent:${key}`}`),
-        () => entry,
-        {
-          fallbackEntry: entry,
-          replaceEntry: true,
-          skipMaintenance: true,
-        },
-      );
+      await seedEntry(scopeFor(`agent:main:${key === "active" ? key : `subagent:${key}`}`), entry);
     }
     const staleTranscriptEvent = {
       id: "stale-event",
@@ -1555,20 +1164,13 @@ describe("sqlite session normalization", () => {
       skipMaintenance: true,
     });
     await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        env,
-        sessionId: "stale-session",
-        storePath: paths.sqlitePath,
-      }),
+      loadTranscriptEvents({ ...storeScope(), sessionId: "stale-session" }),
     ).resolves.toEqual([staleTranscriptEvent]);
-    expect(
-      listSessionEntryRows({
-        agentId: "main",
-        env,
-        storePath: paths.sqlitePath,
-      }).map((summary) => summary.sessionKey),
-    ).toEqual(["agent:main:active", "agent:main:subagent:older", "agent:main:subagent:stale"]);
+    expect(listSessionEntryRows(storeScope()).map((summary) => summary.sessionKey)).toEqual([
+      "agent:main:active",
+      "agent:main:subagent:older",
+      "agent:main:subagent:stale",
+    ]);
 
     const notify = vi.fn();
     const unsubscribe = onSessionIdentityMutation(notify);
@@ -1589,79 +1191,44 @@ describe("sqlite session normalization", () => {
       );
     expect(archivedStale).toHaveLength(1);
     unsubscribe();
-    expect(
-      listSessionEntryRows({
-        agentId: "main",
-        env,
-        storePath: paths.sqlitePath,
-      }).map((summary) => summary.sessionKey),
-    ).toEqual(["agent:main:active"]);
+    expect(listSessionEntryRows(storeScope()).map((summary) => summary.sessionKey)).toEqual([
+      "agent:main:active",
+    ]);
     await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        env,
-        sessionId: "stale-session",
-        storePath: paths.sqlitePath,
-      }),
+      loadTranscriptEvents({ ...storeScope(), sessionId: "stale-session" }),
     ).resolves.toEqual([]);
-    expect(
-      readSessionArchiveContentSync(path.join(paths.tempDir, archivedStale[0] ?? ""))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([staleTranscriptEvent]);
+    expect(readArchive(path.join(paths.tempDir, archivedStale[0] ?? ""))).toEqual([
+      staleTranscriptEvent,
+    ]);
 
-    await patchSessionEntryCore(
-      scopeFor("agent:main:newer"),
-      () => ({ sessionId: "newer-session", updatedAt: Date.now() + 1 }),
-      {
-        fallbackEntry: { sessionId: "newer-session", updatedAt: Date.now() + 1 },
-        replaceEntry: true,
-        skipMaintenance: true,
-      },
-    );
+    await seedEntry(scopeFor("agent:main:newer"), {
+      sessionId: "newer-session",
+      updatedAt: Date.now() + 1,
+    });
     const capped = observeSessionMaintenanceChanges(paths.sqlitePath, "agent:main:active");
-    await patchSessionEntryCore(
+    await seedEntry(
       scopeFor("agent:main:newest"),
-      () => ({ sessionId: "newest-session", updatedAt: Date.now() + 2 }),
-      {
-        fallbackEntry: { sessionId: "newest-session", updatedAt: Date.now() + 2 },
-        replaceEntry: true,
-      },
+      { sessionId: "newest-session", updatedAt: Date.now() + 2 },
+      false,
     );
 
     await capped;
-    expect(
-      listSessionEntryRows({
-        agentId: "main",
-        env,
-        storePath: paths.sqlitePath,
-      }).map((summary) => summary.sessionKey),
-    ).toEqual(["agent:main:active", "agent:main:newer", "agent:main:newest"]);
+    expect(listSessionEntryRows(storeScope()).map((summary) => summary.sessionKey)).toEqual([
+      "agent:main:active",
+      "agent:main:newer",
+      "agent:main:newest",
+    ]);
     expect(loadSessionEntry(scopeFor("agent:main:active"))?.archivedAt).toEqual(expect.any(Number));
   });
 
   it("commits unrelated channel sessions without invoking stored channel plugin resolvers", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      session: { maintenance: { mode: "enforce", pruneAfter: "1d", maxEntries: 2 } },
-    });
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const scopeFor = (sessionKey: string) => ({
-      agentId: "main",
-      env,
-      sessionKey,
-      storePath: paths.sqlitePath,
-    });
+    setMaintenance({ mode: "enforce", pruneAfter: "1d", maxEntries: 2 });
     const storedKey = "agent:main:broken:group:room:thread:reply";
     const storedEntry = {
       sessionId: "stored-channel-session",
       updatedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
     };
-    await patchSessionEntryCore(scopeFor(storedKey), () => storedEntry, {
-      fallbackEntry: storedEntry,
-      replaceEntry: true,
-      skipMaintenance: true,
-    });
+    await seedEntry(scopeFor(storedKey), storedEntry);
 
     const resolveSessionConversation = vi.fn(() => {
       throw new Error("channel resolver must not run inside a SQLite write");
@@ -1684,12 +1251,7 @@ describe("sqlite session normalization", () => {
       for (const channel of ["telegram", "discord"]) {
         const sessionKey = `agent:main:${channel}:direct:user`;
         const entry = { sessionId: `${channel}-session`, updatedAt: Date.now() };
-        await expect(
-          patchSessionEntryCore(scopeFor(sessionKey), () => entry, {
-            fallbackEntry: entry,
-            replaceEntry: true,
-          }),
-        ).resolves.toMatchObject(entry);
+        await expect(seedEntry(scopeFor(sessionKey), entry, false)).resolves.toMatchObject(entry);
         expect(loadSessionEntry(scopeFor(sessionKey))).toMatchObject(entry);
       }
 
@@ -1701,23 +1263,12 @@ describe("sqlite session normalization", () => {
   });
 
   it("persists automatic dashboard archiving before stale-entry pruning", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          archiveDashboardAfter: "7d",
-          pruneAfter: "30d",
-          maxEntries: 500,
-          maxDiskBytes: false,
-        },
-      },
-    });
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const scopeFor = (sessionKey: string) => ({
-      agentId: "main",
-      env,
-      sessionKey,
-      storePath: paths.sqlitePath,
+    setMaintenance({
+      mode: "enforce",
+      archiveDashboardAfter: "7d",
+      pruneAfter: "30d",
+      maxEntries: 500,
+      maxDiskBytes: false,
     });
     const dashboardKey = "agent:main:dashboard:stale-visible-session";
     const dashboardSessionId = "stale-visible-session";
@@ -1728,61 +1279,32 @@ describe("sqlite session normalization", () => {
       type: "metadata",
     };
 
-    await patchSessionEntryCore(
-      scopeFor(dashboardKey),
-      () => ({ sessionId: dashboardSessionId, updatedAt: oldUpdatedAt }),
-      {
-        fallbackEntry: { sessionId: dashboardSessionId, updatedAt: oldUpdatedAt },
-        replaceEntry: true,
-        skipMaintenance: true,
-      },
-    );
+    await seedEntry(scopeFor(dashboardKey), {
+      sessionId: dashboardSessionId,
+      updatedAt: oldUpdatedAt,
+    });
     await appendTranscriptEvent(
       { ...scopeFor(dashboardKey), sessionId: dashboardSessionId },
       transcriptEvent,
     );
 
     const maintained = observeSessionMaintenanceChanges(paths.sqlitePath, dashboardKey);
-    await patchSessionEntryCore(
+    await seedEntry(
       scopeFor("agent:main:explicit:maintenance-trigger"),
-      () => ({ sessionId: "maintenance-trigger", updatedAt: Date.now() }),
-      {
-        fallbackEntry: { sessionId: "maintenance-trigger", updatedAt: Date.now() },
-        replaceEntry: true,
-      },
+      { sessionId: "maintenance-trigger", updatedAt: Date.now() },
+      false,
     );
 
     await maintained;
     expect(loadSessionEntry(scopeFor(dashboardKey))?.archivedAt).toEqual(expect.any(Number));
     await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        env,
-        sessionId: dashboardSessionId,
-        storePath: paths.sqlitePath,
-      }),
+      loadTranscriptEvents({ ...storeScope(), sessionId: dashboardSessionId }),
     ).resolves.toEqual([transcriptEvent]);
   });
 
   it("preserves recent SQLite entries and transcripts during write-triggered capping", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "365d",
-          maxEntries: 2,
-          preserveRecent: "7d",
-        },
-      },
-    });
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    setMaintenance({ mode: "enforce", pruneAfter: "365d", maxEntries: 2, preserveRecent: "7d" });
     const now = Date.now();
-    const scopeFor = (sessionKey: string) => ({
-      agentId: "main",
-      env,
-      sessionKey,
-      storePath: paths.sqlitePath,
-    });
     const recentSessionId = "recent-dashboard-session-1";
     const recentTranscriptEvent = {
       id: "recent-dashboard-event",
@@ -1790,90 +1312,43 @@ describe("sqlite session normalization", () => {
       type: "metadata",
     };
 
-    await patchSessionEntryCore(
-      scopeFor("agent:main:archived-1"),
-      () => ({ archivedAt: now - 4, sessionId: "archived-session-1", updatedAt: now - 4 }),
-      {
-        fallbackEntry: {
-          archivedAt: now - 4,
-          sessionId: "archived-session-1",
-          updatedAt: now - 4,
-        },
-        replaceEntry: true,
-        skipMaintenance: true,
-      },
-    );
-    await patchSessionEntryCore(
-      scopeFor("agent:main:recent-dashboard-1"),
-      () => ({ sessionId: recentSessionId, updatedAt: now - 2 }),
-      {
-        fallbackEntry: { sessionId: recentSessionId, updatedAt: now - 2 },
-        replaceEntry: true,
-        skipMaintenance: true,
-      },
-    );
+    await seedEntry(scopeFor("agent:main:archived-1"), {
+      archivedAt: now - 4,
+      sessionId: "archived-session-1",
+      updatedAt: now - 4,
+    });
+    await seedEntry(scopeFor("agent:main:recent-dashboard-1"), {
+      sessionId: recentSessionId,
+      updatedAt: now - 2,
+    });
     await appendTranscriptEvent(
       { ...scopeFor("agent:main:recent-dashboard-1"), sessionId: recentSessionId },
       recentTranscriptEvent,
     );
-    await patchSessionEntryCore(
-      scopeFor("agent:main:recent-dashboard-2"),
-      () => ({ sessionId: "recent-dashboard-session-2", updatedAt: now - 1 }),
-      {
-        fallbackEntry: { sessionId: "recent-dashboard-session-2", updatedAt: now - 1 },
-        replaceEntry: true,
-        skipMaintenance: true,
-      },
-    );
+    await seedEntry(scopeFor("agent:main:recent-dashboard-2"), {
+      sessionId: "recent-dashboard-session-2",
+      updatedAt: now - 1,
+    });
 
-    await patchSessionEntryCore(
+    await seedEntry(
       scopeFor("agent:main:maintenance-trigger"),
-      () => ({ sessionId: "maintenance-trigger-session", updatedAt: now }),
-      {
-        fallbackEntry: { sessionId: "maintenance-trigger-session", updatedAt: now },
-        replaceEntry: true,
-      },
+      { sessionId: "maintenance-trigger-session", updatedAt: now },
+      false,
     );
 
-    expect(
-      listSessionEntryRows({
-        agentId: "main",
-        env,
-        storePath: paths.sqlitePath,
-      }).map((summary) => summary.sessionKey),
-    ).toEqual([
+    expect(listSessionEntryRows(storeScope()).map((summary) => summary.sessionKey)).toEqual([
       "agent:main:archived-1",
       "agent:main:maintenance-trigger",
       "agent:main:recent-dashboard-1",
       "agent:main:recent-dashboard-2",
     ]);
     await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        env,
-        sessionId: recentSessionId,
-        storePath: paths.sqlitePath,
-      }),
+      loadTranscriptEvents({ ...storeScope(), sessionId: recentSessionId }),
     ).resolves.toEqual([recentTranscriptEvent]);
   });
 
   it("preserves pinned SQLite entries and transcripts during write-triggered capping", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "365d",
-          maxEntries: 2,
-        },
-      },
-    });
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const scopeFor = (sessionKey: string) => ({
-      agentId: "main",
-      env,
-      sessionKey,
-      storePath: paths.sqlitePath,
-    });
+    setMaintenance({ mode: "enforce", pruneAfter: "365d", maxEntries: 2 });
     const now = Date.now();
     const pinnedKey = "agent:main:pinned-dashboard";
     const pinnedSessionId = "pinned-dashboard-session";
@@ -1883,40 +1358,24 @@ describe("sqlite session normalization", () => {
       type: "metadata",
     };
 
-    await patchSessionEntryCore(
-      scopeFor(pinnedKey),
-      () => ({ sessionId: pinnedSessionId, updatedAt: 1, pinnedAt: 2 }),
-      {
-        fallbackEntry: { sessionId: pinnedSessionId, updatedAt: 1, pinnedAt: 2 },
-        replaceEntry: true,
-        skipMaintenance: true,
-      },
-    );
+    await seedEntry(scopeFor(pinnedKey), { sessionId: pinnedSessionId, updatedAt: 1, pinnedAt: 2 });
     await appendTranscriptEvent(
       { ...scopeFor(pinnedKey), sessionId: pinnedSessionId },
       pinnedTranscriptEvent,
     );
-    await patchSessionEntryCore(
-      scopeFor("agent:main:recent-dashboard"),
-      () => ({ sessionId: "recent-dashboard-session", updatedAt: now - 1 }),
-      {
-        fallbackEntry: { sessionId: "recent-dashboard-session", updatedAt: now - 1 },
-        replaceEntry: true,
-        skipMaintenance: true,
-      },
-    );
+    await seedEntry(scopeFor("agent:main:recent-dashboard"), {
+      sessionId: "recent-dashboard-session",
+      updatedAt: now - 1,
+    });
 
     const maintained = observeSessionMaintenanceChanges(
       paths.sqlitePath,
       "agent:main:recent-dashboard",
     );
-    await patchSessionEntryCore(
+    await seedEntry(
       scopeFor("agent:main:maintenance-trigger"),
-      () => ({ sessionId: "maintenance-trigger-session", updatedAt: now }),
-      {
-        fallbackEntry: { sessionId: "maintenance-trigger-session", updatedAt: now },
-        replaceEntry: true,
-      },
+      { sessionId: "maintenance-trigger-session", updatedAt: now },
+      false,
     );
 
     await maintained;
@@ -1925,49 +1384,24 @@ describe("sqlite session normalization", () => {
       sessionId: pinnedSessionId,
     });
     expect(
-      listSessionEntryRows({
-        agentId: "main",
-        env,
-        storePath: paths.sqlitePath,
-      })
+      listSessionEntryRows(storeScope())
         .filter((summary) => summary.entry.archivedAt === undefined)
         .map((summary) => summary.sessionKey),
     ).toEqual(["agent:main:maintenance-trigger", pinnedKey]);
-    expect(
-      listSessionEntryRows({ agentId: "main", env, storePath: paths.sqlitePath }),
-    ).toHaveLength(3);
+    expect(listSessionEntryRows(storeScope())).toHaveLength(3);
     expect(loadSessionEntry(scopeFor("agent:main:recent-dashboard"))).toMatchObject({
       sessionId: "recent-dashboard-session",
       archivedAt: expect.any(Number),
       archiveReason: "active-session-cap",
     });
     await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        env,
-        sessionId: pinnedSessionId,
-        storePath: paths.sqlitePath,
-      }),
+      loadTranscriptEvents({ ...storeScope(), sessionId: pinnedSessionId }),
     ).resolves.toEqual([pinnedTranscriptEvent]);
   });
 
   it("preserves an admitted SQLite session when another session triggers maintenance", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "365d",
-          maxEntries: 1,
-        },
-      },
-    });
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const scopeFor = (sessionKey: string) => ({
-      agentId: "main",
-      env,
-      sessionKey,
-      storePath: paths.storePath,
-    });
+    setMaintenance({ mode: "enforce", pruneAfter: "365d", maxEntries: 1 });
+    const admittedScope = (sessionKey: string) => scopeFor(sessionKey, paths.storePath);
     const dashboardKey = "agent:main:dashboard:active-work";
     const dashboardEntry = {
       lifecycleRevision: "dashboard-revision-1",
@@ -1978,39 +1412,24 @@ describe("sqlite session normalization", () => {
       ["agent:main:slack:channel:c1", "channel-session-1"],
       ["agent:main:slack:channel:c2", "channel-session-2"],
     ] as const) {
-      await patchSessionEntryCore(
-        scopeFor(sessionKey),
-        () => ({ sessionId, updatedAt: Date.now() - 1 }),
-        {
-          fallbackEntry: { sessionId, updatedAt: Date.now() - 1 },
-          replaceEntry: true,
-          skipMaintenance: true,
-        },
-      );
+      await seedEntry(admittedScope(sessionKey), { sessionId, updatedAt: Date.now() - 1 });
     }
 
-    await patchSessionEntryCore(scopeFor(dashboardKey), () => dashboardEntry, {
-      fallbackEntry: dashboardEntry,
-      replaceEntry: true,
-      skipMaintenance: true,
-    });
-    const admission = await beginSessionWorkAdmission({
+    await seedEntry(admittedScope(dashboardKey), dashboardEntry);
+    const admission = await beginSessionEffect({
       scope: paths.storePath,
       identities: [dashboardKey, dashboardEntry.sessionId],
       assertAllowed: () => {},
     });
     try {
       const triggerKey = "agent:main:maintenance-trigger";
-      await patchSessionEntryCore(
-        scopeFor(triggerKey),
-        () => ({ sessionId: "trigger-session", updatedAt: Date.now() + 1 }),
-        {
-          fallbackEntry: { sessionId: "trigger-session", updatedAt: Date.now() + 1 },
-          replaceEntry: true,
-        },
+      await seedEntry(
+        admittedScope(triggerKey),
+        { sessionId: "trigger-session", updatedAt: Date.now() + 1 },
+        false,
       );
 
-      const preservedEntry = loadSessionEntry(scopeFor(dashboardKey));
+      const preservedEntry = loadSessionEntry(admittedScope(dashboardKey));
       expect(preservedEntry).toMatchObject(dashboardEntry);
       expect(preservedEntry?.archivedAt).toBeUndefined();
     } finally {
@@ -2019,36 +1438,20 @@ describe("sqlite session normalization", () => {
   });
 
   it("keeps live entries and transcripts under byte pressure at save time", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      session: {
-        maintenance: {
-          highWaterBytes: 350,
-          maxDiskBytes: 1_200,
-          maxEntries: 100,
-          mode: "enforce",
-          pruneAfter: "365d",
-        },
-      },
-    });
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const scopeFor = (sessionKey: string) => ({
-      agentId: "main",
-      env,
-      sessionKey,
-      storePath: paths.sqlitePath,
+    setMaintenance({
+      highWaterBytes: 350,
+      maxDiskBytes: 1_200,
+      maxEntries: 100,
+      mode: "enforce",
+      pruneAfter: "365d",
     });
     const oldUpdatedAt = Date.now() - 2 * 24 * 60 * 60 * 1000;
     const unsharedUpdatedAt = oldUpdatedAt - 1_000;
 
-    await patchSessionEntryCore(
-      scopeFor("agent:main:unshared-budget"),
-      () => ({ sessionId: "unshared-budget-session", updatedAt: unsharedUpdatedAt }),
-      {
-        fallbackEntry: { sessionId: "unshared-budget-session", updatedAt: unsharedUpdatedAt },
-        replaceEntry: true,
-        skipMaintenance: true,
-      },
-    );
+    await seedEntry(scopeFor("agent:main:unshared-budget"), {
+      sessionId: "unshared-budget-session",
+      updatedAt: unsharedUpdatedAt,
+    });
     await appendTranscriptEvent(
       { ...scopeFor("agent:main:unshared-budget"), sessionId: "unshared-budget-session" },
       {
@@ -2059,15 +1462,10 @@ describe("sqlite session normalization", () => {
       },
     );
 
-    await patchSessionEntryCore(
-      scopeFor("agent:main:old-budget"),
-      () => ({ sessionId: "old-budget-session", updatedAt: oldUpdatedAt }),
-      {
-        fallbackEntry: { sessionId: "old-budget-session", updatedAt: oldUpdatedAt },
-        replaceEntry: true,
-        skipMaintenance: true,
-      },
-    );
+    await seedEntry(scopeFor("agent:main:old-budget"), {
+      sessionId: "old-budget-session",
+      updatedAt: oldUpdatedAt,
+    });
     await appendTranscriptEvent(
       { ...scopeFor("agent:main:old-budget"), sessionId: "old-budget-session" },
       {
@@ -2077,23 +1475,11 @@ describe("sqlite session normalization", () => {
         type: "metadata",
       },
     );
-    await patchSessionEntryCore(
-      scopeFor("agent:main:active-budget"),
-      () => ({
-        sessionId: "active-budget-session",
-        updatedAt: Date.now(),
-        usageFamilySessionIds: ["old-budget-session", "active-budget-session"],
-      }),
-      {
-        fallbackEntry: {
-          sessionId: "active-budget-session",
-          updatedAt: Date.now(),
-          usageFamilySessionIds: ["old-budget-session", "active-budget-session"],
-        },
-        replaceEntry: true,
-        skipMaintenance: true,
-      },
-    );
+    await seedEntry(scopeFor("agent:main:active-budget"), {
+      sessionId: "active-budget-session",
+      updatedAt: Date.now(),
+      usageFamilySessionIds: ["old-budget-session", "active-budget-session"],
+    });
 
     await patchSessionEntryCore(scopeFor("agent:main:active-budget"), () => ({
       modelOverride: "gpt-5.5",
@@ -2103,98 +1489,53 @@ describe("sqlite session normalization", () => {
     // handled by the async physical-budget pass, which only reclaims
     // historical generations no entry, route, or admission references.
     expect(
-      listSessionEntryRows({
-        agentId: "main",
-        env,
-        storePath: paths.sqlitePath,
-      })
+      listSessionEntryRows(storeScope())
         .map((summary) => summary.sessionKey)
         .toSorted(),
     ).toEqual(["agent:main:active-budget", "agent:main:old-budget", "agent:main:unshared-budget"]);
     await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        env,
-        sessionId: "old-budget-session",
-        storePath: paths.sqlitePath,
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        id: "old-budget-event",
-      }),
-    ]);
+      loadTranscriptEvents({ ...storeScope(), sessionId: "old-budget-session" }),
+    ).resolves.toEqual([expect.objectContaining({ id: "old-budget-event" })]);
     await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        env,
-        sessionId: "unshared-budget-session",
-        storePath: paths.sqlitePath,
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        id: "unshared-budget-event",
-      }),
-    ]);
+      loadTranscriptEvents({ ...storeScope(), sessionId: "unshared-budget-session" }),
+    ).resolves.toEqual([expect.objectContaining({ id: "unshared-budget-event" })]);
     expect(
       fs.readdirSync(paths.tempDir).filter((file) => file.includes(".jsonl.deleted.")),
     ).toEqual([]);
   });
 
   it("fails loud for delivery-confirmed lowercased SQLite session aliases", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const canonicalKey = "agent:main:matrix:channel:!MixedCase:example.org";
     const legacyKey = canonicalKey.toLowerCase();
     const canonicalError = `non-canonical persisted row resolves to session key ${canonicalKey}`;
     const entry = {
       delivery: normalizeSessionDeliveryState({
-        context: {
-          accountId: "acct-1",
-          channel: "matrix",
-          to: "!MixedCase:example.org",
-        },
+        context: { accountId: "acct-1", channel: "matrix", to: "!MixedCase:example.org" },
       }),
       sessionId: "legacy-alias-session",
       updatedAt: 10,
     };
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    const database = databaseFor();
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
       )
       .run(legacyKey, entry.sessionId, JSON.stringify(entry), entry.updatedAt);
-    // Exercise delivery-key rejection, not the INSERT trigger's pending-entry state.
+    // The entry identity is valid; admission must still reject its delivery-key alias.
     database.db
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(legacyKey);
 
-    expect(() =>
-      loadSessionEntry({
-        agentId: "main",
-        env,
-        sessionKey: canonicalKey,
-        storePath: paths.sqlitePath,
-      }),
-    ).toThrow(canonicalError);
-    expect(() =>
-      listSessionEntryRows({ agentId: "main", env, storePath: paths.sqlitePath }),
-    ).toThrow(canonicalError);
+    expect(() => loadSessionEntry(scopeFor(canonicalKey))).toThrow(canonicalError);
+    expect(() => listSessionEntryRows(storeScope())).toThrow(canonicalError);
     await expect(
       appendTranscriptEvent(
-        {
-          agentId: "main",
-          env,
-          sessionId: "canonical-transcript-session",
-          sessionKey: canonicalKey,
-          storePath: paths.sqlitePath,
-        },
+        { ...scopeFor(canonicalKey), sessionId: "canonical-transcript-session" },
         { id: "canonical-event", timestamp: new Date(20).toISOString(), type: "metadata" },
       ),
     ).rejects.toThrow("openclaw doctor --fix");
     expect(() =>
-      replaceSessionEntrySync(
-        { agentId: "main", env, sessionKey: canonicalKey, storePath: paths.sqlitePath },
-        { sessionId: "replacement", updatedAt: 20 },
-      ),
+      replaceSessionEntrySync(scopeFor(canonicalKey), { sessionId: "replacement", updatedAt: 20 }),
     ).toThrow("openclaw doctor --fix");
     expect(
       database.db
@@ -2206,23 +1547,17 @@ describe("sqlite session normalization", () => {
       .run("{ malformed", legacyKey);
     await expect(
       appendTranscriptEvent(
-        {
-          agentId: "main",
-          env,
-          sessionId: "canonical-transcript-session-2",
-          sessionKey: canonicalKey,
-          storePath: paths.sqlitePath,
-        },
+        { ...scopeFor(canonicalKey), sessionId: "canonical-transcript-session-2" },
         { id: "canonical-event-2", timestamp: new Date(21).toISOString(), type: "metadata" },
       ),
     ).rejects.toThrow("openclaw doctor --fix");
   });
 
-  it("fails loud for invalid live rows instead of treating them as retained tombstones", () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+  it("fails loud for invalid imported rows instead of treating them as retained tombstones", () => {
     const sessionKey = "agent:main:invalid-live-row";
     const sessionId = "invalid-live-session";
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    const database = databaseFor();
+    markCanonicalSessionValidationPending(database, [sessionKey]);
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, -1, ?)",
@@ -2234,21 +1569,15 @@ describe("sqlite session normalization", () => {
       )
       .run(sessionId, sessionKey);
 
-    expect(() =>
-      listSessionEntryRows({ agentId: "main", env, storePath: paths.sqlitePath }),
-    ).toThrow("openclaw doctor --fix");
+    expect(() => listSessionEntryRows(storeScope())).toThrow("openclaw doctor --fix");
   });
 
-  it("fails loud when promoted lineage disagrees with canonical entry JSON", () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+  it("fails loud when imported lineage disagrees with canonical entry JSON", async () => {
     const sessionKey = "agent:main:lineage-mismatch";
     const sessionId = "lineage-mismatch-session";
-    const entry = {
-      parentSessionKey: "agent:main:json-parent",
-      sessionId,
-      updatedAt: 10,
-    };
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: paths.sqlitePath });
+    const entry = { parentSessionKey: "agent:main:json-parent", sessionId, updatedAt: 10 };
+    const database = databaseFor();
+    markCanonicalSessionValidationPending(database, [sessionKey]);
     database.db
       .prepare(
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key) VALUES (?, ?, ?, ?, ?)",
@@ -2258,51 +1587,26 @@ describe("sqlite session normalization", () => {
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(sessionKey);
 
-    expect(() =>
-      listSessionChildEntriesReadOnly({
-        agentId: "main",
-        env,
-        sessionKey: "agent:main:json-parent",
-        storePath: paths.sqlitePath,
-      }),
-    ).toThrow("openclaw doctor --fix");
-    expect(() =>
-      listSessionEntryRows({ agentId: "main", env, storePath: paths.sqlitePath }),
-    ).toThrow("openclaw doctor --fix");
+    await expect(
+      listSessionChildEntriesReadOnly(scopeFor("agent:main:json-parent")),
+    ).rejects.toThrow("openclaw doctor --fix");
+    expect(() => listSessionEntryRows(storeScope())).toThrow("openclaw doctor --fix");
   });
 
   it("normalizes missing entry updatedAt before writing root and entry rows", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    await replaceSessionEntry(
-      {
-        agentId: "main",
-        env,
-        sessionKey: "agent:main:minimal",
-        storePath: paths.sqlitePath,
-      },
-      {
-        sessionId: "minimal-session",
-        sessionStartedAt: 123,
-      } as SessionEntry,
-    );
+    await replaceSessionEntry(scopeFor("agent:main:minimal"), {
+      sessionId: "minimal-session",
+      sessionStartedAt: 123,
+    } as SessionEntry);
 
-    const loaded = loadSessionEntry({
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:minimal",
-      storePath: paths.sqlitePath,
-    });
+    const loaded = loadSessionEntry(scopeFor("agent:main:minimal"));
     expect(loaded).toMatchObject({
       sessionId: "minimal-session",
       sessionStartedAt: 123,
       updatedAt: 123,
     });
 
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      env,
-      path: paths.sqlitePath,
-    });
+    const database = databaseFor();
     const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
@@ -2329,17 +1633,9 @@ describe("sqlite session normalization", () => {
       window_updated_at: 123,
     });
 
-    await upsertSessionEntryCore(
-      {
-        agentId: "main",
-        env,
-        sessionKey: "agent:main:minimal-upsert",
-        storePath: paths.sqlitePath,
-      },
-      {
-        sessionId: "minimal-upsert-session",
-      },
-    );
+    await upsertSessionEntryCore(scopeFor("agent:main:minimal-upsert"), {
+      sessionId: "minimal-upsert-session",
+    });
     const upsertRow = executeSqliteQueryTakeFirstSync(
       database.db,
       db

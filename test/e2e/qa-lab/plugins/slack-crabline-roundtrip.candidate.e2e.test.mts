@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -18,6 +17,8 @@ import {
   type MockOpenAiRequestSnapshot,
 } from "../../../../extensions/qa-lab/api.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPluginEntryObservation } from "../../../helpers/qa-plugin-entry-observation.js";
+import { json, pluginIdentity, sha256 } from "./candidate-test-support.js";
 
 let startedAdapter: StartedOpenClawCrablineAdapter | undefined;
 let retainedResources = false;
@@ -49,10 +50,6 @@ function required(name: string): string {
     throw new Error(`${name} is required for candidate proof`);
   }
   return value;
-}
-
-function sha256(bytes: Buffer | string): string {
-  return createHash("sha256").update(bytes).digest("hex");
 }
 
 type FailureDetails = { name: string; message: string; errors?: FailureDetails[] };
@@ -150,30 +147,7 @@ async function candidateIdentity() {
   return identity;
 }
 
-async function json<T>(url: string, signal: AbortSignal): Promise<T> {
-  const response = await fetch(url, { signal });
-  expect(response.ok).toBe(true);
-  return (await response.json()) as T;
-}
-
-async function slackRuntimeIdentity() {
-  const root = path.join(await fs.realpath(repoRoot), "dist/extensions/slack");
-  const packageBytes = await fs.readFile(path.join(root, "package.json"));
-  const pkg = JSON.parse(packageBytes.toString("utf8")) as {
-    name: string;
-    openclaw: { extensions: string[] };
-  };
-  expect(pkg.name).toBe("@openclaw/slack");
-  expect(pkg.openclaw.extensions).toEqual([expect.stringMatching(/^\.\/index\.(?:c|m)?js$/u)]);
-  const entry = await fs.realpath(path.resolve(root, pkg.openclaw.extensions[0]!));
-  expect(path.dirname(entry)).toBe(root);
-  return {
-    entry,
-    packageSha256: sha256(packageBytes),
-    entrySha256: sha256(await fs.readFile(entry)),
-    sourceSha256: sha256(await fs.readFile(path.join(repoRoot, "extensions/slack/index.ts"))),
-  };
-}
+const slackRuntimeIdentity = () => pluginIdentity(repoRoot, "slack");
 
 // These are separate test cells: a nonstreaming callback pass never qualifies defaults.
 it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
@@ -198,6 +172,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       // The packet supplies signed source identity; the capsule carrier HEAD is different.
       declaredSignedCommit,
     };
+    const proofIdentity = { mode, cell, identity, source };
     const evidence = await createEvidenceDirectory(cell);
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "slack-crabline-candidate-"));
     const gatewayOwner = createQaGatewayChild();
@@ -228,20 +203,46 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
     };
     const outbound = () =>
       bus.getSnapshot().messages.filter((message) => message.direction === "outbound");
+    const cursors = async (baseUrl: string) => ({
+      modelCursor: (await json<{ cursor: number }>(`${baseUrl}/debug/request-cursor`, signal))
+        .cursor,
+      recorderCursor: (await records()).length,
+      busCursor: outbound().length,
+    });
     const runBody = async () => {
       assertActive();
       startedAdapter = undefined;
-      transport = await createQaCrablineTransportAdapter({
+      const activeTransport = await createQaCrablineTransportAdapter({
         outputDir: directory,
         selection: resolveOpenClawCrablineChannelDriverSelection({ channel: "slack" }),
         state: bus,
       });
+      transport = activeTransport;
       assertActive();
       const adapter = capturedAdapter();
       if (!adapter || !adapter.bindGateway || adapter.manifest.provider !== "slack") {
         throw new Error("Installed public Slack adapter is missing its callback contract");
       }
       const manifest = adapter.manifest;
+      const sendProviderInbound = async (
+        input: Parameters<typeof adapter.createInbound>[0]["input"],
+      ) => {
+        const inbound = adapter.createInbound({ input });
+        // Register reply correlation before the public callback can produce a reply.
+        activeTransport.buildAgentDelivery({ target: inbound.qaTarget });
+        const response = await fetch(inbound.providerUrl, {
+          method: "POST",
+          headers: inbound.providerHeaders,
+          body: JSON.stringify(inbound.providerBody),
+          signal: AbortSignal.any([signal, fixture.signal]),
+        });
+        const body: unknown = await response.json();
+        expect(response.ok).toBe(true);
+        if (!isRecord(body) || !isRecord(body.message) || typeof body.message.ts !== "string") {
+          throw new Error("Crabline Slack inbound omitted its native message timestamp");
+        }
+        return { id: body.message.ts };
+      };
       const probe = await adapter.probe();
       if (!isRecord(probe) || typeof probe.user_id !== "string") {
         throw new Error("Slack auth.test did not return its native bot identity");
@@ -249,28 +250,32 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       const botUserId = probe.user_id;
       const nativeMessages = async (channel: string, threadId?: string) => {
         const method = threadId ? "conversations.replies" : "conversations.history";
-        const response = await fetch(`${manifest.endpoints.apiRoot}${method}`, {
+        const history = await json<{
+          ok: boolean;
+          messages: Array<{ ts: string; text: string; user: string; thread_ts?: string }>;
+        }>(`${manifest.endpoints.apiRoot}${method}`, signal, {
           method: "POST",
           headers: {
             "content-type": "application/json",
             authorization: `Bearer ${manifest.botToken}`,
           },
           body: JSON.stringify({ channel, ...(threadId ? { ts: threadId } : {}) }),
-          signal,
         });
-        expect(response.ok).toBe(true);
-        const history = (await response.json()) as {
-          ok: boolean;
-          messages: Array<{ ts: string; text: string; user: string; thread_ts?: string }>;
-        };
         expect(history.ok).toBe(true);
         return history.messages;
       };
       assertActive();
       mock = await startQaMockOpenAiServer();
+      const requestUrl = `${mock.baseUrl}/debug/requests?after=`;
+      const modelRequests = (cursor: number) =>
+        json<MockOpenAiRequestSnapshot[]>(requestUrl + cursor, signal);
       assertActive();
       const channelConfig = transport.createGatewayConfig({ baseUrl: mock.baseUrl });
       runtimeIdentity = await slackRuntimeIdentity();
+      const entryObservation = await createQaPluginEntryObservation({
+        directory,
+        entry: runtimeIdentity.entry,
+      });
       assertActive();
       gateway = await gatewayOwner.start({
         repoRoot,
@@ -283,6 +288,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         controlUiEnabled: false,
         enabledPluginIds: [...transport.requiredPluginIds],
         runtimeEnvPatch: transport.createRuntimeEnvPatch(),
+        runtimePreloads: [entryObservation.preloadUrl],
         mutateConfig: (cfg) => ({
           ...cfg,
           logging: { ...cfg.logging, level: "debug", consoleLevel: "debug" },
@@ -311,13 +317,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       assertActive();
       await transport.waitReady({ gateway });
       assertActive();
-      const loaded = [...gateway.logs().matchAll(/\[plugins\] loading slack from ([^\r\n]+)/gu)]
-        .at(-1)?.[1]
-        ?.trim();
-      if (!loaded) {
-        throw new Error("Gateway did not report its actual Slack executable entry");
-      }
-      expect(await fs.realpath(loaded)).toBe(runtimeIdentity.entry);
+      await entryObservation.verify(gateway.pid, runtimeIdentity.entrySha256);
       const slack = gateway.cfg.channels?.slack;
       const accounts = slack?.accounts ?? {};
       const key = Object.hasOwn(accounts, "default")
@@ -333,15 +333,10 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         streaming: { ...slack?.streaming, ...account?.streaming },
       };
 
-      const firstCursor = await json<{ cursor: number }>(
-        `${mock.baseUrl}/debug/request-cursor`,
-        signal,
-      );
-      const firstRecorderCursor = (await records()).length;
-      const firstBusCursor = outbound().length;
+      const first = await cursors(mock.baseUrl);
       const unboundMarker = "p03-unbound-no-replay";
       assertActive();
-      const unbound = await transport.sendInbound({
+      const unbound = await sendProviderInbound({
         conversation: { id: "D0000000001", kind: "direct" },
         senderId: "U0000000001",
         text: unboundMarker,
@@ -350,18 +345,11 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       expect(await nativeMessages("D0000000001")).toEqual([
         expect.objectContaining({ ts: unbound.id, text: unboundMarker, user: "U0000000001" }),
       ]);
-      await transport.waitForNoOutbound({ sinceIndex: firstBusCursor });
-      expect(
-        await json<MockOpenAiRequestSnapshot[]>(
-          `${mock.baseUrl}/debug/requests?after=${firstCursor.cursor}`,
-          signal,
-        ),
-      ).toEqual([]);
+      await transport.waitForNoOutbound({ sinceIndex: first.busCursor });
+      expect(await modelRequests(first.modelCursor)).toEqual([]);
       cells.push({
         kind: "unbound",
-        modelCursor: firstCursor.cursor,
-        recorderCursor: firstRecorderCursor,
-        busCursor: firstBusCursor,
+        ...first,
         inboundId: unbound.id,
         nativeCommitted: true,
       });
@@ -379,14 +367,9 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         : (["dm"] as const)) {
         const marker = `p03-${mode}-${kind}`;
         const reply = `callback-${kind}-reply`;
-        const modelCursor = await json<{ cursor: number }>(
-          `${mock.baseUrl}/debug/request-cursor`,
-          signal,
-        );
-        const recorderCursor = (await records()).length;
-        const busCursor = outbound().length;
+        const cursor = await cursors(mock.baseUrl);
         assertActive();
-        const inbound = await transport.sendInbound({
+        const inbound = await sendProviderInbound({
           conversation: { id: "D0000000002", kind: "direct" },
           senderId: "U0000000001",
           text: `${marker}: reply exactly \`${reply}\``,
@@ -395,24 +378,19 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         expect(inbound.id).toMatch(/^\d+\.\d+$/u);
         const normalized = await transport.waitForOutbound({
           conversation: { id: "D0000000002", kind: "direct" },
-          sinceIndex: busCursor,
+          sinceIndex: cursor.busCursor,
           textIncludes: reply,
           ...(kind === "thread" ? { threadId: parentId } : {}),
           timeoutMs: 45_000,
         });
-        expect(normalized.text).toBe(reply);
+        expect(normalized).toMatchObject({ text: reply, accountId: "default" });
         expect(normalized.id).not.toBe("");
-        expect(normalized.accountId).toBe("default");
-        const requests = await json<MockOpenAiRequestSnapshot[]>(
-          `${mock.baseUrl}/debug/requests?after=${modelCursor.cursor}`,
-          signal,
-        );
+        const requests = await modelRequests(cursor.modelCursor);
         const ownRequests = requests.filter((entry) => entry.allInputText.includes(marker));
-        expect(ownRequests).toHaveLength(1);
-        expect(ownRequests[0]!.outcome).toBe("success");
+        expect(ownRequests).toMatchObject([{ outcome: "success" }]);
         expect(requests.every((entry) => !entry.allInputText.includes(unboundMarker))).toBe(true);
         const posts = (await records())
-          .slice(recorderCursor)
+          .slice(cursor.recorderCursor)
           .filter(
             (event) =>
               event.method === "POST" &&
@@ -431,15 +409,15 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
           kind === "thread" ? parentId : undefined,
         );
         const nativeReply = history.find((message) => message.text === reply);
-        expect(nativeReply?.ts).toMatch(/^\d+\.\d+$/u);
-        expect(nativeReply?.user).toBe(botUserId);
+        expect(nativeReply).toMatchObject({
+          ts: expect.stringMatching(/^\d+\.\d+$/u),
+          user: botUserId,
+        });
         expect(nativeReply?.thread_ts).toBe(kind === "thread" ? parentId : undefined);
         expect(normalized.threadId).toBe(kind === "thread" ? parentId : undefined);
         cells.push({
           kind,
-          modelCursor: modelCursor.cursor,
-          recorderCursor,
-          busCursor,
+          ...cursor,
           inboundId: inbound.id,
           nativeReplyId: nativeReply?.ts,
           normalizedId: normalized.id,
@@ -447,10 +425,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         });
         parentId ??= inbound.id;
       }
-      const allRequests = await json<MockOpenAiRequestSnapshot[]>(
-        `${mock.baseUrl}/debug/requests?after=${firstCursor.cursor}`,
-        signal,
-      );
+      const allRequests = await modelRequests(first.modelCursor);
       expect(allRequests.every((entry) => !entry.allInputText.includes(unboundMarker))).toBe(true);
       completed = true;
     };
@@ -472,11 +447,8 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         observeCleanup("snapshot", async () => {
           snapshot = {
             proof: "slack-public-callback-candidate",
-            mode,
-            cell,
+            ...proofIdentity,
             completed,
-            identity,
-            source,
             effectiveConfig,
             cells: cells.map((entry) => Object.assign({}, entry)),
             artifactDirectory: directory,
@@ -560,30 +532,31 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         }),
         async () => {
           retainedResources = !(stopped && transportClosed && providerClosed);
+          const closure = { stopped, transportClosed, providerClosed };
           // The runner deletes its temporary namespace after this callback returns.
           // Copy only after every writer owner has actually completed its close.
           const retentionErrors: unknown[] = [];
-          try {
+          const retain = async (operation: () => unknown) => {
+            try {
+              await operation();
+            } catch (error) {
+              retentionErrors.push(error);
+            }
+          };
+          await retain(() => {
             console.log(
               JSON.stringify({
                 artifactDirectory: directory,
-                stopped,
-                transportClosed,
-                providerClosed,
+                ...closure,
                 bodyFailure:
                   bodyFailure instanceof Error
-                    ? {
-                        name: bodyFailure.name,
-                        message: bodyFailure.message,
-                      }
+                    ? { name: bodyFailure.name, message: bodyFailure.message }
                     : (bodyFailure ?? null),
               }),
             );
-          } catch (error) {
-            retentionErrors.push(error);
-          }
+          });
           let raw: { file: string; bytes: number; sha256: string } | null = null;
-          try {
+          await retain(async () => {
             if (retainedResources) {
               throw new Error("Recorder retention requires confirmed owner closures");
             }
@@ -608,10 +581,8 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
               },
               () => retained.close(),
             );
-          } catch (error) {
-            retentionErrors.push(error);
-          }
-          try {
+          });
+          await retain(async () => {
             await evidence.verify();
             const receipt = await fs.open(path.join(evidence.directory, "cell.json"), "wx", 0o600);
             await runQaGatewayFixture(
@@ -619,12 +590,9 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
                 await receipt.writeFile(
                   JSON.stringify({
                     ...snapshot,
-                    cell,
-                    mode,
-                    identity,
-                    source,
+                    ...proofIdentity,
                     completed,
-                    closure: { stopped, transportClosed, providerClosed },
+                    closure,
                     raw,
                     bodyFailure: bodyFailure === undefined ? null : errorDetails(bodyFailure),
                     cleanupErrors,
@@ -635,9 +603,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
               },
               () => receipt.close(),
             );
-          } catch (error) {
-            retentionErrors.push(error);
-          }
+          });
           if (retentionErrors.length) {
             throw new AggregateError(retentionErrors, "Candidate evidence retention failed");
           }

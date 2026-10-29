@@ -14,37 +14,21 @@ import { resolveDefaultAgentBoundAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramAccountConfig } from "./account-config.js";
 
-function resolveBindingAccount(params: {
-  binding: unknown;
-  channelId: string;
-}): { accountId: string } | null {
-  if (!params.binding || typeof params.binding !== "object") {
+function resolveTelegramBindingAccountId(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
     return null;
   }
-  const binding = params.binding as {
+  const binding = value as {
     match?: { channel?: unknown; accountId?: unknown };
   };
-  if (normalizeLowercaseStringOrEmpty(binding.match?.channel) !== params.channelId) {
+  if (normalizeLowercaseStringOrEmpty(binding.match?.channel) !== "telegram") {
     return null;
   }
   const accountId = typeof binding.match?.accountId === "string" ? binding.match.accountId : "";
   if (!accountId.trim() || accountId.trim() === "*") {
     return null;
   }
-  return {
-    accountId: normalizeAccountId(accountId),
-  };
-}
-
-function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
-  const ids = new Set<string>();
-  for (const binding of cfg.bindings ?? []) {
-    const resolved = resolveBindingAccount({ binding, channelId });
-    if (resolved) {
-      ids.add(resolved.accountId);
-    }
-  }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
+  return normalizeAccountId(accountId);
 }
 
 export function hasTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): boolean {
@@ -56,10 +40,7 @@ export function hasTelegramAccountConfig(cfg: OpenClawConfig, accountId: string)
   if (
     normalized !== DEFAULT_ACCOUNT_ID &&
     (Object.keys(channel?.accounts ?? {}).length > 0 ||
-      !cfg.bindings?.some(
-        (binding) =>
-          resolveBindingAccount({ binding, channelId: "telegram" })?.accountId === normalized,
-      ))
+      !cfg.bindings?.some((binding) => resolveTelegramBindingAccountId(binding) === normalized))
   ) {
     return false;
   }
@@ -72,7 +53,12 @@ export function hasTelegramAccountConfig(cfg: OpenClawConfig, accountId: string)
 
 const { listAccountIds: listTelegramAccountIds } = createAccountListHelpers("telegram", {
   normalizeAccountId,
-  additionalAccountIds: (cfg) => listBoundAccountIds(cfg, "telegram"),
+  additionalAccountIds: (cfg) =>
+    [
+      ...new Set(
+        (cfg.bindings ?? []).map(resolveTelegramBindingAccountId).filter((id) => id !== null),
+      ),
+    ].toSorted((left, right) => left.localeCompare(right)),
   hasImplicitDefaultAccount: (cfg) => hasTelegramAccountConfig(cfg, DEFAULT_ACCOUNT_ID),
 });
 
@@ -80,7 +66,6 @@ export { listTelegramAccountIds };
 
 export function resolveDefaultTelegramAccountSelection(cfg: OpenClawConfig): {
   accountId: string;
-  accountIds: string[];
   shouldWarnMissingDefault: boolean;
 } {
   // Explicit fleets use channel defaults, not a retained legacy migration owner.
@@ -91,7 +76,6 @@ export function resolveDefaultTelegramAccountSelection(cfg: OpenClawConfig): {
   if (boundDefault) {
     return {
       accountId: boundDefault,
-      accountIds: listTelegramAccountIds(cfg),
       shouldWarnMissingDefault: false,
     };
   }
@@ -107,7 +91,6 @@ export function resolveDefaultTelegramAccountSelection(cfg: OpenClawConfig): {
   });
   return {
     accountId: resolved,
-    accountIds,
     shouldWarnMissingDefault:
       resolved === accountIds[0] &&
       !hasExplicitDefaultAccount &&

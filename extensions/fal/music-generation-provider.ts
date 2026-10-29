@@ -1,4 +1,3 @@
-// Fal provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   downloadGeneratedMusicAsset,
@@ -6,13 +5,9 @@ import {
   type MusicGenerationProvider,
   type MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  readProviderJsonResponse,
-} from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
+import { postJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
 
 const DEFAULT_FAL_MUSIC_MODEL = "fal-ai/minimax-music/v2.6";
@@ -26,12 +21,29 @@ const FAL_MUSIC_MODELS = [
   FAL_STABLE_AUDIO_MODEL,
 ] as const;
 
-function resolveFalMusicModel(model: string | undefined): string {
-  return normalizeOptionalString(model) ?? DEFAULT_FAL_MUSIC_MODEL;
-}
-
-function buildFalMinimaxBody(req: MusicGenerationRequest): Record<string, unknown> {
+function buildFalMusicRequestBody(
+  req: MusicGenerationRequest,
+  model: string,
+): Record<string, unknown> {
   const lyrics = normalizeOptionalString(req.lyrics);
+  if (model === FAL_ACE_STEP_MODEL || model === FAL_STABLE_AUDIO_MODEL) {
+    const isStableAudio = model === FAL_STABLE_AUDIO_MODEL;
+    if (lyrics) {
+      throw new Error(
+        `fal ${isStableAudio ? "Stable Audio" : "ACE-Step"} music generation does not support explicit lyrics.`,
+      );
+    }
+    if (isStableAudio && req.instrumental === true) {
+      throw new Error("fal Stable Audio music generation does not support instrumental mode.");
+    }
+    return {
+      prompt: req.prompt,
+      ...(req.instrumental === true ? { instrumental: true } : {}),
+      ...(req.durationSeconds !== undefined
+        ? { [isStableAudio ? "seconds_total" : "duration"]: req.durationSeconds }
+        : {}),
+    };
+  }
   if (lyrics && req.instrumental === true) {
     throw new Error("fal MiniMax music generation cannot use lyrics when instrumental=true.");
   }
@@ -40,7 +52,7 @@ function buildFalMinimaxBody(req: MusicGenerationRequest): Record<string, unknow
     ...(lyrics ? { lyrics } : {}),
     ...(req.instrumental === true ? { is_instrumental: true } : {}),
     ...(!lyrics && req.instrumental !== true ? { lyrics_optimizer: true } : {}),
-    ...(typeof req.durationSeconds === "number" ? { duration: req.durationSeconds } : {}),
+    ...(req.durationSeconds !== undefined ? { duration: req.durationSeconds } : {}),
     audio_setting: {
       sample_rate: 44_100,
       bitrate: 256_000,
@@ -49,64 +61,13 @@ function buildFalMinimaxBody(req: MusicGenerationRequest): Record<string, unknow
   };
 }
 
-function buildFalAceStepBody(req: MusicGenerationRequest): Record<string, unknown> {
-  if (normalizeOptionalString(req.lyrics)) {
-    throw new Error("fal ACE-Step music generation does not support explicit lyrics.");
-  }
-  return {
-    prompt: req.prompt,
-    ...(req.instrumental === true ? { instrumental: true } : {}),
-    ...(typeof req.durationSeconds === "number" ? { duration: req.durationSeconds } : {}),
-  };
-}
-
-function buildFalStableAudioBody(req: MusicGenerationRequest): Record<string, unknown> {
-  if (normalizeOptionalString(req.lyrics)) {
-    throw new Error("fal Stable Audio music generation does not support explicit lyrics.");
-  }
-  if (req.instrumental === true) {
-    throw new Error("fal Stable Audio music generation does not support instrumental mode.");
-  }
-  return {
-    prompt: req.prompt,
-    ...(typeof req.durationSeconds === "number" ? { seconds_total: req.durationSeconds } : {}),
-  };
-}
-
-function buildFalMusicRequestBody(
-  req: MusicGenerationRequest,
-  model: string,
-): Record<string, unknown> {
-  if (model === FAL_ACE_STEP_MODEL) {
-    return buildFalAceStepBody(req);
-  }
-  if (model === FAL_STABLE_AUDIO_MODEL) {
-    return buildFalStableAudioBody(req);
-  }
-  return buildFalMinimaxBody(req);
-}
-
-function resolveFalMusicMetadata(payload: unknown): Record<string, unknown> | undefined {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return undefined;
-  }
-  const metadata: Record<string, unknown> = {};
-  for (const key of ["seed", "tags"]) {
-    const value = (payload as Record<string, unknown>)[key];
-    if (value !== undefined && value !== null) {
-      metadata[key] = value;
-    }
-  }
-  return Object.keys(metadata).length > 0 ? metadata : undefined;
-}
-
 export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
   return {
     id: "fal",
     label: "fal",
     defaultModel: DEFAULT_FAL_MUSIC_MODEL,
     models: [...FAL_MUSIC_MODELS],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "fal", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "fal", ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,
@@ -140,8 +101,8 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
 
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveFalHttpRequestConfig({ req, capability: "audio" });
-      const model = resolveFalMusicModel(req.model);
-      const { response, release } = await postJsonRequest({
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_FAL_MUSIC_MODEL;
+      const payload = await postJsonResponse<unknown>({
         url: `${baseUrl}/${model}`,
         headers,
         body: buildFalMusicRequestBody(req, model),
@@ -149,44 +110,44 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
         fetchFn: fetch,
         allowPrivateNetwork,
         dispatcherPolicy,
+        errorLabel: "fal music generation failed",
+        responseLabel: "fal music generation",
       });
-
-      try {
-        await assertOkOrThrowHttpError(response, "fal music generation failed");
-        const payload = await readProviderJsonResponse<unknown>(response, "fal music generation");
-        const [candidate] = extractGeneratedMusicFileCandidates(payload);
-        if (!candidate) {
-          throw new Error("fal music generation response missing audio output");
-        }
-        const track = await downloadGeneratedMusicAsset({
-          candidate,
-          timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          fetchFn: fetch,
-          provider: "fal",
-          requestFailedMessage: "fal generated music download failed",
-          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-        });
-        const lyrics =
-          typeof payload === "object" && payload && !Array.isArray(payload)
-            ? normalizeOptionalString((payload as Record<string, unknown>).lyrics)
-            : undefined;
-        return {
-          tracks: [track],
-          model,
-          ...(lyrics ? { lyrics: [lyrics] } : {}),
-          metadata: {
-            ...resolveFalMusicMetadata(payload),
-            ...(track.metadata?.url ? { audioUrl: track.metadata.url } : {}),
-            instrumental: req.instrumental === true,
-            ...(req.format ? { requestedFormat: req.format } : {}),
-            ...(typeof req.durationSeconds === "number"
-              ? { requestedDurationSeconds: req.durationSeconds }
-              : {}),
-          },
-        };
-      } finally {
-        await release();
+      const [candidate] = extractGeneratedMusicFileCandidates(payload);
+      if (!candidate) {
+        throw new Error("fal music generation response missing audio output");
       }
+      const track = await downloadGeneratedMusicAsset({
+        candidate,
+        timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        fetchFn: fetch,
+        provider: "fal",
+        requestFailedMessage: "fal generated music download failed",
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+      });
+      const record = isRecord(payload) ? payload : undefined;
+      const lyrics = normalizeOptionalString(record?.lyrics);
+      const metadata: Record<string, unknown> = {};
+      for (const key of ["seed", "tags"]) {
+        const value = record?.[key];
+        if (value !== undefined && value !== null) {
+          metadata[key] = value;
+        }
+      }
+      return {
+        tracks: [track],
+        model,
+        ...(lyrics ? { lyrics: [lyrics] } : {}),
+        metadata: {
+          ...metadata,
+          ...(track.metadata?.url ? { audioUrl: track.metadata.url } : {}),
+          instrumental: req.instrumental === true,
+          ...(req.format ? { requestedFormat: req.format } : {}),
+          ...(req.durationSeconds !== undefined
+            ? { requestedDurationSeconds: req.durationSeconds }
+            : {}),
+        },
+      };
     },
   };
 }

@@ -1,5 +1,4 @@
 // Provides SQLite transaction helpers with nested savepoints.
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
@@ -8,11 +7,8 @@ import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsyste
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // The cache-state module keeps this lifecycle edge off the kysely value graph
 // so cold control-plane paths using transactions do not load kysely.
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  executeWithCachedStatement,
-} from "./kysely-sync-cache-state.js";
-import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
+import { isPostgresSqlConnection, type PostgresSqlConnection } from "./sql-connection.js";
 import {
   readSqliteBusyTimeout,
   runWithSqliteBusyTimeout,
@@ -24,7 +20,18 @@ import {
   sqliteExtendedResultCode,
   sqlitePrimaryResultCode,
 } from "./sqlite-error-diagnostics.js";
-import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
+import {
+  discardSqliteTransactionState,
+  prepareSqliteTransactionCommit,
+  withSqlitePostCommitPublications,
+} from "./sqlite-post-commit.js";
+import {
+  captureSqliteReaderOwner,
+  currentSqliteOperationTiming,
+} from "./sqlite-reader-lifecycle.js";
+import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
+import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
+import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
 
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
@@ -36,7 +43,10 @@ type TransactionDatabase = DatabaseSync & {
   [abortedTransactionSymbol]?: { error: unknown };
 };
 
-export function assertTransactionUsable(db: TransactionDatabase): void {
+export function assertTransactionUsable(db: TransactionDatabase | PostgresSqlConnection): void {
+  if (isPostgresSqlConnection(db)) {
+    return;
+  }
   const aborted = db[abortedTransactionSymbol];
   if (aborted) {
     throw aborted.error;
@@ -57,15 +67,9 @@ function writeAdmissionLocation(database: DatabaseSync): string | null {
   }
   // A native handle's filename is stable; normalize namespace aliases once, without filesystem IO.
   const location = database.location();
-  const canonical = location === null ? null : normalizeWriteAdmissionLocation(location);
+  const canonical = location === null ? null : normalizeDatabasePath(location);
   writeAdmissionLocations.set(database, canonical);
   return canonical;
-}
-
-function normalizeWriteAdmissionLocation(location: string): string {
-  const normalized =
-    process.platform === "win32" ? normalizeWindowsPathPreservingCase(location) : location;
-  return process.platform === "win32" && !path.win32.isAbsolute(normalized) ? location : normalized;
 }
 
 /** Keep worker-owned lock holders serviceable across connections and module graphs. */
@@ -91,7 +95,7 @@ export function retainSqliteWriteAdmissionService(
   nativeLocations: readonly string[],
   service: () => void,
 ): () => void {
-  const locations = new Set(nativeLocations.map(normalizeWriteAdmissionLocation));
+  const locations = new Set(nativeLocations.map(normalizeDatabasePath));
   const registrations = [...locations].map((location) => {
     const services = writeAdmissionServices.get(location) ?? new Set<() => void>();
     // Separate reservations remain valid when the same owner retains two operations.
@@ -108,13 +112,6 @@ export function retainSqliteWriteAdmissionService(
       }
     }
   };
-}
-
-/** Native coordinator waits must keep the same worker's current-authority grants serviceable. */
-export function sqliteWriteAdmissionServicesForLocation(
-  location: string,
-): ReadonlySet<() => void> | undefined {
-  return writeAdmissionServices.get(normalizeWriteAdmissionLocation(location));
 }
 
 type SqliteBeginAdmissionDiagnostics = {
@@ -178,8 +175,12 @@ function beginImmediateTransaction(
 export type SqliteTransactionOptions = {
   /** Already-started BEGIN budget, carried between workers in the same process. */
   beginDeadlineNs?: bigint;
+  /** An outer owner handles nonblocking admission failures. */
+  beginLockFailureReporting?: "suppress";
   busyTimeoutMs?: number;
   databaseLabel?: string;
+  /** Prepared identifiers and counts only; never transcript or session payloads. */
+  diagnosticContext?: Readonly<Record<string, string | number | boolean | null | undefined>>;
   logger?: Pick<SubsystemLogger, "warn">;
   operationLabel?: string;
   slowTransactionHoldMs?: number;
@@ -205,91 +206,67 @@ function slowBusyWaitThresholdMs(options: SqliteTransactionOptions | undefined):
   return Math.min(DEFAULT_SLOW_BUSY_WAIT_MS, options.busyTimeoutMs);
 }
 
-function slowTransactionHoldThresholdMs(options: SqliteTransactionOptions | undefined): number {
-  return options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS;
-}
-
-function transactionLogger(
-  options: SqliteTransactionOptions | undefined,
-): Pick<SubsystemLogger, "warn"> {
-  return options?.logger ?? transactionLog;
-}
-
-function logSlowTransactionHold(params: {
-  elapsedMs: number;
-  options?: SqliteTransactionOptions;
-}): void {
-  if (params.elapsedMs < slowTransactionHoldThresholdMs(params.options)) {
-    return;
+function transactionDiagnosticLabels(
+  db: DatabaseSync | undefined,
+  options:
+    | Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel" | "diagnosticContext">
+    | undefined,
+) {
+  let database = options?.databaseLabel;
+  if (!database) {
+    try {
+      database = db ? (db.location() ?? ":memory:") : "unavailable";
+    } catch {
+      // Failed rollback may have retired the native connection before reporting its hold.
+      database = "unavailable";
+    }
   }
-  transactionLogger(params.options).warn("slow SQLite transaction hold", {
-    async: false,
-    ...(params.options?.databaseLabel ? { database: params.options.databaseLabel } : {}),
-    elapsedMs: params.elapsedMs,
-    isMainThread,
-    ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
-    pid: process.pid,
-    threadId,
-    thresholdMs: slowTransactionHoldThresholdMs(params.options),
-  });
+  return {
+    database,
+    operation: options?.operationLabel || captureSqliteReaderOwner()?.operation || "unlabeled",
+    ...(options?.diagnosticContext ? { context: { ...options.diagnosticContext } } : {}),
+  };
 }
 
-/** The lifecycle lock precedes BEGIN, so transaction hold diagnostics cannot see this wait. */
-export function logSlowSqliteCoordinatorWait(
-  elapsedMs: number,
-  options: Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel">,
+function logTransactionStep(
+  params: {
+    beginAdmission?: SqliteBeginAdmissionDiagnostics;
+    db: DatabaseSync;
+    elapsedMs: number;
+    options?: SqliteTransactionOptions;
+    step: SqliteTransactionStep;
+  },
+  failure?: { error: unknown },
 ): void {
-  if (!isMainThread || elapsedMs <= 100) {
-    return;
+  try {
+    if (!failure && params.elapsedMs < slowBusyWaitThresholdMs(params.options)) {
+      return;
+    }
+    const sqliteErrcode = failure ? sqliteExtendedResultCode(failure.error) : undefined;
+    const sqlitePrimaryCode = failure ? sqlitePrimaryResultCode(failure.error) : undefined;
+    (params.options?.logger ?? transactionLog).warn(
+      failure ? "SQLite transaction lock wait failed" : "slow SQLite transaction step",
+      {
+        async: false,
+        ...(params.options?.busyTimeoutMs !== undefined
+          ? { busyTimeoutMs: params.options.busyTimeoutMs }
+          : {}),
+        ...transactionDiagnosticLabels(params.db, params.options),
+        ...(failure ? { code: sqliteErrorCode(failure.error) } : {}),
+        elapsedMs: params.elapsedMs,
+        ...(failure ? { failureKind: "lock-contention" } : {}),
+        isMainThread,
+        pid: process.pid,
+        ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
+        ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
+        step: params.step,
+        threadId,
+        ...(params.beginAdmission ? { beginAdmission: { ...params.beginAdmission } } : {}),
+      },
+    );
+  } catch {
+    // Diagnostics cannot change transaction outcomes or replace the native failure.
   }
-  transactionLogger(undefined).warn("slow SQLite coordinator lock wait", {
-    async: false,
-    database: options.databaseLabel,
-    elapsedMs,
-    isMainThread,
-    operation: options.operationLabel,
-    pid: process.pid,
-    threadId,
-    thresholdMs: 100,
-  });
-}
-
-function logSlowTransactionStep(params: {
-  beginAdmission?: SqliteBeginAdmissionDiagnostics;
-  elapsedMs: number;
-  options?: SqliteTransactionOptions;
-  step: SqliteTransactionStep;
-}): void {
-  if (params.elapsedMs < slowBusyWaitThresholdMs(params.options)) {
-    return;
-  }
-  transactionLogger(params.options).warn("slow SQLite transaction step", {
-    async: false,
-    ...(params.options?.busyTimeoutMs !== undefined
-      ? { busyTimeoutMs: params.options.busyTimeoutMs }
-      : {}),
-    ...(params.options?.databaseLabel ? { database: params.options.databaseLabel } : {}),
-    elapsedMs: params.elapsedMs,
-    isMainThread,
-    ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
-    pid: process.pid,
-    step: params.step,
-    threadId,
-    ...beginAdmissionLogFields(params.beginAdmission),
-  });
-}
-
-function beginAdmissionLogFields(diagnostics: SqliteBeginAdmissionDiagnostics | undefined) {
-  return diagnostics
-    ? {
-        beginAdmission: {
-          nativeAttempts: diagnostics.nativeAttempts,
-          nativeMs: diagnostics.nativeMs,
-          serviceCalls: diagnostics.serviceCalls,
-          serviceMs: diagnostics.serviceMs,
-        },
-      }
-    : {};
 }
 
 function execTimedTransactionStep(params: {
@@ -310,8 +287,9 @@ function execTimedTransactionStep(params: {
       params.db.exec(params.sql);
     }
     const elapsedMs = Date.now() - startedAt;
-    logSlowTransactionStep({
+    logTransactionStep({
       beginAdmission,
+      db: params.db,
       elapsedMs,
       options: params.options,
       step: params.step,
@@ -319,71 +297,55 @@ function execTimedTransactionStep(params: {
     return elapsedMs;
   } catch (error) {
     const elapsedMs = Date.now() - startedAt;
-    if (isSqliteLockError(error) && shouldReportSqliteLockFailure(params.db)) {
-      const sqliteErrcode = sqliteExtendedResultCode(error);
-      const sqlitePrimaryCode = sqlitePrimaryResultCode(error);
-      transactionLogger(params.options).warn("SQLite transaction lock wait failed", {
-        async: false,
-        ...(params.options?.busyTimeoutMs !== undefined
-          ? { busyTimeoutMs: params.options.busyTimeoutMs }
-          : {}),
-        ...(params.options?.databaseLabel ? { database: params.options.databaseLabel } : {}),
-        code: sqliteErrorCode(error),
-        elapsedMs,
-        failureKind: "lock-contention",
-        isMainThread,
-        ...(params.options?.operationLabel ? { operation: params.options.operationLabel } : {}),
-        pid: process.pid,
-        ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
-        ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
-        step: params.step,
-        threadId,
-        ...beginAdmissionLogFields(beginAdmission),
-      });
+    if (
+      isSqliteLockError(error) &&
+      shouldReportSqliteLockFailure(params.db) &&
+      !(params.step === "begin" && params.options?.beginLockFailureReporting === "suppress")
+    ) {
+      logTransactionStep(
+        { beginAdmission, db: params.db, elapsedMs, options: params.options, step: params.step },
+        { error },
+      );
     }
     throw error;
   }
 }
 
-function beginTransaction(
-  db: DatabaseSync,
-  options: SqliteTransactionOptions | undefined,
-  mode: SqliteTransactionMode,
-): void {
-  execTimedTransactionStep({
-    db,
-    options,
-    sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
-    step: "begin",
-  });
-}
-
-function commitImmediateTransaction(
-  db: DatabaseSync,
-  options: SqliteTransactionOptions | undefined,
-): void {
-  execTimedTransactionStep({
-    db,
-    options,
-    sql: "COMMIT",
-    step: "commit",
-  });
-}
-
 function discardUnsafeConnection(db: TransactionDatabase, error: unknown): void {
-  db[abortedTransactionSymbol] ??= { error };
-  discardSqliteTransactionState(db, error);
-  clearNodeSqliteKyselyCacheForDatabase(db);
+  const aborted = { error };
+  db[abortedTransactionSymbol] ??= aborted;
   try {
-    db.close();
-  } catch {
-    // Preserve the primary failure. The transaction helper also refuses reuse
-    // if the handle was already closed or a lifecycle close hook failed.
+    discardSqliteTransactionState(db, error);
+  } catch (rollbackError) {
+    // Retain this failure's observer aggregate across outer and future admission checks.
+    if (db[abortedTransactionSymbol] === aborted) {
+      aborted.error = rollbackError;
+    }
+    throw rollbackError;
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(db);
+    try {
+      db.close();
+    } catch {
+      // Preserve the primary failure. The transaction helper also refuses reuse
+      // if the handle was already closed or a lifecycle close hook failed.
+    }
   }
 }
 
-function abortImmediateTransaction(db: TransactionDatabase, error: unknown): void {
+function abortImmediateTransaction(
+  db: TransactionDatabase,
+  error: unknown,
+  commitStarted: boolean,
+): void {
   if (db[abortedTransactionSymbol]) {
+    return;
+  }
+  // SQLITE_IOERR/FULL can roll back an operation before commit starts. Once
+  // the commit owner runs, no transaction may instead mean a durable COMMIT
+  // followed by a guard failure or rejected Promise: retain conservative fencing.
+  if (!commitStarted && db.isOpen && !db.isTransaction) {
+    discardSqliteTransactionState(db, error, "rolled-back");
     return;
   }
   try {
@@ -400,13 +362,12 @@ function runSqliteTransactionSync<T>(
   mode: SqliteTransactionMode,
   options?: SqliteTransactionOptions,
 ): T {
-  assertTransactionUsable(db);
   if (db.isTransaction) {
     // SQLite targets the most recent matching savepoint. Reusing its name keeps
     // nested native/SDK calls correct without module-local depth or counters.
     db.exec("SAVEPOINT openclaw_tx_nested");
     try {
-      const result = operation();
+      const result = runSqliteReadOperationSync(db, operation);
       assertSyncTransactionResult(result);
       assertTransactionUsable(db);
       db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
@@ -428,88 +389,285 @@ function runSqliteTransactionSync<T>(
     }
   }
 
-  beginTransaction(db, options, mode);
+  const timing = currentSqliteOperationTiming();
+  const prepareMs = timing ? Date.now() - timing.preparedAtMs : undefined;
+  const beginMs = execTimedTransactionStep({
+    db,
+    options,
+    sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
+    step: "begin",
+  });
+  if (timing) {
+    timing.transactions.count += 1;
+  }
+  return settleSqliteTransactionSync(db, operation, mode, beginMs, prepareMs, options);
+}
+
+/** Settle a reservation acquired by the closed, multi-database worker fence. */
+export function runSqliteReservedTransactionSync<T>(
+  db: DatabaseSync | PostgresSqlConnection,
+  operation: () => T,
+  options: SqliteTransactionOptions,
+): T {
+  if (isPostgresSqlConnection(db)) {
+    return db.runTransaction(operation, options, false, true);
+  }
+  assertTransactionUsable(db);
+  if (isMainThread || !db.isTransaction) {
+    throw new Error("SQLite reserved settlement requires a worker-owned transaction");
+  }
+  return settleSqliteTransactionSync(db, operation, "immediate", 0, undefined, options, true);
+}
+
+function settleSqliteTransactionSync<T>(
+  db: TransactionDatabase,
+  operation: () => T,
+  mode: SqliteTransactionMode,
+  beginMs: number,
+  prepareMs: number | undefined,
+  options: SqliteTransactionOptions | undefined,
+  reservedSourceFence = false,
+): T {
+  const timing = currentSqliteOperationTiming();
   const transactionStartedAt = Date.now();
+  const admissionWaitBefore = timing?.hostAdmissionWaitMs ?? 0;
+  const databaseAdmissionWaitBefore = timing?.databaseAdmissionWaitMs ?? 0;
+  let commitMs = 0;
+  const commit = () => {
+    const startedAt = Date.now();
+    const databaseAdmissionWaitBeforeCommit = timing?.databaseAdmissionWaitMs ?? 0;
+    try {
+      prepareSqliteTransactionCommit(db);
+      execTimedTransactionStep({ db, options, sql: "COMMIT", step: "commit" });
+    } finally {
+      // Schema publication can exchange metadata during COMMIT; count that wait only once.
+      commitMs +=
+        Date.now() -
+        startedAt -
+        ((timing?.databaseAdmissionWaitMs ?? 0) - databaseAdmissionWaitBeforeCommit);
+    }
+  };
+  let commitStarted = false;
   try {
-    const result = operation();
+    // Share admitted schema inside rollback protection unless the source fence already owns it.
+    const result = reservedSourceFence ? operation() : runSqliteReadOperationSync(db, operation);
     assertSyncTransactionResult(result);
     assertTransactionUsable(db);
+    commitStarted = true;
     if (options?.withCommit) {
-      assertSyncTransactionResult(
-        options.withCommit(() => commitImmediateTransaction(db, options)),
-      );
+      assertSyncTransactionResult(options.withCommit(commit));
     } else {
-      commitImmediateTransaction(db, options);
+      commit();
     }
     return result;
   } catch (error) {
-    abortImmediateTransaction(db, error);
+    abortImmediateTransaction(db, error, commitStarted);
     assertTransactionUsable(db);
     throw error;
   } finally {
     // Include COMMIT and failed holders: both keep other writers waiting too.
     try {
-      logSlowTransactionHold({
-        elapsedMs: Date.now() - transactionStartedAt,
-        options,
-      });
+      const elapsedMs = Date.now() - transactionStartedAt;
+      const hostAdmissionWaitMs = (timing?.hostAdmissionWaitMs ?? 0) - admissionWaitBefore;
+      const databaseAdmissionWaitMs =
+        (timing?.databaseAdmissionWaitMs ?? 0) - databaseAdmissionWaitBefore;
+      if (!(elapsedMs < (options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS))) {
+        (options?.logger ?? transactionLog).warn("slow SQLite transaction hold", {
+          async: false,
+          callbackKind: "application-transaction",
+          ...transactionDiagnosticLabels(db, options),
+          elapsedMs,
+          phases: {
+            prepareMs,
+            beginMs,
+            // This legacy field includes application work between native statements.
+            sqlMs: Math.max(
+              0,
+              elapsedMs - hostAdmissionWaitMs - databaseAdmissionWaitMs - commitMs,
+            ),
+            hostAdmissionWaitMs,
+            databaseAdmissionWaitMs,
+            commitMs,
+          },
+          isMainThread,
+          mode,
+          pid: process.pid,
+          threadId,
+          thresholdMs: options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS,
+        });
+      }
     } catch {
       // Diagnostics cannot change an already-settled transaction's outcome.
+    } finally {
+      if (timing) {
+        timing.preparedAtMs = Date.now();
+      }
     }
   }
 }
 
 /** Run synchronous reads against one deferred SQLite snapshot. */
 export function runSqliteDeferredTransactionSync<T>(
-  db: DatabaseSync,
+  db: DatabaseSync | PostgresSqlConnection,
   operation: () => T,
   options?: SqliteTransactionOptions,
 ): T {
-  return runSqliteTransactionSync(db, operation, "deferred", options);
+  if (isPostgresSqlConnection(db)) {
+    return db.runTransaction(operation, options);
+  }
+  assertTransactionUsable(db);
+  return withSqlitePostCommitPublications(db, () =>
+    runSqliteTransactionSync(db, operation, "deferred", options),
+  );
 }
 
-/** Pin an implicit read snapshot without requiring transaction-control authorization. */
-export function runSqlitePinnedReadSnapshotSync<T>(db: DatabaseSync, operation: () => T): T {
-  return executeWithCachedStatement(db, "PRAGMA schema_version", [], (statement) => {
-    // sqlite-allow-raw: Stepping this pragma pins the connection's implicit read transaction.
-    const snapshot = statement.iterate();
-    try {
-      const first = snapshot.next();
-      if (first.done) {
-        throw new Error("SQLite schema version query returned no row");
-      }
-      return operation();
-    } finally {
-      snapshot.return?.();
+/** Read-only composition reuses the caller's snapshot and rollback owner. */
+export function runSqliteReadSnapshotSync<T>(
+  db: DatabaseSync | PostgresSqlConnection,
+  operation: () => T,
+  options?: SqliteTransactionOptions,
+): T {
+  if (isPostgresSqlConnection(db)) {
+    if (db.isTransaction) {
+      const result = operation();
+      assertSyncTransactionResult(result);
+      return result;
     }
-  });
+    return db.runTransaction(operation, options, true);
+  }
+  assertTransactionUsable(db);
+  if (!db.isTransaction) {
+    return runSqliteDeferredTransactionSync(db, operation, options);
+  }
+  const result = runSqliteReadOperationSync(db, operation);
+  assertSyncTransactionResult(result);
+  assertTransactionUsable(db);
+  return result;
 }
 
 export function runSqliteImmediateTransactionSync<T>(
-  db: DatabaseSync,
+  ...args: [
+    db: DatabaseSync | PostgresSqlConnection,
+    operation: () => T,
+    options?: SqliteTransactionOptions,
+  ]
+): T;
+export function runSqliteImmediateTransactionSync<T>(
+  ...args: [db: DatabaseSync, operation: () => T, options?: SqliteTransactionOptions]
+): T;
+export function runSqliteImmediateTransactionSync<T>(
+  db: DatabaseSync | PostgresSqlConnection,
   operation: () => T,
   options?: SqliteTransactionOptions,
 ): T {
-  return runSqliteTransactionSync(db, operation, "immediate", options);
+  if (isPostgresSqlConnection(db)) {
+    return db.runTransaction(operation, options);
+  }
+  assertTransactionUsable(db);
+  return withSqlitePostCommitPublications(db, () =>
+    runSqliteTransactionSync(db, operation, "immediate", options),
+  );
+}
+
+/**
+ * Execute one complete statement, then publish its receipts. Prepare inputs before
+ * calling; the callback must not do fallible work after the native statement.
+ * Existing transactions retain their savepoint and outer publication owner.
+ */
+export function runSqliteSingleStatementSync<T>(
+  db: DatabaseSync | PostgresSqlConnection,
+  statement: () => T,
+): T;
+export function runSqliteSingleStatementSync<T>(db: DatabaseSync, statement: () => T): T;
+export function runSqliteSingleStatementSync<T>(
+  db: DatabaseSync | PostgresSqlConnection,
+  statement: () => T,
+): T {
+  if (isPostgresSqlConnection(db)) {
+    // The store mutex also fences other connections' authority reads through
+    // commit (including agent retirement), so single writes must still join it.
+    return db.runTransaction(statement);
+  }
+  assertTransactionUsable(db);
+  return withSqlitePostCommitPublications(db, () => {
+    const location = writeAdmissionServices.size > 0 ? writeAdmissionLocation(db) : null;
+    // A worker can hold the writer lock while awaiting this host's commit grant.
+    // Reserve through the serviceable BEGIN owner before entering the callback.
+    if (db.isTransaction || (location !== null && writeAdmissionServices.has(location))) {
+      return runSqliteTransactionSync(db, statement, "immediate");
+    }
+    const result = runSqliteReadOperationSync(db, statement);
+    assertSyncTransactionResult(result);
+    return result;
+  });
+}
+
+/** Obtain host admission before taking the writer lock; revalidate before physical commit. */
+export function runSqliteWorkerTransactionSync<T>(
+  context: Omit<SqliteWorkerDatabaseContext, "database"> & {
+    database: DatabaseSync | PostgresSqlConnection;
+  },
+  operation: () => T,
+  options?: SqliteTransactionOptions,
+): T {
+  if (isPostgresSqlConnection(context.database)) {
+    context.admit("transaction");
+    return context.database.runTransaction(operation, {
+      ...options,
+      withCommit(commit) {
+        context.admit("commit");
+        return options?.withCommit ? options.withCommit(commit) : commit();
+      },
+    });
+  }
+  assertTransactionUsable(context.database);
+  context.admit("transaction");
+  return runSqliteImmediateTransactionSync(context.database, operation, {
+    ...options,
+    withCommit(commit) {
+      context.admit("commit");
+      return options?.withCommit ? options.withCommit(commit) : commit();
+    },
+  });
 }
 
 /** Prepare outside the transaction; yield for admission without replaying admitted writes. */
 export async function runSqliteImmediateTransaction<T>(
-  db: DatabaseSync,
+  db: DatabaseSync | PostgresSqlConnection,
   prepare: () => Promise<(() => T) | undefined>,
   options?: SqliteTransactionOptions,
   admit: (write: () => T) => T | Promise<T> = (write) => write(),
 ): Promise<T | undefined> {
+  if (isPostgresSqlConnection(db)) {
+    if (db.isTransaction) {
+      throw new Error("Asynchronous SQLite preparation cannot join an existing transaction");
+    }
+    const operation = await prepare();
+    if (db.isTransaction) {
+      throw new Error("SQLite preparation left a transaction open");
+    }
+    if (!operation) {
+      return undefined;
+    }
+    return await admit(() => {
+      if (db.isTransaction) {
+        throw new Error("Asynchronous SQLite preparation cannot join an existing transaction");
+      }
+      return db.runTransaction(operation, options);
+    });
+  }
   assertTransactionUsable(db);
   if (db.isTransaction) {
     throw new Error("Asynchronous SQLite preparation cannot join an existing transaction");
   }
-  const deadline = performance.now() + readSqliteBusyTimeout(db);
   const inheritedDeadlineNs = options?.beginDeadlineNs;
-  const remainingMs =
-    inheritedDeadlineNs === undefined
-      ? () => deadline - performance.now()
-      : () => Number(inheritedDeadlineNs - process.hrtime.bigint()) / 1_000_000;
+  const remainingMs = (() => {
+    if (inheritedDeadlineNs !== undefined) {
+      return () => Number(inheritedDeadlineNs - process.hrtime.bigint()) / 1_000_000;
+    }
+    const deadline = performance.now() + readSqliteBusyTimeout(db);
+    return () => deadline - performance.now();
+  })();
   let entered = false;
   while (true) {
     const operation = await prepare();

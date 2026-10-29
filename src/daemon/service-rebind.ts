@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { settleWithCleanup } from "../infra/error-graph-internal.js";
 import { readServiceFileState } from "./service-stage.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 
@@ -15,7 +16,6 @@ export type GatewayServiceRebindReceipt = {
 type RebindCapture = {
   before: string;
   runtimePinBefore?: string;
-  active: boolean;
   mutated?: true;
   refresh?: (assertCurrent: () => void) => Promise<void>;
   receipt?: GatewayServiceRebindReceipt;
@@ -56,17 +56,11 @@ export async function withGatewayServiceRebindCapture<T>(
   if (runtimePinBefore !== undefined && !/^[a-f0-9]{64}$/.test(runtimePinBefore)) {
     throw new Error("Invalid original runtime intent binding.");
   }
-  const capture: RebindCapture = { before, runtimePinBefore, active: true };
-  try {
-    return await captures.run(capture, operation);
-  } finally {
-    capture.active = false;
-  }
+  return await captures.run({ before, runtimePinBefore }, operation);
 }
 
 export function currentGatewayServiceRebindReceipt(): GatewayServiceRebindReceipt | undefined {
-  const capture = captures.getStore();
-  return capture?.active ? capture.receipt : undefined;
+  return captures.getStore()?.receipt;
 }
 
 /** Called under the final native operation lock, including the failing-install path. */
@@ -79,9 +73,6 @@ export async function captureGatewayServiceRebind<T>(
   const capture = captures.getStore();
   if (!capture) {
     return await mutate(false);
-  }
-  if (!capture.active || capture.refresh) {
-    throw new Error("Original service rebind interval is closed.");
   }
   const before = await fingerprintGatewayServiceDefinition(await read());
   assertCurrent();
@@ -96,9 +87,6 @@ export async function captureGatewayServiceRebind<T>(
   capture.refresh = async (assertFinalCurrent) => {
     // A failed read must never leave an earlier pre-compensation receipt usable.
     capture.receipt = undefined;
-    if (!capture.active) {
-      throw new Error("Original service rebind interval is closed.");
-    }
     assertFinalCurrent();
     const after = await fingerprintGatewayServiceDefinition(await read());
     assertFinalCurrent();
@@ -131,21 +119,9 @@ export async function settleGatewayServiceRebind<T>(
   if (!capture) {
     return await operation();
   }
-  const [outcome] = await Promise.allSettled([operation()]);
-  try {
-    await capture.refresh?.(assertCurrent);
-  } catch (error) {
-    if (outcome.status === "rejected") {
-      throw new AggregateError(
-        [outcome.reason, error],
-        "Service rebind settlement could not be verified.",
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-  if (outcome.status === "rejected") {
-    throw outcome.reason;
-  }
-  return outcome.value;
+  return settleWithCleanup(
+    operation(),
+    () => capture.refresh?.(assertCurrent),
+    "Service rebind settlement could not be verified.",
+  );
 }

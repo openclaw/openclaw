@@ -3,10 +3,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import {
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
@@ -26,8 +26,8 @@ import { readSessionMessagesMatchingIdAsync } from "./session-transcript-readers
 
 it.runIf(process.env.OPENCLAW_HISTORY_COLD_BENCH === "1")(
   "measures cold chat.history and repeated exact message lookup caller CPU",
-  async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const scope = {
         agentId: "main",
@@ -36,11 +36,9 @@ it.runIf(process.env.OPENCLAW_HISTORY_COLD_BENCH === "1")(
         storePath: database.path,
       };
       const rows = 5_000;
-      await replaceSessionEntry(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        visibility: "shared",
-      });
+      const entry = { sessionId: scope.sessionId, updatedAt: 1, visibility: "shared" as const };
+      const report = (metrics: Record<string, unknown>) => console.log(JSON.stringify(metrics));
+      await replaceSessionEntry(scope, entry);
       await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: scope.sessionId },
         ...Array.from({ length: rows }, (_, index) => ({
@@ -73,13 +71,7 @@ it.runIf(process.env.OPENCLAW_HISTORY_COLD_BENCH === "1")(
         return payload.messages;
       };
       const golden = await history();
-      await replaceSessionEntry(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        lastActivityAt: 1,
-        lastInteractionAt: 1,
-        visibility: "shared",
-      });
+      await replaceSessionEntry(scope, { ...entry, lastActivityAt: 1, lastInteractionAt: 1 });
       database.db.exec("UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1");
       expect(
         await runSessionColdStorageMaintenance({ config: maintenanceConfig(database.path) }),
@@ -89,15 +81,13 @@ it.runIf(process.env.OPENCLAW_HISTORY_COLD_BENCH === "1")(
       const coldCpu = process.threadCpuUsage();
       const restored = await history();
       const coldElapsed = process.threadCpuUsage(coldCpu);
-      console.log(
-        JSON.stringify({
-          method: "chat.history",
-          rows,
-          cold: true,
-          cpuMs: (coldElapsed.user + coldElapsed.system) / 1_000,
-          wallMs: performance.now() - coldStart,
-        }),
-      );
+      report({
+        method: "chat.history",
+        rows,
+        cold: true,
+        cpuMs: (coldElapsed.user + coldElapsed.system) / 1_000,
+        wallMs: performance.now() - coldStart,
+      });
       expect(restored).toEqual(golden);
       const lookup = () => readSessionMessagesMatchingIdAsync(scope, "message-4999");
       const expected = await lookup();
@@ -133,17 +123,14 @@ it.runIf(process.env.OPENCLAW_HISTORY_COLD_BENCH === "1")(
             });
           }
         }
-        console.log(
-          JSON.stringify({
-            method: "message-lookup",
-            mode,
-            rows,
-            samples,
-            medianCpuMs: samples.map((s) => s.cpuMs).toSorted((a, b) => a - b)[2],
-            medianWallMs: samples.map((s) => s.wallMs).toSorted((a, b) => a - b)[2],
-          }),
-        );
+        report({
+          method: "message-lookup",
+          mode,
+          rows,
+          samples,
+          medianCpuMs: samples.map((s) => s.cpuMs).toSorted((a, b) => a - b)[2],
+          medianWallMs: samples.map((s) => s.wallMs).toSorted((a, b) => a - b)[2],
+        });
       }
-    });
-  },
+    }),
 );

@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Transferable } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { WorktreeRepositoryError } from "../agents/worktrees/errors.js";
+import { GitCommandTimeoutError } from "./git-exec.js";
 import {
   GIT_WORKER_HOST_BATCH_LIMIT,
   type GitWorkerEffect,
@@ -24,7 +25,7 @@ type PendingHostRequest = {
 };
 type GitWorkerContext = {
   channel: WorkerTaskChannel;
-  filesystemRefs: boolean;
+  filesystemRefs: string | undefined;
   pending: PendingHostRequest[];
   drain?: Promise<void>;
   closed: boolean;
@@ -49,7 +50,9 @@ export function restoreGitWorkerFailure(failure: GitWorkerFailure): Error {
   const error =
     failure.name === "WorktreeRepositoryError"
       ? new WorktreeRepositoryError(failure.message)
-      : new Error(failure.message);
+      : failure.name === "GitCommandTimeoutError"
+        ? new GitCommandTimeoutError(failure.message)
+        : new Error(failure.message);
   error.name = failure.name;
   if (failure.code !== undefined) {
     Object.assign(error, { code: failure.code });
@@ -64,14 +67,18 @@ export function hasGitWorkerContext(): boolean {
   return context.getStore() !== undefined;
 }
 
+export function gitFilesystemEnvironmentRevision(): string | undefined {
+  return context.getStore()?.filesystemRefs;
+}
+
 export function canReadGitFilesystemRefs(): boolean {
-  return context.getStore()?.filesystemRefs === true;
+  return gitFilesystemEnvironmentRevision() !== undefined;
 }
 
 export async function withGitWorkerContext<T>(
   channel: WorkerTaskChannel,
   operation: () => Promise<T>,
-  filesystemRefs = false,
+  filesystemRefs?: string,
 ): Promise<T> {
   const state: GitWorkerContext = { channel, filesystemRefs, pending: [], closed: false };
   return await context.run(state, async () => {

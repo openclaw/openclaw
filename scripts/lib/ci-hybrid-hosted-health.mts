@@ -6,7 +6,7 @@ const HOSTED_SENTINELS = new Set([
   "control-ui-i18n",
   "native-i18n",
 ]);
-const MAX_WAIT_SECONDS = 180;
+const MAX_WAIT_SECONDS = 60;
 const FRESHNESS_MS = 30 * 60 * 1_000;
 
 type HostedHealth = {

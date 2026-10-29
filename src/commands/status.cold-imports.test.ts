@@ -1,11 +1,15 @@
 // Default status imports must not pull in the broad plugin diagnostics/runtime graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 describe("status cold imports", () => {
   afterEach(() => {
     vi.doUnmock("../plugins/status.js");
     vi.doUnmock("../agents/model-auth-label.js");
-    vi.doUnmock("./status.daemon.js");
+    vi.doUnmock("../daemon/service.js");
+    vi.doUnmock("../daemon/node-service.js");
+    vi.doUnmock("../infra/openclaw-root.js");
     vi.resetModules();
   });
 
@@ -14,9 +18,17 @@ describe("status cold imports", () => {
     vi.doMock("../agents/model-auth-label.js", () => {
       throw usageImportFailure;
     });
-    vi.doMock("./status.daemon.js", () => ({
-      getDaemonStatusSummary: async () => ({ label: "gateway" }),
-      getNodeDaemonStatusSummary: async () => ({ label: "node" }),
+    vi.doMock("../daemon/service.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../daemon/service.js")>()),
+      resolveGatewayService: () => createMockGatewayService({ label: "gateway" }),
+    }));
+    vi.doMock("../daemon/node-service.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../daemon/node-service.js")>()),
+      resolveNodeService: () => createMockGatewayService({ label: "node" }),
+    }));
+    vi.doMock("../infra/openclaw-root.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
+      resolveOpenClawPackageRoot: async () => null,
     }));
 
     const { resolveStatusRuntimeSnapshot } = await import("./status-runtime-shared.js");
@@ -33,8 +45,8 @@ describe("status cold imports", () => {
       usage: undefined,
       health: undefined,
       lastHeartbeat: null,
-      gatewayService: { label: "gateway" },
-      nodeService: { label: "node" },
+      gatewayService: expect.objectContaining({ label: "gateway" }),
+      nodeService: expect.objectContaining({ label: "node" }),
     });
 
     // Usage collection must preserve its failure without breaking pure text formatting.
@@ -59,6 +71,6 @@ describe("status cold imports", () => {
     ]);
 
     expect(scan.scanStatus).toBeTypeOf("function");
-    expect(textRuntime.buildStatusCommandReportData).toBeTypeOf("function");
+    expect(textRuntime.buildStatusCommandReportLines).toBeTypeOf("function");
   });
 });

@@ -1,8 +1,12 @@
+import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { applyEdits, format } from "jsonc-parser";
 import { parseMarkdownJson } from "../../components/markdown-json.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard } from "./chat-types.ts";
+
+registerChatToolLabelsEnglish();
 
 export const TOOL_OUTPUT_PREVIEW_CHARS = 8_000;
 
@@ -29,38 +33,6 @@ export function toolOutputSourceLabel(card: ToolCard): string {
   );
 }
 
-function parseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-}
-
-function formatResponseText(text: string): string {
-  const value = parseJson(text);
-  const execution =
-    isRecord(value) &&
-    typeof value.wall_time_seconds === "number" &&
-    typeof value.exit_code === "number" &&
-    typeof value.output === "string" &&
-    Object.keys(value).every((key) =>
-      ["chunk_id", "wall_time_seconds", "exit_code", "original_token_count", "output"].includes(
-        key,
-      ),
-    )
-      ? { text: value.output, exitCode: value.exit_code }
-      : undefined;
-  const output = execution?.text ?? text;
-  // Whitespace-only edits preserve duplicate members and exact number/string lexemes.
-  const formatted = parseMarkdownJson(output)?.root
-    ? applyEdits(output, format(output, undefined, { insertSpaces: true, tabSize: 2 }))
-    : output;
-  return execution && execution.exitCode !== 0
-    ? `${t("chat.toolCards.exitCode", { code: String(execution.exitCode) })}\n${formatted}`
-    : formatted;
-}
-
 /** Format for display while preserving the captured bytes for Raw/Copy/Download. */
 export function formatToolOutput(card: ToolCard): string | undefined {
   const text = card.outputText;
@@ -74,7 +46,7 @@ export function formatToolOutput(card: ToolCard): string | undefined {
   ) {
     return text;
   }
-  const parts = parseJson(text);
+  const parts = safeParseJson(text);
   if (
     !Array.isArray(parts) ||
     parts.length === 0 ||
@@ -91,6 +63,28 @@ export function formatToolOutput(card: ToolCard): string | undefined {
         parts.length === 1 ||
         !/^Script completed\nWall time [\d.]+ seconds\nOutput:\n$/u.test(part.text),
     )
-    .map((part) => formatResponseText(part.text))
+    .map(({ text: responseText }) => {
+      const value = safeParseJson(responseText);
+      const execution =
+        isRecord(value) &&
+        typeof value.wall_time_seconds === "number" &&
+        typeof value.exit_code === "number" &&
+        typeof value.output === "string" &&
+        Object.keys(value).every((key) =>
+          ["chunk_id", "wall_time_seconds", "exit_code", "original_token_count", "output"].includes(
+            key,
+          ),
+        )
+          ? { text: value.output, exitCode: value.exit_code }
+          : undefined;
+      const output = execution?.text ?? responseText;
+      // Whitespace-only edits preserve duplicate members and exact number/string lexemes.
+      const formatted = parseMarkdownJson(output)?.root
+        ? applyEdits(output, format(output, undefined, { insertSpaces: true, tabSize: 2 }))
+        : output;
+      return execution && execution.exitCode !== 0
+        ? `${t("chat.toolCards.exitCode", { code: String(execution.exitCode) })}\n${formatted}`
+        : formatted;
+    })
     .join("\n");
 }

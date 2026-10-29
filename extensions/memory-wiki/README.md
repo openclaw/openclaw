@@ -2,7 +2,7 @@
 
 Persistent wiki compiler and Obsidian-friendly knowledge vault for **OpenClaw**.
 
-This plugin is separate from the active memory plugin. The active memory plugin still handles recall, promotion, and dreaming. `memory-wiki` compiles durable knowledge into a navigable markdown vault with deterministic indexes, provenance, structured claim/evidence metadata, and optional Obsidian CLI workflows.
+This plugin is separate from the active memory plugin. The active memory plugin still handles recall, promotion, and dreaming. `memory-wiki` compiles durable knowledge into a navigable markdown vault with repeatable indexes, provenance, structured claim/evidence metadata, and optional Obsidian CLI workflows.
 
 When the active memory plugin exposes shared recall, agents can use `memory_search` with `corpus=all` to search durable memory and the compiled wiki in one pass, then fall back to `wiki_search` / `wiki_get` when wiki-specific ranking or provenance matters.
 
@@ -145,9 +145,19 @@ The plugin initializes a vault like this:
 
 Generated content stays inside managed blocks. Human note blocks are preserved.
 
+If lint cannot read an existing report, it reports the filesystem error without
+replacing the report. Resolve the access or I/O error and run lint again. Missing
+reports still receive their normal template.
+
 Key beliefs can live in structured `claims` frontmatter with per-claim evidence, confidence, and status. Compile also persists a machine-readable snapshot in OpenClaw plugin state so agent/runtime consumers do not have to scrape markdown pages.
 
-When `render.createBacklinks` is enabled, compile adds deterministic `## Related` blocks to pages. Those blocks list source pages, pages that reference the current page, and nearby pages that share the same source ids.
+When `render.createBacklinks` is enabled, compile adds repeatable `## Related` blocks to pages. Those blocks list source pages, pages that reference the current page, and nearby pages that share the same source ids.
+
+Local Markdown link paths are percent-decoded for lint and generated backlinks:
+`[Target](%74arget.md)` resolves to `target.md`. Malformed percent escapes remain
+literal, and Obsidian wikilinks keep their existing syntax.
+In native render mode, generated links to paths with spaces or parentheses use
+angle-bracket destinations, such as `[Meeting notes](<sources/meeting notes.md>)`.
 
 When `render.createDashboards` is enabled, compile also maintains report dashboards under `reports/` for open questions, contradictions, low-confidence pages, and stale pages.
 
@@ -164,6 +174,7 @@ openclaw wiki compile
 openclaw wiki lint
 openclaw wiki search "alpha"
 openclaw wiki get entity.alpha --from 1 --lines 80
+openclaw wiki chatgpt import --export ./chatgpt-export
 
 openclaw wiki apply synthesis "Alpha Summary" \
   --body "Short synthesis body" \
@@ -188,6 +199,9 @@ openclaw wiki status --agent support
 openclaw wiki search "refund policy" --agent support
 ```
 
+ChatGPT imports preserve active-branch message text, including pasted JSON.
+Serialized image parts are omitted; serialized text parts are decoded as text.
+
 ## Agent tools
 
 - `wiki_status`
@@ -211,7 +225,6 @@ Read methods:
 - `wiki.search`
 - `wiki.get`
 - `wiki.obsidian.status`
-- `wiki.obsidian.search`
 
 Write methods:
 
@@ -222,6 +235,7 @@ Write methods:
 - `wiki.bridge.import`
 - `wiki.unsafeLocal.import`
 - `wiki.apply`
+- `wiki.obsidian.search`
 - `wiki.obsidian.open`
 - `wiki.obsidian.command`
 - `wiki.obsidian.daily`
@@ -236,7 +250,9 @@ unknown ids fail in multi-agent setups.
 - Agent scope is incompatible with `unsafe-local` and official Obsidian CLI actions.
 - Wiki pages are compiled artifacts, not the ultimate source of truth. Keep provenance attached to raw sources, memory artifacts, and daily notes.
 - The compiled snapshot in shared SQLite plugin state is the stable machine-facing view of the wiki.
+- Upgrades support state written by July 2026 or newer releases. Doctor no longer imports the older `.openclaw-wiki/source-sync.json` or `import-runs/<runId>.json` formats. OpenClaw continues to use the current SQLite state, and retired JSON and import snapshots remain untouched. If Doctor cannot find the current state, it reports how to restore a supported backup or safely set aside the retired file; an empty source-sync store cannot be distinguished from unmigrated state.
 - After editing or restoring vault files, compile again before expecting tools or prompts to use that source state. Lifecycle refresh rejects SQLite snapshots newer than a restored vault, and causal publication chaining rejects compilers started before the restore, without polling or watching files.
 - Rollback quarantine clears immediately for an in-process compile. After a separate compiler process publishes, refresh the plugin lifecycle so the daemon can validate that durable publication.
 - Pre-publication-epoch cache rows are rebuildable misses, not migrated state; the next compile replaces them.
 - Obsidian CLI support requires the official `obsidian` CLI to be installed and available on `PATH`.
+- Whole-vault scans for `wiki_search`, `wiki_get` id lookups and misses, and `wiki_apply` metadata updates run in a plugin-owned pool of two worker threads, handing their shared compute slot or worker to a waiting task at the next 64-page checkpoint (deadlines stay with the caller: `wiki_search` keeps its 30-second deadline, other scans run to completion as before); single-page reads (`wiki_get` by exact path, by basename or by claim id) stay on the calling thread, and the gateway main thread only merges returned results and reads a lookup's one matched page, so the gateway event loop stays responsive and short reads never wait behind a scan.

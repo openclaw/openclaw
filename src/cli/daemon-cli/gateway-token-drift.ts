@@ -4,24 +4,6 @@ import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js"
 import { createGatewayCredentialPlan } from "../../gateway/credential-planner.js";
 import { GatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 
-function authModeDisablesToken(mode: string | undefined): boolean {
-  return mode === "password" || mode === "none" || mode === "trusted-proxy";
-}
-
-function isPasswordFallbackActive(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): boolean {
-  const plan = createGatewayCredentialPlan({
-    config: params.cfg,
-    env: params.env,
-  });
-  if (plan.authMode !== undefined) {
-    return false;
-  }
-  return plan.passwordCanWin && !plan.tokenCanWin;
-}
-
 /** Resolve the expected Gateway token for service drift checks, or undefined when token auth is inactive. */
 export async function resolveGatewayTokenForDriftCheck(params: {
   cfg: OpenClawConfig;
@@ -29,10 +11,11 @@ export async function resolveGatewayTokenForDriftCheck(params: {
 }): Promise<string | undefined> {
   const env = params.env ?? process.env;
   const mode = params.cfg.gateway?.auth?.mode;
-  if (authModeDisablesToken(mode)) {
+  if (mode === "password" || mode === "none" || mode === "trusted-proxy") {
     return undefined;
   }
-  if (isPasswordFallbackActive({ cfg: params.cfg, env })) {
+  const plan = createGatewayCredentialPlan({ config: params.cfg, env });
+  if (plan.authMode === undefined && plan.passwordCanWin && !plan.tokenCanWin) {
     return undefined;
   }
 

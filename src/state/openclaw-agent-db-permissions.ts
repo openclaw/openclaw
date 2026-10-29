@@ -8,7 +8,7 @@ const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 
 function ensureMode(target: string, mode: number): void {
-  // Recheck each time: modes may drift, but reapplying them also writes filesystem metadata.
+  // Open and explicit repair own mode changes; warm reads and writes do not recheck them.
   if (process.platform === "win32" || (statSync(target).mode & 0o7777) !== mode) {
     chmodSync(target, mode);
   }

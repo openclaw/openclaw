@@ -12,10 +12,12 @@ import {
   mockedIsFailoverAssistantError,
   mockedRunEmbeddedAttempt,
   createOverflowRunParams,
-  resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createFreshRunIntegrationState,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -26,9 +28,7 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
   });
 
   beforeEach(async () => {
-    resetSharedRunIntegrationHarnessMocks();
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "run.codex-server-error-fallback" });
+    state = await createFreshRunIntegrationState("run.codex-server-error-fallback");
     useOpenAIPlatformAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
@@ -39,9 +39,8 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
 
   it("throws FailoverError for persistent Codex server_error after transient retries", async () => {
     // Codex server_error is a provider failure, not a normal assistant reply.
-    // The transient retry owner continues the same model first; once the failure
-    // persists past the retry budget, configured fallbacks receive it through
-    // the failover path.
+    // An explicit retry budget allows the full same-model recovery before
+    // configured fallbacks receive the persistent failure.
     const rawCodexError =
       'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
@@ -58,22 +57,26 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
     });
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
+        providerRetryMaxRetries: 8,
         assistantTexts: [],
         lastAssistant: currentAttemptAssistant,
         currentAttemptAssistant,
       }),
     );
 
+    const config = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]);
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot(config);
     const promise = runEmbeddedAgent({
       ...createOverflowRunParams(state),
       runId: "run-codex-server-error-fallback",
       agentHarnessRuntimeOverride: "openclaw",
-      config: createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]),
+      config,
     });
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow(
-      "⚠️ openai/gpt-5.4 request failed (provider internal error). This is usually temporary — try again shortly.",
+      "⚠️ The AI service is having trouble. Please try again in a moment.",
     );
     // Initial attempt plus the full same-model transient retry budget.
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(9);

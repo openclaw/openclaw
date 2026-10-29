@@ -28,11 +28,9 @@ agent tools, but nothing listens on the loopback control port.
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
 - Permissions: `POST /permissions/grant`
-- Debugging: `GET /console`, `POST /pdf`
-- Debugging: `GET /errors`, `GET /requests`, `GET /dialogs`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
+- Debugging: `GET /console`, `GET /errors`, `GET /requests`, `GET /dialogs`, `POST /pdf`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
 - Network: `POST /response/body`
-- State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`
-- State: `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
+- State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`, `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
 
 `POST /tabs/action` is the batched form the CLI uses internally for
@@ -238,7 +236,7 @@ All commands accept `--browser-profile <name>` to target a specific profile, and
 ```bash
 openclaw browser status
 openclaw browser doctor
-openclaw browser doctor --deep    # add a live snapshot probe
+openclaw browser doctor --deep    # add a live snapshot check
 openclaw browser start
 openclaw browser start --headless # one-shot local managed headless launch
 openclaw browser stop            # also clears emulation on attach-only/remote CDP
@@ -463,7 +461,7 @@ not supported on `profile="user"` and other existing-session (chrome-mcp)
 profiles. Send actions individually there.
 
 - CLI: `openclaw browser batch --actions '<json>'`, `openclaw browser batch
---actions-file plan.json`, or `openclaw browser batch --actions-file -` to
+  --actions-file plan.json`, or `openclaw browser batch --actions-file -` to
   read the JSON array from stdin. `--continue` sets `stopOnError=false`. The
   default is to stop on first error. `--target-id` scopes the whole batch to
   one tab. `--actions-file` and stdin input are capped at 1,000,000 bytes.
@@ -480,7 +478,7 @@ profiles. Send actions individually there.
   different tab is rejected with `ACT_TARGET_ID_MISMATCH` before any action
   runs. Batched actions share the request's tab by design.
 - Error summary: the response is `{ "results": [{ "ok": true }, { "ok": false,
-"error": "<message>" }, ...] }`, one entry per action in order. When
+  "error": "<message>" }, ...] }`, one entry per action in order. When
   `stopOnError` is the default, the array ends at the first failure. With
   `--continue` it covers every action. Any failed entry makes the CLI exit
   nonzero. Pass `--json` to preserve the full ordered response for scripts.
@@ -568,7 +566,8 @@ These are useful for "make the site behave like X" workflows:
 - `openclaw browser evaluate --fn` accepts a function source, an expression, or
   a statement body. Statement bodies are wrapped as async functions, so use
   `return` for the value you want back. Use `--timeout-ms <ms>` when the
-  page-side function may need longer than the default evaluate timeout.
+  page-side function may need longer than the default evaluate timeout. The Gateway
+  parses this input for routing; supplied JavaScript runs only inside the page.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
 - Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful. Tunnel and protect them.

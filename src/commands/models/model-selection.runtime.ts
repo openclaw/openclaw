@@ -4,15 +4,19 @@ import { modelKey, type ModelRef } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { resolvePluginProviderRegistryCore } from "../../plugins/providers.runtime.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import {
+  getPluginRuntimeGenerationRegistry,
+  withPluginRuntimeGenerationScope,
+} from "../../plugins/runtime/generation-scope.js";
 
 export function withModelCommandProviderRuntime<T>(
   params: {
     runtimeConfig: OpenClawConfig;
     selectModelRefs: () => readonly (ModelRef | undefined)[];
   },
-  run: () => T,
+  run: (providerRegistryAvailable: boolean) => T,
 ): T {
+  const retainedRegistry = getPluginRuntimeGenerationRegistry();
   const config = params.runtimeConfig;
   const env = process.env;
   const workspaceDir = tryResolveConfiguredAgentWorkspaceDir(config, env);
@@ -42,6 +46,8 @@ export function withModelCommandProviderRuntime<T>(
     : undefined;
   return withPluginRuntimeGenerationScope(
     { metadataSnapshot, pluginRegistry: selected?.registry },
-    run,
+    // An empty retained scope is authoritative; a fresh empty selection only
+    // means that this candidate has no owner in the available metadata inventory.
+    () => run(!retainedRegistry || retainedRegistry.providers.length > 0),
   );
 }

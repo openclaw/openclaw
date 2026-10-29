@@ -1,8 +1,8 @@
-/** Sanitizes MCP server/tool names into stable model-facing tool ids. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 
 // Name sanitizers for tools exposed by bundle MCP servers. Provider/tool names
 // must fit model-facing schema limits while remaining stable and collision-free.
@@ -11,7 +11,30 @@ export const TOOL_NAME_SEPARATOR = "__";
 const TOOL_NAME_MAX_PREFIX = 30;
 const TOOL_NAME_MAX_TOTAL = 64;
 
-/** Builds stable node-ID prefixes capped at 32 characters. */
+export function compareMcpCatalogTools(left: McpCatalogTool, right: McpCatalogTool): number {
+  return (
+    left.safeServerName.localeCompare(right.safeServerName) ||
+    left.toolName.localeCompare(right.toolName) ||
+    left.serverName.localeCompare(right.serverName)
+  );
+}
+
+export function mcpCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
+  return JSON.stringify(
+    tools.map((tool) => [
+      tool.serverName,
+      tool.safeServerName,
+      tool.toolName,
+      tool.title ?? "",
+      tool.description ?? "",
+      tool.fallbackDescription,
+      tool.inputSchema,
+      tool.uiResourceUri ?? "",
+      tool.uiVisibility ?? null,
+    ]),
+  );
+}
+
 export function sanitizeNodeIdFragment(value: string): string {
   const fragment = value
     .trim()
@@ -35,7 +58,6 @@ function sanitizeToolFragment(raw: string, fallback: string, maxChars?: number):
   return providerSafe.length > maxChars ? providerSafe.slice(0, maxChars) : providerSafe;
 }
 
-/** Sanitize one MCP server name and reserve it in the provided set. */
 export function sanitizeServerName(raw: string, usedNames: Set<string>): string {
   const base = sanitizeToolFragment(raw, "mcp", TOOL_NAME_MAX_PREFIX);
   let candidate = base;
@@ -64,11 +86,6 @@ export function assignSafeServerNames(serverNames: Iterable<string>): Map<string
   return assignments;
 }
 
-function sanitizeToolName(raw: string): string {
-  return sanitizeToolFragment(raw, "tool");
-}
-
-/** Normalizes reserved tool names for collision checks. */
 export function normalizeReservedToolNames(names?: Iterable<string>): Set<string> {
   return new Set(
     Array.from(names ?? [], (name) => normalizeOptionalLowercaseString(name)).filter(
@@ -77,28 +94,40 @@ export function normalizeReservedToolNames(names?: Iterable<string>): Set<string
   );
 }
 
-/** Build a safe model-facing tool name from server and tool fragments. */
+/**
+ * The name buildSafeToolName tries on a given attempt: attempt 1 is the
+ * unsuffixed name, and attempt n >= 2 is the `-n` collision-suffixed name.
+ */
+export function safeToolNameCandidate(params: {
+  serverName: string;
+  toolName: string;
+  attempt: number;
+}): string {
+  const maxToolChars = Math.max(
+    1,
+    TOOL_NAME_MAX_TOTAL - params.serverName.length - TOOL_NAME_SEPARATOR.length,
+  );
+  const baseToolName =
+    sanitizeToolFragment(params.toolName, "tool").slice(0, maxToolChars) || "tool";
+  // Keep the suffix inside the total tool-name budget while preserving the
+  // server prefix as the namespace boundary.
+  const suffix = params.attempt > 1 ? `-${params.attempt}` : "";
+  const candidateToolName = suffix
+    ? `${baseToolName.slice(0, Math.max(1, maxToolChars - suffix.length))}${suffix}`
+    : baseToolName;
+  return `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;
+}
+
 export function buildSafeToolName(params: {
   serverName: string;
   toolName: string;
   reservedNames: Set<string>;
 }): string {
-  const cleanedToolName = sanitizeToolName(params.toolName);
-  const maxToolChars = Math.max(
-    1,
-    TOOL_NAME_MAX_TOTAL - params.serverName.length - TOOL_NAME_SEPARATOR.length,
-  );
-  const truncatedToolName = cleanedToolName.slice(0, maxToolChars);
-  let candidateToolName = truncatedToolName || "tool";
-  let candidate = `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;
-  let n = 2;
+  let attempt = 1;
+  let candidate = safeToolNameCandidate({ ...params, attempt });
   while (params.reservedNames.has(normalizeLowercaseStringOrEmpty(candidate))) {
-    // Keep the suffix inside the total tool-name budget while preserving the
-    // server prefix as the namespace boundary.
-    const suffix = `-${n}`;
-    candidateToolName = `${(truncatedToolName || "tool").slice(0, Math.max(1, maxToolChars - suffix.length))}${suffix}`;
-    candidate = `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;
-    n += 1;
+    attempt += 1;
+    candidate = safeToolNameCandidate({ ...params, attempt });
   }
   return candidate;
 }

@@ -1,7 +1,8 @@
 // Resolves config-directory paths without initializing process-wide state.
 import os from "node:os";
 import path from "node:path";
-import { resolveRequiredHomeDir, resolveUserPath } from "./home-dir.js";
+import { resolveStateDir } from "../config/state-dir.js";
+import { resolveUserPath } from "./home-dir.js";
 
 /** Resolves the OpenClaw config directory from state/config env overrides or home. */
 export function resolveConfigDir(
@@ -16,5 +17,5 @@ export function resolveConfigDir(
   if (configPath) {
     return path.dirname(resolveUserPath(configPath, env, homedir));
   }
-  return path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+  return resolveStateDir(env, homedir);
 }

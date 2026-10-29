@@ -45,7 +45,7 @@ extension OpenClawChatViewModel {
         return ChatSessionNavigation.primaryKey(agentID: agentID, mainKey: mainKey)
     }
 
-    func refreshAgents() async {
+    public func refreshAgents() async {
         guard !self.isTransportDetached else { return }
         self.hasRequestedAgents = true
         self.agentCatalogGeneration &+= 1
@@ -58,11 +58,13 @@ extension OpenClawChatViewModel {
             }
         }
         do {
-            let catalog = try await self.transport.listAgents()
-            guard generation == self.agentCatalogGeneration,
-                  !self.isTransportDetached, !Task.isCancelled
-            else { return }
-            self.agentCatalog = catalog
+            try await self.transport.loadAgents { [weak self] catalog in
+                guard let self, generation == self.agentCatalogGeneration,
+                      !self.isTransportDetached, !Task.isCancelled
+                else { return }
+                self.agentCatalog = catalog
+                self.isLoadingAgents = false
+            }
         } catch {
             guard generation == self.agentCatalogGeneration,
                   !self.isTransportDetached, !Task.isCancelled

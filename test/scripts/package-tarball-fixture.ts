@@ -1,8 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { gte as semverGte, valid as validSemver } from "semver";
 import { expect } from "vitest";
 import {
   PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
@@ -13,7 +12,21 @@ import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 
 export const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
-export const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
+
+export function expectPackageCommandSuccess(result: SpawnSyncReturns<string>, label: string) {
+  const { status, signal, error } = result;
+  const facts = JSON.stringify({
+    status,
+    signal,
+    error: error && {
+      name: error.name,
+      code: "code" in error ? error.code : undefined,
+      message: error.message,
+    },
+  });
+  // Native failures can leave status null even when stderr is also populated.
+  expect(status, [label, facts, result.stderr, result.stdout].filter(Boolean).join("\n")).toBe(0);
+}
 
 function chmodTreeWorldReadable(dir: string) {
   chmodSync(dir, 0o755);
@@ -48,7 +61,6 @@ export function withTarball(
     emptyDirectories?: string[];
     filesOnlyArchive?: boolean;
     includeLifecycleMarker?: boolean;
-    includeShrinkwrap?: boolean;
     includeWorkspaceTemplates?: boolean;
     inventoryBody?: string | null;
     packageJson?: Record<string, unknown>;
@@ -59,10 +71,7 @@ export function withTarball(
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-test-"));
   try {
-    const validVersion = validSemver(version);
-    const includeCodeModeWorker =
-      options.includeCodeModeWorker ??
-      (validVersion !== null && semverGte(validVersion, FIRST_CODE_MODE_WORKER_VERSION));
+    const includeCodeModeWorker = options.includeCodeModeWorker ?? true;
     const includeCodeModeWorkerInInventory =
       options.includeCodeModeWorkerInInventory ?? includeCodeModeWorker;
     const controlUiFiles =
@@ -130,22 +139,10 @@ export function withTarball(
             [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH]: "pending\n",
             [PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH]: "export {};\n",
           };
-    const shrinkwrapFile =
-      (options.includeShrinkwrap ?? declaredFiles.includes("npm-shrinkwrap.json"))
-        ? {
-            "npm-shrinkwrap.json": `${JSON.stringify({
-              name: "openclaw",
-              version,
-              lockfileVersion: 3,
-              packages: { "": { name: "openclaw", version } },
-            })}\n`,
-          }
-        : {};
     const tarFiles = {
       ...workspaceTemplates,
       ...controlUiFiles,
       ...lifecycleMarkerFile,
-      ...shrinkwrapFile,
       ...(includeCodeModeWorker ? { [CODE_MODE_WORKER_PATH]: "export {};\n" } : {}),
       ...files,
     };
@@ -211,7 +208,7 @@ export function withTarball(
             env: { ...process.env, COPYFILE_DISABLE: "1" },
           },
         );
-    expect(pack.status, pack.stderr || pack.error?.message).toBe(0);
+    expectPackageCommandSuccess(pack, "pack tarball fixture");
     testBody(tarball, root, packageRoot);
   } finally {
     rmSync(root, { recursive: true, force: true });

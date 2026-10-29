@@ -1,0 +1,601 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
+import {
+  createCapturedHashProbe,
+  createCorrectionFixture,
+} from "./pr-correction-preparation.test-support.js";
+
+const cases = useAutoCleanupTempDirTracker(afterEach);
+const keys = useAutoCleanupTempDirTracker(afterAll);
+const describePosix = process.platform === "win32" ? describe.skip : describe;
+let key: string;
+let signers: string;
+
+type RunResult = Pick<ReturnType<typeof spawnSync>, "status" | "stdout" | "stderr">;
+function pass<T extends RunResult>(result: T) {
+  expect(result.status, `${String(result.stdout)}${String(result.stderr)}`).toBe(0);
+  return result;
+}
+function reject<T extends RunResult>(result: T) {
+  expect(result.status, `${String(result.stdout)}${String(result.stderr)}`).not.toBe(0);
+  return result;
+}
+
+function expectCapturedWrite(probe: ReturnType<typeof createCapturedHashProbe>, size: number) {
+  expect(readFileSync(probe.calls, "utf8").trim().split("\n")).toContain(String(size));
+  expect(readdirSync(probe.scratch).filter((name) => name.startsWith("openclaw-pr-hash-"))).toEqual(
+    [],
+  );
+}
+
+function expectStoredBlob(f: ReturnType<typeof fixture>, bytes: Buffer) {
+  const oid = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+  expect(f.git("rev-parse", "HEAD:docs/fix.md")).toBe(oid);
+  const stored = pass(spawnSync("git", ["cat-file", "blob", oid], { cwd: f.root, env: f.env }));
+  expect(stored.stdout.equals(bytes)).toBe(true);
+  expect(f.read("docs/fix.md").equals(bytes)).toBe(true);
+  return oid;
+}
+
+function fixture(
+  conflict: false | "delete" | "content" | "add" | "attributes" | "clean" | "binary" = false,
+  headRefName = "topic",
+  sourceMessage = "fix: preserve the complete correction",
+) {
+  let baseContent =
+    "import { format } from './format';\nexport const alias = format;\n\nfunction cache(value) {\n  return Number(value);\n}\n\nexport const show = (value) => alias(cache(value));\n";
+  let sourceContent =
+    "import { format, cache } from './format';\nexport const alias = format;\n\nexport const show = (value) => alias(cache(value));\n";
+  let baselineContent =
+    "import { format, finite } from './format';\n\nfunction cache(value) {\n  return finite(value);\n}\n\nexport const show = (value) => format(cache(value));\n";
+  if (conflict === "clean") {
+    baseContent = "first\r\n2\r\n3\r\n4\r\n5\r\nlast\r\n";
+    sourceContent = "source café\r\n2\r\n3\r\n4\r\n5\r\nlast\r\n";
+    baselineContent = "first\r\n2\r\n3\r\n4\r\n5\r\nbaseline 修正\r\n";
+  } else if (conflict === "binary") {
+    baseContent = "base\0blob\n";
+    sourceContent = "source\0blob\n";
+    baselineContent = "baseline\0blob\n";
+  } else if (conflict !== "content" && conflict !== "attributes") {
+    baseContent = "broken\n";
+    sourceContent = "corrected\n";
+    baselineContent = "upstream edit\n";
+  }
+  const f = createCorrectionFixture(cases.make("openclaw-pr-baseline-"), baseContent);
+  const read = (path: string) => readFileSync(join(f.root, path));
+  const json = (path: string) => JSON.parse(read(path).toString());
+  const commitTree = (tree: string, parents: string[], message: string, signed = true) =>
+    f.git(
+      "commit-tree",
+      ...(signed ? ["-S"] : []),
+      tree,
+      ...parents.flatMap((parent) => ["-p", parent]),
+      "-m",
+      message,
+    );
+  f.git("config", "gpg.format", "ssh");
+  f.git("config", "user.signingKey", key);
+  f.git("config", "gpg.ssh.allowedSignersFile", signers);
+  f.git("config", "commit.gpgSign", "true");
+  const metaPath = join(f.root, ".local/pr-meta.json");
+  const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+  meta.state = "OPEN";
+  meta.baseRefName = "main";
+  meta.headRefName = headRefName;
+  writeFileSync(metaPath, JSON.stringify(meta));
+  const metaEnv = join(f.root, ".local/pr-meta.env");
+  writeFileSync(
+    metaEnv,
+    readFileSync(metaEnv, "utf8").replace("PR_HEAD=topic", `PR_HEAD=${headRefName}`),
+  );
+  expect(f.run("prepare_init 42 '' correction").status).toBe(0);
+  f.git("branch", "baseline", f.incoming);
+  f.commitFix(sourceContent);
+  writeFileSync(join(f.root, "fixup.txt"), "complete correction scope\n");
+  f.git("add", "fixup.txt");
+  if (conflict === "delete") {
+    f.git("rm", "docs/fix.md");
+  }
+  f.git("commit", "-S", "-qm", sourceMessage);
+  const source = f.git("rev-parse", "HEAD");
+  expect(f.run("prepare_correction_review_init 42").status).toBe(0);
+  f.approve();
+  const review = readFileSync(join(f.root, ".local/correction-review.json"));
+  const incomingReview = readFileSync(join(f.root, ".local/review.json"));
+  writeFileSync(join(f.root, ".local/gates-build.log"), "prior completed build\n");
+  writeFileSync(
+    join(f.root, ".local/gates.env"),
+    `GATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${source}\n`,
+  );
+  f.git("checkout", "-q", "baseline");
+  writeFileSync(join(f.root, "upstream.txt"), "unrelated upstream repair\n");
+  if (conflict && conflict !== "add") {
+    writeFileSync(join(f.root, "docs/fix.md"), baselineContent);
+  }
+  if (conflict === "add") {
+    writeFileSync(join(f.root, "fixup.txt"), "upstream addition\n");
+  }
+  if (conflict === "attributes") {
+    writeFileSync(join(f.root, ".gitattributes"), "docs/fix.md merge=union\n");
+  }
+  if (conflict === "clean") {
+    chmodSync(join(f.root, "docs/fix.md"), 0o755);
+  }
+  f.git("add", ".");
+  f.git("commit", "-qm", "fix: upstream baseline");
+  const baseline = f.git("rev-parse", "HEAD");
+  f.git("checkout", "-q", "pr-42-prep");
+  const run = (command: string, setup = "", env: NodeJS.ProcessEnv = {}) =>
+    f.run(
+      [
+        'source "$script_parent_dir/pr-lib/worktree.sh"',
+        'source "$script_parent_dir/pr-lib/operation-lock.sh"',
+        'source "$script_parent_dir/pr-lib/push.sh"',
+        "enter_worktree() { :; }",
+        "repo_root() { pwd; }",
+        "mark_pr_operation_side_effects_started() { :; }",
+        `PR_MAIN_SHA=${baseline}`,
+        "PR_OPERATION_LOCK_REF=refs/openclaw/pr-operation-locks/42",
+        `PR_OPERATION_LOCK_OWNER_OID=${f.incoming}`,
+        'git update-ref "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"',
+        setup,
+        command,
+      ].join("\n"),
+      env,
+    );
+  const refresh = (extra = "", setup = "", env: NodeJS.ProcessEnv = {}) =>
+    run(
+      `prepare_baseline_refresh 42 --expected-head ${source} --baseline ${baseline} ${extra}`,
+      setup,
+      env,
+    );
+  const manifest = (bytes: string, path = "docs/fix.md") => {
+    const blob = (commit: string) => {
+      const line = f.git("ls-tree", commit, "--", path);
+      if (!line) {
+        return null;
+      }
+      const [mode, , oid] = line.split(/\s/u);
+      if (!mode || !oid) {
+        throw new Error("Invalid fixture tree entry");
+      }
+      return { mode, oid };
+    };
+    writeFileSync(join(f.root, ".local/resolved.txt"), bytes);
+    const resolution = {
+      path,
+      base: blob(f.incoming),
+      source: blob(source),
+      baseline: blob(baseline),
+      resolved: {
+        mode: "100644",
+        file: "resolved.txt",
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      },
+    };
+    const value = {
+      version: 1,
+      pr: 42,
+      sourceHead: source,
+      baselineHead: baseline,
+      forkBase: f.incoming,
+      resolutions: [resolution],
+    };
+    const save = () =>
+      writeFileSync(join(f.root, ".local/resolutions.json"), JSON.stringify(value));
+    save();
+    return { value, resolution, save, args: "--resolutions .local/resolutions.json" };
+  };
+  return {
+    ...f,
+    run,
+    refresh,
+    manifest,
+    source,
+    baseline,
+    review,
+    incomingReview,
+    read,
+    json,
+    commitTree,
+  };
+}
+
+function contextWriteFault(f: ReturnType<typeof fixture>) {
+  const hook = join(f.root, ".local/write-fault.mjs");
+  writeFileSync(
+    hook,
+    `import fs from 'node:fs';
+const rename = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (to === '.local/prep-context.env') throw new Error('injected context write failure');
+  return rename(from, to);
+};\n`,
+  );
+  return { NODE_OPTIONS: `--import=${hook}` };
+}
+
+function driftAfterSigning(command: string, change: string, oid: string) {
+  return `node() {
+      command node "$@" || return $?
+      if [ "\${2:-}" = ${command} ]; then
+        ${change === "review" ? "printf '\\n' >> .local/correction-review.json" : `command git update-ref "$PR_OPERATION_LOCK_REF" ${oid}`}
+      fi
+    }`;
+}
+
+describePosix("native correction baseline refresh", () => {
+  beforeAll(() => {
+    const root = keys.make("openclaw-pr-baseline-key-");
+    key = join(root, "key");
+    pass(spawnSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key]));
+    signers = join(root, "allowed-signers");
+    writeFileSync(signers, `fixture@example.invalid ${readFileSync(`${key}.pub`, "utf8")}`);
+  });
+
+  it("replays the complete correction while preserving only parsed co-author trailers", () => {
+    const f = fixture(
+      false,
+      "topic/PREP_BASELINE_REFRESH_OID",
+      "fix: preserve the complete correction\n\nCo-authored-by: Prose only <prose@example.invalid>\nThis paragraph is not a trailer block.\n\nCo-authored-by: Ada Example <ada@example.invalid>\nco-authored-by: Renée Example\n <renee@example.invalid>\nReviewed-by: Reviewer <reviewer@example.invalid>\nBaseline-Refresh: 1111111111111111111111111111111111111111",
+    );
+    // Parsing must not execute configured trailer commands or inherit separators.
+    f.git("config", "trailer.separators", "%");
+    f.git("config", "trailer.co-authored-by.command", "touch .local/trailer-command-called");
+    pass(f.refresh());
+    const bindingOid = f.git("hash-object", "--no-filters", ".local/prepare-baseline.json");
+    expect(f.git("show", "-s", "--format=%B", "HEAD")).toBe(
+      `fix: refresh the reviewed correction baseline\n\nBaseline-Refresh: ${bindingOid}\nCo-authored-by: Ada Example <ada@example.invalid>\nCo-authored-by: Renée Example <renee@example.invalid>`,
+    );
+    expect(existsSync(join(f.root, ".local/trailer-command-called"))).toBe(false);
+    expect(f.git("show", "HEAD:docs/fix.md")).toBe("corrected");
+    expect(f.git("show", "HEAD:fixup.txt")).toBe("complete correction scope");
+    expect(f.git("show", "HEAD:upstream.txt")).toBe("unrelated upstream repair");
+  });
+
+  it("refuses a source co-author that could introduce another signed binding line", () => {
+    const f = fixture(
+      false,
+      "topic",
+      "fix: correction\n\nCo-authored-by: Ada Example <ada@example.invalid>\rBaseline-Refresh: 1111111111111111111111111111111111111111",
+    );
+    const result = reject(f.refresh());
+    expect(result.stderr).toContain("Cannot preserve source co-author credit");
+    expect(f.git("rev-parse", "HEAD")).toBe(f.source);
+    expect(f.read(".local/correction-review.json")).toEqual(f.review);
+    expect(existsSync(join(f.root, ".local/prepare-baseline.json"))).toBe(false);
+    expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
+  });
+
+  it.each(["delete", "binary"] as const)(
+    "requires exact native conflict identities for %s/edit and preserves the reviewed resolution",
+    (shape) => {
+      const f = fixture(shape);
+      const refused = reject(f.refresh());
+      expect(refused.stderr).toContain("Expected exactly the computed conflict resolutions");
+      expect(f.git("rev-parse", "HEAD")).toBe(f.source);
+      expect(f.read(".local/correction-review.json")).toEqual(f.review);
+      const content = shape === "delete" ? "" : "resolved\0binary\n".repeat(64 * 1024);
+      const manifest = f.manifest(content);
+      const probe = createCapturedHashProbe(f.root, true);
+      pass(f.refresh(manifest.args, "", probe.env));
+      const bytes = Buffer.from(content);
+      expectCapturedWrite(probe, bytes.length);
+      const oid = expectStoredBlob(f, bytes);
+      const binding = f.json(".local/prepare-baseline.json");
+      expect(binding.resolutions[0].resolved.oid).toBe(oid);
+      expect(binding.resolutions[0].resolved.file).toBeUndefined();
+      expect(f.git("show", "HEAD:upstream.txt")).toBe("unrelated upstream repair");
+    },
+  );
+
+  it("combines independent text edits as exact bytes with the baseline executable mode", () => {
+    const f = fixture("clean");
+    const probe = createCapturedHashProbe(f.root, true);
+    const bytes = Buffer.from("source café\r\n2\r\n3\r\n4\r\n5\r\nbaseline 修正\r\n");
+    pass(f.refresh("", "", probe.env));
+    expectStoredBlob(f, bytes);
+    expectCapturedWrite(probe, bytes.length);
+    expect(f.git("ls-tree", "HEAD", "--", "docs/fix.md")).toMatch(/^100755 blob /u);
+    pass(f.run("prepare_correction_review_init 42", "", probe.env));
+    f.approve();
+    pass(f.run("require_prepared_review 42", "", probe.env));
+    expectCapturedWrite(probe, bytes.length);
+  });
+
+  it("cleans a failed write hash without changing correction authority", () => {
+    const f = fixture("clean");
+    const probe = createCapturedHashProbe(f.root, true);
+    const result = reject(f.refresh("", "", { ...probe.env, FAIL_HASH: "1" }));
+    expect(result.stderr).toContain("fixture Git hash failure");
+    expectCapturedWrite(
+      probe,
+      Buffer.byteLength("source café\r\n2\r\n3\r\n4\r\n5\r\nbaseline 修正\r\n"),
+    );
+    expect(f.git("rev-parse", "HEAD")).toBe(f.source);
+    expect(f.read(".local/correction-review.json")).toEqual(f.review);
+    expect(existsSync(join(f.root, ".local/prepare-baseline.json"))).toBe(false);
+    expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
+  });
+
+  it("resolves a native differing add/add without consulting the source worktree", () => {
+    const f = fixture("add");
+    const manifest = f.manifest("complete correction scope and upstream addition\n", "fixup.txt");
+    expect(manifest.resolution.base).toBeNull();
+    pass(f.refresh(manifest.args));
+    expect(f.git("show", "HEAD:fixup.txt")).toBe("complete correction scope and upstream addition");
+    expect(f.git("show", "HEAD:upstream.txt")).toBe("unrelated upstream repair");
+    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
+  });
+
+  it("reconstructs historical content independently of committed and local merge attributes", () => {
+    const f = fixture("attributes");
+    const content =
+      "import { format, cache } from './format';\nexport const show = (value) => format(cache(value));\n";
+    const manifest = f.manifest(content);
+    pass(f.refresh(manifest.args));
+    expect(readFileSync(join(f.root, "docs/fix.md"), "utf8")).toBe(content);
+    writeFileSync(join(f.root, ".gitattributes"), "docs/fix.md merge=fixture\n");
+    f.git("add", ".gitattributes");
+    f.git("commit", "-S", "-qm", "fix: update product attributes");
+    const driver = "printf used >> .local/driver-used; exit 0";
+    f.git("config", "merge.fixture.driver", driver);
+    f.git("config", "merge.conflictStyle", "zdiff3");
+    f.git("config", "diff.algorithm", "histogram");
+    writeFileSync(join(f.root, ".git/info/attributes"), "docs/fix.md merge=fixture\n");
+    const global = join(f.root, ".local/global-config");
+    const attributes = join(f.root, ".local/global-attributes");
+    writeFileSync(attributes, "docs/fix.md merge=fixture\n");
+    f.git("config", "--file", global, "core.attributesFile", attributes);
+    f.git("config", "--file", global, "merge.fixture.driver", driver);
+    pass(f.run("prepare_correction_review_init 42", "", { GIT_CONFIG_GLOBAL: global }));
+    expect(existsSync(join(f.root, ".local/driver-used"))).toBe(false);
+    expect(readFileSync(join(f.root, "docs/fix.md"), "utf8")).toBe(content);
+  });
+
+  it.each(["stale", "extra", "digest", "symlink"])(
+    "refuses %s resolution authority without retiring current review",
+    (change) => {
+      const f = fixture("delete");
+      const manifest = f.manifest("explicit resolution\n");
+      if (change === "stale") {
+        manifest.resolution.baseline = manifest.resolution.base;
+      }
+      if (change === "extra") {
+        manifest.value.resolutions.push({ ...manifest.resolution, path: "upstream.txt" });
+      }
+      if (change === "digest") {
+        appendFileSync(join(f.root, ".local/resolved.txt"), "changed");
+      }
+      if (change === "symlink") {
+        rmSync(join(f.root, ".local/resolved.txt"));
+        symlinkSync("../upstream.txt", join(f.root, ".local/resolved.txt"));
+      }
+      manifest.save();
+      reject(f.refresh(manifest.args));
+      expect(f.git("rev-parse", "HEAD")).toBe(f.source);
+      expect(f.read(".local/correction-review.json")).toEqual(f.review);
+      expect(existsSync(join(f.root, ".local/gates.env"))).toBe(true);
+    },
+  );
+
+  it("includes later fixups outside the original scope and refuses changed binding bytes", () => {
+    const f = fixture();
+    expect(f.refresh().status).toBe(0);
+    mkdirSync(join(f.root, "src"));
+    writeFileSync(join(f.root, "src/runtime.ts"), "export const fixed = true;\n");
+    f.git("add", "src/runtime.ts");
+    f.git("commit", "-S", "-qm", "fix: complete the runtime correction");
+    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
+    f.approve();
+    const invalid = reject(f.run("require_prepared_review 42"));
+    expect(invalid.stderr).toContain("runtime file changes require");
+    const path = join(f.root, ".local/correction-review.json");
+    const review = JSON.parse(readFileSync(path, "utf8"));
+    review.behavioralSweep.status = "pass";
+    review.behavioralSweep.branches = [
+      { path: "src/runtime.ts", decision: "later fixup", outcome: "reviewed" },
+    ];
+    writeFileSync(path, JSON.stringify(review));
+    expect(f.run("require_prepared_review 42").status).toBe(0);
+    appendFileSync(join(f.root, ".local/prepare-baseline.json"), "\n");
+    expect(f.run("require_prepared_review 42").status).not.toBe(0);
+  });
+
+  it.each(["binding", "restore", "CAS"])(
+    "retains and replays the same owned transition after %s failure",
+    (phase) => {
+      const f = fixture();
+      let setup = "";
+      const env = phase === "binding" ? contextWriteFault(f) : {};
+      if (phase === "restore") {
+        setup = `pr_git() {
+        if [ "$1" = --literal-pathspecs ] && [ "$2" = restore ]; then
+          command git restore --source="$(jq -r .target .local/review-transition.json)" --staged --worktree -- docs/fix.md
+          return 91
+        fi
+        command git "$@"
+      }`;
+      } else if (phase === "CAS") {
+        setup = `pr_git() {
+        command git "$@" || return $?
+        if [ "$1" = update-ref ] && [ "$2" = --no-deref ] && [ "$3" = refs/heads/pr-42-prep ]; then return 91; fi
+      }`;
+      }
+      reject(f.refresh("", setup, env));
+      const journalPath = join(f.root, ".local/review-transition.json");
+      const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+      expect(journal).toMatchObject({ source: f.source, mode: "prep" });
+      expect(f.run("require_prepared_review 42").status).not.toBe(0);
+      pass(f.run("recover_review_transition 42"));
+      expect(f.git("rev-parse", "HEAD")).toBe(journal.target);
+      expect(f.git("status", "--porcelain")).toBe("");
+      expect(existsSync(journalPath)).toBe(false);
+      expect(existsSync(join(f.root, ".local/gates.env"))).toBe(false);
+      expect(f.read(".local/review.json")).toEqual(f.incomingReview);
+    },
+  );
+
+  it("preserves active evidence when an archive copy fails verification", () => {
+    const f = fixture();
+    reject(
+      f.refresh("", `cp() { command cp "$@"; printf '\\ncorrupt' >> "$3/$(basename "$2")"; }`),
+    );
+    expect(f.git("rev-parse", "HEAD")).toBe(f.source);
+    expect(f.read(".local/correction-review.json")).toEqual(f.review);
+    expect(existsSync(join(f.root, ".local/gates.env"))).toBe(true);
+    expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
+  });
+
+  it.each(["head", "repository", "review", "lock"])(
+    "refuses %s drift after signing without handing off a transition",
+    (change) => {
+      const f = fixture();
+      const setup =
+        change === "head" || change === "repository"
+          ? `read_pr_view_json() {
+          local count=0; [ ! -f .local/reads ] || count=$(cat .local/reads)
+          count=$((count + 1)); echo "$count" > .local/reads
+          if [ "$count" -gt 1 ]; then
+            jq '${change === "head" ? `.headRefOid="${f.baseline}"` : '.headRepository={id:"changed"}'}' .local/pr-meta.json
+          else cat .local/pr-meta.json; fi
+        }`
+          : driftAfterSigning("create", change, f.baseline);
+      reject(f.refresh("", setup));
+      expect(f.git("rev-parse", "HEAD")).toBe(f.source);
+      expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
+      expect(existsSync(join(f.root, ".local/gates.env"))).toBe(true);
+    },
+  );
+
+  it("checks the live lock inside installation before writing any preparation authority", () => {
+    const f = fixture();
+    const context = f.read(".local/prep-context.env");
+    reject(
+      f.refresh(
+        "",
+        `node() {
+      if [ "\${2:-}" = install-transition ]; then
+        command git update-ref "$PR_OPERATION_LOCK_REF" ${f.baseline}
+      fi
+      command node "$@"
+    }`,
+      ),
+    );
+    expect(f.git("rev-parse", "HEAD")).toBe(f.source);
+    expect(f.read(".local/prep-context.env")).toEqual(context);
+    expect(f.read(".local/correction-review.json")).toEqual(f.review);
+    expect(existsSync(join(f.root, ".local/prepare-baseline.json"))).toBe(false);
+    expect(existsSync(join(f.root, ".local/gates.env"))).toBe(true);
+    expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(true);
+  });
+
+  it("preserves a third-party preparation ref and journal when replay loses its source CAS", () => {
+    const f = fixture();
+    reject(
+      f.refresh(
+        "",
+        `pr_git() {
+      if [ "$1" = read-tree ]; then return 91; fi
+      command git "$@"
+    }`,
+      ),
+    );
+    const journalPath = join(f.root, ".local/review-transition.json");
+    const journal = readFileSync(journalPath);
+    const foreign = f.commitTree(`${f.source}^{tree}`, [f.source], "foreign preparation");
+    f.git("update-ref", "refs/heads/pr-42-prep", foreign, f.source);
+    const before = f.read("docs/fix.md");
+    reject(f.run("recover_review_transition 42"));
+    expect(f.git("rev-parse", "refs/heads/pr-42-prep")).toBe(foreign);
+    expect(f.read("docs/fix.md")).toEqual(before);
+    expect(readFileSync(journalPath)).toEqual(journal);
+  });
+
+  it("rejects a signed replacement that drops a fixup from the reconstructed candidate", () => {
+    const f = fixture();
+    expect(f.refresh().status).toBe(0);
+    const original = f.git("rev-parse", "HEAD");
+    const message = f.git("show", "-s", "--format=%B", "HEAD");
+    const replacement = f.commitTree(`${f.baseline}^{tree}`, [f.source, f.baseline], message);
+    f.git("reset", "--hard", replacement);
+    const context = join(f.root, ".local/prep-context.env");
+    writeFileSync(context, readFileSync(context, "utf8").replace(original, replacement));
+    const result = reject(f.run("prepare_correction_review_init 42"));
+    expect(result.stderr).toContain("does not reproduce the complete product delta");
+  });
+
+  it("does not reinterpret a merge tool failure as an operator-resolvable conflict", () => {
+    const f = fixture("content");
+    const manifest = f.manifest("resolved\n");
+    const shim = join(f.root, ".local/git-failure");
+    writeFileSync(
+      shim,
+      '#!/bin/sh\nif [ "$1" = merge-file ]; then echo "fixture merge failure" >&2; exit 255; fi\nexec "$FIXTURE_REAL_GIT" "$@"\n',
+      { mode: 0o755 },
+    );
+    const realGit = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+    const result = reject(
+      f.refresh(manifest.args, "", {
+        OPENCLAW_PR_GIT: shim,
+        FIXTURE_REAL_GIT: realGit,
+      }),
+    );
+    expect(result.stderr).toContain("Cannot replay docs/fix.md: fixture merge failure");
+    expect(f.git("rev-parse", "HEAD")).toBe(f.source);
+    expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
+  });
+
+  it.each([".LOCAL/foreign", "fixup.txt/nested"])(
+    "refuses unsafe baseline entry %s before transition",
+    (path) => {
+      const f = fixture();
+      const blob = f.git("rev-parse", `${f.baseline}:upstream.txt`);
+      f.git("read-tree", f.baseline);
+      f.git("update-index", "--add", "--cacheinfo", `100644,${blob},${path}`);
+      const tree = f.git("write-tree");
+      f.git("read-tree", "HEAD");
+      const baseline = f.commitTree(tree, [f.baseline], "unsafe fixture baseline", false);
+      const result = reject(
+        f.run(
+          `PR_MAIN_SHA=${baseline}; prepare_baseline_refresh 42 --expected-head ${f.source} --baseline ${baseline}`,
+        ),
+      );
+      expect(result.stderr).toMatch(/Unsupported product path|Directory\/file overlap/u);
+      expect(f.git("rev-parse", "HEAD")).toBe(f.source);
+      expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
+    },
+  );
+  it("rejects mismatched successor review and selected main without changing authority", () => {
+    const f = createBaselineFixture(cases.make("openclaw-pr-successor-authority-"), 1);
+    f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
+    f.approve();
+    f.publish();
+    const next = f.advanceMain("next upstream");
+    const source = f.prepGit("rev-parse", "HEAD");
+    const before = f.snapshot(["prepare-baseline.json", "correction-review.json"]);
+    for (const option of ["--expected-review", "--baseline"]) {
+      const args = f.successor(next);
+      args[args.indexOf(option) + 1] = option === "--baseline" ? source : f.incoming;
+      reject(f.run("prepare-baseline-successor", args));
+      expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
+      f.expectSnapshot(before);
+      f.expectAbsent("review-transition.json");
+    }
+  });
+});

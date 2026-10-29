@@ -1,27 +1,103 @@
 import type { DatabaseSync } from "node:sqlite";
-import { loadSqliteVecExtensionFromPath } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import type {
+  EngineConnection,
+  SearchSchema,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import { admitStoreSearch } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
-  assertTransactionUsable,
+  ensureMemoryIndexSchema,
+  readRepairedMemoryIndexSchema,
+  publishRepairedMemoryIndexSchema,
+  loadSqliteVecExtensionFromPath,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE,
+  stageMemoryIndexSchemaExtension,
+} from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import {
+  isPostgresSqlConnection,
+  closeMemorySqliteWalMaintenance,
+  configureMemorySqliteWalMaintenance,
+  loadSqliteVecExtension,
+  stopMemorySqliteWalMaintenance,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { readOpenClawAgentDatabaseIdentity } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  bindSqliteWorkerDatabase,
+  admitSqliteSchema,
+  getAdmittedSqliteSchemaFacts,
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
+  readSqliteDatabasePendingScopedWriteToken,
+  readSqliteDatabaseScopedWriteToken,
   runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
+  stageOpenClawAgentDatabaseSchemaExtension,
   supportsNodeSqliteExtensionLoading,
+  tableExists,
+  withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
-import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
+import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
+import {
+  clearMemoryEmbeddingCacheIdentities,
+  countMemoryEmbeddingCache,
+  pruneMemoryEmbeddingCache,
+  upsertMemoryEmbeddingCache,
+  type MemoryEmbeddingCacheSize,
+} from "./manager-embedding-cache.js";
+import {
+  upgradeMemoryIndexProviderKey,
+  writeMemoryIndexMetadata,
+} from "./manager-index-metadata.js";
+import { readMemoryIndex } from "./manager-index-read.js";
+import { bindPostgresMemoryPublication } from "./manager-publication-postgres.js";
 import type {
+  MemoryEmbeddingCacheEntry,
+  MemoryEmbeddingCacheHeader,
   MemoryPublicationConnection,
+  MemoryPublicationFragment,
   MemoryPublicationOperations,
   MemoryPublicationResult,
 } from "./manager-publication-task.js";
-import { assertMemoryShadowIdentity, type MemoryShadowFailure } from "./manager-shadow-task.js";
+import {
+  MEMORY_EMBEDDING_CACHE_WRITE_SCOPE,
+  MEMORY_INDEX_WRITE_SCOPE,
+} from "./manager-publication-task.js";
+import { readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
+import { admitMemoryVectorIndex } from "./manager-search-knn.js";
+import { memoryVectorSearchSchema } from "./manager-search-schema.js";
+import {
+  assertMemoryShadowIdentity,
+  readMemoryShadowIdentity,
+  readMemoryConnectionPragmas,
+  type MemoryShadowConnection,
+  type MemoryShadowFailure,
+} from "./manager-shadow-task.js";
 import {
   MemorySourceIndexKernel,
   type MemorySourceIndexHeader,
   type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
+import { refreshMemorySessionSourceState } from "./manager-source-state.js";
+
+type PublicationConnection =
+  | MemoryShadowConnection
+  | {
+      kind: "agent";
+      pragmas: MemoryShadowConnection["pragmas"];
+    };
+
+// Schema admission restores the foreign-key policy captured from the agent owner.
+const agentConnectionPragmas = new WeakMap<DatabaseSync, MemoryShadowConnection["pragmas"]>();
+const loadedExtensions = new WeakMap<DatabaseSync, string>();
+const embeddingCacheSizes = new WeakMap<
+  DatabaseSync,
+  MemoryEmbeddingCacheSize & { token?: string }
+>();
 
 function failure(error: unknown): MemoryShadowFailure {
   return {
@@ -39,18 +115,57 @@ function failure(error: unknown): MemoryShadowFailure {
   };
 }
 
-export function openExistingSqliteWorkerBackend(
-  input: MemoryPublicationConnection,
+export function createSqliteWorkerBackend(
+  input: { allowExtension: boolean },
   context: { databasePath: string },
-): SqliteWorkerBackend<MemoryPublicationOperations> {
-  const assertPath = () => assertMemoryShadowIdentity(context.databasePath, input.fileIdentity);
-  assertPath();
-  const db = openNodeSqliteDatabase(resolveExistingSqliteFileUri(context.databasePath), {
-    allowExtension: !process.permission && supportsNodeSqliteExtensionLoading(),
-  });
-  return createPublicationBackend(input, context.databasePath, db, true, (stage) =>
-    requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+): Promise<SqliteWorkerBackend<MemoryPublicationOperations>> {
+  return openShadowBackend(context.databasePath, input.allowExtension);
+}
+
+export function openExistingSqliteWorkerBackend(
+  input: MemoryShadowConnection,
+  context: { databasePath: string },
+): Promise<SqliteWorkerBackend<MemoryPublicationOperations>> {
+  return openShadowBackend(context.databasePath, true, input);
+}
+
+async function openShadowBackend(
+  databasePath: string,
+  allowExtension: boolean,
+  existing?: MemoryShadowConnection,
+): Promise<SqliteWorkerBackend<MemoryPublicationOperations>> {
+  const db = openNodeSqliteDatabase(
+    existing ? resolveExistingSqliteFileUri(databasePath) : databasePath,
+    {
+      allowExtension: allowExtension && !process.permission && supportsNodeSqliteExtensionLoading(),
+    },
   );
+  const close = async () => {
+    await stopMemorySqliteWalMaintenance(db);
+    try {
+      closeMemorySqliteWalMaintenance(db);
+    } finally {
+      if (db.isOpen) {
+        db.close();
+      }
+    }
+  };
+  try {
+    configureMemorySqliteWalMaintenance(db, { busyTimeoutMs: 5_000, databasePath });
+    const connection = existing ?? {
+      fileIdentity: readMemoryShadowIdentity(databasePath),
+      pragmas: readMemoryConnectionPragmas(db, "Invalid memory publication connection policy"),
+    };
+    return {
+      ...createPublicationBackend(connection, databasePath, db, (stage) =>
+        requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+      ),
+      close,
+    };
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }
 
 /** Agent publication borrows its executor connection; only private shadows open their own. */
@@ -58,257 +173,529 @@ export function bindSqliteWorkerBackend(
   input: MemoryPublicationConnection,
   context: {
     databasePath: string;
-    database: DatabaseSync;
+    database: EngineConnection;
+    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
     admit(stage: "transaction" | "commit"): void;
   },
-): SqliteWorkerBackend<MemoryPublicationOperations> {
-  return createPublicationBackend(input, context.databasePath, context.database, false, (stage) =>
+) {
+  if (isPostgresSqlConnection(context.database)) {
+    return bindPostgresMemoryPublication(context, "kind" in input ? input.stageId : undefined);
+  }
+  const db = context.database;
+  let pragmas = agentConnectionPragmas.get(db);
+  if ("kind" in input && !pragmas) {
+    pragmas = readMemoryConnectionPragmas(db, "Invalid memory publication connection policy");
+    agentConnectionPragmas.set(db, pragmas);
+  }
+  const connection: PublicationConnection =
+    "kind" in input
+      ? {
+          kind: "agent",
+          pragmas: pragmas!,
+        }
+      : input;
+  return createPublicationBackend(connection, context.databasePath, db, (stage) =>
     context.admit(stage),
   );
 }
 
 function createPublicationBackend(
-  input: MemoryPublicationConnection,
+  input: PublicationConnection,
   databasePath: string,
   db: DatabaseSync,
-  ownsConnection: boolean,
   admit: (stage: "transaction" | "commit") => void,
-): SqliteWorkerBackend<MemoryPublicationOperations> {
-  const assertPath = () => assertMemoryShadowIdentity(databasePath, input.fileIdentity);
+) {
+  const vectorIndex = admitMemoryVectorIndex(db);
+  function assertSourceCurrent(header: MemorySourceIndexHeader): void {
+    if (
+      header.source === "sessions" &&
+      hasMemorySessionTombstone(db, header.agentId, header.sessionId)
+    ) {
+      throw new Error(
+        "A session was forgotten while memory indexing was running; retry the memory index.",
+      );
+    }
+  }
+  // Agent handles are admitted by the database owner; private shadows are checked once on open.
+  if (!("kind" in input)) {
+    assertMemoryShadowIdentity(databasePath, input.fileIdentity);
+  }
+  // Each agent run binds its own backend; shadow runs use the private writer queue.
+  // Large sources stay in worker memory without per-fragment SQLite I/O.
   let staged:
-    | {
-        operation: string;
-        header: MemorySourceIndexHeader;
-        rows: number;
-        row: number;
-        part: number;
-      }
+    | ({
+        fragments: MemoryPublicationFragment[];
+      } & (
+        | { kind: "source"; header: MemorySourceIndexHeader }
+        | { kind: "cache"; header: MemoryEmbeddingCacheHeader }
+      ))
     | undefined;
-  let loadedExtension: string | undefined;
-  try {
-    assertPath();
-    for (const [name, value] of Object.entries(input.pragmas)) {
-      if (!Number.isSafeInteger(value)) {
-        throw new Error("Invalid memory publication connection policy");
-      }
-      if (ownsConnection) {
-        db.exec(`PRAGMA ${name} = ${value}`);
-      } else {
-        const row = db.prepare(`PRAGMA ${name}`).get();
-        if (!row || Number(Object.values(row)[0]) !== value) {
-          throw new Error(
-            `Memory publication differs from its canonical connection policy: ${name}`,
-          );
-        }
-      }
+  const loadExtension = (extensionPath: string | undefined) => {
+    if (extensionPath && extensionPath !== loadedExtensions.get(db)) {
+      loadSqliteVecExtensionFromPath(db, extensionPath);
+      loadedExtensions.set(db, extensionPath);
     }
-    // Connection-local scratch spills to SQLite's temporary storage instead of
-    // retaining a second complete source in the Worker or its broker queue.
-    if (ownsConnection) {
-      db.exec("PRAGMA temp_store = FILE");
+  };
+  const discard = () => {
+    staged = undefined;
+  };
+  const finish = <T>(outcome: MemoryPublicationResult<T>): MemoryPublicationResult<T> => {
+    if (outcome.ok) {
+      discard();
     }
-    db.exec(
-      "CREATE TEMP TABLE memory_publication_input (row INTEGER NOT NULL, part INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY (row, part)) WITHOUT ROWID",
+    return outcome;
+  };
+  const transact = <T>(
+    run: (hooks: { onBegin: () => void; withCommit: (commit: () => void) => void }) => T,
+  ): MemoryPublicationResult<T> => {
+    let entered = false;
+    let committed = false;
+    let writeToken: string | undefined;
+    try {
+      const value = run({
+        onBegin: () => {
+          entered = true;
+          admit("transaction");
+        },
+        withCommit: (commit) => {
+          admit("commit");
+          writeToken = readSqliteDatabasePendingScopedWriteToken(db, MEMORY_INDEX_WRITE_SCOPE);
+          commit();
+          committed = true;
+        },
+      });
+      return { ok: true, value, writeToken };
+    } catch (error) {
+      return { ok: false, error: failure(error), entered, committed };
+    }
+  };
+  const write = <T>(
+    run: () => T,
+    scopes = [MEMORY_INDEX_WRITE_SCOPE],
+  ): MemoryPublicationResult<T> =>
+    transact((hooks) =>
+      runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          hooks.onBegin();
+          // Index writes do not change session facts. DDL still invalidates all scopes.
+          return withSqliteDatabaseWriteScope(db, scopes, run);
+        },
+        { withCommit: hooks.withCommit },
+      ),
     );
-    const insert = db.prepare(
-      "INSERT INTO temp.memory_publication_input (row, part, json) VALUES (?, ?, ?)",
-    );
-    const discard = () => {
-      db.exec("DELETE FROM temp.memory_publication_input");
-      staged = undefined;
-    };
-    const transact = <T>(
-      run: (hooks: { onBegin: () => void; withCommit: (commit: () => void) => void }) => T,
-    ): MemoryPublicationResult<T> => {
-      let entered = false;
-      let committed = false;
-      try {
-        assertPath();
-        // Failed BEGIN is returned to the preparing host without sleeping here.
-        // It revalidates memory-file input before every retry, as before.
-        db.exec("PRAGMA busy_timeout = 0");
-        const value = run({
-          onBegin: () => {
-            entered = true;
-            db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
-            assertPath();
-            admit("transaction");
-          },
-          withCommit: (commit) => {
-            assertPath();
-            admit("commit");
-            commit();
-            committed = true;
-          },
-        });
-        return { ok: true, value };
-      } catch (error) {
-        return { ok: false, error: failure(error), entered, committed };
-      } finally {
-        if (db.isOpen) {
-          db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
-        }
-      }
-    };
+  const writeSingleStatement = <T>(statement: () => T): MemoryPublicationResult<T> => {
+    let committed = false;
+    try {
+      admit("transaction");
+      // Autocommit makes the statement the effect boundary.
+      admit("commit");
+      const value = withSqliteDatabaseWriteScope(db, [MEMORY_INDEX_WRITE_SCOPE], () =>
+        runSqliteSingleStatementSync(db, statement),
+      );
+      committed = true;
+      const writeToken = readSqliteDatabaseScopedWriteToken(db, MEMORY_INDEX_WRITE_SCOPE);
+      return { ok: true, value, writeToken };
+    } catch (error) {
+      return { ok: false, error: failure(error), entered: true, committed };
+    }
+  };
+  const withFacts = <T>(
+    result: MemoryPublicationResult<T>,
+    includeSearchSchema = false,
+  ): MemoryPublicationResult<T> => {
+    if (!result.ok) {
+      return result;
+    }
+    const facts = readMemoryDatabaseFacts(db);
+    // DDL receipts carry the admitted SQL verbatim, including sqlite-vec's exact declaration.
+    const schema = includeSearchSchema && getAdmittedSqliteSchemaFacts(db)!.tableSql;
     return {
-      assertSettled() {
-        assertTransactionUsable(db);
-        if (!db.isOpen || db.isTransaction) {
-          throw new Error("Memory publication left an unsettled native connection");
-        }
-      },
-      execute(command) {
-        assertPath();
-        if (command.type === "stage.start") {
-          if (staged) {
-            throw new Error("Memory publication input already belongs to another operation");
+      ...result,
+      facts,
+      ...(schema
+        ? {
+            searchSchema: {
+              fts: schema.get(MEMORY_INDEX_FTS_TABLE) ?? null,
+              paths: schema.get(MEMORY_INDEX_PATHS_FTS_TABLE) ?? null,
+              vector: schema.get(MEMORY_INDEX_VECTOR_TABLE) ?? null,
+            },
           }
-          staged = { ...command.input, row: 0, part: 0 };
-          return undefined;
-        }
-        if (command.type === "stage.discard") {
-          if (staged?.operation === command.input.operation) {
-            discard();
-          }
-          return undefined;
-        }
-        if (command.type === "stage.append") {
-          if (!staged || staged.operation !== command.input.operation) {
-            throw new Error("Memory publication input owner changed");
-          }
-          for (const fragment of command.input.fragments) {
-            if (
-              fragment.row !== staged.row ||
-              fragment.part !== staged.part ||
-              staged.row >= staged.rows
-            ) {
-              throw new Error("Memory publication input is incomplete or out of order");
+        : {}),
+    };
+  };
+  const cacheSize = (
+    recountBelow?: number,
+    token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE),
+  ) => {
+    let retained = embeddingCacheSizes.get(db);
+    if (
+      !retained ||
+      retained.token !== token ||
+      (recountBelow !== undefined && retained.size <= recountBelow)
+    ) {
+      retained = { size: countMemoryEmbeddingCache(db), exact: true, token };
+      embeddingCacheSizes.set(db, retained);
+    }
+    return retained;
+  };
+  const writeCache = (
+    run: (size: MemoryEmbeddingCacheSize) => MemoryEmbeddingCacheSize,
+    recountBelow?: number,
+  ): MemoryPublicationResult<boolean> => {
+    // Register the scope before write decides whether this connection tracks scoped receipts.
+    const token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE);
+    const result = write(
+      () => run(cacheSize(recountBelow, token)),
+      [MEMORY_EMBEDDING_CACHE_WRITE_SCOPE],
+    );
+    if (!result.ok) {
+      return result;
+    }
+    embeddingCacheSizes.set(db, {
+      ...result.value,
+      token: readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE),
+    });
+    return { ...result, value: true };
+  };
+  return bindSqliteWorkerDatabase<MemoryPublicationOperations>(db, {
+    async prepare(command) {
+      if (command.type !== "vector.prepare") {
+        return;
+      }
+      const extensionPath = command.input.state.extensionPath;
+      const loadedPath = loadedExtensions.get(db);
+      if (loadedPath && (!extensionPath || extensionPath === loadedPath)) {
+        return;
+      }
+      // Module resolution can yield; the executor awaits preparation before
+      // entering its synchronous operation and transaction admission.
+      const loaded = await loadSqliteVecExtension({ db, extensionPath });
+      if (!loaded.ok || !loaded.extensionPath) {
+        throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+      }
+      loadedExtensions.set(db, loaded.extensionPath);
+    },
+    execute(command) {
+      if (command.type === "database.reset") {
+        throw new Error("Worker memory reset requires PostgreSQL");
+      }
+      if (
+        command.type === "database.stage.start" ||
+        command.type === "database.stage.publish" ||
+        command.type === "database.stage.discard"
+      ) {
+        throw new Error("Connection-local memory staging requires PostgreSQL");
+      }
+      if (command.type === "connection.inspect") {
+        return "kind" in input
+          ? {
+              fileIdentity: readMemoryShadowIdentity(databasePath),
+              pragmas: readMemoryConnectionPragmas(
+                db,
+                "Invalid memory publication connection policy",
+              ),
             }
-            insert.run(fragment.row, fragment.part, fragment.json);
-            if (fragment.last) {
-              staged.row++;
-              staged.part = 0;
-            } else {
-              staged.part++;
+          : input;
+      }
+      if (
+        command.type === "index.facts" ||
+        command.type === "source.state" ||
+        command.type === "source.hash" ||
+        command.type === "source.chunks" ||
+        command.type === "cache.read"
+      ) {
+        return readMemoryIndex(db, command).value;
+      }
+      if (command.type === "schema.admit") {
+        // Request-owned managers reopen this worker for every search. Retain repair
+        // proof on the existing database admission, invalidated by index/import writes.
+        // The existing writer reservation still owns serialization; a receipt is not a lock.
+        admit("transaction");
+        const schema = { ...command.input, db };
+        const writeToken = readSqliteDatabaseScopedWriteToken(db, MEMORY_INDEX_WRITE_SCOPE);
+        const repaired = readRepairedMemoryIndexSchema(schema, writeToken);
+        // Storage/STRICT migration must disable foreign keys before BEGIN.
+        if (!repaired) {
+          db.exec("PRAGMA foreign_keys = OFF");
+        }
+        try {
+          const result = repaired
+            ? { ok: true as const, value: repaired, writeToken }
+            : write(() => {
+                stageOpenClawAgentDatabaseSchemaExtension(db);
+                return ensureMemoryIndexSchema(schema);
+              });
+          if (result.ok && !repaired) {
+            admitSqliteSchema(db);
+            if (!schema.ftsEnabled || result.value.ftsAvailable) {
+              publishRepairedMemoryIndexSchema(schema, result.writeToken);
             }
           }
-          return undefined;
+          const published = withFacts(result, true);
+          return published.ok && "kind" in input
+            ? {
+                ...published,
+                value: {
+                  ...published.value,
+                  admission: {
+                    hasIndex: true,
+                    ftsAvailable: published.value.ftsAvailable,
+                    identity: readOpenClawAgentDatabaseIdentity({ db }),
+                    facts: published.facts,
+                  },
+                },
+              }
+            : published;
+        } finally {
+          if (!repaired && db.isOpen) {
+            db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
+          }
         }
-        const extensionPath = command.input.state.extensionPath;
-        if (extensionPath && extensionPath !== loadedExtension) {
-          loadSqliteVecExtensionFromPath(db, extensionPath);
-          assertPath();
-          loadedExtension = extensionPath;
+      }
+      if (command.type === "index.upgradeProviderKey") {
+        return withFacts(
+          write(
+            () => upgradeMemoryIndexProviderKey(db, command.input),
+            [MEMORY_INDEX_WRITE_SCOPE, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE],
+          ),
+        );
+      }
+      if (command.type === "index.writeMetadata") {
+        return withFacts(writeSingleStatement(() => writeMemoryIndexMetadata(db, command.input)));
+      }
+      if (command.type === "source.refresh") {
+        return withFacts(
+          write(() => {
+            const changed = refreshMemorySessionSourceState(db, command.input);
+            if (changed) {
+              advanceMemoryIndexRevision(db);
+            }
+            return changed;
+          }),
+        );
+      }
+      if (command.type === "stage.start" || command.type === "cache.stage.start") {
+        staged =
+          command.type === "stage.start"
+            ? { ...command.input, kind: "source", fragments: [] }
+            : { ...command.input, kind: "cache", fragments: [] };
+        return undefined;
+      }
+      if (command.type === "stage.discard") {
+        discard();
+        return undefined;
+      }
+      if (command.type === "stage.append") {
+        if (!staged) {
+          throw new Error("Memory publication input was not started");
         }
-        if (command.type === "database.publish") {
-          const publication = command.input;
-          return transact((hooks) => {
+        staged.fragments.push(...command.input.fragments);
+        return undefined;
+      }
+      if (command.type === "cache.prune") {
+        const { maxEntries, recount, unreferencedFirst } = command.input;
+        if (!recount && cacheSize().size <= maxEntries) {
+          return { ok: true, value: false };
+        }
+        let exceedsCap = false;
+        const result = writeCache(
+          (size) => {
+            exceedsCap = size.size > maxEntries;
+            return pruneMemoryEmbeddingCache(db, size, maxEntries, unreferencedFirst);
+          },
+          recount ? maxEntries : undefined,
+        );
+        return result.ok ? { ...result, value: exceedsCap } : result;
+      }
+      if (command.type === "cache.clear") {
+        return writeCache((size) => ({
+          ...size,
+          size: size.size - clearMemoryEmbeddingCacheIdentities(db, command.input.identities),
+        }));
+      }
+      if (command.type === "cache.write" || command.type === "cache.write.inline") {
+        let header: MemoryEmbeddingCacheHeader;
+        let readEntries: () => Iterable<MemoryEmbeddingCacheEntry>;
+        if (command.type === "cache.write.inline") {
+          header = command.input.header;
+          const entries = command.input.entries;
+          readEntries = () => entries;
+        } else {
+          if (staged?.kind !== "cache") {
+            throw new Error("Memory cache input was not started");
+          }
+          header = staged.header;
+          const fragments = staged.fragments;
+          readEntries = () => readPublicationRows<MemoryEmbeddingCacheEntry>(fragments);
+        }
+        const outcome = writeCache((size) => {
+          const eligible = new Map<string, boolean>();
+          function* entries() {
+            for (const entry of readEntries()) {
+              if (entry.sessionId) {
+                let current = eligible.get(entry.sessionId);
+                if (current === undefined) {
+                  current = !hasMemorySessionTombstone(db, header.agentId, entry.sessionId);
+                  eligible.set(entry.sessionId, current);
+                }
+                if (!current) {
+                  continue;
+                }
+              }
+              yield entry;
+            }
+          }
+          return upsertMemoryEmbeddingCache({ ...header, db, cacheSize: size, entries });
+        });
+        return command.type === "cache.write" ? finish(outcome) : outcome;
+      }
+      if (command.type === "vector.prepare") {
+        const loadedPath = loadedExtensions.get(db);
+        if (!loadedPath) {
+          throw new Error("Memory vector extension was not prepared");
+        }
+        if (!tableExists(db, "chunks_vec")) {
+          return {
+            ok: true,
+            value: { extensionPath: loadedPath, retiredLegacy: false },
+          };
+        }
+        return withFacts(
+          write(() => {
+            stageMemoryIndexSchemaExtension(db);
+            stageOpenClawAgentDatabaseSchemaExtension(db);
+            db.exec("DROP TABLE IF EXISTS chunks_vec");
+            return { extensionPath: loadedPath, retiredLegacy: true };
+          }),
+        );
+      }
+      if (command.type === "vector.ensure") {
+        const { dimensions } = command.input;
+        if (!Number.isSafeInteger(dimensions) || dimensions <= 0) {
+          throw new Error("Memory vector dimensions must be a positive integer");
+        }
+        const { meta, hasIndexedChunks, hasVectorTable } = readMemoryDatabaseFacts(db);
+        const currentDimensions = meta ? meta.vectorDims : command.input.currentDimensions;
+        if (currentDimensions === dimensions && hasVectorTable) {
+          loadExtension(command.input.state.extensionPath);
+          admitStoreSearch(db, memoryVectorSearchSchema(dimensions), {
+            extension: "memory.vector",
+          });
+          return { ok: true, value: undefined };
+        }
+        loadExtension(command.input.state.extensionPath);
+        return withFacts(
+          write(() => {
+            stageMemoryIndexSchemaExtension(db);
+            stageOpenClawAgentDatabaseSchemaExtension(db);
+            if (hasVectorTable) {
+              vectorIndex.capability.drop(vectorIndex.index);
+            }
+            vectorIndex.capability.create(vectorIndex.index, dimensions);
+            admitStoreSearch(db, memoryVectorSearchSchema(dimensions), {
+              extension: "memory.vector",
+            });
+            if (meta && !meta.vectorDims && !hasIndexedChunks) {
+              writeMemoryIndexMetadata(db, { ...meta, vectorDims: dimensions });
+            }
+          }),
+          true,
+        );
+      }
+      loadExtension(command.input.state.extensionPath);
+      if (command.type === "database.publish") {
+        const publication = command.input;
+        return withFacts(
+          transact((hooks) => {
             assertMemoryShadowIdentity(publication.sourcePath, publication.sourceIdentity);
             publishMemoryDatabaseTables({
               ...publication,
               targetDb: db,
               onBegin: () => {
                 hooks.onBegin();
+                stageOpenClawAgentDatabaseSchemaExtension(db);
                 assertMemoryShadowIdentity(publication.sourcePath, publication.sourceIdentity);
               },
               withCommit: hooks.withCommit,
             });
-          });
-        }
-        if (command.type === "source.delete") {
-          return transact((hooks) =>
-            runSqliteImmediateTransactionSync(
-              db,
-              () => {
-                hooks.onBegin();
-                return new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(
-                  command.input,
-                );
-              },
-              { withCommit: hooks.withCommit },
-            ),
-          );
-        }
-        if (
-          !staged ||
-          staged.operation !== command.input.operation ||
-          staged.row !== staged.rows ||
-          staged.part !== 0
-        ) {
-          throw new Error("Memory publication input was not sealed");
-        }
-        const header = staged.header;
-        const outcome = transact((hooks) =>
-          runSqliteImmediateTransactionSync(
-            db,
-            () => {
-              hooks.onBegin();
-              if (
-                header.source === "sessions" &&
-                hasMemorySessionTombstone(db, header.agentId, header.sessionId)
-              ) {
-                throw new Error(
-                  "A session was forgotten while memory indexing was running; retry the memory index.",
-                );
-              }
-              const beforeRevision = readMemoryDatabaseRevision(db);
-              new MemorySourceIndexKernel(db, command.input.state).replaceRows(
-                header,
-                readStagedRows(db),
-              );
-              return { beforeRevision, databaseRevision: readMemoryDatabaseRevision(db) };
-            },
-            { withCommit: hooks.withCommit },
-          ),
+          }),
         );
-        // Failed publication closes the Worker at its host owner. Preserve the
-        // transaction error instead of replacing it with a staging-cleanup error.
-        if (outcome.ok) {
-          try {
-            discard();
-          } catch (error) {
-            return {
-              ok: false,
-              error: failure(error),
-              entered: true,
-              committed: true,
-            };
+      }
+      if (command.type === "source.delete") {
+        return withFacts(
+          write(() => {
+            const changed = new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(
+              command.input,
+            );
+            if (changed) {
+              advanceMemoryIndexRevision(db);
+            }
+            return changed;
+          }),
+        );
+      }
+      if (command.type === "source.replace.group") {
+        const outcome = write(() => {
+          const kernel = new MemorySourceIndexKernel(db, command.input.state);
+          const inputs = command.input.sources;
+          function* sources() {
+            for (const { header, fragments } of inputs) {
+              assertSourceCurrent(header);
+              yield { header, rows: readPublicationRows<MemorySourceIndexRow>(fragments) };
+            }
           }
+          kernel.replaceGroup(sources());
+          advanceMemoryIndexRevision(db);
+          return true;
+        });
+        return outcome.ok
+          ? { ...outcome, facts: readMemoryDatabaseFacts(db, command.input.state.hasVectorTable) }
+          : outcome;
+      }
+      let header: MemorySourceIndexHeader;
+      let rows: Iterable<MemorySourceIndexRow>;
+      if (command.type === "source.replace.inline") {
+        header = command.input.header;
+        rows = readPublicationRows<MemorySourceIndexRow>(command.input.fragments);
+      } else {
+        if (staged?.kind !== "source") {
+          throw new Error("Memory publication input was not started");
         }
-        return outcome;
-      },
-      close() {
-        if (ownsConnection) {
-          db.close();
-        } else {
-          db.exec("DROP TABLE temp.memory_publication_input");
-        }
-      },
-    };
-  } catch (error) {
-    if (ownsConnection) {
-      db.close();
-    }
-    throw error;
-  }
+        header = staged.header;
+        rows = readPublicationRows<MemorySourceIndexRow>(staged.fragments);
+      }
+      let facts: ReturnType<typeof readMemoryDatabaseFacts> | undefined;
+      const outcome = write(() => {
+        assertSourceCurrent(header);
+        new MemorySourceIndexKernel(db, command.input.state).replaceRows(header, rows);
+        advanceMemoryIndexRevision(db);
+        facts = readMemoryDatabaseFacts(db, command.input.state.hasVectorTable);
+        return true;
+      });
+      const published = outcome.ok ? { ...outcome, facts } : outcome;
+      return command.type === "source.replace.inline" ? published : finish(published);
+    },
+    close() {
+      discard();
+    },
+  });
 }
 
-function* readStagedRows(db: DatabaseSync): Generator<MemorySourceIndexRow> {
+function* readPublicationRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(
+  fragments: Iterable<MemoryPublicationFragment>,
+): Generator<Row> {
+  // SAFETY: Only the paired source/cache producer writes these sealed records.
+  const parse = (parts: string[]) => JSON.parse(parts.join("")) as Row;
   let parts: string[] = [];
-  let row = 0;
-  for (const fragment of db
-    .prepare("SELECT row, json FROM temp.memory_publication_input ORDER BY row, part")
-    .iterate()) {
-    if (fragment.row !== row) {
-      // SAFETY: Only the paired typed producer writes these sealed JSON records.
-      yield JSON.parse(parts.join("")) as MemorySourceIndexRow;
+  for (const fragment of fragments) {
+    parts.push(fragment.json);
+    if (fragment.last) {
+      yield parse(parts);
       parts = [];
-      row = Number(fragment.row);
     }
-    parts.push(String(fragment.json));
   }
   if (parts.length) {
-    // SAFETY: Only the paired typed producer writes these sealed JSON records.
-    yield JSON.parse(parts.join("")) as MemorySourceIndexRow;
+    yield parse(parts);
   }
 }

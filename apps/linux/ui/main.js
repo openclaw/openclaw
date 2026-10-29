@@ -7,6 +7,9 @@ const elements = {
   activityLabel: document.querySelector("#activity-label"),
   actionControls: document.querySelector("#action-controls"),
   channel: document.querySelector("#channel"),
+  channelLabel: document.querySelector("#channel-label"),
+  channelField: document.querySelector("#channel-field"),
+  bundledInstall: document.querySelector("#bundled-install"),
   connectionChoices: document.querySelector("#connection-choices"),
   connectionLocal: document.querySelector("#connection-local"),
   connectionRemote: document.querySelector("#connection-remote"),
@@ -43,6 +46,8 @@ const elements = {
   remoteTransportSsh: document.querySelector("#remote-transport-ssh"),
   remoteUrl: document.querySelector("#remote-url"),
   remoteUrlField: document.querySelector("#remote-url-field"),
+  runtimeFlavor: document.querySelector("#runtime-flavor"),
+  runtimeSeparator: document.querySelector("#runtime-separator"),
   setupBack: document.querySelector("#setup-back"),
   setupContinue: document.querySelector("#setup-continue"),
   setupNavigation: document.querySelector(".setup-navigation"),
@@ -75,6 +80,11 @@ function show(element, visible) {
   element.classList.toggle("hidden", !visible);
 }
 
+function bundledRuntimeLabel() {
+  return firstRunBuild?.runtimeFlavor === "jit" ? "JIT"
+    : firstRunBuild?.runtimeFlavor === "aot" ? "AOT (experimental)" : null;
+}
+
 function render({
   activity = null,
   description,
@@ -91,10 +101,18 @@ function render({
   if (activity) {
     elements.activityLabel.textContent = activity;
   }
-  elements.installHint.textContent =
-    firstRunBuild?.platform === "freebsd"
+  const bundled = bundledRuntimeLabel();
+  elements.installButton.textContent = bundled ? "Install bundled OpenClaw" : "Install OpenClaw";
+  elements.bundledInstall.textContent = bundled
+    ? `Bundled with app v${firstRunBuild.version} · ${bundled}` : "";
+  show(elements.bundledInstall, Boolean(bundled));
+  show(elements.channelLabel, !bundled);
+  show(elements.channelField, !bundled);
+  elements.installHint.textContent = bundled
+    ? "Installs this app's bundled OpenClaw runtime in ~/.openclaw. Update the desktop app to change versions."
+    : firstRunBuild?.platform === "freebsd"
       ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
-      : "Installs the CLI and managed Node runtime in ~/.openclaw.";
+      : "Installs OpenClaw and its managed runtime in ~/.openclaw.";
   show(elements.installControls, showInstall);
   show(elements.actionControls, false);
   show(elements.editConnection, false);
@@ -190,12 +208,6 @@ function gatewayHost(gateway) {
   return (gateway.host || "").trim().replace(/\.$/, "");
 }
 
-function canConnectDirect(gateway) {
-  return (
-    gateway.tls || gateway.directReachable || gatewayHost(gateway).toLowerCase().endsWith(".ts.net")
-  );
-}
-
 function renderGateways(gateways) {
   elements.gatewayList.replaceChildren();
   elements.discoveryStatus.textContent = gateways.length ? `${gateways.length} FOUND` : "SEARCHING";
@@ -214,7 +226,9 @@ function renderGateways(gateways) {
     const button = document.createElement("button");
     button.className = "gateway-card";
     button.type = "button";
-    button.disabled = !canConnectDirect(gateway);
+    button.disabled = !(
+      gateway.tls || gateway.directReachable || gatewayHost(gateway).toLowerCase().endsWith(".ts.net")
+    );
     if (button.disabled) {
       button.title = "This gateway does not advertise a direct connection.";
     }
@@ -284,21 +298,33 @@ async function refreshGateways() {
   }
 }
 
-async function connect() {
-  render({
+async function connect(action) {
+  render(action ? {
+    activity: `${action === "restart" ? "Restarting" : "Starting"} gateway…`,
+    description: "OpenClaw is waiting for the local gateway to become healthy.",
+    eyebrow: "GATEWAY",
+    title: "One moment",
+  } : {
     activity: "Checking local services…",
     description: "Finding your gateway and preparing the Control UI.",
     title: "Connecting to OpenClaw",
   });
   try {
+    if (action) {
+      await invoke("gateway_action", { action });
+      return;
+    }
     const snapshot = await invoke("bootstrap");
     if (snapshot.phase === "missingCli" || snapshot.phase === "unconfigured") {
       firstRunPhase = snapshot.phase;
-      firstRunBuild = await invoke("build_info").catch(() => null);
-      if (firstRunBuild?.releaseBuild === false) {
+      if (firstRunBuild?.releaseBuild === false && !bundledRuntimeLabel()) {
         elements.channel.value = "dev";
       }
-      renderWelcome();
+      if (snapshot.setupError) {
+        renderConnectionChoices(snapshot.setupError);
+      } else {
+        renderWelcome();
+      }
     } else if (snapshot.phase === "remoteError") {
       renderRemoteRetry(snapshot.detail);
     }
@@ -319,16 +345,18 @@ function renderWelcome() {
   show(elements.welcomeScreen, true);
 }
 
-function renderConnectionChoices() {
+function renderConnectionChoices(error = null) {
   const freebsd = firstRunBuild?.platform === "freebsd";
+  const bundled = bundledRuntimeLabel();
   elements.localSubtitle.textContent = freebsd
     ? "Connect to a Gateway you start with the FreeBSD service or in a terminal."
+    : bundled ? `Bundled with app v${firstRunBuild.version} · ${bundled}. Installs and starts automatically.`
     : "Private to this computer. Installs and starts automatically.";
   render({
-    description: freebsd
+    description: error || (freebsd
       ? "On FreeBSD, install the CLI if needed, then start your Gateway with the openclaw package service or run openclaw gateway run in a terminal. Connect here using the same account you used for onboarding."
-      : "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.",
-    dot: "idle",
+      : "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background."),
+    dot: error ? "error" : "idle",
     eyebrow: "CHOOSE YOUR GATEWAY",
     title: "Where should your assistant live?",
   });
@@ -350,6 +378,8 @@ function selectConnection(connection) {
   elements.footerMode.textContent = isRemote ? "REMOTE GATEWAY" : "LOCAL GATEWAY";
   show(elements.remoteDetails, isRemote);
   show(elements.setupContinue, !isRemote && !editingConnection);
+  elements.setupContinue.textContent = bundledRuntimeLabel() && firstRunPhase === "missingCli"
+    ? "Install bundled OpenClaw" : "Continue";
   show(elements.discovery, isRemote);
   if (isRemote) {
     void refreshGateways();
@@ -405,7 +435,7 @@ async function continueLocalSetup() {
     }
     return;
   }
-  if (firstRunBuild?.releaseBuild === false) {
+  if (firstRunBuild?.releaseBuild === false && !bundledRuntimeLabel()) {
     render({
       description:
         firstRunBuild?.platform === "freebsd"
@@ -585,14 +615,16 @@ async function install() {
   render({
     activity: "Installing OpenClaw…",
     description:
-      firstRunBuild?.platform === "freebsd"
+      bundledRuntimeLabel()
+        ? "This app's bundled OpenClaw runtime is being installed in your home directory."
+        : firstRunBuild?.platform === "freebsd"
         ? "Installing the CLI requires a compatible system Node.js and npm. Start the Gateway with the package service or in a terminal after installation."
-        : "A managed CLI and Node runtime are being installed in your home directory.",
+        : "OpenClaw and its managed runtime are being installed in your home directory.",
     eyebrow: "INSTALLING",
     title: "Preparing your companion",
   });
   try {
-    await invoke("install_cli", { channel: elements.channel.value });
+    await invoke("install_cli", { channel: bundledRuntimeLabel() ? "stable" : elements.channel.value });
     elements.logStatus.textContent = "COMPLETE";
   } catch (error) {
     const message = friendlyError(error);
@@ -608,20 +640,6 @@ async function install() {
   } finally {
     elements.installButton.disabled = false;
     elements.channel.disabled = false;
-  }
-}
-
-async function runGatewayAction(action) {
-  render({
-    activity: `${action === "restart" ? "Restarting" : "Starting"} gateway…`,
-    description: "OpenClaw is waiting for the local gateway to become healthy.",
-    eyebrow: "GATEWAY",
-    title: "One moment",
-  });
-  try {
-    await invoke("gateway_action", { action });
-  } catch (error) {
-    renderRetry(friendlyError(error));
   }
 }
 
@@ -645,7 +663,7 @@ function renderRetry(message) {
 elements.installButton.addEventListener("click", () => {
   void install();
 });
-elements.welcomeContinue.addEventListener("click", renderConnectionChoices);
+elements.welcomeContinue.addEventListener("click", () => renderConnectionChoices());
 elements.connectionLocal.addEventListener("click", () => selectConnection("local"));
 elements.connectionRemote.addEventListener("click", () => selectConnection("remote"));
 elements.setupBack.addEventListener("click", () =>
@@ -705,7 +723,7 @@ await listen("updater://not-available", () => {
 await listen("updater://available", ({ payload }) => {
   elements.updateProgress.removeAttribute("value");
   renderUpdate({
-    message: payload.notes || "Downloading in the background…",
+    message: "Downloading in the background…",
     progress: true,
     title: `Update available v${payload.version} — downloading…`,
   });
@@ -729,23 +747,33 @@ await listen("updater://ready", ({ payload }) => {
   });
 });
 await listen("updater://available-manual", ({ payload }) => {
-  const openDownloadPage = () =>
-    invoke("open_release_page").catch((error) => {
-      if (updateAction !== openDownloadPage || elements.updateBanner.classList.contains("hidden")) {
-        return;
-      }
-      renderUpdate({
-        action: openDownloadPage,
-        actionLabel: "Open download page",
+  const availableUpdate = {
+    message: "Install the latest system package from the release page.",
+    title: `Update available v${payload.version}`,
+  };
+  const openDownloadPage = async () => {
+    let result = availableUpdate;
+    try {
+      await invoke("open_release_page");
+    } catch (error) {
+      result = {
         message: friendlyError(error),
         title: "Could not open release page",
-      });
+      };
+    }
+    if (updateAction !== openDownloadPage || elements.updateBanner.classList.contains("hidden")) {
+      return;
+    }
+    renderUpdate({
+      ...result,
+      action: openDownloadPage,
+      actionLabel: "Open download page",
     });
+  };
   renderUpdate({
+    ...availableUpdate,
     action: openDownloadPage,
     actionLabel: "Open download page",
-    message: payload.notes || "Install the latest system package from the release page.",
-    title: `Update available v${payload.version}`,
   });
 });
 await listen("updater://error", ({ payload }) => {
@@ -759,12 +787,23 @@ void refreshGateways();
 window.setInterval(() => void refreshGateways(), 2000);
 
 const mode = new URLSearchParams(window.location.search).get("mode");
+firstRunBuild = await invoke("build_info").catch(() => null);
+if (firstRunBuild?.runtimeFlavor === "jit" || firstRunBuild?.runtimeFlavor === "aot") {
+  elements.runtimeFlavor.textContent = firstRunBuild.runtimeFlavor === "aot"
+    ? "BUNDLED AOT · EXPERIMENTAL"
+    : "BUNDLED JIT";
+  if (firstRunBuild.testProfile) {
+    elements.runtimeFlavor.textContent += ` · PROFILE ${firstRunBuild.testProfile.toUpperCase()}`;
+  }
+  elements.runtimeFlavor.title = `OpenClaw ${firstRunBuild.version}`;
+  show(elements.runtimeFlavor, true);
+  show(elements.runtimeSeparator, true);
+}
 if (mode === "connectionSettings") {
   await editConnection();
 } else if (mode === "remoteError") {
   renderRemoteRetry();
 } else if (mode === "missingCli") {
-  firstRunBuild = await invoke("build_info").catch(() => null);
   render({
     description: "Install the OpenClaw CLI to connect to a local Gateway.",
     dot: "idle",
@@ -790,7 +829,7 @@ if (mode === "connectionSettings") {
       eyebrow: "GATEWAY STOPPED",
       title: "OpenClaw is standing by",
     },
-    () => runGatewayAction("start"),
+    () => connect("start"),
   );
 } else if (mode === "error") {
   renderRetry("The last gateway action failed. Check the service, then retry.");

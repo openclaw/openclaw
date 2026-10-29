@@ -1,24 +1,7 @@
 // Covers config-controlled context visibility decisions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-import {
-  resolveChannelContextVisibilityMode,
-  resolveDefaultContextVisibility,
-} from "./context-visibility.js";
-
-describe("resolveDefaultContextVisibility", () => {
-  it("reads channels.defaults.contextVisibility", () => {
-    expect(
-      resolveDefaultContextVisibility({
-        channels: {
-          defaults: {
-            contextVisibility: "allowlist_quote",
-          },
-        },
-      }),
-    ).toBe("allowlist_quote");
-  });
-});
+import { resolveChannelContextVisibilityMode } from "./context-visibility.js";
 
 describe("resolveChannelContextVisibilityMode", () => {
   it("prefers explicitly provided mode", () => {

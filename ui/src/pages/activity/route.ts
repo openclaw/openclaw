@@ -16,5 +16,8 @@ export const page = definePage({
     return `${pathname}\u0000${search}\u0000${hash}`;
   },
   loader: (_context, { location }) => sessionActivityRouteLocation(location),
-  component: () => import("./activity-page.ts").then((module) => module.activityPageComponent),
+  component: () =>
+    import("./activity-route.tsx").then((module) => ({
+      renderSolid: module.renderSolid,
+    })),
 });

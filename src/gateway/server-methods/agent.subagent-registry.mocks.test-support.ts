@@ -1,50 +1,49 @@
 import { vi } from "vitest";
-import type { runSubagentAnnounceFlow } from "../../agents/subagents/announce/subagent-announce.js";
-import type { maybeWakeRequesterAfterAllChildrenSettled } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
-import type {
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-} from "../../agents/subagents/registry/subagent-registry-state.js";
+import type * as Announce from "../../agents/subagents/announce/subagent-announce.js";
+import type * as Wake from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
+import type * as StateStore from "../../state/openclaw-state-worker-store.js";
 import type { callGateway } from "../call.js";
 
 const subagentRegistryMocks = vi.hoisted(() => ({
   registryCallGateway: vi.fn<typeof callGateway>().mockResolvedValue({ status: "pending" }),
-  registryAnnounce: vi.fn<typeof runSubagentAnnounceFlow>(),
-  registryWake: vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(),
-  registryPersist: vi.fn<typeof persistSubagentRunsToDisk>(),
-  registryPersistOrThrow: vi.fn<typeof persistSubagentRunsToDiskOrThrow>(),
+  registryAnnounce: vi.fn<typeof Announce.runSubagentAnnounceFlow>(),
+  registryWake: vi.fn<typeof Wake.maybeWakeRequesterAfterAllChildrenSettled>(),
+  registryWrite: vi.fn<() => void>(),
+  pendingWakeRoots: new Set<Promise<void>>(),
 }));
 
 export { subagentRegistryMocks };
 
-vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../server-recovery-runtime-context.js")>()),
+vi.mock("../server-lifecycle-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-lifecycle-runtime-context.js")>()),
   bindGatewayLifecycleRequest: () => subagentRegistryMocks.registryCallGateway,
 }));
 
-vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../agents/subagents/registry/subagent-registry-state.js")
-    >();
+vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof StateStore>();
   return {
     ...actual,
-    persistSubagentRunsToDisk: (...args: Parameters<typeof actual.persistSubagentRunsToDisk>) =>
-      subagentRegistryMocks.registryPersist.getMockImplementation()
-        ? subagentRegistryMocks.registryPersist(...args)
-        : actual.persistSubagentRunsToDisk(...args),
-    persistSubagentRunsToDiskOrThrow: (
-      ...args: Parameters<typeof actual.persistSubagentRunsToDiskOrThrow>
+    runOpenClawStateWorkerOperation: (
+      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
     ) =>
-      subagentRegistryMocks.registryPersistOrThrow.getMockImplementation()
-        ? subagentRegistryMocks.registryPersistOrThrow(...args)
-        : actual.persistSubagentRunsToDiskOrThrow(...args),
+      actual.runOpenClawStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            execute(command) {
+              if (command.type === "subagents.persistChanges") {
+                subagentRegistryMocks.registryWrite();
+              }
+              return scope.execute(command);
+            },
+          }),
+        options,
+      ),
   };
 });
 
 vi.mock("../../agents/subagents/announce/subagent-announce.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../agents/subagents/announce/subagent-announce.js")>();
+  const actual = await importOriginal<typeof Announce>();
   return {
     ...actual,
     runSubagentAnnounceFlow: (...args: Parameters<typeof actual.runSubagentAnnounceFlow>) =>
@@ -57,18 +56,27 @@ vi.mock("../../agents/subagents/announce/subagent-announce.js", async (importOri
 vi.mock(
   "../../agents/subagents/announce/subagent-announce.requester-settle-wake.js",
   async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../../agents/subagents/announce/subagent-announce.requester-settle-wake.js")
-      >();
+    const actual = await importOriginal<typeof Wake>();
+    const { captureGatewayRootWorkReleaseObserver } =
+      await import("../../process/gateway-work-admission.js");
     return {
       ...actual,
       maybeWakeRequesterAfterAllChildrenSettled: (
         ...args: Parameters<typeof actual.maybeWakeRequesterAfterAllChildrenSettled>
-      ) =>
-        subagentRegistryMocks.registryWake.getMockImplementation()
+      ) => {
+        // Cleanup publication precedes this detached wake's worker reads and final release.
+        const observeRelease = captureGatewayRootWorkReleaseObserver();
+        if (observeRelease) {
+          const released = new Promise<void>((resolve) => {
+            observeRelease(() => resolve());
+          });
+          subagentRegistryMocks.pendingWakeRoots.add(released);
+          void released.then(() => subagentRegistryMocks.pendingWakeRoots.delete(released));
+        }
+        return subagentRegistryMocks.registryWake.getMockImplementation()
           ? subagentRegistryMocks.registryWake(...args)
-          : actual.maybeWakeRequesterAfterAllChildrenSettled(...args),
+          : actual.maybeWakeRequesterAfterAllChildrenSettled(...args);
+      },
     };
   },
 );
@@ -82,10 +90,15 @@ vi.mock("../../agents/runtime-plugins.js", async () => {
   return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
 });
 
+export async function settleAgentSubagentWakeRoots(): Promise<void> {
+  while (subagentRegistryMocks.pendingWakeRoots.size > 0) {
+    await Promise.all(subagentRegistryMocks.pendingWakeRoots);
+  }
+}
+
 export function resetSubagentRegistryMocks() {
   subagentRegistryMocks.registryCallGateway.mockReset().mockResolvedValue({ status: "pending" });
   subagentRegistryMocks.registryAnnounce.mockReset();
   subagentRegistryMocks.registryWake.mockReset();
-  subagentRegistryMocks.registryPersist.mockReset();
-  subagentRegistryMocks.registryPersistOrThrow.mockReset();
+  subagentRegistryMocks.registryWrite.mockReset();
 }

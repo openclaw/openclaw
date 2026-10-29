@@ -3,11 +3,10 @@ import type {
   WorkboardCard,
   WorkboardDiagnostic,
   WorkboardEvent,
+  WorkboardLaunchState,
   WorkboardWorkspace,
   WorkboardWorkspaceAccess,
 } from "@openclaw/workboard-contract";
-
-export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
 
 type WorkboardCardInput = {
   title?: unknown;
@@ -18,7 +17,6 @@ type WorkboardCardInput = {
   agentId?: unknown;
   sessionKey?: unknown;
   runId?: unknown;
-  taskId?: unknown;
   sourceUrl?: unknown;
   execution?: unknown;
   metadata?: unknown;
@@ -40,9 +38,13 @@ type WorkboardCardInput = {
   parents?: unknown;
 };
 
-export type WorkboardCardPatch = Partial<WorkboardCardInput>;
+export type WorkboardCardPatch = WorkboardCardInput;
+/** Internal builders carry launch state separately from untrusted metadata. */
+export type WorkboardOwnedCardPatch = WorkboardCardPatch & {
+  ownedLaunch?: WorkboardLaunchState;
+};
 export type WorkboardUpdateCardOptions = {
-  allowAutomationLaunch?: boolean;
+  automationLaunch?: WorkboardLaunchState;
   allowMetadataDependencyLinks?: boolean;
   enforceStatusHolds?: boolean;
   event?: Omit<WorkboardEvent, "id" | "at">;
@@ -50,6 +52,7 @@ export type WorkboardUpdateCardOptions = {
   expectedUpdatedAt?: number;
   ownerSlot?: { ownerId: string; now: number };
   preserveProofId?: string;
+  preserveNotificationId?: string;
 };
 export type WorkboardCommentInput = { body?: unknown };
 export type WorkboardLinkInput = {
@@ -58,9 +61,7 @@ export type WorkboardLinkInput = {
   title?: unknown;
   url?: unknown;
 };
-export type WorkboardLinkedCreateInput = WorkboardCardInput & {
-  parents?: unknown;
-};
+export type WorkboardLinkedCreateInput = WorkboardCardInput;
 export type WorkboardProofInput = {
   status?: unknown;
   label?: unknown;
@@ -80,20 +81,14 @@ export type WorkboardAttachmentInput = {
   mimeType?: unknown;
   note?: unknown;
 };
-export type WorkboardWorkerLogInput = {
+export type WorkboardWorkerLogInput = Pick<WorkboardCardInput, "sessionKey" | "runId"> & {
   level?: unknown;
   message?: unknown;
-  sessionKey?: unknown;
-  runId?: unknown;
 };
-export type WorkboardProtocolViolationInput = {
+export type WorkboardProtocolViolationInput = Pick<WorkboardCardInput, "sessionKey" | "runId"> & {
   detail?: unknown;
-  sessionKey?: unknown;
-  runId?: unknown;
 };
-export type WorkboardClaimInput = {
-  ownerId?: unknown;
-  token?: unknown;
+export type WorkboardClaimInput = WorkboardMutationScope & {
   ttlSeconds?: unknown;
 };
 export type WorkboardClaimOptions = {
@@ -109,9 +104,7 @@ export type WorkboardClaimOptions = {
   /** Trusted legacy-card adoption; applied only while expectedAuthority still matches. */
   adoptWorkspaceAccess?: WorkboardWorkspaceAccess;
 };
-export type WorkboardHeartbeatInput = {
-  token?: unknown;
-  ownerId?: unknown;
+export type WorkboardHeartbeatInput = WorkboardMutationScope & {
   note?: unknown;
 };
 export type WorkboardBulkInput = {
@@ -119,18 +112,14 @@ export type WorkboardBulkInput = {
   patch?: unknown;
   archived?: unknown;
 };
-export type WorkboardCompleteInput = {
-  ownerId?: unknown;
-  token?: unknown;
+export type WorkboardCompleteInput = WorkboardMutationScope & {
   summary?: unknown;
   proof?: unknown;
   proofId?: unknown;
   artifacts?: unknown;
   createdCardIds?: unknown;
 };
-export type WorkboardBlockInput = {
-  ownerId?: unknown;
-  token?: unknown;
+export type WorkboardBlockInput = WorkboardMutationScope & {
   reason?: unknown;
 };
 export type WorkboardDispatchResult = {
@@ -161,12 +150,10 @@ export type WorkboardReassignInput = {
   resetFailures?: unknown;
   reason?: unknown;
 };
-export type WorkboardReclaimInput = {
-  status?: unknown;
-  reason?: unknown;
-};
+export type WorkboardReclaimInput = Pick<WorkboardReassignInput, "status" | "reason">;
 export type WorkboardBoardInput = {
   id?: unknown;
+  kind?: unknown;
   name?: unknown;
   description?: unknown;
   icon?: unknown;
@@ -180,17 +167,12 @@ export type WorkboardBoardInput = {
 export type WorkboardSpecifyInput = WorkboardCardPatch & {
   summary?: unknown;
 };
-export type WorkboardDecomposeChildInput = WorkboardLinkedCreateInput & {
-  idempotencyKey?: unknown;
-};
 export type WorkboardDecomposeInput = {
   summary?: unknown;
   children?: unknown;
   completeParent?: unknown;
 };
-export type WorkboardNotificationSubscribeInput = {
-  boardId?: unknown;
-  cardId?: unknown;
+export type WorkboardNotificationSubscribeInput = WorkboardNotificationListOptions & {
   sessionKey?: unknown;
   runId?: unknown;
   target?: unknown;

@@ -1,14 +1,17 @@
-// Deepseek plugin entrypoint registers its OpenClaw integration.
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import { fetchDeepSeekUsage } from "openclaw/plugin-sdk/provider-usage";
+import {
+  fetchDeepSeekUsage,
+  resolveProviderUsageApiKeyAuth,
+} from "openclaw/plugin-sdk/provider-usage";
 import { applyDeepSeekConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
 import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
+import { createDeepSeekWebSearchProvider } from "./web-search-provider.js";
 
 const PROVIDER_ID = "deepseek";
 
@@ -17,6 +20,11 @@ export default defineSingleProviderPluginEntry({
   name: "DeepSeek Provider",
   description: "Bundled DeepSeek provider plugin",
   manifest,
+  register(api) {
+    // Search reads the prepared credential from each request, not registration config.
+    api.registerReload({ hotPrefixes: ["plugins.entries.deepseek.config.webSearch.apiKey"] });
+    api.registerWebSearchProvider(createDeepSeekWebSearchProvider());
+  },
   provider: {
     label: "DeepSeek",
     docsPath: "/providers/deepseek",
@@ -42,12 +50,7 @@ export default defineSingleProviderPluginEntry({
     wrapStreamFn: (ctx) => createDeepSeekV4ThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
     resolveThinkingProfile: ({ modelId }) => resolveDeepSeekV4ThinkingProfile(modelId),
     isModernModelRef: ({ modelId }) => Boolean(resolveDeepSeekV4ThinkingProfile(modelId)),
-    resolveUsageAuth: async (ctx) => {
-      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-        envDirect: [ctx.env.DEEPSEEK_API_KEY],
-      });
-      return apiKey ? { token: apiKey } : null;
-    },
+    resolveUsageAuth: (ctx) => resolveProviderUsageApiKeyAuth(ctx, [ctx.env.DEEPSEEK_API_KEY]),
     fetchUsageSnapshot: async (ctx) =>
       await fetchDeepSeekUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
   },

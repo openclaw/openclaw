@@ -4,9 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import { decodeOpenAICodexJwtPayload } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerClient } from "../app-server/client.js";
+import { readCodexExperimentalFeature } from "../app-server/experimental-features.js";
 import type { CodexExperimentalFeatureListResponse } from "../app-server/protocol-control-plane.js";
 import type {
   CodexConfigReadResponse,
@@ -138,77 +140,70 @@ async function readNativeCredential(
   if (client.getRuntimeIdentity()?.codexHome !== home) {
     return undefined;
   }
-  const revision = client.getModelCatalogRevision();
-  const configured = await client.request<CodexConfigReadResponse>(
-    "config/read",
-    { includeLayers: false, cwd: home },
-    { signal },
-  );
-  const required = await client.request<CodexConfigRequirementsReadResponse>(
-    "configRequirements/read",
-    {},
-    { signal },
-  );
-  // The native requirements override configuration; File is the pinned dependency's default.
-  const mode =
-    required.requirements?.cli_auth_credentials_store ??
-    configured.config.cli_auth_credentials_store ??
-    "file";
-  let record: Record<string, unknown> | undefined;
-  if (mode === "file") {
-    record = await readAuthFile(home);
-  } else if ((mode === "keyring" || mode === "auto") && process.platform === "darwin") {
-    let cursor: string | undefined;
-    let encrypted: boolean | undefined;
-    do {
-      const features = await client.request<CodexExperimentalFeatureListResponse>(
-        "experimentalFeature/list",
-        { limit: 100, cursor },
-        { signal },
+  // Startup can announce account/updated during inspection. Retry one invalidated
+  // snapshot within the same deadline, including native storage selection.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const revision = client.getModelCatalogRevision();
+    const configured = await client.request<CodexConfigReadResponse>(
+      "config/read",
+      { includeLayers: false, cwd: home },
+      { signal },
+    );
+    const required = await client.request<CodexConfigRequirementsReadResponse>(
+      "configRequirements/read",
+      {},
+      { signal },
+    );
+    // The native requirements override configuration; File is the pinned dependency's default.
+    const mode =
+      required.requirements?.cli_auth_credentials_store ??
+      configured.config.cli_auth_credentials_store ??
+      "file";
+    let record: Record<string, unknown> | undefined;
+    if (mode === "file") {
+      record = await readAuthFile(home);
+    } else if ((mode === "keyring" || mode === "auto") && process.platform === "darwin") {
+      const encrypted = await readCodexExperimentalFeature(
+        (params) =>
+          client.request<CodexExperimentalFeatureListResponse>("experimentalFeature/list", params, {
+            signal,
+          }),
+        "secret_auth_storage",
       );
-      const storage = features.data.find((feature) => feature.name === "secret_auth_storage");
-      if (storage) {
-        encrypted = storage.enabled;
-        break;
+      if (encrypted !== false) {
+        return undefined;
       }
-      cursor = features.nextCursor ?? undefined;
-    } while (cursor);
-    if (encrypted !== false) {
+      record = await readDirectKeyring(home, signal);
+    }
+    signal.throwIfAborted();
+    if (!record) {
       return undefined;
     }
-    record = await readDirectKeyring(home, signal);
-  }
-  signal.throwIfAborted();
-  if (!record) {
-    return undefined;
-  }
-  const oauth = options.credentialKind === "api_key" ? undefined : parseOAuthCredential(record);
-  let apiKey = options.credentialKind === "oauth" ? undefined : parseApiKeyCredential(record);
-  if (apiKey) {
-    // Account lookup gates the API key only; legacy OAuth remains independently importable.
-    const account = await client
-      .request<CodexGetAccountResponse>("account/read", { refreshToken: false }, { signal })
-      .catch(() => undefined);
-    if (account?.account?.type !== "apiKey" || !account.requiresOpenaiAuth) {
-      apiKey = undefined;
+    const oauth = options.credentialKind === "api_key" ? undefined : parseOAuthCredential(record);
+    let apiKey = options.credentialKind === "oauth" ? undefined : parseApiKeyCredential(record);
+    if (apiKey) {
+      // Account lookup gates the API key only; legacy OAuth remains independently importable.
+      const account = await client
+        .request<CodexGetAccountResponse>("account/read", { refreshToken: false }, { signal })
+        .catch(() => undefined);
+      if (account?.account?.type !== "apiKey" || !account.requiresOpenaiAuth) {
+        apiKey = undefined;
+      }
+    }
+    signal.throwIfAborted();
+    if (client.getCloseError()) {
+      return undefined;
+    }
+    if (client.getModelCatalogRevision() === revision) {
+      return { ...(oauth ? { oauth } : {}), ...(apiKey ? { apiKey } : {}) };
     }
   }
-  signal.throwIfAborted();
-  return !client.getCloseError() && client.getModelCatalogRevision() === revision
-    ? { ...(oauth ? { oauth } : {}), ...(apiKey ? { apiKey } : {}) }
-    : undefined;
+  return undefined;
 }
 
 function jwtExpiry(token: string): number | undefined {
-  try {
-    const data = asOptionalRecord(
-      JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")),
-    );
-    const exp = data?.exp;
-    return typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1000 : undefined;
-  } catch {
-    return undefined;
-  }
+  const exp = decodeOpenAICodexJwtPayload(token)?.exp;
+  return typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1000 : undefined;
 }
 
 function parseOAuthCredential(data: Record<string, unknown>): CodexCliCredential | undefined {

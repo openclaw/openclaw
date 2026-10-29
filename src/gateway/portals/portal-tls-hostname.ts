@@ -15,10 +15,9 @@ export function resolvePortalTlsHostname(
   const certificate = new X509Certificate(material);
   const candidates: string[] = [];
   for (const origin of gatewayOrigins) {
-    try {
-      candidates.push(new URL(origin).hostname.replace(/^\[|\]$/gu, ""));
-    } catch {
-      // Origin allowlists can contain non-URL entries such as "*".
+    const url = URL.parse(origin);
+    if (url) {
+      candidates.push(url.hostname.replace(/^\[|\]$/gu, ""));
     }
   }
   candidates.push(fallbackHost.replace(/^\[|\]$/gu, ""));

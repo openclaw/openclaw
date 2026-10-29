@@ -1,35 +1,45 @@
-// Covers document extractor runtime hooks supplied by plugins.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
+import { beforeEach, expect, it, vi } from "vitest";
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
-const mocks = vi.hoisted(() => ({
-  readBundledDiscoveryModeMemoized: vi.fn<() => "allowlist" | "compat">(),
-  loadPluginMetadataSnapshot: vi.fn((_params?: unknown) => ({
-    plugins: [
-      {
-        id: "document-extract",
-        origin: "bundled",
-        enabledByDefault: true,
-        channels: [],
-        cliBackends: [],
-        providers: [],
-        legacyPluginIds: [],
-        contracts: { documentExtractors: ["pdf"] },
-      },
-      {
-        id: "openai",
-        origin: "bundled",
-        enabledByDefault: true,
-        channels: [],
-        cliBackends: [],
-        providers: ["openai", "openai"],
-        legacyPluginIds: [],
-        contracts: {},
-      },
-    ],
-  })),
+const mocks = vi.hoisted(() => {
+  const plugin = (
+    id: string,
+    contracts: { documentExtractors?: string[] } = {},
+    providers: string[] = [],
+  ) => ({
+    id,
+    origin: "bundled",
+    enabledByDefault: true,
+    channels: [],
+    cliBackends: [],
+    providers,
+    legacyPluginIds: [],
+    contracts,
+  });
+  return {
+    plugin,
+    warn: vi.fn(),
+    readBundledDiscoveryModeMemoized: vi.fn<() => "allowlist" | "compat">(),
+    publicArtifactModule: {} as Record<string, unknown>,
+    loadPublicArtifact: vi.fn<(params: { dirName: string }) => Record<string, unknown> | null>(),
+    loadPluginMetadataSnapshot: vi.fn((_params?: unknown) => ({
+      plugins: [
+        plugin("document-extract", { documentExtractors: ["pdf"] }),
+        plugin("openai", {}, ["openai", "openai"]),
+      ],
+    })),
+  };
+});
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+  createSubsystemLogger: () => ({
+    warn: mocks.warn,
+    info: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
 }));
 
 vi.mock("./bundled-discovery-state.js", async (importOriginal) => ({
@@ -37,117 +47,134 @@ vi.mock("./bundled-discovery-state.js", async (importOriginal) => ({
   readBundledDiscoveryModeMemoized: mocks.readBundledDiscoveryModeMemoized,
 }));
 
-vi.mock("./document-extractor-public-artifacts.js", () => ({
-  loadBundledDocumentExtractorEntriesFromDir: vi.fn(
-    ({ dirName }: { dirName: string; pluginId: string }) =>
-      dirName === "document-extract"
-        ? [
-            {
-              id: "pdf",
-              label: "PDF",
-              mimeTypes: ["application/pdf"],
-              pluginId: "document-extract",
-              extract: vi.fn(),
-            },
-          ]
-        : null,
-  ),
+// mock-isolation: extractor factories come from the fixture, without loading installed plugins.
+vi.mock("./public-surface-loader.js", () => ({
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: mocks.loadPublicArtifact,
 }));
 
+// mock-isolation: Extractor availability comes from the fixture inventory, not host plugin discovery.
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
-  resolvePluginMetadataSnapshot: vi.fn(
-    (params?: { pluginMetadataSnapshot?: unknown }) =>
-      params?.pluginMetadataSnapshot ?? mocks.loadPluginMetadataSnapshot(params),
-  ),
+  resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
+    params?.pluginMetadataSnapshot ?? mocks.loadPluginMetadataSnapshot(params),
 }));
 
 vi.mock("./manifest-registry.js", () => ({
   resolveManifestContractOwnerPluginId: vi.fn(() => undefined),
 }));
 
-describe.each(["allowlist", "compat"] as const)("resolvePluginDocumentExtractors (%s)", (mode) => {
-  beforeEach(() => {
-    mocks.readBundledDiscoveryModeMemoized.mockReturnValue(mode);
+const throwingFactory = (error: Error) => () => {
+  throw error;
+};
+const pdfFields = { id: "pdf", label: "PDF", mimeTypes: ["application/pdf"] };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.readBundledDiscoveryModeMemoized.mockReturnValue("compat");
+  mocks.publicArtifactModule = {
+    createPdfDocumentExtractor: () => ({
+      ...pdfFields,
+      mimeTypes: [...pdfFields.mimeTypes],
+      extract: vi.fn(),
+    }),
+  };
+  mocks.loadPublicArtifact.mockImplementation(({ dirName }) =>
+    dirName === "document-extract" ? mocks.publicArtifactModule : null,
+  );
+});
+
+it("reuses one manifest registry pass in allowlist mode", () => {
+  mocks.readBundledDiscoveryModeMemoized.mockReturnValue("allowlist");
+
+  expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
+  expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+});
+
+const normalizedAllow = [" document-extract ", "document-extract"];
+it.each([
+  ["global disablement", false, ["document-extract"], []],
+  ["cannot expand allowlist", undefined, ["openai"], []],
+  ["normalized allowlist", undefined, normalizedAllow, ["pdf"]],
+] as const)("enforces %s", (_name, enabled, allow, expected) => {
+  const result = resolvePluginDocumentExtractors({
+    config: { plugins: { enabled, allow: [...allow] } },
   });
+  expect(result).toStrictEqual(expected.map((id) => expect.objectContaining({ id })));
+  if (enabled === false) {
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadPublicArtifact).not.toHaveBeenCalled();
+  }
+});
 
-  it("reuses one manifest registry pass for compat and enabled bundled extractors", () => {
-    vi.mocked(loadPluginMetadataSnapshot).mockClear();
+it("isolates a throwing factory when another extractor factory succeeds", () => {
+  const error = new Error("native probe failed");
+  mocks.publicArtifactModule.createBrokenDocumentExtractor = throwingFactory(error);
 
-    expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
-    expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+  expect(resolvePluginDocumentExtractors()).toStrictEqual([
+    { ...pdfFields, extract: expect.any(Function), pluginId: "document-extract" },
+  ]);
+  expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringMatching(/document extractors.*document-extract/),
+    { error },
+  );
+});
+
+it.each([
+  ["module", true],
+  ["factory", true],
+  ["factories", true],
+  ["factory", false],
+] as const)("reports failed %s initialization (healthy sibling: %s)", (kind, healthy) => {
+  const pluginId = healthy ? "broken-extract" : "document-extract";
+  const error = new Error(healthy ? "broken-extract module failed" : "native probe failed");
+  const secondError = new Error("second extractor failed");
+  if (healthy) {
+    const snapshot = mocks.loadPluginMetadataSnapshot();
+    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce({
+      plugins: [...snapshot.plugins, mocks.plugin(pluginId, { documentExtractors: ["broken"] })],
+    });
+  }
+  mocks.loadPublicArtifact.mockImplementation(({ dirName }) => {
+    if (dirName === pluginId) {
+      if (kind === "module") {
+        throw error;
+      }
+      return Object.fromEntries(
+        (kind === "factory" ? [error] : [error, secondError]).map((cause, index) => [
+          `create${index}DocumentExtractor`,
+          throwingFactory(cause),
+        ]),
+      );
+    }
+    return dirName === "document-extract" ? mocks.publicArtifactModule : null;
   });
-
-  it.each([{ allow: undefined }, { allow: ["document-extract"] }])(
-    "respects global plugin disablement with allow=$allow",
-    ({ allow }) => {
-      vi.mocked(loadPluginMetadataSnapshot).mockClear();
-      vi.mocked(loadBundledDocumentExtractorEntriesFromDir).mockClear();
-      expect(
-        resolvePluginDocumentExtractors({
-          config: {
-            plugins: {
-              enabled: false,
-              allow,
-            },
-          },
+  if (!healthy) {
+    expect(resolvePluginDocumentExtractors).toThrow(
+      expect.objectContaining({
+        message: "Unable to load document extractor plugins",
+        cause: expect.objectContaining({
+          message: "Unable to initialize document extractors for plugin document-extract",
+          cause: error,
         }),
-      ).toStrictEqual([]);
-      expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-      expect(loadBundledDocumentExtractorEntriesFromDir).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([{ onlyPluginIds: undefined }, { onlyPluginIds: ["document-extract"] }])(
-    "does not expand an operator plugin allowlist with scope=$onlyPluginIds",
-    ({ onlyPluginIds }) => {
-      expect(
-        resolvePluginDocumentExtractors({
-          config: {
-            plugins: {
-              allow: ["openai"],
-            },
-          },
-          onlyPluginIds,
-        }),
-      ).toStrictEqual([]);
-    },
-  );
-
-  it.each([
-    { allow: [], onlyPluginIds: undefined, expected: ["pdf"] },
-    { allow: ["DOCUMENT-EXTRACT"], onlyPluginIds: undefined, expected: ["pdf"] },
-    {
-      allow: [" document-extract ", "document-extract"],
-      onlyPluginIds: ["document-extract"],
-      expected: ["pdf"],
-    },
-    { allow: [" document-extract ", "document-extract"], onlyPluginIds: ["openai"], expected: [] },
-  ])(
-    "intersects normalized allow=$allow with scope=$onlyPluginIds",
-    ({ allow, onlyPluginIds, expected }) => {
-      expect(
-        resolvePluginDocumentExtractors({ config: { plugins: { allow } }, onlyPluginIds }).map(
-          (extractor) => extractor.id,
-        ),
-      ).toEqual(expected);
-    },
-  );
-
-  it("respects an explicit empty plugin scope with an operator plugin allowlist", () => {
-    expect(
-      resolvePluginDocumentExtractors({
-        config: {
-          plugins: {
-            allow: ["document-extract"],
-          },
-        },
-        onlyPluginIds: [],
       }),
-    ).toStrictEqual([]);
-  });
-
-  it("respects an explicit empty plugin scope without an operator plugin allowlist", () => {
-    expect(resolvePluginDocumentExtractors({ onlyPluginIds: [] })).toStrictEqual([]);
-  });
+    );
+    expect(mocks.warn).not.toHaveBeenCalled();
+    return;
+  }
+  expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
+  expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("using healthy extractors"),
+    {
+      error:
+        kind === "module"
+          ? error
+          : expect.objectContaining({
+              cause: kind === "factory" ? error : expect.any(AggregateError),
+            }),
+      detail:
+        kind === "module"
+          ? "broken-extract module failed"
+          : `Unable to initialize document extractors for plugin broken-extract | broken-extract module failed${kind === "factories" ? " | second extractor failed" : ""}`,
+    },
+  );
 });

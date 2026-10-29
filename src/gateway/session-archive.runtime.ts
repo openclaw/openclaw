@@ -2,8 +2,7 @@
 export {
   archiveSessionTranscriptPaths,
   archiveSessionTranscriptsDetailed,
-  archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
   resolveSessionTranscriptCandidates,
   resolveStableSessionEndTranscript,
-} from "./session-archive.fs.js";
+} from "./session-transcript-files.fs.js";

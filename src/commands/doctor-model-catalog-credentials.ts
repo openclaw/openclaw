@@ -26,18 +26,16 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding } from "../flows/health-checks.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listAgentModelsJsonPaths } from "../secrets/storage-scan.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { createAuthMigrationWarningRecorder } from "./doctor/auth-migration-findings.js";
 
-type PlaintextCredential = { key: string; provider: string };
-type AgentCatalogs = {
-  agentDir: string;
-  localStore: AuthProfileStore;
-  providers: Record<string, unknown>[];
-};
+type PlaintextCredential = { key: string; provider: string; catalog: boolean };
 
 function emptyStore(): AuthProfileStore {
   return { version: AUTH_STORE_VERSION, profiles: {} };
@@ -56,29 +54,25 @@ function credentialMatches(
   );
 }
 
-function matchesProviderEnvRefMarker(
-  cfg: OpenClawConfig,
-  provider: string,
-  value: string,
-): boolean {
-  const ref = resolveProviderConfigSecretInput(cfg, provider).ref;
-  if (ref?.source !== "env") {
-    return false;
-  }
-  // Generated env markers are provider-scoped. Treating every uppercase value
-  // as a marker would discard valid literal credentials.
-  const id = ref.id.trim();
-  const candidate = value.trim();
-  return candidate === id || candidate === `$${id}` || candidate === `\${${id}}`;
+function hasProviderSecretRef(store: AuthProfileStore, provider: string): boolean {
+  return Object.values(store.profiles).some(
+    (credential) =>
+      normalizeProviderId(credential.provider) === normalizeProviderId(provider) &&
+      ((credential.type === "api_key" && credential.keyRef !== undefined) ||
+        (credential.type === "token" && credential.tokenRef !== undefined)),
+  );
 }
 
 function findProviderSecretRefProfiles(store: AuthProfileStore, cfg: OpenClawConfig) {
-  return Object.entries(store.profiles).filter(
-    ([, credential]) =>
-      credential.type === "api_key" &&
-      credential.key &&
-      matchesProviderEnvRefMarker(cfg, credential.provider, credential.key),
-  );
+  return Object.entries(store.profiles).filter(([, credential]) => {
+    if (credential.type !== "api_key" || !credential.key) {
+      return false;
+    }
+    const ref = resolveProviderConfigSecretInput(cfg, credential.provider).ref;
+    const id = ref?.id.trim();
+    // Only this provider's declared env markers are non-secret; uppercase keys can be real.
+    return ref?.source === "env" && [id, `$${id}`, `\${${id}}`].includes(credential.key.trim());
+  });
 }
 
 function collectCredentials(
@@ -86,6 +80,7 @@ function collectCredentials(
   store: AuthProfileStore,
   blockedStores: readonly AuthProfileStore[] = [],
   cfg?: OpenClawConfig,
+  catalog = false,
 ): PlaintextCredential[] {
   if (!isRecord(providers)) {
     return [];
@@ -95,11 +90,12 @@ function collectCredentials(
       return [];
     }
     const key = entry.apiKey;
-    const credential = { provider, key };
+    const credential = { provider, key, catalog };
     if (
       !key.trim() ||
       // An authored SecretRef owns this provider; generated catalog copies are never fallbacks.
       (cfg && resolveProviderConfigSecretInput(cfg, provider).ref) ||
+      (catalog && hasProviderSecretRef(store, provider)) ||
       isNonSecretApiKeyMarker(key) ||
       store.profiles[key] !== undefined ||
       findMatchingProfileId(store, credential, blockedStores) !== undefined
@@ -165,9 +161,8 @@ async function persistCredentials(params: {
   agentDir?: string;
   blockedStores?: readonly AuthProfileStore[];
   credentials: readonly PlaintextCredential[];
-  inheritedStore?: AuthProfileStore;
+  env: NodeJS.ProcessEnv;
   invalidProfiles: ReadonlyArray<[string, AuthProfileCredential]>;
-  stateDir: string;
 }): Promise<{ migrated: number; removed: number }> {
   const credentials = uniqueCredentials(params.credentials);
   const { invalidProfiles } = params;
@@ -177,12 +172,13 @@ async function persistCredentials(params: {
   const blockedStores = params.blockedStores ?? [];
   const profileIds = new Map<string, PlaintextCredential>();
   let added = 0;
+  let inheritedStore: AuthProfileStore | null | undefined;
   let removedProfiles: [string, AuthProfileCredential][] = [];
   const updated = await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
-    stateDir: params.stateDir,
+    stateDir: resolveStateDir(params.env),
     saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
-    updater: (localStore) => {
+    updater: (localStore, _owner, sharedStore) => {
       // Confirmation can pause while another writer replaces a marker. Only remove
       // the exact credential observed before prompting, including its references.
       removedProfiles = invalidProfiles.filter(([profileId, credential]) =>
@@ -197,10 +193,14 @@ async function persistCredentials(params: {
           }),
         );
       }
-      const effectiveStore = params.inheritedStore
-        ? mergeAuthProfileStores(params.inheritedStore, localStore)
+      inheritedStore = sharedStore;
+      const effectiveStore = sharedStore
+        ? mergeAuthProfileStores(sharedStore, localStore)
         : localStore;
       for (const credential of credentials) {
+        if (credential.catalog && hasProviderSecretRef(effectiveStore, credential.provider)) {
+          continue;
+        }
         const profileId =
           findMatchingProfileId(effectiveStore, credential, blockedStores) ??
           allocateProfileId(effectiveStore, credential, blockedStores);
@@ -224,12 +224,9 @@ async function persistCredentials(params: {
   }
   const persisted = params.agentDir
     ? loadPersistedAuthProfileStore(params.agentDir)
-    : loadPersistedSharedAuthProfileStore({
-        ...process.env,
-        OPENCLAW_STATE_DIR: params.stateDir,
-      });
-  const effectivePersisted = params.inheritedStore
-    ? mergeAuthProfileStores(params.inheritedStore, persisted ?? emptyStore())
+    : loadPersistedSharedAuthProfileStore(params.env);
+  const effectivePersisted = inheritedStore
+    ? mergeAuthProfileStores(inheritedStore, persisted ?? emptyStore())
     : persisted;
   for (const [profileId, credential] of removedProfiles) {
     if (isDeepStrictEqual(persisted?.profiles[profileId], credential)) {
@@ -244,19 +241,25 @@ async function persistCredentials(params: {
   return { migrated: added, removed: removedProfiles.length };
 }
 
-function collectAgentCatalogs(agentDir: string, warnings: string[]): AgentCatalogs {
+function collectAgentCatalogs(agentDir: string, warnings: string[], findings: HealthFinding[]) {
+  const reportWarning = createAuthMigrationWarningRecorder(warnings, findings);
   const localStore = loadPersistedAuthProfileStore(agentDir) ?? emptyStore();
   const providers: Record<string, unknown>[] = [];
   const rootPath = path.join(agentDir, "models.json");
   try {
-    const root = parseModelCatalogJson(fs.readFileSync(rootPath, "utf8"));
+    const root = parseModelCatalogJson(
+      decodeUtf8Input(fs.readFileSync(rootPath), `Model catalog ${rootPath}`),
+    );
     if (isRecord(root) && isRecord(root.providers)) {
       providers.push(root.providers);
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      warnings.push(
+      reportWarning(
         `Could not read model catalog ${shortenHomePath(rootPath)}: ${error instanceof Error ? error.message : String(error)}`,
+        "catalog-read-failed",
+        "Keep the model catalog. Correct the reported file access or JSON error, then rerun openclaw doctor --fix to verify credential migration.",
+        rootPath,
       );
     }
   }
@@ -272,12 +275,20 @@ function collectAgentCatalogs(agentDir: string, warnings: string[]): AgentCatalo
           providers.push(parsed.providers);
         }
       } catch {
-        warnings.push(`Could not parse generated model catalog for plugin ${catalog.pluginId}.`);
+        reportWarning(
+          `Could not parse generated model catalog for plugin ${catalog.pluginId}.`,
+          "catalog-parse-failed",
+          "Keep the agent database and recovery copy. Check the plugin catalog format with its maintainer before retrying openclaw doctor --fix; use openclaw models status to identify affected providers.",
+          catalog.pluginId,
+        );
       }
     }
   } catch (error) {
-    warnings.push(
+    reportWarning(
       `Could not read generated model catalogs for ${shortenHomePath(agentDir)}: ${error instanceof Error ? error.message : String(error)}`,
+      "catalog-owner-read-failed",
+      "Keep the agent database and recovery copy. Correct the reported database access error before rerunning openclaw doctor --fix; do not delete the credential database.",
+      agentDir,
     );
   }
   return { agentDir, localStore, providers };
@@ -289,8 +300,21 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   env?: NodeJS.ProcessEnv;
   prompter: DoctorPrompter;
   runtime: RuntimeEnv;
-}): Promise<{ detected: number; migrated: number; removed: number; warnings: string[] }> {
+  reportFindings?: (findings: readonly HealthFinding[], warnings?: readonly string[]) => void;
+}): Promise<{
+  detected: number;
+  migrated: number;
+  removed: number;
+  warnings: string[];
+  findings: readonly HealthFinding[];
+}> {
   const warnings: string[] = [];
+  const findings: HealthFinding[] = [];
+  const reportWarning = createAuthMigrationWarningRecorder(
+    warnings,
+    findings,
+    params.reportFindings,
+  );
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env);
   const mainAgentDir = resolveSharedMainAuthAgentDir(env);
@@ -310,10 +334,7 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     .map((modelsPath) => path.dirname(modelsPath))
     .filter((agentDir) => !isRetained(agentDir));
   const mainStore = loadPersistedSharedAuthProfileStore(env) ?? emptyStore();
-  const catalogs = agentDirs.map((agentDir) => collectAgentCatalogs(agentDir, warnings));
-  const effectiveStores = catalogs.map(({ localStore }) =>
-    mergeAuthProfileStores(mainStore, localStore),
-  );
+  const catalogs = agentDirs.map((agentDir) => collectAgentCatalogs(agentDir, warnings, findings));
   const childStores = catalogs
     .filter((catalog) => catalog.agentDir !== mainAgentDir)
     .map((catalog) => catalog.localStore);
@@ -323,30 +344,33 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     childStores,
     params.cfg,
   );
-  const catalogCredentials = catalogs.map((catalog, index) =>
-    uniqueCredentials(
-      catalog.providers.flatMap((providers) =>
-        collectCredentials(providers, effectiveStores[index] ?? mainStore, [], params.cfg),
+  const catalogImports = catalogs.map(({ agentDir, localStore, providers }) => {
+    const effectiveStore = mergeAuthProfileStores(mainStore, localStore);
+    return {
+      agentDir,
+      credentials: uniqueCredentials(
+        providers.flatMap((entries) =>
+          collectCredentials(entries, effectiveStore, [], params.cfg, true),
+        ),
       ),
-    ),
-  );
+      invalidProfiles:
+        agentDir === mainAgentDir ? [] : findProviderSecretRefProfiles(localStore, params.cfg),
+    };
+  });
   const invalidMainProfiles = findProviderSecretRefProfiles(mainStore, params.cfg);
-  const invalidCatalogProfiles = catalogs.map((catalog) =>
-    catalog.agentDir === mainAgentDir
-      ? []
-      : findProviderSecretRefProfiles(catalog.localStore, params.cfg),
-  );
   const detected =
-    configCredentials.length + catalogCredentials.reduce((sum, entries) => sum + entries.length, 0);
+    configCredentials.length +
+    catalogImports.reduce((sum, entry) => sum + entry.credentials.length, 0);
   const removable =
     invalidMainProfiles.length +
-    invalidCatalogProfiles.reduce((sum, profiles) => sum + profiles.length, 0);
+    catalogImports.reduce((sum, entry) => sum + entry.invalidProfiles.length, 0);
 
+  params.reportFindings?.(findings, warnings);
   for (const warning of warnings) {
     params.runtime.error(warning);
   }
   if (detected === 0 && removable === 0) {
-    return { detected, migrated: 0, removed: 0, warnings };
+    return { detected, migrated: 0, removed: 0, warnings, findings };
   }
 
   if (detected > 0) {
@@ -368,41 +392,53 @@ export async function maybeMigrateModelCatalogCredentials(params: {
       initialValue: true,
     }));
   if (!shouldRepair) {
-    return { detected, migrated: 0, removed: 0, warnings };
+    const pending: HealthFinding[] = [
+      {
+        checkId: "core/doctor/auth-migration/model-credential-repair-pending",
+        severity: "warning",
+        category: "recommended",
+        message: `${detected} plaintext model credential${detected === 1 ? "" : "s"} and ${removable} unresolved marker${removable === 1 ? "" : "s"} remain pending repair.`,
+        fixHint:
+          "Run openclaw doctor --fix to copy and verify plaintext credentials in agent SQLite and remove unresolved markers. This prepares for catalog auth retirement; keep the original catalog values until verification completes.",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/running#auth-migration-recovery",
+      },
+    ];
+    findings.push(...pending);
+    params.reportFindings?.(pending);
+    return { detected, migrated: 0, removed: 0, warnings, findings };
   }
 
-  let migrated = 0;
-  let removed = 0;
-  try {
-    const result = await persistCredentials({
+  function* migrationTargets() {
+    yield {
+      description: "configured model credentials",
       blockedStores: childStores,
       credentials: configCredentials,
       invalidProfiles: invalidMainProfiles,
-      stateDir,
-    });
-    migrated += result.migrated;
-    removed += result.removed;
-  } catch (error) {
-    const warning = `Could not migrate configured model credentials: ${error instanceof Error ? error.message : String(error)}`;
-    warnings.push(warning);
-    params.runtime.error(warning);
+    };
+    for (const { agentDir, credentials, invalidProfiles } of catalogImports) {
+      yield {
+        description: `model credentials for ${shortenHomePath(agentDir)}`,
+        credentials,
+        invalidProfiles,
+        ...(agentDir === mainAgentDir ? {} : { agentDir }),
+      };
+    }
   }
-
-  const migratedMainStore = loadPersistedSharedAuthProfileStore(env) ?? mainStore;
-  for (const [index, catalog] of catalogs.entries()) {
+  let migrated = 0;
+  let removed = 0;
+  for (const { description, ...target } of migrationTargets()) {
     try {
-      const result = await persistCredentials({
-        ...(catalog.agentDir === mainAgentDir ? {} : { agentDir: catalog.agentDir }),
-        credentials: catalogCredentials[index] ?? [],
-        invalidProfiles: invalidCatalogProfiles[index] ?? [],
-        ...(catalog.agentDir === mainAgentDir ? {} : { inheritedStore: migratedMainStore }),
-        stateDir,
-      });
+      const result = await persistCredentials({ ...target, env });
       migrated += result.migrated;
       removed += result.removed;
     } catch (error) {
-      const warning = `Could not migrate model credentials for ${shortenHomePath(catalog.agentDir)}: ${error instanceof Error ? error.message : String(error)}`;
-      warnings.push(warning);
+      const warning = `Could not migrate ${description}: ${error instanceof Error ? error.message : String(error)}`;
+      reportWarning(
+        warning,
+        "credential-import-failed",
+        "Keep the original catalog values and recovery copy. Correct the reported credential-store error and rerun openclaw doctor --fix. Check openclaw models status for the intended accounts.",
+        description,
+      );
       params.runtime.error(warning);
     }
   }
@@ -419,5 +455,5 @@ export async function maybeMigrateModelCatalogCredentials(params: {
       "Doctor changes",
     );
   }
-  return { detected, migrated, removed, warnings };
+  return { detected, migrated, removed, warnings, findings };
 }

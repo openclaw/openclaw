@@ -32,4 +32,25 @@ describe("Copilot request facts", () => {
       hasImages: false,
     });
   });
+
+  it.each([
+    { name: "canonical", marker: { runtimeContext: {} } },
+    { name: "shipped", marker: { runtimeContextCarrier: true } },
+  ])("keeps $name runtime context transparent to request initiator ownership", ({ marker }) => {
+    const runtimeContext = {
+      role: "user",
+      content: "OpenClaw runtime context:\ncurrent runtime facts",
+      ...marker,
+    };
+    expect(
+      projectCopilotRequestFacts([{ role: "user", content: "question" }, runtimeContext], "nested")
+        .initiator,
+    ).toBe("user");
+    expect(
+      projectCopilotRequestFacts(
+        [{ role: "toolResult", content: "result" }, runtimeContext],
+        "nested",
+      ).initiator,
+    ).toBe("agent");
+  });
 });

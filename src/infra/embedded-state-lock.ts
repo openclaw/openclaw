@@ -1,13 +1,9 @@
 // Coordinates direct embedded state writers with the Gateway state-directory owner.
+import { setTimeout as delay } from "node:timers/promises";
 import { createAbortError } from "./abort-signal.js";
 import type { GatewayLockIdentity, GatewayLockOptions } from "./gateway-lock.js";
 
 export type EmbeddedStateSignal = "SIGINT" | "SIGTERM";
-
-export type EmbeddedStateSignalProcess = {
-  on(signal: EmbeddedStateSignal, handler: () => void): unknown;
-  off(signal: EmbeddedStateSignal, handler: () => void): unknown;
-};
 
 export type EmbeddedStateLockHandle = {
   release: () => Promise<void>;
@@ -15,45 +11,25 @@ export type EmbeddedStateLockHandle = {
 
 const EMBEDDED_STATE_SIGNALS: readonly EmbeddedStateSignal[] = ["SIGINT", "SIGTERM"];
 
-function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    return Promise.reject(createAbortError("embedded state lock acquisition aborted"));
-  }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      reject(createAbortError("embedded state lock acquisition aborted"));
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 /** Bridges process signals into embedded-run cancellation so lock cleanup can unwind. */
-export function createEmbeddedStateSignalBridge(processLike: EmbeddedStateSignalProcess = process) {
+export function createEmbeddedStateSignalBridge() {
   const controller = new AbortController();
   let receivedSignal: EmbeddedStateSignal | undefined;
   const handlers = new Map<EmbeddedStateSignal, () => void>();
   const dispose = () => {
     for (const [signal, handler] of handlers) {
-      processLike.off(signal, handler);
+      process.off(signal, handler);
     }
     handlers.clear();
   };
   for (const signal of EMBEDDED_STATE_SIGNALS) {
     const handler = () => {
       receivedSignal = signal;
-      if (!controller.signal.aborted) {
-        controller.abort();
-        dispose();
-      }
+      controller.abort();
+      dispose();
     };
     handlers.set(signal, handler);
-    processLike.on(signal, handler);
+    process.on(signal, handler);
   }
   return {
     signal: controller.signal,
@@ -85,7 +61,12 @@ export async function acquireEmbeddedStateLock(params: {
     return await acquireGatewayLock({
       ...params.options,
       role: "agent-embedded",
-      sleep: params.options?.sleep ?? (async (ms) => await abortableDelay(ms, params.signal)),
+      sleep:
+        params.options?.sleep ??
+        ((ms) =>
+          delay(ms, undefined, { signal: params.signal }).catch(() => {
+            throw createAbortError("embedded state lock acquisition aborted");
+          })),
     });
   } catch (error) {
     if (!(error instanceof GatewayLockError)) {

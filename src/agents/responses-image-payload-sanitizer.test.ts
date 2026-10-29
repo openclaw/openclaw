@@ -1,6 +1,10 @@
 import { sanitizeResponsesImagePayload } from "@openclaw/ai/transports";
+import "../llm/ai-transport-host.js";
+import type { Context, Model } from "@openclaw/llm-core";
 // Verifies Responses image payloads are canonicalized or replaced before send.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { convertResponsesMessages } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 
 const PNG_1X1 =
   // Valid JPEG-labeled data is sniffed as PNG and normalized to the real MIME type.
@@ -85,4 +89,97 @@ describe("Responses image payload sanitizer", () => {
       },
     ]);
   });
+});
+
+it.each([
+  { name: "canonical", mimeType: "image/png", data: PNG_1X1 },
+  { name: "MIME normalization", mimeType: "image/jpeg", data: PNG_1X1 },
+  { name: "whitespace normalization", mimeType: "image/png", data: `\n${PNG_1X1}\n` },
+  { name: "padding normalization", mimeType: "image/png", data: PNG_1X1.replace(/=+$/, "") },
+])("reuses $name image work without sharing mutable request items", ({ mimeType, data }) => {
+  const image = { type: "image" as const, mimeType, data };
+  const model: Model = {
+    id: "fixture-model",
+    name: "Synthetic",
+    provider: "openai",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 200000,
+    maxTokens: 1024,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  const context: Context = { messages: [{ role: "user", content: [image], timestamp: 0 }] };
+  const build = () => ({ input: convertResponsesMessages(model, context, new Set(["openai"])) });
+  const decode = vi.spyOn(Buffer, "from");
+  try {
+    const initial = build();
+    const first = sanitizeResponsesImagePayload(initial);
+    const expected =
+      '[{"type":"message","role":"user","content":[{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,' +
+      PNG_1X1 +
+      '"}]}]';
+    expect(JSON.stringify(first.input)).toBe(expected);
+    // Another conversation must not evict the first image's prepared work.
+    sanitizeResponsesImagePayload({
+      input: convertResponsesMessages(
+        model,
+        {
+          messages: [{ role: "user", content: [{ ...image }], timestamp: 1 }],
+        },
+        new Set(["openai"]),
+      ),
+    });
+    decode.mockClear();
+    const next = build();
+    expect(next.input[0]).not.toBe(initial.input[0]);
+    expect(JSON.stringify(sanitizeResponsesImagePayload(next).input)).toBe(expected);
+    expect(decode).not.toHaveBeenCalled();
+
+    // A hook may rewrite an existing item; the unchanged source cannot bless that URL.
+    const item = next.input[0];
+    if (item?.type !== "message" || !Array.isArray(item.content)) {
+      throw new Error("missing image");
+    }
+    const part = item.content[0];
+    if (part?.type !== "input_image") {
+      throw new Error("missing image");
+    }
+    part.image_url = "data:image/png;base64,invalid!";
+    expect(JSON.stringify(sanitizeResponsesImagePayload(next))).toContain("omitted image payload");
+    expect(JSON.stringify(sanitizeResponsesImagePayload(build()).input)).toBe(expected);
+
+    // In-place transcript edits and replacements must be observed on the next request.
+    image.data = HEIC_HEADER;
+    expect(JSON.stringify(sanitizeResponsesImagePayload(build()))).toContain(
+      "omitted image payload",
+    );
+    decode.mockClear();
+    expect(JSON.stringify(sanitizeResponsesImagePayload(build()))).toContain(
+      "omitted image payload",
+    );
+    expect(decode).not.toHaveBeenCalled();
+    image.data = PNG_1X1;
+    image.mimeType = "text/plain";
+    expect(JSON.stringify(sanitizeResponsesImagePayload(build()))).toContain(
+      "omitted image payload",
+    );
+    context.messages = [
+      { role: "user", content: [{ ...image, mimeType: "image/png" }], timestamp: 0 },
+    ];
+    expect(JSON.stringify(sanitizeResponsesImagePayload(build()).input)).toBe(expected);
+    // Frozen image history keeps preparation reusable and hook input editable.
+    context.messages.forEach(freezeJsonSnapshot);
+    const hookInput = () => ({
+      input: convertResponsesMessages(model, context, new Set(["openai"]), { mutableInput: true }),
+    });
+    sanitizeResponsesImagePayload(hookInput());
+    decode.mockClear();
+    const detached = hookInput();
+    expect(JSON.stringify(sanitizeResponsesImagePayload(detached).input)).toBe(expected);
+    expect(decode).not.toHaveBeenCalled();
+  } finally {
+    decode.mockRestore();
+  }
 });

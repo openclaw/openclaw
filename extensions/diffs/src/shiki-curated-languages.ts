@@ -1,4 +1,3 @@
-// Diffs plugin module implements shiki curated languages behavior.
 const javascript = () => import("@shikijs/langs/javascript");
 const typescript = () => import("@shikijs/langs/typescript");
 const tsx = () => import("@shikijs/langs/tsx");
@@ -71,8 +70,3 @@ export const bundledLanguagesInfo = [
 export const bundledLanguagesBase = Object.fromEntries(
   bundledLanguagesInfo.map((language) => [language.id, language.import]),
 );
-export function getBundledLanguageAliases(
-  language: (typeof bundledLanguagesInfo)[number],
-): readonly string[] {
-  return "aliases" in language ? language.aliases : [];
-}

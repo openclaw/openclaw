@@ -1,0 +1,13 @@
+format: knowledge-schema-v1
+version: 0.1.0
+name: supports
+label: Supports
+description: Supports records. One primary home per record; references connect
+  related knowledge.
+kind: relationship
+directory: relationships/
+fields: []
+from_types:
+  - organization
+to_types:
+  - project

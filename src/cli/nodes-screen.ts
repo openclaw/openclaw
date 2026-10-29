@@ -1,25 +1,15 @@
-// Screen-recording payload helpers for node media commands.
 import * as path from "node:path";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
-import { asRecord, readStringValue, resolveTempPathParts } from "./nodes-media-utils.js";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { resolveTempPathParts } from "./nodes-media-utils.js";
 
 export {
   writeBase64ToFile as writeScreenRecordToFile,
   writeBase64ToFile as writeScreenSnapshotToFile,
 } from "./nodes-camera.js";
 
-/** Validated payload returned by `nodes screen record` RPC calls. */
-type ScreenRecordPayload = {
-  format: string;
-  base64: string;
-  durationMs?: number;
-  fps?: number;
-  screenIndex?: number;
-  hasAudio?: boolean;
-};
-
-/** Validate and normalize an unknown screen-record payload. */
-export function parseScreenRecordPayload(value: unknown): ScreenRecordPayload {
+export function parseScreenRecordPayload(value: unknown) {
   const obj = asRecord(value);
   const format = readStringValue(obj.format);
   const base64 = readStringValue(obj.base64);
@@ -36,7 +26,6 @@ export function parseScreenRecordPayload(value: unknown): ScreenRecordPayload {
   };
 }
 
-/** Build the temp output path for a screen recording artifact. */
 export function screenRecordTempPath(opts: { ext: string; tmpDir?: string; id?: string }) {
   const { tmpDir, id, ext } = resolveTempPathParts(opts);
   return path.join(tmpDir, `openclaw-screen-record-${id}${ext}`);
@@ -58,7 +47,6 @@ export function screenSnapshotFormatForPath(filePath: string): "png" | "jpeg" | 
   return ext === ".jpg" || ext === ".jpeg" ? "jpeg" : undefined;
 }
 
-/** Build the temp output path for a screen snapshot artifact. */
 export function screenSnapshotTempPath(opts: { ext: string; tmpDir?: string; id?: string }) {
   // No default extension: the node chooses the encoding, and assuming PNG here
   // is how a JPEG snapshot ends up named `.png`.

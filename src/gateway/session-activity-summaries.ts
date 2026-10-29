@@ -11,49 +11,60 @@ import {
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import {
   ACTIVITY_SUMMARY_FORMAT_REVISION,
+  ACTIVITY_SUMMARY_TEXT_FORMAT_REVISION,
   readSessionActivitySummary,
   type SessionActivitySummary,
 } from "../config/sessions/activity-summary.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-  readSessionTranscriptActivePathEntryRelation,
-  readSessionTranscriptWatermark,
-} from "../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isCronSessionKey,
   isIncognitoSessionKey,
   isSubagentSessionKey,
-  parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
+import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import {
   onSessionIdentityMutation,
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
-import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { createActivitySummaryAuthority } from "./session-activity-summary-authority.js";
+import {
+  beginActivitySummaryCompletion,
+  type PendingSessionActivitySummaryCompletion,
+  type SessionActivitySummaryCompletion,
+} from "./session-activity-summary-completion.js";
+import {
+  projectActivitySummaryEntry,
+  subscribeActivitySummaryEntryReceipts,
+} from "./session-activity-summary-entry-receipts.js";
 import { readActivitySummarySource } from "./session-activity-summary-source.js";
 import {
   activitySummaryScope,
-  projectSessionActivitySummary,
+  createActivitySummaryStorePaths,
+  prepareSessionActivitySummaryView,
+  resolveActivitySummaryEventTarget,
   sessionActivitySummaryOwnerIsCurrent,
   setSessionActivitySummaryState,
   type ActivitySummaryTarget,
 } from "./session-activity-summary-state.js";
+import { readSessionListSelectionFacts } from "./session-list-target.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
 const log = createSubsystemLogger("gateway/activity-summary");
-const REFRESH_MS = 90_000;
 const RETRY_MS = 120_000;
 const MAX_TRACKED = 256;
 const MAX_RETRIES = 3;
@@ -61,6 +72,7 @@ const RETRY_BACKOFF = { initialMs: 30_000, maxMs: RETRY_MS, factor: 2, jitter: 0
 const MAX_CALLS_PER_HOUR = 40;
 const HOUR_MS = 3_600_000;
 const MODEL_TIMEOUT_MS = 20_000;
+const OMISSION_NOTICE = "(Some oversized messages were omitted.)";
 const SYSTEM_PROMPT = [
   "Write an Activity recap for someone scanning their tasks: what was done here, and where it stands now.",
   "Use one to three short, plain-language sentences (at most 450 characters). Lead with the concrete result or work performed; finish with whether it is done, still in progress, blocked, or waiting, only as supported by the conversation.",
@@ -75,6 +87,7 @@ const SYSTEM_PROMPT = [
 
 type Tracked = ActivitySummaryTarget & {
   sessionId: string;
+  entry: ReturnType<typeof projectActivitySummaryEntry>;
   lifecycleRevision?: string;
   storePath: string;
   readyAt: number;
@@ -82,59 +95,64 @@ type Tracked = ActivitySummaryTarget & {
   failures: number;
   controller?: AbortController;
   inFlight: boolean;
-  queued: boolean;
   dirty: boolean;
-  immediate: boolean;
-  lastStartedAt: number;
   retryAt: number;
   windowStart: number;
   calls: number;
+  completion?: PendingSessionActivitySummaryCompletion;
 };
 class ActivitySummaryCancelledError extends Error {
   constructor() {
     super("Activity recap lifecycle or utility model changed");
+    this.name = "AbortError";
   }
 }
 
 export type SessionActivitySummaryService = {
-  ensure: (target: ActivitySummaryTarget) => ActivitySummaryView;
+  beginCompletion(
+    target: { key: string; agentId?: string; storePath: string },
+    entry: SessionEntry | undefined,
+  ): SessionActivitySummaryCompletion | undefined;
+  ensure(target: ActivitySummaryTarget, entry?: SessionEntry): Promise<ActivitySummaryView>;
   handleEvent: (event: SessionObserverEvent) => void;
-  handleTranscript: (event: InternalSessionTranscriptUpdate) => void;
   handleLifecycle: (event: SessionLifecycleEvent) => void;
   dispose: () => Promise<void>;
 };
 
 export function createSessionActivitySummaries(deps: {
+  scheduler: GatewayScheduler;
   getConfig: () => OpenClawConfig;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
   onChanged: (target: ActivitySummaryTarget & { storePath: string }) => void;
-  prepareModel?: typeof defaultPrepareModel;
-  completeModel?: typeof defaultCompleteModel;
 }): SessionActivitySummaryService {
   const states = new Map<string, Tracked>();
   const queue: Tracked[] = [];
   const running = new Set<Promise<void>>();
+  const admissions = new Set<Promise<unknown>>();
   const modelBackoffs = new Map<string, { until: number; failures: number }>();
-  let pumpTimer: ReturnType<typeof setTimeout> | undefined;
+  let pumpJob: GatewayScheduledJob | undefined;
   const owner = Symbol("activity-summary-owner");
-  let active = 0;
   let disposed = false;
-  const now = () => Date.now();
+  const now = () => deps.scheduler.now();
   const modelRef = (target: ActivitySummaryTarget) =>
     resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId: target.agentId });
+  const storePathFor = createActivitySummaryStorePaths(deps.getConfig);
   const scope = (target: ActivitySummaryTarget) => ({
     agentId: target.agentId,
     sessionKey: target.key,
-    storePath: resolveSessionStorePathCore(deps.getConfig().session?.store, {
-      agentId: target.agentId,
-    }),
+    storePath: storePathFor(target.agentId),
   });
-  const read = (target: ActivitySummaryTarget) =>
-    loadSessionEntryReadOnly({ ...scope(target), projection: "list" });
+  const isActive = (state: Tracked) =>
+    resolveVisibleActiveSessionRunState({
+      ...state,
+      requestedKey: state.key,
+      canonicalKey: state.key,
+    }).active;
   const current = (state: Tracked) =>
     !disposed &&
     states.get(activitySummaryScope(state)) === state &&
     sessionActivitySummaryOwnerIsCurrent(state, owner) &&
-    scope(state).storePath === state.storePath;
+    storePathFor(state.agentId) === state.storePath;
   const publish = (state: Tracked, value: ActivitySummaryView["state"], force = false) => {
     if (!current(state)) {
       return;
@@ -157,6 +175,7 @@ export function createSessionActivitySummaries(deps: {
   };
   const drop = (state: Tracked) => {
     state.controller?.abort(new ActivitySummaryCancelledError());
+    state.completion?.release();
     states.delete(activitySummaryScope(state));
     const index = queue.indexOf(state);
     if (index >= 0) {
@@ -164,27 +183,29 @@ export function createSessionActivitySummaries(deps: {
     }
     setSessionActivitySummaryState(state, owner);
   };
-  const admit = (target: ActivitySummaryTarget): Tracked | undefined => {
-    if (
-      disposed ||
-      isCronSessionKey(target.key) ||
-      isSubagentSessionKey(target.key) ||
-      isIncognitoSessionKey(target.key) ||
-      !modelRef(target)
-    ) {
+  const canTrack = (target: ActivitySummaryTarget) =>
+    !disposed &&
+    !isCronSessionKey(target.key) &&
+    !isSubagentSessionKey(target.key) &&
+    !isIncognitoSessionKey(target.key) &&
+    Boolean(modelRef(target));
+  const admit = (
+    target: ActivitySummaryTarget,
+    entry: SessionEntry | undefined,
+    storePath = scope(target).storePath,
+  ): Tracked | undefined => {
+    if (!canTrack(target)) {
       return undefined;
     }
-    const entry = read(target);
     if (
       !entry?.sessionId ||
       entry.initializationPending ||
       entry.incognito ||
       entry.heartbeatIsolatedBaseSessionKey ||
-      entry.spawnedBy
+      readSessionListSelectionFacts(target.key, entry).isSubagent
     ) {
       return undefined;
     }
-    const storePath = scope(target).storePath;
     const key = activitySummaryScope(target);
     let state = states.get(key);
     if (
@@ -201,7 +222,7 @@ export function createSessionActivitySummaries(deps: {
     }
     if (states.size >= MAX_TRACKED) {
       const evictable = [...states.values()].find(
-        (candidate) => !candidate.inFlight && !candidate.queued,
+        (candidate) => !candidate.inFlight && !queue.includes(candidate),
       );
       if (!evictable) {
         return undefined;
@@ -210,6 +231,7 @@ export function createSessionActivitySummaries(deps: {
     }
     state = {
       ...target,
+      entry: projectActivitySummaryEntry(entry),
       sessionId: entry.sessionId,
       lifecycleRevision: entry.lifecycleRevision,
       storePath,
@@ -217,10 +239,7 @@ export function createSessionActivitySummaries(deps: {
       retryPending: false,
       failures: 0,
       inFlight: false,
-      queued: false,
       dirty: false,
-      immediate: false,
-      lastStartedAt: 0,
       retryAt: 0,
       windowStart: now(),
       calls: 0,
@@ -238,38 +257,33 @@ export function createSessionActivitySummaries(deps: {
     if (
       !current(state) ||
       // Deletion and reset retain exact-row snapshots across awaited preparation.
-      isSessionLifecycleMutationActive(state.storePath, [state.key, state.sessionId]) ||
+      isSessionMutationActive(state.storePath, [state.key, state.sessionId]) ||
       modelRef(state) !== expectedModel ||
       state.controller?.signal.aborted
     ) {
       throw new ActivitySummaryCancelledError();
     }
   };
-  const assertCurrentEntry = (state: Tracked, entry: ReturnType<typeof read>) => {
+  const assertCurrentEntry = (state: Tracked, entry: SessionEntry | undefined) => {
     if (
       !entry ||
       entry.initializationPending ||
+      readSessionListSelectionFacts(state.key, entry).isSubagent ||
       entry.sessionId !== state.sessionId ||
       entry.lifecycleRevision !== state.lifecycleRevision
     ) {
       throw new ActivitySummaryCancelledError();
     }
-    return entry;
   };
-  const assertCurrent = (state: Tracked, expectedModel: string) => {
-    assertCurrentOwner(state, expectedModel);
-    return assertCurrentEntry(state, read(state));
-  };
-  const schedule = (state: Tracked, immediate: boolean) => {
+  const schedule = (state: Tracked) => {
     if (!current(state)) {
       return;
     }
     state.dirty = true;
-    state.immediate ||= immediate;
     if (state.inFlight) {
       return;
     }
-    if (!state.queued && !state.retryPending && state.retryAt <= now()) {
+    if (!queue.includes(state) && !state.retryPending && state.retryAt <= now()) {
       state.retryAt = 0;
       state.failures = 0;
     }
@@ -284,14 +298,13 @@ export function createSessionActivitySummaries(deps: {
     state.readyAt = Math.max(
       now(),
       state.retryAt,
-      state.immediate ? 0 : state.lastStartedAt + REFRESH_MS,
       state.calls >= MAX_CALLS_PER_HOUR ? state.windowStart + HOUR_MS : 0,
     );
-    publish(state, "updating");
-    // Every admitted session occupies at most one queue entry. The tracked-session
-    // bound also bounds pending work, so a full Activity page cannot overflow it.
-    if (!state.queued) {
-      state.queued = true;
+    if (!readSessionActivitySummary(state.entry) || state.readyAt > now()) {
+      publish(state, "updating");
+    }
+    // The tracked-session bound also bounds the queue, with at most one entry per session.
+    if (!queue.includes(state)) {
       queue.push(state);
     }
     pump();
@@ -299,7 +312,6 @@ export function createSessionActivitySummaries(deps: {
   const run = async (state: Tracked) => {
     state.inFlight = true;
     state.dirty = false;
-    state.immediate = false;
     state.retryPending = false;
     state.retryAt = 0;
     if (now() - state.windowStart >= HOUR_MS) {
@@ -308,29 +320,37 @@ export function createSessionActivitySummaries(deps: {
     }
     const ref = modelRef(state);
     const priorBackoff = ref ? modelBackoffs.get(ref) : undefined;
+    let authority: ReturnType<typeof createActivitySummaryAuthority> | undefined;
     let partial = false;
-    let ownedWork: Promise<string> | undefined;
+    const ownedWork = new AsyncWorkScope();
     try {
       if (!ref) {
         publish(state, "unavailable");
         return;
       }
-      const entry = assertCurrent(state, ref);
-      const transcriptScope = { ...scope(state), sessionId: state.sessionId };
+      const recapAuthority = createActivitySummaryAuthority({
+        agentId: state.agentId,
+        getEntry: () => state.entry,
+        getConfig: deps.getConfig,
+        assertCurrent: () => assertCurrentOwner(state, ref),
+      });
+      authority = recapAuthority;
       const source = await readActivitySummarySource({
-        scope: transcriptScope,
-        previous: readSessionActivitySummary(entry),
-        assertCurrent: () => assertCurrent(state, ref),
+        scope: { ...scope(state), sessionId: state.sessionId },
+        previous: readSessionActivitySummary(state.entry),
+        assertCurrent: recapAuthority.assertCurrent,
       });
       if (!source) {
         state.dirty = true;
         return;
       }
       const { previous, snapshot, watermark, covered, page, omitted, notes } = source;
-      const restyle = previous && previous.formatRevision !== ACTIVITY_SUMMARY_FORMAT_REVISION;
+      const restyle =
+        previous && (previous.formatRevision ?? 1) < ACTIVITY_SUMMARY_TEXT_FORMAT_REVISION;
       if (
         previous &&
-        !restyle &&
+        previous.formatRevision === ACTIVITY_SUMMARY_FORMAT_REVISION &&
+        previous.omittedContent === omitted &&
         previous.coveredMessages === snapshot.totalMessages &&
         previous.maxSeq === watermark.maxSeq &&
         previous.generation === watermark.generation
@@ -338,42 +358,55 @@ export function createSessionActivitySummaries(deps: {
         publish(state, "current");
         return;
       }
+      publish(state, "updating");
       let text = previous?.text ?? "";
+      if (text.endsWith(OMISSION_NOTICE)) {
+        text = text.slice(0, -OMISSION_NOTICE.length).trimEnd();
+      }
       if (notes.length || (restyle && text)) {
-        state.lastStartedAt = now();
-        state.calls += 1;
         const controller = new AbortController();
         state.controller = controller;
         const timer = setTimeout(
           () => controller.abort(new Error("Activity recap timed out")),
           MODEL_TIMEOUT_MS,
         );
-        const aborted = new Promise<never>((_, reject) => {
-          controller.signal.addEventListener(
-            "abort",
-            () => reject(toErrorObject(controller.signal.reason, "Activity recap cancelled")),
-            {
-              once: true,
-            },
-          );
-        });
         try {
           const assertRequestCurrent = () => {
             if (controller.signal.aborted || state.controller !== controller) {
               throw controller.signal.reason ?? new ActivitySummaryCancelledError();
             }
-            assertCurrent(state, ref);
+            recapAuthority.assertCurrent();
+            assertCurrentEntry(state, state.entry);
           };
           const execute = async () => {
-            const prepared = await (deps.prepareModel ?? defaultPrepareModel)({
+            const operatorAuthority = await recapAuthority.prepare();
+            const { hasAvailableUtilityCompletionAuth } =
+              await import("../agents/utility-completion.js");
+            assertRequestCurrent();
+            const prepared = await defaultPrepareModel({
               cfg: deps.getConfig(),
               agentId: state.agentId,
               modelRef: ref,
               useUtilityModel: true,
             });
             assertRequestCurrent();
-            const result = await (deps.completeModel ?? defaultCompleteModel)({
+            const available = await hasAvailableUtilityCompletionAuth(prepared);
+            assertRequestCurrent();
+            if (!available) {
+              state.retryAt = now() + RETRY_MS;
+              publish(state, "unavailable");
+              log.info("recap unavailable: no Gateway model credential", {
+                agentId: state.agentId,
+              });
+              return undefined;
+            }
+            state.calls += 1;
+            const result = await defaultCompleteModel({
               ...prepared,
+              operatorAuthority,
+              purpose: "session-activity-summary",
+              sessionId: state.sessionId,
+              sessionKey: state.key,
               config: deps.getConfig(),
               systemPrompt: SYSTEM_PROMPT,
               prompt: JSON.stringify({
@@ -384,17 +417,21 @@ export function createSessionActivitySummaries(deps: {
               timeoutMs: MODEL_TIMEOUT_MS,
               abortSignal: controller.signal,
               assertCurrent: assertRequestCurrent,
-              streamParams: { maxTokens: 240, temperature: 0.2 },
+              answerTokenBudget: 240,
+              streamParams: { temperature: 0.2 },
             });
+            assertRequestCurrent();
             return result.text;
           };
-          ownedWork = execute();
-          text = truncateUtf16Safe(
-            redactToolPayloadText(await Promise.race([ownedWork, aborted]))
-              .replace(/\s+/gu, " ")
-              .trim(),
-            450,
+          const completed = await racePromiseWithAbortSignal(
+            ownedWork.track(execute),
+            controller.signal,
+            (signal) => toErrorObject(signal.reason, "Activity recap cancelled"),
           );
+          if (completed === undefined) {
+            return;
+          }
+          text = truncateUtf16Safe(completed.replace(/\s+/gu, " ").trim(), 450);
           if (!text) {
             throw new Error("Activity recap returned no visible text");
           }
@@ -402,10 +439,8 @@ export function createSessionActivitySummaries(deps: {
           clearTimeout(timer);
         }
       }
-      assertCurrent(state, ref);
-      if (omitted && text && !text.endsWith("(Some oversized messages were omitted.)")) {
-        const omissionNotice = " (Some oversized messages were omitted.)";
-        text = truncateUtf16Safe(text, 450 - omissionNotice.length) + omissionNotice;
+      if (omitted && text && !text.endsWith(OMISSION_NOTICE)) {
+        text = `${truncateUtf16Safe(text, 449 - OMISSION_NOTICE.length)} ${OMISSION_NOTICE}`;
       }
       const summary: SessionActivitySummary = {
         version: 1,
@@ -421,48 +456,30 @@ export function createSessionActivitySummaries(deps: {
         totalMessages: snapshot.totalMessages,
         omittedContent: omitted,
       };
-      let accepted = false;
-      const committed = await patchSessionEntryCore(
-        scope(state),
-        (fresh) => {
-          assertCurrentEntry(state, fresh);
-          return { activitySummary: summary };
-        },
-        {
-          preserveActivity: true,
-          shouldCommit: () => {
-            // The accessor revalidates the prepared row in this transaction.
-            // A separate read-only entry probe would rescan the store on a fresh connection.
-            assertCurrentOwner(state, ref);
-            const latest = readSessionTranscriptWatermark(transcriptScope);
-            if (
-              latest.generation !== summary.generation ||
-              (summary.leafEntryId &&
-                !["exact", "ancestor"].includes(
-                  readSessionTranscriptActivePathEntryRelation(
-                    transcriptScope,
-                    summary.leafEntryId,
-                  ),
-                ))
-            ) {
-              return false;
-            }
-            accepted = true;
-            return true;
+      const committed =
+        (await state.completion?.offer(summary)) ??
+        (await applySessionEntryOperation(
+          scope(state),
+          { kind: "activity-summary", summary, sessionKey: state.key },
+          {
+            preserveActivity: true,
+            workerGuard: {
+              assertCurrent: recapAuthority.assertCurrent,
+            },
           },
-        },
-      );
-      if (!committed || !accepted || !current(state)) {
+        ));
+      if (!committed || !current(state)) {
         state.dirty = true;
         return;
       }
+      state.entry = { ...state.entry, activitySummary: committed.activitySummary };
       state.failures = 0;
       if (modelBackoffs.get(ref) === priorBackoff) {
         modelBackoffs.delete(ref);
       }
       partial = summary.coveredMessages < summary.totalMessages;
-      const latest = readSessionTranscriptWatermark(transcriptScope);
-      state.dirty ||= latest.generation !== summary.generation || latest.maxSeq !== summary.maxSeq;
+      // A concurrent terminal event or rewrite can leave a stale
+      // optional recap until refresh. Readers compare its saved source watermark.
       publish(state, partial || state.dirty ? "updating" : "current", true);
     } catch (error) {
       if (current(state)) {
@@ -473,7 +490,6 @@ export function createSessionActivitySummaries(deps: {
         }
         const failure = resolveModelFallbackError(error);
         const reason = failure.kind === "failover" ? failure.error.reason : undefined;
-        const message = formatErrorMessage(error);
         const transient =
           (reason === "overloaded" ||
             reason === "server_error" ||
@@ -498,8 +514,7 @@ export function createSessionActivitySummaries(deps: {
                 ? Math.max(direct, parsed ?? 0)
                 : parsed;
             }) ?? 0;
-          // Long provider retry floors remain unavailable rather than being shortened
-          // into repeated billable attempts or overflowing native timers.
+          // Long provider retry floors cannot become repeated billable attempts or overflow timers.
           state.retryPending &&= Number.isFinite(retryAfter) && retryAfter <= HOUR_MS;
           delay = Math.max(computeBackoff(RETRY_BACKOFF, failures), retryAfter);
           modelBackoffs.set(ref, { until: now() + delay, failures });
@@ -507,30 +522,34 @@ export function createSessionActivitySummaries(deps: {
         }
         state.retryAt = now() + delay;
         publish(state, state.retryPending ? "updating" : "unavailable");
-        log.debug("Activity recap deferred", {
+        log[authority?.operatorOwned ? "info" : "debug"]("Activity recap deferred", {
           agentId: state.agentId,
-          error: message,
+          error: formatErrorMessage(error),
           retryScheduled: state.retryPending,
         });
       }
     } finally {
-      // Cancellation can precede provider settlement. Retain the slot and request identity
-      // until owned work settles so a timed-out prepare cannot escape the concurrency bound.
-      await ownedWork?.catch(() => undefined);
+      // Logical results can precede tracked cleanup. Retain this recap's slot
+      // through descendant settlement without draining its caller's scope.
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [ownedWork],
+        () => ownedWork.drain(),
+      );
+      authority?.release();
       state.controller = undefined;
       state.inFlight = false;
       if (current(state) && (state.retryPending || (!state.retryAt && (partial || state.dirty)))) {
-        schedule(state, state.retryPending || partial || state.immediate);
+        schedule(state);
       }
     }
   };
   const pump = () => {
-    clearTimeout(pumpTimer);
-    pumpTimer = undefined;
-    if (disposed) {
+    pumpJob?.cancel();
+    pumpJob = undefined;
+    if (disposed || deps.scheduler.signal.aborted) {
       return;
     }
-    while (active < 2 && queue.length) {
+    while (running.size < 2 && queue.length) {
       let earliest = Infinity;
       const index = queue.findIndex((candidate) => {
         if (!current(candidate)) {
@@ -543,49 +562,39 @@ export function createSessionActivitySummaries(deps: {
       });
       if (index < 0) {
         if (Number.isFinite(earliest)) {
-          pumpTimer = setTimeout(pump, Math.min(earliest - now(), HOUR_MS));
-          pumpTimer.unref?.();
+          pumpJob = runInDetachedAsyncContext(() =>
+            deps.scheduler.schedule({
+              id: "session-activity-summary-pump",
+              atMs: earliest,
+              run: async () => {
+                pump();
+                while (running.size > 0) {
+                  await Promise.all(running);
+                }
+              },
+            }),
+          );
         }
         return;
       }
       const state = queue.splice(index, 1)[0]!;
-      state.queued = false;
       if (!current(state)) {
         continue;
       }
-      active += 1;
-      const work = run(state)
+      // The per-recap scope must not detach cleanup from inherited connection work.
+      const work = trackAsyncWork(() => run(state))
         .catch((error: unknown) => {
           log.debug("Activity recap background work failed", { error: formatErrorMessage(error) });
         })
         .finally(() => {
-          active -= 1;
           running.delete(work);
           pump();
         });
       running.add(work);
     }
   };
-  const request = (target: ActivitySummaryTarget, immediate: boolean) => {
-    const state = admit(target);
-    if (state) {
-      schedule(state, immediate);
-    }
-    return state;
-  };
-  const eventTarget = (key?: string, agentId?: string): ActivitySummaryTarget | undefined => {
-    const agentOwner = agentId ?? (key ? parseAgentSessionKey(key)?.agentId : undefined);
-    return key && agentOwner
-      ? {
-          key: resolveSessionStoreKey({
-            cfg: deps.getConfig(),
-            sessionKey: key,
-            storeAgentId: agentOwner,
-          }),
-          agentId: agentOwner,
-        }
-      : undefined;
-  };
+  const eventTarget = (key?: string, agentId?: string) =>
+    resolveActivitySummaryEventTarget(deps.getConfig(), key, agentId);
   const unsubscribeIdentity = onSessionIdentityMutation((mutation) => {
     for (const key of mutation.previous.sessionKeys) {
       const state = states.get(activitySummaryScope({ key, agentId: mutation.agentId }));
@@ -594,47 +603,77 @@ export function createSessionActivitySummaries(deps: {
       }
     }
   });
+  const unsubscribeFacts = subscribeActivitySummaryEntryReceipts(states, drop);
+  const ensure = async (requested: ActivitySummaryTarget, entry: SessionEntry | undefined) => {
+    const target = eventTarget(requested.key, requested.agentId)!;
+    if (isCronSessionKey(target.key)) {
+      return { state: "unavailable" as const };
+    }
+    const state = admit(target, entry);
+    const readView = await prepareSessionActivitySummaryView({
+      ...target,
+      cfg: deps.getConfig(),
+      entry: state?.entry ?? entry,
+      storePath: scope(target).storePath,
+      admitted: state !== undefined,
+    });
+    const canSchedule = state && !isActive(state);
+    if (canSchedule && readView().state !== "current") {
+      schedule(state);
+    }
+    const view = readView();
+    return canSchedule && view.state === "stale" ? { ...view, state: "updating" as const } : view;
+  };
+  const trackAdmission = <T>(work: Promise<T>): Promise<T> => {
+    admissions.add(work);
+    void work.finally(() => admissions.delete(work)).catch(() => {});
+    return work;
+  };
+  const logAdmissionFailure = (error: unknown) =>
+    log.debug("Activity recap admission failed", { error: formatErrorMessage(error) });
+  const requestInBackground = (target: ActivitySummaryTarget | undefined, runEnded = false) => {
+    if (!target || !canTrack(target)) {
+      return;
+    }
+    const storePath = scope(target).storePath;
+    const consume = (entry: SessionEntry | undefined) => {
+      if (!runEnded) {
+        return trackAsyncWork(() => trackAdmission(ensure(target, entry))).catch(
+          logAdmissionFailure,
+        );
+      }
+      const state = admit(target, entry, storePath);
+      return state ? schedule(state) : undefined;
+    };
+    const projection = deps.getSessionRowProjection?.();
+    if (projection?.sharingRevision) {
+      void consume(projection.sharingTarget(target)?.entry);
+      return;
+    }
+    const retained = states.get(activitySummaryScope(target));
+    if (retained?.storePath === storePath) {
+      void consume(retained.entry);
+      return;
+    }
+    void runInDetachedAsyncContext(() =>
+      trackAdmission(
+        readSessionEntryReadOnlyInWorker({ ...scope(target), storePath, projection: "list" }).then(
+          consume,
+        ),
+      ),
+    ).catch(logAdmissionFailure);
+  };
   return {
-    ensure(requested) {
-      const target = eventTarget(requested.key, requested.agentId)!;
-      if (isCronSessionKey(target.key)) {
-        return { state: "unavailable" };
-      }
-      const state = request(target, true);
-      const projected = projectSessionActivitySummary({
-        ...target,
-        cfg: deps.getConfig(),
-        entry: read(target),
-      });
-      if (!state && projected?.state !== "current") {
-        return { ...projected, state: "unavailable" };
-      }
-      return projected ?? { state: "updating" };
+    beginCompletion(requested, entry) {
+      const target = eventTarget(requested.key, requested.agentId);
+      const state = target && admit(target, entry, requested.storePath);
+      return state ? beginActivitySummaryCompletion(state) : undefined;
     },
-    handleTranscript(event) {
-      const target = eventTarget(
-        event.target?.sessionKey ?? event.sessionKey,
-        event.target?.agentId ?? event.agentId,
-      );
-      if (!target || getAgentRunContext(event.runId ?? "")?.isHeartbeat) {
-        return;
-      }
-      const state = admit(target);
-      if (
-        !state ||
-        ((event.target?.sessionId ?? event.sessionId) &&
-          (event.target?.sessionId ?? event.sessionId) !== state.sessionId) ||
-        (event.lifecycleRevision && event.lifecycleRevision !== state.lifecycleRevision)
-      ) {
-        return;
-      }
-      schedule(state, false);
-    },
+    ensure,
     handleEvent(event) {
       const runContext = getAgentRunContext(event.runId);
       if (
         event.stream !== "lifecycle" ||
-        runContext?.isHeartbeat ||
         !isDefinitiveRunLifecycle({ phase: event.data.phase, data: event.data })
       ) {
         return;
@@ -644,27 +683,27 @@ export function createSessionActivitySummaries(deps: {
         event.agentId ?? runContext?.agentId,
       );
       if (target) {
-        request(target, true);
+        states.get(activitySummaryScope(target))?.completion?.markTerminal();
+        requestInBackground(target, true);
       }
     },
     handleLifecycle(event) {
-      if (event.reason !== "archive" && event.reason !== "unarchive") {
-        return;
-      }
-      const target = eventTarget(event.sessionKey, event.agentId);
-      if (target) {
-        request(target, true);
+      if (event.reason === "archive" || event.reason === "unarchive") {
+        requestInBackground(eventTarget(event.sessionKey, event.agentId));
       }
     },
     async dispose() {
       disposed = true;
-      clearTimeout(pumpTimer);
+      pumpJob?.cancel();
+      pumpJob = undefined;
       modelBackoffs.clear();
       unsubscribeIdentity();
+      unsubscribeFacts();
       for (const state of states.values()) {
         drop(state);
       }
       queue.length = 0;
+      await Promise.allSettled(admissions);
       await Promise.allSettled(running);
     },
   };
