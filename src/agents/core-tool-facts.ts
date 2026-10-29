@@ -272,6 +272,7 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
   if (!profile) {
     return undefined;
   }
+  // SAFETY: The lookup may miss; the allow/deny check below rejects unknown profile keys.
   const resolved = CORE_TOOL_PROFILES[profile as ToolProfileId];
   if (!resolved?.allow && !resolved?.deny) {
     return undefined;
