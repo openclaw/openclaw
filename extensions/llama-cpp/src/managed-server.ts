@@ -681,6 +681,7 @@ export async function ensureManagedLlamaServerForChat(params: {
           ? Math.floor(configuredContext)
           : params.model.contextTokens,
       maxTokens: params.model.maxTokens,
+      swaFull: params.model.params?.swaFull === true,
       ...(projectorPath ? { projectorPath } : {}),
       ...(typeof params.model.params?.imageMaxTokens === "number"
         ? { imageMaxTokens: params.model.params.imageMaxTokens }

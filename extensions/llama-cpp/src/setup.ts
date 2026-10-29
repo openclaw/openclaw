@@ -44,7 +44,11 @@ import {
   type ManagedLlamaServer,
 } from "./managed-server.js";
 import { resolveLlamaCppMediaModels } from "./media-config.js";
-import { recommendLlamaCppModel, resolveLlamaCppModelCandidates } from "./model-catalog.js";
+import {
+  recommendLlamaCppModel,
+  resolveLlamaCppModelCandidates,
+  withLlamaCppPromptReuse,
+} from "./model-catalog.js";
 
 const BYTES_PER_GB = 1_000_000_000;
 const BYTES_PER_MB = 1_000_000;
@@ -374,7 +378,7 @@ export async function runLlamaCppSetup(ctx: LlamaCppSetupContext): Promise<Provi
     if (recommendation.kind === "recommended") {
       const { recipe } = recommendation;
       const cachedPath = cachedModels.get(recipe.model.id);
-      candidate = { model: recipe.model, provider };
+      candidate = { model: withLlamaCppPromptReuse(recipe, hardware, asset.backend), provider };
       const recommendationSummary = [
         `Runs on Gateway host ${os.hostname()} (${hardware.platform}/${hardware.arch}), using ${asset.backend === "metal" ? "Apple Metal" : asset.backend === "cuda" ? "NVIDIA CUDA" : "the CPU"}.`,
         `${formatLlamaCppMemory(hardware.totalMemoryBytes)} RAM; ${formatLlamaCppMemory(hardware.availableDiskBytes ?? 0)} free disk.`,
@@ -459,6 +463,7 @@ export async function runLlamaCppSetup(ctx: LlamaCppSetupContext): Promise<Provi
             ? Math.floor(configuredContext)
             : plan.candidate.model.contextTokens,
         maxTokens: plan.candidate.model.maxTokens,
+        swaFull: plan.candidate.model.params?.swaFull === true,
       };
     } else {
       chatModel = { mode: mediaModels ? "preserve" : "remove" };
