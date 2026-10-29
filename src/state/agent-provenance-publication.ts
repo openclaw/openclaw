@@ -16,7 +16,7 @@ export const agentProvenancePublication = createStateDomainPublication<AgentProv
     typeof value.agentId === "string" &&
     (value.createdVia === "operator" ||
       value.createdVia === "agent" ||
-      value.createdVia === "claw") &&
+      value.createdVia === "template") &&
     (value.creatorAgentId === null || typeof value.creatorAgentId === "string") &&
     typeof value.createdAtMs === "number",
 });

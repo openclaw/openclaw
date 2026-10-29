@@ -20,6 +20,12 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { createContext as createGatewayContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -226,6 +232,50 @@ describe("media generation detachment admission", () => {
 });
 
 describe("scheduleMediaGenerationTaskCompletion", () => {
+  it("keeps detached completion bound to its original live Gateway instance", async () => {
+    const gateway = createGatewayContext();
+    let currentGateway: GatewayRequestContext | undefined = gateway;
+    const lifecycle = createImageMediaLifecycle();
+    const handle = await withPluginRuntimeGatewayContextResolver(
+      () => currentGateway,
+      () => lifecycle.createTaskRun({ sessionKey: "agent:main:media", prompt: "proof image" }),
+    );
+    assert(handle);
+    const completed = createDeferredCore();
+    const onWakeFailure = vi.fn();
+    const onCrash = vi.fn((error: string) => completed.reject(new Error(error)));
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockImplementationOnce(
+      async (params: { resolveGatewayContext?: () => GatewayRequestContext | undefined }) => {
+        expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+        expect(params.resolveGatewayContext?.()).toBe(gateway);
+        currentGateway = createGatewayContext();
+        expect(params.resolveGatewayContext?.()).toBeUndefined();
+        return { delivered: true, path: "direct" };
+      },
+    );
+
+    scheduleImageCompletion({
+      lifecycle: {
+        ...lifecycle,
+        completeTaskRun: (params) => {
+          lifecycle.completeTaskRun(params);
+          completed.resolve();
+        },
+      },
+      handle,
+      onWakeFailure,
+      scheduleBackgroundWork: createDefaultMediaGenerateBackgroundScheduler({
+        toolName: "image_generate",
+        onCrash,
+      }),
+    });
+    await completed.promise;
+
+    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
+    expect(onWakeFailure).not.toHaveBeenCalled();
+    expect(onCrash).not.toHaveBeenCalled();
+  });
+
   it("runs detached completion outside a disposed requester transcript owner", async () => {
     const sessionKey = "agent:qa:image-generate";
     let disposed = false;

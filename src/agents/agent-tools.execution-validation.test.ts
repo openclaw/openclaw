@@ -1,3 +1,4 @@
+import { rejects } from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
@@ -23,7 +24,8 @@ it.each([false, true])(
         }
       });
       if (reject) {
-        await expect(operation).rejects.toThrow("tool failed");
+        // Vitest retains async-assertion diagnostic stacks until this test finishes.
+        await rejects(operation, { message: "tool failed" });
       } else {
         await operation;
       }
@@ -31,8 +33,13 @@ it.each([false, true])(
     }
     const completed = await Promise.all(Array.from({ length: 20 }, completeInvocation));
     const control = new WeakRef({});
-    await nextTurn();
-    queryObjects(WeakRef);
+    // JSC can conservatively retain the last rejected frame on a resumed microtask stack.
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        queryObjects(WeakRef);
+        resolve();
+      }, 0);
+    });
     expect(control.deref()).toBeUndefined();
     expect(completed.filter(({ reference }) => reference.deref())).toHaveLength(0);
     // Retiring the closure must not turn an inherited validation scope into a bypass.

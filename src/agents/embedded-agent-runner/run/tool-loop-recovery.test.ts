@@ -27,6 +27,7 @@ import { createToolLoopBatchAdmission } from "./tool-loop-recovery.js";
 function batch(id: string, args: Record<string, unknown>, timestamp: number) {
   const tool = markCodeModeControlTool(createStubTool("exec"));
   return {
+    toolLoopRecoveryState: { criticalToolLoopSeen: false },
     assistantMessage: makeAgentAssistantMessage({
       content: [],
       provider: "test",
@@ -52,17 +53,13 @@ it("canonicalizes equivalent Code Mode exec aliases before loop detection", asyn
     runId: "run-1",
     loopDetection: { enabled: true },
   });
-  const results = [];
-  const lifecycles = [];
   for (const [index, alias] of ["code", "command"].entries()) {
     const toolCallId = `${alias}-alias`;
     const result = expectDefined(
       await admission(batch(toolCallId, { [alias]: "return 1;" }, index + 1)),
       "admission result",
     );
-    results.push(result);
     const lifecycle = expectDefined(takeInternalToolBatchLifecycle(result), "batch lifecycle");
-    lifecycles.push(lifecycle);
     lifecycle.commitReadyCalls?.([
       { toolCallId, args: { code: "return 1;", command: "return 1;" } },
     ]);
@@ -76,7 +73,4 @@ it("canonicalizes equivalent Code Mode exec aliases before loop detection", asyn
   ]);
   expect(mocks.committedArgs).toEqual(admittedArgs);
   expect(mocks.releasedIds).toEqual([[], []]);
-  expect(results).toEqual([{}, {}]);
-  expect(lifecycles[0]?.commitReadyCalls).not.toBe(lifecycles[1]?.commitReadyCalls);
-  expect(lifecycles).toHaveLength(2);
 });

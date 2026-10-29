@@ -172,6 +172,7 @@ export type WorkspaceManifestComputationOperations = {
   };
   "workspace.manifest.pair": {
     input: {
+      buildCacheInputs?: string[];
       baseRaw: Uint8Array<ArrayBuffer>;
       baseRef: string;
       currentRaw: Uint8Array<ArrayBuffer>;

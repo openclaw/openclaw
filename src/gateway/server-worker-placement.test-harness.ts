@@ -85,7 +85,6 @@ export async function admitWorkerStopChat(params: {
       activeRunScopeKey: sessionKey,
       timeoutMs: 600000,
       now,
-      restartSafeRequest: undefined,
     },
     context,
     client: null,

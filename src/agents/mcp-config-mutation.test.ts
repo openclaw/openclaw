@@ -246,7 +246,7 @@ it.each([
     }
   },
 );
-it("waits for active Claw ownership reconciliation before an ordinary mutation", async () => {
+it("waits for active Template ownership reconciliation before an ordinary mutation", async () => {
   const leaseEntered = createDeferred();
   const releaseLease = createDeferred();
   const order: string[] = [];

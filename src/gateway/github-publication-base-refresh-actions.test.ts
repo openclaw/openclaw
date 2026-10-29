@@ -16,6 +16,7 @@ import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js"
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { publicationPullRequestResponse } from "./github-publication-git.test-support.js";
 import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
 import {
   commandResult,
@@ -47,7 +48,7 @@ installGitHubPublicationTestHarness({
   realWorktree: true,
 });
 
-it("recovers one guest integration, retains saved data and publishes the resolved same draft with base ancestry", async () => {
+it("recovers a retargeted guest PR, retains saved data and publishes the resolved same draft with base ancestry", async () => {
   const initialWorktree = { ...mocks.findWorktree("session", "unused"), id: randomUUID() };
   mocks.findWorktree.mockImplementation((_kind: string, ownerId: string) => ({
     ...initialWorktree,
@@ -62,6 +63,11 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   await write(cwd, ".gitignore", ".env.local\n.guest-cache\n");
   const first = await f.coordinator.requestForSessionV2(f.request("first-draft", f.guest));
   assert(first.status === "published", "Fixture publication failed");
+  // A new request uses current credentials for the same shared publisher, not a historical profile.
+  const publisher = await mocks.prepareIdentity();
+  mocks.prepareIdentity.mockResolvedValue({ ...publisher, profileId: "rotated-publisher-profile" });
+  const originalBase = await git("rev-parse", "main");
+  const destination = "review/current-destination";
   const created = mocks.runCommand.mock.calls.findLast(
     ([argv]) => argv.includes("POST") && argv.some((arg: string) => arg.endsWith("/pulls")),
   )!;
@@ -72,7 +78,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
     body: JSON.parse(created[1].input).body,
     headSha: first.headCommit,
     headRef: first.branch,
-    baseRef: "main",
+    baseRef: destination,
   };
   const { runCommandBuffered } =
     await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
@@ -96,6 +102,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   const upstream = path.join(path.dirname(cwd), "upstream");
   const upstreamGit = (...args: string[]) => git("-C", upstream, ...args);
   await git("clone", "--no-local", "--branch", "main", cwd, upstream);
+  await upstreamGit("checkout", "-b", destination);
   await write(upstream, "artifact.txt", "upstream-v2\n");
   await write(upstream, ".gitignore", ".env.local\n.guest-cache\n");
   await upstreamGit("add", "-A");
@@ -107,7 +114,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   await upstreamGit("checkout", "-b", "feature", first.headCommit);
   await upstreamGit("merge", "--no-edit", "-s", "ours", baseCommit);
   const featureMerge = await upstreamGit("rev-parse", "HEAD");
-  await upstreamGit("checkout", "main");
+  await upstreamGit("checkout", destination);
   await upstreamGit("merge", "--no-edit", "-s", "ours", first.headCommit);
   await write(upstream, "upstream.txt", "unrelated upstream file\n");
   // The synthetic ours merges otherwise record this feature input as a base-side deletion.
@@ -138,7 +145,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   await git("fetch", "--filter=blob:none", "--no-write-fetch-head", "fixture", baseCommit);
   await git("fetch", "--filter=blob:none", "--no-write-fetch-head", "fixture", featureMerge);
   await git("update-ref", `refs/heads/${first.branch}`, featureMerge);
-  await git("update-ref", "refs/heads/main", baseCommit);
+  await git("update-ref", `refs/heads/${destination}`, baseCommit);
   expect((await git("merge-base", "--all", "HEAD", baseCommit)).split("\n")).toHaveLength(2);
   await git("config", "remote.fixture.url", path.join(upstream, "unavailable-promisor"));
   const missingContents = (commit = partialBase) =>
@@ -152,7 +159,20 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   const transport = mocks.runCommand.getMockImplementation()!;
   mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
     if (argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))) {
-      return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: baseCommit }));
+      const selected = argv.some((arg) => arg.endsWith(`/${destination}`)) ? destination : "main";
+      return commandResult(
+        JSON.stringify({
+          ref: `refs/heads/${selected}`,
+          sha: selected === destination ? baseCommit : originalBase,
+        }),
+      );
+    }
+    if (
+      argv[0] === "gh" &&
+      argv.includes("GET") &&
+      argv.some((arg) => /\/pulls\/\d+$/u.test(arg))
+    ) {
+      return commandResult(JSON.stringify(publicationPullRequestResponse(pr)));
     }
     if (argv.includes("fetch") && (argv.includes(partialBase) || argv.includes("--stdin"))) {
       expect(argv).toContain("https://github.com/openclaw/openclaw.git");
@@ -397,6 +417,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   const refreshed = await refresh();
   expect(refreshed).toMatchObject({
     status: "conflicts",
+    baseBranch: destination,
     baseCommit,
     conflictPaths: ["artifact.txt"],
   });
@@ -464,7 +485,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   }
   expect(await git("show", "HEAD:artifact.txt")).toBe("upstream-v2\nguest-v2");
   await expectFile(cwd, ".env.local", "host-private-fixture");
-  await git("checkout", "main");
+  await git("checkout", destination);
   await write(cwd, "later-upstream.txt", "later upstream only\n");
   await git("add", "later-upstream.txt");
   await git("commit", "-m", "Advance base without conflicts");

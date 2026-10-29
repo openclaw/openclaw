@@ -193,15 +193,16 @@ test("lease expiry and exact status expiry remain enforced", () => {
   assert.notEqual(parse("status", { ...ready, expiresAtMs: Date.now() + 1000 }).status, 0);
 });
 
-test("running, resume and handoff wire shapes stay unchanged", () => {
+test("running and resume remain strict; committed handoff outlives its lease", () => {
   assert.equal(proof("suspension-running", { status: "running" }).status, 0);
   assert.notEqual(proof("suspension-running", { status: "running", writeCustody: [] }).status, 0);
   assert.equal(proof("suspension-resume", { ok: true, status: "running", resumed: true }).status, 0);
   assert.notEqual(proof("suspension-resume", { ok: true, status: "running", resumed: true, writeCustody: [] }).status, 0);
-  const end = expiry();
-  const armed = { status: "armed", suspensionId: lease, expiresAtMs: end };
-  assert.equal(proof("suspension-handoff", armed, lease, end).status, 0);
-  assert.notEqual(proof("suspension-handoff", { ...armed, writeCustody: [] }, lease, end).status, 0);
+  const end = Date.now() - 1;
+  const committed = { status: "committed", suspensionId: lease, expiresAtMs: end };
+  assert.equal(proof("suspension-handoff", committed, lease, end).status, 0);
+  for (const extra of [{ status: "armed" }, { writeCustody: [] }, { expiresAtMs: end + 1 }])
+    assert.notEqual(proof("suspension-handoff", { ...committed, ...extra }, lease, end).status, 0);
 });
 
 function ownerRun(body, first, next = first, options = {}, bindings = {}) {
@@ -222,6 +223,8 @@ run_gateway() {
     gateway.suspend.prepare) cat "$FIXTURE/first.json" ;;
     gateway.suspend.status) cat "$FIXTURE/next.json" ;;
     gateway.suspend.resume) printf '%s\\n' '{"ok":true,"status":"running","resumed":true}' ;;
+    gateway.suspend.handoff) [[ "$6" == *'"commit":true'* ]] || { echo 'handoff must commit shutdown' >&2; return 98; }
+      touch "$FIXTURE/fail-rpc"; printf '{"status":"committed","suspensionId":"fixture-owned-lease","expiresAtMs":%s}' "$suspension_expiry" ;;
     *) return 99 ;;
   esac
 }
@@ -233,6 +236,7 @@ suspension_scope=system
 suspension_release=fixture
 suspension_pid=42
 suspension_generation=123
+suspension_instance=fixture-instance
 held_suspension=fixture-owned-lease
 suspension_expiry="$EXPECTED_EXPIRY"
 interrupt_after_drain=1
@@ -248,15 +252,6 @@ ${body}
     rmSync(root, { recursive: true, force: true });
   }
 }
-
-test("owner allows ordinary bounded interruption for clear or unknown custody", () => {
-  for (const presence of ["clear", "unknown"]) {
-    const payload = status("draining");
-    if (presence === "unknown") delete payload.writeCustody;
-    const result = ownerRun("check_suspension", payload);
-    assert.equal(result.status, 0, result.stderr);
-  }
-});
 
 test("owner refuses positive write custody without treating it as malformed wire", () => {
   for (const phase of ["migration", "backup", "session-mutation", "terminal-persistence", "coordinator-write", "future-owner"]) {
@@ -329,14 +324,18 @@ check_suspension
   assert.match(result.stderr, /SUSPENSION_CHECK_FAILED stage=status/);
 });
 
-test("owner accepts modern preparation without altering existing lease binding", () => {
-  const payload = prepare("draining");
+for (const state of ["ready", "draining", "legacy"]) test(`owner commits ${state} shutdown without rechecking its retired lease`, () => {
+  const prepared = prepare(state === "legacy" ? "draining" : state);
+  if (state === "legacy") delete prepared.writeCustody;
+  const payload = { ...status(prepared.status), expiresAtMs: prepared.expiresAtMs };
+  if (state === "legacy") delete payload.writeCustody;
   const result = ownerRun(`
-held_suspension=""
-request_suspension fixture '{}'
-[[ "$held_suspension" == fixture-owned-lease && "$suspension_write_custody" == clear ]]
-`, payload);
+assert_protected_identity() { :; }; assert_policy() { :; }
+held_suspension=""; request_suspension fixture '{}'
+check_suspension && arm_suspension_handoff
+`, prepared, payload);
   assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.calls, ["gateway.suspend.prepare", "gateway.suspend.status", "gateway.suspend.handoff"]);
 });
 
 test("malformed preparation still retires its exact offered lease through existing exit owner", () => {

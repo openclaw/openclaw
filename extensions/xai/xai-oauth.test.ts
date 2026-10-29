@@ -609,14 +609,14 @@ describe("xAI OAuth", () => {
       headers: undefined,
       request: { auth: undefined, headers: undefined },
     });
-    expect(savedProvider?.models.map((model) => model.id)).toEqual(["grok-4.6"]);
+    expect(savedProvider?.models?.map((model) => model.id)).toEqual(["grok-4.6"]);
     expect(
       fetchImpl.mock.calls
         .map(([input]) => requestUrl(input))
         .filter((url) => url.endsWith("/models")),
     ).toEqual([MODELS_URL]);
-    expect(savedProvider?.models[0]?.thinkingLevelMap).toBeUndefined();
-    expect(savedProvider?.models[0]?.compat?.supportedReasoningEfforts).toBeUndefined();
+    expect(savedProvider?.models?.[0]?.thinkingLevelMap).toBeUndefined();
+    expect(savedProvider?.models?.[0]?.compat?.supportedReasoningEfforts).toBeUndefined();
     if (setup === "api") {
       expect(savedProvider?.request?.allowPrivateNetwork).toBe(false);
     }

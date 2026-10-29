@@ -428,7 +428,9 @@ export function createTelegramDispatchHttpFixture() {
     const work = (async () => {
       let channelOptions: ReplyResolverOptions;
       const replyResolver: ReplyResolver = async (_ctx, options) => {
-        await options?.onReplyStart?.();
+        if (!options?.suppressTyping) {
+          await options?.onReplyStart?.();
+        }
         await options?.onAssistantMessageStart?.();
         await emitEvents(options, channelOptions);
         // The final answer follows the finished progress edit, as a model that

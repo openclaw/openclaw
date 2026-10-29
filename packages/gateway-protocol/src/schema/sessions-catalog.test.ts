@@ -209,7 +209,6 @@ describe("SessionRowSchema", () => {
       channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
       visibility: "suggest",
       sharingRole: "owner",
-      restartRecoveryStatus: "tombstoned",
       permissionMode: "workspace",
       sandboxMode: "off",
       communication: { receive: "ask" },

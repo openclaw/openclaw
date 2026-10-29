@@ -1,4 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
@@ -27,7 +28,9 @@ type SkippedInstall = {
 };
 
 function summarizeInstallFailure(message: string): string | undefined {
-  const cleaned = message.replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "").trim();
+  const cleaned = terminalText`${message}`
+    .replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "")
+    .trim();
   if (!cleaned) {
     return undefined;
   }
@@ -38,7 +41,7 @@ function summarizeInstallFailure(message: string): string | undefined {
 function formatSkillHint(skill: Pick<SkillStatusEntry, "description" | "install">): string {
   const desc = skill.description?.trim();
   const installLabel = skill.install[0]?.label?.trim();
-  const combined = desc && installLabel ? `${desc} — ${installLabel}` : desc || installLabel;
+  const combined = terminalText`${desc && installLabel ? `${desc} — ${installLabel}` : desc || installLabel || ""}`;
   if (!combined) {
     return "install";
   }
@@ -148,7 +151,7 @@ export async function setupSkills(
         },
         ...candidateInstallable.map((skill) => ({
           value: skill.name,
-          label: `${skill.emoji ?? "🧩"} ${skill.name}`,
+          label: terminalText`${skill.emoji ?? "🧩"} ${skill.name}`,
           hint: formatSkillHint(skill),
         })),
       ],
@@ -199,7 +202,9 @@ export async function setupSkills(
       // Onboarding installs the primary recipe only; alternative recipes remain
       // visible through `openclaw skills list --verbose`.
       await options.beforePersistentEffect?.();
-      const spin = prompter.progress(t("wizard.skills.installing", { name: target.name }));
+      const spin = prompter.progress(
+        t("wizard.skills.installing", { name: terminalText`${target.name}` }),
+      );
       const result = await installSkill({
         workspaceDir,
         skillName: target.name,
@@ -210,11 +215,11 @@ export async function setupSkills(
       if (result.ok) {
         spin.stop(
           warnings.length > 0
-            ? t("wizard.skills.installedWithWarnings", { name: target.name })
-            : t("wizard.skills.installed", { name: target.name }),
+            ? t("wizard.skills.installedWithWarnings", { name: terminalText`${target.name}` })
+            : t("wizard.skills.installed", { name: terminalText`${target.name}` }),
         );
       } else if (result.skipReason) {
-        spin.stop(t("wizard.skills.installSkipped", { name: target.name }));
+        spin.stop(t("wizard.skills.installSkipped", { name: terminalText`${target.name}` }));
         const detail = summarizeInstallFailure(result.message);
         selectedSkippedInstallable.push({
           skill: target,
@@ -226,7 +231,7 @@ export async function setupSkills(
         const detail = summarizeInstallFailure(result.message);
         spin.stop(
           t("wizard.skills.installFailed", {
-            name: target.name,
+            name: terminalText`${target.name}`,
             code,
             detail: detail ? ` - ${detail}` : "",
           }),
@@ -274,13 +279,13 @@ export async function setupSkills(
           const visible = names.slice(0, SKIPPED_INSTALL_NAME_LIMIT);
           const suffix =
             names.length > visible.length ? ` (+${names.length - visible.length} more)` : "";
-          lines.push(`${SKIP_REASON_LABELS[reason]}: ${visible.join(", ")}${suffix}`);
+          lines.push(terminalText`${SKIP_REASON_LABELS[reason]}: ${visible.join(", ")}${suffix}`);
         }
       }
       for (const item of skipped
         .filter((entry) => entry.detail)
         .slice(0, SKIPPED_INSTALL_NAME_LIMIT)) {
-        lines.push(`${item.skill.name}: ${item.detail}`);
+        lines.push(terminalText`${item.skill.name}: ${item.detail}`);
       }
       lines.push(t("wizard.skills.manualPrereqsDoctorHint"));
       await prompter.note(lines.join("\n"), t("wizard.skills.manualPrereqsTitle"));

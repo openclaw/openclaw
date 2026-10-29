@@ -77,20 +77,16 @@ describe("message action projections", () => {
     expect(preview).not.toHaveBeenCalled();
     prepare("toolResult", "First line\nSecond line");
     expect(preview).not.toHaveBeenCalled();
-    const container = document.createElement("div");
-    const view = mountSolid(
-      GroupedMessage,
-      {
-        preparation: prepareChatMessageRender({
-          role: "toolResult",
-          content: "First line\nSecond line",
-        }),
-        messageKey: "tool-preview",
-        options: { isStreaming: true, showReasoning: false },
-      },
-      container,
-    );
-    onTestFinished(view.dispose);
+    const { container, dispose } = mountSolid(GroupedMessage, {
+      preparation: prepareChatMessageRender({
+        role: "toolResult",
+        content: "First line\nSecond line",
+      }),
+      messageKey: "tool-preview",
+      options: { isStreaming: true, showReasoning: false },
+    });
+    onTestFinished(dispose);
+    await import("./chat-tool-card-row.solid.tsx");
     await waitForSolid(() =>
       expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("tool"),
     );

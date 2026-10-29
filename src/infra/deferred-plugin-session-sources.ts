@@ -109,12 +109,11 @@ export function prepareSessionSourceVerification(params: SessionImportSource) {
   };
 }
 
-export function resolveVerifiedSessionSource(
-  source: DeferredPluginSessionImport["sources"][number],
+function sessionSourceVerificationTarget(
   target: SessionImportTarget,
   env: NodeJS.ProcessEnv,
   verification: SessionSourceVerification,
-): string | undefined {
+) {
   const targetKey = JSON.stringify([
     resolveDeferredPluginSessionSourceKey(target),
     resolveSessionSqliteMigrationRunsDir(env),
@@ -124,6 +123,27 @@ export function resolveVerifiedSessionSource(
     cachedTarget = { resolved: new Map() };
     verification.set(targetKey, cachedTarget);
   }
+  return cachedTarget;
+}
+
+/** Archive mappings survive recovery awaits; file identities must still be checked fresh. */
+export function sessionSourceArchives(
+  target: SessionImportTarget,
+  env: NodeJS.ProcessEnv,
+  verification: SessionSourceVerification,
+): ArchivedSessionSources {
+  const prepared = sessionSourceVerificationTarget(target, env, verification);
+  return (prepared.archives ??= collectArchivedSources(target, env));
+}
+
+export function resolveVerifiedSessionSource(
+  source: DeferredPluginSessionImport["sources"][number],
+  target: SessionImportTarget,
+  env: NodeJS.ProcessEnv,
+  verification: SessionSourceVerification,
+  archives?: ArchivedSessionSources,
+): string | undefined {
+  const cachedTarget = sessionSourceVerificationTarget(target, env, verification);
   const resolutions = cachedTarget.resolved.get(source.path) ?? [];
   const cached = resolutions.find(({ identity }) =>
     sameMigrationArtifact(identity, source.identity),
@@ -135,7 +155,7 @@ export function resolveVerifiedSessionSource(
     ? sameSourceContent(readMigrationArtifactIdentity(source.path), source.identity)
       ? source.path
       : undefined
-    : (cachedTarget.archives ??= collectArchivedSources(target, env))
+    : (archives ?? sessionSourceArchives(target, env, verification))
         .get(source.path)
         ?.find(
           ({ identity, path: archivePath }) =>
@@ -156,7 +176,6 @@ function assertVerifiedSessionSources(
 ): void {
   const target = { ...params.target, sqlitePath: params.sqlitePath };
   const verifiedPaths = new Map<string, string>();
-  let conflictArchives: ArchivedSessionSources | undefined;
   for (const source of receipt.sources) {
     let verifiedPath: string | undefined;
     try {
@@ -171,9 +190,7 @@ function assertVerifiedSessionSources(
         onSourceConflict(source.path);
         for (const artifactPath of existingSessionSourcePaths(
           source.path,
-          target,
-          params.env,
-          (conflictArchives ??= collectArchivedSources(target, params.env)),
+          sessionSourceArchives(target, params.env, verification),
         )) {
           if (artifactPath !== source.path) {
             onSourceConflict(source.path, artifactPath);
@@ -295,8 +312,11 @@ export function readDeferredPluginSessionImport(
           ) ||
           existingSessionSourcePaths(
             source.path,
-            { ...params.target, sqlitePath: params.sqlitePath },
-            params.env,
+            sessionSourceArchives(
+              { ...params.target, sqlitePath: params.sqlitePath },
+              params.env,
+              verification,
+            ),
           ).length > 0,
       ),
     };

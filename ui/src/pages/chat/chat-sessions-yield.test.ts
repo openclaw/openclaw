@@ -46,33 +46,52 @@ const nestedHistory = [
     ],
   },
 ];
+const yieldRequest = (args: Record<string, unknown>, before: unknown[] = []) => ({
+  ...separateHistory[0],
+  content: [...before, { ...call, arguments: args }],
+});
+const handoffRun = (runId: string, delay: number) =>
+  separateHistory.map((message) => ({ ...message, runId, timestamp: message.timestamp + delay }));
 const pendingHandoff = { timestamp: 2_000, runId: "parent-run" };
 // A confirmed handoff leaves one structural item behind and nothing to draw.
 const silentBoundary = expect.objectContaining({ kind: "notice", handoffBoundary: true, text: "" });
+const waitingNotice = expect.objectContaining({ kind: "notice", text: "Waiting for a message" });
+
+const projectHistory = (messages: unknown[], props: Parameters<typeof createProps>[0] = {}) =>
+  buildChatItems(createProps({ messages, ...props }));
+type Items = ReturnType<typeof projectHistory>;
+const transcriptMessages = (items: Items) =>
+  items.flatMap((item) => (item.kind === "group" ? item.messages : []));
+const transcriptTools = (items: Items) =>
+  transcriptMessages(items).flatMap(({ message }) => extractToolCardsCached(message));
+const handoffDisplays = (items: Items) =>
+  transcriptMessages(items)
+    .map(({ message }) => readHandoffDisplay(message))
+    .filter(Boolean);
+function withYieldResult(
+  content: typeof result.content,
+  fields: { details?: unknown; isError?: boolean } = {},
+) {
+  return [separateHistory[0], { ...separateHistory[1], content, ...fields }];
+}
 
 describe("sessions_yield transcript projection", () => {
-  it.each([["nested exec activity", nestedHistory]])(
-    "leaves no transcript row for %s and reports the pending handoff",
-    (_name, messages) => {
-      const original = structuredClone(messages);
-      // Only the boundary remains, and it carries nothing a reader could see.
-      expect(buildChatItems(createProps({ messages, showToolCalls: false }))).toEqual([
-        silentBoundary,
-      ]);
-      expect(pendingSessionsYield(messages)).toEqual(pendingHandoff);
-      expect(pendingSessionsYield(messages)).toEqual(pendingHandoff);
-      expect(messages).toEqual(original);
-    },
-  );
+  it.each([
+    ["separate tool result", separateHistory],
+    ["nested exec activity", nestedHistory],
+  ])("leaves no transcript row for %s and reports the pending handoff", (_name, messages) => {
+    const original = structuredClone(messages);
+    expect(projectHistory(messages, { showToolCalls: false })).toEqual([silentBoundary]);
+    expect(pendingSessionsYield(messages)).toEqual(pendingHandoff);
+    expect(pendingSessionsYield(messages)).toEqual(pendingHandoff);
+    expect(messages).toEqual(original);
+  });
 
-  it.each([true])(
+  it.each([false, true])(
     "never displays private yield inputs before confirmation (failed=%s)",
     (failed) => {
       const messages = [
-        {
-          ...separateHistory[0],
-          content: [{ ...call, arguments: { message: "PRIVATE_PENDING_CONTEXT" } }],
-        },
+        yieldRequest({ message: "PRIVATE_PENDING_CONTEXT" }),
         ...(failed
           ? [
               {
@@ -84,7 +103,7 @@ describe("sessions_yield transcript projection", () => {
           : []),
       ];
       const original = structuredClone(messages);
-      const items = buildChatItems(createProps({ messages, showToolCalls: true }));
+      const items = projectHistory(messages, { showToolCalls: true });
       expect(JSON.stringify(items)).not.toContain("PRIVATE_PENDING_CONTEXT");
       expect(pendingSessionsYield(messages)).toBeNull();
       if (failed) {
@@ -128,28 +147,75 @@ describe("sessions_yield transcript projection", () => {
         ],
       },
     ];
-    const items = buildChatItems(createProps({ messages }));
+    const items = projectHistory(messages);
     expect(items.filter((item) => item.kind === "notice")).toEqual([silentBoundary]);
-    const remaining = items.flatMap((item) => (item.kind === "group" ? item.messages : []));
-    expect(
-      remaining.flatMap(({ message }) => extractToolCardsCached(message).map((card) => card.name)),
-    ).toEqual(["read"]);
+    expect(transcriptTools(items).map((card) => card.name)).toEqual(["read"]);
     expect(JSON.stringify(items)).toContain("Delegated implementation.");
     expect(JSON.stringify(items)).not.toContain("PRIVATE_CONTINUATION");
-    const hidden = buildChatItems(createProps({ messages, showToolCalls: false }));
-    expect(
-      hidden.flatMap((item) =>
-        item.kind === "group"
-          ? item.messages.flatMap(({ message }) => extractToolCardsCached(message))
-          : [],
-      ),
-    ).toEqual([]);
+    const hidden = projectHistory(messages, { showToolCalls: false });
+    expect(transcriptTools(hidden)).toEqual([]);
     expect(JSON.stringify(hidden)).toContain("Delegated implementation.");
   });
 
-  it.each([[separateHistory[1]!]])("requires a successful call/result pair", (...messages) => {
+  it("requires a successful call/result pair", () => {
+    const messages = [separateHistory[1]!];
     expect(pendingSessionsYield(messages)).toBeNull();
-    expect(buildChatItems(createProps({ messages, showToolCalls: false }))).toEqual([]);
+    expect(projectHistory(messages, { showToolCalls: false })).toEqual([]);
+  });
+
+  it("reads a leading receipt with annotations without changing its public acknowledgment", () => {
+    const acknowledgment = 'I’ll check {docs} and the "CLI".\nThen report back.';
+    const messages = withYieldResult(
+      [
+        {
+          type: "text",
+          text: " \n" + JSON.stringify({ status: "yielded", acknowledgment }, null, 2),
+        },
+        { type: "text", text: "The session will resume when its children finish." },
+      ],
+      { details: { display: "Yield" } },
+    );
+    const items = projectHistory(messages);
+    expect(pendingSessionsYield(messages)).toEqual(pendingHandoff);
+    expect(items).toContainEqual(silentBoundary);
+    expect(groupTexts(items)).toEqual([expect.stringContaining(JSON.stringify(acknowledgment))]);
+    expect(JSON.stringify(items)).not.toContain("The session will resume");
+  });
+
+  it.each([
+    { name: "malformed primary object", output: '{"status":"yielded",}\n{"status":"yielded"}' },
+    { name: "unterminated primary object", output: '{"status":"yielded"\n{"status":"yielded"}' },
+    { name: "nonleading object", output: 'Example receipt: {"status":"yielded"}' },
+    { name: "array wrapper", output: '[{"status":"yielded"}]' },
+    { name: "deferred primary receipt", output: '{"status":"deferred"}\n{"status":"yielded"}' },
+    { name: "error-flagged receipt", output: '{"status":"yielded"}', isError: true },
+    {
+      name: "structured conflict",
+      output: '{"status":"yielded"}',
+      details: { status: "deferred" },
+    },
+    { name: "explicit empty status", output: '{"status":"yielded"}', details: { status: null } },
+  ])("does not confirm a $name", ({ output, details, isError }) => {
+    const messages = withYieldResult([{ type: "text", text: output }], { details, isError });
+    expect(pendingSessionsYield(messages)).toBeNull();
+    expect(projectHistory(messages, { showToolCalls: false })).toEqual([]);
+  });
+
+  it("uses only the selected structured receipt's public acknowledgment", () => {
+    const messages = withYieldResult(
+      [{ type: "text", text: '{"status":"error","acknowledgment":"Not selected"}' }],
+      {
+        details: {
+          status: "yielded",
+          acknowledgment: "Waiting for the review.",
+          message: "PRIVATE",
+        },
+      },
+    );
+    expect(pendingSessionsYield(messages)).toEqual(pendingHandoff);
+    const items = projectHistory(messages);
+    expect(groupTexts(items)).toEqual([expect.stringContaining("Waiting for the review.")]);
+    expect(JSON.stringify(items)).not.toMatch(/PRIVATE|Not selected/);
   });
 
   describe("a run that resumed the handoff", () => {
@@ -157,9 +223,9 @@ describe("sessions_yield transcript projection", () => {
     const request = { askedAt: 1_000, runIds: ["parent-run"] };
     const working = { runActive: true, runWorking: true, streamStartedAt: 3_000 };
     const status = (messages: unknown[], overrides: Parameters<typeof createProps>[0] = {}) =>
-      buildChatItems(
-        createProps({ messages, runId: "resumed-run", ...working, ...overrides }),
-      ).find((item) => item.kind === "reading-indicator");
+      projectHistory(messages, { runId: "resumed-run", ...working, ...overrides }).find(
+        (item) => item.kind === "reading-indicator",
+      );
 
     it("counts from the request and names the run that handed off", () => {
       expect(status([asked, ...separateHistory])).toMatchObject({
@@ -172,29 +238,16 @@ describe("sessions_yield transcript projection", () => {
         status([asked, ...separateHistory], { searchOpen: true, searchQuery: "no such text" }),
       ).toMatchObject({ startedAt: 1_000, request });
       // A second handoff in the same request extends the chain, oldest run first.
-      const again = separateHistory.map((message) => ({
-        ...message,
-        runId: "second-run",
-        timestamp: message.timestamp + 500,
-      }));
+      const again = handoffRun("second-run", 500);
       expect(status([asked, ...separateHistory, ...again])).toMatchObject({
         request: { askedAt: 1_000, runIds: ["parent-run", "second-run"] },
       });
     });
 
-    it.each([2])("counts each run once after %s handoffs", (handoffCount) => {
+    it.each([1, 2])("counts each run once after %s handoffs", (handoffCount) => {
       const runIds = ["parent-run", "second-run"].slice(0, handoffCount);
       const runId = runIds.at(-1)!;
-      const messages = [
-        asked,
-        ...runIds.flatMap((id, index) =>
-          separateHistory.map((message) => ({
-            ...message,
-            runId: id,
-            timestamp: message.timestamp + index * 1_000,
-          })),
-        ),
-      ];
+      const messages = [asked, ...runIds.flatMap((id, index) => handoffRun(id, index * 1_000))];
       const usageByRun = new Map(
         runIds.map((id, index) => [id, { outputTokens: index === 0 ? 4_100 : 256, seq: 1 }]),
       );
@@ -221,9 +274,7 @@ describe("sessions_yield transcript projection", () => {
 
     it("is recognized before the pane knows its run id", () => {
       resetWorkingProgress();
-      const items = buildChatItems(
-        createProps({ messages: [asked, ...separateHistory], ...working }),
-      );
+      const items = projectHistory([asked, ...separateHistory], working);
       const unnamed = items.find((item) => item.kind === "reading-indicator");
       expect(unnamed).toMatchObject({ startedAt: 1_000, request });
       expect(unnamed).not.toHaveProperty("runId");
@@ -244,19 +295,14 @@ describe("sessions_yield transcript projection", () => {
   });
 });
 
+const resumedReply = { role: "assistant", content: "Back again.", timestamp: 4_000 };
+
 function messageWait(acknowledgment?: string, waitFor?: "message") {
   return [
     { role: "user", content: "talk to parent session", timestamp: 1_000 },
-    {
-      ...separateHistory[0],
-      content: [
-        { type: "thinking", thinking: "Wait for the parent." },
-        {
-          ...call,
-          arguments: { ...(waitFor ? { waitFor } : {}), message: "PRIVATE_CONTINUATION" },
-        },
-      ],
-    },
+    yieldRequest({ ...(waitFor ? { waitFor } : {}), message: "PRIVATE_CONTINUATION" }, [
+      { type: "thinking", thinking: "Wait for the parent." },
+    ]),
     {
       ...separateHistory[1],
       content: [{ type: "text", text: JSON.stringify({ status: "yielded", acknowledgment }) }],
@@ -272,17 +318,12 @@ const groupTexts = (items: ReturnType<typeof buildChatItems>) =>
 
 it("keeps a runtime notice for a message wait that says nothing", () => {
   const messages = messageWait(undefined, "message");
-  const notice = expect.objectContaining({ kind: "notice", text: "Waiting for a message" });
-  const items = buildChatItems(createProps({ messages }));
+  const items = projectHistory(messages);
   expect(items.filter((item) => item.kind === "group").map((item) => item.role)).toEqual(["user"]);
-  expect(items).toContainEqual(notice);
+  expect(items).toContainEqual(waitingNotice);
   expect(JSON.stringify(items)).not.toContain("PRIVATE_CONTINUATION");
-  const resumed = buildChatItems(
-    createProps({
-      messages: [...messages, { role: "assistant", content: "Back again.", timestamp: 4_000 }],
-    }),
-  );
-  expect(resumed).not.toContainEqual(notice);
+  const resumed = projectHistory([...messages, resumedReply]);
+  expect(resumed).not.toContainEqual(waitingNotice);
 });
 
 it.each([
@@ -293,41 +334,24 @@ it.each([
   (_name, waitFor) => {
     const acknowledgment = "Started the backend session.\n\nI’ll report back when it finishes.";
     const messages = messageWait(acknowledgment, waitFor);
-    const items = buildChatItems(createProps({ messages }));
+    const items = projectHistory(messages);
     expect(items.filter((item) => item.kind === "notice" && item.text)).toEqual([]);
     const [user, assistant, ...rest] = groupTexts(items);
     expect([user?.startsWith("user"), rest]).toEqual([true, []]);
     expect(assistant).toContain(JSON.stringify(acknowledgment));
     expect(assistant).not.toContain("resumedAt");
     expect(JSON.stringify(items)).not.toContain("PRIVATE_CONTINUATION");
-    const resumed = buildChatItems(
-      createProps({
-        messages: [
-          ...messages,
-          { role: "assistant", runId: "resumed-run", content: "Back again.", timestamp: 4_000 },
-        ],
-      }),
-    );
-    const spoken = resumed
-      .flatMap((item) => (item.kind === "group" ? item.messages : []))
-      .map(({ message }) => readHandoffDisplay(message))
-      .filter(Boolean);
+    const resumed = projectHistory([...messages, { ...resumedReply, runId: "resumed-run" }]);
     // It stays, and marks how long the run waited before it resumed.
-    expect(spoken).toEqual([{ yieldedAt: 2_000, resumedAt: 4_000 }]);
+    expect(handoffDisplays(resumed)).toEqual([{ yieldedAt: 2_000, resumedAt: 4_000 }]);
     expect(JSON.stringify(resumed)).toContain(JSON.stringify(acknowledgment));
     expect(resumed.filter((item) => item.kind === "notice" && item.text)).toEqual([]);
     // A message sent meanwhile starts its own block rather than resuming this one.
-    const interrupted = buildChatItems(
-      createProps({
-        messages: [...messages, { role: "user", content: "Any news?", timestamp: 3_000 }],
-      }),
-    );
-    expect(
-      interrupted
-        .flatMap((item) => (item.kind === "group" ? item.messages : []))
-        .map(({ message }) => readHandoffDisplay(message))
-        .filter(Boolean),
-    ).toEqual([{ yieldedAt: 2_000 }]);
+    const interrupted = projectHistory([
+      ...messages,
+      { role: "user", content: "Any news?", timestamp: 3_000 },
+    ]);
+    expect(handoffDisplays(interrupted)).toEqual([{ yieldedAt: 2_000 }]);
   },
 );
 
@@ -343,20 +367,12 @@ it("does not revive a completed message wait when search hides the resumed reply
     },
   ];
   const search = { searchOpen: true, searchQuery: "Waiting for the parent" };
-  const notice = expect.objectContaining({ kind: "notice", text: "Waiting for a message" });
-  expect(buildChatItems(createProps({ messages, ...search }))).toContainEqual(notice);
-  expect(
-    buildChatItems(
-      createProps({
-        messages: [...messages, { role: "assistant", content: "Back again.", timestamp: 4_000 }],
-        ...search,
-      }),
-    ),
-  ).not.toContainEqual(notice);
+  expect(projectHistory(messages, search)).toContainEqual(waitingNotice);
+  expect(projectHistory([...messages, resumedReply], search)).not.toContainEqual(waitingNotice);
 });
 
 it("keeps Code Mode activity and speaks its yield acknowledgment without an empty assistant row", () => {
-  const items = buildChatItems(createProps({ messages: emptyAssistantHistory() }));
+  const items = projectHistory(emptyAssistantHistory());
   const assistant = items.flatMap((item) =>
     item.kind === "group" && item.role === "assistant" ? item.messages : [],
   );
@@ -364,14 +380,11 @@ it("keeps Code Mode activity and speaks its yield acknowledgment without an empt
     expect.stringContaining(JSON.stringify(emptyAssistantAcknowledgment)),
   ]);
   expect(items.filter((item) => item.kind === "notice" && item.text)).toEqual([]);
-  expect(
-    items.flatMap((item) =>
-      item.kind === "group"
-        ? item.messages.flatMap(({ message }) =>
-            extractToolCardsCached(message).map((card) => card.name),
-          )
-        : [],
-    ),
-  ).toEqual(["exec", "exec", "sessions_list", "sessions_list"]);
+  expect(transcriptTools(items).map((card) => card.name)).toEqual([
+    "exec",
+    "exec",
+    "sessions_list",
+    "sessions_list",
+  ]);
   expect(JSON.stringify(items)).not.toContain("PRIVATE_CONTINUATION");
 });

@@ -397,9 +397,9 @@ function navigationProjection(
       'report', json(${report}),
       'navigation', json(${projectTranscriptPayloadNavigationSql(database, event)}),
       'reset', json(${projectResetBoundaryNavigationSql(database, originalEvent)}),
-      'model', json(${projectModelContextNavigationSql(database, event)}),
-      'modelBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(0))}),
-      'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(1))}),
+      'model', json(${projectModelContextNavigationSql(database, event, undefined, sql.lit(1))}),
+      'modelBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(0), undefined, undefined, sql.lit(1))}),
+      'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(1), undefined, undefined, sql.lit(1))}),
       'withoutCustomDataBytes', octet_length(json_remove(${event}, '$.data')))
     END ELSE NULL END`;
 }

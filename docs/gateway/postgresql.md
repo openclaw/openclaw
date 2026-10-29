@@ -819,6 +819,18 @@ selection; global PostgreSQL support alone is insufficient. A target without
 that proof is refused. A raw package-manager downgrade does not provide this
 guard.
 
+Agent schema admission recognizes the local PostgreSQL anchor and reads the
+matching server store's version without migrating it. An older server schema can
+therefore reach the stopped-writer migration phase; a newer schema or mismatched
+anchor identity still refuses the update.
+
+Update Doctor and `openclaw update repair` select the configured engines before
+reading maintenance state. Doctor inspects configured PostgreSQL agents without
+opening them as runtime stores, then applies their forward migrations with writers
+stopped. Transcript migration detection uses the selected engine's catalog. The local
+anchors remain identity files; SQLite repair and reclamation leave them untouched.
+Gateway startup still requires the completed PostgreSQL migration.
+
 Before mutation, the updater captures exact PostgreSQL rows, sequence allocation
 state, schema facts, and matching anchors alongside local SQLite state and config.
 Recovery restores into fresh namespaces and publishes matching anchors. It

@@ -99,6 +99,7 @@ function projectResolvedReplyPreview(
             assistantAvatarUrl: isCurrentAgent
               ? props.assistantAvatarUrl
               : props.senderAgentAvatars?.get(agentId),
+            assistantAvatarSource: isCurrentAgent ? props.assistantAvatarSource : undefined,
           }),
         }
       : { turnRunId: userTurnRunId(message) ?? undefined }),

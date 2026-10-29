@@ -21,8 +21,8 @@ import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
-import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import {
   bindSessionRowProjection,
   getSessionRowProjection,
@@ -73,7 +73,7 @@ test("nested state cleanup joins suite ACP reads", async () => {
     const fixtureSignal = getAsyncWorkSignal();
     ensureProfileForEmail("nested-state-reader@example.test");
     const { storePath } = await createSessionStoreDir();
-    const runtime = getGatewayRecoveryRuntime();
+    const runtime = getGatewayLifecycleRuntime();
     const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
     if (!projection) {
       throw new Error("Suite Gateway projection is missing");

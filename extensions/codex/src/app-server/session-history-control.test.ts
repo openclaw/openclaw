@@ -1,13 +1,116 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, it } from "vitest";
+import { buildCodexSelectedHistoryItems } from "./context-engine-history-items.js";
+import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { setupSessionHistoryFixtures, settledFixture } from "./session-history.test-support.js";
 import {
   captureCodexSettledTurnFinalizationContext,
   CodexSettledTurnContext,
 } from "./settled-turn-context.js";
+import { assistantMessage } from "./test-support.js";
+import { projectBoundedCodexVisibleSessionHistory } from "./transcript-history-projection.js";
 
 const { writeSession, writeSqliteSession } = setupSessionHistoryFixtures();
+
+function deliveredResultHistory() {
+  const text = "Scheduled report ready.";
+  const mirrorOnly = "Local delivery bookkeeping.";
+  const local = {
+    ...assistantMessage(text, 1),
+    provider: "openclaw",
+    model: "delivery-mirror",
+    content: [
+      { type: "text" as const, text },
+      { type: "text" as const, text: mirrorOnly },
+    ],
+  };
+  const confirmed = {
+    ...assistantMessage(text, 2),
+    provider: "openclaw",
+    model: "automation-result",
+    openclawAutomation: {
+      kind: "cron",
+      jobId: "private-job",
+      runId: "private-run",
+    },
+  };
+  const messages: AgentMessage[] = [local, confirmed];
+  return { text, mirrorOnly, messages };
+}
+
+it.each(["file", "sqlite"] as const)(
+  "replays a delivered cron result without local bookkeeping from %s",
+  async (storage) => {
+    const { text, mirrorOnly, messages: prior } = deliveredResultHistory();
+    const { settledMessages } = settledFixture();
+    const messages = [...prior, ...settledMessages];
+    const sqlite = storage === "sqlite" ? await writeSqliteSession() : undefined;
+    if (sqlite) {
+      for (const message of messages) {
+        await sqlite.append(message);
+      }
+    }
+    const target = sqlite?.target ?? {
+      sessionFile: await writeSession(
+        messages.map((message, index) => ({
+          type: "message",
+          message,
+          id: `entry-${index}`,
+          parentId: index ? `entry-${index - 1}` : null,
+          timestamp: "2026-06-15T00:00:00.000Z",
+        })),
+      ),
+      sessionId: "codex-session",
+      sessionKey: "codex-session",
+    };
+    const captured = await captureCodexSettledTurnFinalizationContext({
+      ...target,
+      model: "gpt-5.6-luna",
+      settledMessages,
+      mirroredMessages: settledMessages,
+      turnId: "settled",
+    });
+    expect(captured).toBeInstanceOf(CodexSettledTurnContext);
+    const data = JSON.stringify(captured?.data);
+    expect(data.split(text)).toHaveLength(2);
+    expect(data).not.toContain(mirrorOnly);
+    expect(data).not.toContain("private-job");
+    expect(data).not.toContain("private-run");
+  },
+);
+
+it.each(["legacy", "selected", "import"] as const)(
+  "projects delivered results and normal assistant history without mirrors through %s",
+  async (projection) => {
+    const { text, mirrorOnly, messages } = deliveredResultHistory();
+    messages.push(assistantMessage("Ordinary assistant reply.", 3));
+    const projected =
+      projection === "legacy"
+        ? await projectContextEngineAssemblyForCodex({
+            assembledMessages: messages,
+            prompt: "Next",
+          })
+        : projection === "selected"
+          ? await buildCodexSelectedHistoryItems({ messages, tokenBudget: 1_000 })
+          : projectBoundedCodexVisibleSessionHistory(
+              messages.map((message, index) => ({
+                entryId: `entry-${index}`,
+                parentId: index ? `entry-${index - 1}` : null,
+                seq: index,
+                role: message.role,
+                message,
+              })),
+            );
+    const data = JSON.stringify(projected);
+    expect(data.split(text)).toHaveLength(2);
+    expect(data).toContain("Ordinary assistant reply.");
+    expect(data).not.toContain(mirrorOnly);
+    expect(data).not.toContain("private-job");
+    expect(data).not.toContain("private-run");
+  },
+);
+
 type CustomMessage = Extract<AgentMessage, { role: "custom" }>;
 function custom(
   customType: string,

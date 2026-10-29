@@ -1,6 +1,5 @@
 // Gateway maintenance tests cover periodic cleanup for media, dedupe records,
 // stale chat buffers, expired runs, health summaries, and timer disposal.
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
@@ -215,18 +214,23 @@ describe("startGatewayMaintenanceTimers", () => {
         if (order === "health-first") {
           const stop = harness.manager.stopChannel;
           vi.spyOn(harness.manager, "stopChannel").mockImplementation((...args) => {
-            recoveryOrder.push("health-stop");
+            recoveryOrder.push(`stop:${args[1] ?? "all"}`);
             return stop(...args);
           });
           const capture = harness.manager.captureAccountRestart;
           vi.spyOn(harness.manager, "captureAccountRestart").mockImplementation((...args) => {
-            recoveryOrder.push("thaw-capture");
+            recoveryOrder.push(`${args[2]}-capture:${args[1]}`);
             return capture(...args);
           });
         }
         await harness.advance(210_000);
         if (order === "health-first") {
-          expect(recoveryOrder).toEqual(["health-stop", "thaw-capture", "thaw-capture"]);
+          expect([...recoveryOrder]).toEqual([
+            "health-monitor-capture:first",
+            "stop:first",
+            "host-thaw-capture:first",
+            "host-thaw-capture:second",
+          ]);
         } else {
           expect(harness.stops).toEqual([]);
           if (order === "same-clock") {
@@ -243,6 +247,8 @@ describe("startGatewayMaintenanceTimers", () => {
             harness.manager.getRuntimeSnapshot().channelAccounts.discord?.first?.lastStartAt,
           ).toBe(originalStart);
         }
+        expect(harness.stops).toEqual(["first"]);
+        expect(harness.starts).toEqual(["first", "second", "first"]);
         harness.state.busy = false;
         await harness.advance(TICK_INTERVAL_MS);
         expect(harness.stops).toEqual(["first", "second"]);
@@ -964,7 +970,7 @@ describe("startGatewayMaintenanceTimers", () => {
     },
   );
 
-  it("leaves stalled terminal persistence and recovery ownership with the controller", async () => {
+  it("leaves stalled terminal persistence with the controller", async () => {
     const { deps } = await createTimedMaintenanceScenario();
     const runId = "run-terminal-persistence";
     const terminalRun = createActiveRun("main");
@@ -973,25 +979,11 @@ describe("startGatewayMaintenanceTimers", () => {
     terminalRun.adapter.projectSessionTerminalObservedAt = Date.now() - 120_000;
     terminalRun.adapter.projectSessionTerminalPersistence = new Promise<void>(() => {});
     rpcSourceTesting.set(runId, terminalRun);
-    const target = expectDefined(terminalRun.input.target, "Expected captured fixture target");
-    const recoveryCandidate = {
-      storePath: target.storeScope,
-      agentId: target.agentId,
-      runId,
-      sourceRunId: "source-terminal-persistence",
-      lifecycleGeneration: "generation-1",
-      sessionKey: "main",
-      sessionId: "sess-1",
-      observedAt: terminalRun.adapter.projectSessionTerminalObservedAt,
-    };
-    deps.restartRecoveryCandidates.set(runId, recoveryCandidate);
-
     const timers = startGatewayMaintenanceTimers(deps);
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(terminalRun.input.abortSignal.aborted).toBe(false);
     expect(rpcSourceTesting.get(runId)).toBe(terminalRun);
-    expect(deps.restartRecoveryCandidates.get(runId)).toBe(recoveryCandidate);
     await stopMaintenanceTimers(timers);
   });
 

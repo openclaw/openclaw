@@ -501,6 +501,7 @@ describe("published installed update progress", () => {
       };
       const census = vi.spyOn(nativeObservation, "readRelatedProcessDiagnostics").mockReturnValue({
         ok: !failed,
+        ownedPids: failed ? [] : [processFacts.pid],
         error: failed ? "observation failed token=" + secret : null,
         truncated: false,
         processes: failed

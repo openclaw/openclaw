@@ -342,6 +342,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
       readRevision: () => 0,
       writer: () => sender.records.get(snapshot!.identity),
       suspended: () => false,
+      hasPendingSchemaMutation: () => false,
       publish: (record) => sender.publish(record),
     });
     try {

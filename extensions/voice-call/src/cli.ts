@@ -142,35 +142,61 @@ function writeSetupStatus(status: ReturnType<typeof buildSetupStatus>): void {
 
 async function runWithStandaloneRuntime(
   createRuntime: () => Promise<VoiceCallRuntime>,
-  run: (ensureRuntime: () => Promise<VoiceCallRuntime>) => Promise<void>,
+  run: (ensureRuntime: () => Promise<VoiceCallRuntime>, signal?: AbortSignal) => Promise<void>,
+  interruptGateway = false,
 ): Promise<void> {
   let runtime: Promise<VoiceCallRuntime> | undefined;
   const interrupted = createDeferred();
+  const cancellation = new AbortController();
   let exitSignal: "SIGINT" | "SIGTERM" | undefined;
   const interrupt = (signal: "SIGINT" | "SIGTERM") => {
     exitSignal ??= signal;
     process.exitCode = exitSignal === "SIGINT" ? 130 : 143;
+    cancellation.abort();
     interrupted.resolve();
   };
   const onSigint = () => interrupt("SIGINT");
   const onSigterm = () => interrupt("SIGTERM");
+  const listen = () => {
+    process.on("SIGINT", onSigint);
+    process.on("SIGTERM", onSigterm);
+  };
   try {
-    await run(async () => {
-      if (!runtime) {
-        process.on("SIGINT", onSigint);
-        process.on("SIGTERM", onSigterm);
-        runtime = createRuntime();
-      }
-      const active = await runtime;
-      if (exitSignal) {
-        throw new Error(`Voice call command interrupted by ${exitSignal}`);
-      }
-      return active;
-    });
+    if (interruptGateway) {
+      listen();
+    }
+    await run(
+      async () => {
+        if (!runtime) {
+          if (!interruptGateway) {
+            listen();
+          }
+          runtime = createRuntime();
+        }
+        const active = await runtime;
+        if (exitSignal) {
+          if (interruptGateway) {
+            cancellation.signal.throwIfAborted();
+          }
+          throw new Error(`Voice call command interrupted by ${exitSignal}`);
+        }
+        return active;
+      },
+      interruptGateway ? cancellation.signal : undefined,
+    );
     // A standalone webhook continues serving after the call ID is printed.
     // Retain its command owner so scheduler teardown cannot run at action return.
     if (runtime) {
       await interrupted.promise;
+    }
+  } catch (error) {
+    if (
+      !interruptGateway ||
+      !cancellation.signal.aborted ||
+      !(error instanceof Error) ||
+      error.name !== "AbortError"
+    ) {
+      throw error;
     }
   } finally {
     try {
@@ -348,15 +374,25 @@ export function registerVoiceCallCli(params: {
     .action((options: { callId: string; message: string }) => {
       const gatewayParams = { callId: options.callId, message: options.message };
       const continueTimeoutMs = resolveContinueTimeout(config);
-      return managerAction({
-        gatewayCall: () =>
-          callVoiceCallGateway("voicecall.continue.start", gatewayParams, {
-            timeoutMs: resolveOperationTimeout(config),
+      return runWithStandaloneRuntime(
+        createRuntime,
+        (ensureRuntime, signal) =>
+          runGatewayManagerCommand({
+            config,
+            ensureRuntime,
+            signal,
+            // Let the admitted speech operation settle; only local observation is cancelled.
+            gatewayCall: () =>
+              callVoiceCallGateway("voicecall.continue.start", gatewayParams, {
+                timeoutMs: resolveOperationTimeout(config),
+              }),
+            resolveGatewayPayload: (payload) =>
+              pollContinueGateway(payload, continueTimeoutMs, signal),
+            managerFallback: (manager) => manager.continueCall(options.callId, options.message),
+            failureLabel: "continue",
           }),
-        resolveGatewayPayload: (payload) => pollContinueGateway(payload, continueTimeoutMs),
-        managerFallback: (manager) => manager.continueCall(options.callId, options.message),
-        failureLabel: "continue",
-      });
+        true,
+      );
     });
 
   root

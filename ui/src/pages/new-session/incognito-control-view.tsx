@@ -69,7 +69,7 @@ export function NewSessionIncognitoControl(props: {
 }) {
   return (
     <div class="new-session-page__incognito-rail">
-      {props.draftAvailable ? (
+      {props.draftAvailable || props.submission.visibility === "draft" ? (
         <VisibilityToggle submission={props.submission} mode="draft" />
       ) : undefined}
       <VisibilityToggle submission={props.submission} mode="incognito" />

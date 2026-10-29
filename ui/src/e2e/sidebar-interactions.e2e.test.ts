@@ -128,6 +128,8 @@ suite.define(() => {
           await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         }
         if (action.section) {
+          // Leave the previous control so its tooltip cannot cover the next header.
+          await composer.hover();
           await page
             .locator(`[data-session-section="${action.section}"] .sidebar-recent-sessions__head`)
             .hover();
@@ -230,7 +232,7 @@ suite.define(() => {
 
   it("shows one row per agent plus Show all and reaches them with menu keys", async () => {
     await suite.withPage(desktop, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         methodResponses: {
           "agent.identity.get": {
             cases: [
@@ -250,6 +252,9 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const draft = "Keep this draft while opening agent settings";
+      await composer.fill(draft);
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator(".sidebar-agent-menu");
@@ -257,11 +262,11 @@ suite.define(() => {
       const researchSwitch = menu.getByRole("menuitem", { name: "Research", exact: true });
       await expect
         .poll(() =>
-          researchSwitch.evaluate(
-            (element) => element.parentElement?.matches(".sidebar-agent-menu__agent-list") ?? false,
-          ),
+          menu
+            .locator(".sidebar-agent-menu__agent-list .agent-select__option-label")
+            .allTextContents(),
         )
-        .toBe(true);
+        .toEqual(["Show all", "Scheduled Automations", "Research", "Forge", "Support"]);
       await expect
         .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
         .toContain("data:image/png;base64,");
@@ -294,6 +299,21 @@ suite.define(() => {
       await pressAndExpectFocus(page, "r", researchSwitch);
       const researchSettings = researchSwitch.getByRole("button", { name: "Research settings" });
       await pressAndExpectFocus(page, "Tab", researchSettings);
+      const refreshAfter = (await gateway.getRequests("agent.identity.get", { agentId: "forge" }))
+        .length;
+      await gateway.deferNext("agent.identity.get", { agentId: "forge" });
+      await gateway.emitGatewayEvent("agent.identity.changed", { agentId: "forge" });
+      await gateway.waitForRequest("agent.identity.get", {
+        after: refreshAfter,
+        match: { agentId: "forge" },
+      });
+      await gateway.resolveDeferred(
+        "agent.identity.get",
+        { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge refreshed" },
+        { match: { agentId: "forge" } },
+      );
+      await menu.getByRole("menuitem", { name: "Forge refreshed", exact: true }).waitFor();
+      await expectFocused(researchSettings);
       await page.keyboard.press("Enter");
       await waitForControlUiRoute(page, {
         routeId: "agents",
@@ -304,6 +324,7 @@ suite.define(() => {
       );
       await page.locator(".settings-sidebar__back").click();
       await waitForControlUiRoute(page, { routeId: "chat" });
+      expect(await composer.inputValue()).toBe(draft);
       await sidebar.locator(".sidebar-agent-card__main").click();
       await expectAttribute(mainSwitch, "aria-current", "true");
       await researchSwitch.focus();
@@ -318,7 +339,13 @@ suite.define(() => {
         .toBe(1);
       await sidebar.locator(".sidebar-agent-card__main").click();
       await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
+      await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
       await sidebar.locator(".sidebar-workspace-header__main").click();
+      await expectAttribute(
+        menu.getByRole("menuitem", { name: "Show all", exact: true }),
+        "aria-current",
+        "true",
+      );
     });
   });
 

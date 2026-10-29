@@ -224,10 +224,11 @@ export const SessionPlacementSchema = Type.Union([
 
 /**
  * Requests one-way dispatch to an explicit or automatically selected device (`operator.write`),
- * an explicit profile (`operator.admin`), or an `operator.admin`-only
+ * an explicit profile (`operator.write` plus administrator authority or a current role grant
+ * for the session's verified creator), or an `operator.admin`-only
  * `cloudWorkers.projectProfiles` lookup when no target is supplied. Target modes are exclusive.
  * An absent, unmatched, or invalid mapping is rejected with `INVALID_REQUEST` instead of
- * provisioning or falling back to another target.
+ * provisioning or falling back to another target. Setup remains administrator-only.
  */
 export const SessionsDispatchParamsSchema = Type.Object(
   {

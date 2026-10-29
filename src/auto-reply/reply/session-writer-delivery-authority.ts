@@ -1,4 +1,3 @@
-import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-completion-recovery.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -34,21 +33,7 @@ function isEntryAuthorized(
   ) {
     return false;
   }
-  const claim = authority.harnessCompletion;
-  if (
-    claim &&
-    (claim.requesterSessionKey !== authority.sessionKey ||
-      (authority.agentId !== undefined && claim.requesterAgentId !== authority.agentId))
-  ) {
-    return false;
-  }
-  try {
-    // A queued final owns transport custody after execution cleanup. Keep the
-    // exact task/outcome and session fence, not the now-retired input claim.
-    return !claim || Boolean(getOwedHarnessCompletionTask(claim, current));
-  } catch {
-    return false;
-  }
+  return true;
 }
 
 /** One worker preparation per delivery custody; write receipts keep its final check current. */

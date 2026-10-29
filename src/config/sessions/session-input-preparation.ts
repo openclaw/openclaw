@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionActorHotState } from "./session-actor-contract.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { createSessionTranscriptTurnKernel } from "./session-turn.kernel.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 import type { prepareSessionTurn } from "./session-turn.worker.js";
@@ -86,7 +86,7 @@ export function prepareSessionInputFromReplica(
     messages,
     coldArchive: undefined,
     version: hot.transcript.version,
-    expectedSessionState: buildRestartRecoveryExpectedState(
+    expectedSessionState: buildSessionTranscriptTurnExpectedState(
       hot.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
     ),
     goalId: undefined,

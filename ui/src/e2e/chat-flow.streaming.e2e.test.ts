@@ -225,8 +225,10 @@ suite.define(() => {
   );
 
   it("keeps the pending telemetry row stable through acknowledgement and streaming", async () => {
+    const session = { key: "agent:main:main", kind: "group" };
     const { page, gateway } = await chatFixture(suite, {
-      sessionInfo: { key: "agent:main:main", kind: "group" },
+      sessions: [session],
+      sessionInfo: session,
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);

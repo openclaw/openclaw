@@ -70,7 +70,6 @@ export function createExecution(
       isNewSession: false,
       isRawModelRun: true,
       isOneShotModelRun: true,
-      isRestartRecoveryResumeRun: false,
       suppressVisibleSessionEffects: true,
       images: [],
       imageOrder: [],

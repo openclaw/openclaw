@@ -419,6 +419,71 @@ Removing the executor also changes explicit QuickJS selection and plugin
 availability. Verify release-tag reachability and any required configuration
 migration first; silently falling back to Node would change the trust boundary.
 
+## Integrated validation follow-up
+
+The October 28 follow-up starts from frozen baseline
+[`b61ab6deb40cc640aec077b6e6a7b93a44b5422c`](https://github.com/openclaw/openclaw/commit/b61ab6deb40cc640aec077b6e6a7b93a44b5422c).
+It includes the merged controller, scheduling and dependency changes. The earlier
+timings remain measurements of their recorded inputs, not this integrated tree.
+
+The coverage audit found three different boundaries:
+
+- `code-mode-engine-parity.test.ts` and `code-mode.failure-phase.test.ts` already
+  exercise both engines through public execution, including retained results,
+  errors and trusted bridge-failure provenance. Store-capacity failures remain
+  the separate follow-up identified below.
+- `code-mode.bridge.lifecycle.test.ts` previously selected only Node. Its nine
+  guest-execution cases now select both engines through the same subscribed
+  embedded attempt and catalog executor. They cover persisted nested activity,
+  direct handoff closing a sibling cell, catalog ownership, repeated resumes,
+  cancellation races, sequential exclusion, expiry and shutdown. Host-only
+  subscriber cases still run once. Transcript setup awaits the canonical
+  persistence API. Ordinary PR CI selects this suite under its infra
+  database-worker owner and uses a Bun host; it does not also establish the
+  same cases under a Node host.
+- `scripts/perf/code-mode-engine-measure.ts` invokes the executors directly with
+  a synthetic bridge. It can measure successful execution and checkpoint cost,
+  but bypasses the public execution owner, transcript projection and bridge
+  policy. It does not validate cumulative owner budgets or cancellation.
+
+Focused reproduction:
+
+```sh
+OPENCLAW_VITEST_RUNTIME=node node scripts/run-vitest.mjs src/agents/code-mode.bridge.lifecycle.test.ts --maxWorkers=1
+OPENCLAW_VITEST_RUNTIME=node node scripts/run-vitest.mjs src/agents/code-mode-engine-parity.test.ts \
+  src/agents/code-mode.failure-phase.test.ts --maxWorkers=1
+node --import ./scripts/tsx.mjs scripts/perf/code-mode-engine-measure.ts 1 3
+```
+
+The last command is a functional smoke capture, not a timing comparison. A
+performance comparison still needs at least five alternating process pairs and
+recorded effective resources. The initial Blacksmith Testbox allocation was
+stopped while queued: no arm, source assertion or resource preflight executed.
+That attempt supplies no successful standalone or performance result.
+
+Additional standalone-probe limits remain explicit. Each synthetic continuation grants
+a fresh timeout, so its successful resumes cannot establish the production
+owner's cumulative budget. QuickJS's shared worker pool is not adopted by the
+probe's resource host; closing that host is not proof of QuickJS pool retirement.
+The probe's cleanup audit found a separate harness defect: a failed parallel
+execution or an assertion could lose custody of sibling checkpoints, and an
+earlier cleanup rejection skipped later cleanup. The probe now registers
+checkpoints as they arrive, joins launched siblings before unwinding, joins all
+checkpoint disposals and attempts host and scheduler cleanup independently.
+It preserves workload and cleanup errors and clears both timers after cleanup
+settles. Three deterministic failure-path tests target this ownership boundary;
+they mock the executor and do not establish VM behavior. The initial
+[CI execution](https://github.com/openclaw/openclaw/actions/runs/40708711969/job/122888857460)
+passed all three tests under a Bun host. This does not establish Node-host
+coverage. A follow-up Testbox allocation was also stopped while queued and
+supplied no execution proof.
+
+Pending cleanup can still leave the child alive until the parent's 180-second
+deadline. The pool-retirement and cumulative-budget limits above also remain
+unqualified. These are explicit proof gaps, not an observed executor failure or
+evidence that QuickJS should be removed. An explicit `OPENCLAW_VITEST_RUNTIME=node`
+selects the Node test host; launching the wrapper with Node alone does not.
+
 ## Reproduction and remaining qualification
 
 The measured inputs can be reconstructed from public stack objects without

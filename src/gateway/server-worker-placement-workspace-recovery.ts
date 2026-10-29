@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { retryGatewayWorkerStartupRecovery } from "./server-worker-startup-recovery.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
@@ -18,7 +19,11 @@ export async function recoverGatewayWorkerPlacementWorkspaces(params: {
   if (params.isStopping?.()) {
     return;
   }
-  const orphanedJournals = await params.placements.pruneOrphanedWorkspaceReconciliations();
+  const orphanedJournals = await retryGatewayWorkerStartupRecovery({
+    operation: "placementJournals.prune",
+    run: () => params.placements.pruneOrphanedWorkspaceReconciliations(),
+    warn: (message) => workerPlacementLog.warn(message),
+  });
   for (const owner of orphanedJournals) {
     workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
   }

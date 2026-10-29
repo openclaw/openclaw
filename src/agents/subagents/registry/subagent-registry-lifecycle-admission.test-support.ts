@@ -41,7 +41,6 @@ export function registerRequesterDatabaseAdmissionTests({
       const wake: RequesterSettleWakeState = {
         status: "dispatching",
         attemptCount: 1,
-        replayCount: 1,
         batchRunIds: ["run-1"],
         requesterYieldBatch: true,
         rearmGeneration: 1,

@@ -25,7 +25,6 @@ import { claimInboundDedupe } from "./inbound-dedupe.js";
 import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./message-received-hooks.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { isDuplicateRestartRecoverySource } from "./restart-recovery-source.js";
 import { resolveDispatchConversationBinding } from "./session-conversation-binding.js";
 import {
   resolveReplyMessageToolAvailability,
@@ -343,12 +342,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       : undefined);
   // Compute once before hooks. The prepared agent turn reuses this exact route-scoped id.
   setChannelSourceTurnId(ctx, durableSourceTurnId);
-  if (isDuplicateRestartRecoverySource(sessionStoreEntry.entry, durableSourceTurnId)) {
-    // Process-local inbound dedupe cannot see provider redelivery after restart.
-    // Drop durable duplicates before any plugin dispatch hook can repeat effects.
-    return skipDuplicate();
-  }
-
   const sourceRunId = normalizeOptionalString(ctx.MessageSid);
   const recorder = params.replyOptions?.userTurnTranscriptRecorder;
   let reclaimPendingInput: (() => boolean) | undefined;

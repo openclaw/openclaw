@@ -177,7 +177,6 @@ const ownerRoutedUnitTestPatterns = [
   // mocks live in a shared helper.
   // Completion custody tests use real session/task SQLite and process-scoped state cleanup.
   "src/agents/agent-harness-completion-delivery.test.ts",
-  "src/agents/agent-harness-completion-ownership.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
   "src/agents/agent-command.operator-direct-root.test.ts",

@@ -10,11 +10,11 @@ import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
+import { registerSessionTitleTarget } from "./markdown-link-display.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
-import { SessionLinkTitler } from "./session-link-titling.ts";
 import "./session-progress-hovercard-registration.ts";
+import { SessionLinkTitler } from "./session-link-titling.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
-import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 const SESSION_KEY = "agent:main:research";
 const DASHBOARD_KEY = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
@@ -87,7 +87,7 @@ function sessionContext(rows: GatewaySessionRow[] = [], origin?: string): Applic
     gateway: {
       connectionRevision: 0,
       snapshot: {
-        hello: gatewayHelloForMethods(["controlUi.sessionPreview", "sessions.resolve"]),
+        hello: gatewayHelloForMethods(["controlUi.sessionPreview"]),
         phase: "connected",
         selfUser: { id: "first-profile" },
       },
@@ -146,27 +146,6 @@ describe("SessionLinkTitler", () => {
     vi.restoreAllMocks();
   });
 
-  it("seeds and updates roster titles without turning labels into navigation", async () => {
-    const { host, request, titler } = createTitler([row("Cached research")]);
-    const label = document.createElement("span");
-    label.dataset.sessionTitleOnly = "";
-    label.dataset.sessionKey = SESSION_KEY;
-    label.innerHTML = '<span class="session-label"></span>';
-    host.append(label);
-    registerTargets(titler, host);
-    titler.refresh();
-    expectTitle(label, "Cached research");
-    expect(label.classList.contains("markdown-session-link--titled")).toBe(true);
-    expectAttributes(label, { title: null, href: null });
-    expect(label.parentElement).toBe(host);
-    expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
-    expect(request).not.toHaveBeenCalled();
-    titler.context = sessionContext([row("Current research")]);
-    await decorate(titler, label);
-    expectTitle(label, "Current research");
-    expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
-  });
-
   it("caches titles and retains producer labels", async () => {
     const request = vi.fn().mockResolvedValue(previewResponse());
     const { titler } = createTitler([], request);
@@ -195,6 +174,48 @@ describe("SessionLinkTitler", () => {
     await decorate(titler, first);
     expect(first.firstElementChild).toBe(label);
     expect(first.textContent).toBe("Updated by the producer");
+  });
+
+  it.each(["a", "span"])("reconciles %s roster titles without replaying equal labels", (tag) => {
+    const rows = [row("Saved research")];
+    const { host, titler, request } = createTitler(rows);
+    const anchor = tag === "a" ? sessionAnchor() : document.createElement("span");
+    if (tag === "span") {
+      anchor.dataset.sessionTitleOnly = "";
+      anchor.dataset.sessionKey = SESSION_KEY;
+    }
+    const label = document.createElement("span");
+    label.className = "session-label";
+    if (tag === "a") {
+      label.textContent = "Saved research";
+      anchor.classList.add("markdown-session-link--titled");
+    }
+    anchor.replaceChildren(label);
+    host.append(anchor);
+    const onTitle = vi.fn();
+    titler.register(anchor, label, { title: tag === "a" ? "Saved research" : undefined, onTitle });
+    const observer = observe(anchor);
+    try {
+      for (const title of ["Saved research", "Current research", undefined]) {
+        rows[0] = row(title);
+        titler.refresh();
+        expectTitle(anchor, title ?? SESSION_KEY);
+        expect(anchor.firstElementChild).toBe(label);
+        expect(anchor.classList.contains("markdown-session-link--titled")).toBe(Boolean(title));
+        expect(onTitle).toHaveBeenLastCalledWith(title);
+        if (tag === "span") {
+          expectAttributes(anchor, { title: null, href: null });
+          expect(anchor.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
+          expect(anchor.parentElement).toBe(host);
+        }
+        observer.takeRecords();
+        titler.refresh();
+        expect(observer.takeRecords()).toEqual([]);
+      }
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      observer.disconnect();
+    }
   });
 
   it.each(
@@ -286,46 +307,53 @@ describe("SessionLinkTitler", () => {
     });
   });
 
-  it.each([true, false])("titles unloaded URLs (full key: %s)", async (fullKey) => {
-    const displayName = fullKey ? "Peter's plan" : undefined;
-    const source = fullKey
-      ? "`https://chat.example/chat/main/dashboard/d0effac9-3211-4641-b993-10f619f124e6`"
-      : "[Plan](/chat/main/d0effac9?view=details)";
-    const params = fullKey
-      ? {
-          reference: { key: DASHBOARD_KEY },
-          agentId: "main",
-          includeGlobal: true,
-          includeUnknown: true,
-          allowMissing: true,
-        }
-      : { shortId: "d0effac9", agentId: "main", allowMissing: true };
-    const key = DASHBOARD_KEY;
-    const request = vi.fn(async (method: string) =>
-      method === "sessions.resolve"
-        ? { ok: true, key, agentId: "main", ...(displayName ? { displayName } : {}) }
-        : previewResponse({ sessionKey: key, title: undefined, derivedTitle: "Derived plan" }),
-    );
-    const { host, titler } = createTitler([], request);
-    titler.context = sessionContext([], "https://chat.example");
-    const getLink = renderMarkdown(titler, host, source);
-    await refresh(titler);
-    const link = getLink();
+  it.each([true, false])(
+    "titles unloaded URLs without advertised resolution (full key: %s)",
+    async (fullKey) => {
+      const displayName = fullKey ? "Peter's plan" : undefined;
+      const source = fullKey
+        ? "`https://chat.example/chat/main/dashboard/d0effac9-3211-4641-b993-10f619f124e6`"
+        : "[Plan](/chat/main/d0effac9?view=details)";
+      const params = fullKey
+        ? {
+            reference: { key: DASHBOARD_KEY },
+            agentId: "main",
+            includeGlobal: true,
+            includeUnknown: true,
+            allowMissing: true,
+          }
+        : { shortId: "d0effac9", agentId: "main", allowMissing: true };
+      const key = DASHBOARD_KEY;
+      const request = vi.fn(async (method: string) =>
+        method === "sessions.resolve"
+          ? { ok: true, key, agentId: "main", ...(displayName ? { displayName } : {}) }
+          : previewResponse({ sessionKey: key, title: undefined, derivedTitle: "Derived plan" }),
+      );
+      const { host, titler } = createTitler([], request);
+      titler.context = sessionContext([], "https://chat.example");
+      titler.context.gateway.snapshot.phase = "connecting";
+      const getLink = renderMarkdown(titler, host, source);
+      await refresh(titler);
+      expect(request).not.toHaveBeenCalled();
+      titler.context.gateway.snapshot.phase = "connected";
+      await refresh(titler);
+      const link = getLink();
 
-    expect(link).toMatchObject({
-      textContent: displayName ?? "Derived plan",
-      dataset: { sessionKey: key },
-    });
-    expect(link.hasAttribute("title")).toBe(false);
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", params);
-    expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
+      expect(link).toMatchObject({
+        textContent: displayName ?? "Derived plan",
+        dataset: { sessionKey: key },
+      });
+      expect(link.hasAttribute("title")).toBe(false);
+      expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", params);
+      expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
 
-    const observer = observe(host);
-    await refresh(titler);
-    expect(observer.takeRecords()).toEqual([]);
-    observer.disconnect();
-    expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
-  });
+      const observer = observe(host);
+      await refresh(titler);
+      expect(observer.takeRecords()).toEqual([]);
+      observer.disconnect();
+      expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
+    },
+  );
 
   it.each([
     ["bare URL", `${location.origin}/chat/main/d0effac9?view=details#latest`],

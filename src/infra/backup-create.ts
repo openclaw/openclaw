@@ -18,13 +18,14 @@ import {
   canonicalizePathForContainment,
   type BackupAsset,
   resolveBackupPlanFromDisk,
+  resolveBackupArchivePath,
 } from "../commands/backup-shared.js";
 import { encodeBackupManifest, type BackupManifest } from "../commands/backup-verify-manifest.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { runOfflineDatabaseBackup } from "../snapshot/database-backup.js";
-import { resolveHomeDir, resolveUserPath } from "../utils.js";
+import { resolveHomeDir } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
   recordArchiveSymbolicLink,
@@ -126,8 +127,8 @@ async function resolveOutputPath(params: {
   stateDir: string;
 }): Promise<string> {
   const basename = buildBackupArchiveBasename(params.nowMs);
-  const rawOutput = params.output?.trim();
-  if (!rawOutput) {
+  const rawOutput = params.output;
+  if (!rawOutput?.trim()) {
     const cwd = path.resolve(process.cwd());
     const canonicalCwd = await fs.realpath(cwd).catch(() => cwd);
     const cwdInsideSource = params.includedAssets.some((asset) =>
@@ -137,7 +138,7 @@ async function resolveOutputPath(params: {
     return path.resolve(defaultDir, basename);
   }
 
-  const resolved = resolveUserPath(rawOutput);
+  const resolved = resolveBackupArchivePath(rawOutput, "--output");
   if (rawOutput.endsWith("/") || rawOutput.endsWith("\\")) {
     return path.join(resolved, basename);
   }

@@ -227,6 +227,7 @@ export function ChatThread(input: {
             "chat-thread--direct": current().projection.isDirectThread,
             "chat-thread--route-loading": mobile() && routeLoading(),
             "chat-thread--comment-pins": commentPins(),
+            "chat-thread--annotations": input.props.commentAttachments !== undefined,
           },
         ]}
         role="log"
