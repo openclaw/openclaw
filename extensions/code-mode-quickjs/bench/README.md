@@ -1,6 +1,6 @@
 # Code Mode engine investigation
 
-Investigation date: October 27, 2026. This record separates engine measurements,
+Investigation dates: October 27–29, 2026. This record separates engine measurements,
 the production execution owner, and the remaining end-to-end qualification.
 
 ## Decision and boundaries
@@ -438,9 +438,9 @@ The coverage audit found three different boundaries:
   direct handoff closing a sibling cell, catalog ownership, repeated resumes,
   cancellation races, sequential exclusion, expiry and shutdown. Host-only
   subscriber cases still run once. Transcript setup awaits the canonical
-  persistence API. Ordinary PR CI selects this suite under its infra
-  database-worker owner and uses a Bun host; it does not also establish the
-  same cases under a Node host.
+  persistence API. The initial October 28 CI execution used a Bun host under
+  its infra database-worker owner. The prepared routing correction selects
+  these contracts on both hosts; the refreshed candidate still requires fresh CI.
 - `scripts/perf/code-mode-engine-measure.ts` invokes the executors directly with
   a synthetic bridge. It can measure successful execution and checkpoint cost,
   but bypasses the public execution owner, transcript projection and bridge
@@ -455,9 +455,9 @@ OPENCLAW_VITEST_RUNTIME=node node scripts/run-vitest.mjs src/agents/code-mode-en
 node --import ./scripts/tsx.mjs scripts/perf/code-mode-engine-measure.ts 1 3
 ```
 
-The last command is a functional smoke capture, not a timing comparison. A
-performance comparison still needs at least five alternating process pairs and
-recorded effective resources. The initial Blacksmith Testbox allocation was
+The last command is a functional smoke capture, not a timing comparison. The
+October 29 follow-up below supplies five alternating process pairs and recorded
+effective resources. The initial Blacksmith Testbox allocation was
 stopped while queued: no arm, source assertion or resource preflight executed.
 That attempt supplies no successful standalone or performance result.
 
@@ -484,9 +484,125 @@ unqualified. These are explicit proof gaps, not an observed executor failure or
 evidence that QuickJS should be removed. An explicit `OPENCLAW_VITEST_RUNTIME=node`
 selects the Node test host; launching the wrapper with Node alone does not.
 
+## October 29 matched executor follow-up
+
+The standalone comparison now has five complete alternating process pairs:
+Node → QuickJS, QuickJS → Node, repeated, ending Node → QuickJS.
+Ten fresh processes each ran eight scenarios with three warmups and 40 timed
+cells per scenario: 3,200 timed cells and 71,200 timed synthetic bridge calls.
+Every cell checked its result; each scenario checked its bridge-call count.
+All ten children and the parent returned exit zero. This establishes successful
+process completion for this campaign; it does not establish pool retirement
+merely from `host.close()`.
+
+Measured source HEAD was
+`22385d0b3fb03ab05268498481bb50d161f53084`, with working-tree changes:
+the measured complete tree was `5fa1c7860a664fe9fec43233460dbe7a14e2a6e7`.
+The HEAD alone does not identify that tree. Relevant SHA-256 identities were:
+
+| Input                                                  | SHA-256                                                            |
+| ------------------------------------------------------ | ------------------------------------------------------------------ |
+| `scripts/perf/code-mode-engine-measure.ts`             | `9e6b7686295d586ca25ad85e1e900a906eea04dae582a3a44cf00aa0766b2013` |
+| `src/agents/code-mode-node.worker.ts`                  | `79911bd4ad2c3022785b50ce3849d7964f81f6d803afff97b9bf5dc369308174` |
+| `extensions/code-mode-quickjs/src/code-mode.worker.ts` | `874cb27840f8043c3286c28c2a8c94632408bb67fbd5e1b6c22c4997cbd7aa2a` |
+
+The Blacksmith focused Testbox requested 4-class but exposed two AMD EPYC CPUs,
+affinity 0–1, and 8,218,361,856 bytes of RAM. Record those observed resources
+rather than inferring capacity from the label. Node was 24.22.1 and the actual
+installed QuickJS package was 3.6.3. One-minute load ranged 0.64–1.64.
+The test host also provided pinned Bun
+`1.4.4-canary.1+191755ec1`; the timed executor processes used Node.
+No forced GC was used. The source probe used a 160-entry catalog and a 30-second
+grant; each synthetic resume received a fresh grant.
+
+Values below are milliseconds, summarized as the median of five process medians.
+The ratio is computed within each matching process pair first, then summarized;
+it is not the ratio of the two aggregate medians.
+
+| Warm scenario                  | Node ms | QuickJS ms | Paired median ratio | Pair ratio range |
+| ------------------------------ | ------: | ---------: | ------------------: | ---------------: |
+| No-op                          |   2.512 |      4.846 |               1.821 |      1.319–2.522 |
+| CPU loop, 100,000 iterations   |   3.487 |      7.065 |               1.985 |      1.906–2.387 |
+| JSON round-trip, 1,000 objects |   2.621 |      6.235 |               2.364 |      1.840–2.719 |
+| 1 sequential bridge call       |   2.855 |      4.788 |               1.825 |      1.243–1.899 |
+| 32 sequential bridge calls     |   4.527 |      8.462 |               1.868 |      1.548–2.305 |
+| 128 sequential bridge calls    |   9.843 |     16.017 |               1.627 |      1.487–1.939 |
+| 16 joined bridge calls         |   2.802 |      4.787 |               1.851 |      1.391–2.201 |
+| 1 MiB retained checkpoint      |   2.748 |     11.061 |               4.025 |      2.261–4.970 |
+
+All five pairs favored Node in every scenario. The complete paired ratios
+(QuickJS/Node) retain the observed variation:
+
+| Scenario        | Pair 1 | Pair 2 | Pair 3 | Pair 4 | Pair 5 |
+| --------------- | -----: | -----: | -----: | -----: | -----: |
+| noop            |  2.209 |  2.522 |  1.758 |  1.319 |  1.821 |
+| cpu             |  2.303 |  2.387 |  1.906 |  1.954 |  1.985 |
+| json            |  2.364 |  2.294 |  2.569 |  2.719 |  1.840 |
+| bridge-1        |  1.825 |  1.243 |  1.696 |  1.899 |  1.877 |
+| bridge-32       |  2.305 |  1.548 |  1.718 |  1.869 |  1.868 |
+| bridge-128      |  1.939 |  1.627 |  1.681 |  1.597 |  1.487 |
+| parallel-16     |  2.201 |  1.582 |  1.851 |  1.904 |  1.391 |
+| checkpoint-1MiB |  4.025 |  3.729 |  4.902 |  4.970 |  2.261 |
+
+First source-worker cells ranged 243.243–301.171 ms for Node and
+520.683–607.341 ms for QuickJS, excluding the separately recorded module import.
+These are source-worker bootstrap observations, not packaged cold startup or
+public-owner cold admission.
+
+The five-millisecond RSS sampler observed process maxima of
+670,941,184–684,109,824 bytes for Node and 494,149,632–541,278,208 for QuickJS.
+The probe also parked eight cells retaining a 1 MiB guest array each.
+Node reported 536,870,912 retained bytes as live-worker budget estimates;
+QuickJS reported 23,068,672 serialized snapshot bytes. Those counters measure
+different things. Neither the RSS samples nor these counters establish a
+production memory reduction, a peak bound, a leak, or a Gateway memory cap.
+
+Reproduce the workload only on a qualified source/dependency installation and
+verify the recorded probe and worker hashes before comparing results:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/code-mode-engine-measure.ts 5 40
+```
+
+This is the direct executor with synthetic bridge replies. It bypasses the
+public execution owner, cumulative grants, bridge policy and transcript
+projection. The QuickJS pool is still outside this probe's resource-host
+adoption. These results support the measured engine/checkpoint cost; they do
+not supply ShellBench accuracy, model latency, packaged behavior or current-main
+owner qualification.
+
+### Cold lifecycle failure and test-host qualification
+
+The real shard runner executed the three contracts on both test hosts before
+the fixture correction: Node lifecycle 21/22, Bun lifecycle 22/22, parity 16/16
+per host and failure-origin 60/60 per host. The failing Node-host case reached
+its first QuickJS invocation in the original Node-first, QuickJS-second order
+and returned `timeout`, `failurePhase: host`, `bridgeDispatchStarted: false`
+and zero bridge calls. It failed before exercising the second reused
+`exec_0`; an executor-ID regression was not established.
+
+The shared fixture imposed 1,500 ms on ordinary cases while the canonical
+product admission default was 10,000 ms. Removing that implicit fixture
+override preserved the first cold invocation and production timeout accounting;
+the corrected lifecycle passed 22/22 on each host. Deadline-specific tests keep
+explicit overrides. The host-denial late-settlement case deliberately retains
+1,500 ms because that budget must park the cell before its held sibling is
+released. All seven other fixture-caller files passed: 98 cases per host,
+196 overlapping executions, on complete tree
+`1de75e7c6370fca773e6e12175bdb8b964f9c2f1`.
+The three deterministic probe cleanup regressions also passed on Node.
+
+These observations identify a test-policy mismatch on the measured source;
+they do not isolate which part of cold admission consumed the budget or prove
+a production timeout regression. The subsequent PR baseline refresh changed
+the execution owner. The earlier results do not qualify that refreshed owner;
+it requires fresh candidate CI. Its focused Testbox attempt was stopped while
+queued and supplied no runtime execution proof.
+
 ## Reproduction and remaining qualification
 
-The measured inputs can be reconstructed from public stack objects without
+The October 27 production-owner measurement inputs can be reconstructed from
+public stack objects without
 treating a later main revision as measured:
 
 - Start a clean, task-owned checkout at
@@ -556,4 +672,13 @@ model/provider, task subset and seed, concurrency, retry policy and auditable
 traces, including accuracy, total calls/tokens and end-to-end latency. Fewer
 visible model turns alone is not a win.
 
-The parked ShellBench campaign remains a separate qualification boundary.
+The parked ShellBench campaign remains a separate qualification boundary. The policy-test
+runtime archive from `scripts/macos-native-runtime-artifact.mjs` deliberately
+excludes plugins and target-native dependencies. That archive and a successful
+CI run do not establish an admitted benchmark distribution. Select a clean
+upstream main commit, then use its native
+`scripts/package-openclaw-for-docker.mjs` with `--bundle-plugin codex` and
+`--bundle-plugin diagnostics-otel`. Retain the finished pack receipt,
+inventories and exact source/dependency identities; actual behavioral tests must
+qualify the bundle before marking it built and tested. Packaging success alone
+is insufficient. No matched packaged ShellBench campaign is established here.
