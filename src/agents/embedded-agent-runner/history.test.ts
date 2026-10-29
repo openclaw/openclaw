@@ -10,7 +10,7 @@ const account = {
   dmHistoryLimit: 12,
   dms: {
     "123": { historyLimit: 22 },
-    peer: { historyLimit: 41 },
+    PEER: { historyLimit: 41 },
     "direct:peer": { historyLimit: 31 },
     "a::b": { historyLimit: 33 },
     "a:b": { historyLimit: 43 },

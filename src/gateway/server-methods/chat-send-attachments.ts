@@ -24,7 +24,7 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
-import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
@@ -90,7 +90,7 @@ export async function prepareChatSendAttachments(params: {
     const explicitOriginTargets = await resolveExplicitOriginBindingTargets(explicitOrigin);
     assertInputCurrent();
     explicitOriginTargetsPlugin = explicitOriginTargets.plugin;
-    const recoveredInput = readChatInputRecoveryAdmission(clientRunId);
+    const recoveredInput = readQueuedChatInputAdmission(clientRunId);
     if (recoveredInput) {
       // Accepted media retains its managed sources; the normal prompt owner hydrates them.
       mediaPathOffloads = readPersistedMediaFacts(recoveredInput.target.message) ?? [];

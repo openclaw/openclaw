@@ -5,8 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
-import { addPreCutoverClientCredentialTablesForTest } from "../../state/openclaw-state-schema.test-support.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
+} from "../../state/openclaw-state-schema.test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import * as snapshotSource from "../sqlite-snapshot-source.js";
 import { inspectDatabaseStore, type DatabaseStoreInspection } from "./diagnostics.js";
 import { writePortAnchor } from "./port-backup.test-support.js";
 import type { PortDescriptor } from "./port-types.js";
@@ -43,16 +47,15 @@ async function inspectUnchanged(input: DatabaseStoreInspection) {
   return result;
 }
 async function stateStore(version: number) {
-  const input = {
-    ...fixture(),
-    family: "state" as const,
-    descriptor: await loadStatePortDescriptor(),
-  };
+  const input = fixture();
+  input.family = "state";
+  input.descriptor = await loadStatePortDescriptor();
   using db = openNodeSqliteDatabase(input.path!);
   for (const schema of [input.descriptor, ...(input.descriptor.fragments ?? [])]) {
     db.exec(version === 25 ? withLegacyStateHeadLayout(schema.sqlite) : schema.sqlite);
   }
   if (version === 25) {
+    restorePreTemplateStateIdentifiersForTest(db);
     addPreCutoverClientCredentialTablesForTest(db);
   }
   db.exec(`PRAGMA user_version = ${version};
@@ -73,10 +76,9 @@ describe("physical store diagnostics", () => {
     });
     expect(fs.existsSync(input.path!)).toBe(false);
     fs.writeFileSync(input.path!, "not a sqlite database");
-    const damaged = await inspectDatabaseStore(input);
+    const damaged = await inspectUnchanged(input);
     expect(damaged.observed).toBe("unknown");
     expect(damaged.nextSteps.join(" ")).toContain("doctor --fix");
-    expect(fs.readFileSync(input.path!, "utf8")).toBe("not a sqlite database");
   });
 
   it("keeps inaccessible stores as warnings instead of treating them as absent", async () => {
@@ -90,21 +92,49 @@ describe("physical store diagnostics", () => {
     expect(result.nextSteps.join(" ")).toContain("permissions");
   });
 
-  it("reports the physical SQLite version and pending migration without changing its bytes", async () => {
-    const input = fixture();
-    createStore(input, 1);
-    const result = await inspectUnchanged(input);
-    expect(result).toMatchObject({
-      observed: "sqlite",
-      mismatch: false,
-      schema: { version: 1, expectedVersion: 2, pending: 1 },
-      connectivity: "local",
-      custody: "unverifiable",
-      lease: "unverifiable",
-      backup: null,
-    });
-    expect(result.nextSteps.join(" ")).toContain("doctor --fix");
-  });
+  it.each([
+    [1, "sqlite", 2, 1, "doctor --fix"],
+    [2, "postgres", 2, 0, "database port"],
+    [0, "sqlite", null, null, "backup"],
+  ] as const)(
+    "inspects SQLite %i against %s without blocking or changing bytes",
+    async (version, effective, expectedVersion, pending, fix) => {
+      const input = fixture();
+      if (expectedVersion === null) {
+        Object.assign(input, {
+          family: "managed-update",
+          descriptor: undefined,
+          schemaVersion: null,
+        });
+      }
+      createStore(input, version);
+      input.configured = { ...input.configured, default: effective, effective };
+      const actual = await vi.importActual<typeof snapshotSource>("../sqlite-snapshot-source.js");
+      vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocation").mockImplementation(
+        actual.prepareSqliteReadOnlyLocation,
+      );
+      const turn = vi.fn();
+      setImmediate(turn);
+      const result = await inspectUnchanged(input);
+      expect(turn).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({
+        observed: "sqlite",
+        mismatch: effective !== "sqlite",
+        schema: {
+          versioning: expectedVersion === null ? "unversioned" : "versioned",
+          version: expectedVersion === null ? null : version,
+          expectedVersion,
+          pending,
+        },
+        connectivity: "local",
+        custody: "unverifiable",
+        lease: "unverifiable",
+        backup: null,
+      });
+      expect(result.nextSteps.join(" ")).toContain(fix);
+      expect(result.nextSteps.join(" ")).not.toContain("expected schema version");
+    },
+  );
 
   it.each([
     {
@@ -151,31 +181,6 @@ describe("physical store diagnostics", () => {
       pending: 0,
     });
     expect(result.issues).toEqual([]);
-  });
-
-  it("distinguishes a configured PostgreSQL engine from a physical SQLite store", async () => {
-    const input = fixture();
-    createStore(input, 2);
-    input.configured = { ...input.configured, default: "postgres", effective: "postgres" };
-    const result = await inspectDatabaseStore(input);
-    expect(result).toMatchObject({ observed: "sqlite", mismatch: true, schema: { pending: 0 } });
-    expect(result.nextSteps.join(" ")).toContain("database port");
-  });
-
-  it("does not report SQLite's default user_version as a schema for unversioned journals", async () => {
-    const input = fixture();
-    input.family = "managed-update";
-    input.descriptor = undefined;
-    input.schemaVersion = null;
-    createStore(input, 0);
-    const result = await inspectDatabaseStore(input);
-    expect(result.schema).toEqual({
-      versioning: "unversioned",
-      version: null,
-      expectedVersion: null,
-      pending: null,
-    });
-    expect(result.nextSteps.join(" ")).not.toContain("expected schema version");
   });
 
   it("keeps a PostgreSQL anchor observable when its connection is missing or unreachable", async () => {

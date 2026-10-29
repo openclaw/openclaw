@@ -563,7 +563,7 @@ describe("Claude native stdio boundary", () => {
       sessionId: SESSION_ID,
       useResume: true,
       promptContext: { prependContext: "private prefix", appendContext: "private suffix" },
-      toolAvailability: { native: ["Read"], openClaw: ["message"] },
+      toolAvailability: { native: ["Read"], discovery: ["ToolSearch"], openClaw: ["message"] },
     });
     const nativeArgs = ["--fork-session", "--plugin-dir", "/tmp/synthetic-skills"];
     context.args = [
@@ -598,7 +598,7 @@ describe("Claude native stdio boundary", () => {
     expect(args).not.toContain("bypassPermissions");
     expect([flag("--permission-mode"), flag("--tools"), flag("--allowedTools")]).toEqual([
       ["default"],
-      ["Read"],
+      ["Read", "ToolSearch"],
       ["mcp__openclaw__message"],
     ]);
     expect(detail).toMatchObject({

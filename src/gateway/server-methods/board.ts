@@ -73,7 +73,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       const { params: boardParams, respond, context, client } = invocation;
       const ingress = client?.remoteControlUiIngress;
       const authority = captureBoardRequestAuthority(invocation);
-      const boardSession = resolveBoardSession(boardParams, context, respond);
+      const boardSession = resolveBoardSession(boardParams, context, respond, "read");
       if (!boardSession) {
         return;
       }

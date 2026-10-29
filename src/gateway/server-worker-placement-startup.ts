@@ -30,10 +30,7 @@ import { prepareWorkerPlacementRepositoryManifestRefs } from "./server-worker-pl
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
-import {
-  createWorkerPlacementInitialRecovery,
-  installWorkerPlacementReconcileGuard,
-} from "./server-worker-placement-reconcile-guard.js";
+import { installWorkerPlacementReconcileGuard } from "./server-worker-placement-reconcile-guard.js";
 import { createWorkerRuntimeRefreshWaiter } from "./server-worker-placement-runtime-refresh.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
 import {
@@ -42,7 +39,6 @@ import {
   loadWorkerPlacementSessionRuntimeModule,
   resolveWorkerPlacementSessionTarget,
   runWorkerPlacementSessionBarrier,
-  WorkerDispatchTargetChangedError,
 } from "./server-worker-placement-session-target.js";
 import { recoverGatewayWorkerPlacementWorkspaces } from "./server-worker-placement-workspace-recovery.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
@@ -215,8 +211,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       placements: params.placements,
       initialPlacements: params.initialPlacements,
       environments: params.environments,
-      // Must read true before enrollment cancellation in every shutdown path, so an interrupted
-      // provisioning is retained rather than terminalized. Runtime reset replaces the drain signal.
+      // Stop closes provider work before the ordinary dispatch failure path releases its resources.
       isShuttingDown: isStopping,
       runnerAvailability,
       resolveDevicePlacementRequirement,
@@ -232,31 +227,9 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
           getConfig: getRuntimeConfig,
           ...identity,
-          action: "activation",
           run: (_workspace, assertCurrent) => {
             authorize?.();
             return activate(assertCurrent);
-          },
-        }),
-      runRecoveryBarrier: async ({ environmentId, expectedGeneration, run, ...identity }) =>
-        await runWorkerPlacementSessionBarrier({
-          sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
-          getConfig: getRuntimeConfig,
-          ...identity,
-          action: "recovery",
-          run: async (workspace, assertCurrent) => {
-            const placement = await params.placements.getAsync(identity.sessionId);
-            assertCurrent();
-            if (
-              placement?.state !== "provisioning" ||
-              placement.generation !== expectedGeneration ||
-              placement.environmentId !== environmentId
-            ) {
-              throw new WorkerDispatchTargetChangedError(
-                `Session ${identity.sessionKey} placement changed before cloud worker recovery. Retry.`,
-              );
-            }
-            await run(workspace, assertCurrent);
           },
         }),
       onActivated: ({ sessionId }, placement) => {
@@ -309,10 +282,6 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         )?.gitAuthor,
     }),
     createGatewayWorkerDispatchAdmission(),
-    createWorkerPlacementInitialRecovery({
-      ...params,
-      isStopping,
-    }),
     publishPlacementChanges,
     {
       placements: params.placements,
@@ -380,7 +349,6 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     placements: params.placements,
     resolveWorkspace,
     reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
-    isInterruptedTurn: dispatchService.isInterruptedTurn,
     waitForAdmissionNode: runtimeRefresh.wait,
     waitForInitialPlacement: dispatchService.waitForInitialPlacement,
     redispatchPlacement,

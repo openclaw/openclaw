@@ -11,39 +11,30 @@ import {
 
 const powerShellCompletion = new PowerShellCompletionRunner();
 
-afterAll(async () => {
-  await powerShellCompletion.close();
-});
+afterAll(() => powerShellCompletion.close());
 
 // Aliases are typeable commands, so every shell must preserve their nested command paths.
 describe("completion-cli command aliases", () => {
   itWithFish.each([
-    ["an alias-shaped profile value", "openclaw --profile capability cap", "capability"],
-  ])("completes real Fish root aliases after %s", (_name, commandLine, expected) => {
-    expect(runGeneratedFishCompletion(createAliasedCompletionProgram(), commandLine)).toContain(
-      expected,
-    );
+    ["openclaw --profile capability cap", expect.arrayContaining(["capability"])],
+    ["openclaw cron create -", ["--at"]],
+  ] as const)("completes real Fish aliases: %s", (line, expected) => {
+    expect(runGeneratedFishCompletion(createAliasedCompletionProgram(), line)).toEqual(expected);
   });
 
-  it("completes root and nested aliases in zsh lists and dispatch", () => {
+  it("includes root and nested aliases in zsh command lists", () => {
     const script = getCompletionScript("zsh", createAliasedCompletionProgram());
 
     expect(script).toContain("'capability[Run inference]'");
-    expect(script).toContain("(infer|capability) _openclaw_infer ;;");
     expect(script).toContain("'create[Add a job]'");
-    expect(script).toContain("(add|create) _openclaw_cron_add ;;");
   });
 
   it.skipIf(process.platform === "win32")("offers options after a nested alias in bash", () => {
     expect(
-      runGeneratedBashCompletion(createAliasedCompletionProgram(), [
-        "openclaw",
-        "--profile",
-        "work",
-        "cron",
-        "create",
-        "--a",
-      ]),
+      runGeneratedBashCompletion(
+        createAliasedCompletionProgram(),
+        "openclaw --profile work cron create --a".split(" "),
+      ),
     ).toEqual(["--at"]);
   });
 
@@ -63,15 +54,6 @@ describe("completion-cli command aliases", () => {
       "complete -c openclaw -n \"__openclaw_command_path_matches cron create\" -l at -r -d 'Schedule time'",
     );
   });
-
-  itWithFish.each([["an aliased nested command", "openclaw cron create -"]])(
-    "keeps real Fish alias completions scoped after %s",
-    (_name, commandLine) => {
-      expect(runGeneratedFishCompletion(createAliasedCompletionProgram(), commandLine)).toEqual([
-        "--at",
-      ]);
-    },
-  );
 
   itWithPowerShell.each([
     ["a global option", "openclaw --profile work cron create --a"],

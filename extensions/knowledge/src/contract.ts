@@ -72,6 +72,7 @@ import { withSearchDetail } from "./search-detail.js";
 import { SessionActivityInput, SessionActivityOutput } from "./session-activity.js";
 import {
   AgentProxyInput,
+  GrantChangeInput,
   StoreState,
   StoresChangeInput,
   StoresChangeOutput,
@@ -321,7 +322,7 @@ export const contract = defineFeatureContract({
     recall: {
       kind: "action",
       description:
-        "Owner-private agent tool for explicit automatic-recall approval. Set a short summary plus optional trigger phrases, importance and host project keys on one exact active record; the service supplies approval identity/time. Source and agent-inference claims cannot be approved. Clear removes recall metadata. Revision/hash preconditions and exact request replay use the normal publication receipt and local Git checkpoint path. Corrections do not inherit approval.",
+        "Agent tool for explicit automatic-recall approval, in owner-private conversations or conversations an owner granted saves to private knowledge. Set a short summary plus optional trigger phrases, importance and host project keys on one exact active record; the service supplies approval identity/time. Source and agent-inference claims cannot be approved. Clear removes recall metadata. Revision/hash preconditions and exact request replay use the normal publication receipt and local Git checkpoint path. Corrections do not inherit approval.",
       input: RecallInput,
       output: Receipt,
       tool: { name: "knowledge_recall", label: "Curate automatic recall" },
@@ -563,6 +564,13 @@ export const contract = defineFeatureContract({
       description:
         "Operator settings: change one agent's store assignment (share its store, use a shared store, or use its own). Requires operator admin access and the current settings revision.",
       input: StoresChangeInput,
+      output: StoresChangeOutput,
+    },
+    stores_grant: {
+      kind: "action",
+      description:
+        "Operator settings: grant, change or revoke one conversation's read, write or read-write access to its agent's private knowledge. Requires operator admin access and the current grants revision.",
+      input: GrantChangeInput,
       output: StoresChangeOutput,
     },
     stores_change_status: {

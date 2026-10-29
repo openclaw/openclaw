@@ -66,14 +66,19 @@
     var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px) +
       var(--oc-link-reader-reserve-bottom, 0px) + var(--oc-assistant-reserve-bottom, 0px)
   );
+  --shell-dock-reserve-right: calc(
+    var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px) +
+      var(--oc-link-reader-reserve-right, 0px) + var(--oc-assistant-reserve-right, 0px)
+  );
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
   height: var(--shell-content-height);
   display: grid;
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
-  grid-template-rows: var(--shell-topbar-height) 1fr;
+  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
   grid-template-areas:
     "nav topbar"
+    "nav notice"
     "nav content";
   gap: 0;
   transition:
@@ -109,6 +114,17 @@
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
+}
+
+.shell-config-read-only {
+  grid-area: notice;
+  margin: 0 var(--shell-dock-reserve-right) 0 0;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.shell--nav-collapsed:not(.shell--mobile-nav) .shell-config-read-only {
+  padding-inline-start: var(--shell-chrome-safe-area-left);
 }
 
 .shell-skip-link {
@@ -328,7 +344,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
-  grid-template-rows: 0 1fr;
+  grid-template-rows: 0 auto minmax(0, 1fr);
   --shell-nav-width: 0px;
 }
 
@@ -354,7 +370,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   --settings-content-block-start-padding: 44px;
   --settings-content-inline-padding: clamp(28px, 5vw, 72px);
   grid-template-columns: var(--shell-settings-nav-width) minmax(0, 1fr);
-  grid-template-rows: 0 1fr;
+  grid-template-rows: 0 auto minmax(0, 1fr);
   --shell-nav-width: var(--shell-settings-nav-width);
 }
 
@@ -1149,14 +1165,18 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   color: var(--text);
 }
 
-/* Personal groups has a static heading, not a draggable session row. */
-.personal-session-groups__heading:hover,
-.personal-session-groups__heading .sidebar-session-toolbar__button:is(:hover, :focus-visible) {
-  background: transparent;
+/* The section icon distinguishes personal sections from shared groups. */
+.personal-session-groups__icon {
+  display: inline-flex;
+  flex: none;
+  /* Sit closer to the label than the row's standard gap. */
+  margin-inline-end: -3px;
+  color: var(--muted);
 }
 
-.personal-session-groups__heading .sidebar-session-toolbar__button {
-  margin-inline-start: auto;
+.personal-session-groups__icon svg {
+  width: 12px;
+  height: 12px;
 }
 
 .sidebar-recent-sessions__head--draggable {
@@ -2115,12 +2135,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 
   .sidebar-online__list {
-    grid-template-columns: 20px minmax(0, 1fr) 32px max-content;
+    grid-template-columns: max-content minmax(0, 1fr) 32px max-content;
   }
 
   .sidebar-online__menu-trigger.oc-menu-trigger {
     width: 32px;
     height: 40px;
+  }
+
+  .sidebar-online__menu-trigger svg {
+    display: block;
   }
 }
 
@@ -2286,6 +2310,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 @media (hover: none), (pointer: coarse) {
   .sidebar-online__person {
+    align-items: center;
     min-height: 44px;
   }
 }
@@ -3308,10 +3333,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
      reshape the content area (shrink it) instead of overlaying the chat. The
      panels set these vars; they are 0 when closed. */
   margin-bottom: var(--shell-dock-reserve-bottom);
-  margin-right: calc(
-    var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px) +
-      var(--oc-link-reader-reserve-right, 0px) + var(--oc-assistant-reserve-right, 0px)
-  );
+  margin-right: var(--shell-dock-reserve-right);
   transition:
     margin-bottom 0.16s ease,
     margin-right 0.16s ease;
@@ -3640,10 +3662,11 @@ html.openclaw-native-web-chrome
 @media (max-width: 900px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .shell--mobile-nav {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto 1fr;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
     grid-template-areas:
       "topbar"
       "nav"
+      "notice"
       "content";
   }
 

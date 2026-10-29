@@ -213,8 +213,8 @@ export async function repairLegacySessionRunOutcomes(
       return rewriteDoctorSessionEntries({
         scope,
         sessionKeys,
-        rawTransform: (entry, sessionKey, updatedAt) => ({
-          entry: migrateLegacySessionRunOutcome(entry, sessionKey, updatedAt),
+        rawTransform: (entry, _sessionKey, updatedAt) => ({
+          entry: migrateLegacySessionRunOutcome(entry, updatedAt),
         }),
         expectedIdentity,
         assertCurrent,

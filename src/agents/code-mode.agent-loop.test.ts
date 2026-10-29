@@ -13,8 +13,10 @@ import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { getSession, waitForExecSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { nodeCommand } from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { createCodeModePermissionChangeReason } from "./code-mode-permission-change.js";
 import { controlledTool } from "./code-mode.controlled-tool.test-support.js";
@@ -83,7 +85,9 @@ async function nativeExecFixture(label: string, onTestFinished: TestContext["onT
 }
 
 async function runCodeModeAgent(params: {
-  programs: Array<RecoveryProgram | ((context: Context) => RecoveryProgram)>;
+  programs: Array<
+    RecoveryProgram | ((context: Context) => RecoveryProgram | Promise<RecoveryProgram>)
+  >;
   hiddenTools: AnyAgentTool[];
   execInput?: Record<string, unknown>;
   abortSignal?: AbortSignal;
@@ -106,10 +110,10 @@ async function runCodeModeAgent(params: {
     afterToolCall: async ({ result, isError }) => ({
       isError: isError || isToolResultError(result),
     }),
-    streamFn: (_activeModel, context) => {
+    streamFn: async (_activeModel, context) => {
       const index = requestIndex++;
       const program = params.programs[index];
-      const code = typeof program === "function" ? program(context) : program;
+      const code = typeof program === "function" ? await program(context) : program;
       const waiting = code !== undefined && typeof code !== "string";
       const message = makeAssistantMessage(
         code === undefined
@@ -209,7 +213,6 @@ describe("Code Mode agent-loop error recovery", () => {
       expect(await parked.promise).toMatchObject({
         status: "waiting",
         reason: "pending_tools",
-        replaySafe: false,
       });
       expect(read.tool.execute).toHaveBeenCalledOnce();
       expect(effects).toEqual([]);
@@ -310,9 +313,18 @@ describe("Code Mode agent-loop error recovery", () => {
     });
   });
 
-  it("recovers a wrong shell wait without relaunching", async ({ onTestFinished }) => {
-    const { scopeKey, shell } = await nativeExecFixture("wrong-wait-recovery", onTestFinished);
-    const command = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('same-process-recovered')"`;
+  it("recovers a wrong shell wait without relaunching", async ({ onTestFinished, signal }) => {
+    const { state, scopeKey, shell } = await nativeExecFixture(
+      "wrong-wait-recovery",
+      onTestFinished,
+    );
+    // Noninteractive exec closes stdin; a parent-owned file releases this same child.
+    const releasePath = join(state.workspaceDir, "release-held-process");
+    const command = nodeCommand(
+      `const fs = require("node:fs"); const release = ${JSON.stringify(releasePath)};
+       const finish = () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("same-process-recovered"); } };
+       const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, finish); finish();`,
+    );
     const process = createProcessTool({ scopeKey });
     vi.spyOn(shell, "execute");
     vi.spyOn(process, "execute");
@@ -331,11 +343,17 @@ describe("Code Mode agent-loop error recovery", () => {
           sessionId = nested.sessionId;
           return { wait: true, runId: sessionId };
         },
-        (context) => {
+        async (context) => {
           const failure = context.messages.at(-1);
           expect(failure).toMatchObject({ role: "toolResult", toolName: "wait", isError: true });
           expect(JSON.stringify(failure)).toContain("poll that same session with process");
-          return `return await process({ action: "poll", sessionId: ${JSON.stringify(sessionId)}, timeout: 1000 });`;
+          const session = sessionId ? getSession(sessionId) : undefined;
+          if (!session) {
+            throw new Error("Expected the original held shell session");
+          }
+          await writeFile(releasePath, "finish");
+          await withinTest(waitForExecSession(session), signal);
+          return `return await process({ action: "poll", sessionId: ${JSON.stringify(sessionId)}, timeout: 0 });`;
         },
       ],
     });

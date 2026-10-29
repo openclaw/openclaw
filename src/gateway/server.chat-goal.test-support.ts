@@ -96,7 +96,6 @@ export function registerGoalChatRestartSettlementCase(fixture: {
         status: "failed",
         lastRunId: request.idempotencyKey,
         abortedLastRun: false,
-        restartRecoveryDeliveryRunId: request.idempotencyKey,
         goal: { objective: request.message },
       });
       expect(readGoalChatUserMessages(fixture.scope())).toHaveLength(1);

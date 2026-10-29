@@ -216,8 +216,6 @@ external state matters. The results store holds at most 64 values with a total e
 JSON allowance of `min(memoryLimitBytes, maxSnapshotBytes)` (10 MiB by default),
 separate from the cell inbox. New saves fail when full; existing references are
 never evicted automatically. No functions, tool handles, or permissions are saved.
-Result operations are unavailable in `restartSafe` cells because references are
-transient and deletion cannot be replayed safely.
 Automatic preservation is also disabled in headless execution. If capacity,
 the data allowance, or the output budget prevents delivering a reference, the
 original call remains completed and returns an ordinary truncation marker

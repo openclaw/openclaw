@@ -1,4 +1,5 @@
 import { routeIdFromPath, isSessionRouteId, type RouteId } from "../app-route-paths.ts";
+import { hasIdleWarmups, takeIdleWarmups } from "../lib/idle-warmup.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ShellOwner } from "./app-host.tsx";
 import type { ApplicationContext } from "./context.ts";
@@ -97,7 +98,7 @@ export function connectShellIdle(
   };
   const schedule = () => {
     cancel();
-    if (!available() || running || (manifest && !nextPending())) {
+    if (!available() || running || (manifest && !nextPending() && !hasIdleWarmups())) {
       return;
     }
     // Readiness can precede first paint. Leave a quiet window, then ask for idle
@@ -136,6 +137,13 @@ export function connectShellIdle(
         Object.keys(entries).forEach((key) => pending.add(key));
       }
       if (!ready()) {
+        return;
+      }
+      // Current-page menu bodies precede next-route guesses; navigation intent still wins.
+      const warmups = intent ? [] : takeIdleWarmups();
+      if (warmups.length) {
+        // Speculation only; opening the surface owns any load failure.
+        await Promise.all(warmups.map((load) => load().catch(() => undefined)));
         return;
       }
       const currentRoute = router.getState().matches[0]?.routeId;
@@ -180,7 +188,7 @@ export function connectShellIdle(
               "load",
               () => {
                 if (applyStyle && !styleApplied()) {
-                  // Keep Chat's style matching out of Create Claw, but its JS lazy.
+                  // Keep Chat's style matching out of Create Template, but its JS lazy.
                   // Vite adopts this loaded sheet; it must outlive the idle owner.
                   link.rel = "stylesheet";
                   link.removeAttribute("as");

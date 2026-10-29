@@ -37,8 +37,7 @@ async function seedContinuation() {
   setRuntimeConfigSnapshot({});
   await upsertSessionEntryCore(base, { sessionId: "run-123", updatedAt: 1 });
   await upsertSessionEntryCore(exact, {
-    sessionId: "run-123",
-    updatedAt: 1,
+    ...loadSessionEntry(base)!,
     cronRunContinuation: { lifecycleRevision: "fixture", phase: "ready", basePersisted: true },
   });
   return captureOpenClawStateWorkerContext();
@@ -85,6 +84,7 @@ afterEach(() => {
 it.each(writers)(
   "retains the alias through %s admission until its own delivery settles",
   async (writer) => {
+    const retained = writer === "claimed";
     await withContinuation(async (context) => {
       const admission = pauseAdmission();
       const enqueueing = enqueue(context, writer);
@@ -99,11 +99,11 @@ it.each(writers)(
       expect(await queue.loadPendingSessionDeliveries(context)).toMatchObject([
         { id: await enqueueing, sessionKey: exact.sessionKey },
       ]);
-      expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
+      await upsertSessionEntryCore(exact, { pinnedAt: retained ? 0 : undefined });
       await removeIdle(exact.sessionKey, undefined, context);
       expect(loadSessionEntry(exact)?.sessionId).toBe("run-123");
       await removeIdle(exact.sessionKey, await enqueueing, context);
-      expect(loadSessionEntry(exact)).toBeUndefined();
+      expect(loadSessionEntry(exact)?.sessionId).toBe(retained ? "run-123" : undefined);
       expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
     });
   },

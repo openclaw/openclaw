@@ -38,7 +38,7 @@ export async function releaseFailedAgentRunAdmission(
   error: unknown,
   cleanupPreaccept: () => Promise<void>,
 ): Promise<never> {
-  const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, error, "interrupted");
+  const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
   try {
     await cleanupPreaccept();
   } catch (cleanupError) {
@@ -90,7 +90,6 @@ export function createAgentRunAdmissionRevalidator(options: {
     }
   };
   return (userTurn?: PreparedAgentRunUserTurn): true | Promise<undefined> => {
-    const disposition = parentResume ? "cancelled" : "interrupted";
     try {
       const sessionEntry = params.assertGatewayWorkAdmissionAllowed();
       if (parentResume) {
@@ -108,7 +107,7 @@ export function createAgentRunAdmissionRevalidator(options: {
     } catch (err) {
       return (async () => {
         const failure = userTurn
-          ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err, disposition)
+          ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err)
           : err;
         if (failure === err) {
           publishAborted();
@@ -122,7 +121,7 @@ export function createAgentRunAdmissionRevalidator(options: {
     return (async () => {
       try {
         if (userTurn) {
-          await releasePreparedAgentRunUserTurn(userTurn, disposition);
+          await releasePreparedAgentRunUserTurn(userTurn);
         }
         // Abort replay must not publish before pending input has durably settled.
         publishAborted();

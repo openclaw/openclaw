@@ -21,6 +21,22 @@ export function applySessionEntryWritePolicy(
 ): { entry: SessionEntry; previousEntry: SessionEntry | undefined } {
   let normalizedEntry = initialEntry;
   if (
+    canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
+    canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision ||
+    normalizedEntry.archivedAt !== undefined ||
+    normalizedEntry.incognito
+  ) {
+    delete normalizedEntry.resumeAfterRestart;
+  } else if (!Object.hasOwn(normalizedEntry, "resumeAfterRestart")) {
+    // Public projections omit the shutdown marker; same-incarnation bookkeeping retains it.
+    normalizedEntry = {
+      ...normalizedEntry,
+      ...(canonicalPreviousEntry.resumeAfterRestart
+        ? { resumeAfterRestart: canonicalPreviousEntry.resumeAfterRestart }
+        : {}),
+    };
+  }
+  if (
     canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
     canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision &&
     canonicalPreviousEntry.compactionQualityDegraded
@@ -101,9 +117,6 @@ export function applySessionEntryWritePolicy(
   // The lifecycle-selected entry owns visibility copy-forward semantics.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;
-  }
-  if (normalizedEntry.archivedAt || normalizedEntry.incognito) {
-    delete normalizedEntry.pendingExecNotifications;
   }
   return { entry: normalizedEntry, previousEntry };
 }

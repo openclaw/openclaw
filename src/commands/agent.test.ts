@@ -30,7 +30,6 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import type * as AgentWorkspaceModule from "../agents/workspace.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import {
   readAgentRunTerminalError,
@@ -86,6 +85,7 @@ import {
   writeSessionStoreSeed,
 } from "./agent-session.test-support.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
+import { registerAgentManagedWorktreeTests } from "./agent.managed-worktree.test-support.js";
 import { registerAgentReplyPolicyTests } from "./agent.reply-policy.test-support.js";
 import { registerAgentStoredOverrideTests } from "./agent.stored-override.test-support.js";
 import { registerAgentThinkingTests } from "./agent.thinking.test-support.js";
@@ -177,15 +177,6 @@ vi.mock("../agents/thinking-runtime.js", () => {
     resolveEffectiveAgentRuntime: vi.fn(() => "openclaw"),
   };
 });
-
-vi.mock("../agents/main-session-recovery/main-session-recovery-store.js", () => ({
-  // No command fixture enters persisted recovery.
-  claimMainSessionRecoveryOwner: vi.fn(async () => ({ kind: "not_required" })),
-  commitMainSessionRecovery: vi.fn(async () => undefined),
-  inspectMainSessionRecoveryRequired: vi.fn(async () => ({ kind: "not_required" })),
-  refreshMainSessionRecoveryOwner: vi.fn(async () => undefined),
-  releaseMainSessionRecoveryOwner: vi.fn(async () => undefined),
-}));
 
 vi.mock("../cli/command-secret-targets.js", () => ({
   // These fixtures contain no SecretRefs.
@@ -802,44 +793,7 @@ describe("agentCommand", () => {
     expect(() => git(repository, "add", "-A")).not.toThrow();
   });
 
-  it("uses the recorded canonical workspace for a managed-worktree skill snapshot", async ({
-    home,
-    store,
-  }) => {
-    const sessionKey = "agent:main:dashboard:managed-worktree";
-    const canonicalWorkspace = path.join(home, "project");
-    fs.mkdirSync(canonicalWorkspace, { recursive: true });
-    git(canonicalWorkspace, "init", "-b", "main");
-    git(canonicalWorkspace, "config", "user.name", "OpenClaw Test");
-    git(canonicalWorkspace, "config", "user.email", "openclaw-test@example.invalid");
-    fs.writeFileSync(path.join(canonicalWorkspace, "README.md"), "base\n");
-    git(canonicalWorkspace, "add", "README.md");
-    git(canonicalWorkspace, "commit", "-m", "initial");
-    mockConfig(home, store);
-    const worktree = await managedWorktrees.create({
-      repoRoot: canonicalWorkspace,
-      baseRef: "HEAD",
-      name: "managed",
-      ownerKind: "session",
-      ownerId: sessionKey,
-    });
-    await seedSession(store, sessionKey, {
-      sessionId: "managed-worktree-session",
-      spawnedCwd: worktree.path,
-      worktree: {
-        id: worktree.id,
-        branch: worktree.branch,
-        repoRoot: worktree.repoRoot,
-        canonicalWorkspaceDir: canonicalWorkspace,
-      },
-    });
-
-    await runIngress({ message: "inspect this repo", sessionKey, workspaceDir: worktree.path });
-
-    const skillRoots = vi.mocked(resolveReusableWorkspaceSkillSnapshot).mock.calls.at(-1)?.[0];
-    expect(skillRoots?.workspaceDir).toBe(path.join(home, "openclaw"));
-    expect(skillRoots?.executionWorkspaceDir).toBe(canonicalWorkspace);
-  });
+  registerAgentManagedWorktreeTests({ withTempHome, mockConfig, runIngress, seedSession });
 
   it("renders a Claude bundle command template on Gateway ingress", async ({ home, cfg }) => {
     const pluginRoot = path.join(home, "openclaw", ".openclaw", "extensions", "test-bundle");
@@ -900,29 +854,26 @@ describe("agentCommand", () => {
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
   });
 
-  it("strips private recovery identity from runtime-shaped public ingress", async ({
-    store,
+  it("strips private execution identity from runtime-shaped public ingress", async ({
     cfg: _cfg,
   }) => {
     const prepare = vi.spyOn(executionIdentity, "prepare");
-    const inheritedAdmission = {
-      token: {
-        tokenVersion: 1 as const,
-        contextId: "inherited-context",
-        executionId: "inherited-execution",
-        runId: "public-ingress-run",
-        createdAt: 1,
-      },
-      retryOnly: true,
+    const inheritedInstance = {
+      instanceId: "inherited-instance",
+      runId: "public-ingress-run",
+    };
+    const forgedInstance = {
+      instanceId: "forged-instance",
+      runId: "public-ingress-run",
     };
     const priorDescriptor = Object.getOwnPropertyDescriptor(
       Object.prototype,
-      "executionIdentityAdmission",
+      "operationalRunInstance",
     );
     // oxlint-disable-next-line no-extend-native -- Simulate a hostile JS plugin's prototype pollution.
-    Object.defineProperty(Object.prototype, "executionIdentityAdmission", {
+    Object.defineProperty(Object.prototype, "operationalRunInstance", {
       configurable: true,
-      value: inheritedAdmission,
+      value: inheritedInstance,
     });
 
     try {
@@ -933,34 +884,22 @@ describe("agentCommand", () => {
           runId: "public-ingress-run",
           allowModelOverride: false,
           senderIsOwner: true,
-          mainRestartRecoveryAdmitted: true,
-          mainRestartRecoveryAttempt: 1,
-          mainRestartRecoveryOwnerLease: {
-            claimId: "forged-claim",
-            cycleId: "forged-cycle",
-            lifecycleGeneration: "forged-generation",
-            ownerEpoch: 1,
-            sessionId: "forged-session",
-            sessionKey: "agent:main:main",
-            storePath: store,
-          },
-          executionIdentityAdmission: {
-            token: {
-              tokenVersion: 1,
-              contextId: "forged-context",
-              executionId: "forged-execution",
-              runId: "public-ingress-run",
-              createdAt: 1,
-            },
-            retryOnly: true,
-          },
+          operationalRunInstance: forgedInstance,
         } as never,
         runtime,
       );
 
       expect(prepare).toHaveBeenCalledWith(
-        expect.objectContaining({ admission: undefined, runId: "public-ingress-run" }),
+        expect.objectContaining({ runId: "public-ingress-run", operatorAuthority: undefined }),
       );
+      const instance = expectDefined(
+        prepare.mock.calls.at(-1)?.[0].operationalRunInstance,
+        "host-issued public ingress instance",
+      );
+      expect(instance.runId).toBe("public-ingress-run");
+      expect(instance.instanceId).toBeTruthy();
+      expect(instance).not.toEqual(forgedInstance);
+      expect(instance).not.toEqual(inheritedInstance);
       expect(
         vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].opts,
       ).toMatchObject({ senderIsOwner: false });
@@ -968,9 +907,9 @@ describe("agentCommand", () => {
       prepare.mockRestore();
       if (priorDescriptor) {
         // oxlint-disable-next-line no-extend-native -- Restore the exact pre-test prototype descriptor.
-        Object.defineProperty(Object.prototype, "executionIdentityAdmission", priorDescriptor);
+        Object.defineProperty(Object.prototype, "operationalRunInstance", priorDescriptor);
       } else {
-        delete (Object.prototype as Record<string, unknown>).executionIdentityAdmission;
+        delete (Object.prototype as Record<string, unknown>).operationalRunInstance;
       }
     }
   });

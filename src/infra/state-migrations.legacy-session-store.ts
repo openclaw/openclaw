@@ -7,7 +7,6 @@ import {
   migrateLegacySessionEntryState,
   normalizePersistedSessionEntryShape,
 } from "../commands/doctor/shared/session-entry-shape.js";
-import { normalizeRestartRecoveryEntryFields } from "../config/sessions/restart-recovery-state.js";
 import { hasLegacySessionProviderState } from "../config/sessions/session-entry-state-format.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
@@ -52,58 +51,6 @@ const log = createSubsystemLogger("sessions/legacy-importer");
 const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../gateway/session-archive.runtime.js"),
 );
-
-function normalizeOptionalDeliveryContext(value: unknown): DeliveryContext | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized = normalizeDeliveryContext({
-    channel: typeof value.channel === "string" ? value.channel : undefined,
-    to: typeof value.to === "string" ? value.to : undefined,
-    accountId: typeof value.accountId === "string" ? value.accountId : undefined,
-    threadId:
-      typeof value.threadId === "string" || typeof value.threadId === "number"
-        ? value.threadId
-        : undefined,
-  });
-  return normalized?.channel && normalized.to ? normalized : undefined;
-}
-
-function sameDeliveryContext(
-  left: DeliveryContext | undefined,
-  right: DeliveryContext | undefined,
-): boolean {
-  return (
-    (left?.channel ?? undefined) === (right?.channel ?? undefined) &&
-    (left?.to ?? undefined) === (right?.to ?? undefined) &&
-    (left?.accountId ?? undefined) === (right?.accountId ?? undefined) &&
-    (left?.threadId ?? undefined) === (right?.threadId ?? undefined)
-  );
-}
-
-function normalizeRestartRecoveryFields(entry: SessionEntry): SessionEntry {
-  let next = entry;
-  const assign = <K extends keyof SessionEntry>(key: K, value: SessionEntry[K] | undefined) => {
-    if (entry[key] === value) {
-      return;
-    }
-    if (next === entry) {
-      next = { ...entry };
-    }
-    if (value === undefined) {
-      delete next[key];
-    } else {
-      next[key] = value;
-    }
-  };
-
-  const restartContext = normalizeOptionalDeliveryContext(entry.restartRecoveryDeliveryContext);
-  if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartContext)) {
-    assign("restartRecoveryDeliveryContext", restartContext);
-  }
-  normalizeRestartRecoveryEntryFields(entry, assign);
-  return next;
-}
 
 function normalizeLegacyPluginState(
   entry: SessionEntry,
@@ -173,10 +120,8 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
     if (modelSelectionLocked && runtimeFields !== shaped) {
       throw new Error(`Invalid model-selection-locked session entry: ${key}`);
     }
-    let normalized = normalizeRestartRecoveryFields(
-      normalizeLegacySessionEntryDelivery(
-        migrateLegacySessionCreator(modelSelectionLocked ? shaped : runtimeFields),
-      ),
+    let normalized = normalizeLegacySessionEntryDelivery(
+      migrateLegacySessionCreator(modelSelectionLocked ? shaped : runtimeFields),
     );
     normalized = normalizeLegacyPluginState(normalized, "pluginExtensions", (value) =>
       isPluginJsonValue(value) ? value : undefined,

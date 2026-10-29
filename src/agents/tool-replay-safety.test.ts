@@ -4,42 +4,24 @@ import {
   collectReplaySafeToolNames,
   collectSideEffectToolOwners,
   isAgentToolReplaySafe as replaySafe,
-  isAgentToolRestartSafe as restartSafe,
 } from "./tool-replay-safety.js";
-import { TOOL_CALL_RAW_TOOL_NAME } from "./tool-search-types.js";
 
 const declared = (value: boolean) => ({ declaredReplaySafe: () => value });
 
 describe("agent tool replay safety", () => {
   it.each([
-    ["search", undefined, true, true],
-    ["progress_card", undefined, false, false],
-    ["process", undefined, false, false],
-    ["vendor_widget", undefined, false, false],
-    ["search", false, false, false],
-    ["x_search", true, true, true],
-    ["vendor_widget", true, false, true],
-    ["vendor_widget", false, false, false],
-    ["memory_search", true, false, true],
-  ] as const)("classifies %s with owner declaration %s", (name, declaration, replay, restart) => {
+    ["search", undefined, true],
+    ["progress_card", undefined, false],
+    ["process", undefined, false],
+    ["vendor_widget", undefined, false],
+    ["search", false, false],
+    ["x_search", true, true],
+    ["vendor_widget", true, false],
+    ["vendor_widget", false, false],
+    ["memory_search", true, false],
+  ] as const)("classifies %s with owner declaration %s", (name, declaration, replay) => {
     const options = declaration === undefined ? undefined : declared(declaration);
-    expect([replaySafe({ name }, options), restartSafe({ name }, options)]).toEqual([
-      replay,
-      restart,
-    ]);
-  });
-
-  it("admits only the concrete Tool Search dispatcher for explicit restart recovery", () => {
-    const dispatcher = bindAgentToolReplaySafety({ name: TOOL_CALL_RAW_TOOL_NAME }, "dispatcher");
-
-    expect(restartSafe(dispatcher)).toBe(true);
-    expect(replaySafe(dispatcher)).toBe(false);
-    expect(restartSafe({ name: TOOL_CALL_RAW_TOOL_NAME })).toBe(false);
-    expect(restartSafe({ ...dispatcher })).toBe(false);
-    for (const name of ["exec", "wait", "tool_call", "other_dispatcher"]) {
-      expect(restartSafe(bindAgentToolReplaySafety({ name }, "dispatcher")), name).toBe(false);
-    }
-    expect(restartSafe(dispatcher, declared(false))).toBe(false);
+    expect(replaySafe({ name }, options)).toBe(replay);
   });
 
   it("binds read-only recovery safety to the concrete variant rather than its historical name", () => {

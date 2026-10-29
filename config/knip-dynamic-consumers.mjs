@@ -120,7 +120,7 @@ function lazyRuntimeModuleMemberEdges(source, consumerFile, targetSpecifier) {
         /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*createLazyRuntimeModule\(\s*\(\s*\)\s*=>\s*import\(\s*["']([^"'\r\n]+)["']\s*\)\s*,?\s*\)\s*;/gu,
       ),
     ]
-      .filter(([, , specifier]) => specifier === targetSpecifier)
+      .filter((match) => match[2] === targetSpecifier)
       .map(([, loader, specifier]) => [loader, specifier]),
   );
   const edges = new Map();
@@ -155,10 +155,7 @@ function computedCheckoutNamespaceMemberEdges(source) {
         /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*join\(\s*source\s*,\s*["']([^"'\r\n]+)["']\s*\)\s*;/gu,
       ),
     ]
-      .filter(
-        ([, , directory]) =>
-          !path.isAbsolute(directory) && !directory.split(/[\\/]/u).includes(".."),
-      )
+      .filter((match) => !path.isAbsolute(match[2]) && !match[2].split(/[\\/]/u).includes(".."))
       .map(([, binding, directory]) => [binding, directory]),
   );
   const edges = new Map();
@@ -264,6 +261,39 @@ function emittedSelfNamedImportNames(source) {
       .map((binding) => binding.trim().split(/\s+as\s+/u)[0])
       .filter(Boolean),
   );
+}
+
+function prToolingNamedImportEdges(source) {
+  // The wrapper supplies quoted argv to this specific stdin module. Keep the
+  // import and its path argument attached to the same live heredoc launch.
+  const tooling = source.match(
+    /^[ \t]*node[ \t]+--input-type=module[ \t]+-[ \t]+((?:"[^"\r\n]*"[ \t]+)+)<<'EOF_TOOLING'\r?\n([\s\S]*?)^EOF_TOOLING$/mu,
+  );
+  const edges = new Map();
+  if (!tooling) {
+    return edges;
+  }
+  const args = [...tooling[1].matchAll(/"([^"\r\n]*)"/gu)].map((match) => match[1]);
+  for (const match of tooling[2].matchAll(
+    /^[ \t]*const\s*\{([^{}]+)\}\s*=\s*await\s+import\(\s*\(\s*await\s+import\(["']node:url["']\)\s*\)\.pathToFileURL\(\s*process\.argv\[(\d+)\]\s*\)\s*\)\s*;/gmu,
+  )) {
+    const modulePath = args[Number(match[2]) - 2]?.match(
+      /^\$pr_bootstrap_root\/(scripts\/pr-lib\/[^"\r\n]+\.mjs)$/u,
+    )?.[1];
+    if (!modulePath) {
+      continue;
+    }
+    const target = path.resolve(modulePath);
+    const names = edges.get(target) ?? new Set();
+    for (const binding of match[1].split(",")) {
+      const name = binding.trim().split(/\s*:\s*/u)[0];
+      if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
+        names.add(name);
+      }
+    }
+    edges.set(target, names);
+  }
+  return edges;
 }
 
 function namedImport(names, targetFile, consumerFile, index) {
@@ -398,7 +428,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   const archiveChurnSource = fs.readFileSync(archiveChurnPath, "utf8");
   const archiveChurnLaunch =
     archiveChurnSource.match(
-      /^if \(values\.allocations\) \{([\s\S]*?)^\}\nconst inspector = new Session\(\);/mu,
+      /^if \(values\.allocations(?: \|\| values\.entry)?\) \{([\s\S]*?)^\}\nconst inspector = new Session\(\);/mu,
     )?.[1] ?? "";
   if (
     /^\s*const\s+preload\s*=\s*pathToFileURL\(\s*path\.join\(\s*path\.dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*["']archive-worker-churn-preload\.mjs["']\s*\)\s*,\s*\)\.href\s*;/mu.test(
@@ -498,6 +528,12 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   }
   for (const [targetFile, names] of codexLazyEdges) {
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
+  }
+
+  for (const [targetFile, names] of prToolingNamedImportEdges(
+    fs.readFileSync("scripts/pr", "utf8"),
+  )) {
+    addNamedImport([...names], targetFile);
   }
 
   return `${source}\n${imports.join("\n")}`;

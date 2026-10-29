@@ -166,7 +166,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       selectedSession,
       placementStartup !== null,
     );
-    const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
     const catalogReason = this.catalogComposerReason(catalogKey);
     const catalogDisabledReason = catalogReason?.text ?? null;
@@ -268,7 +267,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const sessionDisabledBanner = this.sessionDisabledBanner({
       catalogDisabledReason,
       modelSetupRequired,
-      restartRecoveryTombstoned,
       selectedSessionArchived,
       selectedSessionId: selectedSession?.sessionId?.trim() || undefined,
       selectedSession,
@@ -303,12 +301,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       sessionDisabledBanner?.kind !== "composer-replacement" &&
       (catalog
         ? catalogCanContinue
-        : !disabledReason &&
-          !(
-            selectedSessionArchived ||
-            selectedSession?.restartRecoveryStatus === "tombstoned" ||
-            placementComposer.blocksSend
-          ));
+        : !disabledReason && !(selectedSessionArchived || placementComposer.blocksSend));
     const canWriteProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
     const typingEnabled =
       multiIdentity &&
@@ -381,18 +374,14 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       showThinking: state.settings.chatShowThinking,
       showToolCalls: state.settings.chatShowToolCalls,
       persistCommentary: state.settings.chatPersistCommentary !== false,
-      // Recovery can temporarily withhold the first turn after history loaded empty.
-      // Keep its pane loading until startup can display the retained message again.
+      // A locally created session can still be preparing its first input.
       loading: catalogKey
         ? this.history.catalogLoading
         : (!state.connected && !state.currentSessionId) ||
           state.chatLoading ||
           (!runActive && pendingReason !== null && placementStartup === null),
       routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
-      sending:
-        state.chatSending ||
-        this.sessionCreation.recovering ||
-        this.collaboration.addOperation !== undefined,
+      sending: state.chatSending || this.collaboration.addOperation !== undefined,
       placementStartup: placementStartup ?? placementComposer.startup,
       guestWelcome: this.context.guestWelcome,
       onRetrySessionPlacementStartup: placementStartup?.retryable
@@ -442,6 +431,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         historyHasMore || this.history.loadingOlder
           ? {
               hasMore: historyHasMore,
+              error: this.history.olderError,
+              connected: state.connected,
               loading:
                 this.history.loadingOlder ||
                 (catalogKey ? this.history.catalogLoading : state.chatLoading),
@@ -517,8 +508,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         : undefined,
       ...composerAvailability,
       disabledReasonAction: catalogReason?.action,
-      modelSetupRequired:
-        modelSetupRequired && !selectedSessionArchived && !restartRecoveryTombstoned,
+      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
       onModelSetup: () => this.context.navigate("model-setup"),
       error: providerPaused ? null : state.lastError,
       diskSpace: placementComposer.diskSpace,

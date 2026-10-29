@@ -141,8 +141,10 @@ import { runWithCliPreparationSource } from "./prepare-source.js";
 import {
   capCliToolAvailability,
   keptManagedNativeTools,
+  withCliToolSearch,
   resolveCliBootstrapFileAccess,
   resolveCliRuntimeToolPolicy,
+  resolveCliToolAvailabilityHash,
 } from "./prepare-tool-policy.js";
 import {
   buildCliVisibleReplyGuidance,
@@ -848,6 +850,7 @@ async function prepareCliRunContextWithinReadFence(
   );
   // Mirror the embedded runner's bootstrap routing for backends that transport
   // OpenClaw's system prompt, using the final native or mediated file access.
+  params = withCliToolSearch(params, backendResolved.nativeToolSearch);
   const hasBootstrapFileAccess = resolveCliBootstrapFileAccess({
     backend: backendResolved,
     params,
@@ -952,17 +955,8 @@ async function prepareCliRunContextWithinReadFence(
     nativeAuthorityAllowed: !skipsTurnPreparation && !nodeClaudePlacement,
     projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
   });
-  const toolBoundExtraSystemPromptHash = params.cliToolAvailability
-    ? hashCliSessionText(
-        JSON.stringify([
-          baseExtraSystemPromptHash ?? null,
-          params.cliToolAvailability.native.toSorted(),
-          params.cliToolAvailability.openClaw.toSorted(),
-        ]),
-      )
-    : baseExtraSystemPromptHash;
   const extraSystemPromptHash = resolveCliBootstrapPromptHash({
-    baseHash: toolBoundExtraSystemPromptHash,
+    baseHash: resolveCliToolAvailabilityHash(baseExtraSystemPromptHash, params.cliToolAvailability),
     bootstrapMode,
     bootstrapTruncationNotice,
     contextFiles,
@@ -1088,7 +1082,9 @@ async function prepareCliRunContextWithinReadFence(
           })()
         : undefined;
     const rawLoopbackServerConfig = mcpLoopbackRuntime
-      ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+      ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port, {
+          deferTools: Boolean(params.cliToolAvailability?.discovery?.length),
+        })
       : undefined;
     const loopbackServerConfig =
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
@@ -1575,7 +1571,6 @@ async function prepareCliRunContextWithinReadFence(
         // Operator-kept orchestration tools that survived every later native-tool cap.
         nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params),
         runtimeContextFragments: params.runtimeContextFragments,
-        // Caller-owned memory cannot grant access to persisted interrupted inputs.
         sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
         context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));

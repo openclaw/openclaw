@@ -8,7 +8,7 @@ import {
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { readAgentDatabaseReadAdmissionRefusal } from "../state/agent-database-admission.js";
 import { getOrLoadAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -39,7 +39,7 @@ export async function loadAdmittedAuthStores(params: {
     if (isDeleted()) {
       continue;
     }
-    const refusal = readAgentDatabaseAdmissionRefusal(agentId, {
+    const refusal = readAgentDatabaseReadAdmissionRefusal(agentId, {
       env: params.env,
     });
     if (
