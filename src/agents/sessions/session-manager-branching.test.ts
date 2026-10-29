@@ -127,7 +127,7 @@ it.each(["memory", "sqlite"].flatMap((mode) => [3, 4].map((version) => ({ mode, 
     expect(manager.getSessionId()).not.toBe(scope.sessionId);
     expect(manager.getPersistedEntries()).toEqual(expected);
     // The source transcript keeps counting the copied path.
-    expect(manager.getHeader()?.inheritedThrough).toBe("reply");
+    expect(manager.getHeader()?.inheritedThrough).toEqual(["reply"]);
     expect(manager.getLabel("user")).toBe("named");
     expect(manager.getEntry("abandoned")).toBeUndefined();
     if (mode === "sqlite") {
@@ -163,7 +163,7 @@ it("marks only the source's active path as inherited when branching from an inac
   expect(manager.getLeafId()).toBe("active");
   await manager.createBranchedSession("inactive");
   // The source counts root and active; the copied inactive reply still counts in the branch.
-  expect(manager.getHeader()?.inheritedThrough).toBe("root");
+  expect(manager.getHeader()?.inheritedThrough).toEqual(["root"]);
 });
 
 it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {

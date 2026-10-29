@@ -13,7 +13,7 @@ import type {
   SessionMessageCutIntent,
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
-import { createSessionTranscriptHeader } from "./transcript-header.js";
+import { createSessionTranscriptHeader, readInheritedThrough } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
@@ -94,11 +94,19 @@ export function planSessionMessageCut(
     cwd: readTranscriptHeaderCwd(events),
     sessionId: nextSessionId,
     version: findSessionTranscriptHeader(events)?.version ?? MIN_READABLE_SESSION_VERSION,
-    // The source counts its active path; a fork copies a prefix of it.
+    // A fork copies a prefix of the counted active path. Rewind and switch copy the whole
+    // tree: the source counts its active path, and its own inherited paths stay inherited.
     inheritedThrough:
-      (params.mode === "fork" && cut
-        ? readLastEventId(cut.prefix)
-        : scanSessionTranscriptTree(events).leafId) ?? undefined,
+      params.mode === "fork" && cut
+        ? [readLastEventId(cut.prefix)].filter((id): id is string => id !== null)
+        : [
+            ...new Set(
+              [
+                ...readInheritedThrough(findSessionTranscriptHeader(events)),
+                scanSessionTranscriptTree(events).leafId,
+              ].filter((id): id is string => typeof id === "string"),
+            ),
+          ],
   });
   const nextEvents =
     params.mode === "fork" && cut

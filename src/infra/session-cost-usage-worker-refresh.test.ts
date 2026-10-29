@@ -2,6 +2,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import {
   buildForkedChildTranscriptEvents,
   resolveParentForkSourceTranscript,
@@ -188,6 +189,11 @@ it("aggregates duplicate-ID paths in selected ancestry order when sequence numbe
   ).toMatchObject({ count: 1, min: 1000, max: 1000, sum: 1000 });
 });
 
+const newTurnParent: Record<string, string> = {
+  "parent fork": "a2",
+  switch: "a2b",
+  "switch back": "a2",
+};
 // Each copy adds one 5-token turn. Copied turns on the source's active path count in the source;
 // a switch to the inactive branch still counts that branch's reply (40), which the source never did.
 it.each([
@@ -195,6 +201,8 @@ it.each([
   ["fork", 5],
   ["parent fork", 5],
   ["switch", 45],
+  // Switching back must not recount the reply the first copy already counted.
+  ["switch back", 5],
 ] as const)(
   "counts history copied by a %s once, in its source transcript",
   async (mode, expected) => {
@@ -232,22 +240,37 @@ it.each([
         targetSessionId: "copy",
       });
     } else {
-      const entry = { sessionId: "source", lifecycleRevision: "r1", updatedAt: timestamp };
-      const plan = planSessionMessageCut(entry, source, {
-        mode,
-        entryId: mode === "switch" ? "a2b" : "u2",
-        expectedState: { sessionId: "source", lifecycleRevision: "r1" },
-        sourceKey: "agent:main:source",
-        canonicalSourceKey: "agent:main:source",
-        targetKey: "agent:main:copy",
-      });
-      expect(plan.status).toBe("prepared");
-      copy = plan.status === "prepared" ? plan.events : [];
+      const cut = (
+        events: readonly TranscriptEvent[],
+        cutMode: "fork" | "rewind" | "switch",
+        entryId: string,
+      ) => {
+        const first = events[0];
+        const sessionId = isRecord(first) && typeof first.id === "string" ? first.id : "";
+        const plan = planSessionMessageCut(
+          { sessionId, lifecycleRevision: "r1", updatedAt: timestamp },
+          events,
+          {
+            mode: cutMode,
+            entryId,
+            expectedState: { sessionId, lifecycleRevision: "r1" },
+            sourceKey: "agent:main:source",
+            canonicalSourceKey: "agent:main:source",
+            targetKey: "agent:main:copy",
+          },
+        );
+        expect(plan.status).toBe("prepared");
+        return plan.status === "prepared" ? plan.events : [];
+      };
+      copy =
+        mode === "switch back"
+          ? cut(cut(source, "switch", "a2b"), "switch", "a2")
+          : cut(source, mode, mode === "switch" ? "a2b" : "u2");
     }
     // A new turn continues from the copy's visible leaf.
     const rows = [
       ...copy.filter(isRecord),
-      answer("new", { "parent fork": "a2", switch: "a2b" }[mode as string] ?? "a1", 5),
+      answer("new", newTurnParent[mode] ?? "a1", 5),
       // Stored transcripts keep the session header at seq 0.
     ].map((event, index) => ({ seq: index, event }));
     const result = await scan(rows);

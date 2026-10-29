@@ -378,7 +378,7 @@ export function buildForkedChildTranscriptEvents(params: {
     : null;
   return [
     // The parent transcript keeps counting the copied branch.
-    { ...header, ...(lastPathEntryId ? { inheritedThrough: lastPathEntryId } : {}) },
+    { ...header, ...(lastPathEntryId ? { inheritedThrough: [lastPathEntryId] } : {}) },
     ...params.source.branchEntries,
     ...labelEntries,
     ...(leafEntry ? [leafEntry] : []),

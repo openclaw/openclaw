@@ -11,8 +11,8 @@ export interface SessionHeader {
   timestamp: string;
   cwd: string;
   parentSession?: string;
-  /** Last event copied from the source transcript, which already counts its usage. */
-  inheritedThrough?: string;
+  /** Copied events whose paths are already counted by the source transcript or its sources. */
+  inheritedThrough?: string[];
 }
 
 export interface NewSessionOptions {
