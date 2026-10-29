@@ -150,6 +150,43 @@ afterEach(() => {
 });
 
 describe("NewSessionDraftPersistence restore race", () => {
+  it.each([undefined, "read-only", "guarded", "workspace", "full"] as const)(
+    "restores draft-local permission %s and resets it for another draft",
+    async (permissionMode) => {
+      const flow = createFlow("permission-draft", true);
+      try {
+        await restore(storedDraft("Saved prompt", "saved", 7, { permissionMode }));
+        expect(flow.permissionMode).toBe(permissionMode);
+        flow.setMessage("Edited prompt");
+        flow.draftPersistence.persistNow();
+        await waitForWrite({ text: "Edited prompt", permissionMode });
+        flow.resetDraft();
+        expect(flow.permissionMode).toBeUndefined();
+      } finally {
+        flow.disconnect();
+      }
+    },
+  );
+
+  it.each([undefined, "read-only"] as const)(
+    "preserves a newer permission choice %s while restoring saved content",
+    async (permissionMode) => {
+      const flow = createFlow("pending-permission", true);
+      try {
+        flow.setPermissionMode(permissionMode);
+        flow.draftPersistence.persistNow();
+        expect(writeSnapshot).not.toHaveBeenCalled();
+        await restore(storedDraft("Keep saved content", "saved", 7, { permissionMode: "full" }));
+        expect(flow.message).toBe("Keep saved content");
+        expect(flow.permissionMode).toBe(permissionMode);
+        flow.draftPersistence.persistNow();
+        await waitForWrite({ text: "Keep saved content", permissionMode });
+      } finally {
+        flow.disconnect();
+      }
+    },
+  );
+
   it("preserves a newer edit when stored attachment hydration succeeds late", async () => {
     const flow = createFlow();
     const hydrationEntered = createDeferred();
@@ -194,7 +231,7 @@ describe("NewSessionDraftPersistence restore race", () => {
       if (restoration !== "pending") {
         flow.draftPersistence.captureSubmission();
       }
-      flow.draftPersistence.noteModelSelectionMutation();
+      flow.draftPersistence.noteSelectionMutation("model");
       const saved = storedDraft("Keep saved content", "saved", 10);
       if (restoration !== "pending") {
         await restore(saved);
@@ -208,7 +245,7 @@ describe("NewSessionDraftPersistence restore race", () => {
         await restore(restoration === "read" ? { status: "storage-failed" } : saved);
         flow.draftPersistence.persistNow();
         expect(writeSnapshot).not.toHaveBeenCalled();
-        flow.draftPersistence.noteModelSelectionMutation();
+        flow.draftPersistence.noteSelectionMutation("model");
       }
       await resolvePendingRead(saved);
       await vi.waitFor(() => expect(flow.message).toBe("Keep saved content"));
@@ -228,7 +265,7 @@ describe("NewSessionDraftPersistence restore race", () => {
     flow.draftPersistence.captureSubmission();
     // A rejected/no-result create keeps this same unsent mutation and text.
     selected = "openai/second";
-    flow.draftPersistence.noteModelSelectionMutation();
+    flow.draftPersistence.noteSelectionMutation("model");
     flow.draftPersistence.persistNow();
     await waitForWrite({
       text: "Still unsent",
