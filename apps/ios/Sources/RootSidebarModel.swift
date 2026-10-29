@@ -391,10 +391,17 @@ final class RootSidebarModel {
     }
 
     func observeSessionEvents(appModel: NodeAppModel) async {
-        defer { self.sessionRefreshCoordinator.cancel() }
+        var subscription: GatewayServerEventSubscription?
+        defer {
+            subscription?.cancel()
+            self.sessionRefreshCoordinator.cancel()
+        }
         await Self.consumeSubscribedSessionEvents(
             makeStream: {
-                await appModel.operatorSession.subscribeServerEvents(bufferingNewest: 200)
+                subscription?.cancel()
+                let current = await Self.makeSessionEventSubscription(gateway: appModel.operatorSession)
+                subscription = current
+                return current.events
             },
             subscribe: {
                 let request = OpenClawChatGatewayRequests.subscribeSessions(timeoutMs: 12000)
@@ -409,6 +416,17 @@ final class RootSidebarModel {
             declareObserverVisibility: { [weak self] visible in
                 await self?.setSessionObserverVisibility(appModel: appModel, visible: visible)
             })
+    }
+
+    static func makeSessionEventSubscription(gateway: GatewayNodeSession) async -> GatewayServerEventSubscription {
+        // Filter on the Gateway actor, before unrelated chat payloads enter this
+        // MainActor consumer or displace a roster update in its bounded buffer.
+        await gateway.makeServerEventSubscription(bufferingNewest: 200, matching: { frame in
+            switch frame.event {
+            case "sessions.changed", "session.observer", "seqGap": true
+            default: false
+            }
+        })
     }
 
     static func consumeSubscribedSessionEvents(
