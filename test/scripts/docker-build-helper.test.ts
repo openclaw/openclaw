@@ -3688,6 +3688,7 @@ exit 0
               OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: publishedBaseline ? "1" : "0",
               OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
               OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT: timeout,
+              OPENCLAW_E2E_COMMAND_TIMEOUT: "23s",
               OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:
                 scenario === "package-installed-recovery" ? "" : "openclaw@2026.7.1-2",
               OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "manual",
@@ -3705,7 +3706,12 @@ exit 0
           scenario === "package-installed-recovery"
             ? "OPENCLAW_E2E_COMMAND_TIMEOUT"
             : "OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT";
-        expect(dockerArgs.split("\n")).toContain(`${budgetEnv}=${timeout || "900s"}`);
+        // Docker keeps the last value when package arguments repeat an environment key.
+        const effectiveBudget = dockerArgs
+          .split("\n")
+          .filter((arg) => arg.startsWith(`${budgetEnv}=`))
+          .at(-1);
+        expect(effectiveBudget).toBe(`${budgetEnv}=${timeout || "900s"}`);
         expect(dockerArgs).toContain(`${artifacts}:/tmp/openclaw-upgrade-survivor-artifacts`);
         expect(dockerArgs).not.toContain(publicRoot);
         expect(dockerArgs).not.toContain(":/tmp/openclaw-upgrade-survivor-artifacts/diagnostics");
