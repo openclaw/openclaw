@@ -1856,25 +1856,29 @@ describe("google transport stream", () => {
   it.each([
     ["aiplatform.eu.rep", "us-central1", "eu"],
     ["aiplatform.us.rep", "us-central1", "us"],
+    ["aiplatform.eu.rep", "eu", "eu", true],
+    ["aiplatform.us.rep", "us", "us", true],
     ["aiplatform", "us-central1", "global"],
     ["us-east5-aiplatform", "global", "us-east5"],
     ["custom", "us-central1", "us-central1"],
-  ])("routes %s through the production Vertex stream", async (host, environment, location) => {
-    await useGoogleAuthLibraryCredentials("endpoint-location", "fixture-token");
-    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
-    vi.stubEnv("GOOGLE_CLOUD_LOCATION", environment);
-    mockGoogleTextResponse();
-    const baseUrl = `https://${host}.googleapis.com`;
-    await runGoogleVertexStreamResult({
-      model: buildGoogleVertexModel({ baseUrl }),
-      fetch: vi.fn(),
-    });
-
-    const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
-    expect(String(url)).toBe(
-      `${baseUrl}/v1/projects/demo/locations/${location}/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse`,
-    );
-  });
+  ] as const)(
+    "routes %s through the Vertex stream",
+    async (host, environment, location, template) => {
+      await useGoogleAuthLibraryCredentials("endpoint-location", "fixture-token");
+      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", environment);
+      mockGoogleTextResponse();
+      const baseUrl = `https://${host}.googleapis.com`;
+      await runGoogleVertexStreamResult({
+        model: buildGoogleVertexModel(template ? {} : { baseUrl }),
+        fetch: vi.fn(),
+      });
+      const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+      expect(String(url)).toBe(
+        `${baseUrl}/v1/projects/demo/locations/${location}/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse`,
+      );
+    },
+  );
 
   it("never refreshes stale home ADC when the selected Cloud SDK directory has no credentials", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-stale-home-"));
