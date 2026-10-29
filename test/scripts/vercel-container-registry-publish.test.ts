@@ -1015,6 +1015,21 @@ describe("Vercel Container Registry publishing", () => {
         "sha512-8DlAEKlHbOQmz5R05dAYE+P1wNQ44nEvAnf1jnWtF0LZWHiu/F48USSMKyY8Ib8iE1MCfo3Yvhmky8bUppLaWA==",
       version: "4.4.0",
     });
+    // Keep security repairs scoped to the existing CLI versions and dependency majors.
+    const patchedVersions: Record<string, string[]> = {
+      "fast-uri": ["3.1.9"],
+      "smol-toml": ["1.9.1"],
+      undici: ["6.29.1", "7.30.1"],
+    };
+    for (const [name, versions] of Object.entries(patchedVersions)) {
+      const entries = Object.entries(packageLock.packages ?? {}).filter(([path]) =>
+        path.endsWith(`node_modules/${name}`),
+      );
+      expect(entries.length).toBeGreaterThan(0);
+      for (const [, entry] of entries) {
+        expect(versions).toContain(entry.version);
+      }
+    }
     const lockSha256 = createHash("sha256").update(packageLockBytes).digest("hex");
     expect(materialize).toContain(`expected_lock_sha256="${lockSha256}"`);
     expect(materialize).toContain("npm ci \\\n");
