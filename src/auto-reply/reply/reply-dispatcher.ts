@@ -335,6 +335,8 @@ export function createReplyDispatcher(
     notifySkip: boolean,
   ) =>
     normalizeReplyPayloadOutcome(payload, {
+      preserveLeadingSourceBoundary:
+        kind === "block" && getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
       responsePrefix: options.responsePrefix,
       responsePrefixContext:
         options.responsePrefixContextProvider?.() ?? options.responsePrefixContext,
@@ -528,7 +530,8 @@ export function createReplyDispatcher(
     const fallback = undeliveredFallbacks.get(payload);
     undeliveredFallbacks.delete(payload);
     const normalizedPrimary =
-      getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationOwner === dispatcher
+      getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationOwner === dispatcher &&
+      getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationKind === kind
         ? ({ kind: "deliver", payload } as const)
         : normalizeForDispatch(kind, payload, true);
     const normalizedFallback =
@@ -642,6 +645,7 @@ export function createReplyDispatcher(
             kind: "deliver",
             payload: setReplyPayloadMetadata(outcome.payload, {
               replyDispatcherNormalizationOwner: dispatcher,
+              replyDispatcherNormalizationKind: kind,
             }),
           }
         : outcome;

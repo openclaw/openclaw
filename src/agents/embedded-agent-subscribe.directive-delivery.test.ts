@@ -122,7 +122,10 @@ function createDeliveryHarness(
     onBlockReply: record,
     replyThreading: { implicitCurrentMessage: "deny" },
     normalizeStreamingText: (payload) => {
-      const text = sanitizeUserFacingText(payload.text ?? "", { streaming: true });
+      const text = sanitizeUserFacingText(payload.text ?? "", {
+        streaming: true,
+        preserveLeadingSourceBoundary: getReplyPayloadMetadata(payload)?.streamedSourceBoundary,
+      });
       return { text, skip: !text.trim() };
     },
     applyReplyToMode: createReplyToModeFilterForChannel("all"),
@@ -264,6 +267,12 @@ const prefixCorrection = {
   literal: true,
   terminalText: leadChunks.join("") + correctedText + "\n",
   correctedText,
+  streamedChunks: [
+    "First lead stays.\nNext lead stays.",
+    "\nThe current value is one for this item.",
+    "Continue. Keep this sentence unchanged. Retain",
+    "each result. The final summary also remains",
+  ],
 };
 
 it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
@@ -308,9 +317,7 @@ it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
       expect(delivered.length).toBeGreaterThan(0);
       const beforeTerminalCount = delivered.length;
       if ("terminalText" in scenario) {
-        expect(texts(delivered).join("\n")).toBe(
-          scenario.chunks.map((text) => text.trimEnd()).join("\n"),
-        );
+        expect(texts(delivered)).toEqual(scenario.streamedChunks);
       }
       const text = texts(delivered).join("");
       if ("preservedLiteral" in scenario) {
@@ -321,7 +328,7 @@ it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
         if ("literalText" in scenario) {
           expect
             .soft(delivered.find((payload) => payload.text?.includes(scenario.marker))?.text)
-            .toBe(scenario.literalText);
+            .toBe(scenario.literalText + "\n");
         }
       } else {
         expect.soft(text).not.toContain(scenario.marker);
@@ -348,7 +355,7 @@ it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
       if ("terminalText" in scenario) {
         const recipientText = texts(delivered);
         const additional = recipientText.slice(beforeTerminalCount);
-        expect(additional.join(" ")).toBe(scenario.correctedText);
+        expect(additional.join(" ")).toBe("\n" + scenario.correctedText);
         for (const sentence of scenario.unchangedLeadSentences) {
           expect.soft(recipientText.join(" ").split(sentence)).toHaveLength(2);
         }
@@ -502,7 +509,7 @@ it.each([
     expect.soft(blocks.filter((payload) => payload.audioAsVoice)).toHaveLength(edges);
   }
   for (const text of expectedReplies) {
-    expect(delivered.filter((payload) => payload.text === text)).toHaveLength(1);
+    expect(delivered.filter((payload) => payload.text === text + "\n")).toHaveLength(1);
   }
   expect(delivered.filter(isAudioPayload).map((payload) => payload.audioAsVoice)).toEqual([true]);
 });

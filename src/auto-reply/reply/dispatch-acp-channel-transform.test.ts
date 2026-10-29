@@ -1,6 +1,6 @@
 // Tests ACP delivery's channel-transform ownership and suppression boundary.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReplyPayload } from "../reply-payload.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -40,6 +40,24 @@ function createCoordinator(params: {
 describe("ACP channel reply transforms", () => {
   beforeEach(() => {
     ttsMocks.maybeApplyTtsToPayload.mockClear();
+  });
+
+  it("retains source separators through active TTS directive cleaning", async () => {
+    const texts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        texts.push(payload.text ?? "");
+      },
+    });
+    const coordinator = createCoordinator({ dispatcher });
+    await coordinator.deliver("block", { text: "# Title\n" });
+    await coordinator.deliver(
+      "block",
+      setReplyPayloadMetadata({ text: "\nFirst paragraph." }, { streamedSourceBoundary: true }),
+    );
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(texts.join("")).toBe("# Title\n\nFirst paragraph.");
   });
 
   it("honors dispatcher channel suppression before TTS or transcript accounting", async () => {

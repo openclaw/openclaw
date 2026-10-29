@@ -48,7 +48,10 @@ function createBlockReplyCoalescer(params: {
   const { minChars, maxChars, idleMs, joiner } = config;
 
   let bufferText = "";
-  let bufferSource: Pick<ReplyPayloadMetadata, "blockSourceText" | "blockSourceRange"> = {};
+  let bufferSource: Pick<
+    ReplyPayloadMetadata,
+    "blockSourceText" | "blockSourceRange" | "streamedSourceBoundary"
+  > = {};
   let bufferedPayload: ReplyPayload | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
 
@@ -97,9 +100,14 @@ function createBlockReplyCoalescer(params: {
     await onFlush(payload);
   };
 
+  const joinText = (text: string) => {
+    const separator = bufferText.endsWith("\n") || text.startsWith("\n") ? "" : joiner;
+    return `${bufferText}${separator}${text}`;
+  };
+
   const canMergeBufferedTextWithMedia = (payload: ReplyPayload, text: string) =>
     Boolean(bufferText) &&
-    (!text || bufferText.length + joiner.length + text.length <= maxChars) &&
+    (!text || joinText(text).length <= maxChars) &&
     bufferedPayload !== undefined &&
     [bufferedPayload, payload].every(
       (part) =>
@@ -111,6 +119,10 @@ function createBlockReplyCoalescer(params: {
     (!payload.replyToId || bufferedPayload.replyToId === payload.replyToId);
 
   const mergeSource = (text: string, source: typeof bufferSource): typeof bufferSource => ({
+    // The first buffered block owns its leading boundary, including with media.
+    streamedSourceBoundary: bufferText
+      ? bufferSource.streamedSourceBoundary
+      : source.streamedSourceBoundary,
     // Source coverage excludes the transport joiner.
     blockSourceText:
       bufferSource.blockSourceText !== undefined || source.blockSourceText !== undefined
@@ -123,7 +135,7 @@ function createBlockReplyCoalescer(params: {
   });
 
   const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
-    const mergedText = text ? `${bufferText}${joiner}${text}` : bufferText;
+    const mergedText = text ? joinText(text) : bufferText;
     const mergedSource = mergeSource(text, text ? (getReplyPayloadMetadata(payload) ?? {}) : {});
     const mergedPayload: ReplyPayload = {
       ...bufferedPayload,
@@ -153,6 +165,7 @@ function createBlockReplyCoalescer(params: {
     const source = {
       blockSourceText: getReplyPayloadMetadata(payload)?.blockSourceText,
       blockSourceRange: getReplyPayloadMetadata(payload)?.blockSourceRange,
+      streamedSourceBoundary: getReplyPayloadMetadata(payload)?.streamedSourceBoundary,
     };
     if (reply.hasMedia) {
       if (canMergeBufferedTextWithMedia(payload, text)) {
@@ -191,7 +204,7 @@ function createBlockReplyCoalescer(params: {
       bufferedPayload = payload;
     }
 
-    let nextText = bufferText ? `${bufferText}${joiner}${text}` : text;
+    let nextText = bufferText ? joinText(text) : text;
     const replaceSource = nextText.length > maxChars;
     if (replaceSource) {
       if (bufferText) {

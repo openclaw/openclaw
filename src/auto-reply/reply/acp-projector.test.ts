@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js";
 
 type Delivery = { kind: string; text?: string };
@@ -77,6 +78,47 @@ function emitTool(projector: Projector, event: Partial<Omit<EventOf<"tool_call">
 
 describe("createAcpReplyProjector", () => {
   afterEach(() => vi.useRealTimers());
+  it.each([false, true])(
+    "keeps ACP boundaries only after accepted text=%s",
+    async (acceptFirst) => {
+      const delivered: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+      });
+      let first = true;
+      const projector = createAcpReplyProjector({
+        cfg: createCfg({ acp: { enabled: true, stream: { deliveryMode: "live" } } }),
+        shouldSendToolSummaries: async () => false,
+        shouldSendFullToolDetails: async () => false,
+        deliver: async (_kind, payload) => {
+          const suppressed = first && !acceptFirst;
+          first = false;
+          if (suppressed) {
+            return false;
+          }
+          const accepted = dispatcher.sendBlockReply(payload);
+          await dispatcher.waitForIdle();
+          return accepted;
+        },
+      });
+      try {
+        await emitText(projector, "# Title");
+        await projector.flush();
+        await emitText(projector, "\n\nFirst paragraph.\n");
+        await projector.flush();
+        await emitText(projector, "Second line.");
+        await projector.flush();
+        expect(delivered.join("")).toBe(
+          (acceptFirst ? "# Title\n\n" : "") + "First paragraph.\nSecond line.",
+        );
+      } finally {
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+      }
+    },
+  );
   it.each([false, true])("shows execute details only in full verbose mode: %s", async (verbose) => {
     const { deliveries, projector } = createStreamHarness(
       "live",

@@ -14,6 +14,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ReplyPayload, ReplyPayloadTtsSupplement } from "../shared/reply-payload.types.js";
 import type { CommandOwnerAssertion } from "./command-owner-authority.js";
 import type { BlockReplySource } from "./reply/block-reply-source.types.js";
+import type { ReplyDispatchKind } from "./reply/reply-dispatcher.types.js";
 
 export type {
   ReplyMediaAttachment,
@@ -258,6 +259,8 @@ export type ReplyPayloadMetadata = {
   blockSourceText?: string;
   /** UTF-16 source range represented by this block within one assistant message. */
   blockSourceRange?: readonly [start: number, end: number];
+  /** An authored line break continues an already accepted source text block. */
+  streamedSourceBoundary?: true;
   /** Live source receipts retained until final text recovery settles. */
   blockReplySources?: readonly BlockReplySource[];
   /** Persisted assistant speech facts; never serialized into channel payloads. */
@@ -284,6 +287,8 @@ export type ReplyPayloadMetadata = {
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */
   replyDispatcherNormalizationOwner?: object;
+  /** The dispatch lane whose whitespace policy has already been applied. */
+  replyDispatcherNormalizationKind?: ReplyDispatchKind;
   /** The command owner produced this terminal reply without starting an agent run. */
   commandReply?: true;
   /** Inline acknowledgements accompany a model turn and do not own another command input. */
