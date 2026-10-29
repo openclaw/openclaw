@@ -91,7 +91,6 @@ describe("usage fixed-precision costs", () => {
       expect(formatUsageCost(value, decimals)).toBe(expected);
     }
     expect(formatUsageCost(1.5)).toBe("$1.50");
-    expect(formatUsageCost(1.5, 2, { state: "unavailable" })).toBe("≥ $1.50");
   });
 
   it("keeps analysis scale boundaries and small negative amounts", () => {

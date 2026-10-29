@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, useContext } from "solid-js";
+import { For, Show, useContext } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -29,25 +29,29 @@ registerEnglishCatalog(registerChatComposerEnglish);
 
 registerNewSessionRuntimeEnglish();
 
-function renderStatusNotice(
-  className: string,
-  tone: "info" | "warn" | "danger",
-  title: string,
-  body: string,
-  tooltip?: string,
-) {
+function StatusNotice(props: {
+  class: string;
+  tone: "info" | "warn" | "danger";
+  title: string;
+  body: string;
+  tooltip?: string;
+}) {
   return (
     <div
-      class={["chat-composer-neighbor-card", `chat-composer-neighbor-card--${tone}`, className]}
-      role={tone === "danger" ? "alert" : "status"}
-      title={tooltip}
+      class={[
+        "chat-composer-neighbor-card",
+        `chat-composer-neighbor-card--${props.tone}`,
+        props.class,
+      ]}
+      role={props.tone === "danger" ? "alert" : "status"}
+      title={props.tooltip}
     >
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
-        <Icon name={tone === "info" ? "info" : "alertTriangle"} />
+        <Icon name={props.tone === "info" ? "info" : "alertTriangle"} />
       </span>
       <div class="chat-composer-neighbor-card__copy">
-        <strong>{title}</strong>
-        <span>{body}</span>
+        <strong>{props.title}</strong>
+        <span>{props.body}</span>
       </div>
     </div>
   );
@@ -62,14 +66,16 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
       ? Math.round(((diskSpace.totalBytes - diskSpace.availableBytes) / diskSpace.totalBytes) * 100)
       : 0;
   const critical = diskSpace.status === "critical";
-  return renderStatusNotice(
-    "chat-cloud-disk-space-notice",
-    critical ? "danger" : "warn",
-    t(critical ? "chat.diskSpace.criticalTitle" : "chat.diskSpace.warningTitle"),
-    t(critical ? "chat.diskSpace.criticalBody" : "chat.diskSpace.warningBody", {
-      percent: String(usedPercent),
-      free: formatBytes(diskSpace.availableBytes),
-    }),
+  return (
+    <StatusNotice
+      class="chat-cloud-disk-space-notice"
+      tone={critical ? "danger" : "warn"}
+      title={t(critical ? "chat.diskSpace.criticalTitle" : "chat.diskSpace.warningTitle")}
+      body={t(critical ? "chat.diskSpace.criticalBody" : "chat.diskSpace.warningBody", {
+        percent: String(usedPercent),
+        free: formatBytes(diskSpace.availableBytes),
+      })}
+    />
   );
 }
 
@@ -89,14 +95,18 @@ function renderWorkerRuntimeInstallNotice(
     ? t("chat.workerRuntimeInstall.installingBody")
     : t("chat.workerRuntimeInstall.transferringBody", progress);
   // Topbar notices render as compact pills that hide the body, so the title carries progress.
-  return renderStatusNotice(
-    "chat-worker-runtime-install-notice",
-    "info",
-    installing
-      ? t("chat.workerRuntimeInstall.installingTitle")
-      : t("chat.workerRuntimeInstall.transferringTitle", progress),
-    body,
-    body,
+  return (
+    <StatusNotice
+      class="chat-worker-runtime-install-notice"
+      tone="info"
+      title={
+        installing
+          ? t("chat.workerRuntimeInstall.installingTitle")
+          : t("chat.workerRuntimeInstall.transferringTitle", progress)
+      }
+      body={body}
+      tooltip={body}
+    />
   );
 }
 
@@ -240,8 +250,6 @@ export function ChatTopbarNoticesContent(props: ChatViewNoticesProps) {
 
 export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
   const mobile = useContext(ChatConversationMobile);
-  // Unrelated pane publications must not replace a visible provider notice.
-  const providerPolicyNotice = createMemo(() => props.providerPolicyNotice);
   const hasTranscriptFailure = () =>
     Boolean(
       props.runError?.runId &&
@@ -270,7 +278,9 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
   );
   return (
     <>
-      {renderProviderPolicyNotice(providerPolicyNotice())}
+      <Show when={props.providerPolicyNotice}>
+        {(notice) => <ProviderPolicyNoticeView notice={notice()} />}
+      </Show>
       <Show when={usageLimit()}>
         {(kind) => (
           <For each={[`${props.sessionKey}:${props.runError?.runId}:${kind()}`]}>
@@ -314,22 +324,21 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
   );
 }
 
-function renderProviderPolicyNotice(notice: ProviderPolicyNotice | null | undefined) {
-  if (!notice) {
-    return undefined;
-  }
-  const blocked = notice.state === "blocked" || notice.state === "unavailable";
-  const model = notice.fallbackModel ?? notice.model;
-  const namesModel = notice.state !== "buffering" && notice.state !== "blocked";
-  const body =
-    namesModel && !model
+function ProviderPolicyNoticeView(props: { notice: ProviderPolicyNotice }) {
+  const blocked = () => props.notice.state === "blocked" || props.notice.state === "unavailable";
+  const model = () => props.notice.fallbackModel ?? props.notice.model;
+  const namesModel = () => props.notice.state !== "buffering" && props.notice.state !== "blocked";
+  const body = () =>
+    namesModel() && !model()
       ? t("chat.providerPolicy.fallbackUnknownBody")
-      : t(`chat.providerPolicy.${notice.state}Body`, { model: model ?? "" });
-  return renderStatusNotice(
-    "chat-provider-policy-notice",
-    blocked ? "danger" : "warn",
-    t(`chat.providerPolicy.${notice.state}Title`),
-    body,
+      : t(`chat.providerPolicy.${props.notice.state}Body`, { model: model() ?? "" });
+  return (
+    <StatusNotice
+      class="chat-provider-policy-notice"
+      tone={blocked() ? "danger" : "warn"}
+      title={t(`chat.providerPolicy.${props.notice.state}Title`)}
+      body={body()}
+    />
   );
 }
 

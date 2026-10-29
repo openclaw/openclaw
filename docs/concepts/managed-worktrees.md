@@ -92,6 +92,10 @@ See [Workspace access](/gateway/sandboxing/workspace-access#managed-project-work
 for write policy, reconciliation, and conflict recovery. To update an existing
 local sandbox workspace from its selected repository base, use `github_publish`
 action `refresh_base` before tests and Auto Review.
+For an open PR originally published from this conversation, refresh uses that
+PR's current destination, including an externally changed base branch. It keeps
+the original PR selected for subsequent publication; the earlier publication
+receipt remains unchanged.
 Publication and base refresh reuse exact commits already stored locally instead
 of fetching them again. Partial clones still fetch missing contents when the
 operation needs those files.

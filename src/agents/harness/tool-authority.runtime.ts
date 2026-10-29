@@ -56,8 +56,6 @@ type ToolAuthorityAttempt = Pick<
   | "messageChannel"
   | "toolsAllow"
   | "disableTools"
-  | "forceRestartSafeTools"
-  | "forceCodeModeTools"
   | "runId"
   | "abortSignal"
   | "sessionTarget"
@@ -187,8 +185,6 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           originatingChannel: attempt.messageChannel,
           toolsAllow: attempt.toolsAllow,
           disableTools: attempt.disableTools,
-          forceRestartSafeTools: attempt.forceRestartSafeTools,
-          forceCodeModeTools: attempt.forceCodeModeTools,
           operatorAuthority,
           run: {
             ...attempt,

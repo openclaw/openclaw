@@ -281,12 +281,14 @@ export async function captureGatewayOperatorRunAuthority(input: {
     "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
   >;
   hasCurrentClientAuthority?: () => boolean;
-  /** Only an accepting continuation owner may outlive the original recovery claim. */
+  /** Only an accepting work owner may outlive the original scheduling claim. */
   independentContinuation?: true;
   sourceAuthority?: Readonly<{
     assertCurrent: () => void;
     signal?: AbortSignal;
     gatewayAccessGrant?: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
+    /** Transfer the prepared principal/session facts to this admitted lifetime. */
+    release?: () => void;
   }> | null;
   /** Additional request lifetime; never replaces the authenticated access grant. */
   invocationAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;
@@ -469,6 +471,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
             unsubscribe?.();
           }
           preparedProfile?.release();
+          params.sourceAuthority?.release?.();
           releaseDevice?.();
         }
       }

@@ -313,7 +313,7 @@ const catalog = {
         "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",
       failureUnsupportedFormat:
-        "Rejected by the local attachment allowlist. Send a supported file type.",
+        "This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file.",
       history: "History",
       image: "Image",
       notSent: "Not sent",

@@ -4,7 +4,9 @@ import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-id
 import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import {
+  assertExpectedSharedGitHubPublisher,
   prepareGitHubPublicationRepositoryIdentity,
+  type PublicationSessionIdentity,
   type readGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
@@ -20,10 +22,90 @@ import {
 } from "./github-publication-git-transport.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
+import {
+  readPublishedGitHubPullRequest,
+  type PublishedGitHubPullRequest,
+} from "./github-publication-pull-requests.js";
+import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
+
+type GitHubPublicationTarget = {
+  pushRepository: string;
+  repository: string;
+  branch: string;
+  baseBranch: string;
+  pushOwner: string;
+  githubHost: string;
+  publishedPullRequest?: PublishedGitHubPullRequest;
+};
+
+/** A current workspace receipt selects its own PR without granting arbitrary import authority. */
+export async function preparePublishedPullRequestTarget(
+  params: {
+    session?: PublicationSessionIdentity;
+    identity: PreparedGitHubPublicationIdentity;
+    reconcile?: boolean;
+    assertCurrent: () => void;
+  },
+  target: GitHubPublicationTarget,
+): Promise<GitHubPublicationTarget> {
+  if (!params.session) {
+    return target;
+  }
+  const receipt = await readSharedGitHubPublication(params.session, { status: "published" });
+  params.assertCurrent();
+  if (!receipt) {
+    return target;
+  }
+  if (
+    !("worktree_id" in receipt) ||
+    receipt.repository?.toLowerCase() !== target.repository.toLowerCase() ||
+    receipt.branch !== target.branch
+  ) {
+    throw new GitHubPublicationWorkspaceChangedError(
+      "The original publication's repository or head branch changed; saved work was preserved.",
+    );
+  }
+  const publisher = projectGitHubPublicationResult(receipt).publisher;
+  const url = URL.parse(receipt.pull_request_url ?? "");
+  const number = Number(url?.pathname.split("/").at(-1));
+  if (
+    !url ||
+    !Number.isSafeInteger(number) ||
+    number < 1 ||
+    url.href.toLowerCase() !==
+      `https://${target.githubHost}/${receipt.repository}/pull/${number}`.toLowerCase()
+  ) {
+    throw new GitHubPublicationWorkspaceChangedError("The original publication's PR is invalid.");
+  }
+  const publishedPullRequest = { url: url.href, number, pushRepository: target.pushRepository };
+  const { candidate } = await readPublishedGitHubPullRequest({
+    publishedPullRequest,
+    repository: target.repository,
+    branch: target.branch,
+    host: target.githubHost,
+    publisherAccountId: publisher?.accountId,
+    refreshIdentity: async () => params.identity,
+    assertCurrent: params.assertCurrent,
+  });
+  // A new ordinary publication after a completed PR retains its existing selection rules.
+  // Recovery still observes that exact PR, including an accepted update followed by closure.
+  if (!params.reconcile && candidate.state === "closed") {
+    return target;
+  }
+  assertExpectedSharedGitHubPublisher(publisher, {
+    source: params.identity.source,
+    ...params.identity.account,
+  });
+  return {
+    ...target,
+    baseBranch: candidate.baseRef,
+    publishedPullRequest,
+  };
+}
 
 /** A refreshed observation must still name the bound PR and its original repositories/refs. */
 function assertBoundGitHubPullRequest(
@@ -53,8 +135,9 @@ export async function prepareGitHubPublicationTarget(params: {
   worktree: Awaited<ReturnType<typeof readGitHubPublicationWorktreeOwner>>["worktree"];
   identity: PreparedGitHubPublicationIdentity;
   pullRequest?: SessionGitHubPullRequestBinding;
+  session?: PublicationSessionIdentity;
   assertCurrent: () => void;
-}) {
+}): Promise<GitHubPublicationTarget> {
   const { worktree, assertCurrent } = params;
   const githubHost = params.identity.host ?? resolveGitHubHost();
   const repositoryIdentity = await prepareGitHubPublicationRepositoryIdentity(params);
@@ -130,14 +213,59 @@ export async function prepareGitHubPublicationTarget(params: {
       "GitHub publication branch changed to its pull request base.",
     );
   }
-  return {
+  return preparePublishedPullRequestTarget(params, {
     pushRepository,
     repository,
     branch,
     baseBranch,
     pushOwner: target.push.owner,
     githubHost,
-  };
+  });
+}
+
+/** Keep a recorded attempt's target fixed until any dispatched effect is reconciled. */
+export async function prepareGitHubPublicationExecutionTarget(params: {
+  worktree: Parameters<typeof prepareGitHubPublicationTarget>[0]["worktree"];
+  identity: PreparedGitHubPublicationIdentity;
+  pullRequest?: SessionGitHubPullRequestBinding;
+  row: GitHubPublicationExecutionRow;
+  lifecycleRevision: string | null;
+  expectedTarget?: Pick<GitHubPublicationTarget, "pushRepository" | "repository" | "baseBranch">;
+  assertCurrent: () => void;
+}): Promise<{ status: "reconcile" } | { status: "ready"; target: GitHubPublicationTarget }> {
+  const { row } = params;
+  const target = await prepareGitHubPublicationTarget({
+    worktree: params.worktree,
+    identity: params.identity,
+    pullRequest: params.pullRequest,
+    session:
+      row.identity_source === "personal"
+        ? undefined
+        : {
+            agentId: row.agent_id,
+            sessionKey: row.session_key,
+            sessionId: row.session_id,
+            lifecycleRevision: params.lifecycleRevision,
+          },
+    assertCurrent: params.assertCurrent,
+  });
+  const expected = params.expectedTarget;
+  if (
+    expected &&
+    (expected.pushRepository !== target.pushRepository ||
+      expected.repository !== target.repository ||
+      expected.baseBranch !== target.baseBranch)
+  ) {
+    throw new GitHubPublicationWorkspaceChangedError(
+      "GitHub publication accepted repository target changed.",
+    );
+  }
+  if (row.head_commit && row.base_branch && row.base_branch !== target.baseBranch) {
+    // Shared effects are invocation-local. An absent effect receipt after restart
+    // cannot establish that the recorded commit was never pushed.
+    return { status: "reconcile" };
+  }
+  return { status: "ready", target };
 }
 
 /** Reuse genuine publication receipts for repeats; a remote advance is never an implicit import. */

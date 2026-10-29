@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "What the Control UI keeps when the Gateway connection drops, and how it recovers"
 read_when:
   - The Control UI shows Reconnecting or drops messages
@@ -144,6 +145,20 @@ state; the full live presence roster replaces these last-known viewers when it
 arrives. The identity-only hello does not clear them. The header retains the
 sharing control's displayed mode and geometry while connecting, without enabling
 its menu or membership actions until live authority is available.
+
+The cached window also retains resolved link labels, image dimensions, archive
+attribution, and avatar source identities. Previously displayed inline thumbnails
+can paint with their rows while reconnecting, without a new network read. These
+display copies do not authorize opening originals or other Gateway actions.
+
+Thumbnail storage shares the transcript's Gateway and account scope. It holds at
+most 32 thumbnails and 8 MiB total, with a 256 KiB limit per image; animated and
+full-size originals are excluded. Display facts cover up to eight links and eight
+images per retained row, across 80 rows. Thumbnails leave the cache with their
+rows, and scope retirement, session reset, or forgetting the browser clears the
+affected copies. Missing, evicted, or incompatible data keeps the usual loader.
+Media tickets and credentials are never added to these display facts.
+
 The first chat request uses the saved cursor if the cached transcript is ready when
 the live message subscription finishes connecting. Otherwise, the live read and
 cache restoration run in parallel. Agent switches and stale asynchronous reads
@@ -207,7 +222,8 @@ The account-scoped transcript cache replaces older unscoped derived snapshots;
 those old transcripts are discarded rather than attributed to the next account.
 A connected visit fills the new cache. Existing unowned drafts and queued input
 are preserved for explicit recovery and review, not automatically assigned or
-sent. Existing attachment stores and storage limits remain unchanged. An older
+sent. Draft and queued-input attachment stores keep their existing storage limits;
+warm transcript thumbnails use the separate bounds above. An older
 UI cannot read the new account-qualified outbox keys; rolling back does not
 convert that retained input back into an unowned queue.
 
@@ -323,8 +339,11 @@ drafts, then try **Refresh** again. **Keep drafts** leaves them protected in thi
 Each draft shows the session title, session key, and pane position captured when
 the file was opened, so matching filenames remain distinguishable. Newer edits
 remain protected if they change while you review an older draft.
-File edits stay in memory in the current page;
-an explicit browser reload or closing the browser tab discards them.
+File edits stay in memory in the current page. After editing a file, the browser
+asks for confirmation before an ordinary reload or tab close, including when the
+file preview is closed. Cancel keeps your edits available. Saving or explicitly
+discarding the last draft removes this protection. Confirming the reload or tab
+close discards the unsaved edits; it does not save them to the file.
 
 ## Visualizations during a connection loss
 
@@ -527,23 +546,26 @@ one history notice offers **Retry**, which reloads the conversation and restores
 its live subscription, including approval updates. Permission and other terminal
 failures remain visible rather than being silently retried.
 
-After a Gateway restart, eligible accepted chat inputs resume on the server in
-order within each session, even while this browser is closed. Automatic recovery
-requires the original session and current operator access, and is limited to
-inputs accepted in the past 24 hours. Cancelled inputs never resume. Inputs that
-cannot resume stay visibly interrupted for review. The browser keeps the original
-submission ID when retrying, so reconnect cannot duplicate a recovered input.
-It does not resend interrupted inputs automatically: the server owns recovery order.
-If a saved input remains interrupted, copy it and send again to continue.
+After a graceful Gateway restart, each marked running root conversation receives
+one standard resume input. Accepted user messages captured in that shutdown's
+marker follow it in FIFO order, even while this browser is closed. Each sender must still
+have current authority; an unavailable or revoked sender gets an ordinary failed
+send that can be resent. New input uses normal steering and queue rules while the
+resumed run works.
+
+A crash or forced kill does not resume work automatically. Stored conversations
+remain available for a new message. At startup, accepted queued input without a
+live owner or graceful-restart marker becomes a cancelled send with its text intact,
+so you can review and resend it. It does not count as pending work. Legacy interrupted
+input remains inert. The browser preserves submission IDs when reconciling uncertain sends.
 
 When the Gateway acknowledges a send, including a duplicate submission, the
 Control UI marks it sent. The browser keeps any payload needed to display
 server-held input until consumption or cancellation is confirmed.
 Confirmed server custody does not block later browser-queued
-chat sends, including when the accepted input is too old for automatic recovery.
+chat sends.
 Local commands such as `/compact` and `/reset` in the same browser outbox wait
-for live accepted work. An interrupted input without a live owner remains
-available for explicit recovery and does not block later commands. An independent
+for live accepted work. Legacy interrupted input without a live owner is inert and does not block later commands. An independent
 authorized reset from another client can cancel pending work, as with other session resets.
 If the Gateway is holding that input for a later turn, it appears in the queue
 above the composer. Removing that row withdraws the exact queued message without
@@ -556,11 +578,6 @@ Stopping a turn or an unsuccessful send can still leave a cancelled prompt with
 recovery guidance; those actions do not remove the prompt.
 Incognito chats keep their existing cancellation behavior: Remove cancels queued
 work, but the cancelled-message notice remains until the private session ends.
-
-If automatic restart recovery is interrupted or cancelled before the agent resumes,
-the **System · restart recovery** notice shows that outcome and asks you to send a
-message to continue. It does not mean the agent resumed. Messages forwarded from
-other sessions keep their own delivery status next to each message.
 
 Acknowledging a duplicate submission retires its pending browser copy even when
 the original message is outside the latest history page. Reconnect does not need
@@ -630,8 +647,9 @@ restarts. This also covers attachments, commands sent through `chat.send`, and
 per-message overrides. Reusing a recorded key with different content is rejected.
 The guarantee applies while that submission record remains in the same session;
 it does not restore deleted sessions or resume interrupted agent work.
-The Gateway's separate interrupted-input recovery still resumes eligible accepted
-work after rechecking its current authority.
+Queued input captured in the graceful-shutdown marker follows the session's resume
+input under each sender's current authority. A crash does not trigger queued-input
+reconstruction; later graceful restarts do not adopt those older rows.
 
 **Discard** stays available while a message is pending. It removes only this
 browser's outbox copy, not work the Gateway already accepted. It does not undo or

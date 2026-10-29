@@ -72,6 +72,10 @@ import {
   insertManagedImageRecordWithFile,
 } from "./managed-image-attachments.custody.js";
 import {
+  createManagedImageAttachmentError,
+  getSanitizedManagedImageAttachmentError,
+} from "./managed-image-attachments.errors.js";
+import {
   formatLimitMiB,
   maxBytesForManagedMediaKind,
   resolveManagedMediaKind,
@@ -177,30 +181,6 @@ function resolveManagedImageAttachmentLimits(
     maxHeight: config?.maxHeight ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxHeight,
     maxPixels: config?.maxPixels ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxPixels,
   };
-}
-
-function createManagedImageAttachmentError(message: string) {
-  const error = new Error(message);
-  error.name = "ManagedImageAttachmentError";
-  return error;
-}
-
-function getSanitizedManagedImageAttachmentError(
-  error: unknown,
-  label: string,
-  kind: ManagedMediaKind | "media",
-): Error {
-  if (
-    error instanceof Error &&
-    (error.name === "ManagedImageAttachmentError" ||
-      error.message.startsWith("Managed image attachment ") ||
-      error.message.startsWith("Invalid image data URL"))
-  ) {
-    return error;
-  }
-  return createManagedImageAttachmentError(
-    `Managed ${kind} attachment ${JSON.stringify(label)} could not be prepared`,
-  );
 }
 
 export function buildManagedMediaFailureBlock(params: {
@@ -965,6 +945,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
 
       let savedOriginalPath: string | null = null;
       let insertedRecord: ManagedImageRecord | undefined;
+      let failureCode: ReplyMediaFailureCode = "delivery-failed";
       try {
         params.assertCurrent?.();
         const parsedDataUrl = parseMediaDataUrl(mediaUrl, fallbackLabel, limits);
@@ -1030,6 +1011,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
         }
         const mediaKind = resolveManagedMediaKind(savedOriginalContentType);
         if (!mediaKind) {
+          failureCode = "unsupported-format";
           throw new Error("Managed media attachment has an unsupported content type");
         }
         if (localMediaPath && mediaKind !== "image" && !item.trustedLocal) {
@@ -1188,7 +1170,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
         if (params.continueOnPrepareError) {
           blocks.push(
             buildManagedMediaFailureBlock({
-              code: "delivery-failed",
+              code: failureCode,
               kind: hintedKind,
               label,
               mimeType: item.mimeType ?? mimeTypeFromFilePath(localMediaPath ?? mediaUrl),

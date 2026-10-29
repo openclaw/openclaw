@@ -9,7 +9,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
-import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveVisibleActiveSessionRunState } from "../../gateway/server-methods/session-active-runs.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
@@ -25,11 +25,7 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { splitExtraSystemPrompt } from "../internal-runtime-context.js";
-import { createOperatorRecoveryAuthority } from "../operator-recovery.test-support.js";
-import {
-  prepareCommandSessionRecoveryEntry,
-  prepareEmbeddedSessionState,
-} from "./session-preparation.js";
+import { prepareEmbeddedSessionState } from "./session-preparation.js";
 
 vi.mock("../subagents/registry/subagent-registry-read.js", () => ({
   getLatestLiveSubagentRunByChildSessionKey: () => undefined,
@@ -178,139 +174,6 @@ it.each([
         expect(prepared.sessionEntry?.elevatedLevel).toBeUndefined();
         expect(prepared.sessionEntry?.inheritedToolAllow).toBeUndefined();
       }
-    });
-  },
-);
-
-it.each([
-  { sourceTool: "subagent_settle", requesterProfileId: undefined, retained: true },
-  { sourceTool: "subagent_announce", requesterProfileId: undefined, retained: false },
-  { sourceTool: "sessions_send", requesterProfileId: undefined, retained: false },
-  { sourceTool: "subagent_settle", requesterProfileId: "another-operator", retained: false },
-  { sourceTool: "sessions_send", requesterProfileId: "original-operator", retained: true },
-])(
-  "binds operator recovery custody for $sourceTool from $requesterProfileId",
-  ({ sourceTool, requesterProfileId, retained }) => {
-    const runId = "announce:requester-settle:main:agent:main:main:child-run";
-    const operatorAuthority = createOperatorRecoveryAuthority(
-      "original-operator",
-      "original-grant",
-    );
-    const { nextEntry } = prepareCommandSessionRecoveryEntry({
-      entry: {
-        sessionId: "requester-session",
-        lifecycleRevision: "requester-revision",
-        updatedAt: 1,
-      },
-      sessionId: "requester-session",
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      runId,
-      now: 2,
-      lifecycleGeneration: "current-generation",
-      isSessionRollover: false,
-      opts: {
-        message: "Child completed",
-        operatorAuthority,
-        requesterOrigin: requesterProfileId
-          ? { sessionKey: "agent:main:main", operatorProfileId: requesterProfileId }
-          : undefined,
-        inputProvenance: {
-          kind: "inter_session",
-          sourceTool,
-          sourceChannel: sourceTool === "sessions_send" ? "webchat" : "internal",
-          sourceSessionKey: "agent:main:subagent:child",
-        },
-      },
-    });
-    if (!retained) {
-      expect(nextEntry.restartRecoveryOperatorSource).toBeUndefined();
-      return;
-    }
-    expect(nextEntry).toMatchObject({
-      restartRecoveryDeliverySourceRunId: runId,
-      restartRecoverySourceIngress: "internal",
-      restartRecoveryOperatorSource: {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionId: "requester-session",
-        lifecycleRevision: "requester-revision",
-        sourceRunId: runId,
-        snapshot: {
-          profileId: "original-operator",
-          scopes: ["operator.read"],
-          controlUiAdmin: false,
-        },
-      },
-    });
-  },
-);
-
-it.each(["channel", "delegate", "generated-media", "recovery"] as const)(
-  "binds requester facts to the existing %s command recovery claim",
-  (kind) => {
-    const requesterOrigin = {
-      sessionKey: "agent:research:telegram:group:requesters",
-      messageProvider: "telegram",
-      senderId: "bob",
-    };
-    const entry: InternalSessionEntry = {
-      sessionId: "destination-session",
-      lifecycleRevision: "destination-lifecycle",
-      updatedAt: 1,
-      ...(kind === "recovery"
-        ? {
-            restartRecoveryDeliveryRunId: "current-run",
-            restartRecoveryDeliverySourceRunId: "original-run",
-            restartRecoverySourceIngress: "internal" as const,
-            restartRecoveryRequesterSource: {
-              agentId: "main",
-              sessionKey: "agent:main:destination",
-              sessionId: "destination-session",
-              lifecycleRevision: "destination-lifecycle",
-              sourceRunId: "original-run",
-              requesterOrigin: { ...requesterOrigin, senderId: "original-requester" },
-            },
-          }
-        : {}),
-    };
-    const prepared = prepareCommandSessionRecoveryEntry({
-      agentId: "main",
-      sessionKey: "agent:main:destination",
-      sessionId: entry.sessionId,
-      entry,
-      runId: "current-run",
-      now: 2,
-      lifecycleGeneration: getAgentRunLifecycleGeneration(),
-      isSessionRollover: false,
-      opts: {
-        message: "continue accepted work",
-        requesterOrigin,
-        inputProvenance:
-          kind === "channel"
-            ? undefined
-            : {
-                kind: "inter_session",
-                sourceTool: kind === "generated-media" ? "subagent_settle" : "sessions_send",
-              },
-        ...(kind === "generated-media"
-          ? { internalDeliveryMediaUrls: ["/synthetic/result.png"] }
-          : {}),
-      },
-    });
-    requesterOrigin.senderId = "replacement";
-    expect(prepared.nextEntry).toMatchObject({
-      restartRecoveryDeliveryRunId: "current-run",
-      restartRecoveryDeliverySourceRunId: kind === "recovery" ? "original-run" : "current-run",
-      restartRecoverySourceIngress: kind === "channel" ? "channel" : "internal",
-      restartRecoveryRequesterSource: {
-        agentId: "main",
-        sessionKey: "agent:main:destination",
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-        sourceRunId: kind === "recovery" ? "original-run" : "current-run",
-        requesterOrigin: { senderId: kind === "recovery" ? "original-requester" : "bob" },
-      },
     });
   },
 );

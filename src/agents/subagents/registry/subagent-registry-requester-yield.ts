@@ -271,7 +271,7 @@ export function listUnsettledRequesterChildrenInRuns(params: {
 }
 
 /** Completion children that a requester turn still claims. */
-export function selectRequesterTurnChildren(
+function selectRequesterTurnChildren(
   runs: ReadonlyMap<string, SubagentRunRecord>,
   requesterSessionKey: string,
   requesterAgentId: string | undefined,

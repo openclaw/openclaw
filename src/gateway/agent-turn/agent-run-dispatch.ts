@@ -14,7 +14,6 @@ import {
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
-import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import type {
   FollowupCompletionOwner,
@@ -93,7 +92,6 @@ export function dispatchAgentRunFromGateway(params: {
   io: AgentTurnIo;
   context: AgentTurnContext;
   canonicalSkillWorkspaceDir?: string;
-  restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
   /** Privacy classification carried from the resolved session entry. */
   isIncognito?: boolean;
@@ -343,7 +341,6 @@ export function dispatchAgentRunFromGateway(params: {
             : ingressOptsWithSpawnFacts,
           diagnostics.runtime,
           params.context.deps,
-          { restoreAdmittedRecovery: params.restoreAdmittedRecovery },
           params.commandRuntimeContext,
         ),
       );

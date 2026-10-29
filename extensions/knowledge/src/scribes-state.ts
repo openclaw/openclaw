@@ -16,7 +16,7 @@ export type ScribeStatus =
   | "paused"
   | "failing"
   | "done"
-  | "reauth";
+  | "missing";
 
 /** The session row fields the Scribes view reads. */
 type ScribeSession = {
@@ -174,7 +174,7 @@ const ENDED_WITHOUT_RESULT = new Set(["failed", "interrupted", "killed", "timeou
 
 /**
  * Derive one scribe's state.
- * - No live conversation: Available, or Needs reauthorization when its automation still exists.
+ * - No live conversation: Available, or Missing when its automation still exists.
  * - With an automation: Paused, Failing or On from the scheduler state.
  * - Without one: Done / Failing from the last result line, Available when an ongoing scribe was
  *   turned off or the setup never reached the conversation, Starting until the conversation
@@ -190,7 +190,7 @@ function deriveStatus(input: {
 }): ScribeStatus {
   const { session, job, result, setupSent } = input;
   if (!session || session.archived) {
-    return job ? "reauth" : "available";
+    return job ? "missing" : "available";
   }
   if (job) {
     if (job.state.autoDisabled) {
@@ -233,19 +233,45 @@ async function findSessions(host: ScribeReader, agentId: string, scribe: ScribeD
   );
 }
 
+const SESSION_TARGET = "session:";
+
+/** The sessions the scribe's automations target, by exact key; deleted ones are left out. */
+async function describeTargets(host: ScribeReader, keyed: ScribeJob[]) {
+  const keys = new Set(
+    keyed.flatMap((job) =>
+      job.sessionTarget?.startsWith(SESSION_TARGET)
+        ? [job.sessionTarget.slice(SESSION_TARGET.length)]
+        : [],
+    ),
+  );
+  const rows = await Promise.all(
+    [...keys].map((key) =>
+      host.request<{ session?: unknown }>("sessions.describe", { key }).then((r) => r?.session),
+    ),
+  );
+  return rows.filter((row): row is ScribeSession => isRecord(row) && typeof row.key === "string");
+}
+
 /**
- * Pair a scribe with its conversation and automation. An ongoing scribe's conversation is the
- * one its job targets; otherwise the newest unarchived session with the scribe's title. The job
- * is the one targeting that conversation, or any job with the key (shown as needing repair).
+ * Pair a scribe with its conversation and automation.
+ * - With automations: the conversation is the one a job targets, read by its session key, so a
+ *   renamed conversation stays paired. None left means it was deleted; the job stays (Missing).
+ * - Without: no key is recorded, so the conversation is the newest unarchived session with the
+ *   scribe's title, or an archived one.
  */
-function pairScribe(sessions: ScribeSession[], keyed: ScribeJob[]) {
-  const targets = new Set(keyed.map((job) => job.sessionTarget));
-  const session =
-    sessions.find((row) => targets.has(`session:${row.key}`)) ??
-    sessions.find((row) => !row.archived) ??
-    sessions[0];
+async function pairScribe(
+  host: ScribeReader,
+  agentId: string,
+  scribe: ScribeDefinition,
+  keyed: ScribeJob[],
+) {
+  const sessions = keyed.length
+    ? await describeTargets(host, keyed)
+    : await findSessions(host, agentId, scribe);
+  const session = sessions.find((row) => !row.archived) ?? sessions[0];
   const job =
-    keyed.find((entry) => session && entry.sessionTarget === `session:${session.key}`) ?? keyed[0];
+    keyed.find((entry) => session && entry.sessionTarget === `${SESSION_TARGET}${session.key}`) ??
+    keyed[0];
   return { session, job };
 }
 
@@ -286,14 +312,13 @@ async function readMessages(host: ScribeReader, session: ScribeSession, agentId:
 
 /** Load every scribe's conversation, automation and last status line for one agent. */
 export async function loadScribes(host: ScribeReader, agentId: string): Promise<ScribeSnapshot[]> {
-  const [jobs, sessions] = await Promise.all([
-    findJobs(host, agentId),
-    Promise.all(SCRIBES.map((scribe) => findSessions(host, agentId, scribe))),
-  ]);
+  const jobs = await findJobs(host, agentId);
   return Promise.all(
-    SCRIBES.map(async (scribe, i) => {
-      const { session, job } = pairScribe(
-        sessions[i]!,
+    SCRIBES.map(async (scribe) => {
+      const { session, job } = await pairScribe(
+        host,
+        agentId,
+        scribe,
         jobs.get(scribeDeclarationKey(scribe.id)) ?? [],
       );
       const messages = session ? await readMessages(host, session, agentId) : [];

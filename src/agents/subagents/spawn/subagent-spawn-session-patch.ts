@@ -28,6 +28,7 @@ import {
   type TrustedGroupMetadata,
 } from "../../../gateway/server-methods/agent-subagent-registration.js";
 import type { PreparedGatewaySessionLifecycle } from "../../../gateway/session-create-service.types.js";
+import { isSessionVisibilityAllowed } from "../../../gateway/session-sharing-policy.js";
 import type { GatewaySessionStoreTargetWithStore } from "../../../gateway/session-utils-store.types.js";
 import {
   prepareSessionWorktreeCreation,
@@ -51,7 +52,11 @@ import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import { withSubagentSessionSource } from "./subagent-session-source.js";
 import type { SpawnSubagentParams } from "./subagent-spawn-contract.js";
 import type { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
-import { emitSessionLifecycleEvent, upsertSessionEntryCore } from "./subagent-spawn.runtime.js";
+import {
+  emitSessionLifecycleEvent,
+  getRuntimeConfig,
+  upsertSessionEntryCore,
+} from "./subagent-spawn.runtime.js";
 
 type InitialSubagentSession = {
   status: "ok";
@@ -155,6 +160,16 @@ export async function createInitialSubagentSession(input: {
           const parentTarget = params.parentTarget;
           // Request preparation joined participant writes and captured this complete row.
           const parentEntry = parentTarget.store[parentTarget.canonicalKey];
+          const assertDraftCreationAllowed = () => {
+            if (
+              parentEntry?.visibility === "draft" &&
+              !isSessionVisibilityAllowed(getRuntimeConfig(), "draft")
+            ) {
+              throw new Error(
+                "session visibility is disabled: draft. Continue in the existing Draft or ask an administrator to enable Draft creation.",
+              );
+            }
+          };
           if (params.firstAdmission) {
             const group = resolveAgentSessionGroup({
               sessionKey: params.childSessionKey,
@@ -178,6 +193,7 @@ export async function createInitialSubagentSession(input: {
             expectedParentSessionId: params.expectedParentSessionId,
             senderIsOwner: params.senderIsOwner,
           });
+          assertDraftCreationAllowed();
           if (params.incognito) {
             const assertCurrent = () => {
               params.assertActive?.();
@@ -297,6 +313,7 @@ export async function createInitialSubagentSession(input: {
                   ...childSessionIdentity,
                   // Stamp after all request patches so model input cannot create a grant.
                   ...parentLineage,
+                  ...(parentEntry?.visibility === "draft" ? { visibility: "draft" as const } : {}),
                   ...(parentEntry?.skillLibrarySelections
                     ? {
                         // Committed pins belong to the admitted turn, even if the parent refreshes.
@@ -322,7 +339,11 @@ export async function createInitialSubagentSession(input: {
                   }),
                 },
                 sessionEntryCommitGuardOptions(
-                  composeSessionSourceAssertion([params.assertActive, assertSourceCurrent]),
+                  composeSessionSourceAssertion([
+                    params.assertActive,
+                    assertSourceCurrent,
+                    assertDraftCreationAllowed,
+                  ]),
                 ),
               );
             const entry = childMemory

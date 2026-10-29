@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
@@ -19,7 +18,6 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
-import { withSessionSendDelivery } from "../session-send-delivery.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
 
 type PersistParams = Parameters<typeof persistAgentSessionPhase>[0];
@@ -43,7 +41,6 @@ const withPersistFixture = (
       mainSessionKey: "agent:main:main",
       creation: { via: "run" },
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      isRestartRecoveryResumeRun: false,
       agentId: "main",
       suppressVisibleSessionEffects: false,
       initialPatchBuild: {
@@ -72,101 +69,43 @@ const withPersistFixture = (
       assertGatewayWorkAdmissionAllowed: vi.fn(),
       respondToGatewayAdmissionOutcome: () => false,
       setCronContinuationClaim: vi.fn(),
-      setMainRestartRecoveryOwnerLease: vi.fn(),
       respond: vi.fn(),
     };
     await body(params, profile.id);
   });
 
-it.each([false, true])(
-  "sandboxes a synthetic run and preserves interrupted recovery ownership (queued peer: %s)",
-  (queuedPeer) =>
-    withPersistFixture(
-      {
-        sessions: { others: "view" },
-        agents: ["main"],
-        scopes: ["operator.write"],
+it("sandboxes a synthetic run using current creation authority", () =>
+  withPersistFixture(
+    {
+      sessions: { others: "view" },
+      agents: ["main"],
+      scopes: ["operator.write"],
+      sandbox: "required",
+    },
+    async (params, profileId) => {
+      const target = {
+        agentId: "main",
+        sessionKey: params.canonicalSessionKey,
+        storePath: params.storePath,
+      };
+      const sql = observeHostDataSql();
+      const committed = vi.fn((entry: { sessionId: string }) => {
+        sql.restore();
+        expect(loadSessionEntry(target)?.sessionId).toBe(entry.sessionId);
+      });
+      params.onSessionCommitted = committed;
+      const result = await persistAgentSessionPhase(params).finally(sql.restore);
+
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      expect(result?.sessionEntry).toMatchObject({
+        createdVia: "run",
+        createdActor: { type: "human", id: profileId },
         sandbox: "required",
-      },
-      async (params, profileId) => {
-        const { runId, canonicalSessionKey: sessionKey, storePath } = params;
-        const target = { agentId: "main", sessionKey, storePath };
-        const sql = observeHostDataSql();
-        const committed = vi.fn((entry: { sessionId: string }) => {
-          sql.restore();
-          expect(loadSessionEntry(target)?.sessionId).toBe(entry.sessionId);
-        });
-        const setMainRestartRecoveryOwnerLease = vi.fn();
-        params.onSessionCommitted = committed;
-        params.setMainRestartRecoveryOwnerLease = setMainRestartRecoveryOwnerLease;
-        const result = await persistAgentSessionPhase(params).finally(sql.restore);
-
-        expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
-        expect(result?.sessionEntry).toMatchObject({
-          createdVia: "run",
-          createdActor: { type: "human", id: profileId },
-          sandbox: "required",
-        });
-        expect(committed).toHaveBeenCalledOnce();
-        expect(loadSessionEntry(target)).toMatchObject({ sandbox: "required" });
-
-        assert(result?.sessionEntry, "Fixture requires a persisted session");
-        const interruptedRun = {
-          runId: "interrupted-before-send",
-          lifecycleGeneration: "previous-generation",
-        };
-        const interrupted = {
-          ...result.sessionEntry,
-          abortedLastRun: true,
-          restartRecoveryRuns: [interruptedRun],
-        };
-        await replaceSessionEntry(target, interrupted);
-        const resumedPatch = { ...params.initialPatchBuild, isNewSession: false };
-        const persist = () =>
-          persistAgentSessionPhase({
-            ...params,
-            onSessionCommitted: undefined,
-            entry: interrupted,
-            initialPatchBuild: resumedPatch,
-            buildSessionPatch: async () => resumedPatch,
-            state: { ...result, sessionEntry: interrupted, isNewSession: false },
-          });
-        if (queuedPeer) {
-          await withSessionSendDelivery(
-            {
-              delivery: {
-                version: 1,
-                runId,
-                source: {
-                  agentId: "main",
-                  sessionKey: "agent:main:sender",
-                  sessionId: "sender-session",
-                },
-                target: { agentId: "main", sessionKey, sessionId: interrupted.sessionId },
-                sandboxed: true,
-                message: "sandboxed",
-              },
-            },
-            persist,
-          );
-        } else {
-          await persist();
-        }
-        const current = loadSessionEntry(target);
-        expect(current?.restartRecoveryRuns).toContainEqual(interruptedRun);
-        if (queuedPeer) {
-          expect(current?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
-          expect(current?.restartRecoveryRuns).toEqual([interruptedRun]);
-          expect(setMainRestartRecoveryOwnerLease).not.toHaveBeenCalled();
-        } else {
-          expect(
-            Object.values(current?.mainRestartRecovery?.foregroundClaims?.runIdsByClaimId ?? {}),
-          ).toContain(runId);
-          expect(setMainRestartRecoveryOwnerLease).toHaveBeenCalledOnce();
-        }
-      },
-    ),
-);
+      });
+      expect(committed).toHaveBeenCalledOnce();
+      expect(loadSessionEntry(target)).toMatchObject({ sandbox: "required" });
+    },
+  ));
 
 it.each([false, true])(
   "surfaces creation denial when role authority forbids the agent (revoked during preparation: %s)",

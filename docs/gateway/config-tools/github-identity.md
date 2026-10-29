@@ -128,7 +128,16 @@ it checks the selected publisher at the publication boundary. A bot-authored PR
 from another conversation is not eligible for own-PR import just because the
 publisher created it; continue in its original publication conversation.
 
-To continue that PR in the same local conversation, use `github_publish` with
+For an open PR originally published from this conversation, `refresh_base`
+selects its current GitHub destination before integrating the base into the
+managed workspace. This includes a base branch changed outside the conversation.
+Ordinary publication then continues the same PR and head branch. The Gateway
+checks the current workspace, requester and shared publisher; an original
+publication receipt does not grant permission to import another person's PR.
+Prior receipts retain the destination recorded for their own publication, and
+recovery verifies accepted effects against the original PR before another write.
+
+To import your own existing PR into a local conversation, use `github_publish` with
 `action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
 sessions with a writable managed sandbox or an ordinary local Docker or Podman
 sandbox; sessions that run directly on the host do not see it. A separate

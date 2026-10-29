@@ -50,6 +50,35 @@ function composerState(flow: ReturnType<typeof createDraftFixture>["flow"]) {
 }
 
 describe("DraftSubmissionFlow", () => {
+  it("keeps explicit Draft intent when its chooser becomes unavailable before submission", async () => {
+    const { context, create, flow } = createDraftFixture();
+    expectDefined(context.gateway.snapshot.hello, "connected hello").policy = {
+      allowedSessionVisibilities: ["shared", "draft"],
+      hasMultipleSessionSharingIdentities: false,
+    };
+    flow.setVisibility("draft");
+    flow.setMessage("Keep this private plan");
+    const attachment = registerTextPayload("private-plan");
+    flow.attachmentDraft.restore([attachment]);
+    const refusal = "session visibility is disabled: draft";
+    context.sessions.state.error = refusal;
+    create.mockResolvedValueOnce(null);
+
+    await flow.submit();
+
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ visibility: "draft", message: "Keep this private plan" }),
+      backgroundCreateOptions,
+    );
+    expect(flow).toMatchObject({
+      visibility: "draft",
+      message: "Keep this private plan",
+      error: refusal,
+    });
+    expect(flow.attachmentDraft.attachments).toEqual([attachment]);
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "keeps startup creation client-owned beyond four minutes (cancel=%s)",
     async (cancel) => {

@@ -35,38 +35,24 @@ function shareSummaryIdentityStrings(entry: InternalSessionEntry | undefined, ke
     return entry;
   }
   const digest = entry.observerDigest;
-  const source = entry.restartRecoveryOperatorSource;
-  if (!digest && !source) {
+  if (!digest) {
     return entry;
   }
-  const sessionKey = key ?? digest?.sessionKey ?? source?.sessionKey;
-  for (const summary of [digest, source]) {
-    if (!summary) {
-      continue;
-    }
-    if (summary.sessionId === entry.sessionId) {
-      summary.sessionId = entry.sessionId;
-    }
-    if (
-      summary.lifecycleRevision !== undefined &&
-      summary.lifecycleRevision === entry.lifecycleRevision
-    ) {
-      summary.lifecycleRevision = entry.lifecycleRevision;
-    }
-    if (sessionKey !== undefined && summary.sessionKey === sessionKey) {
-      summary.sessionKey = sessionKey;
-    }
+  const sessionKey = key ?? digest.sessionKey;
+  if (digest.sessionId === entry.sessionId) {
+    digest.sessionId = entry.sessionId;
   }
-  if (digest?.runId !== undefined && digest.runId === entry.lastRunId) {
+  if (
+    digest.lifecycleRevision !== undefined &&
+    digest.lifecycleRevision === entry.lifecycleRevision
+  ) {
+    digest.lifecycleRevision = entry.lifecycleRevision;
+  }
+  if (sessionKey !== undefined && digest.sessionKey === sessionKey) {
+    digest.sessionKey = sessionKey;
+  }
+  if (digest.runId !== undefined && digest.runId === entry.lastRunId) {
     digest.runId = entry.lastRunId;
-  }
-  if (source && digest) {
-    if (digest.runId !== undefined && source.sourceRunId === digest.runId) {
-      source.sourceRunId = digest.runId;
-    }
-    if (digest.agentId !== undefined && source.agentId === digest.agentId) {
-      source.agentId = digest.agentId;
-    }
   }
   return entry;
 }
@@ -438,13 +424,13 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "session-pending-input-history", ...input }),
     (value) => value.snapshot,
   ),
+  readPendingInputOrphans: reader(
+    (input) => ({ kind: "session-pending-input-orphans", ...input }),
+    (value) => value.targets,
+  ),
   readPendingInputReceipts: reader(
     (input) => ({ kind: "session-pending-input-receipts", ...input }),
     (value) => value.receipts,
-  ),
-  readHarnessCompletionSource: reader(
-    (input) => ({ kind: "session-harness-completion-source", ...input }),
-    (value) => value.snapshot,
   ),
   readPendingInputSource: reader(
     (input) => ({ kind: "session-pending-input-source", ...input }),

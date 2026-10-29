@@ -38,7 +38,7 @@ import {
 } from "./chat-thread.ts";
 import { coalesceStreamRuns, collapseCompletedTurnWork } from "./chat-turn-presentation.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
-import { createSnapshotRecord } from "./session-snapshot-projection.ts";
+import { createSnapshotRecord } from "./session-snapshot-record.ts";
 import {
   normalizeFinalAssistantMessage,
   readLiveTerminalRevision,
@@ -1210,7 +1210,7 @@ describe("buildCachedChatItems", () => {
           user("Interrupted request", 1_000),
           assistant("Interrupted reply", 2_000),
           user("[System] Continue the interrupted turn.", 3_000, {
-            provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+            provenance: { kind: "internal_system", sourceTool: "system-event" },
           }),
         ],
       },

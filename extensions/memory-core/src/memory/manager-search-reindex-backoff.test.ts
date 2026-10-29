@@ -25,6 +25,7 @@ describe("memory search reindex backoff", () => {
   function clock() {
     const time = { now: Date.now() };
     vi.spyOn(Date, "now").mockImplementation(() => time.now);
+    vi.spyOn(performance, "now").mockImplementation(() => time.now);
     return time;
   }
   // Rebuilds reuse published vectors for unchanged chunks; failing rebuilds need new input.

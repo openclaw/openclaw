@@ -41,10 +41,7 @@ export type SessionStoreWorkerReadInput = Omit<SessionStoreWorkerReadScope, "age
 };
 
 export type SessionEntrySummaryWorkerRead = Omit<SessionStoreWorkerReadScope, "agentId"> &
-  Pick<
-    SessionEntryListWorkerInput["scope"],
-    "agentId" | "cleanupSession" | "mainSessionRecovery" | "readConsistency"
-  >;
+  Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession" | "readConsistency">;
 
 export type PreparedSessionEntryWorkerRead = {
   result: SessionExactEntriesWorkerResult;

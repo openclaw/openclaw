@@ -49,3 +49,5 @@ export const detailsSnapshotSchema = json.optional(
     outputs: json.optional(nonnegative),
   }),
 );
+
+export type ChatDetailsSnapshot = NonNullable<json.SnapshotValue<typeof detailsSnapshotSchema>>;

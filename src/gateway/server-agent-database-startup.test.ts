@@ -15,7 +15,6 @@ import {
   markPreparedModelRuntimeSnapshotsStale,
   refreshPreparedModelRuntimeSnapshots,
 } from "../agents/prepared-model-runtime.js";
-import * as subagents from "../agents/subagents/registry/subagent-registry.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -64,8 +63,6 @@ import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflig
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 // Keep cold module evaluation outside the lifecycle and RPC behavior deadlines.
-import * as early from "./server-startup-early.js";
-import * as postAttach from "./server-startup-post-attach.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import "./server-methods/chat-send-external-entry.js";
 import { gatewayReplyMock, testState } from "./test-helpers.runtime-state.js";
@@ -195,46 +192,8 @@ it.for([
 ] as const)(
   "applies startup admission while $agentId follows its $outcome lifecycle",
   async ({ outcome, agentId }, { signal }) => {
-    const holdSubagentRestoration = outcome === "recover" && agentId === "worker";
-    const checkHostJournalReads = outcome === "recover" && !holdSubagentRestoration;
-    const restorationEntered = createDeferredCore();
-    const restorationRelease = createDeferredCore();
-    const initialRecoveryReady = createDeferredCore();
-    let startupSettled = false;
+    const checkHostJournalReads = outcome === "recover";
     let recoverySource: OpenClawConfig | undefined;
-    let bootstrapSecrets: ReturnType<typeof getActiveSecretsRuntimeSnapshot> | undefined;
-    let subagentRecoverySettled: Promise<void> | undefined;
-    if (holdSubagentRestoration) {
-      vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", undefined);
-      const startPostAttach = postAttach.startGatewayPostAttachRuntime;
-      vi.spyOn(postAttach, "startGatewayPostAttachRuntime").mockImplementation(async (params) => {
-        const unlockStartupMethods = params.unlockStartupMethods;
-        const runtime = await startPostAttach({
-          ...params,
-          unlockStartupMethods: (options) => {
-            unlockStartupMethods(options);
-            if (!options?.keepChatSendUnavailable) {
-              initialRecoveryReady.resolve();
-            }
-          },
-        });
-        subagentRecoverySettled = runtime.subagentRecoverySettled;
-        return runtime;
-      });
-      const startEarly = early.startGatewayEarlyRuntime;
-      vi.spyOn(early, "startGatewayEarlyRuntime").mockImplementation((params) => {
-        bootstrapSecrets = getActiveSecretsRuntimeSnapshot();
-        return startEarly(params);
-      });
-      vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(() => {
-        restorationEntered.resolve();
-        return {
-          initial: Promise.resolve(),
-          pending: new Map([["worker", restorationRelease.promise]]),
-          settled: restorationRelease.promise,
-        };
-      });
-    }
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
     const brokerExpected =
       nativeBroker ||
@@ -486,7 +445,6 @@ it.for([
           return startTestGatewayServer(portClaim, {
             bind: "loopback",
             auth: { mode: "none" },
-            ...(holdSubagentRestoration ? { sidecarStartup: "defer" as const } : {}),
           });
         });
       }).then((started) => {
@@ -503,12 +461,6 @@ it.for([
         return;
       }
       server = await startup;
-      void server.startupSettled.then(
-        () => {
-          startupSettled = true;
-        },
-        () => {},
-      );
       await server.startupSettled;
       if (brokerExpected) {
         expect(brokerPid).toBeTypeOf("number");
@@ -530,10 +482,6 @@ it.for([
       // Sidecar settlement can precede the unpaused sibling's database admission.
       await waitForHealthyAgent();
       expect(readAgentDatabaseAdmissionRefusal(healthyAgentId, { env })).toBeUndefined();
-      if (holdSubagentRestoration) {
-        // startupSettled does not join the independent initial-recovery admission signal.
-        await withinTest(initialRecoveryReady.promise, signal);
-      }
       const readiness = await probeGateway(port, "/readyz");
       expect(readiness.status).toBe(agentId === "main" && paused ? 503 : 200);
       if (agentId === "main" && paused) {
@@ -566,9 +514,7 @@ it.for([
       if (outcome === "recover") {
         // Full post-attach model preparation can republish auth-store containers;
         // assert the bootstrap fence before that independent publication.
-        const snapshot = holdSubagentRestoration
-          ? bootstrapSecrets
-          : getActiveSecretsRuntimeSnapshot();
+        const snapshot = getActiveSecretsRuntimeSnapshot();
         expect(snapshot?.authStores.some((entry) => entry.databasePath === agentPath)).toBe(false);
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
           false,
@@ -716,30 +662,6 @@ it.for([
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
           false,
         );
-        if (holdSubagentRestoration) {
-          // The optional worker stays gated without making the healthy Gateway unready.
-          await withinTest(restorationEntered.promise, signal);
-          expect(startupSettled).toBe(true);
-          const recoveringReadiness = await probeGateway(port, "/readyz");
-          expect(recoveringReadiness.status).toBe(200);
-          await expect(recoveringReadiness.json()).resolves.toMatchObject({
-            ready: true,
-            coreReady: true,
-            failing: [],
-            agentRecovery: ["worker"],
-          });
-          expect(await rpcReq(chatClient!, "chat.send", chatParams)).toMatchObject({
-            ok: false,
-            error: {
-              code: "UNAVAILABLE",
-              message: "chat.send unavailable during gateway startup",
-              details: { reason: "startup-sidecars", method: "chat.send" },
-            },
-          });
-          restorationRelease.resolve();
-          expect(subagentRecoverySettled).toBeDefined();
-          await withinTest(subagentRecoverySettled!, signal);
-        }
         expect((await probeGateway(port, "/readyz")).status).toBe(200);
         expect(await rpcReq(chatClient!, "chat.send", chatParams)).toMatchObject({ ok: true });
         await withinTest(dispatched.promise, signal);
@@ -761,7 +683,6 @@ it.for([
       }
     } finally {
       pendingFixtureCleanup = (async () => {
-        restorationRelease.resolve();
         preparationRelease.resolve();
         fs.writeFileSync(releasePath, "resume");
         if (pause) {

@@ -117,8 +117,6 @@ export type FollowupRunPayload = {
   /** Turn-owned tool authority captured before queue ownership transfers. */
   toolsAllow?: string[];
   disableTools?: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
   /** Internal Goal nudge; admission must still observe this exact active Goal. */

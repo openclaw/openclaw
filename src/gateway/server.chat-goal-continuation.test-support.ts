@@ -10,7 +10,7 @@ export function registerGoalAutomaticContinuationCases(
   scope: () => { agentId: string; sessionKey: string; sessionId: string; storePath: string },
   runEmbeddedAgent: MockInstance<typeof executeEmbeddedAgent>,
   rpc: (
-    method: "chat.send" | "sessions.abort",
+    method: "chat.send" | "sessions.abort" | "sessions.goal.update",
     params: Record<string, unknown>,
   ) => Promise<MockInstance<RespondFn>>,
   goalStart: (message: string) => Record<string, unknown>,
@@ -56,7 +56,7 @@ export function registerGoalAutomaticContinuationCases(
     });
   });
 
-  it("stops automatic goal pursuit when the operator stops a continuation", async () => {
+  it("stops automatic pursuit and resumes the same Goal once after the stopped run settles", async () => {
     const { sessionKey } = scope();
     const secondStarted = createDeferred();
     const released = createDeferred();
@@ -112,6 +112,39 @@ export function registerGoalAutomaticContinuationCases(
     }
     await expectDrained();
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-    expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
+    const stoppedEntry = loadSessionEntry(scope());
+    expect(stoppedEntry?.goal?.status).toBe("active");
+    expect(stoppedEntry?.abortedLastRun).toBe(true);
+    const goal = stoppedEntry?.goal;
+    const request = {
+      sessionKey,
+      sessionId: scope().sessionId,
+      goalId: goal?.id,
+      action: "resume",
+      operationId: "resume-stopped-goal",
+      issuedAtMs: Date.now(),
+    };
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      await setGoalStatus("complete");
+      return result(params.sessionId);
+    });
+    const resumed = await rpc("sessions.goal.update", request);
+    expect(resumed.mock.calls[0]).toEqual([
+      true,
+      expect.objectContaining({ status: "started", runId: request.operationId, goalId: goal?.id }),
+      undefined,
+      expect.anything(),
+    ]);
+    await expectDrained();
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
+    expect(loadSessionEntry(scope())?.goal).toMatchObject({
+      id: goal?.id,
+      createdAt: goal?.createdAt,
+      status: "complete",
+    });
+    const replay = await rpc("sessions.goal.update", request);
+    expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, runId: request.operationId });
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
+    expect(userMessages()).toHaveLength(2);
   });
 }

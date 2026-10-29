@@ -195,10 +195,6 @@ export const validateSessionsTitlePrepareParams = createProtocolValidator(
   S.SessionsTitlePrepareParamsSchema,
   Checks.isSessionsTitlePrepareParams,
 );
-export const validateSessionsRecoverParams = createProtocolValidator(
-  S.SessionsRecoverParamsSchema,
-  Checks.isSessionsRecoverParams,
-);
 export const validateSessionsSendParams = createProtocolValidator(
   S.SessionsSendParamsSchema,
   Checks.isSessionsSendParams,

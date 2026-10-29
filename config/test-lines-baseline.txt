@@ -1,7 +1,1 @@
-# Frozen comparison: fefc2fb01ca30aa29d8b56156a895484e1ccc5d6 uses 6,310,650 lines.
-# Its 6,310,560 ceiling is exceeded by 90 inherited lines.
-# Allocate those 90 plus 101 net registered metadata regression lines after
-# consolidating 65 lines while preserving all 34 logical cases (32 runner cases).
-# Merged candidate: 6,310,751; zero slack, no reserve or automatic future growth.
-# Counting, branch-delta handling and all test/CI checks remain unchanged.
-6310751
+6320654

@@ -65,7 +65,6 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["sessions.goal.clear", { fields: ["sessionKey"], required: true }],
   ["sessions.providerReview.continue", { fields: ["sessionKey"], required: true, runStart: true }],
   ["sessions.pluginPatch", { fields: ["key"], required: true }],
-  ["sessions.recover", { fields: ["key"], required: true }],
   ["sessions.reset", { fields: ["key"], required: true }],
   ["sessions.rewind", { fields: ["sessionKey"], required: true }],
   ["sessions.send", { fields: ["key"], required: true, runStart: true, mayCreate: true }],

@@ -4,7 +4,6 @@ import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
-import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import { isSessionRunStateActive } from "../session-run-state.ts";
 import type { SessionCreateOutcome } from "./create.ts";
@@ -360,8 +359,6 @@ export function createSessionCapability(
     connection,
     gateway,
     reconcileMutation: roster.reconcileMutation,
-    notifyCreated,
-    reportError: (error) => publish({ ...state, error: formatUiError(error) }, "operation"),
   });
 
   const capturePullRequestEpoch = (key: string): object => {

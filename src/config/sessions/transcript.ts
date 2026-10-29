@@ -26,7 +26,6 @@ import { rethrowIncognitoSessionError } from "../../state/incognito-session-erro
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
-import type { RecoveryNoticeMirror } from "./recovery-notice.js";
 import {
   createSessionEntryWithTranscript,
   isSessionTranscriptProjectionUnavailableError,
@@ -113,8 +112,7 @@ type InternalSessionTranscriptDeliveryMirror =
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     }
   | SkillWorkshopChangeNotice
-  | ModelFallbackNotice
-  | RecoveryNoticeMirror;
+  | ModelFallbackNotice;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";

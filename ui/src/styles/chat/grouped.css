@@ -2313,10 +2313,6 @@ button.chat-reply-attribution__target:disabled {
   transform: rotate(90deg);
 }
 
-.chat-system-events__warning {
-  color: var(--warn);
-}
-
 .chat-system-events__line {
   height: 1px;
   background: var(--border);

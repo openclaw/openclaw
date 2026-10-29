@@ -93,6 +93,7 @@ export function startGatewayTlsRenewal(params: {
   }
   requestRefresh();
   return {
+    name: "tls-renewal",
     setEnabled: (next: boolean) => {
       if (enabled !== next) {
         enabled = next;

@@ -130,6 +130,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (service.gatewayHeap) {
     printInfo("Gateway heap:", terminalText`${formatGatewayHeapLimitReport(service.gatewayHeap)}`);
   }
+  if (service.installationDrift) {
+    printWarning(terminalText`${service.installationDrift}`);
+  }
   printInfo("Host desktop:", formatHostDesktopStatus(status.hostDesktop));
   spacer();
 
@@ -272,6 +275,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       printInfo("Gateway service version:", serviceInstallLine);
       defaultRuntime.log(infoText("The Gateway did not report its own version."));
       if (
+        !status.service.installationDrift &&
         status.service.targetRole !== "diagnostic-only" &&
         status.cli?.version &&
         serviceInstallVersion &&

@@ -39,6 +39,7 @@ import {
 import {
   enqueueGoalContinuation,
   isGoalContinuationCurrent,
+  isGoalContinuationPlacementCurrent,
   createGoalContinuationReturn,
 } from "./goal-continuation.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
@@ -172,6 +173,8 @@ function fixture() {
 beforeEach(() => {
   vi.useFakeTimers();
   children.mockResolvedValue([]);
+  workerPlacement.supported = true;
+  workerPlacement.current.mockReset();
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(getFollowupQueueDepth).mockReturnValue(0);
   vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(entry());
@@ -226,15 +229,111 @@ describe("Goal continuation eligibility", () => {
       state: mode === "local" ? "local" : "requested",
       executionMode: mode === "worker-turn" ? "worker-turn" : "remote-exec",
     });
-    expect(await enqueueGoalContinuation(f.params)).toBe(mode === "remote-exec");
+    expect(await enqueueGoalContinuation(f.params)).toBe(
+      mode === "remote-exec" || mode === "local",
+    );
     if (mode === "remote-exec") {
       expect(vi.mocked(enqueueFollowupRun).mock.calls[0]![1].goalContinuation).toEqual({
         ...identity,
         workerGoal: true,
       });
+    } else if (mode === "local") {
+      expect(vi.mocked(enqueueFollowupRun).mock.calls[0]![1].goalContinuation).toEqual({
+        ...identity,
+        localCodexGoal: true,
+      });
     } else {
       expect(enqueueFollowupRun).not.toHaveBeenCalled();
     }
+  });
+  it.each(["local", "worker-required", "no-authority", "revoked"] as const)(
+    "admits unplaced Codex goals only with current local authority (%s)",
+    async (mode) => {
+      const f = fixture();
+      vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue({
+        ...entry(),
+        agentHarnessId: "codex",
+      });
+      workerPlacement.current.mockReturnValue(undefined);
+      if (mode !== "no-authority") {
+        f.params.base.operatorAuthority = {
+          profileId: "operator",
+          scopes: ["operator.admin"],
+          assertCurrent: () => {
+            if (mode === "revoked") {
+              throw new Error("operator revoked");
+            }
+          },
+        };
+      }
+      if (mode === "worker-required") {
+        f.params.base.run.config = { cloudWorkers: { requiredProfile: "worker" } };
+      }
+      if (mode === "revoked") {
+        await expect(enqueueGoalContinuation(f.params)).rejects.toThrow("operator revoked");
+      } else {
+        expect(await enqueueGoalContinuation(f.params)).toBe(mode === "local");
+      }
+      expect(enqueueFollowupRun).toHaveBeenCalledTimes(mode === "local" ? 1 : 0);
+    },
+  );
+  it.each([
+    { marker: "local", current: "local", expected: true },
+    { marker: "local", current: "worker", expected: false },
+    { marker: "worker", current: "local", expected: false },
+    { marker: "worker", current: "worker", expected: true },
+  ] as const)(
+    "revalidates $marker Codex placement at admission when current is $current",
+    async ({ marker, current, expected }) => {
+      workerPlacement.current.mockReturnValue({
+        agentId: "main",
+        sessionKey: "agent:main:goal",
+        sessionId: identity.sessionId,
+        state: current === "local" ? "local" : "requested",
+        executionMode: "remote-exec",
+        generation: 1,
+        turnClaim: null,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+        environmentId: null,
+        activeOwnerEpoch: null,
+        workspaceBaseManifestRef: null,
+        remoteWorkspaceDir: null,
+        workerBundleHash: null,
+        lastTranscriptAckCursor: null,
+        lastLiveEventAckCursor: null,
+        terminalReason: null,
+        terminalAtMs: null,
+        recoveryError: null,
+      });
+      const continuation = {
+        ...identity,
+        ...(marker === "worker"
+          ? { workerGoal: true as const }
+          : { localCodexGoal: true as const }),
+      };
+      await expect(
+        isGoalContinuationPlacementCurrent({
+          continuation,
+          agentId: "main",
+          sessionKey: "agent:main:goal",
+          hasOperatorAuthority: true,
+          requiresWorker: false,
+        }),
+      ).resolves.toBe(expected);
+    },
+  );
+  it("rejects a queued local continuation when current policy requires a worker", async () => {
+    await expect(
+      isGoalContinuationPlacementCurrent({
+        continuation: { ...identity, localCodexGoal: true },
+        agentId: "main",
+        sessionKey: "agent:main:goal",
+        hasOperatorAuthority: true,
+        requiresWorker: true,
+      }),
+    ).resolves.toBe(false);
   });
   it("does not resume paused goals", () => {
     const current = entry();
@@ -254,6 +353,15 @@ describe("Goal continuation eligibility", () => {
     ).toBe(false);
     expect(isGoalContinuationCurrent(identity, { ...current, abortedLastRun: true })).toBe(false);
     expect(isGoalContinuationCurrent(identity, { ...current, agentHarnessId: "codex" })).toBe(
+      false,
+    );
+    expect(
+      isGoalContinuationCurrent(
+        { ...identity, localCodexGoal: true },
+        { ...current, agentHarnessId: "codex" },
+      ),
+    ).toBe(true);
+    expect(isGoalContinuationCurrent(identity, { ...current, agentHarnessId: "external" })).toBe(
       false,
     );
     expect(

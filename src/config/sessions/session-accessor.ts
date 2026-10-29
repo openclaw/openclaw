@@ -183,10 +183,6 @@ export {
   updateSessionEntry,
   updateSessionLastRoute,
 } from "./session-accessor.entry-mutation.js";
-export {
-  recoverSessionEntryFromRestartTombstone,
-  type RestartTombstoneRecoveryResult,
-} from "./session-accessor.sqlite-recovery.js";
 export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 export { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
 export { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
