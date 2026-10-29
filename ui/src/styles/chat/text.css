@@ -691,14 +691,9 @@
   }
 }
 
-:is(.chat-thread, .chat-session-rail__thread) {
-  --chat-text-link: var(--chat-canvas-link, var(--link));
-  --chat-text-link-hover: var(--chat-canvas-link-hover, var(--link-hover));
-}
-
-/* Paired surfaces keep their own link contract. */
-.chat-bubble--tool-shell,
-.chat-text :is(table, pre) {
+/* Independently painted hosts provide the base for opaque sticky code controls. */
+:is(.chat-bubble--tool-shell, .markdown-table-modal, .sidebar-markdown, openclaw-mermaid) {
+  --chat-bubble-background: initial;
   --chat-text-link: var(--link);
   --chat-text-link-hover: var(--link-hover);
 }
@@ -713,13 +708,13 @@
   color: var(--chat-text-link-hover, var(--link-hover));
 }
 
-/* Inline code has its own fill; file links explicitly remove that chip surface. */
+/* Link labels keep the ink prepared for their actual text surface. */
 .chat-text a:not(.markdown-file-link, .markdown-github-item, .markdown-session-link) > code {
-  color: var(--link);
+  color: var(--chat-text-link, var(--link));
 }
 
 .chat-text a:not(.markdown-file-link, .markdown-github-item, .markdown-session-link):hover > code {
-  color: var(--link-hover);
+  color: var(--chat-text-link-hover, var(--link-hover));
 }
 
 .chat-text :where(.markdown-link-favicon) {
@@ -779,9 +774,8 @@
   line-break: anywhere;
 }
 
-/* Keep status in the ink, not competing fills inside tinted user/sender bubbles.
-   The opaque neutral surface stays independent of its host, while mixing the
-   ink toward strong text protects light and dark palettes. Chips stay atomic. */
+/* Keep status in the ink and preserve each theme's GitHub chip surface.
+   Mixing the ink toward strong text protects light and dark palettes. */
 .chat-text a.markdown-github-item {
   --github-item-tone: var(--muted);
 
@@ -852,8 +846,8 @@
   padding-inline-start: 1.5em;
   border: 0;
   border-radius: var(--radius-sm);
-  background: var(--bg-muted);
-  color: var(--link);
+  background: var(--inline-code-bg, var(--bg-muted));
+  color: var(--chat-text-link, var(--link));
   cursor: pointer;
   font-family: var(--mono);
   font-size: 0.9em;
@@ -893,6 +887,7 @@
 
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link:hover,
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link:focus-visible {
+  color: var(--chat-text-link-hover, var(--link-hover));
   text-decoration: underline;
 }
 
@@ -901,7 +896,7 @@
   max-width: min(28em, 100%);
   padding: 0.08em 0.45em;
   padding-inline-start: 1.5em;
-  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
+  background: var(--accent-subtle);
   font-family: var(--font-body);
   font-weight: 600;
   line-height: 1.25;

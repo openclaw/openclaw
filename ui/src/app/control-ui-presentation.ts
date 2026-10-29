@@ -2,9 +2,9 @@ import { createChangeListeners } from "../../../src/shared/listeners.js";
 import {
   hexToOklch,
   prepareParticipantPalette,
-  type Oklch,
+  prepareThemeLinks,
 } from "../lib/chat/participant-colors.ts";
-import { resolveThemeColor } from "../lib/theme-color.ts";
+import { resolveThemeColor, resolveThemeColors } from "../lib/theme-color.ts";
 import { controlUiAccentInk } from "./accent-contrast.ts";
 import { controlUiDocumentHead } from "./control-ui-document-head.ts";
 import { controlUiPaletteStyle } from "./control-ui-palette-style.ts";
@@ -25,8 +25,25 @@ const ACCENT_CSS_VARIABLES = [
   "--focus-glow",
 ] as const;
 
+const LINK_SURFACES = [
+  "--bg",
+  "--bg-muted",
+  "--bg-elevated",
+  "--card",
+  "--panel",
+  "--popover",
+] as const;
+const LINK_OVERLAYS = [
+  "--inline-code-bg",
+  "--accent-subtle",
+  "--person-reference-bg",
+  "--person-reference-hover-bg",
+] as const;
+
 let participantPaletteValue: ReturnType<typeof prepareParticipantPalette> | undefined;
 let participantPaletteKey = "";
+let themeLinksKey = "";
+let themeLinksValue: ReturnType<typeof prepareThemeLinks> | undefined;
 const participantPaletteListeners = createChangeListeners();
 
 export const controlUiParticipantPalette = {
@@ -35,35 +52,6 @@ export const controlUiParticipantPalette = {
   },
   subscribe: participantPaletteListeners.subscribe,
 };
-
-/** Resolve modern CSS ink without quantizing its hue/chroma through an 8-bit canvas. */
-function resolveLinkColors(root: HTMLElement, normal: string, hover: string) {
-  if (!normal || !hover) {
-    return undefined;
-  }
-  const probe = document.createElement("span");
-  probe.hidden = true;
-  root.append(probe);
-  const computed = getComputedStyle(probe);
-  const read = (color: string): Oklch | undefined => {
-    probe.style.color = `oklch(from ${color} l c h)`;
-    const values = computed.color.match(/^oklch\(([^)]+)\)$/u)?.[1]?.split(/\s+/u);
-    if (!values || values.length < 3) {
-      return undefined;
-    }
-    const [l, c, h] = values.slice(0, 3).map((value) => (value === "none" ? 0 : Number(value)));
-    return Number.isFinite(l) && Number.isFinite(c) && Number.isFinite(h)
-      ? { l: l!, c: c!, h: h! }
-      : undefined;
-  };
-  try {
-    const normalColor = read(normal);
-    const hoverColor = read(hover);
-    return normalColor && hoverColor ? { normal: normalColor, hover: hoverColor } : undefined;
-  } finally {
-    probe.remove();
-  }
-}
 
 let operatorSeamColor: string | undefined;
 let userAccentOverride: string | undefined;
@@ -95,28 +83,56 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
     systemChromeRevisions.set(root, { source, palette });
     return;
   }
+  // Derived ink must not survive a reset or become the next palette's input.
+  root.style.removeProperty("--link");
+  root.style.removeProperty("--link-on-tint");
   const computedStyle = getComputedStyle(root);
   const canvas = resolveThemeColor(computedStyle, "--bg-content");
   const accent = resolveThemeColor(computedStyle, "--accent");
   const mode = root.dataset.themeMode === "light" ? "light" : "dark";
-  const link = computedStyle.getPropertyValue("--link").trim();
-  const linkHover = computedStyle.getPropertyValue("--link-hover").trim();
-  const nextParticipantKey = JSON.stringify([canvas, accent, link, linkHover, mode]);
-  if (
-    nextParticipantKey !== participantPaletteKey &&
-    /^#[\da-f]{6}$/iu.test(canvas) &&
-    /^#[\da-f]{6}$/iu.test(accent)
-  ) {
-    const links = resolveLinkColors(root, link, linkHover);
-    if (links) {
+  const nextParticipantKey = JSON.stringify([canvas, accent, mode]);
+  if (/^#[\da-f]{6}$/iu.test(canvas) && /^#[\da-f]{6}$/iu.test(accent)) {
+    const participantColors = {
+      mode,
+      background: hexToOklch(canvas),
+      accent: hexToOklch(accent),
+    } as const;
+    if (nextParticipantKey !== participantPaletteKey) {
       participantPaletteKey = nextParticipantKey;
-      participantPaletteValue = prepareParticipantPalette(
-        { mode, background: hexToOklch(canvas), accent: hexToOklch(accent) },
-        links,
-      );
-      root.style.setProperty("--chat-canvas-link", participantPaletteValue.canvasLinks.normal);
-      root.style.setProperty("--chat-canvas-link-hover", participantPaletteValue.canvasLinks.hover);
+      participantPaletteValue = prepareParticipantPalette(participantColors);
       participantPaletteListeners.publish();
+    }
+    const custom =
+      root.style.getPropertyValue("--accent") !== "" ||
+      root.dataset.theme === "custom" ||
+      root.dataset.theme === "custom-light";
+    if (custom) {
+      const values = (properties: readonly string[]) =>
+        properties
+          .map((property) => computedStyle.getPropertyValue(property).trim())
+          .filter(Boolean);
+      const surfaces = values(LINK_SURFACES);
+      const overlays = values(LINK_OVERLAYS);
+      const nextLinksKey = JSON.stringify([nextParticipantKey, surfaces, overlays]);
+      if (nextLinksKey !== themeLinksKey) {
+        const colors = resolveThemeColors([...surfaces, ...overlays]);
+        themeLinksValue = undefined;
+        if (colors) {
+          themeLinksValue = prepareThemeLinks(
+            participantColors,
+            colors.slice(0, surfaces.length),
+            colors.slice(surfaces.length),
+          );
+          themeLinksKey = nextLinksKey;
+        }
+      }
+      if (themeLinksValue) {
+        root.style.setProperty("--link", themeLinksValue.normal);
+        root.style.setProperty("--link-on-tint", themeLinksValue.tint);
+      }
+    } else {
+      themeLinksKey = "";
+      themeLinksValue = undefined;
     }
   }
   const pageBackground = computedStyle.getPropertyValue("--bg").trim();

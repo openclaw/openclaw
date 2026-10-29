@@ -50,6 +50,8 @@
      Absolutely recipe tuned warm. Fallbacks keep text painting on failure. */
   --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-chat: "Fraunces", Georgia, "Times New Roman", serif;
+  --link: var(--accent);
+  --link-on-tint: #e29d5f;
 }
 
 :root[data-theme="dash-light"] {
@@ -94,4 +96,6 @@
      dark block. */
   --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-chat: "Fraunces", Georgia, "Times New Roman", serif;
+  --link: #804823;
+  --link-on-tint: #763f19;
 }

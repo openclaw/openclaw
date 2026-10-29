@@ -142,6 +142,9 @@
      feedback that never costs readability. */
   --link: color-mix(in srgb, var(--accent-hover) 85%, var(--text));
   --link-hover: color-mix(in srgb, var(--link) 82%, var(--text));
+  --link-on-tint: var(--link);
+  --person-reference-bg: color-mix(in srgb, var(--accent) 10%, transparent);
+  --person-reference-hover-bg: color-mix(in srgb, var(--accent) 18%, transparent);
   --selection-bg: #5a7593;
   --selection-fg: #ffffff;
   --primary: #d13c3c;
@@ -526,6 +529,8 @@
   --primary-hover: #c22e2e;
   --destructive: #d32f2f;
   --destructive-hover: #bc2a2a;
+  --link: var(--accent);
+  --link-on-tint: #ff7b76;
 }
 
 :root[data-theme="light"] {
@@ -540,6 +545,8 @@
   --popover-foreground: #202020;
   --secondary-foreground: #353535;
   --primary-hover: var(--accent-hover);
+  --link: #ad3623;
+  --link-on-tint: #a32b18;
 }
 
 /* Light theme tokens apply to every light-mode family. */

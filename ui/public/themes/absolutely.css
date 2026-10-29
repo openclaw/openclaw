@@ -91,6 +91,10 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
 
   --grid-line: rgba(255, 255, 248, 0.03);
+
+  --link: #e07d5d;
+
+  --link-on-tint: #fc9776;
 }
 
 :root[data-theme="absolutely-light"] {
@@ -105,7 +109,6 @@
   --primary: #a5654b;
   --primary-hover: #995d45;
   --primary-foreground: #ffffff;
-  --link: color-mix(in srgb, var(--accent) 50%, var(--text));
 
   /* Navigation recedes; the reading canvas and elevated controls stay distinct. */
   --bg-accent: var(--bg);
@@ -144,4 +147,8 @@
   --shadow-lg: 0 12px 28px rgba(30, 30, 24, 0.09);
 
   --grid-line: rgba(30, 30, 24, 0.04);
+
+  --link: #9a5031;
+
+  --link-on-tint: #904728;
 }
