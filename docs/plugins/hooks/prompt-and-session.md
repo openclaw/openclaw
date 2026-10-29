@@ -18,6 +18,8 @@ Use `before_model_resolve` to switch provider or model for an agent turn - it
 runs before model resolution. `llm_output` describes an attempt's output when
 the runtime emits it; `assistantTexts` can be empty and `lastAssistant` absent,
 so the event alone does not prove a successful final answer.
+`lastAssistant` belongs to the current attempt; a failure before a model response
+does not reuse an assistant message from session history.
 
 For proof of the effective session model, inspect runtime registrations, then
 use `openclaw sessions` or the Gateway session/status surfaces. To debug

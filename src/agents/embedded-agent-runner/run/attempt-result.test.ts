@@ -142,6 +142,38 @@ function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
 }
 
 describe("attempt result projection", () => {
+  it.each(["none", "transcript", "completion"] as const)(
+    "attributes llm_output only to this attempt's %s assistant",
+    (source) => {
+      const previous = textAssistant("previous run", {
+        stopReason: "aborted",
+        errorMessage: "Previous run cancelled",
+      });
+      const current =
+        source === "none" ? undefined : textAssistant("current run", { errorMessage: undefined });
+      const fixture = createResultFixture({
+        terminal:
+          source === "none"
+            ? { kind: "failed", source: "precheck", error: new Error("No tools allowed") }
+            : { kind: "ok" },
+        messagesSnapshot: [previous],
+        currentAttemptCompletedAssistant: source === "completion" ? current : undefined,
+      });
+      fixture.settled.lastAssistant = previous;
+      fixture.settled.currentAttemptAssistant = source === "transcript" ? current : undefined;
+      vi.spyOn(fixture.hookRunner, "hasHooks").mockReturnValue(true);
+      const output = vi.spyOn(fixture.hookRunner, "runLlmOutput").mockResolvedValue(undefined);
+
+      const result = completeFixture(fixture);
+
+      expect(output).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ runId: "run-1", lastAssistant: current }),
+        expect.anything(),
+      );
+      expect(result.lastAssistant).toBe(previous);
+    },
+  );
+
   it("reports the effective Access setting even when it came from model configuration", () => {
     const fixture = createResultFixture();
     fixture.input.prepared.sessionRuntime.transport.effectiveExtraParams = {
