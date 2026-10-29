@@ -364,7 +364,11 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
           "active target",
         );
         onTestFinished(() => {
-          vi.mocked(resolveInboundReplyToolAuthorityOverlay).mockReset().mockReturnValue({});
+          vi.mocked(resolveInboundReplyToolAuthorityOverlay).mockReset().mockReturnValue({
+            senderIsOwner: true,
+            disableTools: false,
+            traceAuthorized: false,
+          });
           vi.mocked(beginReplyMessageInjectionTarget).mockReset();
         });
         vi.mocked(resolveInboundReplyToolAuthorityOverlay).mockImplementationOnce(
