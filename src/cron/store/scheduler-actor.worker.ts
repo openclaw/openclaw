@@ -483,6 +483,11 @@ export function runCronSchedulerInWorker(
       );
       candidates = catchup.immediate;
       overflow = catchup.overflow;
+      // Catch-up loads its own job rows; run admission validates slots against `jobs`,
+      // so the recovered-slot rewrite below must land on the same objects.
+      for (const job of candidates) {
+        jobs.set(job.id, job);
+      }
     } else if (command.type !== "cron.schedulerRefresh") {
       const allowCronMissedRunByLastRun = snapshot.config.cronConfig?.skipMissedJobs !== true;
       candidates = currentJobs().filter(
