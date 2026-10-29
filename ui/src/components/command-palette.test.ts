@@ -130,7 +130,9 @@ describe("CommandPalette search", () => {
     await vi.waitFor(() => expect(findPaletteOption(palette, "Needle model")).toBeDefined());
     expect(palette.textContent).toContain("Searching commands");
     findPaletteOption(palette, "Needle model")?.click();
-    expect(palette.onNavigate).toHaveBeenCalledWith("model-providers");
+    expect(palette.onNavigate).toHaveBeenCalledWith("model-providers", {
+      search: "?provider=fixture",
+    });
 
     await searchPalette(palette, "needle");
     automations.resolve({ jobs: [{ id: "needle-job", name: "Needle automation" }] });
