@@ -50,6 +50,8 @@ import {
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
   applyPendingScrollOffset,
+  cancelPendingScrollRetry,
+  createTranscriptScrollRestoreHost,
   type TranscriptScrollRestoreHost,
 } from "./chat-transcript-scroll-restore.ts";
 import {
@@ -164,6 +166,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private readonly prependAnchor = new TranscriptPrependAnchor(
     this.messageElements.elements,
     this.recordEndLayoutCorrection,
+    () => this.offsetState.pendingScrollOffset?.anchor?.messageKey,
   );
   private candidateMessageRowKeysById: ReadonlyMap<string, string> = new Map();
   private candidateMessageRowsByKey: ReadonlyMap<string, string> = new Map();
@@ -178,6 +181,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     initialOffset: number | null = null,
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
     private readonly callbacks: TranscriptCallbacks = {},
+    initialAnchor?: ChatSessionScrollPosition["anchor"],
   ) {
     this.initialRange = new TranscriptInitialRange(
       initialOffset,
@@ -265,25 +269,22 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       beforeMeasure,
       onMount: () => this.queueLayout(),
     });
-    this.scrollRestoreHost = {
+    this.scrollRestoreHost = createTranscriptScrollRestoreHost({
       offsetState: this.offsetState,
       virtualizer: this.virtualizer,
       getScrollElement: () => this.scrollElement,
       isContentReady: () => this.layout.ready,
       getRowCount: () => this.rowKeys.length,
+      getMessageElement: (key) => this.messageElements.elements.get(key),
       isConnected: () => this.connected,
-      pendingScrollFrame: null,
-      onReaderScroll: () => {
-        if (this.initialRange.pending) {
-          this.initialRange.finish();
-          this.invalidate();
-        }
-        this.callbacks.onReaderScroll?.();
-      },
-    };
+      initialRange: this.initialRange,
+      invalidate,
+      onReaderScroll: () => this.callbacks.onReaderScroll?.(),
+    });
     if (initialOffset !== null) {
       this.offsetState.pendingScrollOffset = {
         offset: initialOffset,
+        anchor: initialAnchor,
         stableFrames: 0,
         zeroMaxFrames: 0,
         onSettled: onInitialOffsetSettled,
@@ -397,10 +398,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.offsetState.touchScrolling = false;
     this.renderPreviousRows = null;
     this.messageReveal.clear();
-    if (this.scrollRestoreHost.pendingScrollFrame !== null) {
-      cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
-      this.scrollRestoreHost.pendingScrollFrame = null;
-    }
+    cancelPendingScrollRetry(this.scrollRestoreHost);
     this.threadInnerElement = null;
     if (!this.connected) {
       return;
@@ -618,10 +616,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     const measureSkippedRows = this.offsetState.scrollCommand?.behavior === "smooth";
     this.offsetState.scrollCommand = null;
     this.offsetState.pendingScrollOffset = null;
-    if (this.scrollRestoreHost.pendingScrollFrame !== null) {
-      cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
-      this.scrollRestoreHost.pendingScrollFrame = null;
-    }
+    cancelPendingScrollRetry(this.scrollRestoreHost);
     // The smooth journey may already be automatic when its skipped sizes settle.
     if (measureSkippedRows) {
       this.presentation.measureRowsWithoutScrollAdjustment();

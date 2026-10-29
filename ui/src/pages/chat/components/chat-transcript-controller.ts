@@ -1,11 +1,13 @@
 // Session-owned virtualizer lifecycle for chat transcripts.
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import {
+  captureChatSessionScrollPosition,
   getChatSessionScrollPosition,
   saveChatSessionScrollPosition,
   type ChatScrollToEndOptions,
   type ChatSessionScrollPosition,
 } from "../scroll.ts";
+import { captureTranscriptScrollPosition } from "./chat-transcript-scroll-restore.ts";
 import type { ChatTranscriptSession, TranscriptCallbacks } from "./chat-transcript-session.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 
@@ -51,12 +53,24 @@ export function createChatTranscript(
           initialOffset,
           (position) => saveChatSessionScrollPosition(paneId, sessionKey, position),
           callbacks,
+          savedPosition?.anchorToEnd ? undefined : savedPosition?.anchor,
         );
         if (connected) {
           sessionVirtualizer.connect();
         }
       }
       return render(sessionVirtualizer);
+    },
+    captureScrollPosition(
+      viewport: Parameters<typeof captureChatSessionScrollPosition>[0],
+    ): ChatSessionScrollPosition {
+      return sessionVirtualizer
+        ? captureTranscriptScrollPosition(
+            sessionVirtualizer.isPositionSettled ? sessionVirtualizer.scrollElement : null,
+            viewport,
+            sessionVirtualizer.messageElements.elements,
+          )
+        : captureChatSessionScrollPosition(viewport);
     },
     get isMaintenanceScroll(): boolean {
       return sessionVirtualizer?.isMaintenanceScroll ?? false;

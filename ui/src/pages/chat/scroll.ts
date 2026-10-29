@@ -13,6 +13,8 @@ const MAX_CACHED_TRANSCRIPT_SCROLL_PANES = 8;
 export type ChatSessionScrollPosition = {
   scrollTop: number;
   anchorToEnd: boolean;
+  /** A measured bubble, independent of the virtualizer's offscreen estimates. */
+  anchor?: { messageKey: string; offset: number };
 };
 
 const transcriptScrollTopByPane = new Map<string, Map<string, ChatSessionScrollPosition>>();
@@ -62,6 +64,7 @@ export function saveChatSessionScrollPosition(
   setSessionCacheValue(scrollTops, sessionKey, {
     scrollTop: Math.max(0, position.scrollTop),
     anchorToEnd: position.anchorToEnd,
+    ...(position.anchor ? { anchor: position.anchor } : {}),
   });
 }
 

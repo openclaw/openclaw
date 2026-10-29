@@ -20,6 +20,7 @@ import type { TranscriptMessageElements } from "./chat-transcript-message-elemen
 /** A reader-position restoration that is waiting for measurable transcript geometry. */
 export type ChatTranscriptPendingScrollOffset = {
   offset: number;
+  anchor?: ChatSessionScrollPosition["anchor"];
   observedMaxOffset?: number;
   stableFrames: number;
   zeroMaxFrames: number;

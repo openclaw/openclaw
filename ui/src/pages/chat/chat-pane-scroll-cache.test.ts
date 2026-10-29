@@ -10,6 +10,7 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
+import { saveChatSessionScrollPosition } from "./scroll.ts";
 
 let flushFrames: ReturnType<typeof stubAnimationFrames>;
 beforeEach(() => {
@@ -23,6 +24,8 @@ async function mountSession(paneId: string, sessionKey: string) {
   pane.paneId = paneId;
   pane.presentationId = JSON.stringify([paneId, sessionKey]);
   state.sessionKey = sessionKey;
+  state.chatLoading = false;
+  state.currentSessionId = "scroll-cache-fixture";
   state.chatMessages = Array.from({ length: 12 }, (_, index) => ({
     role: index % 2 ? "assistant" : "user",
     content: `Message ${index}`,
@@ -83,4 +86,17 @@ it("restores each physical pane's reader after visiting nine retained sessions",
     expect.soft(thread.scrollTop).toBe(offset);
     dispose();
   }
+});
+
+it("falls back to the saved offset when the reader message is no longer loaded", async () => {
+  const paneId = "missing-reader-message";
+  const sessionKey = "agent:main:missing-reader-message";
+  saveChatSessionScrollPosition(paneId, sessionKey, {
+    scrollTop: 420,
+    anchorToEnd: false,
+    anchor: { messageKey: "removed-message", offset: 24 },
+  });
+  const { thread, dispose } = await mountSession(paneId, sessionKey);
+  expect(thread.scrollTop).toBe(420);
+  dispose();
 });

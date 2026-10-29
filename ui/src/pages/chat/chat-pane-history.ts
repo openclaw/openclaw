@@ -69,11 +69,7 @@ import {
   publishChatSessionProjectionMessages,
   retireChatSubmissionDisplay,
 } from "./history-merge.ts";
-import {
-  captureChatSessionScrollPosition,
-  saveChatSessionScrollPosition,
-  scheduleChatScroll,
-} from "./scroll.ts";
+import { saveChatSessionScrollPosition, scheduleChatScroll } from "./scroll.ts";
 import { applyChatCacheSnapshot } from "./session-message-cache.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
@@ -303,7 +299,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
         saveChatSessionScrollPosition(
           this.paneId,
           renderedSessionKey,
-          captureChatSessionScrollPosition(viewport),
+          this.transcript.captureScrollPosition(viewport),
         );
       }
     }

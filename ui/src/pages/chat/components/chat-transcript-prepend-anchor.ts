@@ -14,6 +14,7 @@ export class TranscriptPrependAnchor {
   constructor(
     private readonly messageElements: ReadonlyMap<string, HTMLElement>,
     private readonly onLayoutCorrection: (before: number, after: number) => void,
+    private readonly restoringMessageKey?: () => string | undefined,
   ) {}
 
   /** Stable message identity used to resolve its row in the committed projection. */
@@ -27,7 +28,7 @@ export class TranscriptPrependAnchor {
     indexes: ReadonlyMap<string, number>,
     focusedRowKey: string | null,
   ): number[] {
-    const messageKey = this.messageKey;
+    const messageKey = this.messageKey ?? this.restoringMessageKey?.() ?? null;
     const rowKey =
       (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ??
       this.pending?.rowKey ??
@@ -57,7 +58,7 @@ export class TranscriptPrependAnchor {
     const anchor =
       !commanded && (this.hasPrepend || readingProjectionChanged)
         ? (retained ??
-          captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values()))
+          captureTranscriptMessageAnchor(element, this.messageKeys, this.messageElements.values()))
         : null;
     if (anchor) {
       this.pending = { ...anchor, measured: false };
@@ -111,8 +112,8 @@ export class TranscriptPrependAnchor {
   }
 }
 
-/** Capture a retained message before history or regrouping changes its row. */
-function captureTranscriptPrependAnchor(
+/** Capture a visible retained bubble for prepend or session-return restoration. */
+export function captureTranscriptMessageAnchor(
   scrollElement: HTMLDivElement | null,
   next: TranscriptMessageKeys,
   messageElements: Iterable<HTMLElement>,
