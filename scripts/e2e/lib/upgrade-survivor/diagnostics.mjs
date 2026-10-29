@@ -1987,7 +1987,9 @@ function publishedNativePluginUi(snapshot, sanitize) {
 
 function publishedDeferredSchemaDoctor(snapshot, sanitize) {
   const proof = snapshot.deferredSchemaDoctor;
-  if (proof === null || proof === undefined) return null;
+  if (proof === null || proof === undefined) {
+    return null;
+  }
   const schema = (value) =>
     value &&
     [value.userVersion, value.metadataVersion, value.contentVersion].every(

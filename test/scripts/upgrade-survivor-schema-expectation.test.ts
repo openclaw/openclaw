@@ -354,7 +354,9 @@ describe("published survivor schema outcome", () => {
       { encoding: "utf8", env: { ...process.env, ARTIFACT_DIR: root } },
     );
     expect(reset.status, reset.stderr).toBe(0);
-    for (const file of artifacts) expect(existsSync(join(root, file))).toBe(false);
+    for (const file of artifacts) {
+      expect(existsSync(join(root, file))).toBe(false);
+    }
     expect(readFileSync(join(root, "unrelated.json"), "utf8")).toBe("PRIVATE_STALE_WITNESS");
     const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
     const selection = source.match(
