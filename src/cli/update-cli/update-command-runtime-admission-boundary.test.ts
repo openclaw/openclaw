@@ -262,6 +262,10 @@ it.each(["permission", "definition", "executable"] as const)(
         refreshDefinition: true,
       },
     };
+    // Caller-environment discovery is not the service admission exercised below.
+    // The owned service is supplied by inspectUpdateManagedServices; do not let
+    // the host's native manager inspect this fixture's noncanonical profile.
+    vi.spyOn(servicePlan, "readManagedGatewayServiceForUpdate").mockResolvedValue(null);
     vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(true);
     vi.spyOn(databaseContext, "inspectUpdateManagedServices").mockImplementation(async () => ({
       service,
@@ -346,6 +350,7 @@ it.each(["permission", "definition", "executable"] as const)(
     } catch {
       // Diagnostics must never replace the original assertion failure.
     }
+    expect(earlySucceeded).toBe(true);
     expect(capture).toHaveBeenCalledOnce();
     expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
     expect(install).not.toHaveBeenCalled();
