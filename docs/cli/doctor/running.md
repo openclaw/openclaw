@@ -39,10 +39,10 @@ maintenance custody.
 
 SIGINT and SIGTERM cancel Doctor's preparation before it stops a Gateway or
 starts repairs. If repair already owns state, Doctor settles its admitted work
-and restores any service it stopped before exiting. If cleanup or a remaining
-handle stalls, Doctor exits after the service-stop budget (330 seconds) and warns
-that cleanup may be incomplete. Check `openclaw gateway status --deep` and run
-`openclaw doctor --lint` before retrying repairs.
+and restores any service it stopped before exiting. Startup cancellation also
+aborts package-file reads and stops and joins prerequisite subprocesses. Doctor
+closes its owned resources, records the signal exit status, and lets Node exit
+naturally so V8 can finish worker cleanup safely.
 
 Before maintenance begins, package-root discovery, source-config loading, and
 Tailscale prerequisite inspection each have a 60-second asynchronous wait limit.

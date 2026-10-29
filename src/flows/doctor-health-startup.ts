@@ -11,7 +11,7 @@ import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { formatDoctorProgressPhase, type DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
-import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
+import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
 import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -70,17 +70,23 @@ function stateDirectoryExistsAtDoctorStart(): boolean {
 }
 
 // These reads precede maintenance custody; timing out must never abandon a repair.
-function readDoctorStartup<T>(phase: string, read: () => Promise<T>): Promise<T> {
-  return raceWithTimeout(
-    read,
-    60_000,
-    () => {
-      throw new Error(
-        `Doctor startup timed out after 60000ms (${phase}). Retry with OPENCLAW_DEBUG=1 openclaw doctor --lint; if it still stalls, capture a Node diagnostic report before retrying repairs.`,
-      );
-    },
-    { signal: resolveCommandProcessSignal(getAsyncWorkSignal()) },
-  );
+function readDoctorStartup<T>(
+  phase: string,
+  read: (signal?: AbortSignal) => Promise<T>,
+): Promise<T> {
+  return withCommandProcessScope(async () => {
+    const signal = resolveCommandProcessSignal();
+    return raceWithTimeout(
+      () => read(signal),
+      60_000,
+      () => {
+        throw new Error(
+          `Doctor startup timed out after 60000ms (${phase}). Retry with OPENCLAW_DEBUG=1 openclaw doctor --lint; if it still stalls, capture a Node diagnostic report before retrying repairs.`,
+        );
+      },
+      { signal },
+    );
+  }, getAsyncWorkSignal());
 }
 
 export async function prepareDoctorHealthFlow(
@@ -97,12 +103,13 @@ export async function prepareDoctorHealthFlow(
   // Preserve the entry fact so doctor can report that automatic initialization.
   const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
   showIntro("OpenClaw doctor");
-  const root = await readDoctorStartup("package root", async () => {
+  const root = await readDoctorStartup("package root", async (signal) => {
     const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
     return resolveOpenClawPackageRoot({
       moduleUrl: import.meta.url,
       argv1: process.argv[1],
       cwd: process.cwd(),
+      signal,
     });
   });
   if (

@@ -1,4 +1,3 @@
-import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../../gateway-shutdown-budget.mjs";
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type SignalExitBarrier = () => Promise<void>;
@@ -152,16 +151,7 @@ function handleCliSignal(signal: CliExitSignal): void {
   }
   process.stderr.write(`Command interrupted by ${signal}. Waiting for cleanup before exiting.\n`);
   if (cliDoctorSignalOwner) {
-    const code = cliSignalExitCodes[signal];
-    process.exitCode = code;
-    // Allow the full service restoration window, but never swallow termination
-    // forever when a dependency or cleanup owner stops responding.
-    setTimeout(() => {
-      process.stderr.write(
-        `Doctor shutdown exceeded ${GATEWAY_SERVICE_STOP_TIMEOUT_MS}ms; exiting after ${signal}. Cleanup may be incomplete. Run openclaw gateway status --deep and openclaw doctor --lint before retrying repairs.\n`,
-      );
-      process.exit(code);
-    }, GATEWAY_SERVICE_STOP_TIMEOUT_MS).unref();
+    process.exitCode = cliSignalExitCodes[signal];
   }
   cliSignalExit = waitForSignalExitBarriers(signal)
     .catch(() => {
