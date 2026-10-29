@@ -48,6 +48,16 @@ export function summarizeNonceRequest(
 
 type NonceMetrics = ReturnType<typeof nonceTextMetrics>;
 
+interface NonceResponseDiagnostic {
+  httpStatus: number;
+  terminal: string;
+  streamEnded: boolean;
+  observationIncomplete: boolean;
+  malformedFrames: number;
+  itemSnapshots: NonceMetrics[];
+  terminalSnapshot: NonceMetrics[] | null;
+}
+
 function summarizeMessageSnapshot(item: unknown, nonce: string | undefined): NonceMetrics[] {
   if (!isRecord(item) || item.type !== "message" || !Array.isArray(item.content)) {
     return [];
@@ -81,14 +91,14 @@ export async function observeNonceDispatch(
 
 /** Observe the bytes consumed by the real transport, without a second reader or request. */
 export function observeNonceResponse(response: Response, getNonce: () => string | undefined) {
-  const diagnostic = {
+  const diagnostic: NonceResponseDiagnostic = {
     httpStatus: response.status,
     terminal: "unobserved",
     streamEnded: false,
     observationIncomplete: false,
     malformedFrames: 0,
-    itemSnapshots: [] as NonceMetrics[],
-    terminalSnapshot: null as NonceMetrics[] | null,
+    itemSnapshots: [],
+    terminalSnapshot: null,
   };
   if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
     diagnostic.observationIncomplete = true;
