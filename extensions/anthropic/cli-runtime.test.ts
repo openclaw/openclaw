@@ -3,11 +3,17 @@ import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   CliBackendExecuteContext,
+  CliBackendLiveSessionCapability,
+  CliBackendLiveSessionHandle,
   CliBackendMessageInjection,
   CliBackendToolPermissionResult,
   CliBackendTurnStatus,
 } from "openclaw/plugin-sdk/cli-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createOwnedStdioProcess,
+  OwnedStdioCleanupError,
+} from "openclaw/plugin-sdk/process-runtime";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -24,6 +30,11 @@ import {
   waitForProcessExit,
 } from "./cli-runtime.test-support.js";
 import { executeClaudeCli, type ClaudeCliExecuteContext } from "./cli.runtime.js";
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
+  return { ...actual, createOwnedStdioProcess: vi.fn(actual.createOwnedStdioProcess) };
+});
 
 const harness = createCliTestHarness("openclaw-claude-protocol-");
 const createLiveSession = harness.liveSession.bind(harness);
@@ -253,6 +264,36 @@ describe("Claude native stdio boundary", () => {
     await expect(collect(context)).rejects.toBe(reason);
     expect(liveSession.current()).toBeUndefined();
     await expect(access(fixtureFile(context, "fixture.pid"))).rejects.toThrow();
+  });
+
+  it("replaces a session whose launch failed without a child", async () => {
+    const cleanup = vi.fn(async () => {});
+    const liveSession = createLiveSession(cleanup);
+    const failed = await createContext("normal", { liveSession });
+    await expect(
+      collect(failed, { command: fixtureFile(failed, "missing-claude") }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await runDetail(await createContext("normal", { liveSession }))).toMatchObject({
+      turn: 1,
+      user: INPUT,
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a launch with unconfirmed cleanup blocking replacement", async () => {
+    const failure = new OwnedStdioCleanupError("synthetic startup cleanup was not confirmed");
+    vi.mocked(createOwnedStdioProcess).mockRejectedValueOnce(failure);
+    const handles: CliBackendLiveSessionHandle[] = [];
+    // Harness teardown joins every registered exit; this one must stay unconfirmed.
+    const liveSession: CliBackendLiveSessionCapability = {
+      ...createLiveSession(),
+      register: (handle) => {
+        handles.push(handle);
+      },
+    };
+    await expect(collect(await createContext("normal", { liveSession }))).rejects.toBe(failure);
+    expect(handles).toHaveLength(1);
+    await expect(handles[0]?.waitForExit()).rejects.toBe(failure);
   });
 
   it.each([

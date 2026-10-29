@@ -48,6 +48,7 @@ export { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-
 export {
   createOwnedStdioProcess,
   closeOwnedStdioProcess,
+  OwnedStdioCleanupError,
   type OwnedStdioProcess,
   type OwnedStdioProcessOptions,
 } from "../process/owned-stdio.js";

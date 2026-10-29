@@ -228,7 +228,8 @@ Bundled and official plugins with a bidirectional CLI protocol can use
 from `openclaw/plugin-sdk/process-runtime`. The `OwnedStdioProcessOptions` and
 `OwnedStdioProcess` types describe the launch and its process-tree owner.
 Creation resolves after startup and private-input delivery. A failed launch
-also reports a cleanup failure if resource closure cannot be confirmed.
+rejects with `OwnedStdioCleanupError` if resource closure cannot be confirmed;
+any other launch rejection means no child remains.
 
 Pass the command and arguments together as `argv`, with optional `argv0`, `cwd`,
 `env`, and `abortSignal`. For an already prepared CLI invocation, `exactEnv: true`

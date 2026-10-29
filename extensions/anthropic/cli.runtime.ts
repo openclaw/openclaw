@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/cli-backend";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { OwnedStdioCleanupError } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
@@ -582,8 +583,11 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
       isIdle: () => !session.closed && !session.currentTurn,
       close: (_reason, error) => closeSession(session, error),
       waitForExit: async () => {
-        const transport = session.transport ?? (await session.transportStartup);
-        await transport?.waitForExit();
+        // The turn owns launch errors; only unconfirmed startup cleanup blocks replacement.
+        const startup = session.transportStartup?.catch((error: unknown) =>
+          error instanceof OwnedStdioCleanupError ? Promise.reject(error) : undefined,
+        );
+        await (session.transport ?? (await startup))?.waitForExit();
       },
     },
   };
