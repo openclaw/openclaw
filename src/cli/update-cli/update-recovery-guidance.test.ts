@@ -10,11 +10,15 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import {
+  renderUpdateRunReport,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { recordUpdateResultNextAction } from "./update-command-result.js";
+import { refuseUnsettledDoctorRecovery } from "./update-command-service-recovery.js";
 import { publishUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
@@ -79,6 +83,148 @@ afterEach(() => {
 });
 
 describe("update recovery reporting", () => {
+  it.each(["unsettled", "foreign", "settled"] as const)(
+    "keeps %s Doctor settlement guidance when the target Gateway responds",
+    (settlement) => {
+      const root = "/fixture/candidate";
+      const message =
+        "Doctor processes remain unsettled, data-at-risk. PIDs/process groups: 41001. Keep the Gateway stopped and preserve recovery snapshots; resolve retained process custody before retrying `openclaw update repair`.";
+      const result: UpdateRunResult = {
+        status: "error",
+        mode: "npm",
+        root,
+        reason: "state-migrated-no-rollback",
+        before: { version: "2026.9.1" },
+        after: { version: "2026.9.2" },
+        durationMs: 1,
+        recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.2" },
+        steps: [
+          {
+            name: "doctor process settlement",
+            command: "settle doctor process groups",
+            cwd: settlement === "foreign" ? "/fixture/other-candidate" : root,
+            durationMs: 1,
+            exitCode: settlement === "unsettled" ? 1 : 0,
+            ...(settlement === "unsettled"
+              ? {
+                  stderrTail: message,
+                  failureFacts: [
+                    { check: "openclaw doctor", code: "doctor-processes-unsettled", message },
+                  ],
+                }
+              : {}),
+            warnings: ["Optional maintenance remains deferred."],
+          },
+        ],
+      };
+      expect(refuseUnsettledDoctorRecovery(result, root, () => {})).toBe(settlement !== "settled");
+      const nextAction = resolveUpdateResultNextAction({
+        result,
+        env: {},
+        environment: { container: false, stateDir: "/fixture/state" },
+      });
+      expect(nextAction).toBeTruthy();
+      const input = updateRunReportInputFromResult(result, { origin: { nextAction } });
+      const saved = structuredClone(input);
+      const report = renderUpdateRunReport(input, {
+        currentHealth: { kind: "responding", version: "2026.9.2" },
+      });
+      expect(report.lines.join("\n")).toContain(nextAction);
+      expect(report.markdown).not.toContain("saved runtime verification failure no longer applies");
+      expect(report.headline).toContain("update failed: state-migrated-no-rollback");
+      expect(report.lines).toContain("Warning: Optional maintenance remains deferred.");
+      if (settlement === "unsettled") {
+        expect(nextAction).toContain(
+          "Keep the Gateway stopped while Doctor writers may still be running",
+        );
+        expect(report.lines.join("\n")).toContain("doctor-processes-unsettled");
+      } else if (settlement === "settled") {
+        expect(result.recovery).toMatchObject({ serviceRestartSafe: true, service: "healthy" });
+        expect(nextAction).toContain("candidate Gateway is healthy");
+      } else {
+        expect(result.recovery).toMatchObject({ serviceRestartSafe: false });
+        expect(nextAction).toContain("could not prove a runnable installation");
+      }
+      expect(input).toEqual(saved);
+    },
+  );
+
+  it.each([true, false])(
+    "publishes recovery observation consistently after validation fails (healthy=%s)",
+    async (healthy) => {
+      vi.mocked(isContainerEnvironment).mockReturnValue(false);
+      const run = createRun();
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const failedStep = {
+        name: "validating",
+        command: "validate runtime inventory",
+        cwd: "/fixture",
+        durationMs: 1,
+        exitCode: 1,
+        stderrTail: "Runtime inventory refused a retained backup link",
+      };
+      const result = failure({
+        reason: "update-failed",
+        before: { version: "2026.9.6" },
+        after: { version: "2026.9.6" },
+        failedStep,
+        steps: [failedStep],
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      });
+      vi.mocked(observeUpdateGatewayReadiness).mockResolvedValue({
+        health: {
+          runtime: { status: "running", pid: 12345 },
+          portUsage: { port: 19123, status: "busy", listeners: [], hints: [] },
+          healthy,
+          staleGatewayPids: [],
+          expectedVersion: "2026.9.6",
+          gatewayVersion: "2026.9.6",
+          ...(healthy ? {} : { channelProbeErrors: [{ id: "discord", error: "not ready" }] }),
+        },
+        readyz: healthy,
+        http: undefined,
+        launchAgentRecovery: null,
+      });
+      await verifyUpdatedGateway({
+        result,
+        opts: { run },
+        serviceEnv: run.env,
+        gatewayPort: 19123,
+        requireRunningService: true,
+        purpose: "recovery",
+      });
+      await publishUpdateCommandTerminalResult(
+        { opts: { run }, coreAlreadyCurrent: false },
+        result,
+        { rolledBack: false },
+      );
+      const stored = getUpdateRun(run.runId, { env: run.env });
+      expect(stored?.status).toBe("failed");
+      expect(stored?.reason).toBe("update-failed");
+      expect(stored?.verification.recovery).toEqual(result.recovery);
+      const terminal = log.mock.calls.flat().join("\n");
+      const reportPath = terminal.split("\n").find((line) => line.startsWith("Report: "));
+      expect(reportPath).toBeDefined();
+      const markdown = fs.readFileSync(reportPath!.slice("Report: ".length), "utf8");
+      for (const output of [terminal, markdown, stored?.origin.nextAction ?? ""]) {
+        if (healthy) {
+          expect(output).toContain("Your Gateway is still serving 2026.9.6; nothing to restore.");
+          expect(output).toContain("Fix update-failed then run `openclaw update` again.");
+          expect(output).not.toContain("did not pass verification");
+        } else {
+          expect(output).toContain("gateway is running 2026.9.6 but did not pass verification");
+          expect(output).toContain("channel-errors");
+          expect(output).toContain(hostGuidance);
+          expect(output).not.toContain("nothing to restore");
+        }
+      }
+      if (healthy) {
+        expect(terminal).toContain("Gateway: verified serving after update failure.");
+        expect(markdown).toContain("restart remains unsafe (runtime-verification-failed)");
+      }
+    },
+  );
+
   it.each(["stopped", "healthy", "settled", "unsettled", "starting"])(
     "publishes actionable migrated-state recovery with a %s Gateway",
     async (state) => {

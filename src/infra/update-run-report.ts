@@ -244,6 +244,7 @@ export function renderUpdateRunReport(
     run.origin.nextAction
       ? { kind: "unavailable" }
       : undefined);
+  // Health cannot readmit Doctor custody; report steps omit the settlement's authority fields.
   const runtimeVerificationRecovered =
     run.status === "failed" &&
     currentHealth?.kind === "responding" &&
@@ -253,7 +254,8 @@ export function renderUpdateRunReport(
     Boolean(run.after.version) &&
     currentHealth.version === run.after.version &&
     run.verification.recovery?.serviceRestartSafe === false &&
-    run.verification.recovery.reason === "runtime-verification-failed";
+    run.verification.recovery.reason === "runtime-verification-failed" &&
+    !run.steps.some((step) => step.step === "doctor process settlement");
   // Git updates can change commits without changing the package version.
   const before = run.before.sha?.slice(0, 8) ?? run.before.version;
   const after = run.after.sha?.slice(0, 8) ?? run.after.version;
