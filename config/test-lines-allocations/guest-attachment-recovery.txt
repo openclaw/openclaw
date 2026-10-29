@@ -1,2 +1,2 @@
-# Accepted document, failed sandbox setup, then real continuation provider input.
-165
+# Accepted attachment recovery and hook-approved replay after sandbox setup fails.
+248

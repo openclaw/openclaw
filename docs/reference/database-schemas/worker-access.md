@@ -1068,7 +1068,9 @@ On a terminal sandbox provisioning failure before first dispatch, the built-in
 attempt can retain its already-prepared media input through this same recorder
 while the original admission remains current. Original user content and media
 identities stay unchanged; later turns consume the captured projection without
-rescanning historical attachments.
+rescanning historical attachments. Write-hook replacements take precedence over
+prepared text from the earlier input; the native recorder retains that source
+comparison only for its own lifetime.
 
 Gateway run-lifecycle events use the deterministic entry reducer in the same
 worker commit. Goal pauses and recovery updates derive from the current stored

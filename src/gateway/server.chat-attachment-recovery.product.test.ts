@@ -13,6 +13,9 @@ import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
+import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookHandlerMap } from "../plugins/hook-types.js";
+import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import {
   createProductState,
@@ -41,28 +44,30 @@ it(
       });
     });
     const sessionKey = "agent:main:failed-document";
+    const rewrittenKey = "agent:main:rewritten-document";
     const sentinel = "ATTACHMENT_RECOVERY_cobalt_orchard_731";
     const control = "ATTACHMENT_CONTROL_amber_lake_482";
     const document = `Read this selection and report its verification phrase: ${sentinel}.\n`;
     const resolveWorkspace = workspaceSandbox.resolveAttemptWorkspaceSandbox;
-    let injectFailure = true;
+    const setupFailures = new Set([sessionKey, rewrittenKey]);
     // Inject only the known preparation failure; admission, extraction, persistence,
     // the later attempt and its serialized provider request use the real owners.
     const setup = vi
       .spyOn(workspaceSandbox, "resolveAttemptWorkspaceSandbox")
       .mockImplementation(async (params) => {
-        if (params.sessionKey === sessionKey && injectFailure) {
-          injectFailure = false;
+        if (params.sessionKey && setupFailures.delete(params.sessionKey)) {
           throw toSandboxProvisioningError(new Error("Synthetic sandbox setup failure"), "docker");
         }
         return resolveWorkspace(params);
       });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    let releaseHook = () => {};
     try {
       const provider = buildMockOpenAiResponsesProvider(
         await listenProvider(providerServer),
         "attachment-recovery",
       );
+      provider.config.models[0].input = ["text", "image"];
       const model = productModelConfig(state.workspaceDir, provider);
       const cfg = {
         agents: { defaults: { ...model.defaults, utilityModel: "" } },
@@ -108,7 +113,7 @@ it(
       const failed = await send(sessionKey, "", document);
       expect(failed.status).toBe("started");
       expect(await wait(failed.runId)).toMatchObject({ status: "error" });
-      expect(injectFailure).toBe(false);
+      expect(setupFailures.has(sessionKey)).toBe(false);
       expect(requests).toEqual([]);
       const scope = { agentId: "main", sessionKey, sessionId: target.sessionId };
       const storedDocuments = async () =>
@@ -148,7 +153,85 @@ it(
       expect(requests[1]).not.toContain(sentinel);
       expect(errors).toEqual([]);
       expect(requests[0]?.includes(sentinel), "recovered document reached the provider").toBe(true);
+
+      const removedCaption = "HOOK_REMOVED_CAPTION_619";
+      let rewrites = 0;
+      const handler: PluginHookHandlerMap["before_message_write"] = ({ message }) => {
+        if (
+          message.role === "user" &&
+          typeof message.content === "string" &&
+          message.content.includes(removedCaption)
+        ) {
+          rewrites++;
+          message.content = "[redacted]";
+          return { message };
+        }
+        return undefined;
+      };
+      const registry = requireActivePluginRegistry();
+      const hook = {
+        pluginId: "attachment-rewrite-fixture",
+        hookName: "before_message_write" as const,
+        source: "test",
+        handler,
+      };
+      registry.typedHooks.push(hook);
+      initializeGlobalHookRunner(registry);
+      releaseHook = () => {
+        const index = registry.typedHooks.indexOf(hook);
+        if (index >= 0) {
+          registry.typedHooks.splice(index, 1);
+        }
+      };
+      const rewritten = await create(rewrittenKey);
+      const rejected = await client.request<{ runId: string }>("agent", {
+        sessionKey: rewritten.key,
+        message: removedCaption,
+        deliver: false,
+        idempotencyKey: randomUUID(),
+        attachments: [
+          {
+            fileName: "synthetic.png",
+            mimeType: "image/png",
+            content:
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=",
+          },
+        ],
+      });
+      const rejectedOutcome = await wait(rejected.runId);
+      expect(rejectedOutcome).toMatchObject({ status: "error" });
+      expect(setupFailures.has(rewrittenKey), JSON.stringify(rejectedOutcome)).toBe(false);
+      expect(rewrites).toBeGreaterThan(0);
+      expect(requests).toHaveLength(2);
+      const stored = (
+        await loadTranscriptEvents({
+          agentId: "main",
+          sessionKey: rewritten.key,
+          sessionId: rewritten.sessionId,
+        })
+      ).flatMap((event) => {
+        const message = asOptionalRecord(asOptionalRecord(event)?.message);
+        return message?.role === "user" ? [message] : [];
+      });
+      expect(stored, JSON.stringify(rejectedOutcome)).toHaveLength(1);
+      expect(stored[0]?.content).toBe("[redacted]");
+      expect
+        .soft(
+          JSON.stringify(stored).includes(removedCaption),
+          "hook-removed text stayed out of stored metadata",
+        )
+        .toBe(false);
+      const resume = await send(rewritten.key, "Continue.");
+      expect(await wait(resume.runId)).toMatchObject({ status: "ok" });
+      expect(requests).toHaveLength(3);
+      expect
+        .soft(
+          requests[2]?.includes(removedCaption),
+          "hook-removed text stayed out of continuation input",
+        )
+        .toBe(false);
     } finally {
+      releaseHook();
       setup.mockRestore();
       try {
         if (gateway) {

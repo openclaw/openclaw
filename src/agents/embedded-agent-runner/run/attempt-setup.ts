@@ -35,7 +35,9 @@ import {
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
 import { hasPersistedMedia } from "../../../sessions/user-turn-media.js";
+import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
 import { readModelPromptProjection } from "../../../sessions/user-turn-transcript.message.js";
+import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -64,6 +66,7 @@ import {
 } from "../tool-result-truncation.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
 import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
+import { resolveModelPromptText } from "./attempt-llm-boundary.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
@@ -144,7 +147,21 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
             assertCurrent();
             const persisted = recorder.getPersistedMessage?.();
             if (persisted && readModelPromptProjection(persisted) === undefined) {
-              await recorder.captureModelPromptProjection(params.prompt, assertCurrent);
+              const approvedText =
+                extractTextFromChatContent(persisted.content, {
+                  joinWith: "\n",
+                  normalizeText: (value) => value,
+                }) ?? "";
+              const submittedText = getUserTurnTranscriptAdmissionOwner(recorder)?.submittedText;
+              const text =
+                submittedText === undefined
+                  ? approvedText
+                  : resolveModelPromptText({
+                      text: approvedText,
+                      transcriptPrompt: submittedText,
+                      modelPrompt: params.prompt,
+                    });
+              await recorder.captureModelPromptProjection(text, assertCurrent);
             }
           }
         } catch (retentionError) {
