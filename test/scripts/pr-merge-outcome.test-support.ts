@@ -1000,7 +1000,8 @@ if [ -n "\${FIXTURE_DISPATCH_BODY:-}" ]; then
   MERGE_OUTCOME_REF=refs/openclaw/pr-merge-outcomes/123
   MERGE_OUTCOME_OID=$(git rev-parse "$MERGE_OUTCOME_REF")
   MERGE_OUTCOME_RECORD=$(git show "$MERGE_OUTCOME_OID:outcome.json")
-  MERGE_OBSERVATION=$(merge_rest observe 123)
+  observation=$(merge_read observe 123)
+  MERGE_OBSERVATION=$(merge_outcome_normalize "$observation" 123)
   body=$(snapshot_merge_body "$FIXTURE_DISPATCH_BODY")
   merge_outcome_dispatch_async 123 "$(jq -r .pr.headRefOid "$FIXTURE_STATE")" "$body"
 elif [ "\${9:-}" = verify ]; then

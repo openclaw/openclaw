@@ -109,7 +109,15 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     const bodySnapshot = { base64: "", sha256: createHash("sha256").update("").digest("hex") };
     const result = f.rest(
       ["merge", repo, "123", f.head],
-      JSON.stringify({ bodySnapshot, expectedObservation: JSON.parse(observed.stdout) }),
+      JSON.stringify({
+        bodySnapshot,
+        expectedObservation: {
+          main: JSON.parse(observed.stdout).data.repository.ref.target.oid,
+          pr: JSON.parse(observed.stdout).data.repository.pullRequest,
+          transport: "rest",
+          restPolicy: JSON.parse(observed.stdout).restPolicy,
+        },
+      }),
     );
     expectExit(result, 0);
     expect(f.state().restMergePayload?.commit_message).toBe("");

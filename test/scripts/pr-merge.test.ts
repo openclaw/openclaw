@@ -17,6 +17,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 type BodyScenario = {
+  captureComposeInput?: boolean;
   sourceMessages?: string[];
   sourceCommits?: Array<{
     message: string;
@@ -65,6 +66,7 @@ function prepareBody(scenario: BodyScenario = {}, parentEnv: NodeJS.ProcessEnv =
   const failureTrace = join(root, "injected-failures");
   const trailerMarker = join(root, "trailer-command-called");
   const body = join(root, "body");
+  const composeInput = join(root, "compose-input");
   const override = join(root, "operator body.md");
   if (scenario.overrideBody !== undefined) {
     writeFileSync(override, scenario.overrideBody);
@@ -187,6 +189,12 @@ console.log(JSON.stringify(page));
   const shell = `
 set -euo pipefail
 source "$BODY_MERGE_SCRIPT"
+# Observe only the golden case; tee forwards the exact bytes to the real composer.
+node() {
+  if [ "\${2:-}" = compose ] && [ -n "$BODY_COMPOSE_INPUT" ]; then
+    command tee "$BODY_COMPOSE_INPUT" | command node "$@"
+  else command node "$@"; fi
+}
 PREP_HEAD_SHA="$BODY_HEAD"
 LOCAL_PREP_HEAD_SHA="$BODY_LOCAL_HEAD"
 MERGE_REPO_NAME=fixture/repo
@@ -239,6 +247,7 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
       BODY_LOCAL_HEAD: localHead,
       BODY_SOURCE_REPO: sourceRepo,
       BODY_OUTPUT: body,
+      BODY_COMPOSE_INPUT: scenario.captureComposeInput ? composeInput : "",
       BODY_OVERRIDE: scenario.overrideBody === undefined ? "" : override,
       BODY_READ_ERROR: String(scenario.sourceReadError ?? false),
       BODY_WRITE_ERROR: String(scenario.bodyWriteError ?? false),
@@ -284,6 +293,7 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
     bodyFiles: readdirSync(join(sourceRepo, ".local")).filter((name) =>
       name.startsWith("merge-body."),
     ),
+    composeInput: existsSync(composeInput) ? readFileSync(composeInput, "utf8") : null,
     trailerCommandCalled: existsSync(trailerMarker),
     injectedFailures: readFileSync(failureTrace, "utf8").trim().split("\n").filter(Boolean),
     authorRequests: readFileSync(authorTrace, "utf8")
@@ -298,6 +308,39 @@ const maintainerTrailer = "Co-authored-by: Maintainer <maintainer@example.com>";
 const machineTrailer = "Co-authored-by: Claude <noreply@anthropic.com>";
 
 describePosix("native squash attribution", () => {
+  it("preserves the 118-byte healthy input as the exact 180-byte golden body", () => {
+    const credit = 'Co-authored-by: Élodie "Quoted" <elodie@example.com>';
+    const message =
+      'Repair\n\nRésumé 漢字 "quoted" \\ path; literal $(no-command)\n\n' + credit + "\n";
+    const author = person("Fixture Maintainer", "maintainer@example.com");
+    const result = prepareBody({
+      captureComposeInput: true,
+      restPreview: true,
+      prAuthor: "fixture-human",
+      previewBody: "Preview",
+      squashMessage: "COMMIT_MESSAGES",
+      sourceCommits: [source(message, author)],
+    });
+    expect(Buffer.byteLength(message)).toBe(118);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.composeInput).toBe(
+      JSON.stringify({
+        preview: "Preview",
+        prAuthor: { login: "fixture-human", __typename: "User" },
+        source: credit,
+        authors: [{ ...author, user: { login: "fixture-human", type: "User" }, changesTree: true }],
+        captured: "",
+        queue: false,
+        sourceCredit: true,
+        squashDefault: { title: "PR_TITLE", message: "COMMIT_MESSAGES", commits: [message] },
+      }) + "\n",
+    );
+    const expected =
+      "* " + message + "Co-authored-by: Fixture Maintainer <maintainer@example.com>\n";
+    expect(Buffer.byteLength(expected)).toBe(180);
+    expect(result.mergeBody).toBe(expected);
+  });
+
   it.each(["source", "authors", "captured", "messages"])(
     "preserves large %s through the native composition boundary",
     (field) => {
