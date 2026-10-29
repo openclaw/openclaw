@@ -1,0 +1,2 @@
+# Original SVG browser download and inert MIME regression coverage.
+128

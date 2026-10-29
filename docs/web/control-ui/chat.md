@@ -276,6 +276,8 @@ and **Download image** inside its lower-right corner. Devices without hover keep
 these controls visible. Selecting the image itself still opens the viewer.
 **Download image** fetches the original only when selected. A failed preview can
 still have an accessible original, so its action menu retains copy and download.
+For an SVG attachment, the viewer saves the original SVG bytes and filename.
+The download remains a file; it does not open the SVG as an active document.
 When the Gateway confirms that the source is unavailable, the card omits these
 file actions and keeps its applicable recovery action, such as **Retry**.
 Third-party image URLs retain a secondary browser link because their servers
