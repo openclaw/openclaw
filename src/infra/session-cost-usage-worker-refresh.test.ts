@@ -166,6 +166,46 @@ it.each<[string, Row[], [number, number, string], string?]>([
   }
 });
 
+it("follows leaf controls when a switch copies an inactive branch", async () => {
+  // The source selects root -> chosen -> chosen-tail (6 tokens); hidden and hidden-tail (200) are
+  // an inactive branch the source never counted, so the switch's copy must count them.
+  const source = [
+    createSessionTranscriptHeader({ sessionId: "source" }),
+    ...[
+      makeRow(1, "root", null, 1),
+      makeRow(4, "hidden", "root", 100),
+      makeRow(5, "hidden-tail", "hidden", 100),
+      control(8, "leaf", "switch", "hidden-tail", "root"),
+      makeRow(13, "chosen", "switch", 2),
+      makeRow(20, "chosen-tail", "chosen", 3),
+    ].map(({ event }) => event),
+  ];
+  expectUsage(
+    await scan(source.map((event, index) => ({ seq: index, event }))),
+    6,
+    3,
+    "chosen-tail",
+  );
+  const plan = planSessionMessageCut(
+    { sessionId: "source", lifecycleRevision: "r1", updatedAt: timestamp },
+    source,
+    {
+      mode: "switch",
+      entryId: "hidden-tail",
+      expectedState: { sessionId: "source", lifecycleRevision: "r1" },
+      sourceKey: "agent:main:source",
+      canonicalSourceKey: "agent:main:source",
+      targetKey: "agent:main:copy",
+    },
+  );
+  expect(plan.status).toBe("prepared");
+  const copy = plan.status === "prepared" ? plan.events.filter(isRecord) : [];
+  const result = await scan(copy.map((event, index) => ({ seq: index, event })));
+  expect(
+    Object.values(result.rollup.buckets).reduce((sum, b) => sum + b.totals.totalTokens, 0),
+  ).toBe(200);
+});
+
 it("aggregates duplicate-ID paths in selected ancestry order when sequence numbers go backward", async () => {
   const user = (at: number) => ({
     type: "message",
