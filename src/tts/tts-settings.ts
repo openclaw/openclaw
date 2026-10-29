@@ -265,6 +265,7 @@ export function resolveTtsSettingsSnapshot(params: {
       : configuredProvider
         ? { provider: configuredProvider, source: "config" }
         : undefined;
+  const summaryInstructions = prefs.tts?.summaryInstructions;
   return {
     autoMode:
       normalizeTtsAutoMode(params.sessionAuto) ?? resolveTtsAutoModeFromPrefs(prefs) ?? config.auto,
@@ -277,6 +278,10 @@ export function resolveTtsSettingsSnapshot(params: {
       : {}),
     prefsPath,
     summarize: prefs.tts?.summarize ?? DEFAULT_TTS_SUMMARIZE,
+    summaryInstructions:
+      typeof summaryInstructions === "string" && summaryInstructions.length <= 2000
+        ? summaryInstructions.trim()
+        : undefined,
   };
 }
 

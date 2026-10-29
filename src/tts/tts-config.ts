@@ -126,6 +126,7 @@ export type TtsUserPrefs = {
     persona?: string | null;
     maxLength?: number;
     summarize?: boolean;
+    summaryInstructions?: string;
   };
 };
 
