@@ -36,6 +36,7 @@ import type {
   WorkboardStatsResult,
   WorkboardUpdateCardOptions,
 } from "./store-inputs.js";
+import { trimMetadataToBudget } from "./store-metadata-budget.js";
 import {
   appendLinkPreservingDependencies,
   metadataIsEmpty,
@@ -53,10 +54,13 @@ import {
   normalizeTimestamp,
   normalizeTitle,
   syncExecutionSessionKey,
-  trimMetadataToBudget,
 } from "./store-normalizers.js";
 import { readCards } from "./store-read.js";
-import { resolveLifecycleStatusWrite, settleManualStatusTransition } from "./store-status-write.js";
+import {
+  resolveLifecycleStatusWrite,
+  settleManualStatusTransition,
+  WorkboardCardConflictError,
+} from "./store-status-write.js";
 import { normalizeCappedStringList } from "./store-string-lists.js";
 
 export class WorkboardCoreStore extends WorkboardBoardStore {
@@ -876,10 +880,4 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   }
 }
 
-export class WorkboardCardConflictError extends Error {
-  constructor(readonly current: WorkboardCard) {
-    super("Card changed while you were editing. Review the latest values and retry.");
-    this.name = "WorkboardCardConflictError";
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

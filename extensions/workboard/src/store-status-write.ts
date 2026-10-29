@@ -16,7 +16,14 @@ import {
 } from "./store-card-helpers.js";
 import { MAX_CARD_NOTIFICATIONS } from "./store-constants.js";
 import type { WorkboardCardPatch } from "./store-inputs.js";
-import { trimMetadataToBudget } from "./store-normalizers.js";
+import { trimMetadataToBudget } from "./store-metadata-budget.js";
+
+export class WorkboardCardConflictError extends Error {
+  constructor(readonly current: WorkboardCard) {
+    super("Card changed while you were editing. Review the latest values and retry.");
+    this.name = "WorkboardCardConflictError";
+  }
+}
 
 export function finishRun(
   card: WorkboardCard,

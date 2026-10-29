@@ -23,7 +23,8 @@ import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardSessionsBoardService } from "./sessions-board.js";
 import { resolveWorkboardSqliteWorkerModuleUrl } from "./sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./store-lifecycle.js";
-import { WorkboardCardConflictError, WorkboardStore } from "./store.js";
+import { WorkboardCardConflictError } from "./store-status-write.js";
+import { WorkboardStore } from "./store.js";
 import {
   assertWorkboardWorkspaceMutationAccess,
   canonicalizeWorkboardWorkspaceAccess,

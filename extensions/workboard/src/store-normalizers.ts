@@ -53,7 +53,6 @@ import {
   MAX_CARD_COMMENTS,
   MAX_CARD_DIAGNOSTICS,
   MAX_CARD_LINKS,
-  MAX_CARD_METADATA_BYTES,
   MAX_CARD_NOTIFICATIONS,
   MAX_CARD_PROOF,
   MAX_CARD_WORKER_LOGS,
@@ -65,6 +64,7 @@ import type {
   WorkboardProofInput,
   WorkboardWorkerLogInput,
 } from "./store-inputs.js";
+import { isDependencyLink, trimMetadataToBudget } from "./store-metadata-budget.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
 
 export function normalizeBoardId(value: unknown, fallback?: string): string | undefined {
@@ -435,10 +435,6 @@ function normalizeLink(record: unknown): WorkboardLink | null {
   });
 }
 
-function isDependencyLink(link: WorkboardLink): boolean {
-  return link.type === "parent" || link.type === "child";
-}
-
 function normalizeProof(record: Record<string, unknown>): WorkboardProof | null {
   const id = normalizeOptionalString(record.id);
   const createdAt = normalizeTimestamp(record.createdAt, 0);
@@ -754,27 +750,6 @@ function normalizeList<T>(
     : fallback;
 }
 
-/** Metadata fields Workboard persists; a write that names anything else must fail loudly. */
-const SUPPORTED_METADATA_KEYS: ReadonlySet<string> = new Set([
-  "artifacts",
-  "attempts",
-  "attachments",
-  "automation",
-  "archivedAt",
-  "claim",
-  "comments",
-  "diagnostics",
-  "failureCount",
-  "lifecycleStatusSourceUpdatedAt",
-  "links",
-  "notifications",
-  "proof",
-  "stale",
-  "templateId",
-  "workerLogs",
-  "workerProtocol",
-]);
-
 export function normalizeMetadata(
   value: unknown,
   fallback: WorkboardMetadata = {},
@@ -787,16 +762,6 @@ export function normalizeMetadata(
     rejectUnknownKeys?: boolean;
   } = {},
 ): WorkboardMetadata {
-  if (options.rejectUnknownKeys && isRecord(value)) {
-    const unsupported = Object.keys(value)
-      .filter((key) => !SUPPORTED_METADATA_KEYS.has(key))
-      .toSorted();
-    if (unsupported.length > 0) {
-      throw new Error(
-        `Unsupported workboard metadata key(s): ${unsupported.join(", ")}. Supported keys: ${[...SUPPORTED_METADATA_KEYS].toSorted().join(", ")}.`,
-      );
-    }
-  }
   if (!isRecord(value) && !options.automationLaunch) {
     return trimMetadataToBudget(fallback, options);
   }
@@ -906,6 +871,16 @@ export function normalizeMetadata(
     failureCount:
       resolveOptionalIntegerOption(record.failureCount, { min: 0 }) ?? fallback.failureCount,
   };
+  if (options.rejectUnknownKeys) {
+    const unsupported = Object.keys(record)
+      .filter((key) => !Object.hasOwn(normalized, key))
+      .toSorted();
+    if (unsupported.length > 0) {
+      throw new Error(
+        `Unsupported workboard metadata key(s): ${unsupported.join(", ")}. Supported keys: ${Object.keys(normalized).toSorted().join(", ")}.`,
+      );
+    }
+  }
   return trimMetadataToBudget(normalized, options);
 }
 
@@ -954,16 +929,6 @@ export function syncExecutionSessionKey(
   });
 }
 
-export function removeUndefinedMetadataFields(metadata: WorkboardMetadata): WorkboardMetadata {
-  const next = definedFields({ ...metadata });
-  for (const [key, value] of Object.entries(next)) {
-    if ((Array.isArray(value) && value.length === 0) || (key === "failureCount" && value === 0)) {
-      Reflect.deleteProperty(next, key);
-    }
-  }
-  return next;
-}
-
 export function clearDiagnostics(
   metadata: WorkboardMetadata | undefined,
   kinds: readonly WorkboardDiagnosticKind[],
@@ -981,10 +946,6 @@ export function metadataIsEmpty(metadata: WorkboardMetadata | undefined): boolea
   return !metadata || Object.keys(metadata).length === 0;
 }
 
-function metadataByteSize(metadata: WorkboardMetadata): number {
-  return Buffer.byteLength(JSON.stringify(metadata), "utf8");
-}
-
 export function appendLinkPreservingDependencies(
   links: readonly WorkboardLink[],
   link: WorkboardLink,
@@ -1000,56 +961,4 @@ export function appendLinkPreservingDependencies(
   return next.filter((_, index) => index !== dropIndex);
 }
 
-export function trimMetadataToBudget(
-  metadata: WorkboardMetadata,
-  options: { preserveProofId?: string; preserveNotificationId?: string } = {},
-): WorkboardMetadata {
-  let next = removeUndefinedMetadataFields(metadata);
-  while (metadataByteSize(next) > MAX_CARD_METADATA_BYTES) {
-    const currentSize = metadataByteSize(next);
-    for (const key of [
-      "attempts",
-      "diagnostics",
-      "notifications",
-      "proof",
-      "artifacts",
-      "attachments",
-      "workerLogs",
-      "links",
-      "comments",
-    ] as const) {
-      const entries = next[key];
-      if (!entries?.length) {
-        continue;
-      }
-      const preserveId = key === "proof" ? options.preserveProofId : options.preserveNotificationId;
-      const index =
-        key === "proof" || key === "notifications"
-          ? (next[key]?.findIndex((entry) => entry.id !== preserveId) ?? -1)
-          : key === "links"
-            ? (next.links?.findIndex((link) => !isDependencyLink(link)) ?? -1)
-            : 0;
-      if (index < 0) {
-        continue;
-      }
-      next = removeUndefinedMetadataFields({
-        ...next,
-        [key]: entries.filter((_, entryIndex) => entryIndex !== index),
-      });
-      break;
-    }
-    if (metadataByteSize(next) >= currentSize) {
-      if (options.preserveProofId) {
-        throw new Error(`card metadata cannot retain proof: ${options.preserveProofId}`);
-      }
-      if (options.preserveNotificationId) {
-        throw new Error(
-          `card metadata cannot retain notification: ${options.preserveNotificationId}`,
-        );
-      }
-      break;
-    }
-  }
-  return next;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
