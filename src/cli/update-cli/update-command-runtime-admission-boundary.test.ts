@@ -21,6 +21,188 @@ import type { PreManagedServiceStop } from "./update-command-service-context-typ
 import * as servicePlan from "./update-command-service-plan.js";
 import { updateCommand } from "./update-command.js";
 
+// Diagnostic-only: never serialize input objects or free-form strings. Bound all
+// collections and fail closed on getters/proxies; cycles are never traversed.
+function boundaryDiagnostic(
+  drift: unknown,
+  earlySucceeded: unknown,
+  captures: unknown,
+  calls: unknown,
+  errors: unknown = [],
+) {
+  const count = (value: unknown): number => {
+    const length: unknown = Array.isArray(value) ? value.length : 0;
+    return typeof length === "number" && Number.isSafeInteger(length) && length >= 0
+      ? Math.min(length, 32)
+      : 0;
+  };
+  const field = (value: unknown, key: string): unknown =>
+    value !== null && typeof value === "object"
+      ? (value as Record<string, unknown>)[key]
+      : undefined;
+  const reason = (value: unknown) => {
+    switch (value) {
+      case "managed-service-preflight":
+      case "node-runtime-missing":
+      case "node-runtime-incompatible":
+      case "engine-incompatible":
+      case "installation-unclassified":
+      case "database-preflight":
+        return value;
+      default:
+        return "other";
+    }
+  };
+  const status = (value: unknown) => {
+    switch (value) {
+      case "ok":
+      case "error":
+      case "skipped":
+      case "refused":
+        return value;
+      default:
+        return "other";
+    }
+  };
+  try {
+    const reports: {
+      reason: ReturnType<typeof reason>;
+      status: ReturnType<typeof status>;
+      steps: number;
+      warnings: number;
+      facts: number;
+    }[] = [];
+    let hasTypeError = false;
+    let hasModuleNotFound = false;
+    let hasSqliteError = false;
+    let hasFixtureCaptureStop = false;
+    for (let index = 0; index < count(errors); index++) {
+      const error = field(field(errors, String(index)), "0");
+      if (typeof error === "string") {
+        hasTypeError ||= error.includes("TypeError");
+        hasModuleNotFound ||=
+          error.includes("ERR_MODULE_NOT_FOUND") || error.includes("Cannot find module");
+        hasSqliteError ||= error.includes("SQLITE_");
+        hasFixtureCaptureStop ||= error.includes(
+          "Fixture stops best-effort capture after injecting drift",
+        );
+      }
+    }
+    for (let index = 0; index < count(calls); index++) {
+      const report = field(field(calls, String(index)), "0");
+      const steps = field(report, "steps");
+      let warnings = count(field(report, "warnings"));
+      let facts = count(field(report, "failureFacts"));
+      for (let step = 0; step < count(steps); step++) {
+        const entry = field(steps, String(step));
+        warnings += count(field(entry, "warnings"));
+        facts += count(field(entry, "failureFacts"));
+      }
+      reports.push({
+        reason: reason(field(report, "reason")),
+        status: status(field(report, "status")),
+        steps: count(steps),
+        warnings,
+        facts,
+      });
+    }
+    return {
+      drift:
+        drift === "permission" || drift === "definition" || drift === "executable"
+          ? drift
+          : "other",
+      earlySucceeded: earlySucceeded === true,
+      // Reached only after the unchanged code:1 rejection assertion succeeds.
+      expectedCode1: true,
+      captures: count(captures),
+      captureCountCapped: count(captures) === 32,
+      reportCountCapped: count(calls) === 32,
+      reports,
+      errors: count(errors),
+      errorCountCapped: count(errors) === 32,
+      hasTypeError,
+      hasModuleNotFound,
+      hasSqliteError,
+      hasFixtureCaptureStop,
+      projectionFailed: false,
+    };
+  } catch {
+    return { projectionFailed: true };
+  }
+}
+
+it("keeps boundary diagnostics allowlisted for hostile and cyclic input", () => {
+  const secret = "/private/runner/token-DO-NOT-EMIT";
+  const cyclic: Record<string, unknown> = {
+    reason: secret,
+    status: secret,
+    root: secret,
+    pid: 1234567,
+    freeBytes: 987654321,
+  };
+  cyclic.self = cyclic;
+  cyclic.toJSON = () => {
+    throw new Error(secret);
+  };
+  cyclic.steps = [{ warnings: [secret], failureFacts: [{ message: secret }] }];
+  const projected = boundaryDiagnostic(secret, true, [[]], [[cyclic]]);
+  expect(projected).toEqual({
+    drift: "other",
+    earlySucceeded: true,
+    expectedCode1: true,
+    captures: 1,
+    captureCountCapped: false,
+    reportCountCapped: false,
+    reports: [{ reason: "other", status: "other", steps: 1, warnings: 1, facts: 1 }],
+    errors: 0,
+    errorCountCapped: false,
+    hasTypeError: false,
+    hasModuleNotFound: false,
+    hasSqliteError: false,
+    hasFixtureCaptureStop: false,
+    projectionFailed: false,
+  });
+  expect(JSON.stringify(projected)).not.toContain(secret);
+  expect(JSON.stringify(projected)).not.toContain("1234567");
+  expect(JSON.stringify(projected)).not.toContain("987654321");
+  expect(
+    boundaryDiagnostic(
+      "executable",
+      false,
+      [],
+      [],
+      [[secret + " TypeError SQLITE_BUSY ERR_MODULE_NOT_FOUND"]],
+    ),
+  ).toMatchObject({ hasTypeError: true, hasModuleNotFound: true, hasSqliteError: true });
+  const hostile = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error(secret);
+      },
+    },
+  );
+  expect(boundaryDiagnostic("permission", false, [], [[hostile]])).toEqual({
+    projectionFailed: true,
+  });
+  const revoked = Proxy.revocable([], {});
+  revoked.revoke();
+  expect(boundaryDiagnostic("permission", false, revoked.proxy, [])).toEqual({
+    projectionFailed: true,
+  });
+  expect(
+    boundaryDiagnostic(
+      "definition",
+      false,
+      [],
+      [[{ reason: "managed-service-preflight", status: "error" }]],
+    ),
+  ).toMatchObject({
+    drift: "definition",
+    reports: [{ reason: "managed-service-preflight", status: "error" }],
+  });
+});
+
 const { fixture } = installFreshUpdateFixture();
 it.each(["installed", undefined] as const)(
   "rechecks current-Node authority before staging with %s admission",
@@ -148,6 +330,22 @@ it.each(["permission", "definition", "executable"] as const)(
     await expect(
       updateCommand({ tag: targetMetadata.version, yes: true, json: true, admission: "installed" }),
     ).rejects.toMatchObject({ code: 1 });
+    try {
+      console.error(
+        "BOUNDARY_DIAGNOSTIC",
+        JSON.stringify(
+          boundaryDiagnostic(
+            drift,
+            earlySucceeded,
+            capture.mock.calls,
+            vi.mocked(defaultRuntime.writeJson).mock.calls,
+            vi.mocked(defaultRuntime.error).mock.calls,
+          ),
+        ),
+      );
+    } catch {
+      // Diagnostics must never replace the original assertion failure.
+    }
     expect(capture).toHaveBeenCalledOnce();
     expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
     expect(install).not.toHaveBeenCalled();
