@@ -303,7 +303,7 @@ export function createChatSendMessageInjectionStarter(params: {
           ...(!isProgressCardRefreshInputProvenance(ctx.InputProvenance) && debounceMs !== undefined
             ? { debounceMs }
             : {}),
-          // A prepared same-requester join keeps the incumbent's negotiated tool
+          // A prepared continuation keeps the incumbent's negotiated tool
           // surface, so this connection's capability must not retarget it.
           ...(preparedJoin
             ? {}

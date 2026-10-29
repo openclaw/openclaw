@@ -85,6 +85,8 @@ describe("ordinary steering into automatic model fallback", () => {
         gitContributorProfileId: "alice",
       });
       run.run.config = { messages: { queue: { allowCollaborativeSteering: false } } };
+      const taskSuggestionDeliveryMode = scenario === "linked text" ? "gateway" : undefined;
+      run.run.taskSuggestionDeliveryMode = taskSuggestionDeliveryMode;
       run.operatorAuthority = operator(run, "alice");
       const ownerContext = {
         Provider: "telegram",
@@ -134,6 +136,7 @@ describe("ordinary steering into automatic model fallback", () => {
       const nativeSteer = vi.fn(async () => {});
       operation.attachBackend({
         kind: "embedded",
+        taskSuggestionDeliveryMode,
         terminalReplyExpectation: "required",
         supportsTranscriptCommitWait: true,
         supportsQueueMessageImages: true,
@@ -176,6 +179,9 @@ describe("ordinary steering into automatic model fallback", () => {
           incoming.run.senderIsOwner = false;
           incoming.run.traceAuthorized = false;
           incoming.toolsAllow = ["read"];
+          // Crossing surfaces retains the incumbent tools in either direction.
+          incoming.run.taskSuggestionDeliveryMode =
+            scenario === "linked operator image" ? "gateway" : undefined;
           bindRequesterProfile(context, { id: "alice", displayName: null, isCurrent: () => true });
         }
         if (scenario.endsWith("image")) {
@@ -187,6 +193,7 @@ describe("ordinary steering into automatic model fallback", () => {
         });
         expect(question.isCancellationRequested()).toBe(false);
         expect(nativeSteer).toHaveBeenCalledTimes(linked ? 1 : 0);
+        expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
         expect(answer).toHaveBeenCalledTimes(linked ? 0 : 1);
         if (linked) {
           await steer({ ...run, messageId: "later-owner-answer", run: { ...run.run } }, key, {
