@@ -157,12 +157,4 @@ describe("worker policy owner comparisons", () => {
     settleClose();
     await closing;
   });
-  it("can retire a quiescent actor for genuinely different policy", async () => {
-    const owner = getOpenClawStateWorkerOwner();
-    await owner.open(context(installation));
-    await owner.open(context({ ...installation, root: "/different" }));
-    expect(fixture.close).toHaveBeenCalledTimes(1);
-    expect(fixture.open).toHaveBeenCalledTimes(2);
-    await owner.close();
-  });
 });

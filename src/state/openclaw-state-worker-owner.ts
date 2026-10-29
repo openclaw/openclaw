@@ -348,7 +348,9 @@ function createSharedStateWorkerOwner() {
               "Shared-state worker policy changed while its actor is in use; close its leases first",
             );
           }
-          await wait(retire(candidate));
+          // Cleanup clients can still retain the actor after this entry closes.
+          // Retire every client before reopening under the new policy.
+          await wait(candidate.actor ? retireActor(candidate.actor) : retire(candidate));
           assertAdmission();
         }
       }

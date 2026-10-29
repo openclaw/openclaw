@@ -49,7 +49,7 @@ export function startSessionCostUsageProjectionLifetime(params: {
       }
       void work
         .track(async () => {
-          const { agents } = await listGatewayAgentsBasic(params.getConfig());
+          const { agents } = await listGatewayAgentsBasic(params.getConfig(), work.signal);
           for (const agent of agents) {
             if (agentId === undefined || agent.id === agentId) {
               refreshAgent(agent.id);

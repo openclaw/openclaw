@@ -70,9 +70,9 @@ describe("flattenMarkdownToPlainText", () => {
       "Keep [this](https://example.com/open( text",
     ],
     [
-      "heading and list markers",
-      "# Heading\n- bullet\n+ plus\n* star\n2) numbered\n> quote",
-      "Heading bullet plus star numbered quote",
+      "block markers, nested quotes, line boundaries, and inline comparisons",
+      "# Heading\n- bullet\n+ plus\n* star\n2) numbered\n> quote\n>quoted\n>> deep\n>>>tight\n> > spaced\n> >>mixed\n>\r\n    > literal\nNext a > b\n\\>escaped\n#Heading\n-bullet",
+      "Heading bullet plus star numbered quote quoted deep tight spaced mixed > literal Next a > b \\>escaped #Heading -bullet",
     ],
     ["emphasis", "**bold** _italic_ ~~struck~~", "bold italic struck"],
     ["wider opener preference", "__a_ _b__", "a_ _b"],

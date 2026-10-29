@@ -59,13 +59,21 @@ export function mergeGatewayServiceEnv(
   command: GatewayServiceCommandConfig | null,
 ): GatewayServiceEnv {
   const windows = process.platform === "win32";
-  if (!command || (!command.environment && !windows)) {
+  if (!command) {
     return baseEnv;
   }
   const callerEnv = windows ? projectWindowsServiceEnv(baseEnv) : baseEnv;
+  // Installed payloads do not inherit the inspecting CLI's state selectors.
+  const payloadEnv = {
+    ...callerEnv,
+    OPENCLAW_HOME: undefined,
+    OPENCLAW_STATE_DIR: undefined,
+    OPENCLAW_PROFILE: undefined,
+    OPENCLAW_CONFIG_PATH: undefined,
+  };
   const merged = windows
-    ? projectWindowsServiceEnv(baseEnv, command.environment)
-    : { ...baseEnv, ...command.environment };
+    ? projectWindowsServiceEnv(payloadEnv, command.environment)
+    : { ...payloadEnv, ...command.environment };
   if (windows) {
     const profile = resolveWindowsServiceCommandProfile(command);
     if (profile.kind === "resolved" && profile.source === "argv") {

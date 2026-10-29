@@ -30,6 +30,7 @@ import type {
   ResponsesContinuationRequest,
   ResponsesContinuationState,
 } from "../../packages/ai/src/transports/openai-responses-continuation.js";
+import { summarizeGcByKind } from "../lib/gc-profile-summary.ts";
 
 const { values } = parseArgs({
   options: {
@@ -192,17 +193,7 @@ console.log(
     sampledBytes,
     sampledBytesPerTurn: sampledBytes === undefined ? undefined : sampledBytes / iterations,
     samples,
-    gc: [...new Set(collections.map((entry) => entry.gcType))].map((kind) => {
-      const pauses = collections
-        .filter((entry) => entry.gcType === kind)
-        .map((entry) => entry.cost / 1000);
-      return {
-        kind,
-        count: pauses.length,
-        totalMs: pauses.reduce((sum, ms) => sum + ms, 0),
-        maxMs: Math.max(0, ...pauses),
-      };
-    }),
+    gc: summarizeGcByKind(collections),
     memoryBefore,
     memoryAfter,
     hostLoadBefore,
