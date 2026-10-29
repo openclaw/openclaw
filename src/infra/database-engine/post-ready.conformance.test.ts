@@ -274,10 +274,16 @@ conformance("pending input workers", () => {
     return receipt;
   };
 
-  it("retains interrupted history and excludes consumed inputs from counted and context pages", async () => {
+  it("retains failed sends while excluding legacy interrupted and consumed inputs from history", async () => {
     const retained = await stage("retained");
-    retained.finish("interrupted");
+    retained.finish("cancelled");
     await retained.settled?.();
+    const legacy = await stage("legacy-interrupted");
+    legacy.finish("interrupted");
+    await legacy.settled?.();
+    expect(await readSessionSubmittedInput(scope, "legacy-interrupted:user")).toEqual(
+      legacy.message,
+    );
     const consumed = await stage("consumed");
     expect(
       await consumed.run(() => appendTranscriptMessage(scope, { message: consumed.message })),
@@ -286,7 +292,7 @@ conformance("pending input workers", () => {
 
     const expected = {
       id: retained.inputId,
-      state: "interrupted",
+      state: "cancelled",
       message: { content: "retained" },
     };
     expect(await listSessionPendingInputs(scope)).toMatchObject({

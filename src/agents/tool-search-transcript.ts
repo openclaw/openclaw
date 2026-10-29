@@ -8,7 +8,7 @@ function freezeJsonSnapshot(value: unknown): unknown {
   if (value === null || typeof value !== "object") {
     return value;
   }
-  for (const nested of Object.values(value)) {
+  for (const nested of Array.isArray(value) ? value : Object.values(value)) {
     freezeJsonSnapshot(nested);
   }
   return Object.freeze(value);

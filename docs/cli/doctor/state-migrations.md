@@ -33,6 +33,11 @@ suffix can be appended. Matching stores finish archival with the original bytes
 preserved. Genuine content conflicts retain the affected store and its originals;
 Doctor displays the blocking finding and records archive validation as failed.
 
+Retained session recovery prepares archive mappings once per verification phase,
+including when the legacy index is already archived. Source files are still
+rechecked after asynchronous verification. Interrupted-run manifests remain
+available as recovery evidence; you do not need to delete them before retrying.
+
 Session-key repair treats paths that resolve to the same physical database as one
 store, including case variants on case-insensitive filesystems. For example, an
 existing `agents/BA-EA` directory can serve the configured `ba-ea` agent without

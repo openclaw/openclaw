@@ -110,6 +110,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-muted);
+  white-space: pre-wrap;
 }
 
 .sidebar-markdown pre {

@@ -464,9 +464,8 @@ it.each([
     const group = createToolGroup("outcome", [createMessageEntry("call", message)]);
     view.render([group], { showReasoning: false, runActive });
     await settleToolBridges(container);
-    expect(container.querySelectorAll(".chat-tool-failure")).toHaveLength(
-      status === "failed" ? 1 : 0,
-    );
+    // The collapsed group leaves outcomes to its rows; the expanded row below reports it.
+    expect(container.querySelectorAll(".chat-tool-failure")).toHaveLength(0);
     view.render([group], {
       showReasoning: false,
       runActive,

@@ -48,7 +48,7 @@ it("forwards turn context and tool policy for the concrete Codex runtime", async
 
   const result = await runTurn({
     followupRun,
-    opts: { forceRestartSafeTools: true, forceCodeModeTools: true, toolsAllow: ["message"] },
+    opts: { toolsAllow: ["message"] },
     getActiveSessionEntry: () => ({
       sessionId: "session",
       updatedAt: 1,
@@ -58,8 +58,6 @@ it("forwards turn context and tool policy for the concrete Codex runtime", async
 
   expect(result.kind).toBe("success");
   expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded thinking params", {
-    forceRestartSafeTools: true,
-    forceCodeModeTools: true,
     toolsAllow: ["message"],
     extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
     extraSystemPromptTurnContext: turnContext,

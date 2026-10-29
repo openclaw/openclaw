@@ -294,58 +294,6 @@ describe("agent request Swarm preflight", () => {
   });
 });
 
-describe("agent request restart recovery preflight", () => {
-  const overrideError = "forceCodeModeTools is reserved for native restart recovery.";
-  const retryError = expect.stringContaining("execution identity recovery fields");
-  const subagent = "subagent_restart_recovery";
-  it.each([
-    ["backend recovery", true, true, undefined, undefined, false],
-    ["non-backend retry", false, true, undefined, retryError, false],
-    ["non-backend override", false, false, undefined, overrideError, false],
-    ["unrelated internal override", true, false, "other_internal_source", overrideError, false],
-    ["backend subagent recovery", true, false, subagent, undefined, false],
-    ["non-backend subagent override", false, false, subagent, overrideError, false],
-    ["subagent recovery for another session", true, false, subagent, overrideError, true],
-    ["subagent identity retry", true, true, subagent, retryError, false],
-  ] as const)(
-    "checks Code Mode authority for %s",
-    async (_name, backend, retry, sourceTool, error, mismatchedSource) => {
-      const sessionKey =
-        sourceTool === "subagent_restart_recovery"
-          ? "agent:main:dashboard:recovery-child"
-          : "agent:main:main";
-      const outcome = await runRequest(
-        {
-          message: "continue",
-          sessionKey,
-          idempotencyKey: "restart-recovery-run",
-          forceRestartSafeTools: true,
-          forceCodeModeTools: true,
-          ...(retry
-            ? { internalExecutionIdentityRetry: true, internalExecutionIdentityRecoveryAttempt: 1 }
-            : {}),
-          inputProvenance: {
-            kind: "internal_system",
-            sourceSessionKey: mismatchedSource ? "agent:main:dashboard:other-child" : sessionKey,
-            sourceTool: sourceTool ?? "main_session_restart_recovery",
-          },
-        },
-        undefined,
-        backend,
-      );
-      if (error) {
-        expectRejected(outcome, { code: "INVALID_REQUEST", message: error });
-      } else {
-        expect(outcome.result).toBeDefined();
-        expect(outcome.result?.isRestartRecoveryResumeRun).toBe(
-          sourceTool !== "subagent_restart_recovery",
-        );
-        expect(outcome.respond).not.toHaveBeenCalled();
-      }
-    },
-  );
-});
-
 it.each(["ops", undefined])("checks explicit bare-key ownership (%s)", async (owner) => {
   const outcome = await runRequest(
     {

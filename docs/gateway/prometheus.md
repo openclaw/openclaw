@@ -1231,6 +1231,29 @@ reuse the memory telemetry port; port closure stops its observer. Workers withou
 that port, nested workers outside this registry, and runtimes without native GC
 entries are not covered. Worker exit can lose a final undelivered batch.
 
+`openclaw_heap_used_after_major_gc_bytes{thread="main"}` records the full main
+isolate's used heap at the native `MarkSweepCompact` epilogue. Its companion
+`openclaw_heap_used_after_major_gc_timestamp_seconds` records the Unix time when
+the existing observer drains that sample, normally within one second of collection
+but later if the event loop is blocked. V8's profiler does not expose a
+per-collection timestamp. Scavenges and incremental collections update neither
+gauge. No extra collection, polling, heap read, or observer is added.
+
+Both gauges are absent until an observed major collection and retain their last
+sample until another major collection or exporter restart. Use the timestamp to
+check freshness; a large old-space limit can make major collections rare.
+**A minimum of `heap_used` over a time window is not a leak signal under a large
+old-space limit:** it can mostly measure garbage awaiting the next major GC.
+Compare fresh post-major-GC samples under comparable workloads instead.
+
+Workers reuse the existing GC batches on their memory telemetry channel, with
+`thread` set to the same bounded worker-script label as the GC histogram. A
+worker-kind gauge is the most recently received isolate sample, not a sum or
+maximum across workers of that kind; delayed batches can arrive out of order.
+It remains after worker exit, so check its timestamp. Workers without that
+channel (including native-only memory fallbacks), unregistered nested workers,
+and Bun isolates are omitted. No worker slot or thread ID label is added.
+
 The histogram's `_count` and `_sum` are the collection count and total elapsed
 seconds for each label set. Existing queries that need a single total should
 aggregate the new labels; select `thread="main"` to retain main-isolate scope:
@@ -1281,7 +1304,7 @@ attributes.
   <Accordion title="Series cap and overflow accounting">
     The exporter retains at most **16,384 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series. The WebSocket frame-size family is different: its nine cumulative scalar bounds each consume an entry, so 200 event names use 1,800 entries.
 
-    A fixed catalog of 139 metric families reserves **16,000 entries**, leaving **384 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
+    A fixed catalog of 141 metric families reserves **16,128 entries**, leaving **256 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
 
     The following reserves apply per family (all names have the `openclaw_` prefix):
 
@@ -1294,7 +1317,7 @@ attributes.
     | 384 | `gc_duration_seconds` |
     | 256 | All other `gateway_rpc_*` families; `gateway_ws_event_bytes_total`, `gateway_ws_event_wire_bytes_total`, `gateway_ws_events_total`, `gateway_ws_session_event_bytes_total`, `gateway_ws_session_event_frames_total`; `heap_space_bytes` |
     | 128 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_failover_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_catalog_total`, `tool_catalog_tools_total`, `tool_execution_blocked_total`, `tool_execution_total`, `tool_execution_duration_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes`, `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes`, `worker_gc_collections_total`, `worker_gc_duration_seconds_total`, `worker_gc_reclaimed_bytes_total`, `worker_heap_used_high_water_bytes`, `worker_tasks_completed_total` |
-    | 64 | `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_unmeasured_total`, `worker_messages_total` |
+    | 64 | `heap_used_after_major_gc_bytes`, `heap_used_after_major_gc_timestamp_seconds`, `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_unmeasured_total`, `worker_messages_total` |
     | 32 | `chat_send_phase_seconds`, `session_row_partition_cache_total`, `worktree_preparation_seconds` |
     | 8 | `session_row_partition_revisions_total` |
     | 4 | Every other cataloged family |

@@ -285,10 +285,7 @@ describe("mobile release CI tools", () => {
           uses: expect.stringMatching(/^actions\/checkout@/u),
           with: { ref: "${{ github.sha }}", "fetch-depth": platform === "android" ? 1 : 0 },
         });
-        const verification = steps[1]?.run;
-        if (!verification) {
-          throw new Error("Release checkout must be verified before subsequent steps.");
-        }
+        const verification = expectDefined(steps[1]?.run, "Release checkout verification");
         const root = tempRoots.make("openclaw-release-dispatch-");
         initGit(root, { name: "Release Fixture", email: "release@example.invalid" });
         writeFile(root, "README.md", "Synthetic release source\n");
@@ -331,6 +328,7 @@ describe("mobile release CI tools", () => {
     const unrelated = commit(seed, "Unrelated branch");
     git(seed, "tag", "unrelated-tag");
     git(root, "clone", "--bare", seed, remote);
+    git(remote, "config", "uploadpack.allowFilter", "true");
     const baselines = [
       { sha: phoneBaseline, ref: "refs/openclaw/mobile-releases/android/2026.10.70-1" },
       { sha: wearBaseline, ref: "refs/openclaw/mobile-releases/android/2026.10.70-2" },
@@ -352,7 +350,9 @@ describe("mobile release CI tools", () => {
     expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("false");
     expect(git(checkout, "for-each-ref", "--format=%(refname)")).toBe("refs/remotes/origin/main");
     expect(git(checkout, "rev-parse", "origin/main")).toBe(source);
-    expect(() => git(checkout, "cat-file", "-e", unrelated)).toThrow();
+    expect(
+      git(checkout, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"),
+    ).not.toContain(unrelated);
     git(checkout, "fetch", "--no-tags", "origin", "refs/heads/main");
     expect(git(checkout, "rev-parse", "FETCH_HEAD")).toBe(currentMain);
     expect(git(checkout, "rev-parse", "origin/main")).toBe(currentMain);

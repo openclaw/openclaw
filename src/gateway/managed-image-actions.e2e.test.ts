@@ -284,11 +284,18 @@ describe("managed image actions Gateway E2E", () => {
           try {
             for (const artifact of artifacts) {
               const query = { sessionKey, runId, messageRole: "assistant" };
-              const download = await client.request<{
-                artifact: Record<string, unknown>;
-                url?: string;
-                data?: string;
-              }>("artifacts.download", { ...query, artifactId: artifact.id });
+              const download = await client
+                .request<{
+                  artifact: Record<string, unknown>;
+                  url?: string;
+                  data?: string;
+                }>("artifacts.download", { ...query, artifactId: artifact.id })
+                .catch((cause: unknown) => {
+                  throw new Error(
+                    `Managed artifact download failed: ${JSON.stringify({ provenance, ...query, artifactId: artifact.id, name: artifact.name })}`,
+                    { cause },
+                  );
+                });
               expect(download.artifact).toMatchObject({
                 id: artifact.id,
                 title: artifact.title,

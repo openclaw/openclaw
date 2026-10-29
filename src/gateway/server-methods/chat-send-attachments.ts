@@ -24,7 +24,7 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
-import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
@@ -90,7 +90,7 @@ export async function prepareChatSendAttachments(params: {
     const explicitOriginTargets = await resolveExplicitOriginBindingTargets(explicitOrigin);
     assertInputCurrent();
     explicitOriginTargetsPlugin = explicitOriginTargets.plugin;
-    const recoveredInput = readChatInputRecoveryAdmission(clientRunId);
+    const recoveredInput = readQueuedChatInputAdmission(clientRunId);
     if (recoveredInput) {
       // Accepted media retains its managed sources; the normal prompt owner hydrates them.
       mediaPathOffloads = readPersistedMediaFacts(recoveredInput.target.message) ?? [];
@@ -267,6 +267,17 @@ export async function prepareChatSendAttachments(params: {
                 throw new Error(
                   `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
                 );
+              }
+              if (stagingEntry?.pendingWorktree || stagingEntry?.pendingProjectGitUrl) {
+                // The pre-ACK copy validates staging in the current workspace. Deferred
+                // preparation will bind another one, so let reply staging use the managed
+                // originals there instead of certifying this interim copy as final.
+                return mediaPathRefs.map((ref) => ({
+                  path: ref.path,
+                  url: ref.mediaRef,
+                  contentType: ref.mimeType,
+                  fileName: ref.label,
+                }));
               }
               const stagedMedia = stagingCtx.media ?? [];
               // Preserve request order while mixing sandbox-relative paths with managed

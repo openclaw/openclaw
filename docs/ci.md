@@ -231,6 +231,13 @@ and Wear store capture script in one hosted Ubuntu job. The final CI gate requir
 capture to succeed; unit-test-only and documentation changes omit it. See
 [the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
 
+Android Store Release and Internal distribution use the Blacksmith 32-class for
+their shared build/upload job. A controlled cold-build comparison measured eight
+usable CPUs on this class and reduced median signing preflight plus phone/Wear
+bundle time from 621 to 217 seconds. This trades paid compute for shorter release
+runs; qualification and ordinary screenshot CI retain hosted Ubuntu. See
+[runner evidence and cost](/ci/runners#android-release-runner).
+
 Android Release E2E adds one hosted Ubuntu KVM job to exact-source, full-scope
 manual validation when Android is selected, matching the iOS qualification
 selection. The final CI gate requires its success. Manual Android Store Release

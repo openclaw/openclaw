@@ -413,15 +413,27 @@ export async function processCompletionsStream(
       continue;
     }
     const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
-    output.responseId ||= chunk.id;
-    // Retain the provider-returned model when it differs from the requested id so
-    // routed/alias responses are not misattributed, matching the direct provider
-    // stream and the anthropic/responses managed transports.
-    if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
-      output.responseModel ||= chunk.model;
-    }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     const usage = chunk.usage || choice?.usage;
+    const rawChoiceDelta = choice?.delta ?? choice?.message;
+    // Transport heartbeats can carry placeholder ids/models. Attribute only
+    // chunks with response evidence, before buffering or hiding reasoning.
+    const hasResponseEvidence = Boolean(
+      choice?.finish_reason ||
+      (rawChoiceDelta &&
+        (rawChoiceDelta.tool_calls?.length || hasOpenAICompletionsDeltaContent(rawChoiceDelta))) ||
+      asNonNegativeFiniteNumber(usage?.prompt_tokens) !== undefined ||
+      asNonNegativeFiniteNumber(usage?.completion_tokens) !== undefined ||
+      asNonNegativeFiniteNumber(usage?.total_tokens) !== undefined ||
+      asNonNegativeFiniteNumber(usage?.completion_tokens_details?.reasoning_tokens) !== undefined,
+    );
+    if (hasResponseEvidence) {
+      output.responseId ||= chunk.id;
+      // Preserve actual routed/alias models without reporting the requested id twice.
+      if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
+        output.responseModel ||= chunk.model;
+      }
+    }
     // llama.cpp attaches final timings to the usage-only chunk when requested.
     if (
       chunk.timings !== undefined &&
@@ -453,7 +465,6 @@ export async function processCompletionsStream(
         state: terminalUsage && completeCounts ? "available" : "unavailable",
       };
     }
-    const rawChoiceDelta = choice?.delta ?? choice?.message;
     if (!choice) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       continue;

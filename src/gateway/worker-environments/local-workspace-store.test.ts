@@ -46,6 +46,7 @@ import {
 import {
   executeLocalWorkspaceManifestRead,
   readLocalWorkspaceManifestRows,
+  type LocalWorkspaceManifestCheckpoint,
 } from "./local-workspace-manifest-scan.js";
 import {
   createLocalWorkspaceManifestTree,
@@ -96,6 +97,64 @@ function prepareTreePacks(
     prepareLocalWorkspaceContentInDatabase(db, preparation);
   }
 }
+
+it("keeps admitted paths and checkpoint documents out of root-publication requests", async () => {
+  const worktreeId = randomUUID();
+  const buildCacheInputs = Array.from(
+    { length: 1000 },
+    (_, index) => `.artifacts/build-cache-inputs/input-${index}.json`,
+  );
+  const sourcePaths = JSON.stringify(buildCacheInputs);
+  const rawManifest = serializeWorkerWorkspaceManifest({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: [],
+    directories: [],
+    buildCacheInputs,
+  });
+  const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+  const bytes: number[] = [];
+  probe.command(stateWorker, (command, options, scope) => {
+    if (command.type === "localWorkspace.mutate") {
+      bytes.push(serialize(command).byteLength);
+    }
+    return scope.execute(command, options);
+  });
+  const accepted = await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const created = await store.create({
+      ...localWorkspaceProjectionFixture(worktreeId, root),
+      source_paths_json: sourcePaths,
+    });
+    expect(created.source_paths_json).toBe(sourcePaths);
+    const baseline = await store.update(created, {}, undefined, {
+      rawManifest,
+      manifestRef,
+      buildCacheInputs,
+    });
+    const checkpoint: LocalWorkspaceManifestCheckpoint = {
+      version: 1,
+      kind: "scan",
+      previousRoot: baseline.baseline_ref,
+      resultingRoot: baseline.baseline_ref!,
+      treeRoot: `sha256:${Buffer.from(baseline.tree_root_digest!).toString("hex")}`,
+      records: [],
+      removed: [],
+      baseManifestRaw: rawManifest,
+      baseManifestRef: manifestRef,
+      currentManifestRaw: rawManifest,
+      currentManifestRef: manifestRef,
+      buildCacheInputs,
+    };
+    const reserved = await store.update(baseline, { checkpoint_json: JSON.stringify(checkpoint) });
+    return store.update(reserved, { pending_target: null }, undefined, checkpoint);
+  });
+  expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(accepted);
+  expect(accepted.source_paths_json).toBe(sourcePaths);
+  expect(JSON.parse(accepted.checkpoint_json!)).toMatchObject({ buildCacheInputs });
+  expect(bytes).toHaveLength(4);
+  expect.soft(bytes[0], "create request bytes").toBeLessThan(2048);
+  expect.soft(bytes[3], "settlement request bytes").toBeLessThan(2048);
+});
 
 it("looks up workspace identity without returning pending recovery payloads", async () => {
   const worktreeId = randomUUID();

@@ -244,7 +244,7 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
 
   it.each([
     {
-      policy: "default",
+      policy: "configured",
       permissionMode: undefined,
       operatorHint: "workspace-contained by configuration",
     },
@@ -284,6 +284,8 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
       launch.assignment.workerContainmentRoot = contained;
       if (permissionMode) {
         launch.assignment.permissionMode = permissionMode;
+      } else {
+        gateway.config = { tools: { exec: { applyPatch: { workspaceOnly: true } } } };
       }
 
       const logError = vi.spyOn(logger, "logError").mockImplementation(() => {});

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyCodeModeCatalog,
   runCodeModeScriptHeadless,
@@ -368,6 +368,33 @@ function setup(
     run: async (code: string) => resultDetails(await execute(code)),
   };
 }
+
+it("loads saved JSON without decoding it on the host and keeps guest copies detached", async () => {
+  const { run } = setup();
+  const value = {
+    marker: "saved-result-load",
+    rows: Array.from({ length: 100 }, (_, id) => ({ id })),
+  };
+  const json = JSON.stringify(value);
+  const saved = await run(`return await results.save(${json});`);
+  expect(saved.status).toBe("completed");
+  const id = JSON.stringify((saved.value as { id: string }).id);
+  const parse = vi.spyOn(JSON, "parse");
+  try {
+    const result = await run(`
+      const first = await results.load(${id});
+      first.rows[0].id = -1;
+      const second = await results.load(${id});
+      return { first: first.rows[0].id, second: second.rows[0].id, count: second.rows.length };`);
+    expect(result).toMatchObject({
+      status: "completed",
+      value: { first: -1, second: 0, count: 100 },
+    });
+    expect(parse.mock.calls.filter(([text]) => text === json)).toHaveLength(0);
+  } finally {
+    parse.mockRestore();
+  }
+});
 
 it("preserves saved data at the UTF-8 cap and reuses deleted capacity", async () => {
   const { run } = setup([], { codeMode: { maxSnapshotBytes: 1024, maxOutputBytes: 1024 } });

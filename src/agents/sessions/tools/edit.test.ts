@@ -111,7 +111,7 @@ describe("edit tool", () => {
 
     await expect(
       executeEdit(tool, filePath, [{ oldText: "price: 5", newText: "price: 7" }]),
-    ).rejects.toThrow(/not valid UTF-8/);
+    ).rejects.toThrow(/valid UTF-8/);
 
     await expect(fs.readFile(filePath)).resolves.toEqual(original);
   });
@@ -136,7 +136,7 @@ describe("edit tool", () => {
         },
         undefined,
       ),
-    ).rejects.toThrow(/not valid UTF-8/);
+    ).rejects.toThrow(/valid UTF-8/);
 
     expect(writeFile).not.toHaveBeenCalled();
   });

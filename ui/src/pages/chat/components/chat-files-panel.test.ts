@@ -1,6 +1,7 @@
 import { createEffect } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { registerMcpAppUnmountTarget } from "../../../components/mcp-app-unmount.ts";
 import {
@@ -9,6 +10,7 @@ import {
 } from "../../../components/panel-hosted-tabs.ts";
 import { installResizeObserverStub } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import "../../../lib/toast-host.tsx";
 import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
@@ -373,6 +375,129 @@ describe("workspace file tabs", () => {
     expect(retained.content).toMatchObject({ navigation: { line: 9 } });
     await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(3));
   });
+
+  it.each(["managed", "unmanaged", "repository", "denied"] as const)(
+    "validates a document link before reusing a dirty target (%s)",
+    async (scope) => {
+      const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+      await toast.updateComplete;
+      const { state, response, getFile, workspace } = fileFixture(
+        "reports/evidence.md",
+        "Disk evidence",
+        true,
+      );
+      const repository = scope === "repository";
+      if (repository) {
+        response.root = undefined;
+        response.sessionKey = "agent:main:repository-source";
+      }
+      const requestPath = (path: string) => (repository ? path : `/workspace/${path}`);
+      response.source =
+        scope === "unmanaged"
+          ? undefined
+          : {
+              workspaceId: "report-workspace",
+              root: response.root ?? null,
+              fileRoot: repository ? null : "/workspace/nested-cwd",
+            };
+      await openSessionWorkspaceFile(state, {
+        path: requestPath("reports/evidence.md"),
+        sessionKey: response.sessionKey,
+      });
+      const { preview: retained, content: original } = filePreview(state);
+      setFileDraft(original, { content: "Unsaved evidence", expectedHash: "original" });
+      onTestFinished(() => setFileDraft(original, null));
+      getFile.mockResolvedValue({
+        ...response,
+        file: {
+          ...response.file,
+          name: "report.md",
+          path: "reports/report.md",
+          workspacePath: "reports/report.md",
+          content: "# Report",
+        },
+      });
+      const sourcePreview = await openSessionWorkspaceFile(state, {
+        path: requestPath("reports/report.md"),
+        sessionKey: response.sessionKey,
+      });
+      if (!sourcePreview || sourcePreview.content.kind !== "file") {
+        throw new Error("Report did not open");
+      }
+      const source = sourcePreview.content;
+      const held = createDeferred<SessionWorkspaceGetResult>();
+      getFile.mockImplementationOnce(() => held.promise);
+      const opening = openSessionWorkspaceFile(
+        state,
+        { path: "evidence.md", relativeTo: source },
+        "preview",
+      );
+      await vi.waitFor(() =>
+        expect(getFile).toHaveBeenLastCalledWith(
+          response.sessionKey,
+          repository ? "./reports/evidence.md" : "/workspace/reports/evidence.md",
+          { agentId: "main" },
+        ),
+      );
+      expect(workspace.activePreviewId).toBe(sourcePreview.id);
+      held.resolve(response);
+      await opening;
+      expect(workspace.activePreviewId).toBe(retained.id);
+      expect(retained.content).toBe(original);
+      expect(readFileDraft(original)?.content).toBe("Unsaved evidence");
+
+      selectSessionWorkspacePreview(state, sourcePreview.id);
+      if (scope === "denied") {
+        getFile.mockRejectedValueOnce(new Error("Access denied"));
+      } else {
+        getFile.mockResolvedValueOnce(
+          scope === "unmanaged"
+            ? { ...response, root: "/replacement" }
+            : {
+                ...response,
+                source: { ...response.source!, workspaceId: "replacement-workspace" },
+              },
+        );
+      }
+      await openSessionWorkspaceFile(state, { path: "evidence.md", relativeTo: source }, "preview");
+      expect(workspace.activePreviewId).toBe(sourcePreview.id);
+      expect(workspace.error).toContain(scope === "denied" ? "Access denied" : "workspace changed");
+      await waitForSolid(() => expect(toast.textContent).toContain(workspace.error));
+      expect(retained.content).toBe(original);
+      expect(readFileDraft(original)?.content).toBe("Unsaved evidence");
+    },
+  );
+
+  it.each([
+    { path: "reports/report.md", link: "../../../outside.md", request: "./../../outside.md" },
+    { path: "report.md", link: "missing.md", request: "./missing.md" },
+  ])(
+    "keeps rootless document target $link explicit and native-authorized",
+    async ({ path, link, request }) => {
+      const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+      await toast.updateComplete;
+      const { state, response, getFile, workspace } = fileFixture(path, "# Report", true);
+      response.root = undefined;
+      const preview = await openSessionWorkspaceFile(state, { path });
+      if (!preview || preview.content.kind !== "file") {
+        throw new Error("Report did not open");
+      }
+      state.sessions.listFiles = vi.fn();
+      getFile.mockRejectedValueOnce(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "session file not found",
+          details: { type: "session_file_not_found" },
+        }),
+      );
+      await openSessionWorkspaceFile(state, { path: link, relativeTo: preview.content }, "preview");
+      expect(getFile).toHaveBeenLastCalledWith(state.sessionKey, request, { agentId: "main" });
+      expect(state.sessions.listFiles).not.toHaveBeenCalled();
+      expect(workspace.activePreviewId).toBe(preview.id);
+      expect(workspace.previews).toEqual([preview]);
+      await waitForSolid(() => expect(toast.textContent).toContain("session file not found"));
+    },
+  );
 
   it("reconciles canonical aliases for non-text previews", async () => {
     const { state, response, getFile, workspace } = fileFixture("asset.png", "iVBORw0KGgo=", true);

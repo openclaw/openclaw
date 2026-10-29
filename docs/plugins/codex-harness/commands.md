@@ -31,7 +31,7 @@ Common forms:
   limits, MCP servers, and skills.
 - `/codex models` lists live Codex app-server models.
 - `/codex threads [filter]` lists recent Codex app-server threads.
-- `/codex goal` reads or updates the attached thread's native Codex goal. Codex automatic goal continuation stays disabled; OpenClaw does not own autonomous follow-on turns yet.
+- `/codex goal` reads or updates the attached thread's native Codex goal. Codex automatic goal continuation stays disabled. Use OpenClaw's [`/goal`](/tools/goal) for an objective pursued through the shared continuation queue.
 - `/codex resume <thread-id>` attaches the current OpenClaw session to an
   existing Codex thread.
 - `/codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]`

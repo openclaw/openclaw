@@ -9,6 +9,7 @@ import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as systemdExec from "../../daemon/systemd-exec.js";
 import { startSystemdService, stopSystemdService } from "../../daemon/systemd-lifecycle.js";
 import * as systemdScope from "../../daemon/systemd-scope.js";
+import * as stopPolicy from "../../daemon/systemd-stop-policy.js";
 import * as systemdTransport from "../../daemon/systemd-user-transport.js";
 import * as ports from "../../infra/ports-inspect.js";
 import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
@@ -22,6 +23,7 @@ const deadlineAtMs = 1_500;
 
 async function nativeStopFixture(home: string, expireDuring: "transport" | "settlement") {
   mockProcessPlatform("linux");
+  vi.spyOn(stopPolicy, "readSystemdGatewayStopTimeout").mockResolvedValue(330_000);
   let wallNow = 1_000;
   let elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);

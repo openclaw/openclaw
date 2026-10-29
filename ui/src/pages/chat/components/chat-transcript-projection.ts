@@ -71,12 +71,7 @@ export function projectChatTranscript(
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   const { showReasoning, reasoning } = projectChatReasoning(props);
   const assistantAgentId = props.currentAgentId ?? props.fullMessageAgentId;
-  const assistantAvatar = resolveAssistantDisplayAvatar({
-    currentAgentId: assistantAgentId,
-    agents: props.agents,
-    assistantAvatar: props.assistantAvatar,
-    assistantAvatarUrl: props.assistantAvatarUrl,
-  });
+  const assistantAvatar = resolveAssistantDisplayAvatar(props, assistantAgentId);
   const assistantIdentity = {
     agentId: assistantAgentId,
     name: props.assistantName,
@@ -91,7 +86,7 @@ export function projectChatTranscript(
   const chatItemsInput = {
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    archiveNotice: buildChatArchiveNotice(activeSession),
+    archiveNotice: buildChatArchiveNotice(props.transcriptMetadata ?? activeSession),
     runId: props.runId ?? null,
     compactionStatus: props.compactionStatus,
     locale,
@@ -284,6 +279,7 @@ export function projectChatTranscript(
     handoffSessionLinks: subagents.links,
     boardProvider: props.boardProvider,
     widgetLayout: props.widgetLayout,
+    displayFacts: props.displayFacts,
     agentId: assistantAgentId,
     runActive: props.runActive,
     asyncQuestions,

@@ -103,9 +103,7 @@ import {
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
   QA_MCP_CODE_MODE_PROMPT_RE,
   QA_RESTART_CODE_MODE_WAIT_PROMPT_RE,
-  QA_RESTART_RECOVERY_PROMPT_RE,
-  QA_KILL_RESTART_PROMPT_RE,
-  QA_KILL_RESTART_RECOVERED_MARKER,
+  QA_RESTART_RESUME_PROMPT_RE,
   QA_MCP_CODE_MODE_API_FILE_PROMPT_RE,
   type MockScenarioState,
   sourceDiscoveryReadPathForProvider,
@@ -320,7 +318,7 @@ function hasCompactionOutputRecoveryMarker(allInputText: string) {
 }
 
 const QA_RESTART_CHECKPOINT_COUNT = 3;
-const QA_RESTART_FINAL_TEXT = "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK";
+const QA_RESTART_FINAL_TEXT = "RESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
@@ -561,16 +559,10 @@ async function buildResponsesPayload(
       ? buildAssistantEvents(QA_STALLED_TURN_RECOVERY_MARKER)
       : buildFailedResponseEvents();
   }
-  // The hard-kill fixture shares the first real checkpoint below, but recovery
-  // must settle without scheduling the repeated-restart fixture's later waits.
-  if (
-    QA_KILL_RESTART_PROMPT_RE.test(allInputText) &&
-    QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)
-  ) {
-    return buildAssistantEvents(QA_KILL_RESTART_RECOVERED_MARKER);
-  }
   if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
     const progress = readRestartCheckpointProgress(input);
+    const resumeInputs = [...allInputText.matchAll(new RegExp(QA_RESTART_RESUME_PROMPT_RE, "gu"))]
+      .length;
     const currentControlCallId = extractToolOutputCallId(input);
     const latestControlCall = input.findLast(
       (item) => item.name === "exec" || item.name === "wait",
@@ -581,9 +573,6 @@ async function buildResponsesPayload(
       { length: QA_RESTART_CHECKPOINT_COUNT },
       (_, index) => index + 1,
     ).find((checkpoint) => !progress.checkpoints.includes(checkpoint));
-    if (toolOutput.includes("unsafe-probe-executed")) {
-      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
-    }
     if (currentControlOutputIsLatest) {
       if (
         codeModeControlJson?.status === "waiting" &&
@@ -612,13 +601,12 @@ async function buildResponsesPayload(
       return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
     }
     if (nextCheckpoint !== undefined) {
-      if (nextCheckpoint > 1 && !QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+      if (nextCheckpoint > resumeInputs + 1) {
         return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
       }
       if (hasDeclaredTool(toolDeclarationBody, "exec")) {
         const encodedTarget = encodeCodeModeTarget("qa_restart_wait", {});
         return buildToolCallEventsWithArgs("exec", {
-          restartSafe: true,
           code: [
             `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
             'const target = (await catalog.search("qa_restart_wait")).find((tool) => tool.toolName === "qa_restart_wait");',
@@ -632,11 +620,8 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
     }
-    if (!QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+    if (resumeInputs < QA_RESTART_CHECKPOINT_COUNT) {
       return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
-    }
-    if (hasToolDefinition(toolDeclarationBody, "qa_restart_unsafe_probe")) {
-      return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
     }
     return buildAssistantEvents(QA_RESTART_FINAL_TEXT);
   }

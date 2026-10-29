@@ -141,14 +141,16 @@ import { runWithCliPreparationSource } from "./prepare-source.js";
 import {
   capCliToolAvailability,
   keptManagedNativeTools,
+  withCliToolSearch,
   resolveCliBootstrapFileAccess,
   resolveCliRuntimeToolPolicy,
+  resolveCliToolAvailabilityHash,
 } from "./prepare-tool-policy.js";
 import {
   buildCliVisibleReplyGuidance,
   finalizeCliSystemPrompt,
   composeCliPromptContext,
-  createCliCurrentPromptRenderer,
+  buildCliCurrentPrompt,
   prepareCliSystemPrompt,
   prepareCliTurnPromptContext,
 } from "./prompt-context.js";
@@ -848,6 +850,7 @@ async function prepareCliRunContextWithinReadFence(
   );
   // Mirror the embedded runner's bootstrap routing for backends that transport
   // OpenClaw's system prompt, using the final native or mediated file access.
+  params = withCliToolSearch(params, backendResolved.nativeToolSearch);
   const hasBootstrapFileAccess = resolveCliBootstrapFileAccess({
     backend: backendResolved,
     params,
@@ -952,17 +955,8 @@ async function prepareCliRunContextWithinReadFence(
     nativeAuthorityAllowed: !skipsTurnPreparation && !nodeClaudePlacement,
     projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
   });
-  const toolBoundExtraSystemPromptHash = params.cliToolAvailability
-    ? hashCliSessionText(
-        JSON.stringify([
-          baseExtraSystemPromptHash ?? null,
-          params.cliToolAvailability.native.toSorted(),
-          params.cliToolAvailability.openClaw.toSorted(),
-        ]),
-      )
-    : baseExtraSystemPromptHash;
   const extraSystemPromptHash = resolveCliBootstrapPromptHash({
-    baseHash: toolBoundExtraSystemPromptHash,
+    baseHash: resolveCliToolAvailabilityHash(baseExtraSystemPromptHash, params.cliToolAvailability),
     bootstrapMode,
     bootstrapTruncationNotice,
     contextFiles,
@@ -1088,7 +1082,9 @@ async function prepareCliRunContextWithinReadFence(
           })()
         : undefined;
     const rawLoopbackServerConfig = mcpLoopbackRuntime
-      ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+      ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port, {
+          deferTools: Boolean(params.cliToolAvailability?.discovery?.length),
+        })
       : undefined;
     const loopbackServerConfig =
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
@@ -1540,6 +1536,10 @@ async function prepareCliRunContextWithinReadFence(
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
+      const current = buildCliCurrentPrompt(params, reusableCliSession, {
+        ...sessionPromptContext,
+        privateContext: executionTarget.kind === "plugin",
+      });
       ({
         prompt: preparedPrompt,
         systemPrompt,
@@ -1555,6 +1555,7 @@ async function prepareCliRunContextWithinReadFence(
         deliveryGuidance: effectiveReplyGuidance,
         hookResult: promptBuildHookResult,
         prependContext: [
+          current.prependContext,
           sessionPromptContext?.durableContext,
           promptBuildHookResult?.prependContext,
           authorizedPromptBuildResult?.prependContext,
@@ -1570,23 +1571,17 @@ async function prepareCliRunContextWithinReadFence(
         // Operator-kept orchestration tools that survived every later native-tool cap.
         nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params),
         runtimeContextFragments: params.runtimeContextFragments,
-        // Caller-owned memory cannot grant access to persisted interrupted inputs.
         sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
         context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();
-      const renderCurrentPrompt = createCliCurrentPromptRenderer(
-        params,
-        reusableCliSession,
-        sessionPromptContext,
-      );
       const preferResumableText =
         params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId);
-      historyPromptCurrentTurn = renderCurrentPrompt(preparedPrompt);
-      preparedPrompt = renderCurrentPrompt(preparedPrompt, preferResumableText);
+      historyPromptCurrentTurn = current.renderPrompt(preparedPrompt);
+      preparedPrompt = current.renderPrompt(preparedPrompt, preferResumableText);
       if (promptForHooks !== undefined) {
-        promptForHooks = renderCurrentPrompt(promptForHooks, preferResumableText);
+        promptForHooks = current.renderPrompt(promptForHooks, preferResumableText);
       }
     }
     // Fresh native sessions receive only account-owned history via stdin.

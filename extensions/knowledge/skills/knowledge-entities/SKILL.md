@@ -67,6 +67,10 @@ citation, or a reason it has none.
 - **Update:** add the Timeline line; edit a State topic only when its meaning
   changed; use `knowledge_edit_body` for local edits.
 - Use declared ontology fields only; omit unknown values.
+- Page bodies have a size budget, smaller for hub pages
+  ([page budgets](references/publish.md#page-budgets)). When a write is
+  rejected, give the subject that outgrew its section its own page with
+  `knowledge_extract_section`; never truncate.
 - Create claims and evidenced relationships for independently useful
   assertions ([assertions](references/assertions.md)). Markdown links don't
   create relationships.

@@ -6,7 +6,6 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
 import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import { readUpdateTargetCliOptions } from "../cli/update-cli/update-command-cli-options.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -20,7 +19,6 @@ import * as canaryCmd from "./update-candidate-canary-commands.js";
 import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
 import { UPDATE_CANARY_PROGRESS_ARGS } from "./update-candidate-canary-progress.js";
 import * as readiness from "./update-candidate-canary-readiness.js";
-import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
@@ -42,30 +40,14 @@ import {
   type UpdateFailureFact,
 } from "./update-failure-facts.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
-import type { UpdateRunStep } from "./update-run-record.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 /** Rehearse the exact candidate against private SQLite snapshots while the serving generation stays up. */
-export async function validateUpdateCandidateCanary(params: {
-  root: string;
-  /** Serving updater's discovery, not the staged worker's package. */
-  sourceBundledPlugins?: UpdateCandidateBundledSource;
-  config: OpenClawConfig;
-  stateDir: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  env?: NodeJS.ProcessEnv;
-  nodeRunner?: string;
-  fullIntegrityCheck?: boolean;
-  assertCurrent?: () => void;
-  /** Startup-only callers must prove the preserved input boots without Doctor repair. */
-  migrationPolicy?: "rehearse" | "startup-only";
-  /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
-  onStep?: (step: UpdateStepResult) => void | Promise<void>;
-  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
-}): Promise<canaryCmd.CanaryResult> {
+export async function validateUpdateCandidateCanary(
+  params: canaryCmd.UpdateCandidateCanaryParams,
+): Promise<canaryCmd.CanaryResult> {
   const started = Date.now();
   let rehearsal: UpdateCandidateRehearsal | undefined;
   let cleanupUncertain = false;
@@ -151,16 +133,19 @@ export async function validateUpdateCandidateCanary(params: {
   const launch = (
     target: canaryCmd.UpdateCanaryTarget,
     args: string[],
-    observers: Pick<Parameters<typeof launchCanary>[0], "onLine" | "hidesLine" | "onStdout"> = {},
+    options: Pick<
+      Parameters<typeof launchCanary>[0],
+      "onLine" | "hidesLine" | "onStdout" | "nodeRunner"
+    > = {},
   ) => {
     params.signal?.throwIfAborted();
     return launchCanary({
-      ...observers,
       target,
       args,
       root: params.root,
       env,
       nodeRunner: params.nodeRunner,
+      ...options,
       stateDir: params.stateDir,
       assertCurrent: params.assertCurrent,
       capture,
@@ -553,6 +538,7 @@ export async function validateUpdateCandidateCanary(params: {
     const processExit = new AbortController();
     const running = launch(cliTarget, [...args, "--port", String(port)], {
       onLine: startup.onLine,
+      nodeRunner: params.gatewayStartupRuntime ?? params.nodeRunner,
     });
     const abortExited = () => processExit.abort();
     running.child.once("exit", abortExited).once("error", abortExited);

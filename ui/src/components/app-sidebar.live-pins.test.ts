@@ -6,6 +6,8 @@ import { sessionsResult } from "../lib/sessions/session-capability.test-support.
 import "../test-helpers/app-sidebar-suite.ts";
 import {
   createGatewayHarness,
+  createContext,
+  mountSidebarContext,
   createSessionsHarness,
   mountSidebar,
 } from "../test-helpers/app-sidebar.ts";
@@ -172,4 +174,21 @@ it("keeps live pins across query replacement until their descriptors confirm abs
   await sidebar.updateComplete;
   expect(entries.map(rail)).toEqual([null, null]);
   expect(read).toHaveBeenCalledTimes(2);
+});
+
+it("hides unused sections but retains deliberately empty sections", async () => {
+  const gateway = createGatewayHarness({} as GatewayBrowserClient);
+  const sessions = createSessionsHarness("main", []);
+  const context = createContext(gateway.gateway, sessions.sessions);
+  context.navigation.update({ personalSessionGroups: [] });
+  const { sidebar } = await mountSidebarContext(context);
+  expect(sidebar.querySelector(".personal-session-groups")).toBeNull();
+  context.navigation.update({
+    personalSessionGroups: [{ id: "empty", label: "Reading", sessionKeys: [] }],
+  });
+  await settleLitElement(sidebar);
+  expect(sidebar.querySelector(".personal-session-groups")?.textContent).toContain("Reading");
+  context.navigation.update({ personalSessionGroups: [] });
+  await settleLitElement(sidebar);
+  expect(sidebar.querySelector(".personal-session-groups")).toBeNull();
 });

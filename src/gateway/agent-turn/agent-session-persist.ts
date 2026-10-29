@@ -1,20 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
-import {
-  getMainSessionRecoveryRetryCount,
-  transitionMainSessionRecovery,
-} from "../../agents/main-session-recovery/main-session-recovery-state.js";
-import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery/main-session-recovery-store.js";
-import { MAX_RECOVERY_RETRIES } from "../../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../agents/media-generation-activity.js";
 import { clearCommittedSessionResetRuntimeState } from "../../auto-reply/reply/session-reset-cleanup.js";
-import {
-  mergeSessionEntry,
-  type SessionEntry,
-  type InternalSessionEntry,
-} from "../../config/sessions.js";
+import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import {
   patchSessionEntryTarget,
   type SessionEntryPatchOptions,
@@ -58,7 +47,6 @@ import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
 } from "../session-lifecycle-plugin-hooks.js";
-import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
 import {
   cronContinuationHasReusableRuntime,
   resolveAgentSessionWorkStartError,
@@ -108,7 +96,6 @@ export type AgentSessionPersistParams = {
   requestingOperatorProfileId?: string;
   operatorRoleActor?: GatewayOperatorRoleActor;
   lifecycleGeneration: string;
-  isRestartRecoveryResumeRun: boolean;
   runId: string;
   agentId?: string;
   suppressVisibleSessionEffects: boolean;
@@ -128,7 +115,6 @@ export type AgentSessionPersistParams = {
   assertGatewayWorkAdmissionAllowed: () => void;
   respondToGatewayAdmissionOutcome: () => boolean;
   setCronContinuationClaim: (claim: CronContinuationClaim) => void;
-  setMainRestartRecoveryOwnerLease: (lease: MainSessionRecoveryOwnerLease) => void;
   respond: GatewayRequestHandlerOptions["respond"];
 };
 
@@ -145,7 +131,6 @@ export async function persistAgentSessionPhase(
     supersededSessionId,
   } = params.state;
   let restoredCronContinuation: RestoredCronContinuation | undefined;
-  let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
   let skipAgentInitialSessionTouch = false;
   let createdNewEntry = false;
   const isDeliveryDenied = (entry: SessionEntry | undefined) =>
@@ -204,21 +189,6 @@ export async function persistAgentSessionPhase(
       );
       if (archivedError) {
         rejectMutation(ErrorCodes.INVALID_REQUEST, archivedError);
-      }
-      const internalFreshEntry = freshEntry as InternalSessionEntry | undefined;
-      if (
-        !params.isRestartRecoveryResumeRun &&
-        internalFreshEntry &&
-        (internalFreshEntry.mainRestartRecovery?.tombstone ||
-          (internalFreshEntry.abortedLastRun === true &&
-            getMainSessionRecoveryRetryCount(internalFreshEntry.mainRestartRecovery) >=
-              MAX_RECOVERY_RETRIES))
-      ) {
-        rejectMutation(
-          ErrorCodes.UNAVAILABLE,
-          `Session "${params.canonicalSessionKey}" is quarantined after restart recovery ` +
-            "exhaustion; use /new or /reset before starting new work.",
-        );
       }
       let entryForPatch = freshEntry;
       if (params.restoredCronContinuationIdentity) {
@@ -360,43 +330,6 @@ export async function persistAgentSessionPhase(
           };
       createdNewEntry = freshEntry === undefined;
       const merged = mergeSessionEntry(entryForPatch, effectivePatch);
-      const recoveryTransition = params.isRestartRecoveryResumeRun
-        ? transitionMainSessionRecovery(merged as InternalSessionEntry, {
-            kind: "validate_recovery",
-            lifecycleGeneration: params.lifecycleGeneration,
-            runId: params.runId,
-            sessionId: params.request.expectedExistingSessionId ?? merged.sessionId,
-          })
-        : readSessionSendDeliveryAdmission({
-              runId: params.runId,
-              agentId: params.sessionAgentId,
-              sessionKey: params.canonicalSessionKey,
-              sessionId: merged.sessionId,
-            })
-          ? undefined // The selected command claims ownership; future queued inputs must not fence it.
-          : transitionMainSessionRecovery(merged as InternalSessionEntry, {
-              kind: "claim_foreground",
-              cycleId: randomUUID(),
-              lifecycleGeneration: params.lifecycleGeneration,
-              sessionId: merged.sessionId,
-              sessionKey: params.canonicalSessionKey,
-              claimId: mainRestartRecoveryOwnerLease?.claimId ?? randomUUID(),
-              runId: params.runId,
-            });
-      if (params.isRestartRecoveryResumeRun && recoveryTransition?.kind !== "recovery_validated") {
-        rejectMutation(
-          ErrorCodes.UNAVAILABLE,
-          `Session "${params.canonicalSessionKey}" restart recovery reservation is stale; ` +
-            "recovery was skipped.",
-        );
-      }
-      if (recoveryTransition?.kind === "foreground_claimed") {
-        mainRestartRecoveryOwnerLease = {
-          ...recoveryTransition.claim,
-          storePath: params.storePath,
-        };
-        params.setMainRestartRecoveryOwnerLease(mainRestartRecoveryOwnerLease);
-      }
       if (isDeliveryDenied(merged)) {
         deniedSessionEntry = merged;
         return null;

@@ -234,7 +234,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
     ensureColumn(db, tableName, `${columnName} ${dataType}`);
   }
   if (ensureColumn(db, ...columns.packageUpdatedAt[0])) {
-    db.exec("UPDATE claw_package_refs SET updated_at_ms = installed_at_ms;");
+    db.exec("UPDATE template_package_refs SET updated_at_ms = installed_at_ms;");
   }
   ensureColumns(db, columns.packageIntegrity);
   const addedDiagnosticEventSequence = ensureColumn(db, ...columns.diagnosticSequence[0]);

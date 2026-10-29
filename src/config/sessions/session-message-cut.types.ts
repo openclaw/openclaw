@@ -12,6 +12,8 @@ type SessionMessageCutExpectedState = Pick<SessionEntry, "lifecycleRevision" | "
 export type SessionMessageCutPreconditions = {
   sourceRepositoryWorkspaceId?: string;
   assertUpstreamCurrent?: () => void;
+  /** Validate the actual fresh destination against current creation policy before commit. */
+  assertForkVisibilityAllowed?: (visibility: SessionEntry["visibility"]) => void;
 };
 
 export type SessionMessageCutResult =

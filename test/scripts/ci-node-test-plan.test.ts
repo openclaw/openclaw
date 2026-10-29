@@ -393,14 +393,12 @@ describe("Control UI release-only inventories", () => {
 
   it.each([
     { name: "disabled proofs", env: {}, activeIndex: -1 },
-    { name: "disabled peer flag", env: { OPENCLAW_PEER_RESTART_LIVE: "0" }, activeIndex: -1 },
-    { name: "enabled peer", env: { OPENCLAW_PEER_RESTART_LIVE: "1" }, activeIndex: 1 },
     { name: "empty steering variant", env: { OPENCLAW_STEER_CUSTODY_PROOF: "" }, activeIndex: -1 },
-    { name: "enabled steering", env: { OPENCLAW_STEER_CUSTODY_PROOF: "fixed" }, activeIndex: 2 },
+    { name: "enabled steering", env: { OPENCLAW_STEER_CUSTODY_PROOF: "fixed" }, activeIndex: 1 },
     {
       name: "invalid nonempty steering variant",
       env: { OPENCLAW_STEER_CUSTODY_PROOF: "invalid" },
-      activeIndex: 2,
+      activeIndex: 1,
     },
     { name: "disabled DeepSeek flag", env: { OPENCLAW_DEEPSEEK_UI_LIVE: "0" }, activeIndex: -1 },
     {
@@ -411,7 +409,6 @@ describe("Control UI release-only inventories", () => {
   ])("prices $name without removing selected opt-in files", ({ env, activeIndex }) => {
     const optInFiles = [
       "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
-      "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
     ];
     const parallel = [
@@ -569,8 +566,7 @@ describe("startup corpus coverage", () => {
 const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
 const RELEASE_REPORT_OWNER_TEST = "test/scripts/vitest-report-owner.test.ts";
 const PRIVATE_QA_TOOLING_TEST = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
-const MEASURED_STORAGE_RECOVERY_TEST =
-  "src/agents/main-session-recovery/main-session-restart-recovery.test.ts";
+const MEASURED_STORAGE_WORK_TEST = "src/system-agent/setup-inference-activate.test.ts";
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
@@ -2456,57 +2452,72 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it.each([
-    { companion: false, nativeSample: false },
-    { companion: true, nativeSample: true },
-  ])(
-    "prices storage work without changing placement (companion: $companion, native sample: $nativeSample)",
-    async ({ companion, nativeSample }) => {
+  it.each([false, true])(
+    "prices storage work without changing placement (companion: %s)",
+    async (companion) => {
       const config = configPath("infra");
-      const longest = MEASURED_STORAGE_RECOVERY_TEST;
+      const longest = MEASURED_STORAGE_WORK_TEST;
       const ordinary = "src/infra/sqlite-readonly-location.copy.test.ts";
       const measurements: Record<string, number> = { "core-runtime-infra-storage-state": 1 };
       mockProject("core-runtime", config, "src/infra", companion ? [ordinary] : [], measurements);
       mockOriginal("database", { databaseWorkerCoreTestFiles: [longest] });
       mockUnbuiltRuntime();
-      const {
-        createNodeTestShardBundles: createPlan,
-        createSelectedNodeTestShardBundles: createSelectedPlan,
-      } = await loadPlanModule(["build", "database"]);
+      const { createNodeTestShardBundles: createPlan } = await loadPlanModule([
+        "build",
+        "database",
+      ]);
 
       const plan = createPlan({ compactMode: "push", runnerBackend: "blacksmith" });
       expectPlanFiles(plan, companion ? [longest, ordinary] : [longest], requiredPatterns);
       const longestJob = required(findFileJob(plan, longest));
       // The measured file span is indivisible; its wrapper is paid once even at more workers.
-      expect(longestJob.predictedTestSeconds).toBeGreaterThanOrEqual(279.963 + 20);
-      expect(longestJob.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
+      expect(longestJob.predictedTestSeconds).toBeGreaterThanOrEqual(69.039 + 20);
+      expect(longestJob.runner).toBe(DEFAULT_NODE_TEST_RUNNER);
       expectEvery(plan, (job) => job.predictedTestSeconds! <= 300);
-      if (nativeSample) {
-        const targets = [longest, ordinary];
-        const selectedBefore = createSelectedPlan(targets, { runnerBackend: "blacksmith" });
-        const hostedBefore = createPlan({ compactMode: "push", runnerBackend: "github" });
-        const key = required(createNativeSoloTimingKey(longestJob.groups[0]!));
-        measurements[key] = 123;
-        for (const [before, after] of [
-          [plan, createPlan({ compactMode: "push", runnerBackend: "blacksmith" })],
-          [selectedBefore, createSelectedPlan(targets, { runnerBackend: "blacksmith" })],
-        ]) {
-          expect(before).not.toBeNull();
-          expect(after).not.toBeNull();
-          const expected = structuredClone(before!);
-          for (const job of expected) {
-            if (job.groups.some((group) => group.includePatterns?.includes(longest))) {
-              job.predictedSeconds = 123;
-              job.predictedTestSeconds = 123;
-            }
-          }
-          expect(after).toEqual(expected);
-        }
-        // A native price cannot reprice hosted execution of the same file.
-        expect(createPlan({ compactMode: "push", runnerBackend: "github" })).toEqual(hostedBefore);
-      }
     },
   );
+
+  it("applies native solo prices without changing placement or hosted prices", async () => {
+    const config = agentVitestProjectOwners.support.config;
+    const file = "src/agents/harness/lifecycle.test.ts";
+    const files = [file, "src/agents/harness/prompt-context.test.ts"];
+    const measurements: Record<string, number> = { "agentic-agents-support": 240 };
+    mockProject("agentic", config, "src/agents", files, measurements);
+    mockOriginal("inventory", {
+      listWholeConfigSplitFiles: (owner: string) =>
+        owner === "agentic-agents-support" ? files : undefined,
+    });
+    mockUnbuiltRuntime();
+    const {
+      createNodeTestShardBundles: createPlan,
+      createSelectedNodeTestShardBundles: createSelectedPlan,
+    } = await loadPlanModule(["build", "inventory"]);
+    const plan = createPlan({ compactMode: "push", runnerBackend: "blacksmith" });
+    expectPlanFiles(plan, files, requiredPatterns);
+    const job = required(findFileJob(plan, file));
+    expectFields(job, { planConcurrency: 1, runner: EXTRA_LARGE_NODE_TEST_RUNNER });
+    const selectedBefore = createSelectedPlan([file], { runnerBackend: "blacksmith" });
+    const hostedBefore = createPlan({ compactMode: "push", runnerBackend: "github" });
+    const key = required(createNativeSoloTimingKey(job.groups[0]!));
+    measurements[key] = 123;
+    for (const [before, after] of [
+      [plan, createPlan({ compactMode: "push", runnerBackend: "blacksmith" })],
+      [selectedBefore, createSelectedPlan([file], { runnerBackend: "blacksmith" })],
+    ]) {
+      expect(before).not.toBeNull();
+      expect(after).not.toBeNull();
+      const expected = structuredClone(before!);
+      for (const candidate of expected) {
+        if (candidate.groups.some((group) => group.includePatterns?.includes(file))) {
+          candidate.predictedSeconds = 123;
+          candidate.predictedTestSeconds = 123;
+        }
+      }
+      expect(after).toEqual(expected);
+    }
+    // A native price cannot reprice hosted execution of the same file.
+    expect(createPlan({ compactMode: "push", runnerBackend: "github" })).toEqual(hostedBefore);
+  });
 
   it.each([
     {
@@ -2840,18 +2851,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(
       isolated.includePatterns ?? listMatchedTestFiles(createGatewayServerIsolatedVitestConfig({})),
     ).toContain("src/gateway/server.chat-recovered-output.test.ts");
-
-    const coldRecovery = "src/gateway/gateway.sessions-send-recovery.test.ts";
-    expect(mainFiles.filter((file) => file === coldRecovery)).toHaveLength(1);
-    expect(prFiles).not.toContain(coldRecovery);
-    const coldOwners = defaultShards.flatMap((shard) =>
-      (shard.includePatterns ?? []).filter((file) => file === coldRecovery).map(() => shard),
-    );
-    expect(coldOwners).toHaveLength(1);
-    expect(coldOwners[0]).toMatchObject({
-      configs: expect.arrayContaining([configPath("gateway-core")]),
-      pretestBuildMode: "runtime",
-    });
   });
 
   it("defers exactly the runtime release inventory from automatic plans on github", () => {

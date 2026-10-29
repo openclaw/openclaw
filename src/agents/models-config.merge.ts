@@ -218,11 +218,14 @@ export function mergeProviderModels(
       maxTokensSource === undefined ? {} : { maxTokensSource },
       { compat },
       {
+        // Another route withdraws a plain chat grant to unknown, as if discovery had not
+        // matched this row. Only a typed route keeps the veto so it never becomes legacy chat.
         inference:
           explicitModel.inference ??
           (catalogRouteMatches
             ? implicitModel.inference
-            : implicitModel.inference
+            : implicitModel.inference &&
+                (!implicitModel.inference.chat || implicitModel.inference.decision)
               ? { chat: false }
               : undefined),
       },

@@ -2,6 +2,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
+import { monotonicNow } from "../../../shared/monotonic-time.js";
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
@@ -108,6 +109,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
 }) {
   const { runInput, preparedRuntime } = input;
   const { runParams: params, globalLane, agentDir, fallbackConfigured } = runInput;
+  // Project the epoch-valued run origin once, before later wall-clock corrections.
+  const fallbackRunStartMonotonicMs = fallbackConfigured
+    ? monotonicNow() - (Date.now() - runInput.startedAtMs)
+    : 0;
   const { provider, modelId } = preparedRuntime;
   const advanceAttemptAuthProfile = preparedRuntime.advanceAttemptAuthProfile;
   let rateLimitProfileRotations = 0;
@@ -426,7 +431,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         });
         return false;
       }
-      const nowMs = Date.now();
+      const nowMs = monotonicNow();
       const retryWindowStartMs = transientRetryWindowStartMs ?? nowMs;
       if (retry.reason !== "output_limit") {
         transientRetryWindowStartMs = retryWindowStartMs;
@@ -456,7 +461,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         params.timeoutMs > 0 &&
         params.timeoutMs < MAX_TIMER_TIMEOUT_MS;
       const remainingRetryMs = reserveFallback
-        ? params.timeoutMs / 2 - (nowMs - runInput.startedAtMs)
+        ? params.timeoutMs / 2 - (nowMs - fallbackRunStartMonotonicMs)
         : Infinity;
       if (delayMs === undefined || delayMs >= remainingRetryMs) {
         recordDecision("rejected", "retry_delay_unavailable");

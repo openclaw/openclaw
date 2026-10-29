@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import type { WorkerProvisioningDispatchPlacement } from "./placement-dispatch-failure.js";
 import { REQUEST as DISPATCH_REQUEST } from "./placement-dispatch-test-fixtures.js";
 import type { WorkerPlacementDispatchService as DispatchService } from "./placement-dispatch.js";
 import { localPlacement, sessionIdentity } from "./placement-suite.test-support.js";
@@ -9,16 +10,6 @@ import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementMoveRequest,
 } from "./service-contract.js";
-
-type Recovery = DispatchService["resumeProvisioning"];
-export const admittedRecovery =
-  (
-    run: (placement: Parameters<Recovery>[0], core: Parameters<Recovery>[1]) => Promise<void>,
-  ): Recovery =>
-  async (placement, core, _onTransition, admit) => {
-    assert(admit, "Recovery fixture requires the coordinator admission owner");
-    return await admit((signal) => run(placement, () => core(signal)).then(() => undefined));
-  };
 
 export const preparedReclaim =
   (run: () => ReturnType<DispatchService["reclaim"]>): DispatchService["reclaim"] =>
@@ -42,7 +33,7 @@ export const PROVISIONING_PLACEMENT = {
   state: "provisioning",
   sessionId: "cloud",
   environmentId: "worker-cloud",
-} satisfies Parameters<DispatchService["resumeProvisioning"]>[0];
+} satisfies WorkerProvisioningDispatchPlacement;
 
 export const ACTIVE_PLACEMENT = {
   ...LOCAL_PLACEMENT,
@@ -68,8 +59,6 @@ export function createCoordinatorTestService(overrides: Partial<DispatchService>
     subscribeOrphanWorkspaceChanges: () => () => {},
     reconcile: unexpected,
     reconcileActive: unexpected,
-    isInterruptedTurn: () => false,
-    resumeProvisioning: unexpected,
     ...overrides,
   };
 }
@@ -77,9 +66,8 @@ export function createCoordinatorTestService(overrides: Partial<DispatchService>
 export function coordinate(
   overrides: Partial<DispatchService>,
   admit: Parameters<typeof coordinateWorkerPlacementDispatch>[1] = (_request, run) => run(),
-  recover?: Parameters<typeof coordinateWorkerPlacementDispatch>[2],
 ) {
-  return coordinateWorkerPlacementDispatch(createCoordinatorTestService(overrides), admit, recover);
+  return coordinateWorkerPlacementDispatch(createCoordinatorTestService(overrides), admit);
 }
 
 export function createOperationGate<T>(value: T) {

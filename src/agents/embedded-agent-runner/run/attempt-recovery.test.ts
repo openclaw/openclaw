@@ -247,6 +247,9 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(written.filter((event) => event.name === "model.retry.decision")).toEqual([
         expect.objectContaining({
           attributes: {
+            captureId: expect.any(String),
+            sequence: 1,
+            failedWrites: 0,
             decision: retryAvailable ? "accepted" : "rejected",
             reason: retryAvailable ? "backoff_completed" : "retry_budget_exhausted",
             retryCount: 0,
@@ -360,8 +363,8 @@ describe("recoverEmbeddedRunAttempt", () => {
   it.each([outputLimitScenario, emptyLengthScenario])(
     "continues slow output generation without consuming the transient outage window",
     async (scenario) => {
-      const startedAt = Date.now();
-      using now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+      const startedAt = performance.now();
+      using now = vi.spyOn(performance, "now").mockReturnValue(startedAt);
       const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
         await recoverAfterTransportDrop(scenario);
       expect(recovery.action).toBe("retry");

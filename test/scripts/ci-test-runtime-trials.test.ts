@@ -14,6 +14,8 @@ afterEach(() => vi.restoreAllMocks());
 const processConfig = "test/vitest/vitest.process.config.ts";
 const nodeFile = "src/process/spawn-broker/cleanup.test.ts";
 const bunFile = "src/process/spawn-broker/context.test.ts";
+const validatorFile = "src/agents/agent-tools.execution-validation.test.ts";
+const agentBunFile = "src/agents/agent-tools.policy.test.ts";
 // Gateway-core files precede database-worker files for the focused owner assertion.
 const sessionWeakRefFiles = [
   "src/gateway/session-list-history-retention.test.ts",
@@ -54,9 +56,8 @@ async function recordRun(
 }
 
 function expectIncludes(calls: Awaited<ReturnType<typeof recordRun>>["calls"], expected: string[]) {
-  expect(calls.map(({ runtime, includes }) => ({ runtime, includes }))).toEqual(
-    ["node", "bun"].map((runtime) => ({ runtime, includes: expected })),
-  );
+  const actual = calls.map(({ runtime, includes }) => ({ runtime, includes }));
+  expect(actual).toEqual(["node", "bun"].map((runtime) => ({ runtime, includes: expected })));
 }
 
 it.each([
@@ -67,16 +68,19 @@ it.each([
   ["gateway-core", sessionWeakRefFiles.slice(0, 2)],
   ["gateway-database-workers", sessionWeakRefFiles.slice(2)],
   ["gateway-methods", ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts"]],
-] as const)("preserves Gateway Node contracts for the %s inventory", async (name, files) => {
-  const { calls } = await recordRun(group(name, `test/vitest/vitest.${name}.config.ts`));
+  ["agents-core", [validatorFile]],
+] as const)("preserves Node contracts for the %s inventory", async (name, files) => {
+  const plan = group(name, `test/vitest/vitest.${name}.config.ts`);
+  const { calls } = await recordRun(plan);
+  expect(requiresBun(plan.plan, "bun-all")).toBe(true);
   const expected = files.map((file) => path.resolve(file)).toSorted();
-  const gatewayRoot = `${path.resolve("src/gateway")}${path.sep}`;
-  const nodeArgs = calls.find(({ runtime }) => runtime === "node")!.args;
-  const bunArgs = calls.find(({ runtime }) => runtime === "bun")!.args;
-  expect(nodeArgs.filter((arg) => arg.startsWith(gatewayRoot)).toSorted()).toEqual(expected);
+  const ownerRoot = `${path.resolve(name === "agents-core" ? "src/agents" : "src/gateway")}${path.sep}`;
+  const nodeArgs = calls.find(({ runtime }) => runtime === "node")?.args ?? [];
+  const bunArgs = calls.find(({ runtime }) => runtime === "bun")?.args ?? [];
+  expect(nodeArgs.filter((arg) => arg.startsWith(ownerRoot)).toSorted()).toEqual(expected);
   expect(
     bunArgs
-      .filter((arg) => arg.startsWith(`--exclude=${gatewayRoot}`))
+      .filter((arg) => arg.startsWith(`--exclude=${ownerRoot}`))
       .map((arg) => arg.slice("--exclude=".length))
       .toSorted(),
   ).toEqual(expected);
@@ -96,9 +100,7 @@ it.each(["bun-all", "dual-all"] as const)(
       { kind: "group", name: "gateway-methods", plan: { configs, includePatterns } },
       { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
     );
-    expect(calls.map(({ runtime, includes }) => ({ runtime, includes }))).toEqual(
-      ["node", "bun"].map((runtime) => ({ runtime, includes: includePatterns })),
-    );
+    expectIncludes(calls, includePatterns);
     expect(calls[0]!.args.slice(0, 2)).toEqual(configs);
     // The methods project excludes its isolated sibling, leaving no Bun file.
     expect(calls[1]!.args).toEqual([isolatedConfig, "--", `--exclude=${path.resolve(heapFile)}`]);
@@ -106,40 +108,45 @@ it.each(["bun-all", "dual-all"] as const)(
 );
 
 it.each(["bun-all", "dual-all"] as const)(
-  "partitions process discovery and retains failures under %s",
+  "partitions process and agent discovery and retains failures under %s",
   async (policy) => {
-    const { calls, exitCode } = await recordRun(
-      group("process", processConfig, [nodeFile, bunFile]),
-      { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
-      true,
-    );
-    expect(exitCode).toBe(1);
-    const discovered = await Promise.all(
-      calls.map(async ({ args, includes, runtime }) => {
-        const ignore = args
-          .filter((arg) => arg.startsWith("--exclude="))
-          .map((arg) => arg.slice("--exclude=".length));
-        const files = await glob(
-          includes!.map((file) => path.relative("src", file)),
-          { cwd: "src", ignore },
-        );
-        const filters = args.filter((arg) => path.isAbsolute(arg));
-        return {
-          runtime,
-          files: files
-            .filter((file) => !filters.length || filters.includes(path.resolve("src", file)))
-            .map((file) => `src/${file}`)
-            .toSorted(),
-        };
-      }),
-    );
-    expect(discovered).toEqual([
-      {
-        runtime: "node",
-        files: policy === "dual-all" ? [nodeFile, bunFile].toSorted() : [nodeFile],
-      },
-      { runtime: "bun", files: [bunFile] },
-    ]);
+    for (const [config, nodeTarget, bunTarget] of [
+      [processConfig, nodeFile, bunFile],
+      ["test/vitest/vitest.agents-core.config.ts", validatorFile, agentBunFile],
+    ] as const) {
+      const { calls, exitCode } = await recordRun(
+        group(config, config, [nodeTarget, bunTarget]),
+        { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
+        true,
+      );
+      expect(exitCode).toBe(1);
+      const discovered = await Promise.all(
+        calls.map(async ({ args, includes, runtime }) => {
+          const ignore = args
+            .filter((arg) => arg.startsWith("--exclude="))
+            .map((arg) => arg.slice("--exclude=".length));
+          const files = await glob(
+            includes!.map((file) => path.relative("src", file)),
+            { cwd: "src", ignore },
+          );
+          const filters = args.filter((arg) => path.isAbsolute(arg));
+          return {
+            runtime,
+            files: files
+              .filter((file) => !filters.length || filters.includes(path.resolve("src", file)))
+              .map((file) => `src/${file}`)
+              .toSorted(),
+          };
+        }),
+      );
+      expect(discovered).toEqual([
+        {
+          runtime: "node",
+          files: policy === "dual-all" ? [nodeTarget, bunTarget].toSorted() : [nodeTarget],
+        },
+        { runtime: "bun", files: [bunTarget] },
+      ]);
+    }
   },
 );
 
@@ -168,19 +175,23 @@ it("retains Node exceptions when argv overrides a known config", () => {
     vitestArgs: ["--config", processConfig],
   };
   const selected = selections(selection, "bun-all");
-  expect(selected).toHaveLength(2);
-  expect(selected[0]!.runtime).toBe("node");
+  expect(selected.map(({ runtime }) => runtime)).toEqual(["node", "bun"]);
   expect(selected[0]!.vitestArgs).toContain(path.resolve(nodeFile));
-  expect(selected[1]!.runtime).toBe("bun");
   expect(selected[1]!.vitestArgs).toContain(`--exclude=${path.resolve(nodeFile)}`);
   expect(requiresBun(selection, "bun-all")).toBe(true);
 });
 
 it("retains exact Node exceptions and selects broad target remainders on Bun", async () => {
-  for (const target of [nodeFile, `./${nodeFile}`, path.resolve(nodeFile)]) {
-    expect(selections({ targets: [target] }, "bun-all")).toEqual([{ runtime: "node" }]);
+  for (const file of [nodeFile, validatorFile]) {
+    for (const target of [file, `./${file}`, path.resolve(file)]) {
+      for (const policy of ["bun-all", "dual-all"] as const) {
+        expect(selections({ targets: [target] }, policy)).toEqual([{ runtime: "node" }]);
+        expect(requiresBun({ targets: [target] }, policy)).toBe(false);
+      }
+    }
   }
   for (const [target, runtime] of [
+    [agentBunFile, "bun"],
     ["src/config/sessions/session-accessor.pending-input-retention.test.ts", "node"],
     ["src/config/sessions/session-accessor.pending-inputs.test.ts", "bun"],
     ["src/gateway/session-row-projection.accepted-facts.test.ts", "bun"],
@@ -189,11 +200,9 @@ it("retains exact Node exceptions and selects broad target remainders on Bun", a
     expect(selections({ targets: [target] }, "bun-all")).toEqual([{ runtime }]);
   }
   const { calls } = await recordRun({ kind: "target", name: "process", target: "src/process" });
-  expect(calls).toHaveLength(2);
-  expect(calls[0]!.runtime).toBe("node");
+  expect(calls.map(({ runtime }) => runtime)).toEqual(["node", "bun"]);
   expect(calls[0]!.args).toContain(nodeFile);
   expect(calls[0]!.args).not.toContain("src/process");
-  expect(calls[1]!.runtime).toBe("bun");
   expect(calls[1]!.args).toContain("src/process");
   expect(calls[1]!.args).toContain(`--exclude=${path.resolve(nodeFile)}`);
 });

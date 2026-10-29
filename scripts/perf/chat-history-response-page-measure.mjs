@@ -7,6 +7,9 @@
  * Run timing and allocation separately; --reverse counterbalances the initial arm.
  * Pages contain text, tool calls/results, images, activity, and transcript positions.
  * Before timing, compare full JSON responses for fit/tail/anchor/oversized cases.
+ * Add --encode to include worker response encoding; --messages 300 --text-repeats 512
+ * models repeated large-tool-result pages. Allocation is sampled separately from CPU.
+ * Use --response-bytes 524288 for the transport page cap (default: 6 MiB).
  */
 import assert from "node:assert/strict";
 import { Session } from "node:inspector/promises";
@@ -16,7 +19,7 @@ import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { prepareChatHistoryResponsePage } from "../../src/gateway/chat-history-response-page.ts";
+import * as candidate from "../../src/gateway/chat-history-response-page.ts";
 
 const { values } = parseArgs({
   options: {
@@ -25,6 +28,10 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "5" },
     allocation: { type: "boolean", default: false },
     reverse: { type: "boolean", default: false },
+    encode: { type: "boolean", default: false },
+    messages: { type: "string" },
+    "text-repeats": { type: "string", default: "64" },
+    "response-bytes": { type: "string", default: String(6 * 1024 * 1024) },
   },
 });
 assert(global.gc, "Run with --expose-gc");
@@ -33,16 +40,24 @@ const iterations = Number(values.iterations);
 const pairs = Number(values.pairs);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(Number.isSafeInteger(pairs) && pairs > 0);
-const base = (await import(pathToFileURL(resolve(values["base-source"])).href))
-  .prepareChatHistoryResponsePage;
-const arms = { base, candidate: prepareChatHistoryResponsePage };
-const params = { entry: undefined, maxHistoryBytes: 6 * 1024 * 1024 };
-const fixtures = [200, 2000].map((count) => {
+const method = values.encode ? "encodeChatHistoryResponsePage" : "prepareChatHistoryResponsePage";
+const base = await import(pathToFileURL(resolve(values["base-source"])).href);
+const arms = { base: base[method], candidate: candidate[method] };
+const params = {
+  entry: undefined,
+  maxHistoryBytes: 6 * 1024 * 1024,
+  responseHistoryBytes: Number(values["response-bytes"]),
+  encodeResponse: true,
+};
+const fixtures = (values.messages ? [Number(values.messages)] : [200, 2000]).map((count) => {
   const messages = Array.from({ length: count }, (_, index) => ({
     role: index % 3 === 0 ? "user" : index % 3 === 1 ? "assistant" : "toolResult",
     timestamp: 1_700_000_000_000 + index,
     content: [
-      { type: "text", text: `Synthetic history ${index}: ${"output 🦞 ".repeat(64)}` },
+      {
+        type: "text",
+        text: `Synthetic history ${index}: ${"output 🦞 ".repeat(Number(values["text-repeats"]))}`,
+      },
       ...(index % 3 === 1
         ? [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: { path: "fixture" } }]
         : []),
@@ -124,7 +139,8 @@ for (const fixture of fixtures) {
       const start = performance.now();
       let bytes = 0;
       for (let index = 0; index < iterations; index++) {
-        bytes += arms[arm](fixture, params).messagesBytes;
+        const result = arms[arm](fixture, params);
+        bytes += values.encode ? result.encodedResponse.messages.byteLength : result.messagesBytes;
       }
       const elapsedMs = performance.now() - start;
       const cpu = process.threadCpuUsage(cpuStart);
@@ -160,6 +176,7 @@ console.log(
   JSON.stringify(
     {
       node: process.version,
+      responseHistoryBytes: params.responseHistoryBytes,
       mode: values.allocation ? "allocation" : "timing",
       byteComparisons,
       rows,

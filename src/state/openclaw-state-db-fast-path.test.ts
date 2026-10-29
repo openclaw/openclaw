@@ -3,7 +3,17 @@ import { realpathSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { needsOpenClawStateDatabaseSchemaRepair } from "./openclaw-state-db-fast-path.js";
+import {
+  ensureGitHubPublicationSchema,
+  ensureSecretStoreSchema,
+} from "./openclaw-state-db-schema-additive.js";
 import * as state from "./openclaw-state-db.js";
+import {
+  restorePreTemplateStateIdentifiersForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -132,3 +142,62 @@ it.each([false, true])("settles Doctor's disabled foreign-key connection (failur
   expect([...selected].map((database) => database.isOpen)).toEqual([false]);
   expect(foreignKeys()).toBe(0);
 });
+
+it("detects and completes startup columns in present lazy tables", async () => {
+  const env = { OPENCLAW_STATE_DIR: dirs.make("state-lazy-startup-") };
+  const opened = state.openOpenClawStateDatabase({ env });
+  ensureSecretStoreSchema(opened.db);
+  const pathname = opened.path;
+  await state.closeOpenClawStateDatabaseAsync();
+  {
+    using database = new DatabaseSync(pathname);
+    database.exec("ALTER TABLE secret_store_entries DROP COLUMN allowed_hosts");
+  }
+  expect(needsOpenClawStateDatabaseSchemaRepair(pathname)).toBe(true);
+  const repaired = state.openOpenClawStateDatabase({ env });
+  expect(repaired.db.prepare("SELECT allowed_hosts FROM secret_store_entries").all()).toEqual([]);
+  expect(
+    repaired.db
+      .prepare("SELECT name FROM sqlite_schema WHERE name = 'user_profile_identities'")
+      .get(),
+  ).toBeUndefined();
+  expect(needsOpenClawStateDatabaseSchemaRepair(pathname)).toBe(false);
+});
+
+it.each([
+  { table: "secret_store_entries", column: "allowed_hosts" },
+  { table: "github_publication_requests", column: "draft" },
+])(
+  "finishes $table column $column repair alongside a bounded version upgrade",
+  async ({ table, column }) => {
+    const env = { OPENCLAW_STATE_DIR: dirs.make("state-bounded-lazy-repair-") };
+    const opened = state.openOpenClawStateDatabase({ env });
+    ensureSecretStoreSchema(opened.db);
+    ensureGitHubPublicationSchema(opened.db);
+    const pathname = opened.path;
+    await state.closeOpenClawStateDatabaseAsync();
+    {
+      using database = new DatabaseSync(pathname);
+      restorePreTemplateStateIdentifiersForTest(database);
+      database.exec(
+        "PRAGMA user_version = 35; UPDATE schema_meta SET schema_version = 35 WHERE meta_key = 'primary'",
+      );
+      database.exec("ALTER TABLE " + table + " DROP COLUMN " + column);
+    }
+    await withStateMigrationBackupForTest({ env }, () => {
+      expect(state.repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
+    });
+    const repaired = state.openOpenClawStateDatabase({ env });
+    expect(repaired.db.prepare("SELECT " + column + " FROM " + table).all()).toEqual([]);
+    expect(repaired.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
+    expect(
+      repaired.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE name = 'github_personal_publication_requests'",
+        )
+        .get(),
+    ).toBeUndefined();
+  },
+);

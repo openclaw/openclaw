@@ -286,13 +286,20 @@ describe("paired node worker Gateway upgrade wire", () => {
           deliver: false,
           idempotencyKey: continuation,
         });
-        const completed = await operator.request<{ status?: string }>(
-          "agent.wait",
-          {
-            runId: continuation,
-            timeoutMs: PROOF_TIMEOUT_MS,
+        const completionDeadline = Date.now() + PROOF_TIMEOUT_MS;
+        const continuationOperator = operator;
+        // Runtime refresh queues fresh input; agent.wait reports that custody immediately.
+        const completed = await vi.waitUntil(
+          async () => {
+            const timeoutMs = Math.max(0, completionDeadline - Date.now());
+            const result = await continuationOperator.request<{ status?: string }>(
+              "agent.wait",
+              { runId: continuation, timeoutMs },
+              { timeoutMs: timeoutMs + 5_000 },
+            );
+            return result.status === "pending" ? false : result;
           },
-          { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
+          { timeout: PROOF_TIMEOUT_MS, interval: 100 },
         );
         expect(completed, gateway.logs().slice(-12_000)).toMatchObject({ status: "ok" });
         const after = await describeSession(gateway);

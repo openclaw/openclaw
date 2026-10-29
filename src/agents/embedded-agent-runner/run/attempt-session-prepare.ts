@@ -6,7 +6,6 @@ import type { ContextEngine } from "../../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
-  isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../../sessions/input-provenance.js";
@@ -359,9 +358,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         const candidate = resolveOrphanRepairPlan({
           sessionManager,
           prompt: attempt.prompt,
-          preserveLeaf:
-            attempt.skipPreparedUserTurnMessage === true ||
-            isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
+          preserveLeaf: attempt.skipPreparedUserTurnMessage === true,
         });
         const reconciledCurrentUser = reconcilePrePersistedCurrentUserTurn({
           activeSession,

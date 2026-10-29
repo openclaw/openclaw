@@ -95,12 +95,19 @@ export function readSessionMethodScopeAccess(
     isRecord(patch) &&
     (typeof patch.archived === "boolean" || Object.hasOwn(patch, "communication")) &&
     !roleScopesAllow({ role, requestedScopes: ["operator.admin"], allowedScopes: scopes });
+  // Only parentless creation has no existing row whose ownership must be checked.
+  const createsWithoutParent =
+    request.method === "sessions.create" &&
+    !(
+      isRecord(request.params) &&
+      typeof request.params.parentSessionKey === "string" &&
+      request.params.parentSessionKey.trim()
+    );
   if (
     (patchNeedsOwner ||
       (requiredScope === "operator.sessions.write" &&
         !roleScopesAllow({ role, requestedScopes: ["operator.write"], allowedScopes: scopes }) &&
-        // Creation assigns its owner on the Gateway before a canonical row exists.
-        request.method !== "sessions.create")) &&
+        !createsWithoutParent)) &&
     request.session?.sharingRole !== "owner" &&
     request.session?.sharingRole !== "admin"
   ) {

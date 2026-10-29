@@ -14,6 +14,7 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { isTextAttachment } from "../../../lib/media-file-extension.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
+import { isSessionFileReadMetadata } from "../../../lib/protocol-validators.generated/session-input.js";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { TEXT_ATTACHMENT_PREVIEW_MAX_BYTES } from "./chat-attachment-text-reader.ts";
@@ -39,7 +40,11 @@ import type {
   SessionWorkspaceHost,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
-import type { FilePreviewSource, SidebarContent } from "./chat-sidebar-content-types.ts";
+import type {
+  FilePreviewSource,
+  FileSidebarContent,
+  SidebarContent,
+} from "./chat-sidebar-content-types.ts";
 
 export { downloadSessionFile };
 
@@ -52,6 +57,7 @@ type WorkspaceFileOptions = {
   draftScope?: string;
   draftContext?: SessionWorkspaceHost["sessionWorkspaceDraftContext"];
   gatewayUrl: string;
+  relativeTo?: FileSidebarContent;
 };
 
 export async function loadSessionWorkspaceFileContent(
@@ -67,6 +73,19 @@ export async function loadSessionWorkspaceFileContent(
     options.requestPath,
     options.messageEntryId,
   );
+  const document = options.relativeTo;
+  if (
+    document &&
+    reference &&
+    (reference.result.root !== (document.root ?? undefined) ||
+      reference.result.source?.workspaceId !== document.workspaceSource?.workspaceId ||
+      reference.result.source?.root !== document.workspaceSource?.root ||
+      reference.result.source?.fileRoot !== document.workspaceSource?.fileRoot)
+  ) {
+    throw new Error(
+      "The document's workspace changed. Reopen the document before following its links.",
+    );
+  }
   return (
     reference && {
       result: reference.result,
@@ -259,6 +278,7 @@ function createSessionWorkspaceFileContent(
     name,
     content: text,
     download,
+    ...(result.source ? { workspaceSource: result.source } : {}),
     sessionFileSource: {
       sessionKey: result.sessionKey,
       agentId,
@@ -430,7 +450,15 @@ async function readSessionFileReference(
   const read = async (actionPath: string) => {
     try {
       const result = await state.sessions.getFile(sessionKey, actionPath, options);
-      return result ? { result, actionPath } : null;
+      // A preview can resolve an execution-path alias; actions keep its returned file and source.
+      return result
+        ? {
+            result,
+            actionPath: result.file?.workspacePath
+              ? workspaceBrowserFilePath(result.root, result.file.workspacePath)
+              : actionPath,
+          }
+        : null;
     } catch (error) {
       const details = error instanceof GatewayRequestError ? error.details : null;
       if (
@@ -441,8 +469,13 @@ async function readSessionFileReference(
         "size" in details &&
         typeof details.size === "number"
       ) {
+        const metadata = {
+          root: "root" in details ? details.root : undefined,
+          source: "source" in details ? details.source : undefined,
+        };
         const result: SessionWorkspaceGetResult = {
           sessionKey,
+          ...(isSessionFileReadMetadata(metadata) ? metadata : {}),
           file: {
             path: actionPath,
             name: pathDisplayName(actionPath),

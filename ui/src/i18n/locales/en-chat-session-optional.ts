@@ -349,6 +349,8 @@ const catalog = {
       folderUnavailable: "This folder is unavailable. Open its parent folder to continue browsing.",
       noSearchResults: "No matching files.",
       truncated: "Showing the first matching files. Refine the search to narrow results.",
+      searchIncomplete: "Search is incomplete. Some files may not appear in these results.",
+      browseFiles: "Browse files",
       session: "Session",
       missing: "Missing",
       filterAll: "All",

@@ -353,7 +353,7 @@ export async function withCommandPlugin(
           });
           agentTurnRuntime = runtime;
           gateway.createAgentTurnFacade = runtime.createAgentTurnFacade;
-          gateway.recoveryRuntime = runtime.recovery;
+          gateway.lifecycleRuntime = runtime.lifecycle;
           gateway.getGatewayMethodRegistry = () => methodRegistry;
         },
       };
