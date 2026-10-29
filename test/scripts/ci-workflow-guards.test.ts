@@ -10218,8 +10218,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         }>;
         expect(config.test?.maxWorkers).toBe(expectedWorkers);
         expect(projects.map((project) => project.test.maxWorkers)).toEqual([
-          undefined,
-          undefined,
+          expectedWorkers,
+          expectedWorkers,
           1,
           1,
         ]);

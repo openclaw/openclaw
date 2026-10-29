@@ -1,10 +1,12 @@
 // Tool filesystem policy tests cover how global and agent-specific tool
 // profiles decide workspace-only access and root expansion.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withCapturedOpenClawToolsFsPolicy } from "./openclaw-tools.fs-policy.js";
 import {
   resolveEffectiveToolFsRootExpansionAllowed,
   resolveEffectiveToolFsWorkspaceOnly,
+  resolveOpenClawToolsFsPolicy,
 } from "./tool-fs-policy.js";
 
 describe("resolveEffectiveToolFsWorkspaceOnly", () => {
@@ -174,5 +176,65 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
     };
 
     expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "messenger" })).toBe(false);
+  });
+});
+
+describe("resolveOpenClawToolsFsPolicy", () => {
+  it("lets an explicit session permission mode decide and pins its root", () => {
+    expect(
+      resolveOpenClawToolsFsPolicy({
+        cfg: { tools: { fs: { workspaceOnly: false } } },
+        agentId: "main",
+        sessionPermissionPolicy: { mode: "workspace", root: "/work/root" },
+      }),
+    ).toEqual({ workspaceOnly: true, root: "/work/root" });
+    expect(
+      resolveOpenClawToolsFsPolicy({
+        cfg: { tools: { fs: { workspaceOnly: true } } },
+        agentId: "main",
+        sessionPermissionPolicy: { mode: "full", root: "/work/root" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps the subagent attachment root readable without widening the workspace", () => {
+    expect(
+      resolveOpenClawToolsFsPolicy({
+        cfg: { tools: { fs: { workspaceOnly: true } } },
+        agentId: "main",
+        attachmentReadRoot: "/state/attachments/child",
+      }),
+    ).toEqual({ workspaceOnly: true, readOnlyRoots: ["/state/attachments/child"] });
+    expect(
+      resolveOpenClawToolsFsPolicy({ cfg: {}, agentId: "main", attachmentReadRoot: "/x" }),
+    ).toBeUndefined();
+  });
+});
+
+vi.mock("./subagents/subagent-attachment-paths.js", () => ({
+  subagentAttachmentRootForRun: () => "/attachments",
+}));
+
+describe("withCapturedOpenClawToolsFsPolicy", () => {
+  it("derives a restricted policy without mutating frozen caller options", () => {
+    const input = Object.freeze({ config: { tools: { fs: { workspaceOnly: true } } } });
+    const captured = withCapturedOpenClawToolsFsPolicy(input, "main");
+    expect(captured).not.toBe(input);
+    expect(captured.config).toBe(input.config);
+    expect(input).not.toHaveProperty("fsPolicy");
+    expect(captured.fsPolicy).toEqual({ workspaceOnly: true, readOnlyRoots: ["/attachments"] });
+  });
+
+  it("preserves an explicit policy and other caller options", () => {
+    const fsPolicy = { workspaceOnly: true as const, root: "/workspace" };
+    const input = Object.freeze({ fsPolicy, workspaceDir: "/workspace" });
+    const captured = withCapturedOpenClawToolsFsPolicy(input, "main");
+    expect(captured).not.toBe(input);
+    expect(captured.fsPolicy).toBe(fsPolicy);
+    expect(captured.workspaceDir).toBe("/workspace");
+  });
+
+  it("keeps omitted unrestricted options unrestricted", () => {
+    expect(withCapturedOpenClawToolsFsPolicy(undefined, "main").fsPolicy).toBeUndefined();
   });
 });

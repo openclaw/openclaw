@@ -176,6 +176,7 @@ type OwnershipProbe = {
 function probeOwnership(
   options: {
     prebuilt?: boolean;
+    virtualCpus?: number;
     filters?: string[];
     cli?: string[];
     project?: string[];
@@ -265,7 +266,14 @@ function probeOwnership(
     `
     import fs from "node:fs";
     import path from "node:path";
-    import { createVitest, parseCLI } from "vitest/node";
+    import os from "node:os";
+    import { syncBuiltinESMExports } from "node:module";
+    if (${JSON.stringify(options.virtualCpus)} !== undefined) {
+      os.availableParallelism = () => ${JSON.stringify(options.virtualCpus)};
+      os.cpus = () => Array.from({ length: ${JSON.stringify(options.virtualCpus)} }, () => ({ model: "fixture", speed: 1, times: {} }));
+      syncBuiltinESMExports();
+    }
+    const { createVitest, parseCLI } = await import("vitest/node");
     const filters = ${JSON.stringify(options.filters ?? [])};
     const args = ["run", ...filters, ...${JSON.stringify(options.cli ?? [])}];
     process.argv = [process.execPath, "vitest", ...args];
@@ -346,6 +354,15 @@ function probeOwnership(
       timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
       env: {
         ...process.env,
+        // Native configuration resolves a persistent API token even without tests.
+        HOME: directory,
+        USERPROFILE: directory,
+        LOCALAPPDATA: directory,
+        APPDATA: directory,
+        XDG_DATA_HOME: directory,
+        XDG_CONFIG_HOME: directory,
+        XDG_CACHE_HOME: directory,
+        XDG_STATE_HOME: directory,
         OPENCLAW_VITEST_INCLUDE_FILE: options.include ? includeFile : "",
         OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: options.skipRealGateway ? "1" : "",
       },
@@ -359,6 +376,25 @@ function probeOwnership(
 }
 
 describe("Control UI E2E resource ownership", () => {
+  it.each([false, true])("preserves explicit caps on a 32-CPU host (prebuilt=%s)", (prebuilt) => {
+    for (const workers of [undefined, 3]) {
+      const result = probeOwnership({
+        prebuilt,
+        virtualCpus: 32,
+        cli: workers ? ["--maxWorkers", String(workers)] : [],
+      });
+      expect(result.rootWorkers).toBe(workers ?? 2);
+      expect(result.files.some((entry) => entry.phase === (prebuilt ? 2 : 0))).toBe(true);
+      for (const entry of result.files) {
+        expect(entry.workers, entry.project).toBe(entry.phase === 1 ? 1 : (workers ?? 2));
+        if (entry.phase === 1) {
+          expect(entry.fileParallelism).toBe(false);
+        }
+      }
+      expect(result.canonicalAssetsIntact).toBe(true);
+    }
+  });
+
   it("refuses a selected project before acquiring fixtures when environment preflight fails", () => {
     const result = probeOwnership({ filters: [bundledFile], failure: "preflight" });
     expect(result.setupError).toBe("fixture preflight failed");

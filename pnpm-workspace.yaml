@@ -57,7 +57,9 @@ overrides:
   "@aws-sdk/xml-builder": 3.972.40
   "@hono/node-server": 2.1.1
   axios: 1.20.0
-  fast-uri: 4.2.1
+  # Reject malformed URI schemes/hosts and preserve relative reference semantics.
+  # GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h, GHSA-333x-w4r6-6crp.
+  fast-uri: 4.2.3
   follow-redirects: 1.16.1
   defu: 6.1.7
   fast-xml-parser: 5.11.1
@@ -73,7 +75,9 @@ overrides:
   form-data: 4.0.6
   "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"
   ip-address: 10.7.2
-  "mailauth@5.0.3>nodemailer": 10.0.10
+  "mailauth@5.0.3>nodemailer": 10.1.4
+  "mailparser@3.9.28>nodemailer": 10.1.4
+  "baileys@7.0.0-rc14>music-metadata": 11.16.0
   "mailauth@5.0.3>joi": 18.2.9
   # Mailauth pins vulnerable Undici; remove when its direct dependency is fixed.
   "mailauth@5.0.3>undici": 8.10.2
@@ -129,11 +133,12 @@ packageExtensions:
       typescript: 5.9.3
 
 patchedDependencies:
+  "@discord/embedded-app-sdk@2.5.0": patches/@discord__embedded-app-sdk@2.5.0.patch
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch
   "chrome-devtools-mcp@1.9.0": patches/chrome-devtools-mcp@1.9.0.patch
   "matrix-js-sdk@42.4.0": patches/matrix-js-sdk@42.4.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch
-  vitest@5.0.1: patches/vitest@5.0.1.patch
+  vitest@5.0.5: patches/vitest@5.0.5.patch
   "@awesome.me/webawesome@3.13.0": patches/@awesome.me__webawesome@3.13.0.patch
   "@openclaw/proxyline@0.3.12": patches/@openclaw__proxyline@0.3.12.patch
   ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch

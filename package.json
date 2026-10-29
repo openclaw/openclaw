@@ -2353,7 +2353,7 @@
     "@types/semver": "7.8.0",
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
-    "@vitest/coverage-v8": "5.0.1",
+    "@vitest/coverage-v8": "5.0.5",
     "acpx": "0.19.1",
     "apache-arrow": "21.2.0",
     "baileys": "7.0.0-rc14",
@@ -2389,7 +2389,7 @@
     "typescript": "7.1.0-dev.20260920.1",
     "unrun": "0.3.1",
     "vite": "8.3.4",
-    "vitest": "5.0.1"
+    "vitest": "5.0.5"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"
