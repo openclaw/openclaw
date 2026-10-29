@@ -3709,8 +3709,7 @@ exit 0
         // Docker keeps the last value when package arguments repeat an environment key.
         const effectiveBudget = dockerArgs
           .split("\n")
-          .filter((arg) => arg.startsWith(`${budgetEnv}=`))
-          .at(-1);
+          .findLast((arg) => arg.startsWith(`${budgetEnv}=`));
         expect(effectiveBudget).toBe(`${budgetEnv}=${timeout || "900s"}`);
         expect(dockerArgs).toContain(`${artifacts}:/tmp/openclaw-upgrade-survivor-artifacts`);
         expect(dockerArgs).not.toContain(publicRoot);
