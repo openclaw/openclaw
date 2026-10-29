@@ -55,7 +55,8 @@ export async function listMattermostDirectoryGroups(
   if (!clients.length) {
     return [];
   }
-  const q = normalizeLowercaseStringOrEmpty(params.query);
+  // Canonical forms compare equal here; channels keep their original name and display name.
+  const q = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
   const seenIds = new Set<string>();
   const entries: ChannelDirectoryEntry[] = [];
 
@@ -73,8 +74,8 @@ export async function listMattermostDirectoryGroups(
           continue;
         }
         if (q) {
-          const name = normalizeLowercaseStringOrEmpty(ch.name);
-          const display = normalizeLowercaseStringOrEmpty(ch.display_name);
+          const name = normalizeLowercaseStringOrEmpty(ch.name).normalize("NFC");
+          const display = normalizeLowercaseStringOrEmpty(ch.display_name).normalize("NFC");
           if (!name.includes(q) && !display.includes(q)) {
             continue;
           }
@@ -134,7 +135,8 @@ export async function listMattermostDirectoryPeers(
       return [];
     }
     const teamId = team.id;
-    const q = normalizeLowercaseStringOrEmpty(params.query);
+    // The server matches stored user names; forward the canonical form the caller typed.
+    const q = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
 
     let users: MattermostUser[];
     if (q) {
