@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { pathExists, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
@@ -11,6 +11,23 @@ import { renderImportedSourcePage } from "./source-page-shared.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 import { readExistingWikiPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
+
+async function readIngestFile(filePath: string): Promise<Buffer> {
+  try {
+    // A special file must not hold the vault mutation queue waiting for a writer.
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(filePath) });
+    return buffer;
+  } catch (cause) {
+    // Keep readExistingWikiPage's recovery when a previously visible page disappears.
+    if (asNullableRecord(cause)?.code === "ENOENT") {
+      throw cause;
+    }
+    throw new Error(
+      `Cannot read wiki ingest file ${filePath}. Choose a readable regular file and retry.`,
+      { cause },
+    );
+  }
+}
 
 export async function ingestMemoryWikiSource(params: {
   config: ResolvedMemoryWikiConfig;
@@ -27,7 +44,7 @@ export async function ingestMemoryWikiSource(params: {
     });
     params.signal?.throwIfAborted();
     const sourcePath = path.resolve(params.inputPath);
-    const buffer = await fs.readFile(sourcePath);
+    const buffer = await readIngestFile(sourcePath);
     params.signal?.throwIfAborted();
     if (buffer.subarray(0, 4096).includes(0)) {
       throw new Error(`Cannot ingest binary file as markdown source: ${sourcePath}`);
@@ -68,11 +85,8 @@ export async function ingestMemoryWikiSource(params: {
     const existing = created
       ? ""
       : await readExistingWikiPage(
-          () => fs.readFile(pagePath, "utf8"),
-          (error) => {
-            const code = asNullableRecord(error)?.code;
-            return code === "ENOENT" || code === "EISDIR";
-          },
+          async () => (await readIngestFile(pagePath)).toString("utf8"),
+          (error) => asNullableRecord(error)?.code === "ENOENT",
         );
     params.signal?.throwIfAborted();
     await fs.writeFile(

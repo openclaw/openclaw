@@ -1,6 +1,9 @@
 // Memory Wiki tests cover ingest plugin behavior.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { describe, expect, it, vi } from "vitest";
 import { deferred } from "./deferred.test-helpers.js";
@@ -11,6 +14,97 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
 describe("ingestMemoryWikiSource", () => {
+  it.skipIf(process.platform === "win32").each(["source", "page"])(
+    "refuses a FIFO %s without holding the vault mutation queue",
+    async (target) => {
+      const rootDir = await createTempDir("memory-wiki-fifo-");
+      const { stdout } = await promisify(execFile)(
+        process.execPath,
+        [
+          "--import",
+          fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
+          fileURLToPath(new URL("./ingest-special-file.test-support.ts", import.meta.url)),
+          rootDir,
+          target,
+        ],
+        { timeout: 20_000, killSignal: "SIGKILL" },
+      );
+      expect(stdout).toContain("FIFO refused; original preserved; vault queue released");
+    },
+    25_000,
+  );
+
+  it.each(["source", "page"])("refuses a directory %s without modifying it", async (target) => {
+    const rootDir = await createTempDir("memory-wiki-directory-");
+    const inputPath = path.join(rootDir, "notes.txt");
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+      initialize: true,
+    });
+    const pagePath = path.join(config.vault.path, "sources", "notes.md");
+    await fs.writeFile(inputPath, "source content");
+    const directory = target === "source" ? inputPath : pagePath;
+    if (target === "source") {
+      await fs.unlink(inputPath);
+    }
+    await fs.mkdir(directory);
+    await fs.writeFile(path.join(directory, "keep"), "handwritten notes");
+    await expect(ingestMemoryWikiSource({ config, inputPath })).rejects.toThrow(/regular/);
+    await expect(fs.readFile(path.join(directory, "keep"), "utf8")).resolves.toBe(
+      "handwritten notes",
+    );
+  });
+
+  it("preserves symlink-to-regular source and existing-page support", async () => {
+    const rootDir = await createTempDir("memory-wiki-symlink-");
+    const inputPath = path.join(rootDir, "notes.txt");
+    const targetPath = path.join(rootDir, "actual.txt");
+    await fs.writeFile(targetPath, "Unicode: café 日本語");
+    await fs.symlink(targetPath, inputPath);
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+    await ingestMemoryWikiSource({ config, inputPath });
+    const pagePath = path.join(config.vault.path, "sources", "notes.md");
+    const savedPagePath = path.join(rootDir, "saved.md");
+    const page = (await fs.readFile(pagePath, "utf8")).replace(
+      "<!-- openclaw:human:start -->",
+      "<!-- openclaw:human:start -->\nHuman note",
+    );
+    await fs.writeFile(pagePath, page);
+    await fs.rename(pagePath, savedPagePath);
+    await fs.symlink(savedPagePath, pagePath);
+    await ingestMemoryWikiSource({ config, inputPath });
+    const after = await fs.readFile(pagePath, "utf8");
+    expect(after).toContain("Unicode: café 日本語");
+    expect(after).toContain("Human note");
+    expect((await fs.lstat(pagePath)).isSymbolicLink()).toBe(true);
+  });
+
+  it("recreates an existing page that disappears before its read", async () => {
+    const rootDir = await createTempDir("memory-wiki-disappeared-");
+    const inputPath = path.join(rootDir, "notes.txt");
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+    await fs.writeFile(inputPath, "original content");
+    await ingestMemoryWikiSource({ config, inputPath });
+    const pagePath = path.join(config.vault.path, "sources", "notes.md");
+    const realpath = fs.realpath.bind(fs);
+    let removed = false;
+    const spy = vi.spyOn(fs, "realpath").mockImplementation(async (filePath, options) => {
+      if (filePath === pagePath && !removed) {
+        removed = true;
+        await fs.unlink(pagePath);
+      }
+      return realpath(filePath, options);
+    });
+    try {
+      await fs.writeFile(inputPath, "replacement content");
+      await ingestMemoryWikiSource({ config, inputPath });
+      expect(removed).toBe(true);
+      await expect(fs.readFile(pagePath, "utf8")).resolves.toContain("replacement content");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("copies a local text file into sources markdown", async () => {
     const rootDir = await createTempDir("memory-wiki-ingest-");
     const inputPath = path.join(rootDir, "meeting-notes.txt");
