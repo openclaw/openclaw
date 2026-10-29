@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import { ExitError } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { dashboardCommand } from "./dashboard.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -207,6 +208,21 @@ it("guides no-token users to the explicit JSON handoff when clipboard delivery f
   expect(runtime.log).toHaveBeenCalledWith(
     "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
   );
+});
+
+it("passes the command lifetime signal into document readiness", async () => {
+  mockSnapshot("");
+  const scope = new AsyncWorkScope();
+  const documentSignals: Array<AbortSignal | undefined> = [];
+  waitForControlUiDocument.mockImplementation(async (options: { signal?: AbortSignal } = {}) => {
+    documentSignals.push(options.signal);
+    return { ready: true };
+  });
+
+  await scope.run(() => dashboardCommand(runtime, { noOpen: true }));
+
+  expect(documentSignals).toHaveLength(1);
+  expect(documentSignals[0]).toBe(scope.signal);
 });
 
 it("emits one JSON readiness failure before an exiting runtime unwinds", async () => {

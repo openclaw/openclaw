@@ -232,13 +232,8 @@ it("stops probing pending readiness once the command aborts", async () => {
         ready: false,
         reason: "Control UI readiness check was interrupted.",
       });
-      // The accepted interruption stops the retry loop; no probe may follow it.
-      const observed = requests;
-      expect(observed).toBeGreaterThan(0);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 1_200);
-      });
-      expect(requests).toBe(observed);
+      // The accepted interruption stops the retry loop before another probe.
+      expect(requests).toBe(1);
     });
   });
 }, 20_000);

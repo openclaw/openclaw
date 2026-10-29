@@ -1,12 +1,12 @@
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { promptYesNo } from "../cli/prompt.js";
-import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { openUrlPrivately } from "../infra/browser-handoff.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
 import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sleep } from "../utils/sleep.js";
 import {
   hasVerifiedControlUiLoopbackAlias,
@@ -224,30 +224,17 @@ export async function dashboardCommand(
         return;
       }
 
-      // Release the readiness probe on an accepted interruption: the signal barrier
-      // owns the notice and exit code, so the probe must not keep polling.
-      const readinessAbort = new AbortController();
-      let releaseReadinessGate = () => {};
-      const readinessFinished = new Promise<void>((resolve) => {
-        releaseReadinessGate = resolve;
+      // The command lifetime owns cancellation: an accepted interruption aborts this
+      // signal, so pending document work stops before any handoff or guidance.
+      const documentSignal = getAsyncWorkSignal();
+      const document = await waitForControlUiDocument({
+        url: target.documentUrl,
+        tlsConfig: target.tlsConfig,
+        waitForPending: false,
+        ...(documentSignal ? { signal: documentSignal } : {}),
       });
-      const unregisterReadinessGate = registerSignalExitGate(readinessFinished, () =>
-        readinessAbort.abort(),
-      );
-      let document: Awaited<ReturnType<typeof waitForControlUiDocument>>;
-      try {
-        document = await waitForControlUiDocument({
-          url: target.documentUrl,
-          tlsConfig: target.tlsConfig,
-          waitForPending: false,
-          signal: readinessAbort.signal,
-        });
-      } finally {
-        releaseReadinessGate();
-        unregisterReadinessGate();
-      }
       if (!document.ready) {
-        if (readinessAbort.signal.aborted) {
+        if (documentSignal?.aborted) {
           return;
         }
         dashboardJsonFailure(runtime, document.reason);
@@ -326,12 +313,17 @@ export async function dashboardCommand(
     runtime.exit(1);
     return;
   }
+  const documentSignal = getAsyncWorkSignal();
   const document = await waitForControlUiDocument({
     url: target.documentUrl,
     tlsConfig: target.tlsConfig,
     onPending: () => runtime.log("Control UI assets are preparing; waiting for the dashboard…"),
+    ...(documentSignal ? { signal: documentSignal } : {}),
   });
   if (!document.ready) {
+    if (documentSignal?.aborted) {
+      return;
+    }
     runtime.error(document.reason);
     runtime.log("Run `openclaw gateway status --deep` for details.");
     runtime.exit(1);
