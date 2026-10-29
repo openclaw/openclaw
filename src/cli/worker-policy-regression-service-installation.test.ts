@@ -53,14 +53,11 @@ vi.mock("../infra/npm-registry-spec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/npm-registry-spec.js")>()),
   compareOpenClawReleaseVersions: (a: string, b: string) => a.localeCompare(b),
 }));
-vi.mock("../state/openclaw-state-db.paths.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/openclaw-state-db.paths.js")>()),
-  resolveOpenClawStateSqlitePath: () => "/state.sqlite",
-}));
 vi.mock("../version.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version.js")>()),
   VERSION: "2026.10.8",
 }));
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { inspectCliGatewayServiceInstallation } from "./run-main-service-installation.js";
 const command = { fixtureScope: "system", programArguments: ["node", "/system/dist/index.js"] };
 function runtime(
@@ -145,9 +142,12 @@ describe.skipIf(process.platform !== "linux")("worker policy own-service selecti
   });
   it("preserves protection for a genuinely older own effective package", async () => {
     fixture.versions.system = "2026.10.6";
-    await expect(inspectCliGatewayServiceInstallation({})).resolves.toMatchObject({
+    // The live Gateway's own selectors are its database identity.
+    const env = { OPENCLAW_STATE_DIR: "/live-state" };
+    await expect(inspectCliGatewayServiceInstallation(env)).resolves.toMatchObject({
       root: "/system",
       version: "2026.10.6",
+      databasePath: resolveOpenClawStateSqlitePath(env),
     });
   });
   it("uses exact custom user unit from cgroup", async () => {
@@ -208,6 +208,21 @@ describe("worker policy installed-service fallbacks", () => {
     fixture.versions.user = "2026.10.8";
     await expect(inspectCliGatewayServiceInstallation({})).resolves.toBeUndefined();
     expect(fixture.readRuntime).not.toHaveBeenCalled();
+  });
+  it("resolves an installed service's database without the CLI's state selectors", async () => {
+    fixture.gateway = false;
+    const serviceEnv = { HOME: "/home/example" };
+    fixture.readCommand.mockResolvedValue({ fixtureScope: "user", environment: serviceEnv });
+    const isolated = {
+      ...serviceEnv,
+      OPENCLAW_HOME: "/isolated",
+      OPENCLAW_STATE_DIR: "/isolated/state",
+      OPENCLAW_PROFILE: "isolated",
+    };
+    await expect(inspectCliGatewayServiceInstallation(isolated)).resolves.toMatchObject({
+      version: "2026.10.5",
+      databasePath: resolveOpenClawStateSqlitePath(serviceEnv),
+    });
   });
   it.each(["darwin", "win32"])("preserves the installed-service guard on %s", async (platform) => {
     const descriptor = Object.getOwnPropertyDescriptor(process, "platform");

@@ -79,13 +79,22 @@ async function readOwnGatewayServiceCommand(
   }
 }
 
+function withoutStateSelectors(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const hostEnv = { ...env };
+  delete hostEnv.OPENCLAW_HOME;
+  delete hostEnv.OPENCLAW_STATE_DIR;
+  delete hostEnv.OPENCLAW_PROFILE;
+  return hostEnv;
+}
+
 /** Unknown service installations retain normal CLI behavior; only proven older installs restrict migration. */
 export async function inspectCliGatewayServiceInstallation(
   env: NodeJS.ProcessEnv,
 ): Promise<GatewayServiceInstallation | undefined> {
   try {
     const service = resolveGatewayService();
-    const command = (await readOwnGatewayServiceCommand(env)) ?? (await service.readCommand(env));
+    const ownCommand = await readOwnGatewayServiceCommand(env);
+    const command = ownCommand ?? (await service.readCommand(env));
     const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
     const layout = await summarizeGatewayServiceLayout(command);
     const drift = root ? await inspectGatewayServiceInstallationDrift(layout, root) : undefined;
@@ -100,7 +109,12 @@ export async function inspectCliGatewayServiceInstallation(
       version: drift.serviceVersion,
       cliVersion: VERSION,
       databasePath: resolveIdentityPathViaExistingAncestorSync(
-        resolveOpenClawStateSqlitePath({ ...env, ...command?.environment }),
+        resolveOpenClawStateSqlitePath({
+          // This process is the live service, so its selectors are the service's.
+          // Another installed service omitting a selector uses its default, not the CLI's.
+          ...(ownCommand ? env : withoutStateSelectors(env)),
+          ...command?.environment,
+        }),
       ),
     };
   } catch {
