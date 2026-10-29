@@ -184,7 +184,7 @@ if (tool === "docker") {
   if (count <= Number(env["FAKE_GH_" + kind.toUpperCase() + "_FAILURES"] || 0)) {
     emit("partial " + kind + " response\\n");
     console.error(env["FAKE_GH_" + kind.toUpperCase() + "_ERROR"] || "gh: request failed");
-    process.exit(1);
+    process.exit(Number(env.FAKE_GH_EXIT_STATUS || 1));
   }
   const value = kind === "artifact" ? {
     id: Number(env.FAKE_ARTIFACT_ID), name: env.FAKE_ARTIFACT_NAME,
@@ -299,6 +299,35 @@ describe("shared Docker image artifacts", () => {
       if (!attempts) {
         expect(result.stdout).not.toContain("partial artifact response");
         expect(result.stderr).toContain("i/o timeout");
+      }
+    },
+  );
+
+  it.each([
+    [124, "ARTIFACT", "1", true, 2, 1],
+    [137, "ATTEMPT", "1", true, 1, 2],
+    [124, "ARTIFACT", "3", false, 3, 0],
+    [137, "ATTEMPT", "3", false, 1, 3],
+  ] as const)(
+    "handles deadline exit %s for %s after %s failures",
+    (status, target, failures, success, artifacts, attempts) => {
+      const fixture = createFixture();
+      const result = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_EXIT_STATUS: String(status),
+          [`FAKE_GH_${target}_FAILURES`]: failures,
+        },
+      });
+      expectApiResult(result, fixture, {
+        success,
+        sleeps: success ? "2\n" : "2\n4\n",
+        artifacts,
+        attempts,
+        messages: ["GitHub API GET exceeded the 30s request deadline."],
+      });
+      expect(result.stdout).not.toContain("partial");
+      if (!success) {
+        expect(result.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
       }
     },
   );
