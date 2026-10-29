@@ -725,11 +725,11 @@ Object.assign(module.exports.plugin.config, {
 
 describe("resolveGatewayDelegatedChannelPlugin", () => {
   it("sends only declared actions of enabled plugins to the Gateway without channel runtime", async () => {
-    const { cfg, fullMarker, setupMarker } = setupFixture({
-      setupEntry: false,
-      manifestChannelConfig: true,
-      manifestGatewayMessageActions: ["read"],
-    });
+    // A root-token default beside a named account stays selectable; the Gateway owns accounts.
+    const { cfg, fullMarker, setupMarker } = setupFixture(
+      { setupEntry: false, manifestChannelConfig: true, manifestGatewayMessageActions: ["read"] },
+      { "external-chat": { token: "root", accounts: { work: { token: "work" } } } },
+    );
     const resolve = (action: "read" | "send", config = cfg) =>
       resolveGatewayDelegatedChannelPlugin({ channelId: "external-chat", action, config });
     expect(resolve("send")).toBeUndefined();
@@ -750,7 +750,7 @@ describe("resolveGatewayDelegatedChannelPlugin", () => {
       runMessageAction({
         cfg,
         action: "read",
-        params: { channel: "external-chat", target: "channel:123", limit: 1 },
+        params: { channel: "external-chat", accountId: "default", target: "channel:123", limit: 1 },
         senderIsOwner: true,
         conversationReadOrigin: "direct-operator",
         gateway: { clientName: "cli", mode: "cli", request },
@@ -760,7 +760,11 @@ describe("resolveGatewayDelegatedChannelPlugin", () => {
     expect(request).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         method: "message.action",
-        params: expect.objectContaining({ channel: "external-chat", action: "read" }),
+        params: expect.objectContaining({
+          channel: "external-chat",
+          action: "read",
+          accountId: "default",
+        }),
       }),
       expect.anything(),
     );

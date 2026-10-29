@@ -477,6 +477,14 @@ export function resolveGatewayDelegatedChannelPlugin(params: {
     }
     return {
       ...plugin,
+      config: {
+        ...plugin.config,
+        // The Gateway's plugin owns account membership. A root-token or environment default
+        // can sit beside named accounts, so the route must not reject it locally.
+        listAccountIds: (cfg) => [
+          ...new Set([DEFAULT_ACCOUNT_ID, ...plugin.config.listAccountIds(cfg)]),
+        ],
+      },
       // Gateway delivery marks the adapter as a selected sender, so outbound
       // resolution does not bootstrap the channel runtime this adapter replaces.
       outbound: { deliveryMode: "gateway" },
