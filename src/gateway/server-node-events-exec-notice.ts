@@ -159,9 +159,10 @@ export async function handleNodeExecEvent(
       const deliveryContext =
         authorization?.invocationDeliveryContext ?? expectedTarget.deliveryContext;
       const targetAgentId = expectedTarget.agentId ?? agentId;
+      const targetSessionKey = expectedTarget.sessionKey ?? eventSessionKey;
       const eventOptions = withSystemEventOwner(
         {
-          sessionKey: expectedTarget.sessionKey ?? eventSessionKey,
+          sessionKey: targetSessionKey,
           contextKey: runId ? `exec:${runId}` : "exec",
           deliveryContext,
         },
@@ -175,7 +176,10 @@ export async function handleNodeExecEvent(
       try {
         receipt = enqueueSessionEventForHost(text, {
           agentId: targetAgentId,
-          ...eventOptions,
+          // Queue keys include an owner prefix; the handoff retains the logical target.
+          sessionKey: targetSessionKey,
+          contextKey: eventOptions.contextKey,
+          deliveryContext,
           source: "node",
           expectedTarget,
           occurrences: [occurrence],
