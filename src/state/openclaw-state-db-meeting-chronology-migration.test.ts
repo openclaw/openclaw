@@ -25,6 +25,7 @@ import {
 import { migrateMeetingTranscriptStartTime } from "./openclaw-state-db-meeting-chronology-migration.js";
 import { withLegacyStateHeadLayout } from "./openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "./openclaw-state-db-schema-v27-indexes.js";
+import { stateTemplateNamesMigration } from "./openclaw-state-db-schema-v36-template-names.js";
 import { readStateSchemaContentVersion as readVersion } from "./openclaw-state-db-schema-version.js";
 import {
   closeOpenClawStateDatabaseAsync as closeStateAsync,
@@ -35,6 +36,7 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL as SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 import { resolveSchemaMigrationBackupTables as backupScope } from "./schema-migration-backup-scope.js";
@@ -100,6 +102,7 @@ beforeAll(() => {
   template = path.join(directories.make("meeting-chronology-template-"), "openclaw.sqlite");
   using db = new DatabaseSync(template);
   db.exec(withLegacyStateWriteIndexes(withLegacyStateHeadLayout(SCHEMA_SQL)));
+  restorePreTemplateStateIdentifiersForTest(db);
   addPreCutoverClientCredentialTablesForTest(db);
   db.exec(`DROP INDEX idx_meeting_transcript_sessions_chronology;
       ALTER TABLE meeting_transcript_sessions DROP COLUMN started_at_ms;
@@ -237,6 +240,7 @@ it.each(["runtime", "doctor"] as const)(
     expect(backupScope(chronologyMigration)).toEqual(backupTables);
     const migrationTables = [
       ...backupTables,
+      ...stateTemplateNamesMigration.tables,
       "acp_replay_events",
       "device_identities",
       "device_auth_tokens",

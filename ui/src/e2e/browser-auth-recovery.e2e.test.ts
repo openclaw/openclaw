@@ -9,7 +9,6 @@ import {
   controlUiSessionUrl,
   createControlUiMockSameOriginGatewayScript,
   installMockGateway,
-  startControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -46,7 +45,6 @@ const accessServer = createServer((request, response) => {
 });
 const suite = createControlUiE2eSuite({
   name: "Browser sign-in recovery",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
   resources: {
     run: async () => {
       await new Promise<void>((resolve) => {
@@ -181,7 +179,7 @@ suite.define(() => {
             { "set-cookie": renewedCookie },
           );
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-          // Apply shipped CSP after Vite boot without relaxing frames or IdP access.
+          // Apply shipped CSP after UI boot without relaxing frames or IdP access.
           await page.evaluate((policy) => {
             const meta = document.createElement("meta");
             meta.httpEquiv = "Content-Security-Policy";

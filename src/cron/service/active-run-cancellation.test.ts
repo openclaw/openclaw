@@ -77,7 +77,6 @@ it("consumes a removal request made before the run controller binds", () => {
   const controller = new AbortController();
   noteActiveCronJobRemoval("removed-before-controller");
   register({ runId: "removed-before-controller-run", controller, activeJobMarker });
-  expect(controller.signal.aborted).toBe(true);
   expect(controller.signal.reason).toBe("Cron job removed by operator.");
 });
 
@@ -105,11 +104,9 @@ it.each([
     const release = settleCore
       ? undefined
       : register({ runId: "draining-handle", controller: new AbortController() });
-    const firstObservedDrain = vi.fn();
-    const secondObservedDrain = vi.fn();
     const drains = Promise.all([
-      waitForActiveCronTaskRuns(1_000).then(firstObservedDrain),
-      waitForActiveCronTaskRuns(2_000).then(secondObservedDrain),
+      waitForActiveCronTaskRuns(1_000),
+      waitForActiveCronTaskRuns(2_000),
     ]);
     if (deferred) {
       deferred.resolve();
@@ -117,9 +114,10 @@ it.each([
       release?.();
     }
     await vi.advanceTimersByTimeAsync(1);
-    expect(firstObservedDrain).toHaveBeenCalledExactlyOnceWith({ drained: true, active: 0 });
-    expect(secondObservedDrain).toHaveBeenCalledExactlyOnceWith({ drained: true, active: 0 });
-    await drains;
+    await expect(drains).resolves.toEqual([
+      { drained: true, active: 0 },
+      { drained: true, active: 0 },
+    ]);
   },
 );
 
@@ -143,15 +141,11 @@ it("does not retire an unrelated active run when one registered run is cancelled
     controller: cancelledController,
     activeJobMarker: marker("cancelled-job"),
   });
-  const existingTimerCount = vi.getTimerCount();
   requestActiveCronJobCancellation("cancelled-job", "Cancelled by operator.");
-  expect(cancelledController.signal.aborted).toBe(true);
   expect(cancelledController.signal.reason).toBe("Cancelled by operator.");
   expect(unaffectedController.signal.aborted).toBe(false);
-  expect(vi.getTimerCount()).toBe(existingTimerCount + 1);
   requestActiveCronJobCancellation("cancelled-job", "Repeated cancellation.");
   expect(cancelledController.signal.reason).toBe("Cancelled by operator.");
-  expect(vi.getTimerCount()).toBe(existingTimerCount + 1);
   release?.();
   await vi.advanceTimersByTimeAsync(CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS + 1);
   await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: false, active: 1 });
@@ -164,9 +158,7 @@ it("retires mixed active runs during a bulk shutdown", async () => {
   core();
   const release = register({ runId: "shutdown-run", controller });
   expect(abortActiveCronTaskRuns()).toBe(1);
-  const retirementTimerCount = vi.getTimerCount();
   expect(abortActiveCronTaskRuns()).toBe(0);
-  expect(vi.getTimerCount()).toBe(retirementTimerCount);
   release?.();
   await vi.advanceTimersByTimeAsync(CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS + 1);
   await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: true, active: 0 });

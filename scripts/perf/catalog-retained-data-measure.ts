@@ -83,7 +83,12 @@ const remoteCatalog: ActiveRemoteModelCatalog = freezeJsonSnapshot({
 });
 const generations: PreparedModelRuntimePluginGeneration[] = [
   {
-    pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+    pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+      plugins: Array.from({ length: providers }, (_, index) => ({
+        id: `provider-${index}`,
+        providers: [`provider-${index}`],
+      })),
+    }),
     remoteCatalog,
     inlineProviderModels: [],
     configuredCatalogEntries: [],

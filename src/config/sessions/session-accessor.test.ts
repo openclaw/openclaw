@@ -42,7 +42,6 @@ import {
   appendTranscriptMessageSync as appendMessageSync,
   applySessionEntryLifecycleMutation as mutateLifecycle,
   commitReplySessionInitialization as commitInitialization,
-  createSessionEntryWithTranscript as createWithTranscript,
   deleteSessionEntryLifecycle as deleteLifecycle,
   findTranscriptEvent,
   listSessionTranscriptInstances,
@@ -84,9 +83,9 @@ import {
 import { createLegacyUnsequencedTurnFixture } from "./session-accessor.transcript-turn.test-support.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const tempDirs = useSessionStoreTempDirs(
   (cleanup) =>
@@ -1615,29 +1614,24 @@ describe("session accessor seam", () => {
     expect(assistantMessages).toHaveLength(1);
   });
 
-  it("commits admission metadata only for an inserted turn or exact retryable claim", async () => {
+  it("commits admission metadata only for an inserted turn or an expected-state retry", async () => {
     const scope = await seededTranscript("admission", { status: "done" });
     const message = makeMessage("user", "accepted once", {
       idempotencyKey: "run-1:user",
       timestamp: 100,
     });
-    const recoveryClaim = {
-      restartRecoveryDeliveryRequestFingerprint: "fingerprint-1",
-      restartRecoveryDeliveryRunId: "run-1",
-      restartRecoveryDeliverySourceRunId: "run-1",
-    };
+    const admittedRun = { lifecycleRunId: "run-1" };
     const admission = {
-      ...recoveryClaim,
+      ...admittedRun,
       abortedLastRun: false,
       endedAt: undefined,
-      restartRecoveryDeliveryContext: undefined,
       startedAt: 100,
       status: undefined,
       updatedAt: 100,
     };
     const attempt = (
       timestamp: number,
-      expectedSessionState?: ReturnType<typeof buildRestartRecoveryExpectedState>,
+      expectedSessionState?: ReturnType<typeof buildSessionTranscriptTurnExpectedState>,
     ) =>
       persistTurn(scope, {
         expectedSessionId: scope.sessionId,
@@ -1650,26 +1644,24 @@ describe("session accessor seam", () => {
     expect(inserted.messages.filter((m) => m.appended)).toHaveLength(1);
     expectEntry(scope, {
       abortedLastRun: false,
-      restartRecoveryDeliveryRunId: "run-1",
-      restartRecoveryDeliverySourceRunId: "run-1",
+      lifecycleRunId: "run-1",
       startedAt: 100,
       updatedAt: expect.any(Number),
     });
-    expectCleared(readEntry(scope), ["restartRecoveryDeliveryContext", "status", "endedAt"]);
+    expectCleared(readEntry(scope), ["status", "endedAt"]);
     const retryable = await updateEntry(scope, () => ({
-      ...recoveryClaim,
+      ...admittedRun,
       abortedLastRun: false,
       endedAt: 200,
-      restartRecoveryDeliveryContext: undefined,
       status: "failed",
       updatedAt: 200,
     }));
     assert(retryable, "expected retryable admission");
-    const deduplicated = await attempt(300, buildRestartRecoveryExpectedState(retryable));
+    const deduplicated = await attempt(300, buildSessionTranscriptTurnExpectedState(retryable));
     expect(deduplicated.messages.filter((m) => m.appended)).toHaveLength(0);
     expect(deduplicated.messages).toHaveLength(1);
     expectEntry(scope, {
-      ...recoveryClaim,
+      ...admittedRun,
       abortedLastRun: false,
       startedAt: 300,
       updatedAt: expect.any(Number),
@@ -1677,10 +1669,7 @@ describe("session accessor seam", () => {
     expectCleared(readEntry(scope), ["status", "endedAt"]);
     await updateEntry(scope, () => ({
       endedAt: 350,
-      restartRecoveryDeliveryContext: undefined,
-      restartRecoveryDeliveryRequestFingerprint: undefined,
-      restartRecoveryDeliveryRunId: undefined,
-      restartRecoveryDeliverySourceRunId: undefined,
+      lifecycleRunId: undefined,
       status: "done",
       updatedAt: 350,
     }));
@@ -1688,10 +1677,7 @@ describe("session accessor seam", () => {
     expect(historicalMatch.messages.filter((m) => m.appended)).toHaveLength(0);
     expect(historicalMatch.messages).toHaveLength(1);
     expectEntry(scope, { endedAt: 350, status: "done", updatedAt: expect.any(Number) });
-    expectCleared(readEntry(scope), [
-      "restartRecoveryDeliveryRequestFingerprint",
-      "restartRecoveryDeliveryRunId",
-    ]);
+    expectCleared(readEntry(scope), ["lifecycleRunId"]);
     await expect(loadEvents(scope)).resolves.toHaveLength(2);
   });
 
@@ -1760,15 +1746,14 @@ describe("session accessor seam", () => {
     async (change) => {
       const scope = await seededTranscript("same-owner", {
         abortedLastRun: true,
-        restartRecoveryDeliveryRunId: "recovery-run",
-        restartRecoveryDeliverySourceRunId: "control-ui-run",
+        lifecycleRunId: "previous-run",
         pendingFinalDelivery,
         status: "interrupted",
       });
       const stored = readEntry(scope);
       assert(stored, "expected guarded session");
       const expectedSessionState = {
-        ...buildRestartRecoveryExpectedState(stored),
+        ...buildSessionTranscriptTurnExpectedState(stored),
         pendingFinalDelivery: stored.pendingFinalDelivery ?? null,
       };
       const predicateStarted = createDeferred();
@@ -1779,7 +1764,7 @@ describe("session accessor seam", () => {
         sessionLifecyclePatch: { pendingFinalDelivery: undefined },
         messages: [
           {
-            ...turnMessage("assistant", "stale recovery notice", { timestamp: 100 }),
+            ...turnMessage("assistant", "stale result", { timestamp: 100 }),
             shouldAppend: async () => {
               predicateStarted.resolve();
               await predicateGate.promise;
@@ -1799,8 +1784,7 @@ describe("session accessor seam", () => {
             }
           : {
               abortedLastRun: false,
-              restartRecoveryDeliveryRunId: "new-run",
-              restartRecoveryDeliverySourceRunId: "new-run",
+              lifecycleRunId: "new-run",
               sessionId: scope.sessionId,
               status: undefined,
               updatedAt: 20,
@@ -1898,20 +1882,6 @@ describe("session accessor seam", () => {
       sizeBytes: 0,
     });
     expect(cleared.lastMutationAtMs).toBeGreaterThan(imported.lastMutationAtMs ?? 0);
-  });
-
-  it("returns the canonical transcript locator after creation", async () => {
-    const scope = agentScope("agent:main:main");
-    const created = await createWithTranscript(scope, () => ({
-      ok: true,
-      entry: makeEntry("session-1", 10),
-    }));
-    expect(created).toMatchObject({ ok: true, sessionFile: scope.sessionKey });
-    expect(created).not.toHaveProperty("entry.sessionFile");
-    const before = readEntry(scope);
-    const rejected = await createWithTranscript(scope, () => ({ ok: false, error: "rejected" }));
-    expect(rejected).toEqual({ ok: false, error: "rejected", phase: "entry" });
-    expect(readEntry({ ...scope, readConsistency: "latest" })).toEqual(before);
   });
 
   it("returns an implicit candidate fallback without persisting it", () => {

@@ -2,20 +2,11 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 
-type MatrixEnvConfig = {
-  homeserver: string;
-  userId: string;
-  accessToken?: string;
-  password?: string;
-  deviceId?: string;
-  deviceName?: string;
-};
-
 function cleanEnv(value: unknown): string {
   return normalizeOptionalString(value) ?? "";
 }
 
-export function resolveGlobalMatrixEnvConfig(env: NodeJS.ProcessEnv): MatrixEnvConfig {
+export function resolveGlobalMatrixEnvConfig(env: NodeJS.ProcessEnv) {
   return {
     homeserver: cleanEnv(env.MATRIX_HOMESERVER),
     userId: cleanEnv(env.MATRIX_USER_ID),
@@ -42,7 +33,7 @@ export function hasReadyMatrixEnvAuth(config: {
 export function resolveScopedMatrixEnvConfig(
   accountId: string,
   env: NodeJS.ProcessEnv = process.env,
-): MatrixEnvConfig {
+) {
   const keys = getMatrixScopedEnvVarNames(accountId);
   return {
     homeserver: cleanEnv(env[keys.homeserver]),
@@ -57,13 +48,7 @@ export function resolveScopedMatrixEnvConfig(
 export function resolveMatrixEnvAuthReadiness(
   accountId: string,
   env: NodeJS.ProcessEnv = process.env,
-): {
-  ready: boolean;
-  homeserver?: string;
-  userId?: string;
-  sourceHint: string;
-  missingMessage: string;
-} {
+) {
   const normalizedAccountId = normalizeAccountId(accountId);
   const scoped = resolveScopedMatrixEnvConfig(normalizedAccountId, env);
   const scopedReady = hasReadyMatrixEnvAuth(scoped);

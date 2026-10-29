@@ -133,11 +133,7 @@ async function writeScheduledTaskScript(
     definitionTransaction,
   }: Omit<GatewayServiceInstallArgs, "stdout">,
   beforePublish?: (recovery?: ScheduledTaskFileRecovery) => Promise<void>,
-): Promise<{
-  scriptPath: string;
-  taskLaunchPath: string;
-  taskDescription: string;
-}> {
+) {
   const taskEnv = resolveScheduledTaskRenderEnv(env, environment);
   const scriptPath = resolveTaskScriptPath(taskEnv);
   const taskLaunchPath =

@@ -46,36 +46,37 @@ export async function reconcileCodexCatalogFiles(
       owner.assertCurrent();
     }
   }
-  const { files, present } = await owner.scanner.scan(new Set(byPath.keys()));
+  const { files, present } = await owner.scanner.scan(byPath);
   owner.assertCurrent();
-  const observed = new Map(files);
+  // The scanner transfers this map; its directory cache retains separate maps.
   for (const [file, fingerprint] of files) {
     if (++processed % 128 === 0) {
       await nextTurn();
       owner.assertCurrent();
     }
-    const previous = byPath.get(codexCatalogRolloutLogicalPath(file));
-    const known = owner.observedFiles.get(file) ?? previous?.fingerprint;
+    const known =
+      owner.observedFiles.get(file) ??
+      byPath.get(codexCatalogRolloutLogicalPath(file))?.fingerprint;
     if (known?.mtimeMs === fingerprint.mtimeMs && known.size === fingerprint.size) {
       continue;
     }
     owner.requestNativeRefresh();
-    // Failed reads retain their old fingerprint so the next scan can retry.
-    observed.delete(file);
-    if (known) {
-      observed.set(file, known);
-    }
     let thread: CodexThread | undefined;
     try {
       thread = await readCodexCatalogRollout(root, file);
     } catch (error) {
       owner.assertCurrent();
+      // Keep failed reads retryable without reinserting into the active iterator.
+      if (known) {
+        files.set(file, known);
+      } else {
+        files.delete(file);
+      }
       owner.report(error);
       continue;
     }
     owner.assertCurrent();
     if (!thread) {
-      observed.set(file, fingerprint);
       continue;
     }
     const existing = owner.rows.get(thread.id);
@@ -85,11 +86,9 @@ export async function reconcileCodexCatalogFiles(
     ) {
       // Reverts retain older immutable files with the same thread id. Only
       // native metadata may change which rollout the catalog considers current.
-      observed.set(file, fingerprint);
       continue;
     }
     if (!existing && !thread.preview) {
-      observed.set(file, fingerprint);
       continue;
     }
     thread.preview ||= existing?.preview;
@@ -98,7 +97,6 @@ export async function reconcileCodexCatalogFiles(
       { localSessionsRoot: root },
     );
     owner.assertCurrent();
-    observed.set(file, fingerprint);
     const row = projected.rows[0];
     if (!row) {
       continue;
@@ -106,14 +104,14 @@ export async function reconcileCodexCatalogFiles(
     owner.put(mergeCodexCatalogRolloutRow(row, existing, fingerprint));
     await nextTurn();
   }
-  for (const row of byPath.values()) {
+  for (const [logicalPath, row] of byPath) {
     if (++processed % 128 === 0) {
       await nextTurn();
       owner.assertCurrent();
     }
     if (
       row.rolloutPath &&
-      !present.has(codexCatalogRolloutLogicalPath(row.rolloutPath)) &&
+      !present.has(logicalPath) &&
       isCodexCatalogRolloutPathCovered(root, row.rolloutPath) &&
       owner.rows.get(row.threadId) === row
     ) {
@@ -121,5 +119,5 @@ export async function reconcileCodexCatalogFiles(
       owner.remove(row.threadId);
     }
   }
-  return observed;
+  return files;
 }

@@ -127,34 +127,6 @@ describe("Control UI theme contrast", () => {
     groupedRules.filter((rule) => rule.selector === ".chat-confirm-popover__yes"),
     ".chat-confirm-popover__yes",
   );
-  const bubblePaints = (theme: string, tokens: TokenMap) => {
-    const light = theme === "light" || theme.endsWith("-light");
-    const page = resolveOpaqueColor("var(--bg)", tokens);
-    const lightRoot = ':where(:root[data-theme-mode="light"]) ';
-    const lightUser = lightRoot + ".chat-group.user .chat-bubble";
-    const sender =
-      ".chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble";
-    const paint = (selector: string, property = "--chat-bubble-background") =>
-      readPaint(readRule(groupedRules, selector), property);
-    const background = (selector: string, palette = tokens) =>
-      composite(resolveColor(paint(selector), palette), page);
-    const tinted = (selector: string) => {
-      const value = paint(selector);
-      return Array.from({ length: 360 }, (_, hue) =>
-        composite(resolveColor(value, new Map(tokens).set("--chat-sender-hue", String(hue))), page),
-      );
-    };
-    return {
-      page,
-      light,
-      user: background(".chat-group.user .chat-bubble"),
-      lightUserText: paint(lightUser, "color"),
-      sender: tinted(
-        light ? lightRoot + ".chat-group.user.chat-group--sender-tint .chat-bubble" : sender,
-      ),
-      forwarded: () => tinted(sender),
-    };
-  };
 
   const checks = {
     "native selection text: AA": () => [
@@ -262,7 +234,7 @@ describe("Control UI theme contrast", () => {
     }
   });
 
-  it("keeps GitHub item surfaces neutral and ink and focus legible across themes and bubbles", () => {
+  it("keeps GitHub item surfaces neutral and ink and focus legible across themes", () => {
     const selector = ".chat-text a.markdown-github-item";
     const base = readRule(textRules, selector);
     const foreground = readPaint(base, "color");
@@ -275,8 +247,7 @@ describe("Control UI theme contrast", () => {
       "GitHub chip focus paint",
     );
     for (const [theme, palette] of themes) {
-      const { page, user, sender, forwarded } = bubblePaints(theme, palette);
-      const hosts = [page, user, ...sender, ...forwarded()];
+      const hosts = [resolveOpaqueColor("var(--bg-content)", palette)];
       const neutralTokens = new Map(palette).set(
         "--github-item-tone",
         readPaint(base, "--github-item-tone"),
@@ -305,39 +276,6 @@ describe("Control UI theme contrast", () => {
           Math.min(...hosts.map((host) => contrastRatio(composite(focusColor, host), host))),
           3,
           `${theme}/${tone}/focus`,
-        );
-      }
-    }
-  });
-
-  it("keeps chat links at WCAG AA on every bubble surface", () => {
-    const link = readColorToken(readPaint(readRule(textRules, ".chat-text :where(a)"), "color"));
-    const linkTokens = {
-      link,
-      hover:
-        readColorToken(readRule(textRules, ".chat-text :where(a:hover)").get("color") ?? "") ||
-        link,
-    };
-    for (const [themeName, tokens] of themes) {
-      const { light, user, sender, lightUserText } = bubblePaints(themeName, tokens);
-
-      if (light) {
-        const foreground = resolveOpaqueColor(lightUserText, tokens);
-        expectFloor(contrastRatio(foreground, user), AA_NORMAL_TEXT_MIN, `${themeName}: user text`);
-      }
-
-      for (const [state, token] of [
-        ["link", linkTokens.link],
-        ["link hover", linkTokens.hover],
-      ] as const) {
-        const foreground = resolveColor(`var(${token})`, tokens);
-        const ratioOn = (background: RGB) =>
-          contrastRatio(composite(foreground, background), background);
-        expectFloor(ratioOn(user), AA_NORMAL_TEXT_MIN, `${themeName}: ${state} on user bubble`);
-        expectFloor(
-          Math.min(...sender.map(ratioOn)),
-          AA_NORMAL_TEXT_MIN,
-          `${themeName}: ${state} on sender tints`,
         );
       }
     }

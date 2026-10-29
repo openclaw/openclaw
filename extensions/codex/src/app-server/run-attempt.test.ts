@@ -29,15 +29,9 @@ import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
-import {
-  buildCodexOpenClawPromptContext,
-  buildCodexSystemPromptReport,
-  prependCodexOpenClawPromptContext,
-} from "./attempt-context.js";
 import * as attemptStartup from "./attempt-startup.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
-import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-cache-key.js";
 import { releaseCodexAppServerLiveThread } from "./client-runtime.js";
@@ -47,18 +41,12 @@ import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./config.js";
-import { joinPresentSections } from "./developer-instruction-sections.js";
-import {
-  buildDynamicTools,
-  shouldEnableCodexAppServerNativeToolSurface,
-} from "./dynamic-tool-build.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { flattenSpecsWithNamespace } from "./dynamic-tools.test-support.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
-import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test-support.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
   buildCodexAppServerConnectionFingerprint,
@@ -75,7 +63,6 @@ import {
   pluginList,
   pluginSummary,
 } from "./plugin-inventory.test-helpers.js";
-import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   flattenCodexDynamicToolFunctions,
   isJsonObject,
@@ -97,6 +84,7 @@ import {
 } from "./run-attempt-lifecycle.test-support.js";
 import { registerCodexMemoryInstructionTests } from "./run-attempt-memory.test-support.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
+import { buildSandboxExecutionToolsForTest } from "./run-attempt-sandbox-tools.test-helper.js";
 import {
   assistantMessage,
   createAppServerHarness,
@@ -160,7 +148,6 @@ import {
   createLeasedCodexLifecycleHarness,
 } from "./thread-lifecycle.test-fixtures.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
-import { buildThreadStartParams } from "./thread-requests.js";
 import { buildTurnStartParams } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
@@ -204,104 +191,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
   };
 }
 
-async function buildDynamicToolsForTest(
-  params: EmbeddedRunAttemptParams,
-  workspaceDir: string,
-  overrides: Partial<Parameters<typeof buildDynamicTools>[0]> = {},
-) {
-  const sandboxSessionKey = params.sessionKey;
-  if (!sandboxSessionKey) {
-    throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
-  }
-  return buildDynamicTools({
-    params,
-    resolvedWorkspace: workspaceDir,
-    effectiveWorkspace: workspaceDir,
-    effectiveCwd: params.cwd ?? workspaceDir,
-    sandboxSessionKey,
-    sandbox: { enabled: false, backendId: "docker" } as never,
-    nativeToolSurfaceEnabled: true,
-    runAbortController: new AbortController(),
-    sessionAgentId: "main",
-    policyAgentId: params.sandboxAgentId ?? "main",
-    pluginConfig: {},
-    onYieldDetected: () => undefined,
-    ...overrides,
-  });
-}
-
-async function buildCodexTurnContextForTest(
-  params: EmbeddedRunAttemptParams,
-  workspaceDir: string,
-) {
-  const sessionAgentId = "main";
-  const agentTools = await buildDynamicToolsForTest(params, workspaceDir);
-  const toolBridge = createCodexDynamicToolBridge({
-    tools: agentTools,
-    signal: new AbortController().signal,
-  });
-  const dynamicTools = toolBridge.availableSpecs;
-  const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
-    params,
-    resolvedWorkspace: workspaceDir,
-    effectiveWorkspace: workspaceDir,
-    sessionKey: params.sessionKey ?? params.sessionId,
-    sessionAgentId,
-    tools: toolBridge.availableSpecs,
-    ringZeroActive: false,
-  });
-  const threadDeveloperInstructions = (
-    await buildThreadStartParams(params, {
-      cwd: workspaceDir,
-      dynamicTools,
-      appServer: resolveCodexAppServerRuntimeOptions({}),
-      developerInstructions: buildDeveloperInstructions(params, { dynamicTools }),
-      refreshableInstructions: [
-        workspaceBootstrapContext.personaInstructions,
-        workspaceBootstrapContext.memoryInstructions,
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    })
-  ).developerInstructions;
-  assert(typeof threadDeveloperInstructions === "string");
-  const openClawPromptContext = buildCodexOpenClawPromptContext({
-    params,
-    workspacePromptContext: workspaceBootstrapContext.promptContext,
-  });
-  const codexTurnPromptText = prependCodexOpenClawPromptContext(
-    params.prompt,
-    openClawPromptContext,
-  );
-  const turnStartParams = await buildTurnStartParams(params, {
-    threadId: "thread-1",
-    cwd: workspaceDir,
-    appServer: resolveCodexAppServerRuntimeOptions({}),
-    promptText: codexTurnPromptText,
-  });
-  const collaborationInstructions =
-    turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-  const inputText = turnStartParams.input?.find((item) => item.type === "text")?.text ?? "";
-  const systemPromptReport = buildCodexSystemPromptReport({
-    attempt: params,
-    sessionKey: params.sessionKey ?? params.sessionId,
-    workspaceDir,
-    developerInstructions: joinPresentSections(
-      threadDeveloperInstructions,
-      collaborationInstructions,
-    ),
-    workspaceBootstrapContext,
-    skillsPrompt: "",
-    tools: dynamicTools,
-  });
-  return {
-    collaborationInstructions,
-    inputText,
-    systemPromptReport,
-    threadDeveloperInstructions,
-  };
-}
-
 function createCodexToolBridgeForTest(
   params: EmbeddedRunAttemptParams,
   tools: RuntimeDynamicToolForTest[],
@@ -314,70 +203,6 @@ function createCodexToolBridgeForTest(
     signal,
     directToolNames: resolveCodexDynamicToolDirectNames(params, registeredTools, false),
   });
-}
-
-async function startThreadWithDisabledNativeSurfaceForTest(
-  params: EmbeddedRunAttemptParams,
-  options: {
-    pluginConfig?: Record<string, unknown>;
-    developerInstructions?: string;
-  } = {},
-) {
-  const workspaceDir = params.workspaceDir;
-  if (!workspaceDir) {
-    throw new Error("createParams must provide a workspaceDir for Codex thread tests.");
-  }
-  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
-    nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
-  });
-  const dynamicTools = await buildDynamicToolsForTest(params, workspaceDir, {
-    nativeToolSurfaceEnabled,
-    pluginConfig: options.pluginConfig ?? {},
-    effectiveCwd: undefined,
-  });
-  const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-    if (method === "config/read") {
-      return { config: {}, layers: [] };
-    }
-    if (method === "thread/start") {
-      return threadStartResult();
-    }
-    if (method === "app/installed" || method === "app/read") {
-      throw new Error("App inventory should not run when runtime toolsAllow is empty.");
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const pluginConfig = {
-    ...options.pluginConfig,
-    codexPlugins: {
-      ...(options.pluginConfig?.codexPlugins as Record<string, unknown> | undefined),
-      enabled: false,
-    },
-  };
-
-  await startOrResumeThread({
-    client: { request } as never,
-    params,
-    cwd: workspaceDir,
-    dynamicTools: dynamicTools as never,
-    appServer: createThreadLifecycleAppServerOptions(),
-    developerInstructions: options.developerInstructions,
-    nativeCodeModeEnabled: nativeToolSurfaceEnabled,
-    nativeCodeModeOnlyEnabled: false,
-    userMcpServersEnabled: false,
-    environmentSelection: [],
-    pluginThreadConfig: {
-      enabled: true,
-      build: () =>
-        buildCodexPluginThreadConfig({
-          pluginConfig,
-          request: request as never,
-          appCacheKey: "test-app-cache-key",
-        }),
-    },
-  });
-
-  return { request, nativeToolSurfaceEnabled };
 }
 
 type RuntimeDynamicToolForTest = Parameters<
@@ -445,6 +270,14 @@ function getRequestParams<M extends keyof RequestParams>(
     | undefined;
 }
 
+function requestsFor(requests: AttemptHarness["requests"], method: string) {
+  return requests.filter((request) => request.method === method);
+}
+
+function requestMethods(requests: AttemptHarness["requests"]) {
+  return requests.map((request) => request.method);
+}
+
 function turnInput(requests: AttemptHarness["requests"]) {
   const first = getRequestParams(requests, "turn/start")?.input?.[0];
   return first?.type === "text" ? first.text : "";
@@ -470,6 +303,25 @@ function emit(harness: AttemptHarness, method: string, params: JsonObject) {
 
 function emitItem(harness: AttemptHarness, phase: "started" | "completed", item: JsonObject) {
   return harness.notify(itemNotification(`item/${phase}`, item));
+}
+
+function tokenUsage(inputTokens: number, outputTokens: number, cachedInputTokens = 0) {
+  return {
+    totalTokens: inputTokens + outputTokens,
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    reasoningOutputTokens: 0,
+  };
+}
+
+function expectLifecycleRequests(requests: AttemptHarness["requests"], ...methods: string[]) {
+  expect(withoutCodexSkillDiscovery(requestMethods(requests))).toEqual([
+    "configRequirements/read",
+    "config/read",
+    "configRequirements/read",
+    ...methods,
+  ]);
 }
 
 function expectEvent(spy: ReturnType<typeof vi.fn>, stream: string, data: unknown) {
@@ -984,25 +836,12 @@ describe("runCodexAppServerAttempt", () => {
           } as never;
           setRuntimeConfigSnapshot(params.config);
         }
-        const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+        const { nativeToolSurfaceEnabled, dynamicTools } = await buildSandboxExecutionToolsForTest(
           params,
+          workspaceDir,
           sandbox as never,
-          {
-            ...(execServer ? { sandboxExecServerEnabled: true } : {}),
-            nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, {
-              sandbox: sandbox as never,
-            }),
-          },
+          execServer,
         );
-        const dynamicTools = await buildDynamicToolsForTest(params, workspaceDir, {
-          effectiveWorkspace: execServer ? "/workspace" : workspaceDir,
-          sandbox: sandbox as never,
-          nativeToolSurfaceEnabled,
-          pluginConfig: execServer
-            ? { appServer: { mode: "yolo", experimental: { sandboxExecServer: true } } }
-            : {},
-          effectiveCwd: undefined,
-        });
         const environment = execServer
           ? await ensureCodexSandboxExecServerEnvironment({
               client: client as never,
@@ -1515,35 +1354,24 @@ describe("runCodexAppServerAttempt", () => {
     enableRuntimeTools(params);
     params.toolsAllow = [];
     params.extraSystemPrompt = "Tool and file actions are disabled for this sender by chat policy.";
-    const { request, nativeToolSurfaceEnabled } = await startThreadWithDisabledNativeSurfaceForTest(
-      params,
-      {
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "app/installed" || method === "app/read") {
+        throw new Error("App inventory should not run when runtime toolsAllow is empty.");
+      }
+      return undefined;
+    });
+    await finishRun(
+      runCodexAppServerAttempt(params, {
         pluginConfig: {
           appServer: { mode: "yolo" },
           ...codexPluginConfig({
             plugins: { "google-calendar": curatedPlugin("google-calendar") },
           }),
         },
-        developerInstructions: params.extraSystemPrompt,
-      },
+      }),
+      harness,
     );
-    const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
-    const startParams = startRequest?.[1] as
-      | {
-          dynamicTools?: CodexDynamicToolSpec[];
-          environments?: unknown[];
-          developerInstructions?: string;
-          config?: {
-            "features.code_mode"?: boolean;
-            "features.code_mode_only"?: boolean;
-            apps?: Record<
-              string,
-              { enabled?: boolean; destructive_enabled?: boolean; open_world_enabled?: boolean }
-            >;
-          };
-        }
-      | undefined;
-    expect(nativeToolSurfaceEnabled).toBe(false);
+    const startParams = getRequestParams(harness.requests, "thread/start");
     expect(startParams?.dynamicTools).toEqual([]);
     expect(startParams?.environments).toEqual([]);
     expect(startParams?.developerInstructions).toContain(
@@ -1553,14 +1381,14 @@ describe("runCodexAppServerAttempt", () => {
       "features.code_mode": false,
       "features.code_mode_only": false,
     });
-    expect(startParams?.config?.apps?.["_default"]).toEqual({
+    expect(startParams?.config?.apps).toHaveProperty("_default", {
       enabled: false,
       destructive_enabled: false,
       open_world_enabled: false,
     });
-    expect(startParams?.config?.apps?.["google-calendar-app"]?.enabled).toBeUndefined();
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
+    expect(startParams?.config?.apps).not.toHaveProperty(["google-calendar-app", "enabled"]);
+    expect(requestMethods(harness.requests)).not.toContain("app/installed");
+    expect(requestMethods(harness.requests)).not.toContain("app/read");
   });
 
   it("rejects a legacy managed MDM shell denial before a native creator can start", async () => {
@@ -1591,7 +1419,7 @@ describe("runCodexAppServerAttempt", () => {
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
       "Codex native code mode requires shell_tool",
     );
-    expect(harness.requests.map((request) => request.method)).not.toContain("thread/start");
+    expect(requestMethods(harness.requests)).not.toContain("thread/start");
   });
 
   it("overrides a user-level shell disable when native code mode is enabled", async () => {
@@ -1734,9 +1562,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await emitItem(harness, "started", { type: "contextCompaction", id: "compact-1" });
     await emitItem(harness, "completed", { type: "contextCompaction", id: "compact-1" });
-    let planRestoreRequests = harness.requests.filter(
-      (request) => request.method === "thread/inject_items",
-    );
+    let planRestoreRequests = requestsFor(harness.requests, "thread/inject_items");
     expect(planRestoreRequests[0]?.params).toMatchObject({
       threadId: "thread-1",
       items: [
@@ -1785,9 +1611,7 @@ describe("runCodexAppServerAttempt", () => {
     ).toBeLessThanOrEqual(8 * 1024);
     await emitItem(harness, "started", { type: "contextCompaction", id: "compact-2" });
     await emitItem(harness, "completed", { type: "contextCompaction", id: "compact-2" });
-    planRestoreRequests = harness.requests.filter(
-      (request) => request.method === "thread/inject_items",
-    );
+    planRestoreRequests = requestsFor(harness.requests, "thread/inject_items");
     expect(planRestoreRequests).toHaveLength(2);
     expect(planRestoreRequests[1]?.params).toMatchObject({
       items: [
@@ -1838,9 +1662,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     await emitItem(harness, "started", { type: "contextCompaction", id: "compact-3" });
     await emitItem(harness, "completed", { type: "contextCompaction", id: "compact-3" });
-    expect(
-      harness.requests.filter((request) => request.method === "thread/inject_items"),
-    ).toHaveLength(2);
+    expect(requestsFor(harness.requests, "thread/inject_items")).toHaveLength(2);
 
     const result = await finishRun(run, harness);
     expect(result.terminal).toEqual({ kind: "ok" });
@@ -2203,7 +2025,7 @@ describe("runCodexAppServerAttempt", () => {
     await finishRun(run, harness);
 
     const inputText = turnInput(harness.requests);
-    expect(harness.requests.map((request) => request.method)).toContain("thread/start");
+    expect(requestMethods(harness.requests)).toContain("thread/start");
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
     expect(inputText).toContain(`[branchSummary]\n${summary}`);
     expect(inputText).not.toContain("discarded seed");
@@ -2410,12 +2232,8 @@ describe("runCodexAppServerAttempt", () => {
       await emit(harness, "rawResponse/completed", {
         responseId: `response-${inputTokens}`,
         usage: {
-          totalTokens: inputTokens + 2_000,
-          inputTokens,
-          cachedInputTokens: 40_000,
+          ...tokenUsage(inputTokens, 2_000, 40_000),
           cacheWriteInputTokens: 10_000,
-          outputTokens: 2_000,
-          reasoningOutputTokens: 0,
         },
       });
     }
@@ -2443,12 +2261,8 @@ describe("runCodexAppServerAttempt", () => {
     await emit(harness, "thread/tokenUsage/updated", {
       tokenUsage: {
         last: {
-          totalTokens: 162_000,
-          inputTokens: 160_000,
-          cachedInputTokens: 0,
+          ...tokenUsage(160_000, 2_000),
           cacheWriteInputTokens: 0,
-          outputTokens: 2_000,
-          reasoningOutputTokens: 0,
         },
       },
     });
@@ -2525,12 +2339,16 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     enableRuntimeTools(params);
     setAgentWorkspaceForTest(params, workspaceDir);
-    const {
-      collaborationInstructions,
-      inputText,
-      systemPromptReport,
-      threadDeveloperInstructions,
-    } = await buildCodexTurnContextForTest(params, workspaceDir);
+    const harness = createStartedThreadHarness();
+    const result = await finishRun(runCodexAppServerAttempt(params), harness);
+    const threadDeveloperInstructions =
+      getRequestParams(harness.requests, "thread/start")?.developerInstructions ?? "";
+    const collaborationInstructions =
+      getRequestParams(harness.requests, "turn/start")?.collaborationMode?.settings
+        ?.developer_instructions ?? "";
+    const inputText = turnInput(harness.requests);
+    const systemPromptReport = result.systemPromptReport;
+    assert(systemPromptReport);
     expect(threadDeveloperInstructions).not.toContain("Codex loads AGENTS.md natively");
     expect(threadDeveloperInstructions).not.toContain(agentsGuidance);
     expect(collaborationInstructions).toBe("");
@@ -2705,8 +2523,8 @@ describe("runCodexAppServerAttempt", () => {
           )
           .toMatchObject({ injectedChars: 0, truncated: false });
       }
-      expect(harness.requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-      expect(harness.requests.filter(({ method }) => method === "thread/resume")).toHaveLength(0);
+      expect(requestsFor(harness.requests, "thread/start")).toHaveLength(1);
+      expect(requestsFor(harness.requests, "thread/resume")).toHaveLength(0);
 
       const expectedMemory = memorySummary;
       if (scenario === "compacted") {
@@ -2727,7 +2545,7 @@ describe("runCodexAppServerAttempt", () => {
         expect(third.input).toContain(bootstrap);
       }
       if (scenario === "unsubscribed") {
-        expect(harness.requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
+        expect(requestsFor(harness.requests, "thread/resume")).toHaveLength(1);
       }
       const fourth = await runTurn();
       expect.soft(fourth.input).not.toContain(expectedMemory);
@@ -3023,14 +2841,12 @@ describe("runCodexAppServerAttempt", () => {
     await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
       error,
     );
-    expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
-      "configRequirements/read",
-      "config/read",
-      "configRequirements/read",
+    expectLifecycleRequests(
+      harness.requests,
       ...(transient ? ["thread/start"] : ["thread/read", "thread/resume", "thread/inject_items"]),
       "turn/start",
       "thread/unsubscribe",
-    ]);
+    );
     expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-existing");
   });
   it("retries turn/start after a native compact turn finishes", async () => {
@@ -3071,24 +2887,19 @@ describe("runCodexAppServerAttempt", () => {
     harnessRef.current = harness;
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await vi.waitFor(
-      () =>
-        expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
-          2,
-        ),
+      () => expect(requestsFor(harness.requests, "turn/start")).toHaveLength(2),
       fastWait,
     );
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
-    expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
-      "configRequirements/read",
-      "config/read",
-      "configRequirements/read",
+    expectLifecycleRequests(
+      harness.requests,
       "thread/read",
       "thread/resume",
       "thread/inject_items",
       "turn/start",
       "turn/start",
-    ]);
+    );
     await expectRetainedSuccessfulThread(harness.client, "thread-existing");
   });
 
@@ -3121,7 +2932,7 @@ describe("runCodexAppServerAttempt", () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
     });
-    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    expect(requestMethods(harness.requests)).not.toContain("turn/start");
     await harness.notify({
       method: "turn/completed",
       params: {
@@ -3129,14 +2940,14 @@ describe("runCodexAppServerAttempt", () => {
         turn: { id: "stale-turn", status: "completed", items: [] },
       },
     });
-    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    expect(requestMethods(harness.requests)).not.toContain("turn/start");
     await emit(harness, "error", {
       threadId: "thread-existing",
       turnId: "compact-turn",
       error: { message: "native turn has not completed" },
       willRetry: false,
     });
-    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    expect(requestMethods(harness.requests)).not.toContain("turn/start");
     await harness.notify({
       method: "turn/completed",
       params: {
@@ -3145,15 +2956,13 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
     await finishRun(run, harness, "thread-existing");
-    expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
-      "configRequirements/read",
-      "config/read",
-      "configRequirements/read",
+    expectLifecycleRequests(
+      harness.requests,
       "thread/read",
       "thread/resume",
       "thread/inject_items",
       "turn/start",
-    ]);
+    );
     await expectRetainedSuccessfulThread(harness.client, "thread-existing");
   });
 
@@ -3615,16 +3424,16 @@ describe("runCodexAppServerAttempt", () => {
     expect(getRequestParams(requests, "thread/start")).toMatchObject({
       config: { apps: { "google-calendar-app": { enabled: true } } },
     });
-    const inventory = requests.filter((entry) => entry.method === "app/installed");
+    const inventory = requestsFor(requests, "app/installed");
     const globalAppInventoryRequests = inventory.filter(
       (entry) => typeof (entry.params as { threadId?: unknown } | undefined)?.threadId !== "string",
     );
     if (key === "changed") {
       expect(globalAppInventoryRequests).not.toHaveLength(0);
-      expect(requests.map((request) => request.method)).toContain("app/read");
+      expect(requestMethods(requests)).toContain("app/read");
     } else {
       expect(globalAppInventoryRequests).toHaveLength(0);
-      expect(requests.map((request) => request.method)).not.toContain("app/read");
+      expect(requestMethods(requests)).not.toContain("app/read");
     }
     if (!cachedEnabled) {
       expect(
@@ -3656,7 +3465,7 @@ describe("runCodexAppServerAttempt", () => {
     turnStart.resolve(turnStartResult());
     await expect(run).rejects.toThrow("test_abort");
     expect(queueActiveRunMessageForTest("session-1", "after abort")).toBe(false);
-    expect(harness.requests.filter(({ method }) => method === "turn/interrupt")).toEqual([
+    expect(requestsFor(harness.requests, "turn/interrupt")).toEqual([
       { method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } },
     ]);
   });
@@ -3684,8 +3493,7 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     const runTurn = async (sender: { id: string; name: string }, prompt: string, runId: string) => {
-      const expectedTurnStarts =
-        harness.requests.filter((request) => request.method === "turn/start").length + 1;
+      const expectedTurnStarts = requestsFor(harness.requests, "turn/start").length + 1;
       const params = createParams(sessionFile, workspaceDir, { prompt, runId });
       params.trigger = "user";
       const message = {
@@ -3703,10 +3511,7 @@ describe("runCodexAppServerAttempt", () => {
       } as unknown as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
       const run = runCodexAppServerAttempt(params);
       await vi.waitFor(
-        () =>
-          expect(
-            harness.requests.filter((request) => request.method === "turn/start"),
-          ).toHaveLength(expectedTurnStarts),
+        () => expect(requestsFor(harness.requests, "turn/start")).toHaveLength(expectedTurnStarts),
         fastWait,
       );
       await harness.completeTurn({
@@ -3720,23 +3525,21 @@ describe("runCodexAppServerAttempt", () => {
     await runTurn({ id: "profile-grace", name: "Grace" }, "second request", "run-grace");
 
     expect(
-      harness.requests
-        .filter((request) =>
+      requestMethods(
+        harness.requests.filter((request) =>
           ["thread/start", "thread/resume", "turn/start"].includes(request.method),
-        )
-        .map((request) => request.method),
+        ),
+      ),
     ).toEqual(["thread/resume", "turn/start", "turn/start"]);
     expect(
-      harness.requests
-        .filter((request) => request.method === "turn/start")
-        .map(
-          (request) =>
-            (
-              request.params as {
-                additionalContext?: Record<string, { kind: string; value: string }>;
-              }
-            ).additionalContext?.openclaw_current_sender,
-        ),
+      requestsFor(harness.requests, "turn/start").map(
+        (request) =>
+          (
+            request.params as {
+              additionalContext?: Record<string, { kind: string; value: string }>;
+            }
+          ).additionalContext?.openclaw_current_sender,
+      ),
     ).toEqual([
       {
         kind: "untrusted",
@@ -3778,10 +3581,7 @@ describe("runCodexAppServerAttempt", () => {
         }),
       );
       await vi.waitFor(
-        () =>
-          expect(
-            harness.requests.filter((request) => request.method === "turn/start"),
-          ).toHaveLength(expectedTurnStarts),
+        () => expect(requestsFor(harness.requests, "turn/start")).toHaveLength(expectedTurnStarts),
         fastWait,
       );
       const inputTokens = 15_000 + index * 1_000;
@@ -3793,13 +3593,7 @@ describe("runCodexAppServerAttempt", () => {
             threadId: "thread-1",
             turnId,
             responseId: "response-1",
-            usage: {
-              totalTokens: inputTokens + outputTokens,
-              inputTokens,
-              cachedInputTokens: 0,
-              outputTokens,
-              reasoningOutputTokens: 0,
-            },
+            usage: tokenUsage(inputTokens, outputTokens),
           },
         });
       }
@@ -3809,14 +3603,7 @@ describe("runCodexAppServerAttempt", () => {
           threadId: "thread-1",
           turnId,
           tokenUsage: {
-            last: {
-              totalTokens: inputTokens + outputTokens,
-              inputTokens,
-              cachedInputTokens: 0,
-              cacheWriteInputTokens: 0,
-              outputTokens,
-              reasoningOutputTokens: 0,
-            },
+            last: { ...tokenUsage(inputTokens, outputTokens), cacheWriteInputTokens: 0 },
           },
         },
       });
@@ -3838,11 +3625,11 @@ describe("runCodexAppServerAttempt", () => {
       totalTokens: 16_100,
     });
     expect(
-      harness.requests
-        .filter((request) =>
+      requestMethods(
+        harness.requests.filter((request) =>
           ["thread/start", "thread/resume", "turn/start"].includes(request.method),
-        )
-        .map((request) => request.method),
+        ),
+      ),
     ).toEqual(["thread/start", "turn/start", "turn/start"]);
   });
 
@@ -3886,8 +3673,8 @@ describe("runCodexAppServerAttempt", () => {
       pluginConfig: { appServer: { mode: "yolo" } },
     });
     await completeStartedRun(run, waitForMethod, completeTurn);
-    expect(requests.map((request) => request.method)).toContain("thread/start");
-    expect(requests.map((request) => request.method)).not.toContain("thread/resume");
+    expect(requestMethods(requests)).toContain("thread/start");
+    expect(requestMethods(requests)).not.toContain("thread/resume");
     const inputText = turnInput(requests);
     expect(inputText).toContain("pre-binding native-owned context: keep the original plan");
     expect(inputText).toContain("post-binding user context: resume the release checklist");
@@ -3931,8 +3718,8 @@ describe("runCodexAppServerAttempt", () => {
       pluginConfig: { appServer: { mode: "yolo" } },
     });
     await completeStartedRun(run, waitForMethod, completeTurn);
-    expect(requests.map((request) => request.method)).toContain("thread/start");
-    expect(requests.map((request) => request.method)).not.toContain("thread/resume");
+    expect(requestMethods(requests)).toContain("thread/start");
+    expect(requestMethods(requests)).not.toContain("thread/resume");
     expect(new Set(seenAuthProfileIds)).toEqual(new Set(["openai:work"]));
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding).toMatchObject({ authProfileId: "openai:work", threadId: "thread-1" });
@@ -4063,7 +3850,7 @@ describe("runCodexAppServerAttempt", () => {
       threadId: "thread-1",
       model: runtimeModelId,
     });
-    expect(resumedHarness.requests.map((entry) => entry.method)).not.toContain("thread/start");
+    expect(requestMethods(resumedHarness.requests)).not.toContain("thread/start");
     expect(resumedHarness.requests.find((entry) => entry.method === "turn/start")).toMatchObject({
       params: { threadId: "thread-1", model: runtimeModelId },
     });

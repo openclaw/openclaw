@@ -1,8 +1,6 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { text } from "node:stream/consumers";
+import { execa } from "execa";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
@@ -14,35 +12,19 @@ const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePrepare
 afterEach(() => vi.useRealTimers());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function runVerifiedFixture(command: string, args: string[], abortSignal: AbortSignal) {
+async function runFixture(command: string, args: string[], abortSignal: AbortSignal) {
   const execute: CliBackendExecute = async function* (context) {
-    const child = spawn(context.command, context.args, {
+    const { stdout } = await execa(context.command, context.args, {
       argv0: context.argv0,
       cwd: context.cwd,
       env: context.env,
-      signal: context.abortSignal,
+      extendEnv: false,
+      cancelSignal: context.abortSignal,
       killSignal: "SIGKILL",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdin: "ignore",
+      stripFinalNewline: false,
     });
-    const closed = new Promise<void>((resolve) => {
-      child.once("close", () => resolve());
-    });
-    try {
-      const [[code], stdout, stderr] = await Promise.all([
-        once(child, "close"),
-        text(child.stdout),
-        text(child.stderr),
-      ]);
-      if (code !== 0) {
-        throw new Error(stderr || `Fixture CLI exited with code ${code}`);
-      }
-      yield { type: "result", subtype: "success", result: stdout };
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-      await closed;
-    }
+    yield { type: "result", subtype: "success", result: stdout };
   };
   const context = buildPreparedCliRunContext({
     backend: {
@@ -87,22 +69,17 @@ it("runs a verified plugin CLI script through its resolved interpreter", async (
     await fs.writeFile(command, '@echo off\r\n"%~dp0\\cli.js" %*\r\n');
   }
 
-  await expect(
-    runVerifiedFixture(command, ["--fixture-option", "kept"], signal),
-  ).resolves.toMatchObject({
+  await expect(runFixture(command, ["--fixture-option", "kept"], signal)).resolves.toMatchObject({
     text: "fixture-script:--fixture-option|kept",
   });
 });
 
-it.skipIf(process.platform === "win32")(
-  "preserves a verified native CLI's symlink invocation name in a plugin process",
-  async ({ signal }) => {
-    const root = tempDirs.make("openclaw-plugin-cli-alias-");
-    const command = path.join(root, "cli-fixture");
-    await fs.symlink(process.execPath, command);
+it.skipIf(process.platform === "win32")("preserves symlink argv0", async ({ signal }) => {
+  const root = tempDirs.make("openclaw-plugin-cli-alias-");
+  const command = path.join(root, "cli-fixture");
+  await fs.symlink(process.execPath, command);
 
-    await expect(
-      runVerifiedFixture(command, ["-e", "process.stdout.write(process.argv0)"], signal),
-    ).resolves.toMatchObject({ text: command });
-  },
-);
+  await expect(
+    runFixture(command, ["-e", "process.stdout.write(process.argv0)"], signal),
+  ).resolves.toMatchObject({ text: command });
+});

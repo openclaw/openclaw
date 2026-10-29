@@ -9,6 +9,7 @@ import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 
 export const SESSION_ACTION_PREFIX = "session:";
 export const SESSION_SEARCH_LIMIT = 10;
+export { SESSION_SEARCH_SCOPE } from "../lib/sessions/session-requests.ts";
 const SESSION_SEARCH_SNIPPET_MAX_CHARS = 160;
 
 export function buildCommandPaletteSessionItems(params: {

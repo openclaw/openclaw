@@ -3,7 +3,7 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { Question, QuestionRecord, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   createQuestionHarness,

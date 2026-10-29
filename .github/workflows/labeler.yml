@@ -44,6 +44,10 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          sparse-checkout: |
+            /.github/labeler.yml
+            /scripts/github/labeler-label-cap.mjs
+          sparse-checkout-cone-mode: false
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         continue-on-error: true
@@ -526,6 +530,8 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          sparse-checkout: /scripts/github/labeler-label-cap.mjs
+          sparse-checkout-cone-mode: false
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         continue-on-error: true
@@ -860,6 +866,8 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          sparse-checkout: /scripts/github/labeler-label-cap.mjs
+          sparse-checkout-cone-mode: false
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         continue-on-error: true

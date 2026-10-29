@@ -13,7 +13,7 @@
     "@codemirror/language": "6.13.1",
     "@codemirror/language-data": "6.5.2",
     "@codemirror/state": "6.7.6",
-    "@codemirror/view": "6.43.14",
+    "@codemirror/view": "6.43.15",
     "@lezer/highlight": "1.2.5",
     "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/core": "2.3.1",
@@ -66,7 +66,7 @@
     "openclaw": "workspace:*",
     "pako": "3.0.2",
     "playwright": "1.64.1",
-    "postcss": "8.5.30",
+    "postcss": "8.5.31",
     "vite": "8.3.4",
     "vitest": "5.0.5"
   }

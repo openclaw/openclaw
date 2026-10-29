@@ -10,6 +10,7 @@ import {
   mockDoctorConfigSnapshot,
   transformConfigFile,
 } from "./doctor.e2e-harness.js";
+import { loadDoctorCommandForTest } from "./doctor.note-test-helpers.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   useMockProviders: false,
@@ -44,15 +45,9 @@ async function expectNixRefusal(options: Parameters<typeof doctorCommand>[1]) {
 }
 
 beforeEach(async () => {
-  vi.resetModules();
-  vi.doUnmock("../flows/doctor-health-contributions.js");
-  // Prepare the real owners and nested check descriptors as fixture code;
-  // detectors and repairs still run inside the unchanged command deadline.
-  await import("./doctor-maintenance.js");
-  const { resolveDoctorContributionHealthChecks } =
-    await import("../flows/doctor-health-contributions.js");
-  await resolveDoctorContributionHealthChecks();
-  ({ doctorCommand } = await import("./doctor.js"));
+  doctorCommand = await loadDoctorCommandForTest({
+    unmockModules: ["../flows/doctor-health-contributions.js"],
+  });
   vi.clearAllMocks();
   providerRuntimeMocks.useMockProviders = false;
   providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([]);

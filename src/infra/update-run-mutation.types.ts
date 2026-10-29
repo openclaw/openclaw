@@ -1,4 +1,5 @@
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
 import type {
   InterruptedUpdateSettlement,
   InterruptedUpdateSettlementResult,
@@ -36,7 +37,7 @@ export type UpdateRunWriteInput = {
 };
 
 type UpdateRunWriteResult =
-  | { kind: "recorded"; record: UpdateRunRecord }
+  | { kind: "recorded"; record: UpdateRunRecord; updateResult?: UpdateResultPayload }
   | { kind: "bookkeeping-skipped" }
   | { kind: "recovery-required"; recovery: UpdateRecoveryRecord };
 

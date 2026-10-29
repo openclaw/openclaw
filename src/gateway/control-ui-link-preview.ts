@@ -1,6 +1,5 @@
 import { isIP } from "node:net";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { fileTypeFromBuffer } from "file-type";
 import { Parser } from "htmlparser2";
 import pLimit from "p-limit";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -213,6 +212,7 @@ async function loadImage(bytes: Buffer | undefined, icon: boolean, signal: Abort
     if (!bytes || bytes.length > (icon ? ICON_MAX_BYTES : IMAGE_MAX_BYTES)) {
       return undefined;
     }
+    const { fileTypeFromBuffer } = await import("file-type");
     const detected = await fileTypeFromBuffer(bytes);
     if (icon && detected?.mime === "image/x-icon") {
       return `data:image/x-icon;base64,${bytes.toString("base64")}`;

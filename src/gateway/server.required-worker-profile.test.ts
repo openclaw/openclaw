@@ -71,7 +71,6 @@ function createRequiredWorkerSessionPreparation(
     options.dispatch as WorkerPlacementDispatchService,
     createGatewayWorkerDispatchAdmission(),
     undefined,
-    undefined,
     options,
   );
   return createRequiredPreparation({ getConfig: options.getConfig, dispatch });
@@ -579,7 +578,11 @@ test.each(["unchanged", "caller", "runtime"] as const)(
           spawnedCwd: worktree.path,
         });
       } else {
-        await expect(pending).rejects.toThrow("Session changed during worker admission");
+        await expect(pending).rejects.toThrow(
+          change === "runtime"
+            ? "SQLite session state changed while preparing session-entry.patch"
+            : "Session changed during worker admission",
+        );
         expect(dispatch).not.toHaveBeenCalled();
         const entry = loadSessionEntry({ ...identity, storePath });
         expect(entry).not.toHaveProperty("worktree");

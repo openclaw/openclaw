@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
@@ -1346,16 +1346,16 @@ describe("loadChatHistory retry handling", () => {
     },
   );
 
-  it("clears live tool cards when history catches up with content-block tool ids", async () => {
+  it("clears live tool cards for recorded content-block results", async () => {
     const persistedUser = userText("latest ask", { seq: 1 });
-    const persistedToolCall = {
+    const persistedToolResult = {
       role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "shell", arguments: {} }],
+      content: [{ type: "toolResult", id: "call_1", name: "shell", text: "done" }],
       timestamp: 2,
       __openclaw: { seq: 2 },
     };
     const state = createLiveToolHistoryState(
-      [persistedUser, persistedToolCall],
+      [persistedUser, persistedToolResult],
       "Still answering.",
       [toolCall("call_1")],
       [{ text: "before tool", ts: 1 }],
@@ -1364,7 +1364,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual([
       persistedUser,
       expect.objectContaining({ ...replyText("before tool"), timestamp: 1 }),
-      persistedToolCall,
+      persistedToolResult,
     ]);
     expect(state).toMatchObject({
       chatRunId: "run-1",

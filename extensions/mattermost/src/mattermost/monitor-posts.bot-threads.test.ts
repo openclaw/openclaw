@@ -6,6 +6,7 @@ import { expect, it, vi } from "vitest";
 import { setMattermostRuntime } from "../runtime.js";
 import type { MattermostConfig } from "../types.js";
 import { resolveMattermostAccount } from "./accounts.js";
+import type { MattermostIngressPost } from "./monitor-ingress.js";
 import { createMattermostPostHandler } from "./monitor-posts.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -15,8 +16,12 @@ const hasParticipation = vi.hoisted(() => vi.fn());
 const body = "Continue the discussion";
 const threadPolicy = (requireMentionInBotThreads: boolean) => ({ requireMentionInBotThreads });
 
-vi.mock("./monitor-turn.js", () => ({ dispatchMattermostInboundTurn: dispatch }));
-vi.mock("./thread-participation.js", () => ({
+vi.mock("./monitor-turn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor-turn.js")>()),
+  dispatchMattermostInboundTurn: dispatch,
+}));
+vi.mock("./thread-participation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./thread-participation.js")>()),
   hasMattermostThreadParticipationWithPersistence: hasParticipation,
 }));
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
@@ -24,7 +29,12 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   resolveInboundSessionEnvelopeContextAsync: async () => ({ envelopeOptions: {} }),
 }));
 
-function setup(config: Partial<MattermostConfig> = {}, botUsername = "bot", accountId = "default") {
+function setup(
+  config: Partial<MattermostConfig> = {},
+  botUsername = "bot",
+  accountId = "default",
+  cfgExtra: OpenClawConfig = {},
+) {
   dispatch.mockReset();
   hasParticipation.mockReset().mockResolvedValue(false);
   const mattermost: MattermostConfig = {
@@ -33,7 +43,7 @@ function setup(config: Partial<MattermostConfig> = {}, botUsername = "bot", acco
     historyLimit: 0,
     ...config,
   };
-  const cfg: OpenClawConfig = { channels: { mattermost } };
+  const cfg: OpenClawConfig = { ...cfgExtra, channels: { ...cfgExtra.channels, mattermost } };
   const account = resolveMattermostAccount({ cfg, accountId });
   const core = createPluginRuntimeMock();
   core.channel.mentions.buildMentionRegexes = () => [];
@@ -56,18 +66,21 @@ function setup(config: Partial<MattermostConfig> = {}, botUsername = "bot", acco
     pairing: { readAllowFromStore: async () => [] },
     resources: {
       resolveChannelInfo: async () => ({ id: "room", type: "O" }),
+      resolveUserInfo: async (id: string) => ({ id, username: id }),
       resolveMattermostMedia: async () => [],
     },
     runtime: { log: vi.fn(), error: vi.fn() },
     logVerboseMessage: vi.fn(),
   } as unknown as MattermostMonitorContext;
   const handler = createMattermostPostHandler(monitor);
-  const receive = (message = body, id = "follow-up") =>
+  const receivePost = (post: Partial<MattermostIngressPost>) =>
     handler(
-      { id, root_id: "root", channel_id: "room", user_id: "sender", message },
+      { id: "follow-up", channel_id: "room", user_id: "sender", message: body, ...post },
       { data: { sender_name: "sender" } },
     );
-  return { core, root, request, receive };
+  const receive = (message = body, id = "follow-up") =>
+    receivePost({ id, root_id: "root", message });
+  return { core, root, request, receive, receivePost };
 }
 
 const policy = {
@@ -155,3 +168,80 @@ it.each([
     }
   },
 );
+
+const botPost = {
+  id: "post-1",
+  user_id: "other-bot",
+  message: "status update",
+  create_at: 1_714_000_000_000,
+  props: { from_bot: "true" },
+};
+
+const human = { user_id: "alice", props: {} };
+const botMentioned = { message: "@bot status update" };
+it.each([
+  ["default admits bot posts", {}, {}, true],
+  ["allowBots=false ignores bot posts", { allowBots: false }, {}, false],
+  ["allowBots=false keeps human posts", { allowBots: false }, human, true],
+  ["mentions drops an unmentioned bot post", { allowBots: "mentions" }, {}, false],
+  ["mentions admits an explicit mention", { allowBots: "mentions" }, botMentioned, true],
+  ["mentions keeps unmentioned human posts", { allowBots: "mentions" }, human, true],
+  [
+    "channel override beats wildcard and account",
+    { allowBots: false, groups: { "*": { allowBots: false }, room: { allowBots: true } } },
+    {},
+    true,
+  ],
+  ["wildcard override beats account", { groups: { "*": { allowBots: false } } }, {}, false],
+] satisfies Array<[string, Partial<MattermostConfig>, Partial<MattermostIngressPost>, boolean]>)(
+  "%s",
+  async (_name, config, post, admitted) => {
+    await setup({ requireMention: false, ...config }).receivePost({ ...botPost, ...post });
+    expect(dispatch).toHaveBeenCalledTimes(admitted ? 1 : 0);
+  },
+);
+
+it("does not count thread participation as a mention for allowBots=mentions", async () => {
+  const { receivePost: receive } = setup({ allowBots: "mentions", requireMention: true });
+  hasParticipation.mockResolvedValue(true);
+
+  await receive({ ...botPost, root_id: "root" });
+  expect(dispatch).not.toHaveBeenCalled();
+
+  await receive({ ...botPost, ...human, id: "post-2", root_id: "root" });
+  expect(dispatch).toHaveBeenCalledOnce();
+});
+
+it("reports bot-pair facts with merged loop protection config", async () => {
+  const { receivePost: receive } = setup(
+    {
+      requireMention: false,
+      botLoopProtection: { windowSeconds: 600 },
+      groups: {
+        "*": { botLoopProtection: { cooldownSeconds: 1800, maxEventsPerWindow: 10 } },
+        room: { botLoopProtection: { maxEventsPerWindow: 6 } },
+      },
+    },
+    "bot",
+    "default",
+    { channels: { defaults: { botLoopProtection: { enabled: true } } } },
+  );
+
+  await receive(botPost);
+  await receive({ ...botPost, ...human, id: "post-2" });
+
+  expect(dispatch.mock.calls.map(([, params]) => params.botLoopProtection)).toEqual([
+    {
+      scopeId: "default",
+      conversationId: "room",
+      senderId: "other-bot",
+      receiverId: "bot",
+      eventId: "post-1",
+      config: { windowSeconds: 600, cooldownSeconds: 1800, maxEventsPerWindow: 6 },
+      defaultsConfig: { enabled: true },
+      defaultEnabled: true,
+      nowMs: 1_714_000_000_000,
+    },
+    undefined,
+  ]);
+});

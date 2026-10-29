@@ -52,10 +52,13 @@ vi.mock("../../config/sessions/session-store-owner.js", () => ({
   resolvePersistedSessionStoreOwnerForTarget: () => ({ kind: "none" }),
 }));
 // mock-isolation: This durable admission fixture has no memory owner.
+vi.mock("../../config/sessions/session-actor-storage-acquisition.js", () => ({
+  acquireSessionActorStorage: async () => undefined,
+}));
+// mock-isolation: This durable admission fixture has no memory binding.
 vi.mock("../../config/sessions/session-actor-storage-binding.js", () => ({
   captureSessionActorStorageOwner: () => undefined,
   getSessionActorStorageBinding: () => undefined,
-  acquireSessionActorStorage: async () => undefined,
   runWithSessionActorStorage: (_binding: unknown, consume: () => unknown) => consume(),
 }));
 vi.mock("../../config/sessions/transcript.js", () => ({

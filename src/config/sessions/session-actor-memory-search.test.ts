@@ -14,10 +14,8 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import type { SessionActorAuthority, SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { memoryStorage } from "./session-actor-memory-publication.test-support.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import {
   readSessionTranscriptCorpusInWorker,
   resolveMemorySessionTargetsInWorker,

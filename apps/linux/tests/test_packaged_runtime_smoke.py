@@ -113,7 +113,7 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
         self.assertEqual([entry["path"] for entry in report["files"]], [appimage.name])
 
     def test_historical_opt_in_still_rejects_an_incomplete_bundled_runtime(self):
-        (self.appdir / smoke.BUNDLED_BUN_PATH).parent.mkdir(parents=True)
+        (self.appdir / (smoke.BUNDLED_RUNTIME_PATH / "bin/bun")).parent.mkdir(parents=True)
         with self.assertRaisesRegex(RuntimeError, "invalid runtime manifest"):
             self.collect(version_output())
 
@@ -353,18 +353,19 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
                 )
 
     def write_bundled_bun(self, executable=b"\x7fELFsynthetic bun"):
-        resource = self.appdir / smoke.BUNDLED_BUN_PATH
+        resource = self.appdir / (smoke.BUNDLED_RUNTIME_PATH / "bin/bun")
         resource.parent.mkdir(parents=True, exist_ok=True)
         resource.write_bytes(b"OPENCLAW-BUN-RUNTIME-V1\n" + executable)
         (resource.parent.parent / "manifest.json").write_text(json.dumps({
             "platform": "linux",
+            "runtime": {"flavor": "jit", "executable": "bin/bun"},
             "files": {"bin/bun": hashlib.sha256(executable).hexdigest()},
         }))
         return resource
 
     def test_enveloped_bun_abi_is_checked_and_reported_at_its_bundle_path(self):
         resource = self.write_bundled_bun()
-        source_path = smoke.BUNDLED_BUN_PATH.as_posix()
+        source_path = (smoke.BUNDLED_RUNTIME_PATH / "bin/bun").as_posix()
         readelf = smoke.run_readelf
 
         def inspect(path, source, tool, *arguments):
@@ -376,40 +377,169 @@ class PackagedRuntimeAbiTest(unittest.TestCase):
                 return "ELF Header:\n  Machine: Advanced Micro Devices X86-64\n"
             return version_output(needs=("GLIBC_2.36", "GLIBCXX_3.4.30"))
 
-        with mock.patch.object(smoke, "run_readelf", side_effect=inspect):
-            report = self.collect(version_output(needs=("GLIBC_2.17",)))
-        self.assertEqual(report["files"][-1], {
-            "path": source_path,
-            "source": "appdir",
-            "requires": {"GLIBC": ["2.36"], "GLIBCXX": ["3.4.30"], "CXXABI": [], "GCC": []},
-        })
-        self.assertNotIn("openclaw-bun-abi-", json.dumps(report))
-        with self.assertRaisesRegex(RuntimeError, re.escape(source_path) + r" requires GLIBC_2.36"):
-            smoke.enforce_abi_limits(report)
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                if legacy:
+                    manifest = resource.parent.parent / "manifest.json"
+                    value = json.loads(manifest.read_text())
+                    del value["runtime"]
+                    manifest.write_text(json.dumps(value))
+                with mock.patch.object(smoke, "run_readelf", side_effect=inspect):
+                    report = self.collect(version_output(needs=("GLIBC_2.17",)))
+                self.assertEqual(report["runtime"], {"flavor": "jit", "executable": "bin/bun"})
+                self.assertEqual(report["files"][-1], {
+                    "path": source_path,
+                    "source": "appdir",
+                    "requires": {"GLIBC": ["2.36"], "GLIBCXX": ["3.4.30"], "CXXABI": [], "GCC": []},
+                })
+                self.assertNotIn("openclaw-bun-abi-", json.dumps(report))
+                with self.assertRaisesRegex(RuntimeError, re.escape(source_path) + r" requires GLIBC_2.36"):
+                    smoke.enforce_abi_limits(report)
 
     def test_enveloped_bun_refuses_damaged_prefix_and_decoded_hash(self):
         resource = self.write_bundled_bun()
-        for payload, error in (
-            (b"BROKEN\n\x7fELFsynthetic bun", "invalid runtime envelope"),
-            (b"OPENCLAW-BUN-RUNTIME-V1\n\x7fELFtampered bun", "runtime checksum mismatch"),
-        ):
-            with self.subTest(error=error):
-                resource.write_bytes(payload)
-                with self.assertRaisesRegex(RuntimeError, error):
-                    self.collect(version_output())
+        for legacy in (False, True):
+            if legacy:
+                manifest = resource.parent.parent / "manifest.json"
+                value = json.loads(manifest.read_text())
+                del value["runtime"]
+                manifest.write_text(json.dumps(value))
+            for payload, error in (
+                (b"BROKEN\n\x7fELFsynthetic bun", "invalid runtime envelope"),
+                (b"OPENCLAW-BUN-RUNTIME-V1\n\x7fELFtampered bun", "runtime checksum mismatch"),
+            ):
+                with self.subTest(legacy=legacy, error=error):
+                    resource.write_bytes(payload)
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        self.collect(version_output())
+
+    def test_explicit_invalid_runtime_is_not_a_historical_manifest(self):
+        resource = self.write_bundled_bun()
+        manifest = resource.parent.parent / "manifest.json"
+        value = json.loads(manifest.read_text())
+        value["runtime"] = None
+        manifest.write_text(json.dumps(value))
+        with self.assertRaisesRegex(RuntimeError, "invalid runtime manifest"):
+            self.collect(version_output())
 
     def test_enveloped_bun_rejects_a_different_architecture(self):
         self.write_bundled_bun()
         readelf = smoke.run_readelf
 
         def inspect(path, source, tool, *arguments):
-            if source == smoke.BUNDLED_BUN_PATH.as_posix():
+            if source == (smoke.BUNDLED_RUNTIME_PATH / "bin/bun").as_posix():
                 return "ELF Header:\n  Machine: AArch64\n"
             return readelf(path, source, tool, *arguments)
 
         with mock.patch.object(smoke, "run_readelf", side_effect=inspect):
             with self.assertRaisesRegex(RuntimeError, "architecture does not match"):
                 self.collect(version_output())
+
+
+    def test_aot_scans_executable_and_native_sidecars_from_manifest(self):
+        runtime = self.appdir / smoke.BUNDLED_RUNTIME_PATH
+        payloads = {
+            "standalone/openclaw": b"\x7fELFaot",
+            "standalone/runtime/native/addon.node": b"\x7fELFaddon",
+            "standalone/manifest.json": b'{"mode":"aot"}',
+        }
+        for name, content in payloads.items():
+            path = runtime / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(smoke.LINUX_RUNTIME_PREFIX + content)
+        (runtime / "manifest.json").write_text(json.dumps({
+            "platform": "linux",
+            "runtime": {"flavor": "aot", "executable": "standalone/openclaw"},
+            "files": {name: hashlib.sha256(content).hexdigest()
+                      for name, content in payloads.items()},
+        }))
+        original = smoke.run_readelf
+
+        def inspect(path, source, tool, *arguments):
+            if source.startswith(smoke.BUNDLED_RUNTIME_PATH.as_posix()):
+                self.assertTrue(path.read_bytes().startswith(b"\x7fELF"))
+                if arguments == ("--file-header",):
+                    return "ELF Header:\n  Machine: Advanced Micro Devices X86-64\n"
+                version = "GLIBC_2.36" if source.endswith("addon.node") else "GLIBC_2.17"
+                return version_output(needs=(version,))
+            return original(path, source, tool, *arguments)
+
+        with mock.patch.object(smoke, "run_readelf", side_effect=inspect):
+            report = self.collect(version_output())
+        self.assertEqual(report["runtime"], {"flavor": "aot", "executable": "standalone/openclaw"})
+        embedded = [row for row in report["files"] if "/desktop-runtime/" in row["path"]]
+        self.assertEqual([row["path"] for row in embedded], [
+            (smoke.BUNDLED_RUNTIME_PATH / "standalone/openclaw").as_posix(),
+            (smoke.BUNDLED_RUNTIME_PATH / "standalone/runtime/native/addon.node").as_posix(),
+        ])
+        with self.assertRaisesRegex(RuntimeError, "addon.node requires GLIBC_2.36"):
+            smoke.enforce_abi_limits(report)
+
+    def test_non_target_npm_prebuild_is_verified_and_reported_without_abi_enforcement(self):
+        self.write_bundled_bun()
+        runtime = self.appdir / smoke.BUNDLED_RUNTIME_PATH
+        relative = "package/node_modules/example/prebuilds/linux-arm64/addon.node"
+        content = b"\x7fELFother architecture"
+        resource = runtime / relative
+        resource.parent.mkdir(parents=True)
+        resource.write_bytes(smoke.LINUX_RUNTIME_PREFIX + content)
+        manifest = runtime / "manifest.json"
+        value = json.loads(manifest.read_text())
+        value["files"][relative] = hashlib.sha256(content).hexdigest()
+        manifest.write_text(json.dumps(value))
+        original = smoke.run_readelf
+
+        def inspect(path, source, tool, *arguments):
+            if source.startswith(smoke.BUNDLED_RUNTIME_PATH.as_posix()):
+                if source.endswith("addon.node"):
+                    self.assertEqual(arguments, ("--file-header",))
+                    return "ELF Header:\n  Machine: AArch64\n"
+                if arguments == ("--file-header",):
+                    return "ELF Header:\n  Machine: Advanced Micro Devices X86-64\n"
+                return version_output(needs=("GLIBC_2.17",))
+            return original(path, source, tool, *arguments)
+
+        with mock.patch.object(smoke, "run_readelf", side_effect=inspect):
+            report = self.collect(version_output())
+        self.assertEqual(report["runtime"]["nonTargetResources"], [{
+            "path": (smoke.BUNDLED_RUNTIME_PATH / relative).as_posix(), "architecture": "aarch64",
+        }])
+        smoke.enforce_abi_limits(report)
+        resource.write_bytes(smoke.LINUX_RUNTIME_PREFIX + b"tampered")
+        with mock.patch.object(smoke, "run_readelf", side_effect=inspect), self.assertRaisesRegex(
+            RuntimeError, "runtime checksum mismatch"
+        ):
+            self.collect(version_output())
+
+    def test_runtime_rejects_undeclared_executable(self):
+        resource = self.write_bundled_bun()
+        manifest = resource.parent.parent / "manifest.json"
+        value = json.loads(manifest.read_text())
+        value["runtime"]["executable"] = "standalone/openclaw"
+        manifest.write_text(json.dumps(value))
+        with self.assertRaisesRegex(RuntimeError, "invalid runtime manifest"):
+            self.collect(version_output())
+
+    def test_runtime_rejects_redirected_or_missing_declared_resources(self):
+        resource = self.write_bundled_bun()
+        original = resource.read_bytes()
+        resource.unlink()
+        with self.assertRaisesRegex(RuntimeError, "runtime resource is missing"):
+            self.collect(version_output())
+        target = self.root / "external-bun"
+        target.write_bytes(original)
+        resource.symlink_to(target)
+        with self.assertRaisesRegex(RuntimeError, "redirected runtime resource"):
+            self.collect(version_output())
+
+    def test_runtime_rejects_manifest_path_escape(self):
+        resource = self.write_bundled_bun()
+        manifest = resource.parent.parent / "manifest.json"
+        value = json.loads(manifest.read_text())
+        value["files"]["../external"] = "0" * 64
+        manifest.write_text(json.dumps(value))
+        with self.assertRaisesRegex(RuntimeError, "invalid resource identity"):
+            self.collect(version_output())
 
 
 class PackagedRuntimeGStreamerTest(unittest.TestCase):

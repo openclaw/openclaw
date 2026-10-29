@@ -107,7 +107,7 @@ it("captures store ownership before dispatch without host SQLite", async () => {
     updatedAt: 1,
     sessionStartedAt: 1,
     skillsSnapshot: { prompt: "complete saved prompt", skills: [] },
-    subagentRecovery: { wedgedAt: 1, wedgedReason: "Synthetic recovery tombstone" },
+    lastRunId: "synthetic-retained-run",
   };
   replaceSessionEntrySync({ agentId: "main", env: state.env, storePath, sessionKey }, entry);
   const input = readInput(sessionKey, storePath, false);

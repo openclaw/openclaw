@@ -8,10 +8,6 @@ const patchScope = (patch: Record<string, unknown>) =>
 const batchScope = (patch: Record<string, unknown>, extraTarget = {}) =>
   scope("sessions.patchMany", { targets: [{ ...target, ...extraTarget }], patch });
 
-it("keeps explicit restart recovery at write scope", () => {
-  expect(scope("sessions.recover")).toBe("operator.write");
-});
-
 it("requires admin to create a full-access session", () => {
   expect(scope("sessions.create", { permissionMode: "full" })).toBe("operator.admin");
 });

@@ -1,180 +1,200 @@
 import { Icon } from "../../../components/solid/icon.tsx";
-import type { MenuEntry } from "../../../components/solid/menu.tsx";
-import { registerSessionSkillLibraryEnglish } from "../../../i18n/locales/en-session-skill-library.ts";
-import { registerSkillsBrowserEnglish } from "../../../i18n/locales/en-skills-browser.ts";
+import type { MenuItem } from "../../../components/solid/menu.tsx";
+import { registerChatComposerMenuEnglish } from "../../../i18n/locales/en-chat-composer-menu.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import type { ComposerLibraryProps } from "../composer-library-session.ts";
 import {
+  menuChevron,
   menuDivider,
   renderBackRow,
   renderCapabilityMenuState,
+  skillIcon,
 } from "./chat-composer-menu-rows.tsx";
 
-registerEnglishCatalog(registerSkillsBrowserEnglish);
-registerEnglishCatalog(registerSessionSkillLibraryEnglish);
+registerEnglishCatalog(registerChatComposerMenuEnglish);
 
-function libraryStatus(library: ComposerLibraryProps): MenuEntry[] {
-  const entries: MenuEntry[] = [];
-  if (library.loading || library.busy) {
-    entries.push(renderCapabilityMenuState("library-loading", t("common.loading"), "status"));
-  }
+type LibraryMenuEntry = MenuItem | ReturnType<typeof renderCapabilityMenuState>;
+
+function libraryStatus(library: ComposerLibraryProps): LibraryMenuEntry[] {
   if (library.error) {
-    entries.push(renderCapabilityMenuState("library-error", library.error, "alert"), {
-      id: "library-reload",
-      label: t("common.retry"),
-      closeOnSelect: false,
-    });
+    return [
+      renderCapabilityMenuState("library-error", library.error, "alert"),
+      {
+        id: "library-reload",
+        label: t("common.retry"),
+        class: "agent-chat__capability-menu-item",
+        icon: <Icon name="refresh" />,
+        closeOnSelect: false,
+      },
+    ];
   }
-  if (library.notice) {
-    entries.push(renderCapabilityMenuState("library-notice", library.notice, "status"));
-  }
-  return entries;
+  return library.loading
+    ? [renderCapabilityMenuState("library-loading", t("common.loading"), "status")]
+    : [];
 }
 
 export function composerLibraryMenuItems(
-  library?: ComposerLibraryProps,
+  library: ComposerLibraryProps | undefined,
   skillId?: string,
-): MenuEntry[] {
+): LibraryMenuEntry[] {
   if (!library) {
     return [];
   }
   const busy = library.busy || library.loading;
   const session = library.result?.session;
   if (skillId) {
-    const entries: MenuEntry[] = [
-      renderBackRow(),
-      menuDivider("library-back-divider"),
+    const pin = session?.selections.find((entry) => entry.skillId === skillId);
+    const current = library.result?.entries.find((entry) => entry.skillId === skillId);
+    const entries: LibraryMenuEntry[] = [
+      renderBackRow(pin?.slug ?? t("chat.composer.menu.skills")),
+      menuDivider("library-header-divider"),
       ...libraryStatus(library),
     ];
-    const pin = session?.selections.find((entry) => entry.skillId === skillId);
-    if (pin) {
+    if (!pin) {
+      return entries;
+    }
+    entries.push(
+      renderCapabilityMenuState(
+        "library-description",
+        <div class="agent-chat__capability-menu-description">
+          <span>{t("chat.composer.menu.libraryOwner", { owner: pin.ownerLabel })}</span>
+          <p>{pin.description}</p>
+        </div>,
+      ),
+      menuDivider("library-actions-divider"),
+      {
+        id: `library-read:${pin.skillId}`,
+        label: t("chat.composer.menu.readSkill"),
+        class: "agent-chat__capability-menu-item",
+        icon: <Icon name="book" />,
+        details: menuChevron(),
+        disabled: busy,
+        closeOnSelect: false,
+      },
+    );
+    if (library.canWrite) {
       entries.push(
-        renderCapabilityMenuState(
-          "library-pin",
-          <span class="agent-chat__capability-menu-label">
-            <strong>
-              {pin.slug} · {pin.ownerLabel}
-            </strong>
-            <span class="agent-chat__capability-menu-note">
-              {t("skillLibrary.session.pin", { revision: pin.revision.slice(0, 8) })}
-            </span>
-          </span>,
-        ),
+        {
+          id: `library-refresh:${pin.skillId}`,
+          label: t("chat.composer.menu.updateSkill"),
+          class: "agent-chat__capability-menu-item",
+          icon: <Icon name="refresh" />,
+          disabled: busy,
+          closeOnSelect: false,
+          details:
+            current && current.revision !== pin.revision ? (
+              <span class="agent-chat__capability-menu-accent">
+                {t("chat.composer.menu.newVersion")}
+              </span>
+            ) : undefined,
+        },
+        menuDivider("library-remove-divider"),
+        {
+          id: `library-detach:${pin.skillId}`,
+          label: t("chat.composer.menu.removeSkill"),
+          class: "agent-chat__capability-menu-item",
+          icon: <Icon name="x" />,
+          variant: "danger",
+          disabled: busy,
+          closeOnSelect: false,
+        },
       );
-      for (const action of ["read", "refresh", "detach"] as const) {
-        if (action === "read" || library.canWrite) {
-          entries.push({
-            id: `library-${action}:${pin.skillId}`,
-            label: t(`skillLibrary.session.${action}`),
-            class: "agent-chat__capability-menu-item",
-            disabled: busy,
-            closeOnSelect: false,
-          });
-        }
-      }
-    } else if (library.result && !busy) {
-      entries.push(renderCapabilityMenuState("library-not-found", t("skillsPage.notFound")));
     }
     return entries;
   }
-  if (
-    library.result?.defaultTarget === "workspace" &&
-    !session?.selections.length &&
-    !session?.attachable.length
-  ) {
-    return [];
-  }
-  const entries: MenuEntry[] = [
-    renderCapabilityMenuState("library-selected-heading", t("skillLibrary.session.selected")),
+  return [
     ...libraryStatus(library),
-  ];
-  for (const pin of session?.selections ?? []) {
-    const label = `${pin.slug} · ${pin.ownerLabel}`;
-    entries.push({
+    ...(session?.selections ?? []).map((pin): MenuItem => ({
       id: `library-selected:${pin.skillId}`,
-      label,
+      label: `${pin.slug} ${pin.ownerLabel}`,
       class: "agent-chat__capability-menu-item",
+      icon: skillIcon(),
       disabled: busy,
-      attributes: { title: label },
+      closeOnSelect: false,
+      details: menuChevron(),
       content: (
         <span class="agent-chat__capability-menu-label">
-          <span>{label}</span>
+          <span>{pin.slug}</span>
+          <span class="agent-chat__capability-menu-note">{pin.ownerLabel}</span>
+        </span>
+      ),
+    })),
+    ...(session
+      ? [
+          {
+            id: "library-add",
+            label: t("chat.composer.menu.addFromLibraries"),
+            class: "agent-chat__capability-menu-item",
+            icon: <Icon name="plus" />,
+            details: menuChevron(),
+            disabled: busy || !library.canWrite,
+            closeOnSelect: false,
+          } satisfies MenuItem,
+        ]
+      : []),
+  ];
+}
+
+export function composerLibraryAddItems(
+  library: ComposerLibraryProps | undefined,
+): LibraryMenuEntry[] {
+  const entries: LibraryMenuEntry[] = [
+    renderBackRow(t("chat.composer.menu.addFromLibraries")),
+    menuDivider("library-add-header"),
+  ];
+  if (!library) {
+    return entries;
+  }
+  entries.push(...libraryStatus(library));
+  const session = library.result?.session;
+  const selected = new Set(session?.selections.map((pin) => pin.skillId));
+  const attachable = session?.attachable ?? [];
+  const rows = [
+    ...attachable,
+    ...(library.result?.entries ?? []).filter(
+      (entry) =>
+        selected.has(entry.skillId) && !attachable.some((pin) => pin.skillId === entry.skillId),
+    ),
+  ];
+  for (const pin of rows) {
+    entries.push({
+      id: `library-attach:${pin.skillId}`,
+      label: pin.name || pin.slug,
+      class: "agent-chat__capability-menu-item agent-chat__capability-menu-library-add",
+      attributes: { "data-selected": selected.has(pin.skillId) ? "true" : undefined },
+      icon: skillIcon(),
+      disabled: library.loading || library.busy || !library.canWrite || selected.has(pin.skillId),
+      closeOnSelect: false,
+      content: (
+        <span class="agent-chat__capability-menu-label">
+          <span>{pin.name || pin.slug}</span>
           <span class="agent-chat__capability-menu-note">
-            {t("skillLibrary.session.pin", { revision: pin.revision.slice(0, 8) })}
+            {pin.ownerLabel} · {pin.description}
           </span>
         </span>
       ),
       details: (
-        <span class="agent-chat__capability-menu-chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
+        <span class={selected.has(pin.skillId) ? "agent-chat__capability-menu-accent" : undefined}>
+          <Icon name={selected.has(pin.skillId) ? "check" : "plus"} />
         </span>
       ),
-      closeOnSelect: false,
     });
   }
-  if (session && !session.selections.length) {
-    entries.push(renderCapabilityMenuState("library-empty", t("skillLibrary.session.empty")));
-  }
-  if (session?.attachable.length) {
-    entries.push(
-      menuDivider("library-attach-divider"),
-      renderCapabilityMenuState("library-attach-heading", t("skillLibrary.session.attachable")),
-    );
-    for (const pin of session.attachable) {
-      const label = t("skillLibrary.session.attachNamed", {
-        name: pin.slug,
-        owner: pin.ownerLabel,
-      });
-      entries.push({
-        id: `library-attach:${pin.skillId}`,
-        label,
-        class: "agent-chat__capability-menu-item",
-        disabled: busy || !library.canWrite,
-        content: (
-          <span class="agent-chat__capability-menu-label">
-            <span title={`${pin.slug} · ${pin.ownerLabel}`}>{label}</span>
-            <span class="agent-chat__capability-menu-note" title={pin.description}>
-              {pin.description}
-            </span>
-          </span>
-        ),
-        closeOnSelect: false,
-      });
-    }
-  }
-  if (library.result) {
-    entries.push(
-      renderCapabilityMenuState(
-        "library-limit",
-        t("skillLibrary.defaultLimit", { count: String(library.result.defaultSelectionLimit) }),
-      ),
-    );
-  }
-  if (library.result?.defaultSelectionNotice) {
-    entries.push(
-      renderCapabilityMenuState(
-        "library-selection-notice",
-        library.result.defaultSelectionNotice,
-        "status",
-      ),
-    );
-  }
-  entries.push(
-    menuDivider("library-inventory-divider"),
-    renderCapabilityMenuState("library-inventory-heading", t("skillLibrary.inventory")),
-  );
   return entries;
 }
 
 export function handleComposerLibrarySelection(
   value: string,
   library: ComposerLibraryProps | undefined,
-  changeView: (view: "skills" | `library:${string}`) => void,
+  changeView: (view: ChatComposerPlusMenuView) => void,
 ): boolean {
   if (!value.startsWith("library-")) {
     return false;
   }
-  if (value === "library-reload") {
+  if (value === "library-add") {
+    changeView("libraries");
+  } else if (value === "library-reload") {
     library?.onReload();
   } else if (library && !library.loading && !library.busy) {
     const skillId = value.slice(value.indexOf(":") + 1);

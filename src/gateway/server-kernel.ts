@@ -219,7 +219,10 @@ async function createGatewayKernelWithSdkHost(
     lifecycleRuntime = preparedLifecycleRuntime;
     const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
     if (databaseStartupAdmission) {
-      preparedLifecycleRuntime.registerGatewayLifetimeSidecars(databaseStartupAdmission.adopt());
+      preparedLifecycleRuntime.registerGatewayLifetimeSidecars({
+        name: "database-admission",
+        ...databaseStartupAdmission.adopt(),
+      });
     }
     // Retain teardown first. A timer turn lets I/O run before more cached imports.
     await delay(0, undefined, { signal: runtime.connectionWork.signal });

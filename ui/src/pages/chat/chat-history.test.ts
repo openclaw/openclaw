@@ -3,7 +3,7 @@ import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsRewindResult } from "../../api/types.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
@@ -98,7 +98,9 @@ it("preserves prepared quiet activity through older pages and prefetched snapsho
     activity: [{ messageId: "wait-result", items: [] }],
   });
   const expected = [{ ...result, activity: [] }];
-  expect((await loadOlderChatHistoryPage(state, 1))?.messages).toEqual(expected);
+  expect((await loadOlderChatHistoryPage(state, { cursor: "older-1" }))?.messages).toEqual(
+    expected,
+  );
   expect(
     await requestChatSessionSnapshot(state.client!, state.sessionKey, state, () => true),
   ).toMatchObject({ kind: "snapshot", snapshot: { messages: expected } });

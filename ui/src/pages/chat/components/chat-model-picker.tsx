@@ -13,6 +13,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
+import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -36,15 +37,12 @@ registerEnglishCatalog(registerModelControlsEnglish);
 const ChatModelPickerPanel = lazy(() => import("./chat-model-picker-panel.tsx"), {
   export: "ChatModelPickerPanel",
 });
+warmWhenIdle(ChatModelPickerPanel.preload);
 
 export type ChatModelPickerParams = {
   providerAuth?: ReadonlyMap<string, ModelProviderAuthLabel>;
   accountSection?: ChatModelAccountSection;
   contextWindow?: ChatContextWindowControlParams;
-  accessProgramRecovery?: {
-    disabled: boolean;
-    onClear: (sessionKey: string) => unknown;
-  };
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ModelCatalogState;
@@ -180,7 +178,6 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             "chat-controls__inline-select-trigger chat-controls__model-trigger",
             {
               "chat-controls__model-trigger--loading": params.triggerLoading,
-              "chat-controls__inline-select-trigger--disabled": params.disabled,
             },
           ]}
           data-chat-model-select="true"
@@ -190,6 +187,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           aria-label={`${t("chat.selectors.model")}: ${state().triggerTitle}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
           aria-busy={params.triggerLoading ? "true" : "false"}
           aria-disabled={params.disabled ? "true" : "false"}
+          aria-description={params.disabledReason}
           title={params.disabledReason?.trim() || undefined}
         >
           {state().modelToolsUnavailable ? (

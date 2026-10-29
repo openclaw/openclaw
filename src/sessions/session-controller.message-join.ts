@@ -70,7 +70,6 @@ export async function prepareReplyMessageContinuation(params: {
     // Keep delivery ahead of incoming settings/policy so combined failures retain
     // their existing fallback reason. The binding stays selected across the await.
     params.delivery.bindAdmission({
-      recoveryDeliveryClaim: observation.recoveryDeliveryClaim,
       matchesExecutionSettings: (entry, agentId) =>
         isSameReplyExecutionSelection(
           observation.executionSelection,

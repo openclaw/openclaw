@@ -5,19 +5,24 @@ import {
 } from "./message-handler.module-test-helpers.js";
 
 installDiscordIngressTestRuntime();
-import {
-  createChannelIngressQueueForTests,
-  observeChannelIngressQueueWrite,
-} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import assert from "node:assert/strict";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import * as channelOutbound from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAsyncGate as barrier } from "../../../test-support/async-gate.test-support.js";
+import { RequestClient } from "../internal/rest.js";
 import * as ingressRuntime from "./ingress.js";
-import type { DiscordIngressLifecycle } from "./ingress.js";
+import { discordChannelInfoCacheState } from "./message-channel-info-state.js";
+import * as preflightRuntime from "./message-handler.preflight.js";
 const createDiscordIngressMonitor = ingressRuntime.createDiscordIngressMonitor;
+const realPreflight = preflightRuntime.preflightDiscordMessage;
 import { createDiscordMessageHandler } from "./message-handler.js";
 import { createDiscordMessage } from "./message-handler.preflight.test-helpers.js";
 import type { DiscordMessagePreflightParams as PreflightParams } from "./message-handler.preflight.types.js";
@@ -38,8 +43,6 @@ const payload = (id: string, receivedAt = 1): DiscordIngressPayload => ({
     channelId: "lane-a",
     content: "hello",
     author: { id: "user-1", username: "alice", bot: false },
-    timestamp: new Date(0).toISOString(),
-    components: [],
   }).rawData,
 });
 
@@ -65,13 +68,15 @@ async function withQueue(run: (queue: DiscordQueue) => Promise<void>): Promise<v
   );
 }
 
-async function seedPendingFailure(queue: DiscordQueue, id: string, attempts = 1) {
-  await queue.enqueue(id, payload(id), { laneKey: "channel:lane-a", receivedAt: 1 });
+async function seedPendingFailure(queue: DiscordQueue, id: string, attempts = 1, guild = false) {
+  const event = payload(id);
+  if (guild) {
+    Object.assign(event.rawMessage, { guild_id: "guild-1" });
+  }
+  await queue.enqueue(id, event, { laneKey: "channel:lane-a", receivedAt: 1 });
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const claim = await queue.claim(id, { ownerId: `seed-${attempt}` });
-    if (!claim) {
-      throw new Error(`Expected ${id} to be claimable for seed attempt ${attempt}`);
-    }
+    assert(claim, `Expected ${id} to be claimable for seed attempt ${attempt}`);
     await queue.release(claim, {
       lastError: `prior genuine failure ${attempt}`,
       releasedAt: 10 + attempt,
@@ -82,32 +87,20 @@ async function seedPendingFailure(queue: DiscordQueue, id: string, attempts = 1)
 
 async function retryFacts(queue: DiscordQueue, id: string) {
   const record = (await queue.listPending({ limit: "all" })).find((entry) => entry.id === id);
-  if (!record) {
-    throw new Error(`Expected pending Discord ingress row ${id}`);
-  }
+  assert(record, `Expected pending Discord ingress row ${id}`);
   const { attempts, lastAttemptAt, lastError } = record;
   return { attempts, lastAttemptAt, lastError };
 }
 
 async function expectRecovered(queue: DiscordQueue, id: string) {
-  const recovered = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
-    await lifecycle.onAdopted();
-  });
-  const completed = observeChannelIngressQueueWrite(queue, "complete", id);
-  const replacement = createDiscordIngressMonitor({
-    accountId: "default",
-    client: {} as never,
-    runtime: createDiscordHandlerParams().runtime,
-    queue,
-    dispatch: recovered,
-  });
-  replacement.start();
+  prepareQueuedContext();
+  processMessage.mockReset().mockResolvedValue(undefined);
+  const replacement = createHandler({ queue });
   try {
-    await expect(completed).resolves.toBe(true);
-    expect(recovered).toHaveBeenCalledTimes(1);
-    await expectRecord(queue, id, { kind: "completed" });
+    await vi.waitFor(() => expectRecord(queue, id, { kind: "completed" }));
+    expect(processMessage).toHaveBeenCalledTimes(1);
   } finally {
-    await replacement.stop();
+    await replacement.deactivate();
   }
 }
 
@@ -115,45 +108,34 @@ async function expectRecord(queue: DiscordQueue, id: string, record: Record<stri
   await expect(queue.enqueue(id, {} as DiscordIngressPayload)).resolves.toMatchObject(record);
 }
 
-async function seedPoisonLane(queue: DiscordQueue) {
-  const facts = await seedPendingFailure(queue, "poison", priorAttempts);
-  await queue.enqueue("follower", payload("follower", 2), {
-    laneKey: "channel:lane-a",
-    receivedAt: 2,
-  });
-  return facts;
-}
-
 function createHandler(params: {
   queue: DiscordQueue;
-  preflight?: (input: { data: { message?: { id?: string } } }) => Promise<null>;
   debounceMs?: number;
   beforeDispatch?: () => Promise<void>;
   afterDispatch?: () => void;
+  handlerParams?: ReturnType<typeof createDiscordHandlerParams>;
+  client?: Parameters<typeof createDiscordMessageHandler>[0]["client"];
 }) {
-  const handlerParams = createDiscordHandlerParams();
-  handlerParams.cfg.messages = { inbound: { debounceMs: params.debounceMs ?? 0 } };
-  if (params.preflight) {
-    preflightMock.mockImplementation(params.preflight as never);
-  }
+  const handlerParams = params.handlerParams ?? createDiscordHandlerParams();
+  handlerParams.cfg.messages = {
+    ...handlerParams.cfg.messages,
+    inbound: { debounceMs: params.debounceMs ?? 0 },
+  };
   vi.spyOn(ingressRuntime, "createDiscordIngressMonitor").mockImplementation((monitorParams) =>
     createDiscordIngressMonitor({
       ...monitorParams,
       queue: params.queue,
-      dispatch:
-        params.beforeDispatch || params.afterDispatch
-          ? async (event, lifecycle) => {
-              await params.beforeDispatch?.();
-              const result = await monitorParams.dispatch(event, lifecycle);
-              params.afterDispatch?.();
-              return result;
-            }
-          : monitorParams.dispatch,
+      dispatch: async (event, lifecycle) => {
+        await params.beforeDispatch?.();
+        const result = await monitorParams.dispatch(event, lifecycle);
+        params.afterDispatch?.();
+        return result;
+      },
     }),
   );
   return createDiscordMessageHandler({
     ...handlerParams,
-    client: {} as never,
+    client: params.client ?? ({} as never),
   });
 }
 
@@ -199,7 +181,6 @@ it.each(["dispatch", "buffer", "preflight", "queued", "returns", "throws"] as co
       if (phase === "returns" || phase === "throws") {
         await vi.waitFor(() => expect(signal?.aborted).toBe(true));
       }
-      await Promise.resolve();
       gate.release();
       await stopping;
       expect(preflightMock).toHaveBeenCalledTimes(
@@ -207,8 +188,8 @@ it.each(["dispatch", "buffer", "preflight", "queued", "returns", "throws"] as co
       );
       if (phase === "queued") {
         expect(processMessage).not.toHaveBeenCalled();
+        vi.mocked(channelOutbound.createChannelRunQueue).mockRestore();
       }
-      expect(await queue.listPending()).toHaveLength(1);
       expect(await retryFacts(queue, "poison")).toEqual(before);
       await expectRecovered(queue, "poison");
     });
@@ -216,72 +197,146 @@ it.each(["dispatch", "buffer", "preflight", "queued", "returns", "throws"] as co
 );
 
 describe("Discord durable ingress settlement", () => {
+  it.each(["preflight", "processing"] as const)(
+    "adopts a retry while the timed-out %s is still blocked",
+    async (phase) => {
+      vi.useFakeTimers();
+      await withQueue(async (queue) => {
+        const gate = barrier();
+        prepareQueuedContext();
+        const stalled = phase === "preflight" ? preflightMock : processMessage;
+        const dispatch = stalled.getMockImplementation();
+        let attempts = 0;
+        stalled.mockImplementation(async (...args) => {
+          if (++attempts === 1) {
+            await gate.wait();
+          }
+          return dispatch?.(...args);
+        });
+        const handler = createHandler({ queue, debounceMs: 1 });
+        try {
+          await handler(payload("retry").rawMessage, {} as never);
+          await vi.waitFor(() => expect(attempts).toBe(1));
+          await vi.advanceTimersByTimeAsync(301_100);
+          await vi.waitFor(() => expect(attempts).toBe(2));
+          await expectRecord(queue, "retry", { kind: "completed" });
+        } finally {
+          gate.release();
+          await handler.deactivate();
+        }
+      });
+    },
+  );
+
   it("waits for an active durable admission before stopping the drain", async () => {
     const admissionGate = createDeferred<void>();
-    const accept = vi.fn(() => admissionGate.promise);
-    const start = vi.fn();
     const stop = vi.fn(async () => {});
-    const params = createDiscordHandlerParams();
     vi.spyOn(ingressRuntime, "createDiscordIngressMonitor").mockImplementation(() => ({
-      accept,
-      start,
+      accept: () => admissionGate.promise,
+      start: () => {},
       stop,
     }));
     const handler = createDiscordMessageHandler({
-      ...params,
+      ...createDiscordHandlerParams(),
       client: {} as never,
     });
     const handling = handler({ id: "m-admitting", channel_id: "ch-1" } as never, {} as never);
 
-    let deactivated = false;
-    const deactivation = handler.deactivate().then(() => {
-      deactivated = true;
-    });
+    const deactivation = handler.deactivate();
     await Promise.resolve();
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(accept).toHaveBeenCalledTimes(1);
     expect(stop).not.toHaveBeenCalled();
-    expect(deactivated).toBe(false);
 
     admissionGate.resolve();
     await Promise.all([handling, deactivation]);
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["preflight", "processing"] as const)(
-    "dead-letters an exhausted %s failure and releases its Discord lane",
+  it.each([
+    "preflight",
+    "authentication",
+    "disabled-dm",
+    "excluded",
+    "revoked",
+    "tool-only",
+  ] as const)(
+    "authorizes a dead-letter notice through current Discord policy: %s",
     async (phase) => {
       vi.useFakeTimers();
       await withQueue(async (queue) => {
-        await seedPoisonLane(queue);
-        const processed: string[] = [];
-        prepareQueuedContext();
-        const failPoison = (id: string) => {
-          processed.push(id);
-          if (id === "poison") {
-            throw new Error("deterministic queued failure");
-          }
+        await seedPendingFailure(queue, "poison", priorAttempts, phase !== "disabled-dm");
+        await queue.enqueue("follower", payload("follower", 2), {
+          laneKey: "channel:lane-a",
+          receivedAt: 2,
+        });
+        const failure = Object.assign(new Error("deterministic queued failure"), {
+          status: phase === "authentication" ? 401 : 500,
+        });
+        const handlerParams = {
+          ...createDiscordHandlerParams(),
+          discordConfig: { groupPolicy: "open" as const },
+          dmPolicy: "open" as const,
+          dmEnabled: phase !== "disabled-dm",
+          guildEntries: {
+            [phase === "excluded" ? "excluded-guild" : "guild-1"]: { requireMention: false },
+          },
         };
-        processMessage.mockImplementation(async (ctx) => failPoison(ctx.message.id));
+        handlerParams.cfg.messages = {
+          visibleReplies: phase === "tool-only" ? "message_tool" : "automatic",
+        };
+        setRuntimeConfigSnapshot(handlerParams.cfg, handlerParams.cfg);
+        preflightMock.mockImplementation(async (params: PreflightParams) => {
+          if (!params.turnAdoptionLifecycle) {
+            return realPreflight(params);
+          }
+          if (params.data.message.id === "poison") {
+            throw failure;
+          }
+          return messageContext(params.data);
+        });
+        const post = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+          await expectRecord(queue, "poison", { kind: "failed" });
+          return Response.json({});
+        });
+        let requests = 0;
         const handler = createHandler({
           queue,
-          preflight:
-            phase === "preflight"
-              ? async ({ data }) => {
-                  failPoison(data.message?.id ?? "unknown");
-                  return null;
+          handlerParams,
+          client: {
+            rest: new RequestClient("synthetic-token", {
+              fetch: async (...args) => {
+                if (phase === "revoked" && ++requests === 1) {
+                  const revoked = { channels: { discord: { groupPolicy: "disabled" as const } } };
+                  setRuntimeConfigSnapshot(revoked, revoked);
+                  return Response.json({ retry_after: 0.001 }, { status: 429 });
                 }
-              : undefined,
+                return post(...args);
+              },
+            }),
+            fetchGuild: async () => null,
+            fetchChannel: async () => ({ id: "lane-a", type: phase === "disabled-dm" ? 1 : 0 }),
+          } as never,
         });
         try {
           await vi.advanceTimersByTimeAsync(1_000);
-          await vi.waitFor(() => expect(processed).toHaveLength(2));
-          expect(processed).toEqual(["poison", "follower"]);
+          await vi.waitFor(() => expectRecord(queue, "follower", { kind: "completed" }));
           await expectRecord(queue, "poison", {
             kind: "failed",
-            record: { reason: "retry-limit-exceeded" },
+            record: {
+              reason: phase === "authentication" ? "authentication-failed" : "retry-limit-exceeded",
+            },
           });
-          await expectRecord(queue, "follower", { kind: "completed" });
+          const noticeAllowed = ["preflight", "authentication"].includes(phase);
+          expect(post).toHaveBeenCalledTimes(noticeAllowed ? 1 : 0);
+          if (noticeAllowed) {
+            expect(post.mock.calls[0]?.[0]).toContain("/channels/lane-a/messages");
+            const body = post.mock.calls[0]?.[1]?.body;
+            assert(typeof body === "string");
+            expect(JSON.parse(body)).toEqual({
+              content: expect.stringContaining("Please try again"),
+              message_reference: { message_id: "poison", fail_if_not_exists: false },
+              allowed_mentions: { parse: [], replied_user: false },
+            });
+          }
         } finally {
           await handler.deactivate();
         }
@@ -291,6 +346,8 @@ describe("Discord durable ingress settlement", () => {
 });
 
 afterEach(() => {
+  discordChannelInfoCacheState.entries.clear();
+  clearRuntimeConfigSnapshot();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });

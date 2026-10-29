@@ -2,24 +2,14 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
+import { cronTestInput } from "../service.fixture-builders.test-support.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
-import type { CronJobCreate } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { add, remove, update } from "./ops-mutations.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-mutation-completion" });
 const guarded = { commitGuard: () => {} };
-function makeInput(): CronJobCreate {
-  return {
-    name: "mutation completion",
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: "run" },
-  };
-}
 
 let storePath: string;
 let state: ReturnType<typeof createCronRegressionState>;
@@ -43,7 +33,7 @@ async function complete<T>(method: string, action: () => Promise<T>, committed: 
 
 it("records actual mutations while leaving declaration replay, rejection, and absent removal unmarked", async () => {
   const input = {
-    ...makeInput(),
+    ...cronTestInput(),
     declarationKey: "plugin:test:completion",
     payload: { kind: "agentTurn" as const, message: "run", toolsAllow: ["*"] },
   };
@@ -90,7 +80,7 @@ it("leaves completion unmarked when the native commit fails", async () => {
       END;
     `);
   try {
-    await expect(completion.run(() => add(state, makeInput(), guarded))).rejects.toThrow(
+    await expect(completion.run(() => add(state, cronTestInput(), guarded))).rejects.toThrow(
       "FOREIGN KEY constraint failed",
     );
     expect((await loadCronStore(storePath)).jobs).toHaveLength(0);

@@ -53,6 +53,47 @@ describe("worktree Git size estimates", () => {
     return { root, source, origin, clone, commit, missing };
   }
 
+  it("reuses unchanged blob sizes when a complete commit advances", async () => {
+    const root = tempDirs.make("openclaw-complete-worktree-");
+    const repo = await initializeGitFixture(root, "repo", "base.txt", "base\n");
+    const commands = vi.spyOn(commandExec, "runCommandBuffered");
+    const calls = (arg: string) => commands.mock.calls.filter(([argv]) => argv.includes(arg));
+    await expect(estimateWorktreeGitBytes(repo, "HEAD")).resolves.toBe(4096);
+    expect(calls("--missing=print")).toHaveLength(0);
+    await fs.writeFile(path.join(repo, "large.txt"), "x".repeat(5000));
+    await git(repo, "add", ".");
+    await git(repo, "commit", "-m", "advance complete base");
+    await expect(estimateWorktreeGitBytes(repo, "HEAD")).resolves.toBe(12_288);
+
+    expect(calls("ls-tree")).toHaveLength(1);
+    expect(calls("--missing=print")).toHaveLength(1);
+  });
+
+  it.each(["blob", "commit"])("sizes the target when a cached %s is gone", async (missing) => {
+    const root = tempDirs.make("openclaw-collected-checkout-size-");
+    const repo = await initializeGitFixture(root, "repo", "old.txt", "x".repeat(5000));
+    const oldCommit = await git(repo, "rev-parse", "HEAD");
+    const oldBlob = await git(repo, "rev-parse", "HEAD:old.txt");
+    const origin = path.join(root, "origin.git");
+    await git(root, "clone", "--bare", repo, origin);
+    await git(repo, "remote", "add", "origin", origin);
+    await git(repo, "config", "remote.origin.promisor", "true");
+    await expect(estimateWorktreeGitBytes(repo, "HEAD")).resolves.toBe(8192);
+
+    await git(repo, "rm", "old.txt");
+    await fs.writeFile(path.join(repo, "new.txt"), "new\n");
+    await git(repo, "add", "new.txt");
+    const tree = await git(repo, "write-tree");
+    const target = await git(repo, "commit-tree", tree, "-m", "replace source history");
+    await git(repo, "update-ref", "refs/heads/main", target);
+    const object = missing === "blob" ? oldBlob : oldCommit;
+    await fs.unlink(path.join(repo, ".git", "objects", object.slice(0, 2), object.slice(2)));
+    const commands = vi.spyOn(gitExec, "executeGitCommandBytes");
+
+    await expect(estimateWorktreeGitBytes(repo, "HEAD")).resolves.toBe(4096);
+    expect(commands.mock.calls.filter(([, args]) => args[0] === "fetch")).toHaveLength(0);
+  });
+
   it("hydrates a partial-clone default before advancing the local branch", async () => {
     const { clone, commit } = await partialClone();
     const now = Date.now();
@@ -101,14 +142,23 @@ describe("worktree Git size estimates", () => {
         await git(clone, "config", "--unset", "remote.origin.promisor");
       }
       const commandSpy = vi.spyOn(gitExec, "executeGitCommandBytes");
-      const bufferedSpy = vi.spyOn(commandExec, "runCommandBuffered");
+      const runBuffered = commandExec.runCommandBuffered;
+      const bufferedSpy = vi
+        .spyOn(commandExec, "runCommandBuffered")
+        .mockImplementation((argv, options) => {
+          // Older Git ignores GIT_NO_LAZY_FETCH; transport denial must still prevent per-blob fetches.
+          const executionOptions = argv.includes("ls-tree")
+            ? { ...options, env: { ...options?.env, GIT_NO_LAZY_FETCH: "0" } }
+            : options;
+          return runBuffered(argv, executionOptions);
+        });
       const packetTrace = path.join(clone, "hydrate-packets.log");
       vi.stubEnv("GIT_TRACE_PACKET", packetTrace);
-      const objectsBefore = new Set(
+      const objects = async () =>
         (await git(clone, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")).split(
           "\n",
-        ),
-      );
+        );
+      const objectsBefore = new Set(await objects());
       const configBefore = await fs.readFile(path.join(clone, ".git", "config"), "utf8");
       const refsBefore = await git(clone, "show-ref");
       const fetchHeadBefore = await fs.readFile(path.join(clone, ".git", "FETCH_HEAD"), "utf8");
@@ -118,10 +168,7 @@ describe("worktree Git size estimates", () => {
       expect(
         new Set([...packets.matchAll(/>\s+want ([0-9a-f]{40})/gu)].map((match) => match[1])),
       ).toEqual(new Set(missing));
-      const objectsAfter = (
-        await git(clone, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
-      ).split("\n");
-      expect(new Set(objectsAfter.filter((oid) => !objectsBefore.has(oid)))).toEqual(
+      expect(new Set((await objects()).filter((oid) => !objectsBefore.has(oid)))).toEqual(
         new Set(missing),
       );
       expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
@@ -135,17 +182,17 @@ describe("worktree Git size estimates", () => {
       const fetchOptions = fetches[0]?.[2];
       expect(fetchOptions?.timeoutMs).toBe(300_000);
       const input = fetchOptions?.input;
+      expect(typeof input === "string" ? input : Buffer.from(input ?? []).toString("utf8")).toBe(
+        `${missing.join("\n")}\n`,
+      );
+      const sizes = bufferedSpy.mock.calls.filter(
+        ([argv]) => argv[0] === "git" && argv.includes("ls-tree"),
+      );
+      expect(sizes).toHaveLength(2);
+      expect(sizes[0]?.[1]?.env?.GIT_NO_LAZY_FETCH).toBe("1");
       expect(
-        typeof input === "string"
-          ? input
-          : input === undefined
-            ? undefined
-            : Buffer.from(input.buffer, input.byteOffset, input.byteLength).toString("utf8"),
-      ).toBe(`${missing.join("\n")}\n`);
-      expect(
-        bufferedSpy.mock.calls.find(([argv]) => argv[0] === "git" && argv.includes("ls-tree"))?.[1]
-          ?.env?.GIT_NO_LAZY_FETCH,
-      ).toBe("1");
+        bufferedSpy.mock.calls.filter(([argv]) => argv.includes("--missing=print")),
+      ).toHaveLength(1);
       commandSpy.mockClear();
       await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
       expect(commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch").length).toBe(0);
@@ -292,6 +339,7 @@ describe("worktree Git size estimates", () => {
   it("budgets each changed destination path with raw names and without credit for source deletions", async () => {
     const { source } = await partialClone();
     const base = await git(source, "rev-parse", "HEAD");
+    await expect(estimateWorktreeGitBytes(source, base)).resolves.toBe(16_384);
     await git(source, "rm", "base.txt");
     await fs.writeFile(path.join(source, "small.txt"), "y".repeat(5000));
     await fs.writeFile(path.join(source, "copy-a.txt"), "same\n");
@@ -301,18 +349,21 @@ describe("worktree Git size estimates", () => {
     await git(source, "add", ".");
     await git(source, "commit", "-m", "overlay with duplicate blobs and unusual path");
     const target = await git(source, "rev-parse", "HEAD");
+    const commands = vi.spyOn(commandExec, "runCommandBuffered");
 
     await expect(estimateWorktreeCheckoutTransitionBytes(source, base, target)).resolves.toEqual({
       targetBytes: 24_576,
       changedBytes: 24_576,
       requiresFullCheckout: false,
     });
+    expect(commands.mock.calls.filter(([argv]) => argv.includes("diff-tree"))).toHaveLength(1);
   });
 
   it.each([".gitattributes", "nested/.gitattributes"])(
     "budgets the full target when changing %s requires rematerializing unchanged files",
     async (attributesPath) => {
       const { source, commit } = await partialClone();
+      await estimateWorktreeGitBytes(source, commit);
       await fs.mkdir(path.dirname(path.join(source, attributesPath)), { recursive: true });
       await fs.writeFile(path.join(source, attributesPath), "*.txt text eol=crlf\n");
       await git(source, "add", attributesPath);

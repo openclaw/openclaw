@@ -93,6 +93,7 @@ export function repairStateSchema(
   env: NodeJS.ProcessEnv,
   scope: "automatic" | "doctor" | "readability" | "indexes" | "version",
   integrityCheck: "quick" | "full" = "quick",
+  legacyCronDefaultStoreKey?: string,
 ): {
   changes: string[];
   warnings: string[];
@@ -102,7 +103,7 @@ export function repairStateSchema(
   const db = openNodeSqliteDatabase(pathname, { enableForeignKeyConstraints: false });
   try {
     return runUpdateSqliteMigration(db, pathname, () =>
-      repairOpenedStateSchema(db, pathname, env, scope, integrityCheck),
+      repairOpenedStateSchema(db, pathname, env, scope, integrityCheck, legacyCronDefaultStoreKey),
     );
   } finally {
     if (db.isOpen) {
@@ -118,6 +119,7 @@ function repairOpenedStateSchema(
   env: NodeJS.ProcessEnv,
   scope: "automatic" | "doctor" | "readability" | "indexes" | "version",
   integrityCheck: "quick" | "full",
+  legacyCronDefaultStoreKey?: string,
 ): { changes: string[]; warnings: string[] } {
   const rebuiltIndexNames = new Set<string>();
   let indexChanges: string[] = [];
@@ -143,9 +145,17 @@ function repairOpenedStateSchema(
     ensureOpenClawStatePermissions(pathname, env);
     if (scope === "automatic") {
       return {
-        changes: ensureOpenClawStateRuntimeSchema(db, pathname, env, {
-          kind: "existing",
-        }),
+        changes: ensureOpenClawStateRuntimeSchema(
+          db,
+          pathname,
+          env,
+          {
+            kind: "existing",
+          },
+          undefined,
+          false,
+          legacyCronDefaultStoreKey,
+        ),
         warnings: [],
       };
     }
@@ -171,6 +181,8 @@ function repairOpenedStateSchema(
             return [];
           }
           const applied = migrateBoundedStateSchema(db, previousVersion, {
+            env,
+            legacyCronDefaultStoreKey,
             versionMigrationOnly: true,
           });
           if (!applied) {
@@ -339,7 +351,10 @@ function repairOpenedStateSchema(
         }
         if (previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
           openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
-          const boundedChanges = migrateBoundedStateSchema(db, previousVersion);
+          const boundedChanges = migrateBoundedStateSchema(db, previousVersion, {
+            env,
+            legacyCronDefaultStoreKey,
+          });
           if (boundedChanges) {
             applied.push(...boundedChanges);
             markCurrentStateSchemaVersion(db);
@@ -395,7 +410,7 @@ function repairOpenedStateSchema(
           }
           ensureAdditiveStateColumns(db, "repair");
           for (const migration of versionedStateMigrations) {
-            if (migration.migrate(db, previousVersion)) {
+            if (migration.migrate(db, previousVersion, { env, legacyCronDefaultStoreKey })) {
               applied.push(migration.applied);
             }
           }

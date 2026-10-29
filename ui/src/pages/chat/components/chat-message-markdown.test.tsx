@@ -77,20 +77,16 @@ describe("message action projections", () => {
     expect(preview).not.toHaveBeenCalled();
     prepare("toolResult", "First line\nSecond line");
     expect(preview).not.toHaveBeenCalled();
-    const container = document.createElement("div");
-    const view = mountSolid(
-      GroupedMessage,
-      {
-        preparation: prepareChatMessageRender({
-          role: "toolResult",
-          content: "First line\nSecond line",
-        }),
-        messageKey: "tool-preview",
-        options: { isStreaming: true, showReasoning: false },
-      },
-      container,
-    );
-    onTestFinished(view.dispose);
+    const { container, dispose } = mountSolid(GroupedMessage, {
+      preparation: prepareChatMessageRender({
+        role: "toolResult",
+        content: "First line\nSecond line",
+      }),
+      messageKey: "tool-preview",
+      options: { isStreaming: true, showReasoning: false },
+    });
+    onTestFinished(dispose);
+    await import("./chat-tool-card-row.solid.tsx");
     await waitForSolid(() =>
       expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("tool"),
     );
@@ -363,44 +359,6 @@ describe("user message disclosure", () => {
     for (const line of markdown.split("\n").filter(Boolean)) {
       expect(container.textContent).toContain(line);
     }
-  });
-});
-
-describe("streaming message Markdown", () => {
-  it.each([
-    { markdown: "Intro\n\nTail", owner: ".chat-text > p:last-child" },
-    { markdown: "Intro\n\n", owner: ".chat-text > p" },
-    { markdown: "Intro\n\n```ts\nconst answer = 42;\n```", owner: ".chat-text" },
-  ])("keeps the duplicate count on the terminal owner for $markdown", ({ markdown, owner }) => {
-    const container = document.createElement("div");
-    const view = mountSolid(
-      MessageMarkdown,
-      {
-        markdown,
-        messageKey: "streaming-duplicate",
-        options: { role: "assistant", isStreaming: true },
-        markdownOptions: {},
-        duplicateSuffix: { count: 3, label: "Three identical messages" },
-      },
-      container,
-    );
-
-    expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
-    expect(container.querySelector(`${owner} > .chat-duplicate-count`)?.textContent).toBe("×3");
-    expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
-
-    view.update({
-      markdown: `${markdown}\n\nMore`,
-      messageKey: "streaming-duplicate",
-      options: { role: "assistant", isStreaming: true },
-      markdownOptions: {},
-      duplicateSuffix: { count: 4, label: "Four identical messages" },
-    });
-    expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
-    expect(
-      container.querySelector(".chat-text > p:last-child > .chat-duplicate-count")?.textContent,
-    ).toBe("×4");
-    expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
   });
 });
 

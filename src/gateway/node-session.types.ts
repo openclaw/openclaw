@@ -6,6 +6,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
+import type { SerializedEventPayload } from "./node-event-payload.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 /** Connected node session advertised over Gateway websocket. */
@@ -48,4 +49,39 @@ export type NodeSession = {
   presenceActivitySource?: "app" | "system";
   hostStats?: NodeHostStats;
   desktopAvailability?: DesktopAvailability;
+};
+
+export type NodeSessionConnectParams = GatewayWsClient["connect"] &
+  Partial<
+    Pick<
+      NodeSession,
+      | "declaredCaps"
+      | "declaredCommands"
+      | "declaredComputerUse"
+      | "declaredPermissions"
+      | "sessionCapsCeiling"
+      | "sessionCommandsCeiling"
+      | "coreVersion"
+      | "uiVersion"
+    >
+  > & {
+    withheldCommands?: string[];
+  };
+
+export type NodeEventPayloadPreparation = (connId: string) =>
+  | {
+      payloadJSON: SerializedEventPayload | null;
+      onSent?: () => void;
+    }
+  | undefined;
+
+export type NodeConnectivityResult =
+  | { ok: true }
+  | { ok: false; error: { code: string; message: string } };
+
+/** Event transport for nodes that cannot keep a WebSocket open, such as watchOS. */
+export type NodeEventTransport = {
+  send: (event: string, payload: unknown) => boolean;
+  sendRaw: (event: string, payloadJSON?: SerializedEventPayload | null) => boolean;
+  checkConnectivity?: (timeoutMs: number) => Promise<NodeConnectivityResult>;
 };

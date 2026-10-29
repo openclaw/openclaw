@@ -124,9 +124,16 @@ export async function applyRetiredConfigStep(params: {
   doctorFixCommand: string;
   sourceConfig: OpenClawConfig;
   emitChanges: (changeLines: readonly string[]) => void;
+  preflight?: {
+    heartbeatMigrationDeferred?: true;
+    cronStoreSelectionUnresolved?: true;
+  };
 }): Promise<DoctorConfigMutationState> {
   let state = params.state;
-  if (params.shouldRepair) {
+  if (params.preflight?.heartbeatMigrationDeferred) {
+    return state;
+  }
+  if (params.shouldRepair && !params.preflight?.cronStoreSelectionUnresolved) {
     const { tryProjectRetiredHeartbeatConfig } = await import("../../doctor-heartbeat-legacy.js");
     const { retireHeartbeatWithDoctor } = await import("../../doctor-heartbeat-retirement.js");
     const retiredConfig = tryProjectRetiredHeartbeatConfig(state.candidate)

@@ -1,6 +1,7 @@
 /** Owns the execution deadline, approval pauses, and one compaction grace. */
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { createChangeListeners } from "../../../shared/listeners.js";
+import { monotonicNow } from "../../../shared/monotonic-time.js";
 import { observeAgentRunApprovalWait } from "../../agent-run-approval-wait.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { log } from "../logger.js";
@@ -11,7 +12,12 @@ import {
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type ExecutionDeadline =
-  | { kind: "bounded"; deadlineAtMs: number; compactionGraceUsed: boolean }
+  | {
+      kind: "bounded";
+      deadlineAtMs: number;
+      monotonicDeadlineMs: number;
+      compactionGraceUsed: boolean;
+    }
   | { kind: "paused"; remainingMs: number; compactionGraceUsed: boolean }
   | { kind: "unlimited" }
   | { kind: "closed" };
@@ -60,9 +66,11 @@ export function prepareEmbeddedAttemptTimeout(input: {
   runAbortSignal.addEventListener("abort", clearTimers, { once: true });
 
   const scheduleAbortTimer = (delayMs: number, compactionGraceUsed: boolean) => {
+    const monotonicDeadlineMs = monotonicNow() + Math.max(1, delayMs);
     const armed = {
       kind: "bounded" as const,
       deadlineAtMs: Date.now() + Math.max(1, delayMs),
+      monotonicDeadlineMs,
       compactionGraceUsed,
     };
     deadline = armed;
@@ -124,9 +132,11 @@ export function prepareEmbeddedAttemptTimeout(input: {
     if (pending && deadline.kind === "bounded") {
       // Human review preserves the unused execution or compaction-grace budget;
       // the lane and async-task waiter must not retain its old wall-clock deadline.
+      // Compute remaining on the monotonic clock so a wall-clock jump during the
+      // approval pause cannot shrink or stretch the remaining budget.
       deadline = {
         kind: "paused",
-        remainingMs: Math.max(1, deadline.deadlineAtMs - Date.now()),
+        remainingMs: Math.max(1, deadline.monotonicDeadlineMs - monotonicNow()),
         compactionGraceUsed: deadline.compactionGraceUsed,
       };
       clearTimeout(abortTimer);

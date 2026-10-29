@@ -10,6 +10,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -201,7 +202,7 @@ export type SessionStoreTargetInventoryRequest = {
   env: NodeJS.ProcessEnv;
   paths: CapturedSessionStorePaths;
   candidates: SessionStoreReadCandidate[];
-  recoveryExclusions?: { agentIds: string[]; storePaths: string[] };
+  recoveryExclusions?: { agentIds: string[]; storePaths: string[]; databasePaths: string[] };
   registryDiscovery?: {
     agentIds: string[];
     roots: Array<{ path: string; physicalPath: string }>;
@@ -373,6 +374,7 @@ export function prepareSessionStoreTargetInventory(
   inputAgentIds: readonly string[],
   inputEnv?: NodeJS.ProcessEnv,
   selection?: SessionStoreTargetInventoryRequest["selection"],
+  admission: "read" | "write" = "write",
 ): Omit<SessionStoreTargetInventoryRequest, "registeredDatabases"> {
   const environment = captureSessionStoreEnvironment(cfg, inputEnv);
   const { config, env, stateDir, serialized } = environment;
@@ -385,12 +387,14 @@ export function prepareSessionStoreTargetInventory(
   const configuredPaths = (environment.configuredPaths ??= new Map(
     listConfiguredSessionStoreAgentIds(config).map((agentId) => [agentId, capturePaths(agentId)]),
   ));
-  // Recovery skips unavailable stores before discovery can join their native opening.
+  // Background inventories skip unavailable stores before joining their native opening.
   // The preparing owner can still discover its own borrowed admission.
   const refusals =
-    selection === "recovery"
+    selection === "recovery" || selection === "configured"
       ? listAgentDatabaseAdmissionRefusals({ env }).filter((refusal) =>
-          readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }),
+          admission === "read"
+            ? readAgentDatabaseReadAdmissionRefusal(refusal.agentId, { env })
+            : readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }),
         )
       : [];
   const excludedAgentIds = new Set(refusals.map((refusal) => refusal.agentId));
@@ -486,6 +490,7 @@ export function prepareSessionStoreTargetInventory(
       ? {
           recoveryExclusions: {
             agentIds: [...excludedAgentIds],
+            databasePaths: [...excludedDatabasePaths],
             storePaths: excludedStorePaths,
           },
         }
@@ -607,7 +612,9 @@ export function readSessionStoreTargetInventory(
         });
       } else {
         dedupeSessionStoreTargetsBySqliteTarget(
-          resolveConfiguredSessionStoreTargets(config, env, request.paths),
+          resolveConfiguredSessionStoreTargets(config, env, request.paths).filter(
+            (target) => !options.excludeTarget(target),
+          ),
           options,
         );
       }

@@ -78,10 +78,8 @@ const enNewSessionSetup = {
     followUpsAdmissionFailed: runtime.followUpsAdmissionFailed,
     createFailed: runtime.createFailed,
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
-    preferenceSaveUnconfirmed:
-      "Saving your new-session choices could not be confirmed. Check them before starting a session.",
-    worktreeNameClearUnconfirmed:
-      "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
+    preferenceSaveUnconfirmed: runtime.preferenceSaveUnconfirmed,
+    worktreeNameClearUnconfirmed: runtime.worktreeNameClearUnconfirmed,
     agent: "Agent",
     agents: "Agents",
     where: "Where",
@@ -139,6 +137,8 @@ const enNewSessionSetup = {
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
+    draftUnavailable:
+      "Draft creation is disabled. Your message and attachments have been kept. Turn off Draft to create a Shared session, or ask an administrator to enable Draft creation.",
     messagePlaceholder: "What should this session work on?",
     dictate: "Dictate",
     readingAttachment: "Reading attachment",

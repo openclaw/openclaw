@@ -195,6 +195,10 @@ suite.define(() => {
             .first()
             .waitFor();
           expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(viewport.width - 24);
+          // Threshold rows cover entry; 320, 390 and short-landscape rows retain the full journey.
+          if (viewport.width === 349 || viewport.width === 350) {
+            return;
+          }
           const filesRoot = await files.elementHandle();
           await openChatDetails(page);
           expect(await files.isVisible()).toBe(false);

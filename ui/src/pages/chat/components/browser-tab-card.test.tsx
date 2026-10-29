@@ -15,7 +15,7 @@ import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { ActivityGroup } from "./chat-message-group-view.tsx";

@@ -1,4 +1,5 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { throwExpectedCliError } from "../cli/failure-output.js";
@@ -57,7 +58,9 @@ export async function agentsBindingsCommand(opts: { agent?: string; json?: boole
 
   if (filtered.length === 0) {
     runtime.log(
-      filterAgentId ? `No routing bindings for agent "${filterAgentId}".` : "No routing bindings.",
+      filterAgentId
+        ? terminalText`No routing bindings for agent "${filterAgentId}".`
+        : "No routing bindings.",
     );
     return;
   }
@@ -66,7 +69,8 @@ export async function agentsBindingsCommand(opts: { agent?: string; json?: boole
     [
       "Routing bindings:",
       ...filtered.map(
-        (binding) => `- ${normalizeAgentId(binding.agentId)} <- ${describeBinding(binding)}`,
+        (binding) =>
+          terminalText`- ${normalizeAgentId(binding.agentId)} <- ${describeBinding(binding)}`,
       ),
     ].join("\n"),
   );
@@ -164,8 +168,8 @@ export async function agentsUpdateBindingsCommand(
   if (removeAll && "removed" in payload) {
     runtime.log(
       payload.removed.length > 0
-        ? `Removed ${payload.removed.length} binding(s) for "${agentId}".`
-        : `No bindings to remove for agent "${agentId}".`,
+        ? terminalText`Removed ${payload.removed.length} binding(s) for "${agentId}".`
+        : terminalText`No bindings to remove for agent "${agentId}".`,
     );
     return;
   }
@@ -187,7 +191,7 @@ export async function agentsUpdateBindingsCommand(
     if (descriptions.length > 0) {
       runtime.log(heading);
       for (const description of descriptions) {
-        runtime.log(`- ${description}`);
+        runtime.log(terminalText`- ${description}`);
       }
     }
   }
@@ -198,7 +202,7 @@ export async function agentsUpdateBindingsCommand(
         : "Bindings are owned by another agent:",
     );
     for (const conflict of payload.conflicts) {
-      runtime.error(`- ${conflict}`);
+      runtime.error(terminalText`- ${conflict}`);
     }
     runtime.exit(1);
   }

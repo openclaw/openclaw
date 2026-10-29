@@ -4,8 +4,8 @@ import { IdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import { resolveIdentityHue } from "../../lib/identity-avatar.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { participantPalette } from "../../lib/reactive/participant-palette.ts";
 import { ChatAuthorAvatar, UserAvatarSlot } from "../chat/components/chat-author-avatar.ts";
 import { hasUserFileAttachments } from "../chat/components/chat-message-attachments.ts";
 import { AssistantAttachments, MessageImages } from "../chat/components/chat-message-deferred.tsx";
@@ -23,10 +23,6 @@ export function NewSessionSubmission(props: {
 }) {
   const key = "new-session-submission";
   const normalized = createMemo(() => normalizeMessage(props.message));
-  const senderHue = createMemo(() => {
-    const sender = normalized().sender;
-    return sender ? resolveIdentityHue(sender) : null;
-  });
   const media = createMemo(() => projectMessageMedia(props.message, normalized().content));
   const hasUserFiles = createMemo(() => hasUserFileAttachments(media().attachments));
   const markdown = createMemo(() => resolveMessageDisplayMarkdown(props.message, normalized()));
@@ -39,11 +35,8 @@ export function NewSessionSubmission(props: {
   return (
     <div class="new-session-page__starting chat-thread-inner">
       <div
-        class={[
-          "chat-group user chat-group--with-footer",
-          { "chat-group--sender-tint": senderHue() !== null },
-        ]}
-        style={senderHue() === null ? undefined : `--chat-sender-hue: ${senderHue()}`}
+        class="chat-group user chat-group--with-footer"
+        style={participantPalette.read()?.style(null)}
         data-chat-row-key={key}
       >
         <Show when={props.avatarPlacement === "gutter" ? normalized().sender : undefined}>

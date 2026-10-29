@@ -605,10 +605,10 @@ describe("provider local service", () => {
     // Advance only the nested host's readiness clock after the service PID exists.
     // This preserves live-child failure cleanup without spending the deadline in wall time.
     const script = [
-      `const realNow = Date.now.bind(Date);`,
+      `const realNow = performance.now.bind(performance);`,
       `const realSetTimeout = globalThis.setTimeout.bind(globalThis);`,
       `let clockOffsetMs = 0;`,
-      `Date.now = () => realNow() + clockOffsetMs;`,
+      `performance.now = () => realNow() + clockOffsetMs;`,
       `globalThis.setTimeout = (callback, delay, ...args) => {`,
       `  if (clockOffsetMs === 0 && fs.existsSync(${JSON.stringify(servicePidPath)})) {`,
       `    return realSetTimeout(() => {`,

@@ -1,16 +1,16 @@
-/** Runs complete model-catalog discovery outside the Gateway event loop. */
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   getConfigResolutionFacts,
   serializeConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { resolveCodexClientVersion } from "../plugin-sdk/codex-client-version-runtime.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import {
   getPluginCacheRetirementSignal,
   getPluginMetadataSnapshotCache,
@@ -27,9 +27,12 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getActiveSkillEnvKeysCore } from "../skills/runtime/env-overrides.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { beginAuthProfileCredentialBatch } from "../state/user-model-account-authority.js";
+/** Runs complete model-catalog discovery outside the Gateway event loop. */
+import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
+import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import {
   CatalogWorkerTaskPool,
   GATEWAY_CATALOG_WORKERS,
@@ -62,6 +65,8 @@ import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
+// Acknowledgements contain no payloads and expire with the physical singleton pool.
+const acknowledgedContexts = new WeakMap<CatalogPool, Map<string | undefined, string>>();
 type CatalogPoolBorrower = {
   agentDir: string;
   isCurrent: () => boolean;
@@ -265,6 +270,10 @@ export function createPreparedModelCatalogWorkerInput(params: {
       configuredRuntimeModels: params.agentFacts.configuredRuntimeModels,
     },
     preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
+    // Receipt overlays do not change inventory identity; reuse the immutable owner's fact.
+    installedIndexFingerprint: resolveInstalledManifestRegistryIndexFingerprint(
+      pluginMetadataSnapshot.index,
+    ),
     pluginMetadataSnapshot: {
       ...pluginMetadataSnapshot,
       index,
@@ -300,6 +309,12 @@ export function createPreparedModelCatalogWorker(
   },
 ): PreparedModelCatalogWorker {
   const workerInput = createPreparedModelCatalogWorkerInput(params);
+  const context = prepareModelCatalogWorkerContext(workerInput);
+  const {
+    remoteCatalog: _remoteCatalog,
+    pluginMetadataSnapshot: _metadata,
+    ...requestInput
+  } = workerInput;
   // Parent probes retain the canonical generation; only the worker restores a cloned payload.
   const metadataSnapshot = params.pluginMetadataSnapshot;
   const superseded = () =>
@@ -340,6 +355,7 @@ export function createPreparedModelCatalogWorker(
   };
   let receiveResult = validate;
   const stop = async (error: Error) => {
+    materializeErrorStack(error);
     stoppedError ??= error;
     params.retirementSignal.removeEventListener("abort", retire);
     for (const controller of captures.keys()) {
@@ -464,9 +480,19 @@ export function createPreparedModelCatalogWorker(
         shared?.pool ??
         pool ??
         new CatalogWorkerTaskPool(workerInput.input.env, (result) => receiveResult(result));
+      let acknowledged = acknowledgedContexts.get(requestPool);
+      if (!acknowledged) {
+        acknowledged = new Map();
+        acknowledgedContexts.set(requestPool, acknowledged);
+      }
+      const contexts = acknowledged;
       pending = requestPool.run(
         () => {
           assertCurrent();
+          const reuse = contexts.get(context.workspaceDir) === context.fingerprint;
+          // Consume before dispatch: cancellation or a thrown worker failure cannot leave
+          // a stale acknowledgement for the next queued request. Success republishes it.
+          contexts.delete(context.workspaceDir);
           // The existing budget now bounds idle admission, renewed only by verified members.
           expire = () => {
             const failure = new PreparedModelCatalogAdmissionStalledError(
@@ -482,7 +508,9 @@ export function createPreparedModelCatalogWorker(
           task.onRecovery = onRecovery;
           const workerRequest = {
             ...value,
-            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
+            templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({
+              env: input.env,
+            }),
           };
           const publication = beginAuthProfileCredentialBatch(
             captureOpenClawStateWorkerContext({ env: input.env }),
@@ -495,11 +523,14 @@ export function createPreparedModelCatalogWorker(
             credentials = undefined;
             receiveResult = validate;
             validate(result);
+            if (result.status === "ok") {
+              contexts.set(context.workspaceDir, context.fingerprint);
+            }
           };
           if (shared) {
             shared.validate = receiveResult;
           }
-          return { value: workerInput, request: workerRequest };
+          return { context, value: reuse ? requestInput : workerInput, request: workerRequest };
         },
         {
           signal: controller.signal,

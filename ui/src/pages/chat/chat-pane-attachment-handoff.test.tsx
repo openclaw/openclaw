@@ -29,12 +29,13 @@ import {
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
 import { registerChatPane } from "./chat-pane-elements.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
 import {
   captureChatCommandComposerRecovery,
   settleChatCommandComposer,
 } from "./chat-send-composer.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
@@ -288,7 +289,8 @@ describe("cross-region Home composer ownership", () => {
         showInputs: false,
       });
       expect(
-        container.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
+        container.querySelector<HTMLElement>(".chat-attachment-loading__line > span")?.style
+          .transform,
       ).toBe("scaleX(0.5)");
 
       if (outcome === "remove") {

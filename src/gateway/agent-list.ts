@@ -14,7 +14,9 @@ import {
   readAgentDatabaseAdmissionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
+import { getPreparedAgentDeletionDiscovery } from "../state/agent-deletion-journal-status.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 
 type GatewayAgentListRow = {
@@ -105,11 +107,10 @@ export async function listGatewayAgentsBasic(cfg: OpenClawConfig): Promise<
     orderedIds.push(mainKey);
   }
 
-  const { snapshot } = await prepareAgentDatabaseDeletionSnapshotRead(
-    {},
-    "runtime-discovery",
-  ).read();
-  const disposition = snapshot?.retainedDeletions;
+  const disposition =
+    getPreparedAgentDeletionDiscovery(resolveOpenClawStateSqlitePath()) ??
+    (await prepareAgentDatabaseDeletionSnapshotRead({}, "runtime-discovery").read()).snapshot
+      ?.retainedDeletions;
   const deletions =
     disposition?.status === "present"
       ? disposition.entries

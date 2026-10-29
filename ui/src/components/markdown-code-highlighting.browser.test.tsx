@@ -32,7 +32,10 @@ it("highlights the remaining source after native expansion of a settled long fen
   ));
   flush();
   const code = view.container.querySelector("code")!;
-  await expect.poll(() => code.querySelectorAll(".hljs-keyword").length).toBe(7);
+  // The first visible fence starts the native worker and loads its grammar.
+  await expect
+    .poll(() => code.querySelectorAll(".hljs-keyword").length, { timeout: 5_000 })
+    .toBe(7);
   await page.getByRole("button", { name: /Show \d+ hidden lines/ }).click();
   await expect.poll(() => code.querySelectorAll(".hljs-keyword").length).toBe(400);
   expect(code.textContent).toBe(source);

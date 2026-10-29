@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -11,12 +12,98 @@ const registry = vi.hoisted(() => ({
   readRegisteredSandboxRuntimeIds: vi.fn<() => Promise<string[]>>(),
   updateRegistry: vi.fn(),
 }));
+const builtinFactories = vi.hoisted(() => ({ docker: vi.fn(), podman: vi.fn() }));
+vi.mock("./docker-backend.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./docker-backend.js")>()),
+  createDockerSandboxBackend: builtinFactories.docker,
+  createPodmanSandboxBackend: builtinFactories.podman,
+}));
 vi.mock("./registry.js", () => registry);
 vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
   syncWorkspaceSkills: async () => [],
 }));
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.clearAllMocks());
+
+it.each(["docker", "podman"] as const)(
+  "does not await plugin runtime discovery for built-in %s setup",
+  async (backend) => {
+    const root = roots.make("sandbox-builtin-discovery-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+      using _ = custody.acquireOwner(root);
+      registry.readRegisteredSandboxRuntimeIds.mockImplementation(async () => {
+        throw new Error("Built-in setup must not wait for plugin runtime discovery");
+      });
+      builtinFactories[backend].mockResolvedValueOnce({
+        id: backend,
+        runtimeId: "synthetic-builtin",
+        runtimeLabel: "Synthetic built-in",
+        workdir: "/workspace",
+        buildExecSpec: vi.fn(),
+        runShellCommand: vi.fn(),
+      });
+      try {
+        const context = await custody.prepareContext(
+          custody.createConfig({ backend }),
+          "agent:main:subagent:builtin",
+          path.join(root, "workspace"),
+        );
+        expect(context?.backendId).toBe(backend);
+        expect(registry.readRegisteredSandboxRuntimeIds).not.toHaveBeenCalled();
+      } finally {
+        registry.readRegisteredSandboxRuntimeIds.mockReset();
+      }
+    });
+  },
+);
+
+it("checks physical custody once per runtime assertion and refuses a successor owner", async () => {
+  const root = roots.make("sandbox-owner-assertion-");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+    const owner = custody.acquireOwner(root);
+    let assertCurrent: (() => void) | undefined;
+    const restore = registerSandboxBackend("owner-assertion", async (params) => {
+      assertCurrent = params.assertRuntimeCurrent;
+      return {
+        id: "owner-assertion",
+        runtimeId: "synthetic-owner-assertion",
+        runtimeLabel: "Synthetic owner assertion",
+        workdir: "/workspace",
+        buildExecSpec: vi.fn(),
+        runShellCommand: vi.fn(),
+      };
+    });
+    let successor: ReturnType<typeof custody.acquireOwner> | undefined;
+    try {
+      registry.readRegisteredSandboxRuntimeIds.mockResolvedValueOnce([]);
+      await custody.prepareContext(
+        custody.createConfig({ backend: "owner-assertion" }),
+        "agent:main:subagent:owner-assertion",
+        path.join(root, "workspace"),
+      );
+      expect(assertCurrent).toBeDefined();
+      const stat = vi.spyOn(fs, "lstatSync");
+      try {
+        assertCurrent!();
+        // fs-safe brackets one physical custody verification with two leaf observations.
+        expect(stat.mock.calls.filter(([pathname]) => pathname === owner.path)).toHaveLength(2);
+      } finally {
+        stat.mockRestore();
+      }
+      fs.unlinkSync(owner.path);
+      expect(assertCurrent).toThrow();
+      owner.release();
+      successor = custody.acquireOwner(root);
+      expect(assertCurrent).toThrow();
+      expect(() => successor?.assertCurrent()).not.toThrow();
+    } finally {
+      successor?.release();
+      owner.release();
+      restore();
+    }
+  });
+});
 
 it("rejects released hosted custody before ordinary sandbox backend provisioning", async () => {
   const root = roots.make("sandbox-owner-lifetime-");

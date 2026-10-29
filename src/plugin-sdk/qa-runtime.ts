@@ -1,5 +1,6 @@
 import { createServer } from "node:net";
 import path from "node:path";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { runExec } from "./process-runtime.js";
 import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
@@ -81,6 +82,14 @@ export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
   if (openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(statePath)) {
     await state.closeOpenClawStateDatabaseByPathAsync(statePath);
   }
+}
+
+export { initializeQaRuntimeState } from "./qa-state-initializer.js";
+
+/** Read startup facts through the same packaged owners as the QA initializer. */
+export async function snapshotQaStartupState(env: NodeJS.ProcessEnv) {
+  const { collectQaStartupState } = await import("./qa-startup-state.js");
+  return collectQaStartupState(env);
 }
 
 type QaRuntimeSurface = Pick<
@@ -320,12 +329,12 @@ export function createQaDockerRuntime(params: {
   ) => {
     const timeoutMs = deps.timeoutMs ?? 360_000;
     const pollMs = deps.pollMs ?? 1_000;
-    const startMs = Date.now();
+    const startMs = monotonicNow();
     const deadline = startMs + timeoutMs;
     let lastError: unknown = null;
 
-    while (Date.now() < deadline) {
-      const remainingMs = deadline - Date.now();
+    while (monotonicNow() < deadline) {
+      const remainingMs = deadline - monotonicNow();
       if (remainingMs <= 0) {
         break;
       }
@@ -351,13 +360,13 @@ export function createQaDockerRuntime(params: {
       } finally {
         await releaseQaDockerFetchResponse(response);
       }
-      const remainingSleepMs = deadline - Date.now();
+      const remainingSleepMs = deadline - monotonicNow();
       if (remainingSleepMs > 0) {
         await deps.sleepImpl(Math.min(pollMs, remainingSleepMs));
       }
     }
 
-    const elapsedSec = Math.round((Date.now() - startMs) / 1000);
+    const elapsedSec = Math.round((monotonicNow() - startMs) / 1000);
     const service = deps.label ?? url;
     const lines = [
       `${service} did not become healthy within ${elapsedSec}s (limit ${Math.round(timeoutMs / 1000)}s).`,
@@ -376,11 +385,11 @@ export function createQaDockerRuntime(params: {
     timeoutMs = 360_000,
     pollMs = 1_000,
   ) => {
-    const startMs = Date.now();
+    const startMs = monotonicNow();
     const deadline = startMs + timeoutMs;
     let lastStatus = "unknown";
 
-    while (Date.now() < deadline) {
+    while (monotonicNow() < deadline) {
       try {
         const { stdout } = await runCommand(
           "docker",
@@ -398,7 +407,7 @@ export function createQaDockerRuntime(params: {
       await sleepImpl(pollMs);
     }
 
-    const elapsedSec = Math.round((Date.now() - startMs) / 1000);
+    const elapsedSec = Math.round((monotonicNow() - startMs) / 1000);
     throw new Error(
       [
         `${service} did not become healthy within ${elapsedSec}s (limit ${Math.round(timeoutMs / 1000)}s).`,

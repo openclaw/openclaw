@@ -3,7 +3,6 @@ import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
 import setup from "../setup-api.js";
 import { migrateVoiceCallLegacyConfigInput } from "./config-migration.js";
 import {
@@ -42,10 +41,10 @@ describe("errand features config", () => {
       callbacks: { windowMinutes: 60 },
       voicemail: { onMachine: "leave-message", holdOpeningMaxMs: 45000 },
     });
-    expect(() => normalizeVoiceCallConfig({ voicemail: { holdOpeningMaxMs: 0 } })).toThrow();
-    expect(() => normalizeVoiceCallConfig({ callbacks: { windowMinutes: 0 } })).toThrow();
-    expect(() => normalizeVoiceCallConfig({ live: { minIntervalMs: 0 } })).toThrow();
-    expect(() => normalizeVoiceCallConfig({ voicemail: { detection: "unsupported" } })).toThrow();
+    rejectsConfig({ voicemail: { holdOpeningMaxMs: 0 } });
+    rejectsConfig({ callbacks: { windowMinutes: 0 } });
+    rejectsConfig({ live: { minIntervalMs: 0 } });
+    rejectsConfig({ voicemail: { detection: "unsupported" } });
   });
 
   it.each([
@@ -59,10 +58,10 @@ describe("errand features config", () => {
       expect(config.voicemail[key]).toBe(value);
     }
     for (const value of [minimum - step, maximum + step, minimum + 0.5]) {
-      expect(() => normalizeVoiceCallConfig({ voicemail: { [key]: value } })).toThrow();
+      rejectsConfig({ voicemail: { [key]: value } });
     }
     if (step > 1) {
-      expect(() => normalizeVoiceCallConfig({ voicemail: { [key]: minimum + 1 } })).toThrow();
+      rejectsConfig({ voicemail: { [key]: minimum + 1 } });
     }
   });
 });
@@ -94,25 +93,25 @@ function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
 }
 
+function rejectsConfig(input: unknown, error?: RegExp) {
+  expect(() => normalizeVoiceCallConfig(input)).toThrow(error);
+}
+
 const providerCredentials = [
-  {
-    provider: "twilio",
-    values: { accountSid: "AC123", authToken: "secret" },
-    env: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"],
-  },
-  {
-    provider: "telnyx",
-    values: { apiKey: "KEY123", connectionId: "CONN456", publicKey: "public-key" },
-    env: ["TELNYX_API_KEY", "TELNYX_CONNECTION_ID", "TELNYX_PUBLIC_KEY"],
-  },
-  {
-    provider: "plivo",
-    values: { authId: "MA123", authToken: "secret" },
-    env: ["PLIVO_AUTH_ID", "PLIVO_AUTH_TOKEN"],
-  },
+  [
+    "twilio",
+    { accountSid: "AC123", authToken: "secret" },
+    ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"],
+  ],
+  [
+    "telnyx",
+    { apiKey: "KEY123", connectionId: "CONN456", publicKey: "public-key" },
+    ["TELNYX_API_KEY", "TELNYX_CONNECTION_ID", "TELNYX_PUBLIC_KEY"],
+  ],
+  ["plivo", { authId: "MA123", authToken: "secret" }, ["PLIVO_AUTH_ID", "PLIVO_AUTH_TOKEN"]],
 ] as const;
 const providerEnv = [
-  ...providerCredentials.flatMap(({ env }): readonly string[] => env),
+  ...providerCredentials.flatMap((row): readonly string[] => row[2]),
   "TWILIO_FROM_NUMBER",
   "NGROK_AUTHTOKEN",
   "NGROK_DOMAIN",
@@ -121,23 +120,20 @@ const valid = { valid: true, errors: [] };
 const errorPrefix = "plugins.entries.voice-call.config.";
 
 describe("validateProviderConfig", () => {
-  const clearProviderEnv = () => {
+  beforeEach(() => {
     for (const name of providerEnv) {
       vi.stubEnv(name, undefined);
     }
-  };
-
-  beforeEach(clearProviderEnv);
+  });
   afterEach(() => vi.unstubAllEnvs());
 
-  it("passes validation when credentials come from config or environment", () => {
-    for (const { provider, values, env } of providerCredentials) {
-      clearProviderEnv();
+  it.each(providerCredentials)(
+    "resolves %s config/environment credentials and rejects blank environment values",
+    (provider, values, env) => {
       const fromConfig = { ...createBaseConfig(provider), [provider]: values };
       fromConfig.realtime.enabled = provider !== "plivo";
       fromConfig.inboundPolicy = "allowlist";
       expect(validateProviderConfig(fromConfig)).toEqual(valid);
-      clearProviderEnv();
       env.forEach((name, index) => vi.stubEnv(name, Object.values(values)[index]));
       if (provider === "twilio") {
         vi.stubEnv("TWILIO_FROM_NUMBER", "+15550001234");
@@ -150,16 +146,9 @@ describe("validateProviderConfig", () => {
         expect(fromEnv.fromNumber).toBe("+15550001234");
       }
       expect(validateProviderConfig(fromEnv)).toEqual(valid);
-    }
-  });
-
-  it("ignores blank provider and tunnel environment values", () => {
-    for (const { provider, values, env } of providerCredentials) {
-      clearProviderEnv();
       for (const name of providerEnv) {
         vi.stubEnv(name, "   ");
       }
-
       const config = resolveVoiceCallConfig(
         normalizeVoiceCallConfig({
           ...createBaseConfig(provider),
@@ -170,14 +159,9 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.valid).toBe(false);
-      expect([config.tunnel.ngrokAuthToken, config.tunnel.ngrokDomain]).toEqual([
-        undefined,
-        undefined,
-      ]);
-      for (const key of Object.keys(values)) {
-        expect(Reflect.get(config[provider] ?? {}, key)).toBeUndefined();
-      }
+      expect(config.tunnel).toMatchObject({ ngrokAuthToken: undefined, ngrokDomain: undefined });
       Object.keys(values).forEach((key, index) => {
+        expect(Reflect.get(config[provider] ?? {}, key)).toBeUndefined();
         if (key !== "publicKey") {
           expect(result.errors).toContain(
             `${errorPrefix}${provider}.${key} is required (or set ${env[index]} env)`,
@@ -190,11 +174,11 @@ describe("validateProviderConfig", () => {
           `${errorPrefix}fromNumber is required (or set TWILIO_FROM_NUMBER env)`,
         );
       }
-    }
-  });
+    },
+  );
   it("accepts supported Twilio Regions and rejects unknown ones", () => {
     expect(normalizeVoiceCallConfig({ twilio: { region: "ie1" } }).twilio?.region).toBe("ie1");
-    expect(() => normalizeVoiceCallConfig({ twilio: { region: "de1" } })).toThrow();
+    rejectsConfig({ twilio: { region: "de1" } });
   });
 
   it("accepts SecretRef-backed auth tokens before runtime resolution", () => {
@@ -272,17 +256,13 @@ describe("Tailscale external HTTPS port", () => {
   });
 
   it.each([0, 1.5, 65_536])("rejects invalid HTTPS port %s", (port) => {
-    expect(() => normalizeVoiceCallConfig({ tailscale: { port } })).toThrow();
+    rejectsConfig({ tailscale: { port } });
   });
 
   it.each([
-    { name: "legacy mode", input: { tailscale: { mode: "funnel", port: 4545 } } },
-    {
-      name: "unified provider",
-      input: { tailscale: { port: 4545 }, tunnel: { provider: "tailscale-funnel" } },
-    },
-  ])("rejects unsupported Funnel port for $name", ({ input }) => {
-    expect(() => normalizeVoiceCallConfig(input)).toThrow(z.ZodError);
+    { tailscale: { mode: "funnel", port: 4545 } },
+    { tailscale: { port: 4545 }, tunnel: { provider: "tailscale-funnel" } },
+  ])("rejects unsupported Funnel port for %j", (input) => {
     expect(() => normalizeVoiceCallConfig(input)).toThrow(
       expect.objectContaining({
         issues: expect.arrayContaining([
@@ -392,7 +372,6 @@ describe("resolveVoiceCallConfig session routing", () => {
   it("uses dialed-number fallback only for inbound calls", () => {
     for (const [direction, metadata, expected] of [
       ["inbound", undefined, "+15550001111"],
-      ["outbound", undefined, undefined],
       ["inbound", { numberRouteKey: "+15550002222" }, "+15550002222"],
       ["outbound", { numberRouteKey: "+15550002222" }, undefined],
     ] as const) {
@@ -424,7 +403,7 @@ describe("normalizeVoiceCallConfig", () => {
     { streaming: { providers: [] } },
     { numbers: [] },
   ])("rejects malformed config instead of replacing it with defaults: %j", (config) => {
-    expect(() => normalizeVoiceCallConfig(config)).toThrow();
+    rejectsConfig(config);
   });
 
   it("keeps default containers owned by each normalized configuration", () => {
@@ -508,7 +487,7 @@ describe("resolveVoiceCallConfig realtime settings", () => {
     [{ idleHangupMs: 0 }, undefined],
     [{ consultThinkingLevel: "turbo" }, /Invalid option/],
   ] as const)("rejects invalid realtime settings %j", (realtime, error) => {
-    expect(() => sessionConfig({ realtime })).toThrow(error);
+    rejectsConfig({ enabled: true, provider: "mock", realtime }, error);
   });
 });
 
@@ -524,24 +503,21 @@ describe("voice-call config migration", () => {
     expect(packageJson).toMatchObject({ openclaw: { setupEntry: "./setup-api.ts" } });
   });
 
-  it("maps deprecated provider and twilio.from fields into canonical config", () => {
-    const migration = migrate({ provider: "log", twilio: { from: "+15550001234" } });
-    expect(migration.config).toMatchObject({ provider: "mock", fromNumber: "+15550001234" });
-  });
-
   it("migrates through the setup hook without changing its input or sibling plugins", () => {
     const registerConfigMigration = vi.fn<OpenClawPluginApi["registerConfigMigration"]>();
     setup.register(createTestPluginApi({ registerConfigMigration }));
     const other = { config: { nested: { keep: true } } };
-    const pluginConfig = (provider: string) => ({
-      plugins: { entries: { "voice-call": { enabled: true, config: { provider } }, other } },
+    const pluginConfig = (config: Record<string, unknown>) => ({
+      plugins: { entries: { "voice-call": { enabled: true, config }, other } },
     });
-    const config = pluginConfig("log");
+    const config = pluginConfig({ provider: "log", twilio: { from: "+15550001234" } });
     const before = structuredClone(config);
     const migration = registerConfigMigration.mock.calls[0]?.[0](config);
 
     expect(config).toEqual(before);
-    expect(migration?.config).toEqual(pluginConfig("mock"));
+    expect(migration?.config).toEqual(
+      pluginConfig({ provider: "mock", fromNumber: "+15550001234", twilio: {} }),
+    );
   });
 
   it("fills only missing streaming provider fields while preserving canonical values", () => {
@@ -631,6 +607,6 @@ it("validates the realtime input transcription model in runtime and manifest sch
     validateJsonSchemaValue({ schema: configSchema, value: { realtime: { providers } } }).ok,
   ).toBe(true);
   const invalid = { realtime: { providers: { openai: { inputTranscriptionModel: 123 } } } };
-  expect(() => normalizeVoiceCallConfig(invalid)).toThrow(/inputTranscriptionModel/);
+  rejectsConfig(invalid, /inputTranscriptionModel/);
   expect(validateJsonSchemaValue({ schema: configSchema, value: invalid }).ok).toBe(false);
 });

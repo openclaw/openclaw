@@ -36,6 +36,7 @@ export function sessionMenuReasons(params: {
   const involvementReason = reason({
     method: "sessions.setInvolvement",
     requiredScope: "operator.read",
+    sessionScope: true,
   });
   const patchReason = (patch: Record<string, unknown>, sessionScope = false) =>
     reason({
@@ -110,6 +111,8 @@ export function sessionMenuReasons(params: {
     : reason({
         method: "sessions.create",
         params: { parentSessionKey: session.key, fork: true },
+        sessionScope: true,
+        session,
       });
   const cloudWorkerStopReason = cloudWorkerStopAction ? reason(cloudWorkerStopAction) : undefined;
   const placementReason = params.placementRow

@@ -28,64 +28,77 @@ const row = (
   ...estimateRetainedDataSize(roots),
 });
 
-// One weakly-held root set per isolate; diagnostics must not retain a retired catalog.
-let remoteCensus:
-  | {
-      catalogs: WeakRef<ActiveRemoteModelCatalog>[];
-      rows: readonly DiagnosticWorkerRetainedData[];
-    }
-  | undefined;
+// One weak root set per structure; diagnostics must not retain retired publications.
+const publishedCensuses = new Map<
+  "catalog-remote" | "catalog-metadata",
+  { roots: WeakRef<object>[]; rows: readonly DiagnosticWorkerRetainedData[] }
+>();
+
+function measurePublishedRoots(
+  structure: "catalog-remote" | "catalog-metadata",
+  roots: object[],
+  measure: () => DiagnosticWorkerRetainedData[],
+  isImmutable?: (root: object) => boolean,
+): readonly DiagnosticWorkerRetainedData[] {
+  const cached = publishedCensuses.get(structure);
+  if (
+    cached?.roots.length === roots.length &&
+    cached.roots.every((root, index) => root.deref() === roots[index])
+  ) {
+    return cached.rows;
+  }
+  // Keep one shared traversal budget and deduplication across the complete root set.
+  const rows = measure();
+  if (!isImmutable || roots.every(isImmutable)) {
+    publishedCensuses.set(structure, { roots: roots.map((root) => new WeakRef(root)), rows });
+  } else {
+    publishedCensuses.delete(structure);
+  }
+  return rows;
+}
 
 function measureRemoteCatalogs(
   roots: (ActiveRemoteModelCatalog | null)[],
 ): readonly DiagnosticWorkerRetainedData[] {
   const catalogs = roots.filter((catalog) => catalog !== null);
-  if (
-    remoteCensus?.catalogs.length === catalogs.length &&
-    remoteCensus.catalogs.every((catalog, index) => catalog.deref() === catalogs[index])
-  ) {
-    return remoteCensus.rows;
-  }
-  const rows = [
-    row(
-      "catalog-remote",
-      catalogs.map((catalog) => catalog.providers),
-      catalogs.reduce(
-        (count, catalog) =>
-          count +
-          Object.values(catalog.providers).reduce(
-            (total, provider) => total + provider.models.length,
-            0,
-          ),
-        0,
-      ),
-      {
-        generations: catalogs.length,
-        providers: catalogs.reduce(
-          (count, catalog) => count + Object.keys(catalog.providers).length,
+  return measurePublishedRoots(
+    "catalog-remote",
+    catalogs,
+    () => [
+      row(
+        "catalog-remote",
+        catalogs.map((catalog) => catalog.providers),
+        catalogs.reduce(
+          (count, catalog) =>
+            count +
+            Object.values(catalog.providers).reduce(
+              (total, provider) => total + provider.models.length,
+              0,
+            ),
           0,
         ),
-      },
-    ),
-    row(
-      "catalog-pricing",
-      catalogs.flatMap((catalog) => [catalog.pricing, catalog.upstreamPricing]),
-      catalogs.reduce(
-        (count, catalog) =>
-          count + Object.keys(catalog.pricing).length + Object.keys(catalog.upstreamPricing).length,
-        0,
+        {
+          generations: catalogs.length,
+          providers: catalogs.reduce(
+            (count, catalog) => count + Object.keys(catalog.providers).length,
+            0,
+          ),
+        },
       ),
-    ),
-  ];
-  // Transported startup roots can still be mutable. Only immutable publication identities
-  // are revisions; preserve one shared traversal budget and deduplication across all roots.
-  remoteCensus = catalogs.every(isDeeplyFrozenPlainData)
-    ? {
-        catalogs: catalogs.map((catalog) => new WeakRef(catalog)),
-        rows,
-      }
-    : undefined;
-  return rows;
+      row(
+        "catalog-pricing",
+        catalogs.flatMap((catalog) => [catalog.pricing, catalog.upstreamPricing]),
+        catalogs.reduce(
+          (count, catalog) =>
+            count +
+            Object.keys(catalog.pricing).length +
+            Object.keys(catalog.upstreamPricing).length,
+          0,
+        ),
+      ),
+    ],
+    isDeeplyFrozenPlainData,
+  );
 }
 
 /** Inspect only explicit data roots; registry callbacks and hidden runtime graphs are excluded. */
@@ -116,7 +129,10 @@ export function measurePreparedCatalogRetainedData(
   return [
     row("catalog-index", [], live.length, { generations: live.length }),
     row("catalog-config", configs, configs.size),
-    row("catalog-metadata", metadata, metadata.size),
+    // The metadata owner publishes immutable snapshots, replacing identity on lifecycle changes.
+    ...measurePublishedRoots("catalog-metadata", [...metadata], () => [
+      row("catalog-metadata", metadata, metadata.size),
+    ]),
     row(
       "catalog-entries",
       live.flatMap((entry) => [entry.inlineProviderModels, entry.configuredCatalogEntries]),

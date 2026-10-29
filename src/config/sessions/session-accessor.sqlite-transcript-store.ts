@@ -55,8 +55,8 @@ import {
   writableSessionActorMap,
   writableSessionActorNavigation,
 } from "./session-actor-transaction.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { PriorWorkspaceRewriteRows } from "./session-prior-workspace-boundary.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import type { TranscriptWindowUpdate } from "./session-transcript-index-postgres.js";
 import {
   createTranscriptIndexAppenderInTransaction,

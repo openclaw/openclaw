@@ -107,6 +107,7 @@ async function mount(
   };
   const search = async (text = "@") => {
     await append(text);
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(150);
     await palette.updateComplete;
   };

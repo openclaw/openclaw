@@ -581,8 +581,7 @@ export function createUserTurnTranscriptRecorder(
             ...options,
             requestFingerprint: params.pendingInputRequestFingerprint,
             trackCompletion: params.trackInputCompletion,
-            retryInterrupted:
-              options.retryInterrupted || params.sessionTurnMutation?.kind === "goal",
+            retryCancelled: options.retryCancelled || params.sessionTurnMutation?.kind === "goal",
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
             message: projectRequesterOrigin(candidate),
             onCommitted: adoptPendingInput,

@@ -36,7 +36,6 @@ import {
   DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME,
   DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS,
   assertCodexAppServerCommandHasNoInlineArgs,
-  readCodexPluginConfig,
 } from "./config-parsing.js";
 import { parseCodexRequirementsPolicy, readCodexRequirementsToml } from "./config-requirements.js";
 import {
@@ -80,11 +79,8 @@ export function resolveCodexAppServerHomeScope(params: {
     : "agent";
 }
 
-export function resolveCodexAppServerRequestTimeoutMs(pluginConfig?: unknown): number {
-  return resolvePositiveTimerTimeoutMs(
-    readCodexPluginConfig(pluginConfig).appServer?.requestTimeoutMs,
-    60_000,
-  );
+export function resolveCodexAppServerRequestTimeoutMs(pluginConfig?: CodexPluginConfig): number {
+  return resolvePositiveTimerTimeoutMs(pluginConfig?.appServer?.requestTimeoutMs, 60_000);
 }
 
 // Registration binds the host's canonical resolver; cold callers use config-runtime.ts.

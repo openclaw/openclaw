@@ -12,31 +12,6 @@ import {
 import { SessionDeliveryDeadLetteredError } from "./session-delivery-queue.records.js";
 import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
 
-function rejectWrite(
-  db: ReturnType<typeof openOpenClawStateDatabase>["db"],
-  id: string,
-  phase: "retry" | "settlement",
-) {
-  // A real trigger is visible to the worker's existing connection.
-  db.exec(`CREATE TRIGGER main.reject_session_delivery_${phase}
-    BEFORE UPDATE ON delivery_queue_entries
-    WHEN OLD.queue_name = 'session' AND OLD.id = '${id.replaceAll("'", "''")}'
-    BEGIN
-      SELECT RAISE(ABORT, 'synthetic session delivery ${phase} write failure');
-    END;`);
-}
-
-function recover(
-  mode: "startup" | "targeted drain",
-  options: Parameters<typeof recoverPendingSessionDeliveries>[0],
-  id: string,
-  logLabel: string,
-) {
-  return mode === "startup"
-    ? recoverPendingSessionDeliveries(options)
-    : drainPendingSessionDelivery({ ...options, id, logLabel });
-}
-
 it.each([
   { mode: "startup", phase: "retry" },
   { mode: "targeted drain", phase: "retry" },
@@ -47,11 +22,10 @@ it.each([
     const terminal = phase === "settlement";
     const id = await enqueueSessionDelivery(
       {
-        kind: "systemEvent",
+        kind: "agentTurn",
         sessionKey: "agent:main:main",
-        text: terminal
-          ? "delivery requiring terminal settlement"
-          : "recover after retry writes are allowed",
+        messageId: "produced-media-delivery",
+        expectedMediaUrls: ["https://example.invalid/produced-image.png"],
       },
       queueContext,
     );
@@ -59,19 +33,24 @@ it.each([
       env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
     });
     const deliver = vi.fn(async () => {
-      rejectWrite(db, id, phase);
+      // A real trigger is visible to the worker's existing connection.
+      db.exec(`CREATE TRIGGER main.reject_session_delivery_${phase}
+    BEFORE UPDATE ON delivery_queue_entries
+    WHEN OLD.queue_name = 'session' AND OLD.id = '${id.replaceAll("'", "''")}'
+    BEGIN
+      SELECT RAISE(ABORT, 'synthetic session delivery ${phase} write failure');
+    END;`);
       throw terminal
         ? new SessionDeliveryDeadLetteredError("ambiguous side effects")
         : new Error("session delivery interrupted");
     });
     const log = createInfoWarnErrorLogger();
     try {
-      const recovery = recover(
-        mode,
-        { deliver, queueContext, log },
-        id,
-        terminal ? "Session delivery" : "test rejected retry persistence",
-      );
+      const options = { deliver, queueContext, log };
+      const recovery =
+        mode === "startup"
+          ? recoverPendingSessionDeliveries(options)
+          : drainPendingSessionDelivery({ ...options, id, logLabel: "Session delivery" });
       if (terminal) {
         await expect(recovery).resolves.toMatchObject(
           mode === "startup" ? { recovered: 0, failed: 0 } : { id },

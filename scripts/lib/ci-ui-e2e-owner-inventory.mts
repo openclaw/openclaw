@@ -1358,7 +1358,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch(
-    "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+    "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
     ["chat", "config", "profile"],
     [
       "ui/src/components/modal-dialog.tsx",
@@ -1892,7 +1892,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     sessionMenuOwnerRoots,
   ),
   pageWatch("ui/src/e2e/sidebar-refresh-availability.e2e.test.ts", ["new-session"]),
-  pageWatch("ui/src/e2e/sidebar-restart-recovery.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/sidebar-selection-overflow.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/sidebar-session-stability.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(

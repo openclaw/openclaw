@@ -4,6 +4,7 @@ import { shellViewport } from "../../app/shell-viewport.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { canCallGatewayMethod, canPresentGatewayMethod } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import type { ChatMobileHost, MobileHostDestination } from "./chat-mobile-host.ts";
@@ -18,6 +19,11 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatProcessShowRequest } from "./components/chat-details-types.ts";
+import { reportChatComposerDraftStorageError } from "./composer-persistence-feedback.ts";
+import {
+  isIncognitoComposerScope,
+  resolveChatComposerDurableScope,
+} from "./composer-persistence-state.ts";
 import type { SidebarLayout, SidebarSlotId } from "./sidebar-layout-types.ts";
 import {
   closeSlot,
@@ -284,7 +290,25 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     /** The narrow pane control to restore focus to; taken once by the region. */
     sideFocusOrigin?: () => HTMLElement | null;
   } = { focusRequest: undefined, subagentsShowRequest: undefined, sideFocusOrigin: undefined };
-  readonly sessionCompanionThreads = new ChatSessionCompanionThreads();
+  readonly sessionCompanionThreads = new ChatSessionCompanionThreads({
+    scope: (sessionKey, agentId) => {
+      const state = this.state;
+      if (!state) {
+        return null;
+      }
+      const conversation = resolveUiConversationIdentity(state, sessionKey, agentId);
+      if (isIncognitoComposerScope(state, conversation)) {
+        return null;
+      }
+      const scope = resolveChatComposerDurableScope(state, conversation);
+      return scope ? { ...scope, scopeKey: `comments:v1:${scope.scopeKey}` } : null;
+    },
+    onError: () => {
+      if (this.state) {
+        reportChatComposerDraftStorageError(this.state);
+      }
+    },
+  });
   protected readonly setSessionObserverVisibility = (visible: boolean) => {
     void sendSessionObserverVisibility(this.context.gateway.snapshot, visible).catch(
       () => undefined,

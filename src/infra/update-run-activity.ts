@@ -1,5 +1,9 @@
 import { inspectSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
-import { inspectUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
+import {
+  inspectUpdateRunDriver,
+  sameUpdateRunDriver,
+  type UpdateRunDriver,
+} from "./update-run-driver.js";
 import {
   isExpiredLegacyUpdateRun,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -92,7 +96,7 @@ function formatUnverifiedUpdateRunAncestry(record: UpdateRunRecord): string {
   const pids = recordedUpdateRunDrivers(record)
     .map((driver) => driver.pid)
     .join(", ");
-  return `Update ${record.runId} was inherited by this process, but this host could not read this process's ancestry to verify that its live driver (PID ${pids}) started it, so it was not treated as a continuation. This is a process-inspection failure, not evidence of another update. Retry when the host is less busy; if it persists, let the update finish, then run \`openclaw update repair\`.`;
+  return `Update ${record.runId} was inherited by this process, but this host could not read this process's ancestry to verify that its live driver (PID ${pids}) started it, so it was not treated as a continuation. This is a process-inspection failure, not evidence of another update. Restore process inspection (on Linux, readable /proc/<pid>/stat or a compatible proc-safe native helper), wait for the recorded driver to exit, then run \`openclaw update repair\`.`;
 }
 
 export function formatUpdateRunOwnership(record: UpdateRunRecord): string {
@@ -173,7 +177,20 @@ function inspectUpdateRunDriverAbandonment(
   if (!input.explicit && identityUnavailable) {
     return undefined;
   }
-  const drivers = recordedUpdateRunDrivers(record);
+  let drivers = recordedUpdateRunDrivers(record);
+  const handoff = record.origin.managedHandoff;
+  if (handoff) {
+    // The serving Gateway remains alive during validation, but no longer drives the update.
+    // Adoption can prune the dead helper; its separate lifetime must still be checked.
+    drivers = [
+      handoff.helper,
+      ...drivers.filter(
+        (driver) =>
+          !sameUpdateRunDriver(driver, handoff.parent) &&
+          !sameUpdateRunDriver(driver, handoff.helper),
+      ),
+    ];
+  }
   // Confirmed driver death needs no grace; an unrecorded adopter may still be working.
   const requiresInactivity = !drivers.length || identityUnavailable;
   if (requiresInactivity && Date.now() - updateRunLastActivity(record) <= ABANDONED_UPDATE_RUN_MS) {
@@ -181,7 +198,9 @@ function inspectUpdateRunDriverAbandonment(
   }
   if (drivers.length) {
     return drivers.every((driver) => inspectUpdateRunDriver(driver) === "dead")
-      ? "inactive-driver-dead"
+      ? handoff
+        ? "handoff-terminated"
+        : "inactive-driver-dead"
       : undefined;
   }
   return input.explicit ? "operator-reconciled-inactive-run" : undefined;

@@ -63,7 +63,9 @@ async function mountFile(
   document.body.append(container);
   mounted.push(container);
   await panel.updateComplete;
-  await expect.poll(() => panel.querySelector(".cm-editor"), { timeout: 5_000 }).not.toBeNull();
+  await expect
+    .poll(() => panel.querySelector(".cm-editor, .sidebar-markdown"), { timeout: 5_000 })
+    .not.toBeNull();
   return panel;
 }
 
@@ -132,6 +134,71 @@ afterEach(() => {
 });
 
 describe.runIf(browserMode)("chat file editor", () => {
+  it.each(["desktop", "mobile"] as const)(
+    "renders a complete large Markdown file in %s preview without changing its source or safety",
+    async (presentation) => {
+      if (presentation === "desktop") {
+        await desktopViewport();
+      }
+      const source = [
+        "# Large document",
+        "| Item | Status |\n| --- | --- |\n| Preview | Complete |",
+        "- Read the whole file",
+        "```js\n" + 'console.log("document preview");\n'.repeat(12) + "```",
+        "[Related file](docs/guide.md)",
+        "Related session: `agent:main:main`",
+        "![Remote image](https://example.com/preview.png)",
+        '<script>alert(1)</script><img src="x" onerror="alert(1)">',
+        "[Unsafe link](javascript:alert(1))",
+        "Document body. ".repeat(4_500),
+        "## Final heading",
+      ].join("\n\n");
+      const panel = await mountFile(
+        file(source, { path: "large.md", name: "large.md", mimeType: "text/markdown" }),
+        presentation === "desktop" ? 720 : 360,
+        presentation,
+      );
+      const openFile = vi.fn();
+      const openSession = vi.fn();
+      Object.assign(panel, { onOpenWorkspaceFile: openFile, onOpenSessionLink: openSession });
+      await panel.updateComplete;
+      const preview = () =>
+        expectDefined(panel.querySelector<HTMLElement>(".sidebar-markdown"), "Markdown preview");
+      await expect.poll(() => preview().querySelector("h1")?.textContent).toBe("Large document");
+      expect(preview().querySelector("table td")?.textContent).toBe("Preview");
+      expect(preview().querySelector("ul li")?.textContent).toBe("Read the whole file");
+      expect(preview().querySelector("pre code")?.textContent).toContain("document preview");
+      expect(preview().querySelector("h2")?.textContent).toBe("Final heading");
+      expect(preview().querySelector(".markdown-plain-text-fallback")).toBeNull();
+      expect(preview().querySelector('img[src="https://example.com/preview.png"]')).toBeNull();
+      expect(preview().querySelector('a[href="https://example.com/preview.png"]')).not.toBeNull();
+      expect(preview().querySelector('script, [onerror], [href^="javascript:"]')).toBeNull();
+      await userEvent.click(preview().querySelector<HTMLElement>("[data-file-path]")!);
+      expect(openFile).toHaveBeenCalled();
+      await userEvent.click(preview().querySelector<HTMLElement>("[data-session-key]")!);
+      expect(openSession).toHaveBeenCalled();
+      await userEvent.click(preview().querySelector<HTMLButtonElement>(".code-block-expand")!);
+      expect(preview().querySelector(".code-block-wrapper")?.classList).toContain("is-expanded");
+
+      if (presentation === "desktop") {
+        await click(panel, "Reading mode: Preview");
+        await click(panel, "Plain source");
+      } else {
+        await click(panel, "Source");
+      }
+      await expect.poll(() => panel.querySelector(".cm-editor")).not.toBeNull();
+      await expect.element(editorOf(panel)).toBeVisible();
+      const view = expectDefined(EditorView.findFromDOM(editorOf(panel)), "Source editor");
+      expect(view.state.doc.toString()).toBe(source);
+      if (presentation === "desktop") {
+        await click(panel, "Reading mode: Plain source");
+      }
+      await click(panel, "Preview");
+      await expect.poll(() => preview().querySelector("h2")?.textContent).toBe("Final heading");
+      expect(panel.content.content).toBe(source);
+    },
+  );
+
   it("toggles desktop highlighting without replacing the document, selection or undo history", async () => {
     await desktopViewport();
     const panel = await mountFile(
