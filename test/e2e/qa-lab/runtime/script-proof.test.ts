@@ -166,7 +166,10 @@ it.each(["pass", "fail"] as const)(
     expect(
       JSON.parse(await fs.readFile(path.join(artifactBase, "latest-run.json"), "utf8")),
     ).toEqual({ qaEvidence: "qa-evidence.json" });
-    expect(await fs.readFile(path.join(artifactBase, "producer.log"), "utf8")).toBe(log);
+    // A leading pass: field is redacted as a credential assignment by the writer.
+    expect(await fs.readFile(path.join(artifactBase, "producer.log"), "utf8")).toBe(
+      status === "pass" ? "pass: *** passed\n" : "fail: proof failed\n",
+    );
     const entry = evidence.entries[0];
     expect(entry?.result.status).toBe(status);
     expect(entry?.result.failure?.reason).toBe(status === "fail" ? "proof failed" : undefined);
