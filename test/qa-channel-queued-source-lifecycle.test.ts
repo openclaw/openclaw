@@ -9,7 +9,7 @@ import {
   pollQaBus,
   qaChannelPlugin,
 } from "../extensions/qa-channel/api.js";
-import { createQaBusState, startQaBusServer } from "../extensions/qa-lab/bus-api.js";
+import { createQaBusState, startQaBusServer } from "../extensions/qa-lab/api.js";
 import {
   admitFollowupRunLifecycle,
   enqueueFollowupRun,

@@ -8,6 +8,7 @@ import {
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-store";
@@ -426,7 +427,7 @@ export async function handleQaInbound(params: {
       console.warn(`[qa-channel] failed to clear reply preview: ${formatQaErrorForLog(error)}`);
     });
 
-  const queuedDelivery = Promise.withResolvers<boolean>();
+  const queuedDelivery = createDeferred<boolean>();
   let queueDisposition:
     | Parameters<NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>>[0]
     | undefined;

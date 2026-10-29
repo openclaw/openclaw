@@ -1,6 +1,7 @@
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { pollQaBus } from "./bus-client.js";
 import { handleQaInbound } from "./inbound.js";
@@ -142,7 +143,7 @@ export async function startQaGatewayAccount(
         if (inboundError) {
           return;
         }
-        const followupQueued = Promise.withResolvers<void>();
+        const followupQueued = createDeferred();
         const task = startMessage(message, event, followupQueued.resolve);
         // Confirmed followups release intake for collect batching while their
         // full tasks retain delivery, completion receipts and shutdown custody.
