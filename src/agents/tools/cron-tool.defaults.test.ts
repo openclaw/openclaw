@@ -79,8 +79,10 @@ it("keeps creation unchanged when defaults are not configured", async () => {
 
 it("keeps an omitted selection on the native default policy", async () => {
   setRuntimeConfigSnapshot({ cron: { defaultTools: ["read"] } });
-  const input = job();
-  delete input.payload.toolsAllow;
+  const input = {
+    ...job(),
+    payload: { kind: "agentTurn", message: "Use the native default policy." },
+  };
   await executeCron({ action: "add", job: input }, creator);
   expect(readGatewayCall().params).toMatchObject({ payload: { toolsAllow: ["*"] } });
 });
