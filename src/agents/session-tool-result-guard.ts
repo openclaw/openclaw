@@ -1,5 +1,10 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
+import {
+  acknowledgeInternalToolResult,
+  admitInternalNativeInvocationStorage,
+  getInternalNativeInvocation,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -44,6 +49,7 @@ import type {
 } from "./sessions/session-compaction-persistence.js";
 import { withSessionManagerAppend } from "./sessions/session-manager-append-admission.js";
 import { prepareSessionManagerSync } from "./sessions/session-manager-incognito-scope.js";
+import { retainPersistedSessionNativeInvocation } from "./sessions/session-tool-result-preparation.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -176,7 +182,15 @@ export function installSessionToolResultGuard(
     sessionManager.appendMessageWithTranscriptAnchorAsync.bind(sessionManager);
   setRawSessionAppendMessage(sessionManager, originalAppend);
   setRawSessionAppendMessageAsync(sessionManager, getRawSessionAppendMessageAsync(sessionManager));
-  const pending = new Map<string, string | undefined>();
+  const pending = new Map<
+    string,
+    {
+      name?: string;
+      entryId: string;
+      runId?: string;
+      turnId?: string;
+    }
+  >();
   // Response that most recently added pending tool calls; see clearsPendingToolCalls.
   let pendingResponseIds: readonly string[] = [];
   const defaultContext: MessageWriteContext = {
@@ -239,6 +253,7 @@ export function installSessionToolResultGuard(
 
   const updatePending = (
     message: AgentMessage,
+    entryId: string,
     calls = extractPendingAssistantToolCalls(message),
   ) => {
     const resultId = message.role === "toolResult" ? extractToolResultId(message) : null;
@@ -246,7 +261,14 @@ export function installSessionToolResultGuard(
       pending.delete(resultId);
     }
     for (const call of calls) {
-      pending.set(call.id, call.name);
+      pending.set(call.id, {
+        name: call.name,
+        entryId,
+        runId: normalizeOptionalString(
+          asOptionalObjectRecord(asOptionalObjectRecord(message)?.["__openclaw"])?.runId,
+        ),
+        turnId: message.role === "assistant" ? message.responseId || message.turnId : undefined,
+      });
     }
     if (calls.length > 0) {
       pendingResponseIds = assistantResponseIds(message);
@@ -258,7 +280,7 @@ export function installSessionToolResultGuard(
     viewWasSuperseded: boolean,
   ) => {
     if (!viewWasSuperseded) {
-      updatePending(message);
+      updatePending(message, entryId);
       return;
     }
     const branch = sessionManager.getBranch();
@@ -278,7 +300,7 @@ export function installSessionToolResultGuard(
       ) {
         pending.clear();
       }
-      updatePending(entry.message, calls);
+      updatePending(entry.message, entry.id, calls);
     }
   };
 
@@ -287,6 +309,7 @@ export function installSessionToolResultGuard(
     context: MessageWriteContext,
     options?: AppendMessageOptions,
     acknowledgementSource: AgentMessage = message,
+    origin?: ReturnType<typeof getInternalNativeInvocation>,
   ): Generator<
     AppendRequest,
     {
@@ -301,7 +324,44 @@ export function installSessionToolResultGuard(
     AppendReceipt
   > {
     const assistantSource = readAgentAssistantSource(acknowledgementSource);
-    const runOwnedMessage = attachSessionTranscriptRunId(message, context.runId);
+    let runOwnedMessage = attachSessionTranscriptRunId(message, context.runId);
+    const metadata = {
+      ...asOptionalObjectRecord(asOptionalObjectRecord(runOwnedMessage)?.["__openclaw"]),
+    };
+    delete metadata.nativeInvocation;
+    const fact = origin?.fact;
+    const source = fact ? pending.get(fact.toolCallId) : undefined;
+    const admitted =
+      fact &&
+      source &&
+      runOwnedMessage.role === "toolResult" &&
+      !runOwnedMessage.isError &&
+      runOwnedMessage.toolCallId === fact.toolCallId &&
+      runOwnedMessage.toolName === fact.toolName &&
+      source.name === fact.toolName &&
+      source.runId === fact.runId &&
+      context.runId === fact.runId &&
+      source.turnId === fact.turnId;
+    if (admitted) {
+      metadata.nativeInvocation = { v: 1, ...fact, sourceEntryId: source.entryId };
+    }
+    if (
+      admitted ||
+      asOptionalObjectRecord(asOptionalObjectRecord(runOwnedMessage)?.["__openclaw"])
+        ?.nativeInvocation !== undefined
+    ) {
+      runOwnedMessage = Object.assign({ ...runOwnedMessage }, { __openclaw: metadata });
+    }
+
+    const nativeTarget = sessionManager.getSessionTarget();
+    if (admitted && nativeTarget) {
+      admitInternalNativeInvocationStorage(runOwnedMessage, origin, source.entryId, {
+        agentId: nativeTarget.agentId,
+        sessionKey: nativeTarget.sessionKey,
+        sessionId: nativeTarget.sessionId,
+        lifecycleRevision: nativeTarget.expectedLifecycleRevision ?? null,
+      });
+    }
     const parentEntryId = sessionManager.getLeafId();
     const originalTarget = sessionManager.getSessionTarget();
     const {
@@ -340,6 +400,12 @@ export function installSessionToolResultGuard(
     if (committedMessageSeq !== undefined) {
       transcriptSeqByEntryId.set(entryId, committedMessageSeq);
     }
+    // Returned copies keep execution evidence, never fresh-write admission.
+    retainPersistedSessionNativeInvocation(
+      persistedMessage,
+      runOwnedMessage,
+      admitted ? origin : undefined,
+    );
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
     if (assistantSource && appended) {
@@ -406,7 +472,7 @@ export function installSessionToolResultGuard(
       return;
     }
     if (allowSyntheticToolResults) {
-      for (const [id, name] of pending.entries()) {
+      for (const [id, { name }] of pending.entries()) {
         const synthetic = makeMissingToolResult({
           toolCallId: id,
           toolName: name,
@@ -455,6 +521,15 @@ export function installSessionToolResultGuard(
     context: MessageWriteContext,
     callerOptions?: AppendMessageOptions,
   ): Generator<AppendRequest, string | undefined, AppendReceipt> {
+    const captured = getInternalNativeInvocation(message);
+    const origin =
+      captured !== undefined &&
+      message.role === "toolResult" &&
+      !message.isError &&
+      message.toolCallId === captured.fact.toolCallId &&
+      message.toolName === captured.fact.toolName
+        ? captured
+        : undefined;
     const callerInvalidatesCache = callerOptions?.invalidateSerializedPrefixCache === true;
     // Publish the owning run before storage clones the message or hooks project it.
     // Already-admitted immutable replay messages retain their recorded envelope.
@@ -479,7 +554,7 @@ export function installSessionToolResultGuard(
     }
     if (nextMessage.role === "toolResult") {
       const id = extractToolResultId(nextMessage);
-      const toolName = id ? pending.get(id) : undefined;
+      const toolName = id ? pending.get(id)?.name : undefined;
       const normalizedToolResult = normalizePersistedToolResultName(
         nextMessage,
         toolName,
@@ -510,6 +585,7 @@ export function installSessionToolResultGuard(
             persisted.changed,
         },
         message,
+        origin,
       )).entryId;
     }
 

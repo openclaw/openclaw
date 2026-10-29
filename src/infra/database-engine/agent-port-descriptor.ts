@@ -13,6 +13,7 @@ import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/opencla
 import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
+  AGENT_PROGRESS_WORK_SCHEMA_VERSION,
   AGENT_VECTOR_DECODER_SCHEMA_VERSION,
   AGENT_TEXT_SEARCH_SCHEMA_VERSION,
   AGENT_VECTOR_SEARCH_SCHEMA_VERSION,
@@ -37,6 +38,12 @@ import {
   LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS,
   withLegacyAgentPostgresMemoryRevisionTriggers,
 } from "../../state/openclaw-agent-memory-revision-migration.js";
+import {
+  PROGRESS_CARD_WORK_COLUMNS,
+  SESSION_PROGRESS_CARDS_TABLE,
+  ensureOpenClawAgentProgressCardSchemaInTransaction,
+  withoutAgentPostgresProgressWork,
+} from "../../state/openclaw-agent-progress-card-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import { withLegacyAgentPostgresTrajectoryStorage } from "../../state/openclaw-agent-trajectory-storage-migration.js";
@@ -56,6 +63,7 @@ import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { LEGACY_USAGE_COST_PARTITION_SCOPE } from "../session-cost-usage-partitions.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
+import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import {
   AGENT_PORT_PROJECTION_TABLES,
@@ -154,12 +162,12 @@ export async function loadAgentPortDescriptor(
       return backup;
     }
     // Schema 30 appends columns; 31–36 and 38 change only PostgreSQL search, triggers, or indexes.
-    // Schema 37 adds a cold archive companion table.
+    // Schema 37 adds a cold archive companion table; 39 adds retained-work columns.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 38 ||
-      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 39 ||
+      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -172,8 +180,15 @@ export async function loadAgentPortDescriptor(
   const historical = sourceVersion !== agentEngineSchema.version;
   const legacyColdArchive = sourceVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION;
   const legacyTrajectory = sourceVersion < 30;
+  const legacyProgressWork = sourceVersion < AGENT_PROGRESS_WORK_SCHEMA_VERSION;
   const catalog = agentPostgresRuntime.expectedCatalog.filter(
     (fact) =>
+      !(
+        legacyProgressWork &&
+        fact.table === SESSION_PROGRESS_CARDS_TABLE &&
+        isColumn(fact) &&
+        PROGRESS_CARD_WORK_COLUMNS.some(([column]) => column === fact.value.name)
+      ) &&
       !(legacyColdArchive && fact.table === "session_transcript_cold_archive_chunks") &&
       (!legacyTrajectory ||
         fact.table !== "trajectory_runtime_events" ||
@@ -345,7 +360,13 @@ export async function loadAgentPortDescriptor(
           needsIndexRepair ||
           Boolean(hasRetiredUsagePartitions) ||
           hasPendingCurrentVersionAgentDatabaseMigration(db),
-        pendingColumns: pendingSqliteColumns(db, FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS),
+        pendingColumns: pendingSqliteColumns(db, [
+          ...FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS,
+          ...PROGRESS_CARD_WORK_COLUMNS.map(([columnName]) => ({
+            tableName: SESSION_PROGRESS_CARDS_TABLE,
+            columnName,
+          })),
+        ]),
       };
     },
     async migrateSqliteSource(file, _version, assertCurrent) {
@@ -375,6 +396,19 @@ export async function loadAgentPortDescriptor(
               } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
                 ensureColumn(db, tableName, `${columnName} ${dataType}`);
               }
+              // Port copies materialize feature-local columns before complete-layout admission.
+              runSqliteImmediateTransactionSync(
+                db,
+                () => ensureOpenClawAgentProgressCardSchemaInTransaction(db),
+                {
+                  databaseLabel: file,
+                  operationLabel: "agent.port.progress-columns",
+                  withCommit: (commit) => {
+                    assertCurrent();
+                    commit();
+                  },
+                },
+              );
               // Retired partitions are rebuilt from retained transcripts; their NUL keys cannot port.
               executeSqliteQuerySync(
                 db,
@@ -459,9 +493,11 @@ export async function loadAgentPortDescriptor(
         : []),
     ],
     preData: withoutLegacyColdArchive(
-      legacyTrajectory
-        ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)
-        : descriptor.preData,
+      withoutAgentPostgresProgressWork(
+        legacyTrajectory
+          ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)
+          : descriptor.preData,
+      ),
     ),
     postData: withoutLegacyColdArchive(postData),
     expectedCatalog: catalog.map((fact) =>

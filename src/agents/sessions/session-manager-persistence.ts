@@ -1,3 +1,4 @@
+import { copyInternalNativeInvocationStorage } from "../../../packages/agent-core/src/internal-hooks.js";
 import { publishCommittedSessionIdentity } from "../../config/sessions/session-accessor.sqlite-identity.js";
 import {
   prepareTranscriptMessageAppendForWorker,
@@ -197,6 +198,9 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           idempotencyLookup: message.idempotencyLookup,
         }
       : undefined;
+    if (message && wireMessage) {
+      copyInternalNativeInvocationStorage(message.prepared.persistedMessage, wireMessage);
+    }
     const projectAppend = (
       committed: CommittedMetadataAppend,
       reload: MetadataAppend["reload"],

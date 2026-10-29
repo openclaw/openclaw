@@ -87,6 +87,7 @@ import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import { markToolExecutionRefused } from "./tool-effect-receipt.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
+import { captureAgentToolInvocation } from "./tool-replay-safety.js";
 import {
   formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
@@ -455,6 +456,7 @@ export function wrapToolWithBeforeToolCallHook(
       let liveness: ReturnType<typeof startToolExecutionLiveness> | undefined;
       const startedAt = Date.now();
       let completed = false;
+      let observeInvocation: ReturnType<typeof captureAgentToolInvocation> | undefined;
       try {
         let result: Awaited<ReturnType<ForwardedToolExecution>>;
         try {
@@ -468,6 +470,7 @@ export function wrapToolWithBeforeToolCallHook(
               admitExecution?.();
               onImplementationStart?.();
               recordToolExecutionStarted(toolCallId, ctx?.runId);
+              observeInvocation = captureAgentToolInvocation(tool, ctx?.runId);
               liveness = startToolExecutionLiveness(
                 eventBase,
                 hookOptions.emitDiagnostics,
@@ -488,6 +491,11 @@ export function wrapToolWithBeforeToolCallHook(
             ? protectNetworkToolExecutionError(error, "Tool execution failed.", signal)
             : error;
         }
+        observeInvocation?.(
+          result,
+          !signal?.aborted &&
+            resolveToolResultTerminalDiagnostic(result, 0).type === "tool.execution.completed",
+        );
         const durationMs = Date.now() - startedAt;
         const preparedTerminalPresentation = prepareToolTerminalPresentation({
           ctx,

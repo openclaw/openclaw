@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   getAgentRunContext,
@@ -64,6 +63,7 @@ import {
   resolveReportedModelRef,
 } from "./helpers.js";
 import { resolveProviderRefusal } from "./provider-refusal.js";
+import { PROGRESS_WORK_COMPLETION_MESSAGE } from "./terminal-retry-state.js";
 
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
   kind: "embedded";
@@ -248,7 +248,9 @@ function prepareStream(
             }
             const currentState = input.getRunState();
             if (
-              !completionCheck?.unfinishedPlan ||
+              !completionCheck ||
+              completionCheck.work.kind !== "retained" ||
+              completionCheck.work.state.record?.disposition.kind !== "actionable" ||
               completionCheck.checked ||
               lastAssistant?.stopReason !== "stop" ||
               resolveProviderRefusal(lastAssistant) ||
@@ -266,17 +268,33 @@ function prepareStream(
             ) {
               return;
             }
+            if (completionCheck.refresh) {
+              completionCheck.work = await completionCheck.refresh();
+            }
+            const refreshed = completionCheck.work;
+            if (
+              refreshed.kind !== "retained" ||
+              refreshed.state.record?.disposition.kind !== "actionable" ||
+              refreshed.coverage?.kind !== "covered" ||
+              input.runAbortController.signal.aborted ||
+              input.getRunState().aborted ||
+              input.getRunState().promptError ||
+              agentSession.hasDeliveredSourceReply() ||
+              input.getRunState().timedOut ||
+              input.getRunState().yieldDetected ||
+              admission.closed ||
+              activeSession.pendingMessageCount > 0 ||
+              activeSession.agent.hasQueuedMessages() ||
+              !hasCurrentRegistration()
+            ) {
+              return;
+            }
             // This is a same-prompt follow-up, not a replay or draft rewind.
             // Retain every completed effect and consume the check across retries.
             completionCheck.checked = true;
-            await activeSession.sendCustomMessage(
-              {
-                customType: "openclaw.plan-completion-check",
-                display: false,
-                content: `This run’s latest successfully saved plan still has unfinished steps. Before ending, check whether those steps remain required and authorized under the latest user instructions. Continue feasible work from the current transcript; do not repeat completed actions, and reconcile uncertain effects before retrying. If work is complete, reconcile the plan. If user input, approval, an external dependency, or an explicit pause prevents further work, report that concrete limitation; if your previous reply already reported it, end with only ${SILENT_REPLY_TOKEN}. Do not invent completion or new authority.`,
-              },
-              { deliverAs: "followUp" },
-            );
+            await activeSession.sendCustomMessage(PROGRESS_WORK_COMPLETION_MESSAGE, {
+              deliverAs: "followUp",
+            });
             return { continueCurrentTurn: true };
           } finally {
             if (!keepAdmissionClosed) {

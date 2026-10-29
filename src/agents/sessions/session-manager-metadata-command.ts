@@ -1,3 +1,4 @@
+import { copyInternalNativeInvocationStorage } from "../../../packages/agent-core/src/internal-hooks.js";
 import {
   cliHistoryWriterFacts,
   getCliHistoryWriter,
@@ -39,7 +40,9 @@ export function prepareSessionManagerMetadataCommand<Key extends keyof SessionMe
     typeof command.input.event !== "string" &&
     command.input.message
   ) {
-    command.input.message = { ...command.input.message, ...control };
+    const original = command.input.message;
+    command.input.message = { ...original, ...control };
+    copyInternalNativeInvocationStorage(original, command.input.message);
   }
   return cliWriter;
 }

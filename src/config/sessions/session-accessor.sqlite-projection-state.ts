@@ -166,6 +166,7 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
         boundaryScope,
         expectedEntry,
         resetBoundary,
+        entry,
         options.onResetBoundary
           ? {
               scheduleProjectionReconcile: false,

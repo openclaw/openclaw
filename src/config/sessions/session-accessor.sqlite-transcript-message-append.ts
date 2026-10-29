@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { copyInternalNativeInvocationStorage } from "../../../packages/agent-core/src/internal-hooks.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -109,6 +110,7 @@ export function prepareTranscriptMessageAppendForWorker<TMessage extends object>
     canonicalizePersistedUserMessageMedia(message).message,
     "",
   ) as TMessage; // SAFETY: JSON normalization preserves the admitted message's storage shape.
+  copyInternalNativeInvocationStorage(message, persistedMessage);
   return { messageJson: JSON.stringify(persistedMessage), persistedMessage };
 }
 

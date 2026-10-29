@@ -193,6 +193,8 @@ describe("installSessionToolResultGuard", () => {
     );
     sm.appendMessage(assistant("after tools"));
     const persisted = roles(sm, ["assistant", "toolResult", "toolResult", "assistant"]);
+    expect(persisted[1]).toMatchObject({ toolUseId: "call_a", isError: false });
+    expect(persisted[1]).not.toHaveProperty("__openclaw.nativeInvocation");
     expect(persisted[2]).toMatchObject({ toolCallId: "call_b", isError: true });
     expect(guard.getPendingIds()).toEqual([]);
   });

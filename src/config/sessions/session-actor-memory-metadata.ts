@@ -15,7 +15,10 @@ import type { SessionMetadataOperations } from "./session-manager-write-contract
 import { appendSessionPriorWorkspaceCopies } from "./session-prior-workspace-boundary.js";
 import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
-import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
+import {
+  canonicalizeTranscriptEventMedia,
+  stripTranscriptEventNativeInvocation,
+} from "./transcript-event-media.js";
 
 type Scope = SessionMetadataOperations["session.metadata.append"]["input"]["scope"];
 
@@ -199,7 +202,9 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
         };
         const installed = installSessionActorMemoryEntry(state, next);
         const rows = command.input.branch.events.map((event, rawSeq) => {
-          const eventJson = JSON.stringify(canonicalizeTranscriptEventMedia(event));
+          const eventJson = JSON.stringify(
+            canonicalizeTranscriptEventMedia(stripTranscriptEventNativeInvocation(event)),
+          );
           return { rawSeq, event: JSON.parse(eventJson), eventJson };
         });
         events.replaceRows(rows);

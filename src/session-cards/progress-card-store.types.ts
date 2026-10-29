@@ -7,5 +7,8 @@ export interface ProgressCardStore {
     sessionKey: string,
     input: ProgressCardWrite & { assertCurrent?: () => void },
     agentId?: string,
-  ): Promise<{ card: ProgressCard | null }>;
+  ): Promise<{
+    card: ProgressCard | null;
+    work?: import("./progress-card-work.js").ProgressWorkState;
+  }>;
 }

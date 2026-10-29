@@ -53,6 +53,7 @@ import {
   AGENT_STORAGE_SCHEMA_VERSION,
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
   AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
+  AGENT_PROGRESS_WORK_SCHEMA_VERSION,
   AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
   AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
@@ -105,6 +106,7 @@ import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-p
 import { AGENT_MEMORY_REVISION_SQL } from "./openclaw-agent-memory-revision-migration.js";
 import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
+import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "./openclaw-agent-progress-card-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
 import {
@@ -120,6 +122,7 @@ import { migrateDeployedTranscriptFtsRowsInTransaction } from "./openclaw-agent-
 import { migrateTranscriptPayloadStorageInTransaction } from "./openclaw-agent-transcript-payload-migration.js";
 import { migrateAgentWriteLayoutInTransaction } from "./openclaw-agent-write-layout-migration.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   runOpenClawStateWriteTransaction,
@@ -403,6 +406,12 @@ function ensureAgentSchema(
         if (crossesVersion(AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION)) {
           db.exec(AGENT_COLD_ARCHIVE_CHUNKS_SQL);
         }
+        if (
+          crossesVersion(AGENT_PROGRESS_WORK_SCHEMA_VERSION) &&
+          tableExists(db, "session_progress_cards")
+        ) {
+          ensureOpenClawAgentProgressCardSchemaInTransaction(db);
+        }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.
         if (previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION) {
@@ -503,6 +512,12 @@ function ensureAgentSchema(
         ensureSessionEntryValidityProjection(db);
         ensureSessionKeyContractSchemaInTransaction(db);
         ensureSessionReactionsSchemaInTransaction(db);
+        if (
+          targetVersion >= AGENT_PROGRESS_WORK_SCHEMA_VERSION &&
+          tableExists(db, "session_progress_cards")
+        ) {
+          ensureOpenClawAgentProgressCardSchemaInTransaction(db);
+        }
         if (hasPendingMemoryChunkMetadataMigration(db)) {
           migrateMemoryChunkMetadataSchema(db);
           db.exec(schemaSql);

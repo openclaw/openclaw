@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { copyInternalNativeInvocationStorage } from "../../../packages/agent-core/src/internal-hooks.js";
 import type {
   SessionActor,
   SessionActorAppend,
@@ -51,6 +52,14 @@ export async function appendSessionManagerActor(input: {
               : {}),
           },
         };
+  if (
+    input.append.kind === "metadata" &&
+    append.kind === "metadata" &&
+    input.append.input.message &&
+    append.input.message
+  ) {
+    copyInternalNativeInvocationStorage(input.append.input.message, append.input.message);
+  }
   const authority = {
     assertCurrent,
     authorize: (stage: "transaction" | "commit", _facts: unknown, nativeFacts?: unknown) => {

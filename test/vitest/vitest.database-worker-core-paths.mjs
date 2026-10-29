@@ -1,5 +1,8 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/tools/progress-work-wait.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-plan-completion.test.ts",
+  "src/agents/embedded-agent-runner/run/progress-work.test.ts",
   "src/gateway/server-methods.workshop-contract.test.ts",
   "src/cli/skills-cli.workshop-contract.test.ts",
   "src/auto-reply/reply/commands.workshop-contract.test.ts",
@@ -960,6 +963,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-trajectory-storage-migration.test.ts",
   "src/state/openclaw-agent-memory-revision-migration.test.ts",
   "src/state/openclaw-agent-cold-archive-chunks-migration.test.ts",
+  "src/state/openclaw-agent-progress-work-migration.test.ts",
   "src/state/openclaw-agent-vector-decoder-migration.test.ts",
   "src/state/openclaw-agent-write-layout-migration.test.ts",
   "src/state/openclaw-agent-index-retirement-migration.test.ts",

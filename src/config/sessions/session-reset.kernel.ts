@@ -14,7 +14,7 @@ import type { SessionResetCommit } from "./session-reset.types.js";
 export function applySessionResetInDatabase(
   database: OpenClawAgentDatabase,
   input: SessionResetCommit,
-  projection?: Parameters<typeof appendSessionResetBoundary>[4],
+  projection?: Parameters<typeof appendSessionResetBoundary>[5],
 ) {
   const snapshot = readLifecycleTargetSnapshot(database, input.target);
   assertLifecycleTargetSnapshotUnchanged(input.prepared, snapshot, "reset");
@@ -33,6 +33,7 @@ export function applySessionResetInDatabase(
       },
       current.entry,
       input.resetBoundary,
+      input.nextEntry,
       projection,
     ),
   );

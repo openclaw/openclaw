@@ -428,6 +428,10 @@ const readers: Readers & ThisType<ReaderContext> = {
       },
     );
   },
+  readProgressWork: reader(
+    (input) => ({ kind: "session-progress-work", ...input }),
+    (value) => value.work,
+  ),
   readProgressCard: reader(
     (input) => ({ kind: "session-progress-card", ...input }),
     (value) => value.card,

@@ -39,11 +39,11 @@ import {
   ensureSessionEntryValidityProjection,
 } from "./openclaw-agent-db-session-migrations.js";
 import { LEGACY_PARTICIPANT_OPTIONAL_COLUMNS } from "./openclaw-agent-participants-migration.js";
+import { AGENT_PROGRESS_CARD_SCHEMA_SQL } from "./openclaw-agent-progress-card-schema.js";
 import {
-  ensureOpenClawAgentProgressCardSchemaInTransaction,
-  AGENT_PROGRESS_CARD_SCHEMA_SQL,
-} from "./openclaw-agent-progress-card-schema.js";
-import { RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL } from "./openclaw-agent-schema-history.js";
+  AGENT_V14_PROGRESS_CARD_SCHEMA_SQL,
+  RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL,
+} from "./openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
@@ -84,8 +84,21 @@ export function assertOpenClawAgentSchemaContains(
   allowStartupIndexRepair = false,
   readTable?: SqliteTableContractReader,
 ): boolean {
+  // Historical cards may contain some work columns from an interrupted additive upgrade.
+  // Validate their canonical definitions when present, without requiring or installing them.
+  const historicalProgress = schemaSql.includes(AGENT_V14_PROGRESS_CARD_SCHEMA_SQL);
+  if (historicalProgress) {
+    assertSqliteSchemaContains(
+      database,
+      pathname,
+      AGENT_PROGRESS_CARD_SCHEMA_SQL,
+      AGENT_SCHEMA_COMPATIBILITY,
+      readTable,
+    );
+  }
   const compatibility = {
     ...AGENT_SCHEMA_COMPATIBILITY,
+    ...(historicalProgress ? { excludedTables: ["session_progress_cards"] } : {}),
     allowedMissingTables: [
       ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingTables,
       // Legacy migration preflight precedes creation of the required v20 table.
@@ -245,8 +258,7 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
   }
   if (hasAnyCanonicalTable(database, AGENT_PROGRESS_CARD_SCHEMA_SQL)) {
     assertSqliteSchemaTablesPresent(database, options.pathname, AGENT_PROGRESS_CARD_SCHEMA_SQL);
-    ensureOpenClawAgentProgressCardSchemaInTransaction(database);
-    repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_PROGRESS_CARD_SCHEMA_SQL);
+    repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_V14_PROGRESS_CARD_SCHEMA_SQL);
   }
 }
 

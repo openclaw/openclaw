@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { transferProgressWork } from "../../session-cards/progress-card-work.js";
 import { clearSessionActorProgressCardForReset } from "../../session-cards/session-actor-progress-card-memory.js";
 import { shouldPreserveSessionCleanupEntry } from "./cleanup-service-read.policy.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
@@ -321,6 +322,24 @@ export function executeSessionActorMemoryEntryCommand(
         writeBoundary &&
         input.resetBoundary?.context === "clear" &&
         clearSessionActorProgressCardForReset(state);
+      if (
+        writeBoundary &&
+        input.resetBoundary?.context === "preserve-tail" &&
+        previousEntry &&
+        state.progressCard
+      ) {
+        const owner = {
+          agentId: context.agentId,
+          sessionKey,
+          sessionId: previousEntry.sessionId,
+          lifecycleRevision: previousEntry.lifecycleRevision ?? null,
+        };
+        state.progressCard = transferProgressWork(state.progressCard, owner, {
+          ...owner,
+          sessionId: input.nextEntry.sessionId,
+          lifecycleRevision: input.nextEntry.lifecycleRevision ?? null,
+        });
+      }
       const nextEntry = install(sessionKey, input.nextEntry, {
         consumePendingReset: true,
         observeConversation: true,

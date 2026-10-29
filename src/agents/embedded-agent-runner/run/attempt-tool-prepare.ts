@@ -394,9 +394,20 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
         skillUsagePaths: params.skillUsagePaths,
         conversationCapabilityProfile: runtimeCapabilityProfile,
-        onProgressCardPlanSaved: completionCheck
-          ? (unfinished) => {
-              completionCheck.unfinishedPlan = unfinished;
+        progressWorkTarget: attempt.preparedSessionTarget?.target,
+        progressWorkOwner: attempt.preparedSessionTarget
+          ? {
+              agentId: attempt.preparedSessionTarget.target.agentId,
+              sessionKey: attempt.preparedSessionTarget.target.sessionKey,
+              sessionId: attempt.preparedSessionTarget.target.sessionId,
+              lifecycleRevision:
+                attempt.preparedSessionTarget.target.expectedLifecycleRevision ?? null,
+            }
+          : undefined,
+        readProgressCardWork: completionCheck ? () => completionCheck.work : undefined,
+        onProgressCardWorkSaved: completionCheck
+          ? (snapshot) => {
+              completionCheck.work = snapshot;
             }
           : undefined,
         onYield: params.onYield,

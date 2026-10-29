@@ -785,9 +785,19 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["selectProgressCard", "writePreparedSessionProgressCard.write"],
+        operations: [
+          "selectProgressCard",
+          "writePreparedSessionProgressCard.write",
+          "assertWorkOwner",
+        ],
         evidence:
-          "session-transcript.worker.ts owns card reads; progress-card-store.worker.ts owns writes and their fallback reads. Gateway references are type uses; other writeSessionProgressCard callers are fixtures.",
+          "session-transcript.worker.ts owns card and work reads through progress-card-read.worker.ts; progress-card-store.worker.ts owns writes, including both assertWorkOwner write callers, inside its admitted transaction. Gateway references are type uses; other writeSessionProgressCard callers are fixtures.",
+      },
+      {
+        tier: "T3",
+        operations: ["persistProgressAggregate"],
+        evidence:
+          "Managed writes run in progress-card-store.worker.ts. Reset carry shares the worker/maintenance reset-boundary callers of clearProgressCardInTransaction. Entry-write retirement requires changed sessionId/lifecycleRevision: those roots are workers, Doctor/import/migration, or native owner-gated maintenance. Prepared same-key deletion callbacks always capture the message cut, so its uncaptured native fallback is unreachable; ordinary native merges preserve incarnation.",
       },
       {
         tier: "T3",

@@ -3,7 +3,12 @@ import path from "node:path";
 import { afterAll, expect, it } from "vitest";
 import { memoryTextSearchSchema } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  dumpGitBackupDatabase,
+  restoreGitBackupDirectory,
+} from "../../snapshot/git-backup-codec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION as currentVersion } from "../../state/openclaw-agent-db-contract.js";
+import { getOpenClawAgentMigrationSchema } from "../../state/openclaw-agent-db-schema-helpers.js";
 import { seedOpenClawAgentSchemaV21 } from "../../state/openclaw-agent-schema-v21.test-support.js";
 import { seedAgentV30Schema } from "../../state/schema-migration.test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
@@ -50,14 +55,114 @@ it("keeps the cold archive chunk table when backing up a schema-37 store", async
   expect(descriptor.preData).toContain(`CREATE TABLE "${table}"`);
 });
 
-it.each([21, currentVersion])(
+it.each([38, 39])(
+  "restores the exact schema-%s progress layout without changing the source",
+  async (version) => {
+    const descriptor = await loadAgentPortDescriptor(version);
+    const workColumns = [
+      "display_kind",
+      "work_json",
+      "work_generation",
+      "work_revision",
+      "work_command_json",
+    ];
+    const table = descriptor.tables.find(({ name }) => name === "session_progress_cards")!;
+    const columns = table.columns.map(({ name }) => name);
+    expect(columns.filter((name) => workColumns.includes(name))).toEqual(
+      version === 38 ? [] : workColumns,
+    );
+    const catalogColumns = descriptor.expectedCatalog
+      .filter((fact) => fact.table === table.name && fact.kind === "column")
+      .map((fact) => fact.value);
+    expect(catalogColumns).toHaveLength(columns.length);
+    for (const name of workColumns) {
+      const matching = expect.arrayContaining([expect.objectContaining({ name })]);
+      if (version === 39) {
+        expect(catalogColumns).toEqual(matching);
+      } else {
+        expect(catalogColumns).not.toEqual(matching);
+      }
+    }
+    for (const column of workColumns) {
+      expect(descriptor.preData.includes(`"${column}"`)).toBe(version === 39);
+    }
+    const root = tempDirs.make("agent-port-history-");
+    const source = path.join(root, "source.sqlite");
+    const restored = path.join(root, "restored.sqlite");
+    const exported = path.join(root, "export");
+    const payload = ' {"retained":"雪","n":1} ';
+    {
+      using db = openNodeSqliteDatabase(source);
+      db.exec(`${getOpenClawAgentMigrationSchema(version)}
+      PRAGMA user_version = ${version};
+      INSERT INTO schema_meta VALUES ('primary', 'agent', ${version}, 'main', NULL, 1, 1);`);
+      db.prepare(
+        "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES ('retained', 'key', ?, 1)",
+      ).run(payload);
+      expect(
+        db
+          .prepare("PRAGMA table_info(session_progress_cards)")
+          .all()
+          .map((row) => row.name),
+      ).toEqual(columns);
+      expect(
+        (await inspectDatabasePort({ engine: "sqlite", db }, descriptor)).tables.cache_entries
+          ?.rows,
+      ).toBe(1);
+    }
+    const before = await fs.readFile(source);
+    await dumpGitBackupDatabase({
+      snapshotPath: source,
+      outputPath: exported,
+      identity: { role: "agent", agentId: "main" },
+    });
+    await restoreGitBackupDirectory({
+      sourcePath: exported,
+      targetPath: restored,
+      expectedIdentity: { role: "agent", agentId: "main" },
+    });
+    {
+      using db = openNodeSqliteDatabase(restored);
+      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
+      expect(
+        db
+          .prepare("PRAGMA table_info(session_progress_cards)")
+          .all()
+          .map((row) => row.name),
+      ).toEqual(columns);
+      expect(
+        db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get()
+          ?.value_json,
+      ).toBe(payload);
+      expect(
+        (await inspectDatabasePort({ engine: "sqlite", db }, descriptor)).tables.cache_entries
+          ?.rows,
+      ).toBe(1);
+    }
+    if (version === 39) {
+      await descriptor.admit!(restored);
+    }
+    expect(await fs.readFile(source)).toEqual(before);
+  },
+);
+
+it("refuses an unsupported historical or future descriptor", async () => {
+  await expect(loadAgentPortDescriptor(26)).rejects.toThrow(
+    "Missing agent PostgreSQL backup descriptor",
+  );
+  await expect(loadAgentPortDescriptor(40)).rejects.toThrow(
+    "Missing agent PostgreSQL backup descriptor",
+  );
+});
+
+it.each([21, 38, currentVersion])(
   "migrates only the private v%s copy, retiring legacy usage partitions",
   async (version) => {
     const root = tempDirs.make("agent-port-migration-");
     const source = path.join(root, "source.sqlite"),
       copy = path.join(root, "private.sqlite");
     const descriptor = await loadAgentPortDescriptor();
-    const historical = version === 21;
+    const historical = version !== currentVersion;
     const retained = historical
       ? [cacheRow("retained", "key", '{"value":1}')]
       : [
@@ -70,8 +175,13 @@ it.each([21, currentVersion])(
         ];
     {
       using db = openNodeSqliteDatabase(source);
-      if (historical) {
+      if (version === 21) {
         seedOpenClawAgentSchemaV21(db);
+      } else if (version === 38) {
+        const previous = await loadAgentPortDescriptor(38);
+        db.exec(`${previous.sqlite}
+          PRAGMA user_version = 38;
+          INSERT INTO schema_meta VALUES ('primary', 'agent', 38, 'main', NULL, 1, 1);`);
       } else {
         db.exec(`${descriptor.sqlite}
       PRAGMA user_version = ${currentVersion};

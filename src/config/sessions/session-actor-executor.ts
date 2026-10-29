@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { copyInternalNativeInvocationStorage } from "../../../packages/agent-core/src/internal-hooks.js";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type {
@@ -17,6 +19,10 @@ import type {
   SessionActorTarget,
   SessionActorStorage,
 } from "./session-actor-contract.js";
+import {
+  prepareTranscriptNativeInvocation,
+  stripTranscriptNativeInvocation,
+} from "./transcript-event-media.js";
 
 export type SessionActorExecutorGuards = {
   target: SessionActorTarget;
@@ -111,6 +117,34 @@ export function createSessionActorWithExecutor(params: {
     phase?: PhaseState,
   ): Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>> => {
     const captured = structuredClone(input);
+    if (
+      "append" in input &&
+      "append" in captured &&
+      input.append?.kind === "metadata" &&
+      captured.append?.kind === "metadata" &&
+      input.append.input.message &&
+      captured.append.input.message
+    ) {
+      // Bytes alone cannot admit native coverage, including on the durable worker route.
+      const message: unknown = JSON.parse(input.append.input.message.messageJson);
+      if (isRecord(message)) {
+        copyInternalNativeInvocationStorage(input.append.input.message, message);
+      }
+      const preparedMessage = prepareTranscriptNativeInvocation(message);
+      if (preparedMessage !== message) {
+        captured.append.input.message.messageJson = JSON.stringify(preparedMessage);
+      }
+      copyInternalNativeInvocationStorage(
+        input.append.input.message,
+        captured.append.input.message,
+      );
+    } else if ("append" in captured && captured.append?.kind === "message") {
+      const message: unknown = JSON.parse(captured.append.input.messageJson);
+      const strippedMessage = stripTranscriptNativeInvocation(message);
+      if (strippedMessage !== message) {
+        captured.append.input.messageJson = JSON.stringify(strippedMessage);
+      }
+    }
     if (phase && captured.phaseId !== phase.id) {
       throw new Error("Session actor command belongs to another phase");
     }
@@ -163,6 +197,16 @@ export function createSessionActorWithExecutor(params: {
             },
             mutate(mutation, authority, observer) {
               const captured = structuredClone(mutation);
+              if (
+                mutation.type === "session.metadata.append" &&
+                captured.type === "session.metadata.append" &&
+                "message" in mutation.input &&
+                "message" in captured.input &&
+                mutation.input.message &&
+                captured.input.message
+              ) {
+                copyInternalNativeInvocationStorage(mutation.input.message, captured.input.message);
+              }
               return retain(() => storage.mutate(captured, authority, observer), phase);
             },
           } satisfies SessionActorStorage,

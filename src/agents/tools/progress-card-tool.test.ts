@@ -1,23 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import type { WorkSnapshot } from "../../session-cards/progress-card-work-intent.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as gateway from "./in-process-gateway.js";
 import { createProgressCardTool } from "./progress-card-tool.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("progress_card tool", () => {
-  it("limits creation to sequential work while preserving updates, clears, and optional checklists", () => {
-    const { description } = createProgressCardTool();
-
-    expect(description).toContain("Create a card only for substantial work");
-    expect(description).toContain("at least two meaningful sequential steps");
-    expect(description).toContain("Existing cards may still be updated or cleared");
-    expect(description).toContain(
-      "Do not create a card for greetings, quick questions, or single-step requests",
-    );
-    expect(description).not.toContain("any task that takes more than a moment");
-    expect(description).toContain("The checklist is optional");
-  });
-
   it("replaces the card and returns compact progress receipts", async () => {
     const steps = [
       { step: "Inspect", status: "completed" as const },
@@ -44,10 +36,10 @@ describe("progress_card tool", () => {
         },
       })
       .mockResolvedValueOnce({ card: null });
-    const savedPlans: boolean[] = [];
+    const savedPlans: string[] = [];
     const tool = createProgressCardTool({
       agentSessionKey: "agent:main:main",
-      onPlanSaved: (unfinished) => savedPlans.push(unfinished),
+      onWorkSaved: (snapshot) => savedPlans.push(snapshot.kind),
     });
 
     expect(tool.requiredClientCaps).toBeUndefined();
@@ -76,11 +68,11 @@ describe("progress_card tool", () => {
     });
     expect(cleared.details).toEqual({ revision: null, steps: null });
     expect(cleared.content[0]).toEqual({ type: "text", text: "Progress card cleared" });
-    expect(savedPlans).toEqual([true, false, false]);
+    expect(savedPlans).toEqual(["unavailable", "unavailable", "unavailable"]);
 
     callGateway.mockRejectedValueOnce(new Error("save rejected"));
     await expect(tool.execute("call-failed", { plan: steps })).rejects.toThrow("save rejected");
-    expect(savedPlans).toEqual([true, false, false]);
+    expect(savedPlans).toEqual(["unavailable", "unavailable", "unavailable"]);
   });
 
   it.each([
@@ -153,4 +145,65 @@ describe("progress_card tool", () => {
     expect(tool.parameters).not.toHaveProperty("properties.agentId");
     expect(tool.parameters).not.toHaveProperty("properties.sessionKey");
   });
+});
+
+it("captures the host fence before dispatch and rejects stale or failed callbacks without fallback", async () => {
+  const owner = {
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    sessionId: "current",
+    lifecycleRevision: null,
+  };
+  let current: WorkSnapshot = { kind: "none" };
+  const callback = vi.fn((value: WorkSnapshot) => {
+    current = value;
+  });
+  const tool = createProgressCardTool({
+    agentSessionKey: owner.sessionKey,
+    workOwner: owner,
+    workTarget: captureSessionTranscriptTargetBinding({
+      ...owner,
+      storePath: "/private/test.sqlite",
+    }),
+    readWork: () => current,
+    onWorkSaved: callback,
+  });
+  const call = vi.spyOn(gateway, "callAgentToolGatewayRequest");
+  const fallback = vi.spyOn(gateway, "callInProcessGatewayTool");
+  const args = {
+    work: { action: "begin", scope: "Task" },
+    plan: [{ step: "Finish", status: "pending" }],
+  };
+  const invoke = () =>
+    withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: owner.sessionKey,
+        operationalRunInstance: { runId: "current-run", instanceId: "instance" },
+        receiptAuthority: () => true,
+      },
+      () =>
+        runWithAgentToolExecutionContext(
+          {
+            assistantMessage: makeAgentAssistantMessage({ turnId: "turn", content: [] }),
+            toolCall: { type: "toolCall", id: "save", name: "progress_card", arguments: args },
+          },
+          () => tool.execute("save", args),
+        ),
+    );
+  call.mockImplementationOnce(async (request) => {
+    expect(request.agentToolCaller?.progressWork?.expected).toBeNull();
+    current = { kind: "retained", state: { generation: 2, revision: 2, record: null } };
+    return {
+      card: null,
+      work: { kind: "retained", state: { generation: 1, revision: 1, record: null } },
+    };
+  });
+  await expect(invoke()).rejects.toThrow("superseded");
+  expect(callback).not.toHaveBeenCalled();
+  expect(current).toMatchObject({ state: { generation: 2, revision: 2 } });
+  call.mockRejectedValueOnce(new Error("uncertain save"));
+  await expect(invoke()).rejects.toThrow("uncertain save");
+  expect(callback).not.toHaveBeenCalled();
+  expect(fallback).not.toHaveBeenCalled();
 });

@@ -15,6 +15,24 @@ const tableSchema = z
     sha256: digest,
     migrationSha256: digest,
     registryRows: z.array(registryRowSchema).max(4096).optional(),
+    progressWorkColumns: z
+      .array(
+        z
+          .object({
+            name: z.enum([
+              "display_kind",
+              "work_json",
+              "work_generation",
+              "work_revision",
+              "work_command_json",
+            ]),
+            sha256: digest,
+            allDefault: z.boolean(),
+          })
+          .strict(),
+      )
+      .max(5)
+      .optional(),
   })
   .strict();
 export const witnessSchema = z

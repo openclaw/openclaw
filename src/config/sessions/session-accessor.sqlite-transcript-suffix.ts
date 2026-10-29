@@ -43,7 +43,10 @@ import {
   prepareFullTranscriptSuffixMutation,
   prepareTranscriptIndexProjection,
 } from "./session-transcript-suffix-projection.js";
-import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
+import {
+  canonicalizeTranscriptEventMedia,
+  preserveSameEntryNativeInvocation,
+} from "./transcript-event-media.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 import {
@@ -109,9 +112,14 @@ function prepareIncrementalTranscriptSuffixMutation(
   const expectedTail = (
     eventsStartAtPersistedPrefix ? expectedEvents : expectedEvents.slice(persistedPrefixLength)
   ).map(canonicalizeTranscriptEventMedia);
+  const originalById = new Map(expectedTail.map((event) => [readTranscriptEventId(event), event]));
   const nextTail = (
     eventsStartAtPersistedPrefix ? nextEvents : nextEvents.slice(persistedPrefixLength)
-  ).map(canonicalizeTranscriptEventMedia);
+  ).map((event) =>
+    canonicalizeTranscriptEventMedia(
+      preserveSameEntryNativeInvocation(event, originalById.get(readTranscriptEventId(event))),
+    ),
+  );
   if (expectedTail.length > SYNC_REBUILD_MAX_ROWS || nextTail.length > SYNC_REBUILD_MAX_ROWS) {
     throw new Error(
       `Transcript suffix exceeds synchronous planning row limit for ${resolved.sessionId}`,

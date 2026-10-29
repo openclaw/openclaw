@@ -1,11 +1,13 @@
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { withoutAgentColdArchiveChunks } from "./openclaw-agent-cold-archive-chunks-schema.js";
+import { PROGRESS_CARD_WORK_COLUMNS } from "./openclaw-agent-db-additive-columns.js";
 import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
+  AGENT_PROGRESS_WORK_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
   AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
   AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
@@ -22,6 +24,8 @@ import {
 } from "./openclaw-agent-session-snapshots-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 import { withoutTrajectoryPayloadColumns } from "./openclaw-agent-trajectory-storage-migration.js";
+
+export { PROGRESS_CARD_WORK_COLUMNS } from "./openclaw-agent-db-additive-columns.js";
 
 // Schema 21–24 kept every raw writer observable through this required trigger group.
 export const LEGACY_ENTRY_VALIDITY_TRIGGERS_SQL = `
@@ -305,12 +309,29 @@ function withLegacyAgentWriteLayout(schema: string): string {
     );
 }
 
+/** Historical SQLite images retain the pre-work progress-card layout. */
+function withoutAgentProgressWork(schema: string): string {
+  return schema.replace(
+    /CREATE TABLE IF NOT EXISTS session_progress_cards \([\s\S]*?\n\) STRICT;/u,
+    (table) =>
+      PROGRESS_CARD_WORK_COLUMNS.reduce(
+        (historical, [column, declaration]) =>
+          historical.replace("  " + column + " " + declaration + ",\n", ""),
+        table,
+      ),
+  );
+}
+
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const progressSchemaSql =
+    targetVersion < AGENT_PROGRESS_WORK_SCHEMA_VERSION
+      ? withoutAgentProgressWork(OPENCLAW_AGENT_SCHEMA_SQL)
+      : OPENCLAW_AGENT_SCHEMA_SQL;
   const coldArchiveSchemaSql =
     targetVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION
-      ? withoutAgentColdArchiveChunks(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      ? withoutAgentColdArchiveChunks(progressSchemaSql)
+      : progressSchemaSql;
   const revisionSchemaSql =
     targetVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION
       ? withLegacyAgentMemoryRevisionTriggers(coldArchiveSchemaSql)
@@ -379,6 +400,9 @@ export const AGENT_PROGRESS_CARD_SCHEMA_SQL = extractSqliteTableSchema(
     includeEndMarker: false,
     errorMessage: "OpenClaw agent progress-card schema markers are missing.",
   },
+);
+export const AGENT_V14_PROGRESS_CARD_SCHEMA_SQL = withoutAgentProgressWork(
+  AGENT_PROGRESS_CARD_SCHEMA_SQL,
 );
 const AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL = OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL.replace(
   AGENT_PROGRESS_CARD_SCHEMA_SQL,

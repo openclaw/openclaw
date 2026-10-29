@@ -323,6 +323,7 @@ export type SessionHistoryWorkerInput =
   | SessionSuggestionsWorkerInput
   | SessionReactionsWorkerInput
   | SessionMembershipFactsWorkerInput
+  | import("./session-transcript-worker-read.types.js").SessionProgressWorkWorkerInput
   | SessionProgressCardWorkerInput
   | PendingInputHistoryWorkerInput
   | PendingInputOrphansWorkerInput
@@ -451,6 +452,10 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "session-suggestions": { kind: "session-suggestions"; suggestions: StoredSessionSuggestion[] };
     "session-reactions": SessionReactionsWorkerResult;
     "session-membership-facts": SessionMembershipFacts;
+    "session-progress-work": {
+      kind: "session-progress-work";
+      work: import("../../session-cards/progress-card-work.js").ProgressWorkState | undefined;
+    };
     "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
     "goal-operation-receipt": {
       kind: "goal-operation-receipt";
@@ -630,6 +635,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readSuggestions: SessionHistoryReader<"session-suggestions", "suggestions">;
     readReactions: SessionHistoryReader<"session-reactions", "reactions">;
     readMembershipFacts: SessionHistoryReader<"session-membership-facts">;
+    readProgressWork: CancellableSessionHistoryReader<"session-progress-work", "work">;
     readProgressCard: SessionHistoryReader<"session-progress-card", "card">;
     readConversationDelivery: SessionHistoryReader<"conversation-delivery", "record">;
     readGoalOperationReceipt: SessionHistoryReader<"goal-operation-receipt", "result">;

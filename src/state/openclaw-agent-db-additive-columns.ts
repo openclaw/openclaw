@@ -1,5 +1,13 @@
 import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 
+export const PROGRESS_CARD_WORK_COLUMNS = [
+  ["display_kind", "TEXT NOT NULL DEFAULT 'independent'"],
+  ["work_json", "TEXT"],
+  ["work_generation", "INTEGER NOT NULL DEFAULT 0"],
+  ["work_revision", "INTEGER NOT NULL DEFAULT 0"],
+  ["work_command_json", "TEXT"],
+] as const;
+
 type BareNullableSqliteDatatype = "INTEGER" | "TEXT";
 
 type LazyAdditiveAgentColumnDefinition = {
@@ -56,7 +64,13 @@ export function hasPendingAgentStartupColumns(
   tableSql: ReadonlyMap<string, string | null>,
 ): boolean {
   const columns = new Map<string, ReadonlyMap<string, string>>();
-  return STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS.some(({ tableName, columnName }) => {
+  return [
+    ...STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS,
+    ...PROGRESS_CARD_WORK_COLUMNS.map(([columnName]) => ({
+      tableName: "session_progress_cards",
+      columnName,
+    })),
+  ].some(({ tableName, columnName }) => {
     if (!tableSql.has(tableName)) {
       return false;
     }

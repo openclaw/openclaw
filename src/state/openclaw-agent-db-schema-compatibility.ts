@@ -17,7 +17,10 @@ import {
   SESSION_PENDING_INPUTS_TABLE,
   SESSION_INPUT_COMPLETIONS_TABLE,
 } from "./openclaw-agent-pending-inputs-schema.js";
-import { SESSION_PROGRESS_CARDS_TABLE } from "./openclaw-agent-progress-card-schema.js";
+import {
+  SESSION_PROGRESS_CARDS_TABLE,
+  PROGRESS_CARD_WORK_COLUMNS,
+} from "./openclaw-agent-progress-card-schema.js";
 import { SESSION_TRANSCRIPT_ARCHIVES_TABLE } from "./openclaw-agent-session-transcript-archive-schema.js";
 import {
   STANDING_INTENTS_FTS_SHADOW_TABLES,
@@ -46,6 +49,7 @@ export const AGENT_SCHEMA_COMPATIBILITY = {
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
   allowedMissingColumns: [
+    ...PROGRESS_CARD_WORK_COLUMNS.map(([column]) => SESSION_PROGRESS_CARDS_TABLE + "." + column),
     ...STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS.map(
       ({ columnName, tableName }) => `${tableName}.${columnName}`,
     ),

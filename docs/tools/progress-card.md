@@ -7,9 +7,9 @@ read_when:
   - You need the progress_card input, limits, rendering, or clearing contract
 ---
 
-`progress_card` is the single agent status tool for a session. It stores an ordered step plan, a compact Markdown note, or both. Each call replaces the whole card, so the latest write is the source of truth for someone following the work without reading the transcript.
+`progress_card` is the single agent status tool for a session. It stores an ordered step plan, a compact Markdown note, or both. Each call replaces the displayed card. Retained task obligations are separate: removing the displayed checklist does not cancel unfinished work.
 
-The card belongs to the parent session the user is talking to and its agent. Spawned sub-agents never receive `progress_card` or its prompt reminder, including visible dashboard children and resumed children. Their results return to the parent, which owns progress updates. The tool binds the session and agent from the running session; the model only supplies `markdown` and `plan`.
+The card belongs to the parent session the user is talking to and its agent. Spawned sub-agents never receive `progress_card` or its prompt reminder, including visible dashboard children and resumed children. Their results return to the parent, which owns progress updates. The tool binds the session and agent from the running session; the model supplies presentation (`markdown` and `plan`) and optional explicit `work` intent. It never supplies the retained-task owner or revision fence.
 
 The card is durable session state. A reconnect or page reload reads the latest card from the Gateway instead of reconstructing it from tool events or transcript history. The transcript keeps only a short update receipt, not another full copy of the card.
 
@@ -27,7 +27,7 @@ The reminder does not override tool policy. `tools.updatePlan: false` or a match
 
 ## Update a card
 
-Both input fields are optional:
+Presentation fields are optional:
 
 - `plan`: up to 50 ordered steps. Each step has non-empty `step` text and a `status` of `pending`, `in_progress`, or `completed`. At most one step may be `in_progress`.
 - `markdown`: a compact narrative about what happened, what is blocked, or what comes next. Use it when a glanceable note says more than the step list; do not repeat the plan in Markdown.
@@ -53,15 +53,26 @@ For genuinely sequential work, a checklist can show the current phase:
 }
 ```
 
-Every call is a replacement, not a patch. Omitting `markdown` removes the previous note; omitting `plan` removes the previous checklist.
+Every call replaces the displayed card, not the retained task. Omitting `markdown` removes the previous note; omitting `plan` removes the displayed checklist without canceling unfinished obligations.
+
+For admitted agent runs, the first nonempty plan begins retained work. Subsequent plans must account for every unresolved step. Explicit `work` intent controls task changes:
+
+- `{ "action": "begin", "scope": "..." }` begins a task with a nonempty plan.
+- `{ "action": "replace", "scope": "..." }` replaces the task with a new nonempty plan.
+- `{ "action": "reconcile", "disposition": "completed" }` completes a fully reconciled, completed plan.
+- `{ "action": "paused-blocked", "reason": "...", "resumeCondition": "..." }` records a genuine hold.
+- `{ "action": "reconcile", "disposition": "actionable" }` explicitly resumes or reconciles work under current instructions.
+- `{ "action": "retire" }` retires canceled work. It rejects a session that has no retained task, including a legacy display-only card.
+
+Ordinary plan updates do not resume a hold. Display-only Gateway writes and legacy cards do not create retained tasks or change their disposition. PostgreSQL agent schema 39 adds retained-work columns through the native versioned migration; existing cards remain display-only. SQLite keeps its additive first-write upgrade and read-only legacy behavior.
 
 The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done)` or `Progress card updated (rev 4)` when there is no plan. Its structured result contains the revision and completed/total step counts, or `null` without a plan. Successful writes also update channel previews from the complete plan state. Failed or blocked writes leave the previous plan in place. Active channel previews retain a safe failure notice.
 
 ## Before an active run ends
 
 When a run still owes a visible reply, the built-in agent runtime performs at most
-one completion self-check if that run successfully saves an unfinished checklist
-and then produces a normal final answer. The agent rechecks the latest user instructions: continue feasible,
+one completion self-check for actionable retained work with sufficient bounded execution evidence
+and a normal final answer. A later ordinary turn can hydrate that work without saving the plan again. The agent rechecks the latest user instructions: continue feasible,
 already-authorized work, reconcile completed steps, or explain the concrete reason
 it cannot continue. When its previous reply already explained that reason, the check
 ends silently and that reply remains the answer. This may add one model response; it
@@ -73,29 +84,38 @@ restart the original request. A checkpoint already shown in chat stays in the
 conversation while work continues. A genuine blocker can leave steps pending after
 the check.
 
-Old cards do not restart idle work. Completed, cleared, and note-only replacements
-do not request a check. Cancellation, approval waits, accepted child/media completion handoffs,
+Old cards do not restart idle work. Display clears and note-only replacements do not cancel retained work.
+The runtime reads the admitted physical owner for initial hydration and refreshes eligibility before an otherwise eligible finalization.
+Missing or incomplete execution evidence, lifecycle loss and unknown effects keep the check quiet while retaining valid obligations as context with an unavailable reason.
+Neither unavailable observation nor explicit current reconciliation proves a provider effect absent or authorizes duplicate submission.
+A recorded child or media handoff identifies its existing native owner, not a new completion scheduler or replay mechanism. Media execution observations are process-local: losing the process does not prove failure or cancellation and does not authorize resubmission. Collector children still require explicit collection through the native collector; receiving the result does not complete the retained task without reconciliation.
+Managed writes remain bound to the original physical requester. A configuration change that selects a different store cannot redirect an accepted operation's waiting receipt to an identically named session there.
+Cancellation, approval waits, accepted child/media completion handoffs,
 status-only refreshes, and explicit plugin finalization retain their
 existing behavior. Other agent harnesses retain their own finalization policies.
 
 ## Pause without marking work complete
 
 If no authorized step can proceed because of an explicit pause, required approval,
-or an external dependency, replace the checklist with a Markdown-only card. Keep
+or an external dependency, record an explicit `work.action: "paused-blocked"` with `reason` and `resumeCondition`, and replace the displayed checklist with a note. Keep
 the unfinished work, blocker, responsible owner, and resume condition visible.
 Do not mark blocked steps completed or imply that the request is finished.
 
 ```json
 {
-  "markdown": "Update remains open and paused. Waiting for the source owner to publish the reviewed repair. No deployment is authorized; reconcile the new packet and current instructions before resuming."
+  "work": {
+    "action": "paused-blocked",
+    "reason": "Waiting for the source owner to publish the reviewed repair",
+    "resumeCondition": "Reviewed repair is available and current instructions permit continuation"
+  },
+  "markdown": "Update remains open and paused. No deployment is authorized."
 }
 ```
 
 Omitting `plan` removes the checklist, not the note or the task’s unresolved work.
-A note-only replacement does not request a completion self-check. Re-saving an
-unfinished checklist during a later ordinary turn can request another check, even
-when the same blocker remains. Restore a checklist when authorized work can
-proceed; keep any other unresolved dependencies in the note.
+A note-only replacement cannot pause, complete, cancel or resume retained work.
+To resume, explicitly reconcile with `disposition: "actionable"` under current instructions.
+Persisted waiting and paused work remain quiet until explicit reconciliation.
 
 ## Format the note
 
@@ -133,7 +153,7 @@ Call `progress_card` with both parts absent or empty to remove the current card:
 {}
 ```
 
-An empty plan plus empty or whitespace-only Markdown also clears it. A successful clear returns `Progress card cleared`. Channel previews remove the checklist and its status, keep other activity, and delete an otherwise empty draft. A later card update can create a new draft.
+Clearing presentation does not retire retained work; use explicit `work.action: "retire"` for cancellation. An empty plan plus empty or whitespace-only Markdown also clears the display. A successful clear returns `Progress card cleared`. Channel previews remove the checklist and its status, keep other activity, and delete an otherwise empty draft. A later card update can create a new draft.
 
 In the Control UI, **Dismiss progress card** (×) hides the card only in the chat pane where it was clicked, whether expanded or collapsed. Anyone who can view the card can hide it, including for unfinished, paused, completed, and note-only cards.
 
@@ -141,7 +161,7 @@ The click does not write to the Gateway or change the saved card, other clients,
 
 Users with write access can instead select **Clear saved progress for everyone** in the task progress options menu in Details, or use the trash action in an embedded composer. This retains the revision-checked shared clear: if a newer card revision has arrived, it is kept rather than erased. Agents can also clear saved progress with the `progress_card` tool and both fields empty.
 
-A full in-place conversation reset (`/reset` without `soft`, or `sessions.reset`) also clears the previous task’s card. The clear commits with the reset boundary and refreshes subscribed clients; a fresh page load also sees no old card. Writes admitted before that reset cannot restore it. Reset preserves transcript history and dashboard layout. Automatic continuity resets that preserve prior context do not clear the card.
+A full in-place conversation reset (`/reset` without `soft`, or `sessions.reset`) also clears the previous task’s card. The clear commits with the reset boundary and refreshes subscribed clients; a fresh page load also sees no old card. Writes admitted before that reset cannot restore it. Reset preserves transcript history and dashboard layout. Automatic continuity resets that preserve prior context retain the card and task obligations, but do not inherit completion-check eligibility. Current explicit reconciliation is required before the retained work can become eligible again.
 
 ## Where the card appears
 

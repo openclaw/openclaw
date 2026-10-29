@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
+import { copyInternalNativeInvocationStorage } from "../../../packages/agent-core/src/internal-hooks.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
 import {
@@ -67,7 +68,11 @@ import {
 } from "./session-transcript-index.js";
 import { hasTranscriptMessage } from "./session-transcript-projection-append.js";
 import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reconcile.js";
-import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
+import {
+  canonicalizeTranscriptEventMedia,
+  prepareTranscriptNativeInvocation,
+  stripTranscriptEventNativeInvocation,
+} from "./transcript-event-media.js";
 import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
 import {
   createTranscriptEventInserter,
@@ -95,7 +100,9 @@ export function appendTranscriptEventInTransaction(
         ? cursor.rowTranscript.lastAssistantMessage
         : "unknown";
   const persistedEvent =
-    options.eventJson === undefined ? canonicalizeTranscriptEventMedia(event) : event;
+    options.eventJson === undefined
+      ? canonicalizeTranscriptEventMedia(stripTranscriptEventNativeInvocation(event))
+      : event;
   return withSqliteDatabaseWriteScope(
     database.db,
     [scope.sessionKey, sqliteSessionIdWriteScope(scope.sessionId)],
@@ -541,7 +548,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
       try {
         for (const [eventIndex, event] of events.entries()) {
           const persistedEvent = withoutSqliteDatabaseWriteScope(database.db, () =>
-            canonicalizeTranscriptEventMedia(event),
+            canonicalizeTranscriptEventMedia(stripTranscriptEventNativeInvocation(event)),
           );
           const createdAt =
             options.createdAtByIndex?.[eventIndex] ??
@@ -612,9 +619,12 @@ export function replaceSqliteTranscriptEventsInTransaction(
 }
 
 export function sanitizeTranscriptMessageForStorage<TMessage>(message: TMessage): TMessage {
-  return isTranscriptAgentMessage(message)
-    ? (sanitizeTranscriptMessage(message) as TMessage)
-    : message;
+  if (!isTranscriptAgentMessage(message)) {
+    return message;
+  }
+  const sanitized = sanitizeTranscriptMessage(message);
+  copyInternalNativeInvocationStorage(message, sanitized);
+  return prepareTranscriptNativeInvocation(sanitized) as TMessage; // SAFETY: Sanitization preserves this narrowed message variant while normalizing media/replay fields; preparation only changes private provenance metadata.
 }
 
 function isTranscriptAgentMessage(value: unknown): value is AgentMessage {

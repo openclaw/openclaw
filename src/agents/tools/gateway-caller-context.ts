@@ -51,6 +51,8 @@ type ReceiptAuthority = (() => boolean | void) &
   Pick<SessionSourceAssertion, keyof SessionSourceAssertion>;
 
 type GatewayToolCallerIdentity = {
+  /** Private run-bound retained-work observer; never part of a transport request. */
+  progressWork?: import("./progress-work-wait.js").ProgressWorkWaitBinding;
   watchdogAttempt?: SessionControllerWatchdogAttempt;
   personalToolParticipants?: ReplyTurnParticipants;
   personalToolUser?: string;
@@ -618,6 +620,7 @@ export async function withGatewayToolCallerIdentity<T>(
           ? false
           : inheritedValue("fullPermission"),
       operationalRunInstance: inheritedValue("operationalRunInstance"),
+      progressWork: inheritedValue("progressWork"),
       embeddedRunToolAuthorityBinding:
         identity.embeddedRunToolAuthorityBinding ?? inheritedOwner?.embeddedRunToolAuthorityBinding,
       approvalAuthority,

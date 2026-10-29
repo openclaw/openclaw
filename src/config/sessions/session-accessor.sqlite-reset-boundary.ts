@@ -1,4 +1,7 @@
-import { clearSessionProgressCardForReset } from "../../session-cards/progress-card-store.js";
+import {
+  clearSessionProgressCardForReset,
+  carrySessionProgressWorkForReset,
+} from "../../session-cards/progress-card-store.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
   deferOpenClawAgentPostCommitPublication,
@@ -13,12 +16,13 @@ import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.j
 import { resolveResetBoundaryHeaderCwd } from "./transcript-header.js";
 import type { InternalSessionEntry } from "./types.js";
 
-/** Transcript reset and prior-task retirement share the owning guarded transaction. */
+/** The guarded reset transaction retires or transfers prior work according to lifecycle intent. */
 export function appendSessionResetBoundary(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
   previousEntry: InternalSessionEntry,
   boundary: SessionResetBoundaryWrite,
+  nextEntry: InternalSessionEntry,
   projection?: {
     scheduleProjectionReconcile?: boolean;
     onProjectionReconcileNeeded?: () => void;
@@ -39,6 +43,19 @@ export function appendSessionResetBoundary(
   });
   if (appendTranscriptEventInTransaction(database, scope, event, projection) === false) {
     throw new Error("Failed to append reset boundary for " + scope.sessionKey);
+  }
+  if (boundary.context === "preserve-tail") {
+    const owner = {
+      agentId: scope.agentId,
+      sessionKey: scope.sessionKey,
+      sessionId: previousEntry.sessionId,
+      lifecycleRevision: previousEntry.lifecycleRevision ?? null,
+    };
+    carrySessionProgressWorkForReset(database.db, owner, {
+      ...owner,
+      sessionId: nextEntry.sessionId,
+      lifecycleRevision: nextEntry.lifecycleRevision ?? null,
+    });
   }
   if (
     boundary.context === "clear" &&

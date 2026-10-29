@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { copyInternalNativeInvocationStorage } from "../../../packages/agent-core/src/internal-hooks.js";
 import {
   decodeMetadataAppendEvent,
   sessionMetadataAppendNeedsReload,
@@ -45,6 +46,10 @@ import {
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type { SessionTurnCommitted, SessionTurnPlan } from "./session-turn.types.js";
 import { resolveSessionWorkStartError } from "./session-work-start.js";
+import {
+  prepareTranscriptNativeInvocation,
+  stripTranscriptNativeInvocation,
+} from "./transcript-event-media.js";
 import { selectSessionTranscriptTreePathNodes } from "./transcript-tree.js";
 import { mergeSessionEntry } from "./types.js";
 
@@ -142,13 +147,18 @@ export function createSessionActorMemoryTranscript(options: {
       if (input.message.validateTurn && !rebasePrepared(input, event.parentId)) {
         throw new SqliteTranscriptMutationConflictError(input.scope.sessionId);
       }
+      copyInternalNativeInvocationStorage(input.message, event.message, event.id);
+      const preparedMessage = prepareTranscriptNativeInvocation(event.message);
       const appended = appendMessage({
         ...input.options,
         expectedMutationAt: input.message.validateTurn
           ? undefined
           : input.options.expectedMutationAt,
-        message: event.message,
-        messageJson: input.message.messageJson,
+        message: preparedMessage,
+        messageJson:
+          preparedMessage === event.message
+            ? input.message.messageJson
+            : JSON.stringify(preparedMessage),
         eventId: event.id,
         parentId: event.parentId,
         now: Date.parse(event.timestamp),
@@ -259,9 +269,13 @@ export function createSessionActorMemoryTranscript(options: {
           throw new Error("Invalid serialized session transcript message");
         }
         const before = version();
+        const strippedMessage = stripTranscriptNativeInvocation(message);
         const appended = appendMessage({
-          message,
-          messageJson: append.input.messageJson,
+          message: strippedMessage,
+          messageJson:
+            strippedMessage === message
+              ? append.input.messageJson
+              : JSON.stringify(strippedMessage),
           cwd: append.input.cwd,
           custody: append.input.pendingInput,
           fresh: append.input.freshMessageCheck

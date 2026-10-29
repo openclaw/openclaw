@@ -1,11 +1,22 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { observeInternalNativeInvocation } from "../../../../packages/agent-core/src/internal-hooks.js";
 import type { ProgressCardPutResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import {
+  resetSessionEntryLifecycle,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
+import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
+import { progressCardStore } from "../../../gateway/progress-card-store.js";
+import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
 import type { Context, Model } from "../../../llm/types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
 import { createReplyOperation, type ReplyOperation } from "../../../sessions/session-controller.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createOpenClawCodingToolsInternal } from "../../agent-tools.js";
+import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -14,14 +25,35 @@ import {
   streamMocks,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import * as gatewayTool from "../../tools/in-process-gateway.js";
 import { createProgressCardTool } from "../../tools/progress-card-tool.js";
 import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "../runs.test-support.js";
 import { prepareCatalogExecutor } from "./attempt-stream-prepare.test-support.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
+import { captureProgressWorkReader } from "./progress-work.js";
+import type { EmbeddedRunCompletionCheck } from "./terminal-retry-state.js";
 
 registerAgentSessionLoopTestLifecycle();
+const workOwner = {
+  agentId: "main",
+  sessionKey: "agent:main:main",
+  sessionId: "session-output-schema",
+  lifecycleRevision: null,
+};
+const runWithCaller = <T>(run: () => Promise<T>) =>
+  withGatewayToolCallerIdentity(
+    {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: { runId: "test", instanceId: "test" },
+      receiptAuthority: () => true,
+    },
+    run,
+  );
 const streams: ReturnType<typeof prepareCatalogExecutor>[] = [];
 let replyOperation: ReplyOperation;
 beforeEach(() => {
@@ -60,8 +92,28 @@ function toolCall(id: string, name: string, args: Record<string, unknown> = {}) 
 }
 function cardWith(
   steps: NonNullable<ProgressCardPutResult["card"]>["steps"],
-): ProgressCardPutResult {
-  return { card: { sessionKey: "agent:main:main", steps, revision: 1, updatedAt: 1 } };
+): ProgressCardPutResult & {
+  work: import("../../../session-cards/progress-card-work-intent.js").WorkSnapshot;
+} {
+  return {
+    card: { sessionKey: "agent:main:main", steps, revision: 1, updatedAt: 1 },
+    work: {
+      kind: "retained",
+      coverage: { kind: "covered", basis: "bounded-no-handoff" },
+      state: {
+        generation: 1,
+        revision: 1,
+        record: {
+          version: 1,
+          owner: workOwner,
+          source: { runId: "test", turnId: "test", toolCallId: "save", processGeneration: "test" },
+          scope: "Repair",
+          steps: steps ?? [],
+          disposition: { kind: "actionable" },
+        },
+      },
+    },
+  };
 }
 
 function prepare(options: Parameters<typeof prepareCatalogExecutor>[0]) {
@@ -88,24 +140,30 @@ it.each([
 ])(
   "continues a committed unfinished plan without repeating completed effects (nested=$nested, nonStreamedMedia=$nonStreamedMedia)",
   async ({ nested, nonStreamedMedia }) => {
-    const completionCheck = { unfinishedPlan: false, checked: false };
+    const completionCheck: EmbeddedRunCompletionCheck = { work: { kind: "none" }, checked: false };
     const plan = [
       { step: "Inspect", status: "completed" as const },
       { step: "Publish repair", status: "completed" as const },
       { step: "Repair remaining failure", status: "pending" as const },
     ];
     using gatewayCall = vi
-      .spyOn(gatewayTool, "callInProcessGatewayTool")
+      .spyOn(gatewayTool, "callAgentToolGatewayRequest")
       .mockResolvedValue(cardWith(plan));
     const progress = createOpenClawCodingToolsInternal({
       agentId: "main",
       sessionKey: "agent:main:main",
+      progressWorkOwner: workOwner,
+      progressWorkTarget: captureSessionTranscriptTargetBinding({
+        ...workOwner,
+        storePath: "/private/test.sqlite",
+      }),
+      readProgressCardWork: () => completionCheck.work,
+      onProgressCardWorkSaved: (snapshot) => {
+        completionCheck.work = snapshot;
+      },
       config: {
         plugins: { enabled: false },
         tools: { allow: ["progress_card"], toolSearch: false },
-      },
-      onProgressCardPlanSaved: (unfinished) => {
-        completionCheck.unfinishedPlan = unfinished;
       },
     }).find((tool) => tool.name === "progress_card");
     if (!progress) {
@@ -175,7 +233,7 @@ it.each([
         const check = context.messages.findLast(
           (message) =>
             message.role === "user" &&
-            JSON.stringify(message.content).includes("latest successfully saved plan"),
+            JSON.stringify(message.content).includes("retained task still has unfinished steps"),
         );
         expect(check).toBeDefined();
         expect(JSON.stringify(check?.content)).toContain(SILENT_REPLY_TOKEN);
@@ -184,7 +242,7 @@ it.each([
       "Both repairs verified.",
     );
 
-    await session.prompt("Repair both failures and verify them.");
+    await runWithCaller(() => session.prompt("Repair both failures and verify them."));
     await prepared.subscription.waitForPendingEvents();
 
     expect(repair.mock.calls.map(([id]) => id)).toEqual(["first-repair", "remaining-repair"]);
@@ -202,25 +260,102 @@ it.each([
   },
 );
 
-it.each(["no pending plan", "consumed check", "optional status", "authored silence"])(
-  "does not continue after %s",
-  async (state) => {
-    const completionCheck = {
-      unfinishedPlan: state !== "no pending plan",
-      checked: state === "consumed check",
+it("keeps the real finalizer quiet after a same-process preserve-tail reset", async () => {
+  await withOpenClawTestState({ label: "reset-finalizer", scenario: "minimal" }, async (state) => {
+    const now = Date.now();
+    const storePath = state.path("reset-finalizer.sqlite");
+    setRuntimeConfigSnapshot({ session: { store: storePath } });
+    const target = captureSessionTranscriptTargetBinding({
+      ...workOwner,
+      storePath,
+      expectedLifecycleRevision: "before",
+    });
+    await upsertSessionEntryCore(target, {
+      sessionId: target.sessionId,
+      lifecycleRevision: "before",
+      updatedAt: now,
+    });
+    const manager = await SessionManager.openAsync(target, state.workspaceDir);
+    const source = {
+      runId: "before",
+      turnId: "before",
+      toolCallId: "plan",
+      processGeneration: getAgentRunLifecycleGeneration(),
     };
+    installSessionToolResultGuard(manager, { runId: source.runId });
+    await manager.appendMessageAsync(
+      makeAgentAssistantMessage({
+        turnId: source.turnId,
+        stopReason: "toolUse",
+        content: [
+          { type: "toolCall", id: source.toolCallId, name: "progress_card", arguments: {} },
+        ],
+      }),
+    );
+    const nativeResult = {
+      role: "toolResult" as const,
+      toolCallId: source.toolCallId,
+      toolName: "progress_card",
+      content: [{ type: "text" as const, text: "Saved" }],
+      isError: false,
+      timestamp: 1,
+    };
+    observeInternalNativeInvocation(nativeResult, {
+      ...source,
+      toolName: "progress_card",
+      qualification: "managed-progress",
+    });
+    await manager.appendMessageAsync(nativeResult);
+    const reader = captureProgressWorkReader({ target, assertCurrent() {} });
+    const steps = [{ step: "Finish retained work", status: "pending" as const }];
+    await progressCardStore.put(
+      target.sessionKey,
+      {
+        steps,
+        workCommand: {
+          kind: "begin",
+          owner: reader.owner,
+          source,
+          expected: null,
+          scope: "Repair",
+        },
+      },
+      "main",
+    );
+    expect(await reader.read()).toMatchObject({ coverage: { kind: "covered" } });
+    await resetSessionEntryLifecycle({
+      agentId: "main",
+      storePath,
+      target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+      resetBoundary: { context: "preserve-tail", reason: "idle", cwd: state.workspaceDir },
+      buildNextEntry: ({ currentEntry }) => ({
+        ...currentEntry,
+        sessionId: target.sessionId,
+        lifecycleRevision: "after",
+        updatedAt: now + 1,
+      }),
+    });
+    const current = captureProgressWorkReader({
+      target: { ...target, expectedLifecycleRevision: "after" },
+      assertCurrent() {},
+    });
+    const completionCheck: EmbeddedRunCompletionCheck = {
+      work: await current.read(),
+      refresh: () => current.read(),
+      checked: false,
+    };
+    expect(completionCheck.work).toMatchObject({
+      kind: "retained",
+      state: { record: { steps } },
+      coverage: { kind: "unavailable" },
+    });
     const { session } = await createTestSession();
     const prepared = prepare({
       activeSession: session,
-      attempt: {
-        completionCheck,
-        ...(state === "optional status"
-          ? { silentExpected: true, terminalReplyExpectation: "optional" as const }
-          : { terminalReplyExpectation: "required" as const }),
-      },
+      attempt: { completionCheck, terminalReplyExpectation: "required" },
     });
-    const requests = mockTurns(state === "authored silence" ? "NO_REPLY" : "Work is complete.");
-    await session.prompt("Continue only when work remains.");
+    const requests = mockTurns("The retained task needs current reconciliation.");
+    await session.prompt("Report the retained task status.");
     await prepared.subscription.waitForPendingEvents();
     expect(requests()).toBe(1);
     expect(
@@ -229,8 +364,76 @@ it.each(["no pending plan", "consumed check", "optional status", "authored silen
           message.role === "custom" && message.customType === "openclaw.plan-completion-check",
       ),
     ).toHaveLength(0);
-  },
-);
+    expect(await current.read()).toMatchObject({ state: { record: { steps } } });
+  });
+});
+
+it.each([
+  "no pending plan",
+  "consumed check",
+  "optional status",
+  "authored silence",
+  "unavailable coverage",
+  "persisted waiting",
+  "paused work",
+  "failed refresh",
+])("does not continue after %s", async (state) => {
+  const completionCheck: EmbeddedRunCompletionCheck = {
+    work:
+      state === "no pending plan"
+        ? { kind: "none" }
+        : cardWith([{ step: "Remaining", status: "pending" }]).work,
+    checked: state === "consumed check",
+  };
+  if (completionCheck.work.kind === "retained") {
+    if (state === "unavailable coverage") {
+      completionCheck.work.coverage = {
+        kind: "unavailable",
+        reason: "Lifecycle history unavailable",
+      };
+    }
+    const record = completionCheck.work.state.record!;
+    if (state === "persisted waiting") {
+      record.disposition = {
+        kind: "waiting",
+        source: record.source,
+        receipt: { kind: "media", runId: "accepted-media", taskId: "task" },
+        resumeCondition: "Native delivery",
+      };
+    }
+    if (state === "paused work") {
+      record.disposition = {
+        kind: "paused-blocked",
+        source: record.source,
+        reason: "Approval",
+        resumeCondition: "User decision",
+      };
+    }
+    if (state === "failed refresh") {
+      completionCheck.refresh = async () => ({ kind: "unavailable", reason: "Owner replaced" });
+    }
+  }
+  const { session } = await createTestSession();
+  const prepared = prepare({
+    activeSession: session,
+    attempt: {
+      completionCheck,
+      ...(state === "optional status"
+        ? { silentExpected: true, terminalReplyExpectation: "optional" as const }
+        : { terminalReplyExpectation: "required" as const }),
+    },
+  });
+  const requests = mockTurns(state === "authored silence" ? "NO_REPLY" : "Work is complete.");
+  await session.prompt("Continue only when work remains.");
+  await prepared.subscription.waitForPendingEvents();
+  expect(requests()).toBe(1);
+  expect(
+    session.messages.filter(
+      (message) =>
+        message.role === "custom" && message.customType === "openclaw.plan-completion-check",
+    ),
+  ).toHaveLength(0);
+});
 
 it.each([
   { owner: "plugin finalize", checks: 0 },
@@ -243,9 +446,9 @@ it.each([
   { owner: "hook budget exhausted", checks: 1 },
   { owner: "side-effecting hook revision", checks: 1 },
 ])("preserves $owner policy with $checks completion checks", async ({ owner, checks }) => {
-  const completionCheck = { unfinishedPlan: false, checked: false };
+  const completionCheck: EmbeddedRunCompletionCheck = { work: { kind: "none" }, checked: false };
   const plan = [{ step: "Remaining repair", status: "pending" as const }];
-  vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(cardWith(plan));
+  vi.spyOn(gatewayTool, "callAgentToolGatewayRequest").mockResolvedValue(cardWith(plan));
   const controller = new AbortController();
   const onFinalize = vi.fn(async () => {
     if (owner === "closed during hook") {
@@ -284,8 +487,14 @@ it.each([
   });
   const progress = createProgressCardTool({
     agentSessionKey: "agent:main:main",
-    onPlanSaved: (unfinished) => {
-      completionCheck.unfinishedPlan = unfinished;
+    workOwner,
+    workTarget: captureSessionTranscriptTargetBinding({
+      ...workOwner,
+      storePath: "/private/test.sqlite",
+    }),
+    readWork: () => completionCheck.work,
+    onWorkSaved: (snapshot) => {
+      completionCheck.work = snapshot;
     },
   });
   const { session } = await createTestSession({ customTools: [progress] });
@@ -310,7 +519,7 @@ it.each([
     }),
   });
 
-  await session.prompt("Repair the remaining failure.");
+  await runWithCaller(() => session.prompt("Repair the remaining failure."));
   await prepared.subscription.waitForPendingEvents();
   expect(requests()).toBe(2 + checks);
   expect(completionCheck.checked).toBe(checks > 0);

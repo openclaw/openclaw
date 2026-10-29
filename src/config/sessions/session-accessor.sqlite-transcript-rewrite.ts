@@ -29,7 +29,11 @@ import {
   transcriptRewritePreservesAdmission,
   transcriptRewritePreservesProjection,
 } from "./session-transcript-rewrite-effects.js";
-import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
+import {
+  canonicalizeTranscriptEventMedia,
+  preserveSameEntryNativeInvocation,
+  stripTranscriptEventNativeInvocation,
+} from "./transcript-event-media.js";
 import {
   createTranscriptPayloadUpdater,
   prepareTranscriptPayload,
@@ -54,7 +58,11 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
   const writeScopes = new Set([resolved.sessionKey, sqliteSessionIdWriteScope(resolved.sessionId)]);
   const rewrites = rows.map((row) => {
     writeScopes.add(modelContextPageWriteScope(resolved.sessionId, row.seq));
-    const eventJson = JSON.stringify(canonicalizeTranscriptEventMedia(row.event));
+    const eventJson = JSON.stringify(
+      canonicalizeTranscriptEventMedia(
+        preserveSameEntryNativeInvocation(row.event, JSON.parse(row.expectedEventJson)),
+      ),
+    );
     return {
       ...row,
       eventJson,
@@ -194,7 +202,13 @@ export function updateSqliteTranscriptEventJsonInTransaction(
       shouldRebuildSessionTranscriptIndexSynchronously(database.db, sessionId);
     const update = createTranscriptPayloadUpdater(database.db, sessionId);
     for (const row of updates) {
-      update({ seq: row.seq, ...prepareTranscriptPayload(database.db, row.eventJson) });
+      update({
+        seq: row.seq,
+        ...prepareTranscriptPayload(
+          database.db,
+          JSON.stringify(stripTranscriptEventNativeInvocation(JSON.parse(row.eventJson))),
+        ),
+      });
     }
     const generation = rotateTranscriptGenerationInTransaction(database, sessionId);
     priorWorkspace?.commit(generation);

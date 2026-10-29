@@ -384,6 +384,11 @@ CREATE TABLE IF NOT EXISTS session_progress_cards (
   revision INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  display_kind TEXT NOT NULL DEFAULT 'independent',
+  work_json TEXT,
+  work_generation INTEGER NOT NULL DEFAULT 0,
+  work_revision INTEGER NOT NULL DEFAULT 0,
+  work_command_json TEXT,
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
 

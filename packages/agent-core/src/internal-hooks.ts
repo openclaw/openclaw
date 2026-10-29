@@ -131,6 +131,109 @@ const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultA
 const toolResultProvenanceByValue = new WeakMap<object, object>();
 const toolResultContentSourceByValue = new WeakMap<object, ToolResultContentSource>();
 
+export type NativeInvocationFact = Readonly<{
+  runId: string;
+  turnId: string;
+  toolCallId: string;
+  toolName: string;
+  processGeneration: string;
+  qualification: "read" | "managed-progress" | "unqualified";
+}>;
+
+// This slot is separate from effect, refusal, reply and acknowledgement provenance.
+class NativeInvocationObservation {
+  readonly #native = true;
+  static is(value: object): value is NativeInvocationObservation {
+    return #native in value && value.#native;
+  }
+  constructor(readonly fact: NativeInvocationFact) {
+    this.fact = Object.freeze({ ...fact });
+    Object.freeze(this);
+  }
+}
+const nativeInvocationByValue = new WeakMap<object, NativeInvocationObservation>();
+
+export function observeInternalNativeInvocation(value: object, fact: NativeInvocationFact): void {
+  nativeInvocationByValue.set(value, new NativeInvocationObservation(fact));
+}
+
+export function getInternalNativeInvocation(
+  value: object,
+): NativeInvocationObservation | undefined {
+  return nativeInvocationByValue.get(value);
+}
+
+export function retainInternalNativeInvocation(
+  value: object,
+  origin: NativeInvocationObservation | undefined,
+): void {
+  if (origin && NativeInvocationObservation.is(origin)) {
+    nativeInvocationByValue.set(value, origin);
+  } else {
+    nativeInvocationByValue.delete(value);
+  }
+}
+
+// Only the canonical result writer creates this pre-serialization receipt. Raw
+// execution observations and returned transcript copies cannot mint fresh entries.
+const nativeInvocationStorageByValue = new WeakMap<
+  object,
+  Readonly<
+    NativeInvocationFact & {
+      v: 1;
+      sourceEntryId: string;
+      entryId?: string;
+      owner: Readonly<{
+        agentId: string;
+        sessionKey: string;
+        sessionId: string;
+        lifecycleRevision: string | null;
+      }>;
+    }
+  >
+>();
+export function admitInternalNativeInvocationStorage(
+  value: object,
+  origin: ReturnType<typeof getInternalNativeInvocation>,
+  sourceEntryId: string,
+  owner: {
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision: string | null;
+  },
+): void {
+  if (origin && NativeInvocationObservation.is(origin)) {
+    nativeInvocationStorageByValue.set(
+      value,
+      Object.freeze({ v: 1, ...origin.fact, sourceEntryId, owner: Object.freeze({ ...owner }) }),
+    );
+  }
+}
+export function clearInternalNativeInvocationStorage(value: object): void {
+  nativeInvocationStorageByValue.delete(value);
+}
+export function getInternalNativeInvocationStorage(value: object) {
+  return nativeInvocationStorageByValue.get(value);
+}
+export function copyInternalNativeInvocationStorage(
+  source: object,
+  target: object,
+  entryId?: string,
+): void {
+  const fact = nativeInvocationStorageByValue.get(source);
+  if (!fact) {
+    return;
+  }
+  if (entryId && fact.entryId && fact.entryId !== entryId) {
+    nativeInvocationStorageByValue.delete(target);
+    return;
+  }
+  const bound = entryId ? Object.freeze({ ...fact, entryId }) : fact;
+  nativeInvocationStorageByValue.set(source, bound);
+  nativeInvocationStorageByValue.set(target, bound);
+}
+
 /** Copy present private state without clearing a target's existing slot. */
 function copyInternalSlot<T>(slots: WeakMap<object, T>, source: object, target: object): void {
   const value = slots.get(source);
@@ -293,6 +396,7 @@ export function copyInternalToolResultState<T extends object>(source: object, ta
   copyInternalSlot(toolResultAcknowledgementByValue, source, target);
   copyInternalSlot(toolResultProvenanceByValue, source, target);
   copyInternalSlot(toolResultContentSourceByValue, source, target);
+  retainInternalNativeInvocation(target, nativeInvocationByValue.get(source));
   return target;
 }
 

@@ -466,41 +466,41 @@
       "name": "session_transcript_fts_rows_after_delete",
       "table": "session_transcript_fts_rows",
       "range": [
-        32032,
-        32215
+        32218,
+        32401
       ]
     },
     {
       "name": "standing_intents_fts_after_delete",
       "table": "standing_intents",
       "range": [
-        29572,
-        29819
+        29758,
+        30005
       ]
     },
     {
       "name": "standing_intents_fts_after_insert",
       "table": "standing_intents",
       "range": [
-        29355,
-        29570
+        29541,
+        29756
       ]
     },
     {
       "name": "standing_intents_fts_after_update",
       "table": "standing_intents",
       "range": [
-        29821,
-        30197
+        30007,
+        30383
       ]
     }
   ],
   "preData": [
     0,
-    30229
+    30459
   ],
   "postData": [
-    30229,
-    45975
+    30459,
+    46205
   ]
 }

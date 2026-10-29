@@ -104,8 +104,13 @@ export type OpenClawSharedToolsOptions = {
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
+  progressWorkTarget?: import("../config/sessions/transcript-target-binding.js").CapturedSessionTranscriptTargetBinding;
+  progressWorkOwner?: import("../session-cards/progress-card-work.js").ProgressOwner;
+  readProgressCardWork?: () => import("../session-cards/progress-card-work-intent.js").WorkSnapshot;
   /** Host-only observation after a canonical progress-card replacement commits. */
-  onProgressCardPlanSaved?: (unfinished: boolean) => void;
+  onProgressCardWorkSaved?: (
+    snapshot: import("../session-cards/progress-card-work-intent.js").WorkSnapshot,
+  ) => void;
   onYield?: SessionsYieldCallback;
   claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
   /** Records hot-path tool-prep stages for reply startup diagnostics. */

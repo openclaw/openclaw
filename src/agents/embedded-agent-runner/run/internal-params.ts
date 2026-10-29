@@ -1,7 +1,7 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { SessionAdmissionTransition } from "../../../config/sessions/session-admission-transition.types.js";
 import type { PreparedSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
-import type { SessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
+import type { CapturedSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { Model } from "../../../llm/types.js";
 import type { ReplyMessageJoinObservation } from "../../../sessions/session-controller.message-join-observation.js";
@@ -125,7 +125,9 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     bindWatchdogAttempt?: (attempt: SessionControllerWatchdogAttempt) => void;
     /** The dispatch owner already selected this target, including any compaction successor. */
     preparedSessionTarget?: {
-      readonly target: Readonly<BoundAgentRunSessionTarget & SessionTranscriptTargetBinding>;
+      readonly target: Readonly<
+        BoundAgentRunSessionTarget & CapturedSessionTranscriptTargetBinding
+      >;
       assertCurrent: PreparedSessionSourceAssertion;
     };
     /** Frozen source-attempt model view; transcript writer custody remains unchanged. */

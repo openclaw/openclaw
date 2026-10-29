@@ -38,6 +38,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["message.action", { fields: ["sessionKey"], runStart: true }],
   ["plugins.sessionAction", { fields: ["sessionKey"] }],
   ["progressCard.get", { fields: ["sessionKey"], required: true }],
+  ["progressCard.reconcileWork", { fields: ["sessionKey"], required: true }],
   ["progressCard.put", { fields: ["sessionKey"], required: true }],
   ["progressCard.refresh", { fields: ["sessionKey"], required: true, runStart: true }],
   ["send", { fields: ["sessionKey"], runStart: true }],

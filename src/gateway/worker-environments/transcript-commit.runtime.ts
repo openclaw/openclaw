@@ -14,6 +14,7 @@ import { readSessionActorStorageResult } from "../../config/sessions/session-act
 import { restoreSessionColdTranscript } from "../../config/sessions/session-cold-storage.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import { stripTranscriptNativeInvocation } from "../../config/sessions/transcript-event-media.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -81,7 +82,10 @@ async function applyWorkerTranscriptCommit(params: {
   };
   assertCurrent();
   const normalizedMessages = params.messages.map((message) =>
-    attachSessionTranscriptRunId(sanitizeTranscriptMessage(message), params.runId),
+    attachSessionTranscriptRunId(
+      sanitizeTranscriptMessage(stripTranscriptNativeInvocation(message)),
+      params.runId,
+    ),
   );
   const { env: _env, ...scope } = target;
   const input: TranscriptCommitInput = {

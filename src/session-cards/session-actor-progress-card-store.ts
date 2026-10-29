@@ -26,6 +26,8 @@ export function createSessionActorProgressCardStore(
           input: {
             sessionKey: binding.actor.target.sessionKey,
             ...structuredClone({
+              managedWork: input.managedWork,
+              workCommand: input.workCommand,
               markdown: input.markdown,
               steps: input.steps,
               expectedRevision: input.expectedRevision,

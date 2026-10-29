@@ -19,6 +19,7 @@ import type {
 } from "./session-pending-input.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
+import { prepareTranscriptNativeInvocation } from "./transcript-event-media.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { messagesMatchForIdempotentReplay } from "./transcript-message-equality.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -209,8 +210,8 @@ export function createSessionActorMemoryMessages(
     const approvedMessage = usesCustody
       ? acceptedMessage
       : input.preparedMessage
-        ? input.preparedMessage.message
-        : input.message;
+        ? prepareTranscriptNativeInvocation(input.preparedMessage.message)
+        : prepareTranscriptNativeInvocation(input.message);
     if (approvedMessage === undefined) {
       return { result: undefined };
     }

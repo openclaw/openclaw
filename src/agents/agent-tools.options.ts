@@ -154,7 +154,10 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
 export type PluginCodingToolsOptions = Omit<
   OpenClawCodingToolsOptions,
   | "sessionReadScopeKey"
-  | "onProgressCardPlanSaved"
+  | "onProgressCardWorkSaved"
+  | "progressWorkOwner"
+  | "progressWorkTarget"
+  | "readProgressCardWork"
   | "authProfileStoreSource"
   | "onWebSearchConfiguration"
 >;

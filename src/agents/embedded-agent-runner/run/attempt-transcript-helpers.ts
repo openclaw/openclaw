@@ -7,12 +7,15 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
+  composeSessionSourceAssertion,
   sessionEntryCommitGuardOptions,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
+import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -203,4 +206,64 @@ export async function resolveExistingAttemptTranscriptState(params: {
     }
   }
   return { hasBootstrapTranscriptState };
+}
+
+/** Bind attempt and retained-run reads to one captured prompt target, with distinct lifetimes. */
+export function captureAttemptSessionTarget(input: {
+  target: Awaited<ReturnType<typeof resolveAttemptDispatchSessionTarget>>;
+  assertActiveRun: NonNullable<ReturnType<typeof resolveAdmittedRunActiveAssertion>>;
+  isAttemptCurrent: () => boolean;
+  promptState: Pick<
+    PreparedEmbeddedAttemptDispatchInput["sessionPromptState"],
+    "sessionTarget" | "sessionId"
+  >;
+  selectedPromptTarget: PreparedEmbeddedAttemptDispatchInput["sessionPromptState"]["sessionTarget"];
+  sessionId: string;
+}) {
+  const { target, assertActiveRun } = input;
+  if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
+    return undefined;
+  }
+  const assertTargetCurrent = () => {
+    if (
+      input.promptState.sessionId !== input.sessionId ||
+      (["agentId", "sessionId", "sessionKey", "storePath", "threadId"] as const).some(
+        (field) => input.promptState.sessionTarget?.[field] !== input.selectedPromptTarget?.[field],
+      )
+    ) {
+      throw new Error("Session target changed during the outer run");
+    }
+  };
+  const assertAttemptCurrent = () => {
+    if (!input.isAttemptCurrent()) {
+      throw new Error("Session target preparation outlived its attempt");
+    }
+    assertTargetCurrent();
+  };
+  return {
+    target: captureSessionTranscriptTargetBinding({
+      ...target,
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
+    }),
+    assertOuterCurrent() {
+      assertActiveRun();
+      assertTargetCurrent();
+    },
+    assertCurrent: composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
+      assertAttemptCurrent();
+      try {
+        assertSource();
+      } catch (cause) {
+        throw new Error(`Session target preparation outlived its attempt: ${String(cause)}`, {
+          cause,
+        });
+      }
+      // Source callbacks can retire this attempt or replace its selected target.
+      assertAttemptCurrent();
+      assertActiveRun.assertScopeCurrent();
+    }),
+  };
 }

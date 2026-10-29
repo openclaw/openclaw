@@ -37,6 +37,16 @@ export function authorizeGatewayMethod(
   methodRegistry: GatewayMethodRegistryView,
   context: GatewayRequestContext,
 ): { error: ErrorShape | null; sessionScope?: SessionOperatorScope } {
+  if (
+    method === "progressCard.reconcileWork" &&
+    (!client?.internal?.syntheticClient ||
+      !client.internal.agentToolCaller?.progressWork ||
+      !client.internal.agentToolCaller.assertCurrent)
+  ) {
+    return {
+      error: errorShape(ErrorCodes.FORBIDDEN, "Retained work requires current host tool custody"),
+    };
+  }
   // Pre-connect and health requests are allowed through; role/scope checks require the
   // authenticated connect metadata established by the gateway handshake.
   if (!client?.connect || method === "health") {

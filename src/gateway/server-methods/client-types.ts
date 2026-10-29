@@ -20,6 +20,10 @@ export type TrustedAgentToolCaller = Readonly<{
   requesterOrigin?: RequesterOrigin;
   /** Parent audit binding captured with this caller; never grants execution authority. */
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
+  /** Host-only progress invocation custody; never accepted from wire parameters. */
+  progressWork?: import("../../session-cards/progress-card-work-intent.js").ProgressWorkCustody & {
+    target: import("../../config/sessions/transcript-target-binding.js").CapturedSessionTranscriptTargetBinding;
+  };
   /** Exact admitted requester lifetime; identity alone does not establish live authority. */
   assertCurrent?: () => void;
 }>;

@@ -1,3 +1,4 @@
+import { copyInternalNativeInvocationStorage } from "../../../packages/agent-core/src/internal-hooks.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/session-accessor.js";
 import type {
   SessionTranscriptContextVersion,
@@ -5,6 +6,7 @@ import type {
   TranscriptWriteSnapshot,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionActorAppendCommitted } from "../../config/sessions/session-actor-contract.js";
+import { prepareTranscriptNativeInvocation } from "../../config/sessions/transcript-event-media.js";
 import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
 import { isIndexedSessionEntry } from "./session-manager-codec.js";
 import type {
@@ -82,6 +84,10 @@ export function canonicalizeSessionEntry<T extends SessionEntry>(entry: T): T {
   const canonicalEntry = normalizeTranscriptJsonValue(entry, "");
   if (!isIndexedSessionEntry(canonicalEntry) || canonicalEntry.type !== entry.type) {
     throw new Error(`Invalid session transcript entry: ${entry.type}`);
+  }
+  if (canonicalEntry.type === "message" && entry.type === "message") {
+    copyInternalNativeInvocationStorage(entry.message, canonicalEntry.message, canonicalEntry.id);
+    canonicalEntry.message = prepareTranscriptNativeInvocation(canonicalEntry.message);
   }
   // SAFETY: Manager-built envelopes retain T's checked discriminant; the codec validates their JSON storage shape.
   return shareSessionSystemPrompt(canonicalEntry) as T;

@@ -470,7 +470,10 @@ function* createOpenClawToolsSteps(
     ? createProgressCardTool({
         agentSessionKey: sessionKey,
         agentId: sessionAgentId,
-        onPlanSaved: options?.onProgressCardPlanSaved,
+        onWorkSaved: options?.onProgressCardWorkSaved,
+        workOwner: options?.progressWorkOwner,
+        workTarget: options?.progressWorkTarget,
+        readWork: options?.readProgressCardWork,
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);

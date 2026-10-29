@@ -1,3 +1,4 @@
+import { Check } from "typebox/value";
 import {
   ErrorCodes,
   errorShape,
@@ -8,9 +9,25 @@ import {
   type ProgressCardGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  captureMemoryExactSessionReader,
+  assertMemoryExactReadSource,
+} from "../../config/sessions/session-accessor.memory-exact-read.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { sameSessionTranscriptStorePath } from "../../config/sessions/transcript-store-identity.js";
+import {
+  captureSessionTranscriptStorageEnvironment,
+  sameSessionTranscriptStorageEnvironment,
+} from "../../config/sessions/transcript-target-binding.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import {
   normalizeProgressCardInput,
   ProgressCardInputError,
 } from "../../session-cards/progress-card-input.js";
+import {
+  ProgressReconcileParamsSchema,
+  normalizeProgressWorkIntent,
+} from "../../session-cards/progress-card-work-intent.js";
+import { captureGatewaySessionStoreScope } from "../board-store.js";
 import { progressCardStore } from "../progress-card-store.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
@@ -44,6 +61,131 @@ function projectProgressCard(card: ProgressCard | null, scopeKey: string): Progr
 }
 
 export const progressCardHandlers: GatewayRequestHandlers = {
+  "progressCard.reconcileWork": async (invocation) => {
+    const { params, client, respond, context, sessionMutationAuthorization } = invocation;
+    const caller = client?.internal?.agentToolCaller;
+    const custody = caller?.progressWork;
+    const admitted = sessionMutationAuthorization?.admittedTarget;
+    if (
+      !client?.internal?.syntheticClient ||
+      !caller?.assertCurrent ||
+      !custody?.target ||
+      !invocation.sessionMutationCommitGuard ||
+      !admitted
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "Retained work requires guarded host tool custody"),
+      );
+      return;
+    }
+    if (!Check(ProgressReconcileParamsSchema, params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Invalid retained work parameters"),
+      );
+      return;
+    }
+    const session = resolveProgressCardSession(params, context, respond);
+    if (!session) {
+      return;
+    }
+    if (
+      caller.agentId !== session.agentId ||
+      caller.sessionKey !== session.sessionKey ||
+      custody.owner.agentId !== session.agentId ||
+      custody.owner.sessionKey !== session.sessionKey ||
+      custody.owner.sessionId !== admitted.sessionId ||
+      admitted.agentId !== session.agentId ||
+      admitted.sessionKey !== session.sessionKey
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "Retained work caller does not own this incarnation"),
+      );
+      return;
+    }
+    const assertCurrent = () => {
+      invocation.signal?.throwIfAborted();
+      invocation.sessionMutationCommitGuard!();
+      caller.assertCurrent!();
+      sessionMutationAuthorization!.assertCurrent();
+    };
+    try {
+      const input = normalizeProgressCardInput({ markdown: params.markdown, plan: params.plan });
+      const intent = normalizeProgressWorkIntent(params.work);
+      assertCurrent();
+      // Native acceptance keeps the original physical requester even if current
+      // configuration routes an identical session incarnation to another store.
+      const selected = captureGatewaySessionStoreScope(session.sessionKey, session.agentId);
+      const env = captureSessionTranscriptStorageEnvironment(process.env);
+      if (!sameSessionTranscriptStorageEnvironment(custody.target.env, env)) {
+        throw new Error("Retained work storage environment changed");
+      }
+      if (isIncognitoSessionKey(session.sessionKey)) {
+        const original = captureMemoryExactSessionReader(custody.target, assertCurrent);
+        const current = captureMemoryExactSessionReader({ ...selected, env }, assertCurrent);
+        if (!original?.source || !current?.source) {
+          throw new Error("Retained memory owner unavailable");
+        }
+        original.assertCurrent();
+        current.assertCurrent();
+        assertMemoryExactReadSource(original.source, current.source);
+      } else {
+        const original = await prepareSqliteTargetFromSessionStorePath(
+          custody.target.storePath,
+          custody.target,
+          invocation.signal,
+        );
+        const current = await prepareSqliteTargetFromSessionStorePath(
+          selected.storePath,
+          { ...selected, env },
+          invocation.signal,
+        );
+        if (!sameSessionTranscriptStorePath(original.path, current.path)) {
+          throw new Error("Retained work physical requester changed");
+        }
+      }
+      assertCurrent();
+      const { target: _target, ...managedWork } = custody;
+      const result = await progressCardStore.put(
+        session.sessionKey,
+        { ...input, managedWork: { ...managedWork, intent }, assertCurrent },
+        session.agentId,
+      );
+      assertCurrent();
+      context.broadcast(
+        "progressCard.changed",
+        { sessionKey: session.scopeKey, revision: result.card?.revision ?? null },
+        { sessionKeys: [session.sessionKey], agentId: session.agentId },
+      );
+      respond(
+        true,
+        {
+          card: projectProgressCard(result.card, session.scopeKey),
+          work: result.work ? { kind: "retained", state: result.work } : { kind: "none" },
+        },
+        undefined,
+      );
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(
+          error instanceof ProgressCardInputError
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          String(error),
+        ),
+      );
+    }
+  },
   "progressCard.refresh": async (invocation) => {
     const { params, respond, context, sessionMutationAuthorization } = invocation;
     if (

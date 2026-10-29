@@ -13,6 +13,8 @@ import {
 import { ToolArgumentValidationError } from "./errors.js";
 import {
   appendToolLoopWarning,
+  getInternalNativeInvocation,
+  retainInternalNativeInvocation,
   copyInternalToolResultState,
   getInternalToolResultContentSource,
   type InternalToolBatchLifecycle,
@@ -80,6 +82,10 @@ export async function finalizeExecutedToolCall(
   executed: ExecutedToolCallOutcome,
   finalArgs: unknown,
 ): Promise<FinalizedToolCallOutcome> {
+  const nativeOrigin =
+    executed.executionStarted && !executed.isError && !executed.callerCancelled
+      ? getInternalNativeInvocation(executed.result)
+      : undefined;
   let result = executed.result;
   let isError = executed.isError;
 
@@ -114,7 +120,7 @@ export async function finalizeExecutedToolCall(
     }
   }
 
-  return await finalizeToolCallOutcome(
+  const finalized = await finalizeToolCallOutcome(
     batch,
     {
       toolCall: prepared.toolCall,
@@ -129,6 +135,8 @@ export async function finalizeExecutedToolCall(
     },
     finalArgs,
   );
+  retainInternalNativeInvocation(finalized.result, finalized.isError ? undefined : nativeOrigin);
+  return finalized;
 }
 
 export async function completeStartedToolCall(

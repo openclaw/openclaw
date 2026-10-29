@@ -1,3 +1,4 @@
+import { retireProgressWork } from "../../session-cards/progress-card-work.js";
 import { createSessionActorMemoryCollaborationState } from "./session-actor-memory-collaboration-state.js";
 import {
   selectSessionActorMemoryWindow,
@@ -60,6 +61,15 @@ export function installSessionActorMemoryEntry(
     } else {
       delete next.visibility;
     }
+  }
+  const work = state.progressCard?.work?.record;
+  if (
+    state.progressCard &&
+    work &&
+    (work.owner.sessionId !== next.sessionId ||
+      work.owner.lifecycleRevision !== (next.lifecycleRevision ?? null))
+  ) {
+    state.progressCard = retireProgressWork(state.progressCard, Date.now());
   }
   selectSessionActorMemoryWindow(state, next);
   state.sourceCreatedAt ??= resolveSessionWindowCreatedAt(next, next.updatedAt);

@@ -10,6 +10,7 @@ import { admitStoreSearch } from "../infra/database-engine/adapters.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { SearchSchema, StoreSchema } from "../infra/database-engine/contract.js";
+import { createPostgresEngineTestFixture } from "../infra/database-engine/engine-store.test-support.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
@@ -49,6 +50,85 @@ const vector: SearchSchema = {
     },
   },
 };
+
+it.skipIf(!connection)(
+  "admits populated v38 progress cards through the retained-work upgrade",
+  () => {
+    withEngineStoreAdmission(() => {
+      const predecessor: StoreSchema = {
+        ...agentEngineSchema,
+        version: 38,
+        postgres: agentEngineSchema.postgres!.replace(
+          /CREATE TABLE "session_progress_cards" \([\s\S]*?\n\);/u,
+          'CREATE TABLE "session_progress_cards" (\n' +
+            '  "session_key" text COLLATE "C" NOT NULL,\n' +
+            '  "markdown" text COLLATE "C",\n' +
+            '  "steps_json" text COLLATE "C",\n' +
+            '  "revision" bigint NOT NULL,\n' +
+            '  "created_at" bigint NOT NULL,\n' +
+            '  "updated_at" bigint NOT NULL,\n' +
+            '  PRIMARY KEY ("session_key")\n);',
+        ),
+      };
+      using fixture = createPostgresEngineTestFixture({
+        directory: dirs.make("pg-progress-upgrade-"),
+        connection: connection!,
+        schemaPrefix: "progress_upgrade",
+        schema: predecessor,
+      });
+      const old = fixture.open();
+      old.exec("INSERT INTO schema_meta VALUES ('primary', 'agent', 38, 'main', NULL, 1, 1)");
+      old.exec(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES ('agent:main:retained', 'retained', '{}', 1)",
+      );
+      old
+        .prepare("INSERT INTO session_progress_cards VALUES (?, ?, ?, ?, ?, ?)")
+        .run(
+          "agent:main:retained",
+          "Original status",
+          '[{"step":"Finish","status":"pending"}]',
+          7,
+          10,
+          20,
+        );
+      const before = old.prepare("SELECT * FROM session_progress_cards").all();
+      expect(getPostgresPhysicalFacts(old)?.version).toBe(38);
+      expect(before).toEqual([
+        {
+          session_key: "agent:main:retained",
+          markdown: "Original status",
+          steps_json: '[{"step":"Finish","status":"pending"}]',
+          revision: 7,
+          created_at: 10,
+          updated_at: 20,
+        },
+      ]);
+      fixture.invalidate();
+      const migrated = fixture.open(agentEngineSchema);
+      expect(getPostgresPhysicalFacts(migrated)?.version).toBe(39);
+      expect(migrated.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+        schema_version: 39,
+      });
+      expect(migrated.prepare("SELECT * FROM session_progress_cards").all()).toEqual([
+        {
+          ...before[0],
+          display_kind: "independent",
+          work_json: null,
+          work_generation: 0,
+          work_revision: 0,
+          work_command_json: null,
+        },
+      ]);
+      migrated.close();
+      fixture.invalidate();
+      const reopened = fixture.open(agentEngineSchema);
+      expect(getPostgresPhysicalFacts(reopened)?.version).toBe(39);
+      expect(
+        reopened.prepare("SELECT markdown, revision, work_json FROM session_progress_cards").get(),
+      ).toEqual({ markdown: "Original status", revision: 7, work_json: null });
+    });
+  },
+);
 
 function captureStatements(run: () => void) {
   const statements: unknown[] = [];
@@ -232,7 +312,6 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
         });
         expect(stages).toEqual(["transaction", "commit"]);
         expect(tryLock()).toEqual({ locked: 1 });
-        // A second publication must consume the committed definition without reinstalling DDL.
         expect(
           captureStatements(() =>
             admitAgentEngineSearchExtensions(db, paths, () => {
@@ -389,7 +468,7 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
         expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
           schema_version: agentEngineSchema.version,
         });
-        // Exercise both warm and cold function plans: EXPLAIN also counts catalog reads.
+        // Exercise both warm and cold function plans against the same TOAST-read bound.
         for (const cold of [false, true]) {
           if (cold) {
             db.close();

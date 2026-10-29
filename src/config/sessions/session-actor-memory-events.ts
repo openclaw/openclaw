@@ -27,6 +27,10 @@ import {
   preparedAssistantMessagesPreserveTurn,
   resolveTranscriptAppendParent,
 } from "./transcript-append-parent.js";
+import {
+  preserveSameEntryNativeInvocation,
+  stripTranscriptEventNativeInvocation,
+} from "./transcript-event-media.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import {
   scanSessionTranscriptTree,
@@ -105,10 +109,13 @@ export function createSessionActorMemoryEvents(options: {
         };
   };
   const writeEvent = (
-    event: unknown,
-    eventJson = JSON.stringify(event),
+    inputEvent: unknown,
+    inputEventJson?: string,
     lookup?: "scan" | "scan-assistant" | "caller-checked",
   ): boolean => {
+    const event =
+      inputEventJson === undefined ? stripTranscriptEventNativeInvocation(inputEvent) : inputEvent;
+    const eventJson = inputEventJson ?? JSON.stringify(event);
     if (
       isRecord(event) &&
       typeof event.id === "string" &&
@@ -252,7 +259,8 @@ export function createSessionActorMemoryEvents(options: {
       input.appendIntent === "active-branch"
         ? { ...event, parentId: parent({ ...input, parentId: event.parentId }) }
         : event;
-    const appended = writeEvent(resolved, resolved === event ? bytes : undefined);
+    const sanitized = stripTranscriptEventNativeInvocation(resolved);
+    const appended = writeEvent(sanitized, sanitized === event ? bytes : undefined);
     return appended
       ? {
           appended: true as const,
@@ -264,9 +272,24 @@ export function createSessionActorMemoryEvents(options: {
       : { appended: false as const };
   };
   const replaceRows = (
-    rows: SessionActorMemoryState["events"],
+    inputRows: SessionActorMemoryState["events"],
     replacement?: { preserveGeneration?: boolean },
   ) => {
+    const originals = new Map(
+      state.events.flatMap((row) =>
+        isRecord(row.event) && typeof row.event.id === "string"
+          ? [[row.event.id, row.event] as const]
+          : [],
+      ),
+    );
+    const rows = inputRows.map((row) => {
+      const original = isRecord(row.event) ? originals.get(String(row.event.id)) : undefined;
+      if (row.event === original) {
+        return row;
+      }
+      const event = preserveSameEntryNativeInvocation(row.event, original);
+      return { ...row, event, eventJson: JSON.stringify(event) };
+    });
     const generation = replacement?.preserveGeneration
       ? state.hot.transcript.version.generation
       : randomUUID();

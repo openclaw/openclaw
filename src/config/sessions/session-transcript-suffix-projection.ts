@@ -13,7 +13,10 @@ import {
   shouldProjectActiveEvent,
   transcriptEventContextEligibility,
 } from "./session-transcript-projection-append.js";
-import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
+import {
+  canonicalizeTranscriptEventMedia,
+  preserveSameEntryNativeInvocation,
+} from "./transcript-event-media.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -65,7 +68,12 @@ export function prepareFullTranscriptSuffixMutation(
 ) {
   const expectedRows = readTranscriptStorageRows(database, resolved.sessionId);
   const expected = expectedEvents.map(canonicalizeTranscriptEventMedia);
-  const next = nextEvents.map(canonicalizeTranscriptEventMedia);
+  const originalById = new Map(expected.map((event) => [readTranscriptEventId(event), event]));
+  const next = nextEvents.map((event) =>
+    canonicalizeTranscriptEventMedia(
+      preserveSameEntryNativeInvocation(event, originalById.get(readTranscriptEventId(event))),
+    ),
+  );
   const expectedJson = expected.map((event) => JSON.stringify(event));
   if (
     expectedRows.length !== expectedJson.length ||

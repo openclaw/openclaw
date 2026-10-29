@@ -50,10 +50,12 @@ import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
   assertDurableTranscriptRevocation,
   dispatchCases,
+  prepareHydrationCancellation,
 } from "./run-attempt-dispatch.cases.test-support.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import { createSourceTurnDispatchAssertions } from "./run-attempt-dispatch.source-turn.test-support.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
+import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 
 vi.mock("../../git-coauthor-prompt.js", () => ({
   resolveSessionGitCoauthorPrompt: vi.fn(),
@@ -175,7 +177,7 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
 );
 
 it.each(dispatchCases)(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth, access $cyberAccessProgram, transcript target $transcriptTargetInvalidation",
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, cancelled hydration $cancelHydration, prepared auth $preparedAuth, access $cyberAccessProgram, transcript target $transcriptTargetInvalidation",
   async ({
     cyberAccessProgram,
     agentId = "work",
@@ -195,6 +197,7 @@ it.each(dispatchCases)(
     legacyRetryDelayMs,
     retryPreparation,
     cancelTrajectory,
+    cancelHydration,
     preparedAuth,
     transcriptTargetInvalidation,
   }) => {
@@ -314,13 +317,14 @@ it.each(dispatchCases)(
         localBackend,
       );
       const runId = `dispatch-${agentId}`;
-      const harnessId = cancelTrajectory ? "codex" : "owner-fixture";
+      const harnessId = cancelTrajectory || cancelHydration ? "codex" : "owner-fixture";
       const cancellation = new AbortController();
       const policyGrant = new AbortController();
       const cancellationError = new Error("session aborted");
       const storePath = state.path("agents", agentId, "sessions", "sessions.json");
       if (
         cancelTrajectory ||
+        cancelHydration ||
         transcriptTargetInvalidation === "target" ||
         transcriptTargetInvalidation === "policy"
       ) {
@@ -392,19 +396,24 @@ it.each(dispatchCases)(
             transcriptTargetInvalidation === "policy"
           ) {
             assert(capturedAttempt);
-            await assertDurableTranscriptRevocation(capturedAttempt, workspaceDir, () => {
-              if (transcriptTargetInvalidation === "policy") {
-                policyGrant.abort(new Error("plugin access revoked"));
-              } else {
-                onValidateSource = () => {
-                  onValidateSource = undefined;
-                  input.sessionPromptState.sessionTarget = {
-                    ...input.sessionPromptState.sessionTarget!,
-                    sessionId: "rebound-target",
+            await assertDurableTranscriptRevocation(
+              capturedAttempt,
+              workspaceDir,
+              () => {
+                if (transcriptTargetInvalidation === "policy") {
+                  policyGrant.abort(new Error("plugin access revoked"));
+                } else {
+                  onValidateSource = () => {
+                    onValidateSource = undefined;
+                    input.sessionPromptState.sessionTarget = {
+                      ...input.sessionPromptState.sessionTarget!,
+                      sessionId: "rebound-target",
+                    };
                   };
-                };
-              }
-            });
+                }
+              },
+              transcriptTargetInvalidation,
+            );
             throw targetChecked;
           }
           expect(assertPreparedTarget).toBeTypeOf("function");
@@ -485,7 +494,7 @@ it.each(dispatchCases)(
           : undefined,
         admittedRunContext,
         cyberAccessProgram,
-        ...(cancelTrajectory ? { abortSignal: cancellation.signal } : {}),
+        ...(cancelTrajectory || cancelHydration ? { abortSignal: cancellation.signal } : {}),
         agentId,
         config,
         runId,
@@ -555,7 +564,7 @@ it.each(dispatchCases)(
         },
         setParams: () => {},
       });
-      if (transcriptTargetInvalidation) {
+      if (transcriptTargetInvalidation || cancelHydration) {
         const createControls = laneController.createAttemptControls;
         vi.spyOn(laneController, "createAttemptControls").mockImplementation((options) => {
           activeControls = createControls(options);
@@ -646,14 +655,18 @@ it.each(dispatchCases)(
             agentId,
             sessionId: `${agentId}-global`,
             sessionKey: "global",
-            ...(cancelTrajectory || transcriptTargetInvalidation ? { storePath } : {}),
+            ...(cancelTrajectory || cancelHydration || transcriptTargetInvalidation
+              ? { storePath }
+              : {}),
           },
           activePrompt: { persisted: false, internal: false },
           onUserMessagePersisted: vi.fn(),
           settleOwnedTranscriptProjection: vi.fn(),
           suppressNextUserMessagePersistence: false,
         },
-        terminalRetryState: { beforeFinalizeRevisionAttempts: 0 },
+        terminalRetryState: cancelHydration
+          ? createEmbeddedRunTerminalRetryState()
+          : { beforeFinalizeRevisionAttempts: 0 },
         replayState: { replayInvalid: false, hadPotentialSideEffects: false },
         startupStagesEmitted: false,
         bootstrapPromptWarningSignaturesSeen: [],
@@ -758,6 +771,14 @@ it.each(dispatchCases)(
               return createHost(...args);
             })
         : undefined;
+      using hydration = cancelHydration
+        ? prepareHydrationCancellation({
+            cancellation,
+            cancellationError,
+            sessionId: params.sessionId,
+            storePath,
+          })
+        : undefined;
       const pending = prepareAndDispatchEmbeddedRunAttempt(input);
       void pending.catch(() => {});
       const expectNoDispatch = () => {
@@ -766,6 +787,11 @@ it.each(dispatchCases)(
         }
       };
       try {
+        if (hydration) {
+          await hydration.expectCleanup(pending, () => activeControls);
+          expect(runAttempt).not.toHaveBeenCalled();
+          return;
+        }
         if (transcriptTargetInvalidation) {
           await expect(pending).rejects.toBe(targetChecked);
           expect(runAttempt).toHaveBeenCalledOnce();
@@ -965,8 +991,10 @@ it.each(dispatchCases)(
           expect(sandbox).toBeNull();
         }
       } finally {
+        hydration?.settle();
         baseline.resolve();
         await pending.catch(() => undefined);
+        activeControls?.close();
         hostObserver?.mockRestore();
         preparation?.mockRestore();
         remoteImageRead?.mockRestore();

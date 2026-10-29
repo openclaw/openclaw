@@ -108,6 +108,13 @@ export type SessionTranscriptAnchorsWorkerInput = {
   expectedIdentity: DatabaseFileIdentity;
 };
 
+export type SessionProgressWorkWorkerInput = {
+  kind: "session-progress-work";
+  database: { agentId: string; path: string };
+  owner: import("../../session-cards/progress-card-work.js").ProgressOwner;
+  env: NodeJS.ProcessEnv;
+};
+
 export type SessionProgressCardWorkerInput = {
   kind: "session-progress-card";
   database: { agentId: string; path: string };

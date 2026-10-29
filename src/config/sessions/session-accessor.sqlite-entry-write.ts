@@ -4,10 +4,11 @@ import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { retireSessionProgressWorkForIncarnation } from "../../session-cards/progress-card-store.js";
 import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
-import type { ConversationRouteContext } from "./conversation-route-context.js";
 import { prepareLegacyAcpMigrationSourcesForEntryWrite } from "./session-accessor.sqlite-acp-provenance.js";
 import { conversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import {
@@ -33,6 +34,7 @@ import {
   buildSessionEntryWindowUpsert,
   getSessionEntryWriteQueries,
 } from "./session-accessor.sqlite-entry-write-queries.js";
+import type { SessionEntryWriteOptions } from "./session-accessor.sqlite-entry-write.types.js";
 import { advanceSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import { clearSessionCollaborationForKey } from "./session-accessor.sqlite-node-artifacts.js";
 import { prepareSessionEntryWindowRow } from "./session-accessor.sqlite-provenance.js";
@@ -56,14 +58,10 @@ import {
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "./session-entry-snapshots.js";
-import type {
-  SessionEntryWindowFacts,
-  SessionEntryWindowRow,
-} from "./session-entry-window.types.js";
+import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
 import {
   createSessionEntryWriteRow,
-  type SessionEntryWritePostimage,
   type SessionEntryWritePostimages,
 } from "./session-entry-write-postimage.js";
 import { resolveSessionPublicShare } from "./session-public-share.js";
@@ -77,30 +75,6 @@ import {
 } from "./store-entry-shape.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-
-type SessionEntryWriteOptions = {
-  allowStoredAliases?: boolean;
-  /** Only the personal involvement owner may replace this logical-node state. */
-  profileInvolvement?: SessionEntry["profileInvolvement"];
-  /** Only the provider review owner may replace a generation-bound pause. */
-  providerReviewMutation?: boolean;
-  /** Canonical row revalidated in this write transaction; null proves absence. */
-  canonicalPreviousEntry?: SessionEntry | null;
-  /** Raw canonical columns from the same transaction, for exact no-op comparison. */
-  canonicalPreviousRow?: ResolvedSessionEntryRow["row"];
-  canonicalPreviousWindow?: SessionEntryWindowFacts;
-  canonicalPreviousSideTables?: SessionEntryWritePostimage["sideTables"];
-  postimages?: SessionEntryWritePostimages;
-  consumePendingReset?: boolean;
-  /** Initial child fork keeps this logical node's current audience across transcript installation. */
-  preserveVisibility?: boolean;
-  /** A rehome can bind historical windows to an otherwise unchanged target. */
-  publishConversationBinding?: boolean;
-  preserveNodeSuggestions?: boolean;
-  previousEntry?: SessionEntry | null;
-  observeConversation?: boolean;
-  routeContext?: ConversationRouteContext | null;
-};
 
 type PreparedSessionEntryWrite = {
   sessionKey: string;
@@ -337,6 +311,18 @@ function prepareSessionEntryWrite(
           database.db,
           [sessionKey, sqliteSessionIdWriteScope(normalizedEntry.sessionId)],
           () => {
+            if (
+              canonicalPreviousEntry &&
+              (canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId ||
+                canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision)
+            ) {
+              retireSessionProgressWorkForIncarnation(database.db, {
+                agentId: resolveAgentIdFromSessionKey(sessionKey, database.agentId),
+                sessionKey,
+                sessionId: normalizedEntry.sessionId,
+                lifecycleRevision: normalizedEntry.lifecycleRevision ?? null,
+              });
+            }
             // Collaboration rows belong to the exact canonical node being overwritten,
             // which can differ from the selected alias during canonicalization.
             if (
@@ -349,7 +335,7 @@ function prepareSessionEntryWrite(
                 clearSuggestions: options.preserveNodeSuggestions !== true,
               });
             }
-            const writeGeneration = changed
+            return changed
               ? trackSessionEntryCacheWrite(database, () => {
                   if (conversation) {
                     upsertConversationIdentities(
@@ -402,7 +388,6 @@ function prepareSessionEntryWrite(
                   }
                 })
               : undefined;
-            return writeGeneration;
           },
         );
       const publish = (writeGeneration: ReturnType<typeof trackSessionEntryCacheWrite>) => {

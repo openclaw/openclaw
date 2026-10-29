@@ -22,6 +22,7 @@ packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/messages.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
 packages/agent-core/src/harness/session/transcript-model.ts
+packages/agent-core/src/internal-hooks.ts
 packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
@@ -36,6 +37,7 @@ packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-gateway-
 packages/gateway-protocol/src/compiled/sender-identity.js
 packages/gateway-protocol/src/failover-reasons.ts
 packages/gateway-protocol/src/plugin-ui-capabilities.ts
+packages/gateway-protocol/src/progress-card-limits.ts
 packages/gateway-protocol/src/protocol-validator.ts
 packages/gateway-protocol/src/protocol-value-normalization.ts
 packages/gateway-protocol/src/schema/closed-object.ts
@@ -46,6 +48,7 @@ packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts
 packages/gateway-protocol/src/schema/presence-activity.ts
 packages/gateway-protocol/src/schema/presence.ts
 packages/gateway-protocol/src/schema/primitives.ts
+packages/gateway-protocol/src/schema/progress-card.ts
 packages/gateway-protocol/src/schema/session-placement-state.ts
 packages/gateway-protocol/src/schema/since.ts
 packages/gateway-protocol/src/schema/string-literal-union.ts
@@ -2609,7 +2612,11 @@ src/gateway/worker-environments/transcript-commit-policy.ts
 src/gateway/worker-environments/worker-ledger-validation.ts
 src/infra/json-utf8-bytes.ts
 src/infra/retryable-network-errors.ts
+src/infra/unicode-visibility.ts
+src/session-cards/progress-card-input.ts
 src/session-cards/progress-card-values.ts
+src/session-cards/progress-card-work-intent.ts
+src/session-cards/progress-card-work.ts
 src/session-cards/session-actor-progress-card-memory.ts
 src/sessions/input-provenance.ts
 src/sessions/model-overrides.ts

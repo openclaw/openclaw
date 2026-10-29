@@ -49,8 +49,14 @@ it("keeps host-owned controls out of public attempt and tool inputs", () => {
   expectTypeOf<Surface>().not.toHaveProperty("plan");
   type CompactOptions = NonNullable<Parameters<Surface["compactTools"]>[1]>;
   expectTypeOf<CompactOptions>().not.toHaveProperty("prepared");
-  type Hooks = "onProgressCardPlanSaved" | "authProfileStoreSource" | "onWebSearchConfiguration";
-  expectTypeOf<KeysIn<[Tools], Hooks>>().toEqualTypeOf<never>();
+  type Hooks =
+    | "onProgressCardWorkSaved"
+    | "progressWorkOwner"
+    | "progressWorkTarget"
+    | "readProgressCardWork"
+    | "authProfileStoreSource"
+    | "onWebSearchConfiguration";
+  expectTypeOf<KeysIn<[Tools, AsyncTools], Hooks>>().toEqualTypeOf<never>();
   expectTypeOf<AsyncTools>().not.toHaveProperty("onWebSearchConfiguration");
 });
 

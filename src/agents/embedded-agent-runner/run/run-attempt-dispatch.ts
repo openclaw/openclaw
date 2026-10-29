@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
 import * as sourceTurn from "../../../auto-reply/reply/source-turn-id.js";
-import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
-import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
@@ -32,12 +30,16 @@ import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
 import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-additions.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
 import { prepareEmbeddedHarnessTrajectory } from "./attempt-trajectory.js";
-import { resolveAttemptDispatchSessionTarget } from "./attempt-transcript-helpers.js";
+import {
+  captureAttemptSessionTarget,
+  resolveAttemptDispatchSessionTarget,
+} from "./attempt-transcript-helpers.js";
 import { resolveAttemptDispatchApiKey } from "./auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
 import { resolveEmbeddedAttemptBasePrompt } from "./helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+import { captureProgressWorkReader, progressWorkTurnContext } from "./progress-work.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 import { projectEmbeddedMessageContext } from "./shared-run-context.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
@@ -319,7 +321,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     modelId,
   });
   assertActiveRun();
-  // Resolve after the last fallible preparation so the attempt's finally owns the leases.
+  // The attempt cleanup owns these leases through hydration and dispatch.
   const { memoryAudience, release: releaseMemoryAudience } =
     await resolveEmbeddedAttemptMemoryAudience({
       run: params,
@@ -335,348 +337,336 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       params.replyOperation?.abortByUser();
     },
   });
-  const pluginRefresh = captureAgentPluginRuntimeRefresh();
-  const assertTargetCurrent = () => {
-    if (
-      !attemptControls.isAttemptCurrent() ||
-      sessionPromptState.sessionId !== sessionId ||
-      (["agentId", "sessionId", "sessionKey", "storePath", "threadId"] as const).some(
-        (field) => sessionPromptState.sessionTarget?.[field] !== selectedPromptTarget[field],
-      )
-    ) {
-      throw new Error("Session target preparation outlived its attempt");
-    }
-  };
-  const preparedSessionTarget =
-    (!sessionManager || params.sessionPersistence === "detached") &&
-    resolvedSessionTarget?.agentId &&
-    resolvedSessionTarget.sessionId &&
-    resolvedSessionTarget.sessionKey &&
-    resolvedSessionTarget.storePath
-      ? {
-          target: captureSessionTranscriptTargetBinding({
-            ...resolvedSessionTarget,
-            agentId: resolvedSessionTarget.agentId,
-            sessionId: resolvedSessionTarget.sessionId,
-            sessionKey: resolvedSessionTarget.sessionKey,
-            storePath: resolvedSessionTarget.storePath,
-          }),
-          assertCurrent: composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
-            assertTargetCurrent();
-            try {
-              assertSource();
-            } catch (cause) {
-              throw new Error(`Session target preparation outlived its attempt: ${String(cause)}`, {
-                cause,
-              });
-            }
-            // Source callbacks can retire this attempt or replace its selected target.
-            assertTargetCurrent();
-            assertActiveRun.assertScopeCurrent();
-          }),
-        }
-      : undefined;
-  const attemptParams: EmbeddedRunAttemptInternalParams & {
+  let attemptParams: EmbeddedRunAttemptInternalParams & {
     agentId: string;
     sessionKey: string;
     agentHarnessId: string;
-  } = {
-    modelCallSequence: (runInput.modelCallSequence ??= { value: 0 }),
-    bindWatchdogAttempt: attemptControls.bindWatchdogAttempt,
-    providerReviewAcknowledgment: params.providerReviewAcknowledgment,
-    awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
-    pluginRuntimeRefreshPending: pluginRefresh.stopAtStep,
-    registerPluginRuntimeRefreshConsumer: (isCurrent) => {
-      if (attemptControls.isCurrent()) {
-        pluginRefresh.bindConsumer(() => attemptControls.isCurrent() && isCurrent());
-      }
-    },
-    pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
-    pluginRuntimeRefreshUserPrompt: params.pluginRuntimeRefreshUserPrompt,
-    continuation: sessionPromptState.continuation,
-    runCleanupSettlement: params.runCleanupSettlement,
-    joinObservation: params.joinObservation,
-    permissionChange: input.permissionChange,
-    admittedRunContext: params.admittedRunContext,
-    startedAtMs: runInput.startedAtMs,
-    contextEngineAgentId: runInput.contextEngineAgentId,
-    ...(runtime.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
-    operation: "attempt",
-    sessionId,
-    sessionKey: resolvedSessionKey,
-    memoryAudience,
-    conversationRecall: params.conversationRecall,
-    promptCacheKey: params.promptCacheKey,
-    sandboxSessionKey: params.sandboxSessionKey,
-    sandboxAgentId: params.sandboxAgentId,
-    trigger: params.trigger,
-    terminalReplyExpectation: resolveReplyExpectation(params),
-    memoryFlushWritePath: params.memoryFlushWritePath,
-    memoryFlushTools: params.memoryFlushTools,
-    messageChannel: params.messageChannel,
-    messageProvider: params.messageProvider,
-    clientCaps: params.clientCaps,
-    bootstrapUserProfileId: params.bootstrapUserProfileId,
-    gatewayUiCommandTarget: params.gatewayUiCommandTarget,
-    pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
-    toolBindings: params.toolBindings,
-    chatType: params.chatType,
-    agentAccountId: params.agentAccountId,
-    conversationRoutePeerId: params.conversationRoutePeerId,
-    messageTo: params.messageTo,
-    messageThreadId: params.messageThreadId,
-    conversationToolPolicy: params.conversationToolPolicy,
-    messageActionTurnCapability: params.messageActionTurnCapability,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    memberRoleIds: params.memberRoleIds,
-    spawnedBy: params.spawnedBy,
-    isCanonicalWorkspace,
-    ...projectEmbeddedMessageContext(params),
-    hasRepliedRef: params.hasRepliedRef,
-    sessionFile,
-    ...(sessionManager ? { sessionManager } : { sessionTarget: resolvedSessionTarget }),
-    preparedSessionTarget,
-    trajectoryRecorder: trajectoryRecorder ?? undefined,
-    ...resolveHarnessWorkspace(workspaceDir, params, pluginWorkspace, pluginSandbox),
-    bootstrapWorkspaceDir,
-    permissionMode: params.permissionMode,
-    requireWorkspaceOnly: params.requireWorkspaceOnly,
-    agentDir,
-    preparedModelRuntime: runInput.preparedModelRuntime,
-    config: params.config,
-    transportConfig: runtime.transportConfig,
-    toolOverrides: params.toolOverrides,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-    ...(attemptContextEngine
-      ? {
-          contextEngine: attemptContextEngine,
-          contextWindowInfo: runtime.contextWindowInfo,
-        }
-      : {}),
-    ...(runtime.contextTokenBudget === undefined
-      ? {}
-      : { contextTokenBudget: runtime.contextTokenBudget }),
-    ...(runtime.modelContextWindow === undefined
-      ? {}
-      : { modelContextWindow: runtime.modelContextWindow }),
-    ...(runtime.authoredContextTokenCap === undefined
-      ? {}
-      : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
-    skillsSnapshot,
-    prompt: remapSkillReferencePaths(
-      pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
-      skillReferencePaths,
-    ),
-    transcriptPrompt:
-      pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
-        ? preparedExecApprovalContinuation.prompt
-        : preparedExecApprovalContinuation.transcriptPrompt,
-    finalizePromptForResolvedTools:
-      pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
-    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-    // The outer run-loop owns the begun lease; the inner attempt reports only
-    // the accepted candidate boundary to that owner.
-    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
-    skipPreparedUserTurnMessage,
-    currentInboundEventKind: params.currentInboundEventKind,
-    currentInboundContext: params.currentInboundContext,
-    explicitSkillSelections: params.explicitSkillSelections?.map((selection) =>
-      copyExplicitSkillSelectionFileHost(selection, {
-        ...selection,
-        path: remapExplicitSkillSelectionPath(selection, skillReferencePaths),
-      }),
-    ),
-    images: promptMedia.images,
-    imageOrder: promptMedia.imageOrder,
-    media: promptMedia.media,
-    clientTools: params.clientTools,
-    disableTools: params.disableTools,
-    provider,
-    modelId,
-    requestedModelId,
-    fallbackActive,
-    fallbackReason,
-    delegationCapability,
-    isFinalFallbackAttempt: params.isFinalFallbackAttempt,
-    agentHarnessId: runtime.agentHarness.id,
-    agentHarnessRuntimeOverride: runtime.agentHarness.id,
-    modelSelectionLocked: params.modelSelectionLocked,
-    ...(nativeSessionRuntime
-      ? {
-          expectedSessionRuntimeOwnership: {
-            model: "native",
-            auth: nativeSessionRuntime.auth,
-            ...(nativeSessionRuntime.auth === "host"
-              ? { modelRef: nativeSessionRuntime.modelRef }
-              : {}),
-          },
-        }
-      : {}),
-    ...(captureRuntimeArtifact ? { captureRuntimeArtifact: true } : {}),
-    ...(expectedHarnessArtifact?.artifact
-      ? { expectedRuntimeArtifact: expectedHarnessArtifact?.artifact }
-      : {}),
-    ...(params.sessionKey
-      ? {
-          agentHarnessCompletionScope: createAgentHarnessCompletionScope({
-            requesterSessionKey: params.sessionKey,
-            requesterAgentId: workspaceResolution.agentId,
-            gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
-          }),
-        }
-      : {}),
-    runtimePlan,
-    observeToolTerminal: createToolTerminalObserver(params.runId),
-    model: applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(
-        effectiveModel,
-        runtime.runtimeAuthState ?? runtime.apiKeyInfo,
-      ),
-      runtime.runtimeAuthState !== null ? null : runtime.apiKeyInfo,
-      runtime.transportConfig,
-    ),
-    resolvedApiKey: resolvedAttemptApiKey,
-    authProfileId: runtime.lastProfileId,
-    authProfileIdSource: params.authProfileBinding
-      ? params.authProfileIdSource
-      : explicitAuthProfile
-        ? "user"
-        : "auto",
-    authProfileBinding: params.authProfileBinding,
-    initialReplayState: input.replayState,
-    authStorage,
-    authProfileStore,
-    toolAuthProfileStore,
-    modelRegistry,
-    agentId: workspaceResolution.agentId,
-    thinkLevel: runtime.thinkLevel,
-    thinkingExplicit: params.thinkingExplicit,
-    cyberAccessProgram: params.cyberAccessProgram,
-    onToolOutcome: input.observeToolOutcome,
-    isTurnTainted: input.isTurnTainted,
-    allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
-    onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
-    onRunProgress: notifyRunProgress,
-    fastMode: attemptFastMode,
-    fastModeAuto: params.fastMode === "auto",
-    ...(params.fastMode === "auto"
-      ? {
-          fastModeStartedAtMs,
-          fastModeAutoOnSeconds,
-          fastModeAutoProgressState,
-        }
-      : {}),
-    verboseLevel: params.verboseLevel,
-    reasoningLevel: params.reasoningLevel,
-    toolResultFormat: resolvedToolResultFormat,
-    toolProgressDetail: params.toolProgressDetail,
-    execSession: params.execSession,
-    execOverrides: params.execOverrides,
-    bashElevated: params.bashElevated,
-    timeoutMs: params.timeoutMs,
-    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-    runId: params.runId,
-    lifecycleGeneration,
-    abortSignal: attemptControls.abortSignal,
-    onAttemptDeadlineChanged: attemptControls.onAttemptDeadlineChanged,
-    onAttemptTimeout: attemptControls.onAttemptTimeout,
-    onAttemptAbort: attemptControls.onAttemptAbort,
-    onSettledTurn,
-    replyOperation: params.replyOperation,
-    shouldEmitToolResult: params.shouldEmitToolResult,
-    shouldEmitToolOutput: params.shouldEmitToolOutput,
-    onPartialReply: params.onPartialReply,
-    onAssistantMessageStart: params.onAssistantMessageStart,
-    onBlockReply: params.onBlockReply,
-    onBlockReplyFlush: params.onBlockReplyFlush,
-    blockReplyBreak: params.blockReplyBreak,
-    blockReplyChunking: params.blockReplyChunking,
-    onReasoningStream: params.onReasoningStream,
-    streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
-    onReasoningEnd: params.onReasoningEnd,
-    onToolResult: params.onToolResult,
-    onAgentToolResult: params.onAgentToolResult,
-    onAgentEvent: async (event) => params.onAgentEvent?.(event),
-    // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
-    deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
-    onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
-    onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
-    onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt,
-    extraSystemPromptTurnContext: params.extraSystemPromptTurnContext,
-    gitCoauthorPrompt,
-    preparedTtsPreferences: params.preparedTtsPreferences,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    messageToolFinalByDefault: params.messageToolFinalByDefault,
-    silentReplyPromptMode: params.silentReplyPromptMode,
-    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-    inputProvenance: params.inputProvenance,
-    trustedInternalHandoff: params.trustedInternalHandoff,
-    scheduledToolPolicy: params.scheduledToolPolicy,
-    runtimePluginToolGrant: params.runtimePluginToolGrant,
-    cronCreatorAuthorityCapability: params.cronCreatorAuthorityCapability,
-    cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
-    streamParams: params.streamParams,
-    modelRun: params.modelRun,
-    disableTrajectory: params.disableTrajectory,
-    skillWorkshopReviewOf: params.skillWorkshopReviewOf,
-    skillLibraryAuthoring: params.skillLibraryAuthoring,
-    promptMode: params.promptMode,
-    ownerNumbers: params.ownerNumbers,
-    enforceFinalTag: params.enforceFinalTag,
-    silentExpected: params.silentExpected,
-    suppressLiveStreamOutput: params.suppressLiveStreamOutput,
-    bootstrapContextMode: params.bootstrapContextMode,
-    bootstrapContextRunKind: params.bootstrapContextRunKind,
-    jobId: params.jobId,
-    scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
-    scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
-    toolsAllow: params.toolsAllow,
-    toolExecutionAllow: params.toolExecutionAllow,
-    // Authorized prompt enrichment needs the exact prepared turn policy identity.
-    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-    sessionPersistence: params.sessionPersistence,
-    // The host loop settles all completed counts, including default/SDK runs.
-    compactionCountOwner: "caller",
-    onContextAccountingEvent: params.onContextAccountingEvent,
-    onCompactionRequestBudget: params.onCompactionRequestBudget,
-    ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
-    cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
-    oneShotCliRun: params.oneShotCliRun,
-    disableMessageTool: params.disableMessageTool,
-    swarmCollector: params.swarmCollector,
-    swarmOutputSchema: params.swarmOutputSchema,
-    codeModeOverride: params.codeModeOverride,
-    disableToolSearch: params.disableToolSearch,
-    compactionForbidden: params.disableCompactionRecovery,
-    sessionReadScopeKey: params.sessionReadScopeKey,
-    blindPrompt: params.blindPrompt,
-    forceMessageTool: params.forceMessageTool,
-    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-    internalEvents: params.internalEvents,
-    runtimeContextFragments: params.runtimeContextFragments,
-    bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarningSignaturesSeen,
-    bootstrapPromptWarningSignature: input.bootstrapPromptWarningSignaturesSeen.at(-1),
-    suppressNextUserMessagePersistence,
-    beforeAgentFinalizeRevisionAttempts,
-    completionCheck: terminalRetryState.completionCheck,
-    maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
-    suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
-    assistantErrorTranscript: params.assistantErrorTranscript,
-    onUserMessagePersisted: sessionPromptState.onUserMessagePersisted,
-    onUserMessagePersistenceInvalidated: () => {
-      sessionPromptState.activePrompt.persisted = false;
-    },
-    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
-    privateCompletion: params.privateCompletion,
-    ...continuationRetryCount.capability,
   };
-  // Recovery changes execution IDs without changing the original admitted input source.
-  sourceTurn.copyChannelSourceTurnContext(attemptParams, params);
   let rawAttempt: EmbeddedRunAttemptResult;
   try {
+    const pluginRefresh = captureAgentPluginRuntimeRefresh();
+    const preparedSessionTarget = captureAttemptSessionTarget({
+      target:
+        !sessionManager || params.sessionPersistence === "detached"
+          ? resolvedSessionTarget
+          : undefined,
+      assertActiveRun,
+      isAttemptCurrent: attemptControls.isAttemptCurrent,
+      promptState: sessionPromptState,
+      selectedPromptTarget,
+      sessionId,
+    });
+    const completionCheck = terminalRetryState.completionCheck;
+    if (preparedSessionTarget && completionCheck && !completionCheck.refresh) {
+      const retained = captureProgressWorkReader({
+        target: preparedSessionTarget.target,
+        operation: params.replyOperation,
+        assertCurrent: () => preparedSessionTarget.assertOuterCurrent(),
+        signal: params.abortSignal,
+      });
+      completionCheck.refresh = () => retained.read();
+      completionCheck.work = await retained.read();
+      preparedSessionTarget.assertCurrent();
+    }
+    const retainedContext = completionCheck ? progressWorkTurnContext(completionCheck.work) : "";
+    attemptParams = {
+      modelCallSequence: (runInput.modelCallSequence ??= { value: 0 }),
+      bindWatchdogAttempt: attemptControls.bindWatchdogAttempt,
+      providerReviewAcknowledgment: params.providerReviewAcknowledgment,
+      awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
+      pluginRuntimeRefreshPending: pluginRefresh.stopAtStep,
+      registerPluginRuntimeRefreshConsumer: (isCurrent) => {
+        if (attemptControls.isCurrent()) {
+          pluginRefresh.bindConsumer(() => attemptControls.isCurrent() && isCurrent());
+        }
+      },
+      pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
+      pluginRuntimeRefreshUserPrompt: params.pluginRuntimeRefreshUserPrompt,
+      continuation: sessionPromptState.continuation,
+      runCleanupSettlement: params.runCleanupSettlement,
+      joinObservation: params.joinObservation,
+      permissionChange: input.permissionChange,
+      admittedRunContext: params.admittedRunContext,
+      startedAtMs: runInput.startedAtMs,
+      contextEngineAgentId: runInput.contextEngineAgentId,
+      ...(runtime.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
+      operation: "attempt",
+      sessionId,
+      sessionKey: resolvedSessionKey,
+      memoryAudience,
+      conversationRecall: params.conversationRecall,
+      promptCacheKey: params.promptCacheKey,
+      sandboxSessionKey: params.sandboxSessionKey,
+      sandboxAgentId: params.sandboxAgentId,
+      trigger: params.trigger,
+      terminalReplyExpectation: resolveReplyExpectation(params),
+      memoryFlushWritePath: params.memoryFlushWritePath,
+      memoryFlushTools: params.memoryFlushTools,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      clientCaps: params.clientCaps,
+      bootstrapUserProfileId: params.bootstrapUserProfileId,
+      gatewayUiCommandTarget: params.gatewayUiCommandTarget,
+      pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
+      toolBindings: params.toolBindings,
+      chatType: params.chatType,
+      agentAccountId: params.agentAccountId,
+      conversationRoutePeerId: params.conversationRoutePeerId,
+      messageTo: params.messageTo,
+      messageThreadId: params.messageThreadId,
+      conversationToolPolicy: params.conversationToolPolicy,
+      messageActionTurnCapability: params.messageActionTurnCapability,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      memberRoleIds: params.memberRoleIds,
+      spawnedBy: params.spawnedBy,
+      isCanonicalWorkspace,
+      ...projectEmbeddedMessageContext(params),
+      hasRepliedRef: params.hasRepliedRef,
+      sessionFile,
+      ...(sessionManager ? { sessionManager } : { sessionTarget: resolvedSessionTarget }),
+      preparedSessionTarget,
+      trajectoryRecorder: trajectoryRecorder ?? undefined,
+      ...resolveHarnessWorkspace(workspaceDir, params, pluginWorkspace, pluginSandbox),
+      bootstrapWorkspaceDir,
+      permissionMode: params.permissionMode,
+      requireWorkspaceOnly: params.requireWorkspaceOnly,
+      agentDir,
+      preparedModelRuntime: runInput.preparedModelRuntime,
+      config: params.config,
+      transportConfig: runtime.transportConfig,
+      toolOverrides: params.toolOverrides,
+      allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+      ...(attemptContextEngine
+        ? {
+            contextEngine: attemptContextEngine,
+            contextWindowInfo: runtime.contextWindowInfo,
+          }
+        : {}),
+      ...(runtime.contextTokenBudget === undefined
+        ? {}
+        : { contextTokenBudget: runtime.contextTokenBudget }),
+      ...(runtime.modelContextWindow === undefined
+        ? {}
+        : { modelContextWindow: runtime.modelContextWindow }),
+      ...(runtime.authoredContextTokenCap === undefined
+        ? {}
+        : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
+      skillsSnapshot,
+      prompt: remapSkillReferencePaths(
+        pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
+        skillReferencePaths,
+      ),
+      transcriptPrompt:
+        pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
+          ? preparedExecApprovalContinuation.prompt
+          : preparedExecApprovalContinuation.transcriptPrompt,
+      finalizePromptForResolvedTools:
+        pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
+      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+      // The outer run-loop owns the begun lease; the inner attempt reports only
+      // the accepted candidate boundary to that owner.
+      onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
+      skipPreparedUserTurnMessage,
+      currentInboundEventKind: params.currentInboundEventKind,
+      currentInboundContext: params.currentInboundContext,
+      explicitSkillSelections: params.explicitSkillSelections?.map((selection) =>
+        copyExplicitSkillSelectionFileHost(selection, {
+          ...selection,
+          path: remapExplicitSkillSelectionPath(selection, skillReferencePaths),
+        }),
+      ),
+      images: promptMedia.images,
+      imageOrder: promptMedia.imageOrder,
+      media: promptMedia.media,
+      clientTools: params.clientTools,
+      disableTools: params.disableTools,
+      provider,
+      modelId,
+      requestedModelId,
+      fallbackActive,
+      fallbackReason,
+      delegationCapability,
+      isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+      agentHarnessId: runtime.agentHarness.id,
+      agentHarnessRuntimeOverride: runtime.agentHarness.id,
+      modelSelectionLocked: params.modelSelectionLocked,
+      ...(nativeSessionRuntime
+        ? {
+            expectedSessionRuntimeOwnership: {
+              model: "native",
+              auth: nativeSessionRuntime.auth,
+              ...(nativeSessionRuntime.auth === "host"
+                ? { modelRef: nativeSessionRuntime.modelRef }
+                : {}),
+            },
+          }
+        : {}),
+      ...(captureRuntimeArtifact ? { captureRuntimeArtifact: true } : {}),
+      ...(expectedHarnessArtifact?.artifact
+        ? { expectedRuntimeArtifact: expectedHarnessArtifact?.artifact }
+        : {}),
+      ...(params.sessionKey
+        ? {
+            agentHarnessCompletionScope: createAgentHarnessCompletionScope({
+              requesterSessionKey: params.sessionKey,
+              requesterAgentId: workspaceResolution.agentId,
+              gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
+            }),
+          }
+        : {}),
+      runtimePlan,
+      observeToolTerminal: createToolTerminalObserver(params.runId),
+      model: applyAuthHeaderOverride(
+        applyLocalNoAuthHeaderOverride(
+          effectiveModel,
+          runtime.runtimeAuthState ?? runtime.apiKeyInfo,
+        ),
+        runtime.runtimeAuthState !== null ? null : runtime.apiKeyInfo,
+        runtime.transportConfig,
+      ),
+      resolvedApiKey: resolvedAttemptApiKey,
+      authProfileId: runtime.lastProfileId,
+      authProfileIdSource: params.authProfileBinding
+        ? params.authProfileIdSource
+        : explicitAuthProfile
+          ? "user"
+          : "auto",
+      authProfileBinding: params.authProfileBinding,
+      initialReplayState: input.replayState,
+      authStorage,
+      authProfileStore,
+      toolAuthProfileStore,
+      modelRegistry,
+      agentId: workspaceResolution.agentId,
+      thinkLevel: runtime.thinkLevel,
+      thinkingExplicit: params.thinkingExplicit,
+      cyberAccessProgram: params.cyberAccessProgram,
+      onToolOutcome: input.observeToolOutcome,
+      isTurnTainted: input.isTurnTainted,
+      allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
+      onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
+      onRunProgress: notifyRunProgress,
+      fastMode: attemptFastMode,
+      fastModeAuto: params.fastMode === "auto",
+      ...(params.fastMode === "auto"
+        ? {
+            fastModeStartedAtMs,
+            fastModeAutoOnSeconds,
+            fastModeAutoProgressState,
+          }
+        : {}),
+      verboseLevel: params.verboseLevel,
+      reasoningLevel: params.reasoningLevel,
+      toolResultFormat: resolvedToolResultFormat,
+      toolProgressDetail: params.toolProgressDetail,
+      execSession: params.execSession,
+      execOverrides: params.execOverrides,
+      bashElevated: params.bashElevated,
+      timeoutMs: params.timeoutMs,
+      runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+      runId: params.runId,
+      lifecycleGeneration,
+      abortSignal: attemptControls.abortSignal,
+      onAttemptDeadlineChanged: attemptControls.onAttemptDeadlineChanged,
+      onAttemptTimeout: attemptControls.onAttemptTimeout,
+      onAttemptAbort: attemptControls.onAttemptAbort,
+      onSettledTurn,
+      replyOperation: params.replyOperation,
+      shouldEmitToolResult: params.shouldEmitToolResult,
+      shouldEmitToolOutput: params.shouldEmitToolOutput,
+      onPartialReply: params.onPartialReply,
+      onAssistantMessageStart: params.onAssistantMessageStart,
+      onBlockReply: params.onBlockReply,
+      onBlockReplyFlush: params.onBlockReplyFlush,
+      blockReplyBreak: params.blockReplyBreak,
+      blockReplyChunking: params.blockReplyChunking,
+      onReasoningStream: params.onReasoningStream,
+      streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
+      onReasoningEnd: params.onReasoningEnd,
+      onToolResult: params.onToolResult,
+      onAgentToolResult: params.onAgentToolResult,
+      onAgentEvent: async (event) => params.onAgentEvent?.(event),
+      // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
+      deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
+      onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
+      onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
+      onExecutionPhase: params.onExecutionPhase,
+      extraSystemPrompt,
+      extraSystemPromptTurnContext: params.extraSystemPromptTurnContext,
+      gitCoauthorPrompt,
+      preparedTtsPreferences: params.preparedTtsPreferences,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      messageToolFinalByDefault: params.messageToolFinalByDefault,
+      silentReplyPromptMode: params.silentReplyPromptMode,
+      taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+      runtimePluginToolGrant: params.runtimePluginToolGrant,
+      cronCreatorAuthorityCapability: params.cronCreatorAuthorityCapability,
+      cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
+      streamParams: params.streamParams,
+      modelRun: params.modelRun,
+      disableTrajectory: params.disableTrajectory,
+      skillWorkshopReviewOf: params.skillWorkshopReviewOf,
+      skillLibraryAuthoring: params.skillLibraryAuthoring,
+      promptMode: params.promptMode,
+      ownerNumbers: params.ownerNumbers,
+      enforceFinalTag: params.enforceFinalTag,
+      silentExpected: params.silentExpected,
+      suppressLiveStreamOutput: params.suppressLiveStreamOutput,
+      bootstrapContextMode: params.bootstrapContextMode,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
+      jobId: params.jobId,
+      scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
+      scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
+      toolsAllow: params.toolsAllow,
+      toolExecutionAllow: params.toolExecutionAllow,
+      // Authorized prompt enrichment needs the exact prepared turn policy identity.
+      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+      sessionPersistence: params.sessionPersistence,
+      // The host loop settles all completed counts, including default/SDK runs.
+      compactionCountOwner: "caller",
+      onContextAccountingEvent: params.onContextAccountingEvent,
+      onCompactionRequestBudget: params.onCompactionRequestBudget,
+      ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
+      cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
+      oneShotCliRun: params.oneShotCliRun,
+      disableMessageTool: params.disableMessageTool,
+      swarmCollector: params.swarmCollector,
+      swarmOutputSchema: params.swarmOutputSchema,
+      codeModeOverride: params.codeModeOverride,
+      disableToolSearch: params.disableToolSearch,
+      compactionForbidden: params.disableCompactionRecovery,
+      sessionReadScopeKey: params.sessionReadScopeKey,
+      blindPrompt: params.blindPrompt,
+      forceMessageTool: params.forceMessageTool,
+      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+      internalEvents: params.internalEvents,
+      runtimeContextFragments: [
+        ...(params.runtimeContextFragments ?? []),
+        ...(retainedContext ? [{ kind: "conversation-data" as const, text: retainedContext }] : []),
+      ],
+      bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarningSignaturesSeen,
+      bootstrapPromptWarningSignature: input.bootstrapPromptWarningSignaturesSeen.at(-1),
+      suppressNextUserMessagePersistence,
+      beforeAgentFinalizeRevisionAttempts,
+      completionCheck: terminalRetryState.completionCheck,
+      maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
+      suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
+      assistantErrorTranscript: params.assistantErrorTranscript,
+      onUserMessagePersisted: sessionPromptState.onUserMessagePersisted,
+      onUserMessagePersistenceInvalidated: () => {
+        sessionPromptState.activePrompt.persisted = false;
+      },
+      prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+      privateCompletion: params.privateCompletion,
+      ...continuationRetryCount.capability,
+    };
+    // Recovery changes execution IDs without changing the original admitted input source.
+    sourceTurn.copyChannelSourceTurnContext(attemptParams, params);
     rawAttempt = await withPreparedEmbeddedGatewayTools(attemptParams, () => {
       assertActiveRun();
       placement?.assertCurrent();

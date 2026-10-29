@@ -13,10 +13,6 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
-import {
-  mergeAcceptedSessionSpawnsForRun,
-  normalizeAcceptedSessionSpawnResult,
-} from "../accepted-session-spawn.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -65,9 +61,9 @@ import {
   resolveGatewayToolOperatorSelection,
   wrapGatewayPersonalToolExecution,
 } from "./gateway-caller-context.js";
+import { captureProgressWorkWait } from "./progress-work-wait.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
-  recordSessionToolActionFact,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
@@ -83,6 +79,7 @@ import { resolveSessionsSpawnAcpUnavailableMessage } from "./sessions-spawn-acp-
 import { describeSessionsSpawnAgentId } from "./sessions-spawn-agent-id.js";
 import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
 import { resolveSessionsSpawnThreadAvailability } from "./sessions-spawn-thread-availability.js";
+import { recordAcceptedSessionSpawn } from "./sessions-spawn-tool-result.js";
 import { maybeSpawnVisibleSession } from "./sessions-spawn-visible.js";
 import { SESSIONS_SPAWN_SESSION_SCHEMA } from "./sessions-spawn-visible.schema.js";
 
@@ -101,31 +98,6 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "reply_to",
 ] as const;
 const loadAcpSpawnModule = createLazyPromise(() => import("../subagents/spawn/acp-spawn.js"));
-
-function recordAcceptedSessionSpawn(
-  result: Record<string, unknown>,
-  context: "fork" | "isolated" | undefined,
-): void {
-  const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
-  const accepted = normalizeAcceptedSessionSpawnResult({ details: result });
-  if (instance && accepted) {
-    mergeAcceptedSessionSpawnsForRun(instance, [accepted]);
-  }
-  const childSessionKey =
-    typeof result.childSessionKey === "string" ? result.childSessionKey.trim() : "";
-  const targetAgentId = childSessionKey
-    ? parseAgentSessionKey(childSessionKey)?.agentId
-    : undefined;
-  if (result.status !== "accepted" || !childSessionKey || !targetAgentId || !context) {
-    return;
-  }
-  recordSessionToolActionFact({
-    operation: context === "fork" ? "fork" : "create",
-    fact: "committed",
-    targetAgentId,
-    targetSessionKey: childSessionKey,
-  });
-}
 
 const createSessionsSpawnToolSchema = createCachedToolSchema({
   build: buildSessionsSpawnToolSchema,
@@ -359,6 +331,7 @@ export function createSessionsSpawnTool(
     parameters,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
+        const retainWait = captureProgressWorkWait();
         const operatorSelection = resolveGatewayToolOperatorSelection();
         const executionSignal =
           signal && opts?.signal
@@ -515,7 +488,11 @@ export function createSessionsSpawnTool(
               })
             : await spawnVisible();
         if (visibleResult) {
-          recordAcceptedSessionSpawn(visibleResult, context ?? "isolated");
+          await recordAcceptedSessionSpawn(
+            visibleResult,
+            context ?? "isolated",
+            expectsCompletionMessage ? retainWait : undefined,
+          );
           return spawnResult(visibleResult as { status: string });
         }
         if (runtime === "acp" && !acpAvailable) {
@@ -636,7 +613,11 @@ export function createSessionsSpawnTool(
               parentExecutionIdentityToken,
             ),
           );
-          recordAcceptedSessionSpawn(result, "isolated");
+          await recordAcceptedSessionSpawn(
+            result,
+            "isolated",
+            expectsCompletionMessage ? retainWait : undefined,
+          );
           return spawnResult(result);
         }
 
@@ -700,7 +681,11 @@ export function createSessionsSpawnTool(
           ),
         );
 
-        recordAcceptedSessionSpawn(result, result.context);
+        await recordAcceptedSessionSpawn(
+          result,
+          result.context,
+          collect || expectsCompletionMessage ? retainWait : undefined,
+        );
         return spawnResult(result);
       }),
     ),

@@ -193,8 +193,8 @@ describe("memory actor transcript", () => {
     };
     using parse = vi.spyOn(JSON, "parse");
     const first = committed(await metadata("metadata", input));
-    // Decode once for admission and once for the detached result; reload uses the envelope.
-    expect(parse.mock.calls.filter(([json]) => json === messageJson).length).toBeLessThanOrEqual(2);
+    // Provenance, input admission, and the detached result decode; reload reuses the envelope.
+    expect(parse.mock.calls.filter(([json]) => json === messageJson).length).toBeLessThanOrEqual(3);
     const result = metadataResult(first);
     assert(result.reload?.ok && result.reload.value.kind === "full");
     expect(result.reload.value.snapshot.eventJson?.at(-1)).toContain(`"message":${messageJson}}`);
@@ -203,6 +203,19 @@ describe("memory actor transcript", () => {
     );
     expectMessage(replay.receipt, false, "assistant-1", { content: "Exact bytes" });
     expect(replay.receipt.transcript.after).toEqual(first.receipt.transcript.after);
+  });
+
+  it("does not apply durable media and provider replay normalization to memory turns", async () => {
+    const { write } = await fixture();
+    const message = {
+      role: "assistant",
+      content: [
+        { type: "image", mimeType: "IMAGE/PNG", data: "data:image/png;base64,YQ==" },
+        { type: "thinking", thinking: "Provider context", thinkingSignature: "opaque token" },
+      ],
+    };
+    const result = await write({ message, eventId: "memory-content" });
+    expectMessage(result.receipt, true, "memory-content", message);
   });
 
   it("commits initial metadata after a sibling write and rolls back an incomplete pair", async () => {

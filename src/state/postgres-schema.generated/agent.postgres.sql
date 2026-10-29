@@ -430,6 +430,11 @@ CREATE TABLE "session_progress_cards" (
   "revision" bigint NOT NULL,
   "created_at" bigint NOT NULL,
   "updated_at" bigint NOT NULL,
+  "display_kind" text COLLATE "C" NOT NULL DEFAULT 'independent',
+  "work_json" text COLLATE "C",
+  "work_generation" bigint NOT NULL DEFAULT 0,
+  "work_revision" bigint NOT NULL DEFAULT 0,
+  "work_command_json" text COLLATE "C",
   PRIMARY KEY ("session_key")
 );
 

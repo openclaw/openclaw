@@ -61,6 +61,19 @@ export function createCodingToolsGatewayCaller(params: {
   const identity =
     options && agentId && sessionKey?.trim()
       ? {
+          ...(options.progressWorkOwner &&
+          options.progressWorkTarget &&
+          options.readProgressCardWork &&
+          options.onProgressCardWorkSaved
+            ? {
+                progressWork: {
+                  owner: options.progressWorkOwner,
+                  target: options.progressWorkTarget,
+                  read: options.readProgressCardWork,
+                  saved: options.onProgressCardWorkSaved,
+                },
+              }
+            : {}),
           agentId,
           sessionKey: sessionKey.trim(),
           requesterOrigin:

@@ -1,0 +1,2 @@
+17
+# Native transcript ingress: ordinary memory media/replay preservation, partial-result provenance, and closed cancellation DTO regression coverage.

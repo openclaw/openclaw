@@ -79,6 +79,8 @@ export function readSessionActorMemoryStorage(
     case "boards.snapshot":
     case "boards.document":
       return readSessionActorBoardQuery(context, query);
+    case "progressCard.work":
+      return context.get(query.input.sessionKey)?.progressCard?.work;
     case "progressCard.get":
       return readSessionActorProgressCard(context, query.input.sessionKey);
     case "session.rewrite.prepare":

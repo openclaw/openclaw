@@ -6,6 +6,7 @@ import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import {
   readSessionProgressCard,
+  readSessionProgressAggregate,
   writeSessionProgressCard,
 } from "../../session-cards/progress-card-store.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
@@ -51,7 +52,24 @@ it.each([
     const boardBefore = await boards.getSnapshot({ sessionKey });
     const historyBefore = await sessions.loadTranscriptEvents(scope);
     const entryBefore = sessions.loadSessionEntry(scope);
-    writeCard({ markdown: "old", steps: [{ step: "old", status: "in_progress" }] });
+    writeCard({
+      markdown: "old",
+      steps: [{ step: "old", status: "in_progress" }],
+      workCommand: {
+        kind: "begin",
+        display: "replace",
+        scope: "Retained reset work",
+        expected: null,
+        owner: { agentId: "main", sessionKey, sessionId, lifecycleRevision: "before" },
+        source: {
+          runId: "reset-proof",
+          turnId: "turn",
+          toolCallId: "plan",
+          processGeneration: "process",
+        },
+      },
+    });
+    const workBefore = readSessionProgressAggregate(database.db, sessionKey)?.work;
     const before = readCard();
     const invalidations: Array<[string | undefined, string, boolean]> = [];
     const unsubscribe = onSessionLifecycleEvent((event) => {
@@ -99,6 +117,21 @@ it.each([
     {
       using reader = new DatabaseSync(database.path, { readOnly: true });
       expect(readSessionProgressCard(reader, sessionKey)).toEqual(cleared ? null : before);
+    }
+    const workAfter = readSessionProgressAggregate(database.db, sessionKey)?.work;
+    if (rollback) {
+      expect(workAfter).toEqual(workBefore);
+    } else if (cleared) {
+      expect(workAfter).toMatchObject({ generation: 1, revision: 2, record: null });
+    } else {
+      expect(workAfter).toMatchObject({
+        generation: 1,
+        revision: 2,
+        record: {
+          owner: { lifecycleRevision: "after" },
+          steps: [{ step: "old", status: "in_progress" }],
+        },
+      });
     }
     expect(await boards.getSnapshot({ sessionKey })).toEqual(boardBefore);
     expect((await readBoardHtml(boards, { sessionKey }, "widget"))?.html).toBe("<p>kept</p>");

@@ -88,7 +88,10 @@ export const progressCardStore: ProgressCardStore = {
       assertCurrent?: () => void;
     },
     agentId?: string,
-  ): Promise<{ card: ReturnType<typeof readSessionProgressCard> }> {
+  ): Promise<{
+    card: ReturnType<typeof readSessionProgressCard>;
+    work?: import("../session-cards/progress-card-work.js").ProgressWorkState;
+  }> {
     const selected = getSessionActorStorageBinding({});
     if (
       selected?.actor.target.sessionKey === sessionKey &&
@@ -97,6 +100,8 @@ export const progressCardStore: ProgressCardStore = {
       return createSessionActorProgressCardStore(() => selected).put(sessionKey, input, agentId);
     }
     const capturedInput = structuredClone({
+      managedWork: input.managedWork,
+      workCommand: input.workCommand,
       markdown: input.markdown,
       steps: input.steps,
       expectedRevision: input.expectedRevision,
