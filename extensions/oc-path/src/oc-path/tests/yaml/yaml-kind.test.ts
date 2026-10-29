@@ -72,10 +72,8 @@ describe("YAML", () => {
     expect(setYamlOcPath(parseYaml(raw), path(address), value).raw).toContain(expected);
   });
 
-  it("maps .yaml / .yml / .lobster to yaml", () => {
-    expect(inferKind("workflow.yaml")).toBe("yaml");
-    expect(inferKind("config.yml")).toBe("yaml");
-    expect(inferKind("inbox-triage.lobster")).toBe("yaml");
+  it.each(["x.yaml", "x.yml", "x.lobster"])("infers YAML for %s", (file) => {
+    expect(inferKind(file)).toBe("yaml");
   });
   it.each([
     { text: "1", key: 1 },
@@ -86,6 +84,7 @@ describe("YAML", () => {
     const written = parseYaml(result.raw).doc;
     expect(written.get(key)).toBe("updated");
     expect(written.get("untouched")).toBe("keep");
+    expect(() => set(`${text}: old\n`, `+${text}`, "new")).toThrow(error("unresolved"));
   });
 
   it.each([
@@ -108,6 +107,7 @@ describe("YAML", () => {
   it.each([
     ["count: 5\n", "count", "abc", "parse-error"],
     ["config:\n  a: 1\n", "config/+a", "99", "unresolved"],
+    ["config:\n  false: old\n", "config/+false", "new", "unresolved"],
   ])("rejects universal edits of %s at %s", (raw, address, value, reason) => {
     expect(() => set(raw, address, value)).toThrow(error(reason));
   });
@@ -132,7 +132,7 @@ describe("YAML", () => {
 
   it.each([
     ["items: []\n", "items/+", '"a"', "items: [ a ]"],
-    ["config:\n  a: 1\n", "config/+b", "2", "b: 2"],
+    ["true: old\n", "+false", "new", '"false": new'],
   ])("inserts into %s at %s", (raw, address, value, expected) => {
     expect(set(raw, address, value).raw).toContain(expected);
   });

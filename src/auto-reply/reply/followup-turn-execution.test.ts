@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
-import type { ReplyPayload } from "../types.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
-  createFollowupTurnTestTurn,
-  executeFollowupTurnForTest,
+  createFollowupTurnTestTurn as createTurn,
+  executeFollowupTurnForTest as executeFollowupTurn,
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
@@ -19,8 +20,6 @@ import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
-const createTurn = createFollowupTurnTestTurn;
-const executeFollowupTurn = executeFollowupTurnForTest;
 function mockExecution(run: (params: AgentTurnParams) => void | Promise<void>) {
   state.execute.mockImplementation(async (params: AgentTurnParams) => {
     await run(params);
@@ -57,52 +56,7 @@ function executeTestTurn(
   });
 }
 
-async function runFastAutoProgressCase(params: {
-  verboseLevel?: "on" | "off";
-  sourceReplyDeliveryMode?: "message_tool_only";
-  callbackResult?: boolean;
-  opts?: NonNullable<Parameters<typeof executeFollowupTurn>[0]["defaults"]["opts"]>;
-}) {
-  const payload = {
-    text: "💨Fast: auto-on",
-    channelData: { openclawProgressKind: "fast-mode-auto" },
-  } satisfies ReplyPayload;
-  const onChannelToolResult = vi.fn(() => params.callbackResult);
-  const onDurableToolResult = vi.fn(async () => {});
-  const turn = sessionTurn(() => ({
-    sessionId: "session",
-    updatedAt: 1,
-    verboseLevel: params.verboseLevel ?? "on",
-  }));
-  turn.queued.run.sourceReplyDeliveryMode = params.sourceReplyDeliveryMode;
-  mockExecution(async (turnParams) => {
-    await turnParams.opts?.onToolResult?.(payload);
-  });
-
-  const result = await executeTestTurn({
-    turn,
-    opts: { ...params.opts, onToolResult: onChannelToolResult },
-    onToolResult: onDurableToolResult,
-  });
-  await result.progress.drain();
-  return { onChannelToolResult, onDurableToolResult, payload };
-}
-
 describe("executeFollowupTurn", () => {
-  it("retains the queued turn's restart restrictions over later runner defaults", async () => {
-    const turn = createTurn();
-    turn.queued.forceRestartSafeTools = true;
-    turn.queued.forceCodeModeTools = true;
-    await executeTestTurn({
-      turn,
-      defaults: { opts: { forceRestartSafeTools: false, forceCodeModeTools: false } },
-    });
-    expect(state.execute.mock.calls[0]?.[0]?.opts).toMatchObject({
-      forceRestartSafeTools: true,
-      forceCodeModeTools: true,
-    });
-  });
-
   it("records preflight failure on source receipts without changing newer runner state", async () => {
     const receipts: ReplyOperationRunState[] = [{}, {}];
     const newerReceipt: ReplyOperationRunState = {};
@@ -310,61 +264,66 @@ describe("executeFollowupTurn", () => {
     });
     await result.progress.drain();
 
-    for (const callback of [
+    expectNoCalls(
       typing.startTypingLoop,
       typing.startTypingOnText,
       onToolResult,
       ...Object.values(callbacks),
-    ]) {
-      expect(callback).not.toHaveBeenCalled();
-    }
+    );
   });
 
-  it.each([
-    ["hidden at verbosity off", { verboseLevel: "off" }, false, false],
+  it.each<[string, "on" | "off", GetReplyOptions, boolean | undefined, [boolean, boolean]]>([
+    ["hidden at verbosity off", "off", {}, undefined, [false, false]],
     [
       "callback owns source-suppressed delivery",
+      "on",
       {
-        callbackResult: true,
         sourceReplyDeliveryMode: "message_tool_only",
-        opts: { allowProgressCallbacksWhenSourceDeliverySuppressed: true },
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
       },
       true,
-      false,
+      [true, false],
     ],
     [
       "declined callback falls back once",
-      { callbackResult: false, opts: { forceToolResultProgress: true } },
-      true,
-      true,
+      "on",
+      { forceToolResultProgress: true },
+      false,
+      [true, true],
     ],
     [
       "explicit suppression hides callbacks",
+      "off",
       {
-        verboseLevel: "off",
-        callbackResult: false,
-        opts: {
-          forceToolResultProgress: true,
-          suppressToolProgressMessages: true,
-          allowToolLifecycleWhenProgressHidden: true,
-        },
+        forceToolResultProgress: true,
+        suppressToolProgressMessages: true,
+        allowToolLifecycleWhenProgressHidden: true,
       },
       false,
-      false,
+      [false, false],
     ],
-  ] as const)("queued fast auto progress: %s", async (_name, params, channel, durable) => {
-    const { onChannelToolResult, onDurableToolResult, payload } =
-      await runFastAutoProgressCase(params);
-    for (const [callback, delivered] of [
-      [onChannelToolResult, channel],
-      [onDurableToolResult, durable],
-    ] as const) {
-      if (delivered) {
-        expect(callback).toHaveBeenCalledExactlyOnceWith(payload);
-      } else {
-        expect(callback).not.toHaveBeenCalled();
-      }
-    }
+  ])("queued fast auto progress: %s", async (_name, verboseLevel, opts, accepted, deliveries) => {
+    const payload = {
+      text: "💨Fast: auto-on",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    } satisfies ReplyPayload;
+    const onChannelToolResult = vi.fn(() => accepted);
+    const onDurableToolResult = vi.fn(async () => {});
+    const turn = sessionTurn(() => ({ sessionId: "session", updatedAt: 1, verboseLevel }));
+    const { sourceReplyDeliveryMode, ...progressOpts } = opts;
+    turn.queued.run.sourceReplyDeliveryMode = sourceReplyDeliveryMode;
+    mockExecution(async (params) => {
+      await params.opts?.onToolResult?.(payload);
+    });
+    const result = await executeTestTurn({
+      turn,
+      opts: { ...progressOpts, onToolResult: onChannelToolResult },
+      onToolResult: onDurableToolResult,
+    });
+    await result.progress.drain();
+    expect([onChannelToolResult.mock.calls, onDurableToolResult.mock.calls]).toEqual(
+      deliveries.map((delivered) => (delivered ? [[payload]] : [])),
+    );
   });
 
   it("keeps lifecycle-only progress separate from generic summaries", async () => {
@@ -407,11 +366,7 @@ describe("executeFollowupTurn", () => {
     await result.progress.drain();
 
     expect(onToolStart).toHaveBeenCalledOnce();
-    for (const callback of Object.values(hiddenCallbacks)) {
-      expect(callback).not.toHaveBeenCalled();
-    }
-    expect(onChannelToolResult).not.toHaveBeenCalled();
-    expect(onDurableToolResult).not.toHaveBeenCalled();
+    expectNoCalls(...Object.values(hiddenCallbacks), onChannelToolResult, onDurableToolResult);
   });
 });
 
@@ -512,25 +467,17 @@ describe("executeFollowupTurn lifecycle", () => {
   });
 
   it.each([
-    {
-      expectation: "required",
-      progress: "item",
-      accepted: undefined,
-      visible: true,
-      beforeStart: true,
-    },
-    { expectation: "required", progress: "none", accepted: false, visible: false },
-    { expectation: "result-required", progress: "none", accepted: false, visible: false },
-    { expectation: "optional", progress: "none", accepted: false, visible: false },
-    { expectation: "optional", progress: "item", accepted: false, visible: false },
-    { expectation: "optional", progress: "item", accepted: true, visible: true },
-    { expectation: "optional", progress: "item", accepted: undefined, visible: true },
-    { expectation: "optional", progress: "compaction", accepted: undefined, visible: true },
+    ["required", "item", undefined, true, true],
+    ["required", "none", false, false, false],
+    ["result-required", "none", false, false, false],
+    ["optional", "none", false, false, false],
+    ["optional", "item", false, false, false],
+    ["optional", "item", true, true, false],
+    ["optional", "item", undefined, true, false],
+    ["optional", "compaction", undefined, true, false],
   ] as const)(
-    "settles $expectation failure after $progress progress accepts $accepted (before start: $beforeStart)",
-    async (testCase) => {
-      const { expectation, progress, accepted, visible } = testCase;
-      const beforeStart = "beforeStart" in testCase && testCase.beforeStart;
+    "settles %s failure after %s progress accepts %s (visible: %s, before start: %s)",
+    async (expectation, progress, accepted, visible, beforeStart) => {
       const receipt: ReplyOperationRunState = {};
       const failure = new Error("execution failed after start");
       const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();

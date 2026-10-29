@@ -69,6 +69,7 @@ export async function runEmbeddedAttempt(
   const modelExecution = bindOperatorModelExecution(readRunOperatorAuthority(input), {
     provider: input.provider,
     model: input.modelId,
+    cyberAccessProgram: input.cyberAccessProgram,
   });
   try {
     const attempt = modelExecution
@@ -392,7 +393,7 @@ async function runEmbeddedAttemptOwned(
         codeModeControlsEnabled: preparedToolBase.codeModeControlsEnabledForRun,
         onApplied: (surface) => {
           const allowedNames = new Set([
-            ...surface.activeToolNames,
+            ...surface.callableToolNames,
             ...surface.uncompactedEffectiveTools.map((tool) => tool.name),
           ]);
           preparedToolCatalog.applyPromptToolPolicy(allowedNames);
@@ -474,6 +475,8 @@ async function runEmbeddedAttemptOwned(
         ...executionResult,
         codeModeEngaged: codeModeControlsEnabledForRun,
         providerRetryMaxRetries: providerRetry.maxRetries,
+        providerRequestTimeoutExplicit:
+          providerRetry.timeoutMs !== undefined || params.model.requestTimeoutMs !== undefined,
         providerRetryMaxDelayMs: providerRetry.maxRetryDelayMs,
         ...(catalogSession
           ? {
@@ -517,6 +520,10 @@ async function runEmbeddedAttemptOwned(
       externalAbortController.throwIfFired();
     } catch (abortError) {
       error = abortError;
+    }
+    // Preparation can fail before execution records a terminal outcome.
+    if (executionState.terminal.kind === "ok") {
+      executionState.terminal = { kind: "failed", source: "precheck", error };
     }
     const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
       terminal: executionState.terminal,

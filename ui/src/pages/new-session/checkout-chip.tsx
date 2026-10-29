@@ -2,6 +2,7 @@ import { createMemo, lazy } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { warmWhenIdle } from "../../lib/idle-warmup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { SessionPicker } from "./picker.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
@@ -11,6 +12,7 @@ registerNewSessionSetupEnglish();
 const CheckoutPickerContent = lazy(() => import("./checkout-picker-content.tsx"), {
   export: "CheckoutPickerContent",
 });
+warmWhenIdle(CheckoutPickerContent.preload);
 
 export function CheckoutChip(props: {
   params: NewSessionPlaceControlsOptions;

@@ -84,6 +84,11 @@ export function projectReplyToolAuthorityInput(
   ) {
     throw new MessageInjectionRequesterMismatchError();
   }
+  if (continuation && isSameReplyToolAuthorityConversation(snapshot, continuation.caller)) {
+    // Guidance continues this execution; it does not grant a new set of tools or destinations.
+    // The caller binding still checks both live authorities and the incumbent policy.
+    return snapshot;
+  }
   return continuation
     ? {
         ...incoming,
@@ -154,8 +159,6 @@ function applyReplyToolAuthorityCaller(
     operatorAuthority: overlay.operatorAuthority,
     toolsAllow: overlay.toolsAllow,
     disableTools: overlay.disableTools,
-    forceRestartSafeTools: overlay.forceRestartSafeTools,
-    forceCodeModeTools: overlay.forceCodeModeTools,
     run: {
       ...snapshot.run,
       requesterOrigin: undefined,
@@ -194,8 +197,6 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   toolsAllow?: string[];
   disableTools: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
 }): ReplyToolAuthorityOverlay {
   const { ctx } = params;
   const senderId = normalizeOptionalString(ctx.SenderId);
@@ -237,8 +238,6 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     runtimePluginToolGrant: undefined,
     toolsAllow: params.toolsAllow,
     disableTools: params.disableTools,
-    forceRestartSafeTools: params.forceRestartSafeTools,
-    forceCodeModeTools: params.forceCodeModeTools,
     traceAuthorized:
       params.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
     approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
@@ -271,7 +270,15 @@ export function resolveInboundConversationToolPolicy(params: {
 /** Session sharing alone does not establish that two inputs belong to the same conversation. */
 function isSameReplyToolAuthorityConversation(
   snapshot: ReplyToolAuthorityInput,
-  caller: ReplyToolAuthorityOverlay,
+  caller: Pick<
+    ReplyToolAuthorityOverlay,
+    | "messageProvider"
+    | "originatingChannel"
+    | "conversationId"
+    | "sessionKey"
+    | "agentAccountId"
+    | "messageThreadId"
+  >,
 ): boolean {
   const execution = snapshot.run;
   const channel = normalizeMessageChannel(execution.messageProvider ?? snapshot.originatingChannel);

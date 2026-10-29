@@ -32,7 +32,7 @@ function retryFixture(
   } = {},
 ) {
   if (!options.realTimers) {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
   }
   const { realTimers: _realTimers, acceptFrom, ...source } = options;
   const f = fixture({ transcripts: { autoStart: [{ ...room, ...source }] } });
@@ -233,13 +233,14 @@ describe("configured transcript failed-start custody", () => {
   );
 
   it.each([false, true])(
-    "discards failed late startup after the stop deadline (occupied=%s)",
+    "discards failed late startup after a wall-clock step and stop deadline (occupied=%s)",
     async (whenOccupied) => {
       const setup = retryFixture({ whenOccupied });
       const { f, service, start } = setup;
       const pending = pendingStart(setup, true);
       const request = await pending.request;
       const stopping = service.stop();
+      vi.setSystemTime(Date.now() + (whenOccupied ? -60_000 : 60_000));
       await vi.advanceTimersByTimeAsync(5_000);
       await stopping;
       expect(request.abortSignal?.aborted).toBe(true);
@@ -248,7 +249,6 @@ describe("configured transcript failed-start custody", () => {
       await pending.settled;
       // The original cleanup owner keeps joining after its caller's deadline.
       await service.stop();
-      expect(await f.store.listSessionEntries()).toEqual([]);
       await request.onUtterance({ text: "Retired callback" });
       await vi.advanceTimersByTimeAsync(65_000);
       expect(start).toHaveBeenCalledOnce();

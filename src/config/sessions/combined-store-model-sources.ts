@@ -1,7 +1,7 @@
 import { selectStoredSessionLineage } from "../../gateway/session-store-key.js";
 import type { GatewaySessionModelSource } from "../../gateway/session-utils-contracts.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { readAgentDatabaseReadAdmissionRefusal } from "../../state/agent-database-admission.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { storeTargetKey } from "./combined-store-paths.js";
 import type { SessionStoreTarget } from "./targets.js";
@@ -76,7 +76,7 @@ export function createSessionModelSources(
             if (isExcludedOwner(agentId, target.storePath)) {
               return { key: parentKey, value: undefined };
             }
-            const refusal = readAgentDatabaseAdmissionRefusal(agentId);
+            const refusal = readAgentDatabaseReadAdmissionRefusal(agentId);
             if (refusal) {
               const message = `${refusal.reason}\n${refusal.repairHint}`;
               if (!diagnostics.includes(message)) {

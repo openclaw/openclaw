@@ -17,9 +17,26 @@ export function applySessionEntryWritePolicy(
     profileInvolvement?: SessionEntry["profileInvolvement"];
     previousEntry?: SessionEntry | null;
     consumePendingReset?: boolean;
+    preserveVisibility?: boolean;
   },
 ): { entry: SessionEntry; previousEntry: SessionEntry | undefined } {
   let normalizedEntry = initialEntry;
+  if (
+    canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
+    canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision ||
+    normalizedEntry.archivedAt !== undefined ||
+    normalizedEntry.incognito
+  ) {
+    delete normalizedEntry.resumeAfterRestart;
+  } else if (!Object.hasOwn(normalizedEntry, "resumeAfterRestart")) {
+    // Public projections omit the shutdown marker; same-incarnation bookkeeping retains it.
+    normalizedEntry = {
+      ...normalizedEntry,
+      ...(canonicalPreviousEntry.resumeAfterRestart
+        ? { resumeAfterRestart: canonicalPreviousEntry.resumeAfterRestart }
+        : {}),
+    };
+  }
   if (
     canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
     canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision &&
@@ -98,12 +115,13 @@ export function applySessionEntryWritePolicy(
     // Same-lifecycle bookkeeping cannot cancel the one-time reset owed by legacy state.
     normalizedEntry.updatedAt = 0;
   }
-  // The lifecycle-selected entry owns visibility copy-forward semantics.
+  // Fresh child installation can retain its current audience; other replacements clear it.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
-    delete normalizedEntry.visibility;
-  }
-  if (normalizedEntry.archivedAt || normalizedEntry.incognito) {
-    delete normalizedEntry.pendingExecNotifications;
+    if (options.preserveVisibility && canonicalPreviousEntry?.visibility !== undefined) {
+      normalizedEntry.visibility = canonicalPreviousEntry.visibility;
+    } else {
+      delete normalizedEntry.visibility;
+    }
   }
   return { entry: normalizedEntry, previousEntry };
 }

@@ -4,6 +4,7 @@ import {
   FILE_TYPE_SNIFF_MAX_BYTES,
   normalizeMimeType,
 } from "@openclaw/media-core/mime";
+import { memoizeFrozenPlainDataProjection } from "../shared/immutable-data.js";
 
 const ANTHROPIC_SUPPORTED_IMAGE_MIMES = [
   "image/jpeg",
@@ -27,6 +28,10 @@ type NormalizedAnthropicInlineBlock =
   | NormalizedAnthropicInlineImageBlock;
 
 const ANTHROPIC_SUPPORTED_IMAGE_MIME_SET = new Set<string>(ANTHROPIC_SUPPORTED_IMAGE_MIMES);
+// Frozen history owns this byte-only fact; mutable inputs still validate on every call.
+const canonicalImageData = memoizeFrozenPlainDataProjection((block: AnthropicInlineImageBlock) =>
+  canonicalizeBase64(block.data),
+);
 
 function isAnthropicSupportedImageMime(
   value: string | undefined,
@@ -38,7 +43,7 @@ async function normalizeAnthropicInlineImage(block: AnthropicInlineImageBlock): 
   data: string;
   mimeType: AnthropicSupportedImageMime;
 }> {
-  const canonicalData = canonicalizeBase64(block.data);
+  const canonicalData = canonicalImageData(block);
   const data = canonicalData ?? block.data.trim();
   // Only canonical input can be truncated without changing permissive base64 decoding.
   const sniffData = canonicalData?.slice(0, ANTHROPIC_MIME_PREFIX_BASE64_CHARS) ?? data;

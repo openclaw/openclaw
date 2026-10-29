@@ -34,7 +34,7 @@ import { createModelProviderDiscovery } from "./discovery-controller.tsx";
 import { createInstalledAgents } from "./installed-agents.tsx";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import { createModelProviderLogin } from "./login-controller.ts";
-import { createModelProvidersState } from "./page-state.ts";
+import type { ModelProvidersState } from "./page-state.ts";
 import { createModelProviderProfileActions } from "./profile-actions-controller.ts";
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
@@ -51,7 +51,20 @@ export function createModelProviders(
   const gatewayState = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.settingsAgentSelection);
   const overlays = projectOverlays(context.overlays);
-  const projection = observeState(createModelProvidersState());
+  const projection = observeState<ModelProvidersState>({
+    data: null,
+    busy: {},
+    messages: {},
+    probeResults: {},
+    keyEditorProvider: null,
+    keyDraft: "",
+    profileOrders: {},
+    addProviderId: "",
+    addProviderKey: "",
+    defaultsDraft: null,
+    selectedAgentId: "",
+    accountUsageRevision: 0,
+  });
   const state = projection.state;
   const notify = projection.invalidate;
   const mutationBlockedReason = (): string | null =>

@@ -14,9 +14,9 @@ import type {
   SessionActorAuthority,
   SessionActorLifetime,
 } from "./session-actor-contract.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   getSessionActorStorageBinding,
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
 } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageAuthority } from "./session-actor-storage-contract.js";

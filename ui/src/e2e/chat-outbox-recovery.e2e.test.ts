@@ -9,13 +9,15 @@ import {
   captureUiProofEnabled,
   chatMessage,
   createChatFlowE2eSuite,
+  expectDefined,
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
   requireString,
+  scrollChatThreadToTop,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
-import { outboxButton as button } from "./chat-outbox-payloads.test-support.ts";
+import { outboxButton as button, readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const pageOptions = { locale: "en-US", serviceWorkers: "block" as const };
@@ -57,7 +59,7 @@ suite.define(() => {
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 320, height: 844 } },
         async ({ page }) => {
           await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
-          await installMockGateway(page, {
+          const gateway = await installMockGateway(page, {
             historyMessages: ["failed", "waiting-reconnect", "held"].flatMap((state, index) => [
               chatMessage("user", "Pending " + state, {
                 timestamp: 1_000 + index * 2,
@@ -80,35 +82,37 @@ suite.define(() => {
             ]),
           });
           await page.goto(suite.server.baseUrl + "chat");
-          const statuses = page.locator(".chat-send-status");
-          await expectBrowser(statuses).toHaveCount(3, { timeout: 30_000 });
+          await page.locator('.chat-send-status[data-send-state="held"]').waitFor();
           const held = page.locator('.chat-send-status[data-send-state="held"]');
           await expectBrowser(held).toContainText("Needs review");
           await expectBrowser(button(held, "Discard")).toBeVisible();
-          // Enlarged text must not push recovery controls outside the conversation.
+          // Enlarged text must keep recovery controls in bounds as virtual rows change.
           await page.addStyleTag({ content: ".chat-send-status { font-size: 24px; }" });
           for (const theme of ["light", "dark"]) {
+            await gateway.setOnline(false);
             await page.evaluate((mode) => {
               document.documentElement.dataset.themeMode = mode;
             }, theme);
-            for (const status of await statuses.all()) {
+            await scrollChatThreadToTop(page);
+            for (const state of ["failed", "waiting-reconnect", "held"]) {
+              const status = page.locator(`.chat-send-status[data-send-state="${state}"]`);
+              await expectBrowser(status).toBeVisible({ timeout: 30_000 });
               await status.scrollIntoViewIfNeeded();
               await page.mouse.move(0, 0);
-              const footer = status.locator(
-                "xpath=ancestor::div[contains(@class, 'chat-group-footer--send-status')]",
-              );
-              await expectBrowser(footer).toHaveCSS("opacity", "1");
+              await expectBrowser(
+                page.locator(".chat-group-footer--send-status", { has: status }),
+              ).toHaveCSS("opacity", "1");
               for (const action of await status.getByRole("button").all()) {
                 await expectBrowser(action).toBeVisible();
                 await expectBrowser(action).toBeEnabled();
-                const bounds = await action.boundingBox();
-                if (!bounds) {
-                  throw new Error("Recovery action has no rendered bounds");
-                }
+                const bounds = expectDefined(await action.boundingBox(), "recovery action bounds");
                 expect(bounds.x).toBeGreaterThanOrEqual(0);
                 expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
               }
             }
+            // Retry requires a live connection; reconnect after measuring offline recovery.
+            await gateway.setOnline(true);
+            await scrollChatThreadToTop(page);
             const failed = page.locator('.chat-send-status[data-send-state="failed"]');
             const retry = failed.getByRole("button", { name: "Retry queued message" });
             await retry.focus();
@@ -195,11 +199,12 @@ suite.define(() => {
           expect(nextParams).toEqual({ ...firstParams, __controlUiReconnectResume: true });
           expect(await page.locator(".chat-queue").count()).toBe(0);
           await expectBrowser(userFor(page, prompt, true)).toHaveCount(1);
+          await expectBrowser(page.locator(".chat-send-status")).toHaveCount(0);
           if (artifactDir && outcome === "duplicate") {
             const frame = await takeControlUiScreenshotFrame(
               page,
               page.locator("openclaw-chat-pane"),
-              [userFor(page, prompt, true), page.locator(".chat-send-status")],
+              [userFor(page, prompt, true), page.locator(".chat-group.user time")],
               { animations: "disabled" },
             );
             await writeFile(path.join(artifactDir, "after-replaying-original-key.png"), frame.png);
@@ -255,7 +260,8 @@ suite.define(() => {
             1,
           );
           await page.locator('.chat-bubble[data-entry-id="different-history-turn"]').waitFor();
-          await page.locator(".chat-send-status").waitFor();
+          await expectBrowser(page.locator(".chat-send-status")).toHaveCount(0);
+          await page.locator(".chat-group.user", { hasText: prompt }).locator("time").waitFor();
           await expectBrowser(userFor(page, prompt, true)).toHaveCount(1);
           await expectRequestCountStable(gateway, "chat.send", 2);
 
@@ -277,7 +283,8 @@ suite.define(() => {
             after: refreshBefore,
             match: displayMatch,
           });
-          await page.locator(".chat-send-status").waitFor({ state: "detached" });
+          await expect.poll(async () => (await readOutboxQueue(page)).length).toBe(0);
+          await expectBrowser(page.locator(".chat-send-status")).toHaveCount(0);
           expect(
             await userFor(page, prompt, true).count(),
             "The committed user row must survive duplicate ACK retirement while readback is held",
@@ -291,7 +298,8 @@ suite.define(() => {
         } else {
           await gateway.resolveDeferred("chat.send", { runId: acceptedRunId, status: "ok" });
         }
-        await page.locator(".chat-send-status").waitFor({ state: "detached" });
+        await expect.poll(async () => (await readOutboxQueue(page)).length).toBe(0);
+        await expectBrowser(page.locator(".chat-send-status")).toHaveCount(0);
         await expectRequestCountStable(gateway, "chat.send", requestCount);
         expect(
           (await gateway.getRequests("chat.history")).some(

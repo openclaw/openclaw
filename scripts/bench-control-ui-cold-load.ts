@@ -22,6 +22,7 @@
 // --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
 // Repeat --layout-cell mobile:light:chat:cold to isolate cells with their matrix setup intact.
 // --sidebar-presentation adds badges/avatars; --sidebar-presentation-probe records visible waves.
+// --late-row-facts covers titled links, native/ticketed thumbnails, archive notice and avatars.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
 // --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
@@ -72,6 +73,7 @@ import {
 } from "./lib/control-ui-bench-warm-state.ts";
 import {
   compareCpuTables,
+  controlUiScriptAssetUrl,
   formatCpuTables,
   medianCpuTables,
   readCpuProfileReport,
@@ -258,6 +260,11 @@ function summarizeSidebarWindows(
 
 const { values } = parseArgs({
   options: {
+    "new-session-first-token": { type: "boolean", default: false },
+    "new-session-token-ms": { type: "string", default: "1500" },
+    "new-session-worker": { type: "boolean", default: false },
+    "new-session-filmstrip": { type: "boolean", default: false },
+    "new-session-list-mode": { type: "string", default: "normal" },
     "cpu-profile": { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
@@ -266,7 +273,9 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
+    "late-row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
+    "archived-session": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -344,6 +353,22 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
+if (values["late-row-facts"]) {
+  if (
+    !values["warm-reload"] ||
+    !values["gateway-http"] ||
+    values["cold-http-cache"] ||
+    values["hold-boot-assets"] ||
+    Number(values["history-validator-delay-ms"]) > 0 ||
+    values["duplicate-boot-reads"]
+  ) {
+    throw new Error(
+      "late-row-facts requires cache-enabled gateway-http + warm-reload without intercepted assets or duplicate-boot-reads",
+    );
+  }
+  values["row-facts"] = true;
+  values["transcript-avatars"] = true;
+}
 if (values["pane-chrome-probe"] && !values["warm-reload"]) {
   throw new Error("pane-chrome-probe requires warm-reload for the first transcript paint boundary");
 }
@@ -791,7 +816,9 @@ const fixture = createControlUiTeamScaleFixture({
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
   rowFacts: values["row-facts"],
+  lateRowFacts: values["late-row-facts"],
   offRosterSession: values["off-roster-route"],
+  archivedSession: values["archived-session"],
   transcriptMessages,
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
@@ -860,6 +887,14 @@ try {
   const settingsCoreSchema = values["settings-core-schema"]
     ? (await import("../src/config/schema.ts")).buildConfigSchemaCore()
     : undefined;
+  const agentsResponse = fixture.scenario.methodResponses?.["agents.list"];
+  const workerAgents =
+    values["new-session-worker"] && agentsResponse && typeof agentsResponse === "object"
+      ? {
+          ...agentsResponse,
+          sessionPlacement: { requiredProfile: { id: "l247-worker", providerId: "crabbox" } },
+        }
+      : undefined;
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
     ...(streamingSplitLayout
@@ -876,14 +911,11 @@ try {
         }
       : {}),
     subscriptionInitialHistory: true,
-    ...(settingsCoreSchema
-      ? {
-          methodResponses: {
-            ...fixture.scenario.methodResponses,
-            "config.schema": settingsCoreSchema,
-          },
-        }
-      : {}),
+    methodResponses: {
+      ...fixture.scenario.methodResponses,
+      ...(workerAgents ? { "agents.list": workerAgents } : {}),
+      ...(settingsCoreSchema ? { "config.schema": settingsCoreSchema } : {}),
+    },
     terminalEnabled,
     serverBuildId: buildId,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
@@ -1195,12 +1227,31 @@ try {
   ]);
   if (gatewayHttpServer) {
     // Native fixture HTTP keeps browser caching available for production assets.
-    gatewayHttpServer.setFixtureReader((pathname) => {
+    gatewayHttpServer.setFixtureReader((pathname, url) => {
       if (pathname === "/control-ui-config.json") {
         return {
           body: JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario)),
           contentType: "application/json",
         };
+      }
+      if (fixture.lateRowFacts && pathname === "/__openclaw__/assistant-media") {
+        if (url.searchParams.get("source") !== fixture.lateRowFacts.cacheableImageSource) {
+          return undefined;
+        }
+        if (url.searchParams.get("meta") === "1") {
+          return {
+            body: JSON.stringify(fixture.lateRowFacts.metadata),
+            contentType: "application/json",
+            headers: { "Cache-Control": "private, no-store" },
+          };
+        }
+        if (url.searchParams.get("mediaTicket") !== fixture.lateRowFacts.metadata.mediaTicket) {
+          return {
+            body: "Synthetic media ticket required",
+            contentType: "text/plain",
+            status: 403,
+          };
+        }
       }
       const asset = assets.get(pathname);
       return asset
@@ -1330,7 +1381,7 @@ try {
     : "";
   const warmProbes =
     values["warm-reload"] || firstLoad
-      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
+      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
       : "";
   const presentationProbes = fixture.sidebarPresentation
     ? `\n(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});${values["sidebar-presentation-probe"] ? `\n(${sidebarPresentationProbe.toString()})();` : ""}`
@@ -1653,8 +1704,73 @@ try {
   const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
     sessionKey: fixture.selectedSessionKey,
     rowFacts: values["row-facts"],
+    lateRowFacts: values["late-row-facts"],
     offRosterSession: values["off-roster-route"],
     sidebarView: sidebarView === "online" ? "online" : "sessions",
+  };
+  const qualifyLateRowFacts = async () => {
+    if (!fixture.lateRowFacts) {
+      return;
+    }
+    await page
+      .waitForFunction(({ sessionTitle, prUrl }) => {
+        const thread = document.querySelector(".chat-pane-cache__pane--active .chat-thread");
+        const links = [...(thread?.querySelectorAll<HTMLAnchorElement>("a") ?? [])];
+        const images = [
+          ...(thread?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
+        ];
+        const assistantAvatars = [
+          ...(thread?.querySelectorAll<HTMLImageElement>(
+            "img.chat-avatar.assistant, .chat-avatar.assistant img, .identity-avatar--agent img",
+          ) ?? []),
+        ];
+        return (
+          links.some(
+            (link) =>
+              link.classList.contains("markdown-session-link--titled") &&
+              link.textContent === sessionTitle,
+          ) &&
+          links.some((link) => link.href === prUrl && link.dataset.linkReaderTone === "positive") &&
+          images.length === 2 &&
+          images.every((image) => image.complete && image.naturalWidth > 0) &&
+          Boolean(thread?.querySelector('.chat-notice[data-chat-row-key^="archive:"]')) &&
+          assistantAvatars.some(
+            (image) => image.checkVisibility() && image.complete && image.naturalWidth > 0,
+          )
+        );
+      }, fixture.lateRowFacts)
+      .catch(async (error: unknown) => {
+        await writeFile(
+          path.join(artifactDir, "late-row-qualification-failure.json"),
+          JSON.stringify({
+            errors,
+            consoleErrors,
+            diagnostics: await page.evaluate(() => Reflect.get(window, "__coldLoad")?.read()),
+            thread: await page.locator(".chat-pane-cache__pane--active .chat-thread").innerHTML(),
+          }),
+        );
+        await page.screenshot({
+          path: path.join(artifactDir, "late-row-qualification-failure.png"),
+        });
+        throw error;
+      });
+  };
+  const qualifyLateRowSnapshot = (saved: (typeof snapshotSaves)[number], bundleIndex: number) => {
+    if (!values["late-row-facts"] || !comparisonBundleDirs.length || bundleIndex === 0) {
+      return;
+    }
+    const facts = saved.displayFacts;
+    if (
+      !facts ||
+      facts.thumbnails !== 2 ||
+      facts.imageDimensions !== 2 ||
+      facts.links < 2 ||
+      facts.thumbnailBytes <= 0 ||
+      facts.cachedThumbnails > 32 ||
+      facts.cachedThumbnailBytes > 8 * 1024 * 1024
+    ) {
+      throw new Error(`Unqualified candidate late-row snapshot: ${JSON.stringify(facts)}`);
+    }
   };
   if (!firstLoad) {
     await page.goto(chatUrl);
@@ -1727,29 +1843,62 @@ try {
       await settle("chat");
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
+    await qualifyLateRowFacts();
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
       warmInput,
     );
-    warmStates.push(warmStorage);
-    snapshotSaves.push(snapshotSave);
-    for (let index = 1; index < bundleSlots.length; index++) {
-      await restoreColdLoadWarmState(page, warmStorage, warmStates[index - 1]);
-      const reloadUrl = page.url();
-      await selectComparisonBundle(index, page);
-      await page.goto(reloadUrl, { waitUntil: "domcontentloaded" });
-      await settle("chat");
-      if (viewportName === "mobile") {
-        await navigationDrawerToggle(page).click();
-        await page.locator(".shell--nav-drawer-open").waitFor();
+    const passes = values["warm-reload"] ? 2 : 1;
+    for (let index = 0; index < bundleSlots.length; index++) {
+      let storage = warmStorage;
+      if (!values["warm-reload"] && index === 0) {
+        warmStates.push(storage);
+        snapshotSaves.push(snapshotSave);
+        continue;
       }
-      await expandSidebar();
-      const { storage, ...saved } = await page.evaluate(persistColdLoadWarmState, warmInput);
-      warmStates.push(storage);
-      snapshotSaves.push(saved);
-      if (viewportName === "mobile") {
-        await page.keyboard.press("Escape");
-        await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+      const primes: typeof snapshotSaves = [];
+      // Every arm starts from the same seed, then reloads its own projection before freezing it.
+      for (let pass = 0; pass < passes; pass++) {
+        await restoreColdLoadWarmState(page, storage, pass === 0 ? warmStates.at(-1) : storage);
+        const reloadUrl = page.url();
+        await selectComparisonBundle(index, page);
+        await page.goto(reloadUrl, { waitUntil: "domcontentloaded" });
+        await settle("chat");
+        if (viewportName === "mobile") {
+          await navigationDrawerToggle(page).click();
+          await page.locator(".shell--nav-drawer-open").waitFor();
+        }
+        await expandSidebar();
+        await qualifyLateRowFacts();
+        const { storage: captured, ...saved } = await page.evaluate(
+          persistColdLoadWarmState,
+          warmInput,
+        );
+        qualifyLateRowSnapshot(saved, index);
+        storage = captured;
+        primes.push(saved);
+        if (pass === passes - 1) {
+          if (values["warm-reload"]) {
+            const warmReload = await page.evaluate(() =>
+              Reflect.get(window, "__warmReload")?.read(),
+            );
+            if (typeof warmReload?.milestones?.cacheRead !== "number") {
+              throw new Error(
+                "Warm comparison seed requires a cached transcript read in every arm",
+              );
+            }
+            await writeFile(
+              path.join(artifactDir, `warm-prime-${index}.json`),
+              JSON.stringify({ primes, warmReload, snapshots: storage.records.snapshots }),
+            );
+          }
+          warmStates.push(storage);
+          snapshotSaves.push(saved);
+        }
+        if (viewportName === "mobile") {
+          await page.keyboard.press("Escape");
+          await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+        }
       }
     }
     await restoreColdLoadWarmState(page, warmStorage, warmStates.at(-1));
@@ -1782,7 +1931,9 @@ try {
   }
   for (let run = 0; run < runs; run++) {
     const bundleIndex = run % bundleSlots.length;
-    const layoutCell = layoutCells[Math.floor(run / bundleSlots.length) % layoutCells.length];
+    // Compare every bundle under the same route and roster conditions.
+    const bundleCycle = Math.floor(run / bundleSlots.length);
+    const layoutCell = layoutCells[bundleCycle % layoutCells.length];
     const runRoute = layoutCell?.route ?? bootRoute;
     const cold = layoutCell?.cold ?? firstLoad;
     const runUrl =
@@ -2004,6 +2155,7 @@ try {
       layoutCell ||
       firstLoad ||
       values["critical-path"] ||
+      values["new-session-first-token"] ||
       bootRoute !== "chat" ||
       // Typing in the second pane changes the URL; restore the fixture's primary route.
       streamingPanes > 1 ||
@@ -2014,9 +2166,13 @@ try {
       await page.reload({ waitUntil: "domcontentloaded" });
     }
     await settle(runRoute);
+    if (values["late-row-facts"]) {
+      // Seeds are qualified above; best-effort live link prefetch can skip a reload.
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+    }
     const coverage = values.coverage
       ? (await page.coverage.stopJSCoverage())
-          .filter((entry) => URL.parse(entry.url)?.pathname.startsWith("/assets/"))
+          .filter((entry) => controlUiScriptAssetUrl(entry.url, new URL("assets/", baseUrl)))
           .map((entry) =>
             Object.assign(
               { url: entry.url, functions: entry.functions },
@@ -2961,15 +3117,28 @@ try {
       : undefined;
     let sessionSwitch;
     if (values["session-switch"]) {
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await navigationDrawerToggle(page).click();
+        await page.locator(".shell--nav-drawer-open").waitFor();
+      }
       if (sidebarView !== "sessions") {
         await page.locator('[data-navigation-view="sessions"]').click();
       }
+      // Cold runs keep the default My sessions filter until this phase.
+      await page.locator("#sidebar-session-owner-title").click();
+      await page
+        .locator('.sidebar-session-owner-filter [role="option"][data-value="involving-me"]')
+        .click();
       // The first non-main chat is in the initial Involving me page.
       const target = fixture.scenario.sessions![1]!;
       const link = page.locator(
         `.sidebar-recent-session[data-session-key="${target.key}"] a.sidebar-recent-session__link`,
       );
       await link.scrollIntoViewIfNeeded();
+      await page.waitForFunction(() => {
+        const state = Reflect.get(window, "__coldLoad").read();
+        return !state.pending && !state.queued && state.idleMs > 750;
+      });
       const rpcOffset = await page.evaluate(
         () => Reflect.get(window, "__coldLoad").read().rpcs.length,
       );
@@ -3146,8 +3315,23 @@ try {
         await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.${route}.png`) });
       }
     }
+    const newSessionFirstToken = values["new-session-first-token"]
+      ? await (
+          await import("./lib/control-ui-new-session-first-token.ts")
+        ).measureNewSession(page, artifactDir, run + 1, {
+          initialHistory: fixture.scenario.methodResponses?.["chat.startup"],
+          viewerId: fixture.sidebarListInput.viewerProfileId,
+          tokenDelayMs: Number(values["new-session-token-ms"]),
+          worker: values["new-session-worker"],
+          filmstrip: values["new-session-filmstrip"],
+          held:
+            values["new-session-list-mode"] === "held" ||
+            (values["new-session-list-mode"] === "alternate" && bundleCycle % 2 === 1),
+        })
+      : undefined;
     await cdp.detach();
     const result = {
+      newSessionFirstToken,
       layoutCell,
       run: run + 1,
       hostLoadAverage,
@@ -3334,6 +3518,7 @@ try {
         connectNotBeforeMs,
         dashboardWidget: values["dashboard-widget"],
         rowFacts: values["row-facts"],
+        lateRowFacts: values["late-row-facts"],
         face,
         shortRoute: values["short-route"],
         fullUuidRoute: values["full-uuid-route"],

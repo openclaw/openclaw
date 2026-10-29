@@ -110,12 +110,22 @@ export function recordMemorySample(
       labels,
       message.messages,
     );
-    store.counterValue(
-      "openclaw_worker_message_payload_bytes_total",
-      "Known worker payload bytes, excluding transport framing and unmeasured object graphs.",
-      labels,
-      message.payloadBytes,
-    );
+    for (const [requestClass, bytes] of Object.entries(
+      message.payloadBytesByRequestClass ?? {
+        [message.kind === "sqlite_request" ||
+        message.kind === "sqlite_reply" ||
+        message.kind === "authority"
+          ? "other"
+          : ""]: message.payloadBytes,
+      },
+    )) {
+      store.counterValue(
+        "openclaw_worker_message_payload_bytes_total",
+        "Known worker payload bytes, excluding transport framing and unmeasured object graphs.",
+        requestClass ? { ...labels, request_class: requestClass } : labels,
+        bytes,
+      );
+    }
     store.counterValue(
       "openclaw_worker_message_unmeasured_total",
       "Worker messages without a known payload size; these do not contribute to payload bytes.",

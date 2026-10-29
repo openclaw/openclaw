@@ -1,16 +1,13 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
-  resolveModelFallbackAvailability,
 } from "../../agents/agent-scope.js";
 import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-preparation.js";
+import { resolveModelFallbackAvailability } from "../../agents/model-selection-config.js";
 import { resolveCommandAuthorizationAsync } from "../../auto-reply/command-auth.js";
 import { resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
@@ -28,6 +25,7 @@ import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-deliver
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { QueueConfig } from "../../config/types.messages.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
@@ -52,6 +50,7 @@ import type { UserTurnTranscriptPersistResult } from "../../sessions/user-turn-t
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { buildChatSendReplyInjectionText } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
@@ -87,6 +86,7 @@ export function createChatSendMessageInjectionStarter(params: {
   logGateway: GatewayRequestContext["logGateway"];
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  diagnostics?: ChatSendDiagnostics;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
   const { agentId, cfg, entry, sessionKey, storePath, clientRunId, resolvedSessionModel } =
@@ -102,13 +102,12 @@ export function createChatSendMessageInjectionStarter(params: {
     if (!target || isInternalTextSlashCommandTurn) {
       return undefined;
     }
+    using phase = params.diagnostics?.scope("detail.run_admission.steer_authority");
     assertCurrent();
     const delivery = prepareSteeringDelivery({
       agentId,
       sessionKey,
       storePath,
-      sessionId: entry?.sessionId,
-      sourceTurnId: normalizeOptionalString(target.sourceTurnId),
       entry,
       assertCurrent,
     });
@@ -160,14 +159,11 @@ export function createChatSendMessageInjectionStarter(params: {
         documentImages.length > 0
           ? [
               ...(replyOptionImages ?? []),
-              // Extracted page images follow the prepared inbound images, the
-              // same inline-then-extracted ordering reply dispatch produces; each
-              // keeps its attachment index as ordering provenance.
+              // Keep the same inline-then-extracted ordering reply dispatch produces.
               ...documentImages.map((image): ChatImageContent => ({
                 type: "image",
                 data: image.data,
                 mimeType: image.mimeType,
-                sourceIndex: image.attachmentIndex,
               })),
             ]
           : replyOptionImages;
@@ -192,6 +188,7 @@ export function createChatSendMessageInjectionStarter(params: {
         allowCollaborativeSteering: _collaboration,
         ...caller
       } = overlay;
+      phase?.mark("detail.run_admission.steer_continuation");
       join = await prepareReplyMessageContinuation({
         target,
         assertCurrent,
@@ -210,6 +207,7 @@ export function createChatSendMessageInjectionStarter(params: {
             cfg,
             agentId,
             sessionKey,
+            selectedModel: resolvedSessionModel,
             hasSessionModelOverride:
               entry?.modelOverrideSource !== "default" &&
               Boolean(entry?.modelOverride || entry?.providerOverride) &&
@@ -232,6 +230,7 @@ export function createChatSendMessageInjectionStarter(params: {
         return undefined;
       }
       const preparedJoin = join.kind === "prepared" ? join : undefined;
+      phase?.mark("detail.run_admission.steer_delivery");
       try {
         await delivery.prepareCurrent();
       } catch (error) {
@@ -246,6 +245,7 @@ export function createChatSendMessageInjectionStarter(params: {
         return undefined;
       }
       let admissionRefused = false;
+      phase?.mark("detail.run_admission.steer_admit");
       const attempt = await beginSessionControllerSteer({
         input: params.sourceRef.input,
         target,
@@ -323,21 +323,25 @@ export function createChatSendMessageInjectionStarter(params: {
 /** Keep a terminal injection decision through detached preparation and reply dispatch. */
 export function createChatSendInjectionDisposition(
   run: Parameters<typeof refuseCollaborativeSteering>[0],
+  queue: QueueConfig | undefined,
 ) {
-  let refused = false;
+  let collaborationBlocked = false;
   const runState: ReplyOperationRunState = {};
   const isRefused = () =>
-    refused ||
+    (collaborationBlocked && queue?.collaborativeSteeringFallback === "reject") ||
     (runState.admission?.status === "skipped" &&
       runState.admission.reason === "collaborative-steering-disabled");
   return {
     runState,
     isRefused,
+    isCollaborationBlocked: () => collaborationBlocked,
     async observe(attempt: ReplyMessageInjectionAttempt | undefined) {
       const outcome = await attempt?.outcome;
       if (outcome?.status === "rejected" && outcome.reason === "collaborative_steering_disabled") {
-        refused = true;
-        runState.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
+        collaborationBlocked = true;
+        if (queue?.collaborativeSteeringFallback === "reject") {
+          runState.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
+        }
         return undefined;
       }
       return attempt;
@@ -422,7 +426,6 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       channel,
       chatId,
       messageId,
-      sessionId: entry?.sessionId,
       sessionKey,
       durationMs: Math.max(0, Date.now() - params.startedAt),
       outcome: indeterminate ? "error" : "completed",

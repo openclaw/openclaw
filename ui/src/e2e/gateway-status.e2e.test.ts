@@ -291,7 +291,7 @@ suite.define(() => {
           await expect.poll(() => composer.inputValue()).toBe("");
         }
         const footer = page.locator(".sidebar-footer-bar");
-        const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status");
+        const connectionStatus = page.locator(".sidebar-shell__connection .gateway-status");
         await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(2);
         await connectionStatus.getByText("Reconnecting… · 2 queued", { exact: true }).waitFor();
         expect(await connectionStatus.getByRole("button").count()).toBe(0);
@@ -366,7 +366,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
-        await connectionStatus.getByText("Connected", { exact: true }).waitFor();
+        await connectionStatus.waitFor({ state: "detached" });
         await expect
           .poll(() => identityStatus.getAttribute("data-connection-status"))
           .toBe("connected");

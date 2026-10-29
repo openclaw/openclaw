@@ -120,7 +120,7 @@ function lazyRuntimeModuleMemberEdges(source, consumerFile, targetSpecifier) {
         /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*createLazyRuntimeModule\(\s*\(\s*\)\s*=>\s*import\(\s*["']([^"'\r\n]+)["']\s*\)\s*,?\s*\)\s*;/gu,
       ),
     ]
-      .filter(([, , specifier]) => specifier === targetSpecifier)
+      .filter((match) => match[2] === targetSpecifier)
       .map(([, loader, specifier]) => [loader, specifier]),
   );
   const edges = new Map();
@@ -155,10 +155,7 @@ function computedCheckoutNamespaceMemberEdges(source) {
         /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*join\(\s*source\s*,\s*["']([^"'\r\n]+)["']\s*\)\s*;/gu,
       ),
     ]
-      .filter(
-        ([, , directory]) =>
-          !path.isAbsolute(directory) && !directory.split(/[\\/]/u).includes(".."),
-      )
+      .filter((match) => !path.isAbsolute(match[2]) && !match[2].split(/[\\/]/u).includes(".."))
       .map(([, binding, directory]) => [binding, directory]),
   );
   const edges = new Map();
@@ -266,6 +263,39 @@ function emittedSelfNamedImportNames(source) {
   );
 }
 
+function prToolingNamedImportEdges(source) {
+  // The wrapper supplies quoted argv to this specific stdin module. Keep the
+  // import and its path argument attached to the same live heredoc launch.
+  const tooling = source.match(
+    /^[ \t]*node[ \t]+--input-type=module[ \t]+-[ \t]+((?:"[^"\r\n]*"[ \t]+)+)<<'EOF_TOOLING'\r?\n([\s\S]*?)^EOF_TOOLING$/mu,
+  );
+  const edges = new Map();
+  if (!tooling) {
+    return edges;
+  }
+  const args = [...tooling[1].matchAll(/"([^"\r\n]*)"/gu)].map((match) => match[1]);
+  for (const match of tooling[2].matchAll(
+    /^[ \t]*const\s*\{([^{}]+)\}\s*=\s*await\s+import\(\s*\(\s*await\s+import\(["']node:url["']\)\s*\)\.pathToFileURL\(\s*process\.argv\[(\d+)\]\s*\)\s*\)\s*;/gmu,
+  )) {
+    const modulePath = args[Number(match[2]) - 2]?.match(
+      /^\$pr_bootstrap_root\/(scripts\/pr-lib\/[^"\r\n]+\.mjs)$/u,
+    )?.[1];
+    if (!modulePath) {
+      continue;
+    }
+    const target = path.resolve(modulePath);
+    const names = edges.get(target) ?? new Set();
+    for (const binding of match[1].split(",")) {
+      const name = binding.trim().split(/\s*:\s*/u)[0];
+      if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
+        names.add(name);
+      }
+    }
+    edges.set(target, names);
+  }
+  return edges;
+}
+
 function namedImport(names, targetFile, consumerFile, index) {
   const bindings = names.map(
     (name, bindingIndex) => `${name} as __dynamic${index}_${bindingIndex}`,
@@ -289,6 +319,12 @@ function sideEffectImport(targetFile, consumerFile) {
  */
 export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints = {}) {
   const imports = [];
+  // Empty recognizers must not create a module edge or consume an alias index.
+  const addNamedImport = (names, targetFile) => {
+    if (names.length > 0) {
+      imports.push(namedImport(names, targetFile, filePath, imports.length));
+    }
+  };
 
   const tsdownPath = "tsdown.config.ts";
   const runtimeManifestSpecifier = "./src/infra/runtime-process-manifest.ts";
@@ -296,23 +332,12 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     fs.readFileSync(tsdownPath, "utf8"),
     runtimeManifestSpecifier,
   );
-  if (manifestNames.length > 0) {
-    imports.push(
-      namedImport(
-        manifestNames,
-        path.resolve(path.dirname(tsdownPath), runtimeManifestSpecifier),
-        filePath,
-        imports.length,
-      ),
-    );
-  }
+  addNamedImport(manifestNames, path.resolve(path.dirname(tsdownPath), runtimeManifestSpecifier));
 
   const benchmarkGeneratorPath = "scripts/lib/gateway-bench-worker-messages.ts";
   const benchmarkGenerator = fs.readFileSync(benchmarkGeneratorPath, "utf8");
   const generatedNames = emittedSelfNamedImportNames(benchmarkGenerator);
-  if (generatedNames.length > 0) {
-    imports.push(namedImport(generatedNames, benchmarkGeneratorPath, filePath, imports.length));
-  }
+  addNamedImport(generatedNames, benchmarkGeneratorPath);
 
   const transportPath = "extensions/team-reports/src/report-fixture-transport.test-support.ts";
   const redirectedSpecifier = fs
@@ -325,16 +350,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   if (redirectedSpecifier && fixtureSpecifier) {
     const runtimeConsumer = fs.readFileSync("extensions/team-reports/src/sources/http.ts", "utf8");
     const names = importedNames(runtimeConsumer, redirectedSpecifier);
-    if (names.length > 0) {
-      imports.push(
-        namedImport(
-          names,
-          path.resolve(path.dirname(benchmarkPath), fixtureSpecifier),
-          filePath,
-          imports.length,
-        ),
-      );
-    }
+    addNamedImport(names, path.resolve(path.dirname(benchmarkPath), fixtureSpecifier));
   }
 
   const doctorConsumerPath = "src/commands/config-preflight-snapshot.ts";
@@ -343,16 +359,10 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     fs.readFileSync(doctorConsumerPath, "utf8"),
     doctorLegacySpecifier,
   );
-  if (doctorLegacyNames.length > 0) {
-    imports.push(
-      namedImport(
-        doctorLegacyNames,
-        path.resolve(path.dirname(doctorConsumerPath), doctorLegacySpecifier),
-        filePath,
-        imports.length,
-      ),
-    );
-  }
+  addNamedImport(
+    doctorLegacyNames,
+    path.resolve(path.dirname(doctorConsumerPath), doctorLegacySpecifier),
+  );
 
   const mcpLoaderPath = "src/agents/agent-bundle-mcp-runtime-modules.ts";
   const mcpRuntimePath = "src/agents/agent-bundle-mcp-runtime.ts";
@@ -366,16 +376,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
       continue;
     }
     const names = [...(mcpMembers.get(namespace) ?? [])];
-    if (names.length > 0) {
-      imports.push(
-        namedImport(
-          names,
-          path.resolve(path.dirname(mcpLoaderPath), specifier),
-          filePath,
-          imports.length,
-        ),
-      );
-    }
+    addNamedImport(names, path.resolve(path.dirname(mcpLoaderPath), specifier));
   }
 
   const rowChurnInstrumenter = fs.readFileSync(
@@ -392,11 +393,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     fs.readFileSync(runtimeAssetGeneratorPath, "utf8"),
     materializerSpecifier,
   );
-  if (materializerNames.length > 0) {
-    imports.push(
-      namedImport(materializerNames, path.resolve(materializerSpecifier), filePath, imports.length),
-    );
-  }
+  addNamedImport(materializerNames, path.resolve(materializerSpecifier));
 
   const prepareHooksPath = "scripts/prepare-git-hooks.mjs";
   const bootstrapSpecifier = "../runtime-process-bootstrap.generated.mjs";
@@ -404,16 +401,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     fs.readFileSync(prepareHooksPath, "utf8"),
     bootstrapSpecifier,
   );
-  if (bootstrapNames.length > 0) {
-    imports.push(
-      namedImport(
-        bootstrapNames,
-        path.resolve(path.dirname(prepareHooksPath), bootstrapSpecifier),
-        filePath,
-        imports.length,
-      ),
-    );
-  }
+  addNamedImport(bootstrapNames, path.resolve(path.dirname(prepareHooksPath), bootstrapSpecifier));
 
   const workerArtifactsPath = "test/scripts/vitest-worker-artifacts.test.ts";
   const emittedWorkerEdges = emittedFileNamedImportEdges(
@@ -421,9 +409,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   );
   const sqliteFacadePath = path.resolve("node-sqlite.mjs");
   const sqliteFacadeNames = [...(emittedWorkerEdges.get(sqliteFacadePath) ?? [])];
-  if (sqliteFacadeNames.length > 0) {
-    imports.push(namedImport(sqliteFacadeNames, sqliteFacadePath, filePath, imports.length));
-  }
+  addNamedImport(sqliteFacadeNames, sqliteFacadePath);
 
   for (const entry of Object.values(scriptEntrypoints)) {
     if (generatesRuntimeScriptAsset(entry) && entry.sourceBinding) {
@@ -442,7 +428,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   const archiveChurnSource = fs.readFileSync(archiveChurnPath, "utf8");
   const archiveChurnLaunch =
     archiveChurnSource.match(
-      /^if \(values\.allocations\) \{([\s\S]*?)^\}\nconst inspector = new Session\(\);/mu,
+      /^if \(values\.allocations(?: \|\| values\.entry)?\) \{([\s\S]*?)^\}\nconst inspector = new Session\(\);/mu,
     )?.[1] ?? "";
   if (
     /^\s*const\s+preload\s*=\s*pathToFileURL\(\s*path\.join\(\s*path\.dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*["']archive-worker-churn-preload\.mjs["']\s*\)\s*,\s*\)\.href\s*;/mu.test(
@@ -483,11 +469,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   const trajectoryFlushNames = emittedSelfNamedImportNames(
     fs.readFileSync(trajectoryFlushPreloadPath, "utf8"),
   );
-  if (trajectoryFlushNames.length > 0) {
-    imports.push(
-      namedImport(trajectoryFlushNames, trajectoryFlushPreloadPath, filePath, imports.length),
-    );
-  }
+  addNamedImport(trajectoryFlushNames, trajectoryFlushPreloadPath);
 
   const poolLifecyclePath = "scripts/perf/pg-pool-lifecycle.mts";
   const poolFixtureSpecifier = fs
@@ -546,6 +528,12 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   }
   for (const [targetFile, names] of codexLazyEdges) {
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
+  }
+
+  for (const [targetFile, names] of prToolingNamedImportEdges(
+    fs.readFileSync("scripts/pr", "utf8"),
+  )) {
+    addNamedImport([...names], targetFile);
   }
 
   return `${source}\n${imports.join("\n")}`;

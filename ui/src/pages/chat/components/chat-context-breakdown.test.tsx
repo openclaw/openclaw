@@ -20,7 +20,7 @@ import {
   buildDeferredContextGroups,
 } from "./chat-context-breakdown-model.ts";
 import { ChatContextBreakdown } from "./chat-context-breakdown.tsx";
-import { ChatContextPage } from "./chat-context-page.tsx";
+import { ChatContextPanel } from "./chat-context-panel.tsx";
 
 const workspaceFile = (path: string, chars = 16000) => ({
   name: "AGENTS.md",
@@ -48,7 +48,7 @@ const usage = (key: string, sessionId = key, contextWeight = report) => ({
 type ContextGateway = ReturnType<typeof createApplicationGateway>["gateway"];
 function mountPage(gateway: ContextGateway, key = "first", empty = false, compact = false) {
   return mountSolid(() => (
-    <ChatContextPage
+    <ChatContextPanel
       presented
       details={{
         currentAgentId: "main",

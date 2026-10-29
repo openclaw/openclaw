@@ -1,6 +1,6 @@
-/* @vitest-environment jsdom */
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
@@ -9,7 +9,11 @@ import {
   openSessionSnapshotDatabase,
   readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
+import * as snapshotDatabase from "./session-snapshot-database.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 const sessionKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:escaped-"\\🦞';
 function snapshot(): ChatSessionSnapshot {
@@ -77,8 +81,21 @@ describe("snapshot write serialization and scheduling", () => {
       usage: { input: 1_200, output: 400 },
       openclawResponsesInputReplay: { text: "Server replay only" },
     }));
-    const value = { ...snapshot(), messages, pagination, deltaCursor: "latest-cursor" };
-    store.write(sessionKey, value);
+    const reactions = [{ emoji: "👍", count: 1, identities: [{ id: "peer", label: "Peer" }] }];
+    const row = {
+      links: { source: { title: "Linked task" } },
+      images: { source: { width: 480, height: 240, rendition: 480 as const } },
+    };
+    const value: ChatSessionSnapshot = {
+      ...snapshot(),
+      messages,
+      pagination,
+      deltaCursor: "latest-cursor",
+      transcriptMetadata: { key: "agent:main:saved", kind: "direct", contextTokens: 200_000 },
+      messageReactions: { "message-0": reactions, "message-1099": reactions, missing: reactions },
+      rowDisplay: { "message-0": row, "message-1099": row, missing: row },
+    };
+    writeSnapshotFixture(store, sessionKey, value);
     await store.flush();
     const restored = await store.read(sessionKey);
     expect(restored?.messages).toEqual(
@@ -90,6 +107,9 @@ describe("snapshot write serialization and scheduling", () => {
       totalMessages: pagination.totalMessages,
     });
     expect(restored?.deltaCursor).toBe("latest-cursor");
+    expect(restored?.messageReactions).toEqual({ "message-1099": reactions });
+    expect(restored?.rowDisplay).toEqual({ "message-1099": row });
+    expect(restored?.transcriptMetadata?.contextTokens).toBe(200_000);
     expect(value.messages).toHaveLength(1_100);
     expect(JSON.stringify(restored).length).toBeLessThan(220_000);
   });
@@ -100,7 +120,7 @@ describe("snapshot write serialization and scheduling", () => {
       content: `Message ${index}`,
       __openclaw: { id: `message-${index}`, seq: Math.floor(index / 3) + 1 },
     }));
-    store.write(sessionKey, {
+    writeSnapshotFixture(store, sessionKey, {
       ...snapshot(),
       messages,
       pagination: { hasMore: false, totalMessages: 34 },
@@ -109,27 +129,6 @@ describe("snapshot write serialization and scheduling", () => {
     const restored = await store.read(sessionKey);
     expect(restored?.messages).toEqual(messages.slice(18));
     expect(restored?.pagination).toEqual({ hasMore: true, nextOffset: 0, totalMessages: 34 });
-  });
-
-  it("bounds saved reaction facts to the retained rows and restores their context window", async () => {
-    const messages = Array.from({ length: 100 }, (_, index) => ({
-      role: "assistant",
-      content: `Saved reply ${index}`,
-      __openclaw: { id: `reply-${index}`, seq: index + 1 },
-    }));
-    const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer", label: "Peer" }] }];
-    store.write(sessionKey, {
-      ...snapshot(),
-      messages,
-      pagination: { hasMore: false, totalMessages: 100 },
-      transcriptMetadata: { key: "agent:main:saved", kind: "direct", contextTokens: 200_000 },
-      messageReactions: { "reply-0": summaries, "reply-99": summaries, missing: summaries },
-    });
-    await store.flush();
-    const restored = await store.read(sessionKey);
-    expect(restored?.messageReactions).toEqual({ "reply-99": summaries });
-    expect(restored?.transcriptMetadata?.contextTokens).toBe(200_000);
-    expect(restored?.messages).toEqual(messages.slice(-80));
   });
 
   it.each([false, true])(
@@ -148,7 +147,7 @@ describe("snapshot write serialization and scheduling", () => {
         messages,
         pagination: { hasMore: true as const, nextOffset: 120, totalMessages: 200 },
       };
-      store.write(sessionKey, value);
+      writeSnapshotFixture(store, sessionKey, value);
       await store.flush();
       expect(await store.read(sessionKey)).toEqual({
         ...value,
@@ -175,7 +174,7 @@ describe("snapshot write serialization and scheduling", () => {
       messages: [{ role: "assistant", content, openclawDisplayContent: content }],
     };
 
-    store.write(sessionKey, value);
+    writeSnapshotFixture(store, sessionKey, value);
     await store.flush();
 
     const storedContent = [
@@ -199,9 +198,25 @@ describe("snapshot write serialization and scheduling", () => {
 
   it.each([
     {
-      name: "transcript display facts and progress",
+      name: "display facts and JSON value conversion",
       value: {
         ...snapshot(),
+        deltaCursor: 'cursor-"\\🦞',
+        displayedLeafEntryId: null,
+        avatarSources: undefined,
+        messages: [
+          {
+            content: [{ type: "text", text: "line\n🦞", omitted: undefined }],
+            callback: () => true,
+            symbol: Symbol("omitted"),
+            date: new Date(0),
+            nested: { values: [undefined, Number.NaN, Infinity, -0, () => true, Symbol("null")] },
+          },
+          { toJSON: () => ({ text: "converted", nested: [1, null] }) },
+          undefined,
+          null,
+        ],
+        pagination: { hasMore: true, nextOffset: 2.5, totalMessages: 10 },
         transcriptMetadata: {
           key: "agent:main:notes",
           kind: "direct",
@@ -219,47 +234,11 @@ describe("snapshot write serialization and scheduling", () => {
       },
     },
     {
-      name: "nested non-JSON values",
-      value: {
-        ...snapshot(),
-        deltaCursor: 'cursor-"\\🦞',
-        displayedLeafEntryId: null,
-        messages: [
-          {
-            content: [{ type: "text", text: "line\n🦞", omitted: undefined }],
-            callback: () => true,
-            symbol: Symbol("omitted"),
-            date: new Date(0),
-            nested: { values: [undefined, Number.NaN, Infinity, -0, () => true, Symbol("null")] },
-          },
-          undefined,
-          null,
-        ],
-        pagination: { hasMore: true, nextOffset: 2.5, totalMessages: 10 },
-      },
-    },
-    {
       name: "empty complete snapshot",
       value: {
         messages: [],
         pagination: { hasMore: false, completeSnapshot: true, totalMessages: 0 },
         sessionId: null,
-      },
-    },
-    {
-      name: "undefined optional fields",
-      value: {
-        ...snapshot(),
-        deltaCursor: undefined,
-        displayedLeafEntryId: undefined,
-        pagination: { hasMore: false, totalMessages: undefined },
-      },
-    },
-    {
-      name: "custom JSON content",
-      value: {
-        ...snapshot(),
-        messages: [{ toJSON: () => ({ text: "converted", nested: [1, null] }) }],
       },
     },
   ] satisfies Array<{ name: string; value: ChatSessionSnapshot }>)(
@@ -268,22 +247,13 @@ describe("snapshot write serialization and scheduling", () => {
       // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON omission/conversion is the persisted storage contract.
       const sanitized: ChatSessionSnapshot = JSON.parse(JSON.stringify(value));
       const envelope = {
-        projectionVersion: 5,
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
         savedAt: Date.now(),
         sessionId: value.sessionId,
         sessionKey,
       };
-      // Previous persistence measured each sanitized array item, then both envelopes.
-      const messageWeight = sanitized.messages.reduce<number>(
-        (sum, message) => sum + JSON.stringify([message]).length - 2,
-        0,
-      );
-      const expectedWeight =
-        messageWeight +
-        Math.max(0, sanitized.messages.length - 1) +
-        JSON.stringify({ ...sanitized, messages: [] }).length +
-        JSON.stringify(envelope).length;
-      store.write(sessionKey, value);
+      const expectedWeight = JSON.stringify(sanitized).length + JSON.stringify(envelope).length;
+      writeSnapshotFixture(store, sessionKey, value);
       const stringify = vi.spyOn(JSON, "stringify");
       await store.flush();
       // One transcript serialization plus its small record envelope; no per-message remeasurement.
@@ -300,6 +270,8 @@ describe("snapshot write serialization and scheduling", () => {
         savedAt: envelope.savedAt,
         sessionKey,
         weight: expectedWeight,
+        thumbnailCount: 0,
+        thumbnailBytes: 0,
       });
     },
   );
@@ -349,7 +321,7 @@ describe("snapshot write serialization and scheduling", () => {
       const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readwrite");
       const completed = transactionComplete(transaction);
       transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put({
-        projectionVersion: 5,
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
         savedAt: 1,
         sessionId: "session-1",
         sessionKey,
@@ -381,7 +353,7 @@ describe("snapshot write serialization and scheduling", () => {
     const idle = idleScheduler();
     const value = snapshot();
     const stringify = vi.spyOn(JSON, "stringify");
-    store.write(sessionKey, value);
+    writeSnapshotFixture(store, sessionKey, value);
     vi.advanceTimersByTime(500);
     expect(stringify).not.toHaveBeenCalled();
     expect(idle.request).toHaveBeenCalledOnce();
@@ -394,25 +366,89 @@ describe("snapshot write serialization and scheduling", () => {
     expect(await store.read(sessionKey)).toEqual(value);
   });
 
-  it("uses idle time before the timeout and cancels stale work on reschedule", async () => {
-    const idle = idleScheduler();
-    store.write(sessionKey, snapshot());
-    vi.advanceTimersByTime(500);
-    const latest = { ...snapshot(), messages: ["latest"] };
-    store.write(sessionKey, latest);
-    expect(idle.cancel).toHaveBeenCalledOnce();
-    vi.advanceTimersByTime(500);
-    idle.request.mock.calls[1]?.[0]({ didTimeout: false, timeRemaining: () => 50 });
-    await store.whenIdle();
-    expect(await store.read(sessionKey)).toEqual(latest);
+  it.each([false, true])(
+    "does not postpone writes during continuous updates (idle=%s)",
+    async (idle) => {
+      if (idle) {
+        idleScheduler();
+      } else {
+        vi.stubGlobal("requestIdleCallback", undefined);
+      }
+      let latest = snapshot();
+      writeSnapshotFixture(store, sessionKey, latest);
+      const deadline = idle ? 1500 : 500;
+      for (let elapsed = 100; elapsed < deadline; elapsed += 100) {
+        vi.advanceTimersByTime(100);
+        latest = { ...snapshot(), messages: [`revision-${elapsed}`] };
+        writeSnapshotFixture(store, sessionKey, latest);
+      }
+      vi.advanceTimersByTime(100);
+      await store.whenIdle();
+      expect(await store.read(sessionKey)).toEqual(latest);
+    },
+  );
+
+  it("coalesces repeated flushes behind one active database write", async () => {
+    const database = await openSessionSnapshotDatabase();
+    const held = createDeferred<IDBDatabase | null>();
+    const opening = vi
+      .spyOn(snapshotDatabase, "openSessionSnapshotDatabase")
+      .mockReturnValueOnce(held.promise);
+    writeSnapshotFixture(store, sessionKey, snapshot());
+    const first = store.flush();
+    await vi.waitFor(() => expect(opening).toHaveBeenCalledOnce());
+    const values = Array.from({ length: 60 }, (_, index) => ({
+      ...snapshot(),
+      messages: [`revision-${index}`],
+    }));
+    const stringify = vi.spyOn(JSON, "stringify");
+    const flushes = values.map((value) => {
+      writeSnapshotFixture(store, sessionKey, value);
+      return store.flush();
+    });
+    try {
+      expect(
+        stringify.mock.calls.filter(([value]) => values.includes(value as (typeof values)[number])),
+      ).toHaveLength(0);
+    } finally {
+      stringify.mockRestore();
+      held.resolve(database);
+      await Promise.all([first, ...flushes]);
+    }
+    expect(await store.read(sessionKey)).toEqual(values.at(-1));
   });
 
-  it("uses the debounce timer when idle callbacks are unavailable", async () => {
-    vi.stubGlobal("requestIdleCallback", undefined);
-    store.write(sessionKey, snapshot());
-    vi.advanceTimersByTime(500);
-    await store.whenIdle();
-    expect(await store.read(sessionKey)).toEqual(snapshot());
+  it("keeps whenIdle pending until a successor write settles", async () => {
+    const firstDatabase = await openSessionSnapshotDatabase();
+    const nextDatabase = await openSessionSnapshotDatabase();
+    const firstOpening = createDeferred<IDBDatabase | null>();
+    const nextOpening = createDeferred<IDBDatabase | null>();
+    const opening = vi
+      .spyOn(snapshotDatabase, "openSessionSnapshotDatabase")
+      .mockReturnValueOnce(firstOpening.promise)
+      .mockReturnValueOnce(nextOpening.promise);
+    writeSnapshotFixture(store, sessionKey, snapshot());
+    const first = store.flush();
+    await vi.waitFor(() => expect(opening).toHaveBeenCalledOnce());
+    let idleSettled = false;
+    const idle = store.whenIdle().then(() => {
+      idleSettled = true;
+    });
+    const latest = { ...snapshot(), messages: ["successor"] };
+    writeSnapshotFixture(store, sessionKey, latest);
+    const next = store.flush();
+    try {
+      firstOpening.resolve(firstDatabase);
+      await vi.waitFor(() => expect(opening).toHaveBeenCalledTimes(2));
+      expect(idleSettled).toBe(false);
+      nextOpening.resolve(nextDatabase);
+      await idle;
+      expect(await store.read(sessionKey)).toEqual(latest);
+    } finally {
+      firstOpening.resolve(firstDatabase);
+      nextOpening.resolve(nextDatabase);
+      await Promise.all([first, next, idle]);
+    }
   });
 
   it.each(["pagehide", "visibilitychange", "disconnect"])(
@@ -420,7 +456,7 @@ describe("snapshot write serialization and scheduling", () => {
     async (event) => {
       const idle = idleScheduler();
       const value = snapshot();
-      store.write(sessionKey, value);
+      writeSnapshotFixture(store, sessionKey, value);
       vi.advanceTimersByTime(500);
       const stringify = vi.spyOn(JSON, "stringify");
       if (event === "visibilitychange") {
@@ -441,7 +477,7 @@ describe("snapshot write serialization and scheduling", () => {
 
   it("cancels idle work when the cache is cleared", async () => {
     const idle = idleScheduler();
-    store.write(sessionKey, snapshot());
+    writeSnapshotFixture(store, sessionKey, snapshot());
     vi.advanceTimersByTime(500);
     store.clearMemory();
     expect(idle.cancel).toHaveBeenCalledOnce();

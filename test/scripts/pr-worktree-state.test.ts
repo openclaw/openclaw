@@ -19,6 +19,7 @@ import { restoreDoctorMigrationBackup } from "../../src/commands/doctor-migratio
 import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../../src/infra/client-credential-schema.js";
 import { generateStoredDeviceIdentity } from "../../src/infra/device-identity-material.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
+import { withLegacyTemplateStateSchema } from "../../src/state/openclaw-state-db-schema-v36-template-names.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -67,7 +68,7 @@ describePosix("repository-owned PR provisioning state", () => {
     };
     {
       using database = new DatabaseSync(databasePath);
-      database.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      database.exec(withLegacyTemplateStateSchema(OPENCLAW_STATE_SCHEMA_SQL));
       database.exec(`PRAGMA user_version=${version}`);
       database
         .prepare("INSERT INTO schema_meta VALUES ('primary','global',?,NULL,NULL,1,1)")

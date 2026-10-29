@@ -21,18 +21,8 @@ import { SidebarMenusRenderer } from "./sidebar-menus-render.tsx";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import { createSidebarMenus, type SidebarMenus } from "./sidebar-menus.tsx";
 
-it("updates retained agent creation menu labels when the locale changes", async () => {
-  await i18n.setLocale("en");
-  onTestFinished(async () => {
-    await i18n.setLocale("en");
-    i18n.registerTranslation("de", de);
-  });
-  // This new action does not have a foreign catalog translation yet.
-  i18n.registerTranslation("de", {
-    ...de,
-    agentChip: { createAgent: "Neuen Agenten erstellen" },
-  });
-  const view = render(() => (
+function renderAgentMenu(props: Partial<Parameters<typeof AgentMenu>[0]> = {}) {
+  return render(() => (
     <AgentMenu
       activeId="main"
       agents={[]}
@@ -53,8 +43,23 @@ it("updates retained agent creation menu labels when the locale changes", async 
       onSwitchAgent={vi.fn()}
       onClose={vi.fn()}
       onNavigate={vi.fn()}
+      {...props}
     />
   ));
+}
+
+it("updates retained agent creation menu labels when the locale changes", async () => {
+  await i18n.setLocale("en");
+  onTestFinished(async () => {
+    await i18n.setLocale("en");
+    i18n.registerTranslation("de", de);
+  });
+  // This new action does not have a foreign catalog translation yet.
+  i18n.registerTranslation("de", {
+    ...de,
+    agentChip: { createAgent: "Neuen Agenten erstellen" },
+  });
+  const view = renderAgentMenu();
   flush();
   const menu = view.getByRole("menu", { hidden: true });
   const row = view.getByRole("menuitem", { name: "Create new agent", hidden: true });
@@ -67,6 +72,58 @@ it("updates retained agent creation menu labels when the locale changes", async 
     expect(menu.querySelector('[data-value="command:new-agent"]')).toBe(row);
   });
   expect(view.getByRole("menu", { hidden: true })).toBe(menu);
+});
+
+it("keeps menu controls with their agent as the roster changes", () => {
+  const [agents, setAgents] = createSignal<Array<{ id: string; name: string }>>([]);
+  const [pending, setPending] = createSignal<{ id: string; name: string }>();
+  const view = renderAgentMenu({
+    get agents() {
+      return agents();
+    },
+    get pendingAgent() {
+      return pending();
+    },
+  });
+  flush();
+  const menu = view.getByRole("menu", { hidden: true });
+  expect(menu.querySelector('[data-value^="agent:"]')).toBeNull();
+  setAgents([
+    { id: "main", name: "Main" },
+    { id: "scout", name: "Scout" },
+  ]);
+  flush();
+  const scout = view.getByRole("menuitem", { name: "Scout", hidden: true });
+  const settings = view.getByRole("button", { name: "Scout settings", hidden: true });
+  settings.focus();
+  expect(document.activeElement).toBe(settings);
+  setAgents([
+    { id: "main", name: "Main" },
+    { id: "scout", name: "Scout renamed" },
+  ]);
+  flush();
+  expect(view.getByRole("menuitem", { name: "Scout renamed", hidden: true })).toBe(scout);
+  expect(view.getByRole("button", { name: "Scout renamed settings", hidden: true })).toBe(settings);
+  expect(document.activeElement).toBe(settings);
+  expect(menu.querySelector('[data-value="scope:all"]')).not.toBeNull();
+
+  setPending({ id: "scout", name: "Creating scout" });
+  flush();
+  expect(scout.getAttribute("aria-disabled")).toBe("true");
+  expect(scout.querySelector(".sidebar-agent-menu__settings")).toBeNull();
+  expect(menu.querySelectorAll('[data-value="agent:scout"]')).toHaveLength(1);
+  setPending(undefined);
+  flush();
+  expect(scout.getAttribute("aria-disabled")).toBeNull();
+  expect(view.getByRole("button", { name: "Scout renamed settings", hidden: true })).not.toBe(
+    settings,
+  );
+
+  setAgents([{ id: "main", name: "Main" }]);
+  flush();
+  expect(scout.isConnected).toBe(false);
+  expect(menu.querySelector('[data-value="scope:all"]')).toBeNull();
+  expect(view.queryByRole("button", { name: "Scout renamed settings", hidden: true })).toBeNull();
 });
 
 const position = { x: 12, y: 30 };

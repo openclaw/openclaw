@@ -30,6 +30,7 @@ type WizardStepControlsProps = {
   /** Model-setup sign-in identity: Gateway brand id (icon) and display name. */
   brandId?: string;
   providerLabel?: string;
+  signInIcon?: JSX.Element;
   presentation?: "channels" | "model-setup";
   channelSelect?: boolean;
   answerLabel?: string;
@@ -104,7 +105,7 @@ function OptionBody(props: { option: WizardStepOption; channels?: boolean; selec
 
 type SignInProps = Pick<
   WizardStepControlsProps,
-  "step" | "presentation" | "onAutofocusRef" | "brandId" | "providerLabel"
+  "step" | "presentation" | "onAutofocusRef" | "brandId" | "providerLabel" | "signInIcon"
 > & { waiting: boolean };
 
 function SignIn(props: SignInProps) {
@@ -114,6 +115,7 @@ function SignIn(props: SignInProps) {
         <ModelSetupSignIn
           step={props.step}
           waiting={props.waiting}
+          icon={props.signInIcon}
           brandId={props.brandId}
           providerLabel={props.providerLabel}
           onAutofocusRef={props.onAutofocusRef}

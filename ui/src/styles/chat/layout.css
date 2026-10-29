@@ -199,14 +199,6 @@ openclaw-pending-session-create {
   opacity: 0.1;
 }
 
-.chat > * {
-  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
-}
-
-.chat[data-attachment-drop-active] > * {
-  opacity: 0.5;
-}
-
 /* Center search in its own pane, including narrow split views. */
 .agent-chat__search-bar {
   display: flex;
@@ -387,11 +379,6 @@ openclaw-pending-session-create {
 
 .chat-composer-neighbor-card__copy span {
   color: var(--muted);
-}
-
-.chat-child-attention .chat-composer-neighbor-card__copy :is(strong, span) {
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
 
 .chat-composer-neighbor-card--info {
@@ -634,7 +621,7 @@ openclaw-pending-session-create {
 }
 
 .chat-virtual-block {
-  /* The outer extent owns scroll height. This translated row window must not
+  /* The outer extent owns scroll height. This positioned row window must not
      contribute a second changing box when saved rows become live rows. */
   contain: size;
   position: absolute;
@@ -652,9 +639,19 @@ openclaw-pending-session-create {
   content-visibility: auto;
 }
 
+@media (min-width: 769px) {
+  .chat-virtual-row {
+    /* The virtualizer bounds mounted rows. Wide rows pay for WebKit's automatic
+       content skipping; compact rows retain it for steadier frame delivery. */
+    content-visibility: visible;
+    contain: content;
+  }
+}
+
 /* Small notice rows must enter at their real height, not the virtual estimate. */
 .chat-virtual-row:has(> .chat-notice) {
   content-visibility: visible;
+  contain: none;
 }
 
 .chat-virtual-row:focus-within {
@@ -663,17 +660,17 @@ openclaw-pending-session-create {
   overflow-clip-margin: 10px;
 }
 
-/* Message jumps need real mounted-row sizes before their target settles.
-   Native reader takeover restores ordinary overscan layout skipping. */
+/* Message jumps need real mounted-row sizes before their target settles. */
 .chat-thread-inner[data-measuring-rows] .chat-virtual-row {
   content-visibility: visible;
+  contain: none;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   /* Revealed 44px footer targets can overhang the compact row by half their
-     height. Widen the paint clip rather than toggling content-visibility:
-     flipping it from :hover while a context menu opens crashes Chromium's
-     renderer (Chrome for Testing 153). */
+     height. Widen the paint clip instead of changing containment on hover.
+     Toggling content-visibility here while a context menu opens previously
+     crashed Chromium's renderer (Chrome for Testing 153). */
   .chat-virtual-row:has(.chat-group:hover),
   .chat-virtual-row:has(.chat-group:is(:focus-within, .chat-group--meta-revealed)) {
     overflow-clip-margin: 22px;
@@ -727,6 +724,21 @@ openclaw-pending-session-create {
   padding: 8px 12px;
 }
 
+/* Included in the transcript virtualizer's header margin; keep this height exact. */
+.chat-pending-inputs--history {
+  box-sizing: border-box;
+  overflow: hidden;
+  height: 44px;
+  flex-wrap: nowrap;
+  padding: 4px 12px;
+}
+
+.chat-pending-inputs--history .btn {
+  min-width: 0;
+  height: 100%;
+  white-space: normal;
+}
+
 .chat-history-error--inline {
   border-block-end: 1px solid var(--border);
 }
@@ -735,12 +747,14 @@ openclaw-pending-session-create {
    contract with CHAT_HISTORY_BOUNDARY_HEIGHT_PX (chat-history-boundary.ts):
    it becomes the virtualizer scrollMargin, so drift misaligns row offsets. */
 .chat-history-boundary {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: 44px;
   overflow: hidden;
   height: 44px;
   align-items: center;
   gap: 10px;
-  padding: 8px 8px 0;
+  padding: 0 8px;
   color: var(--muted);
   font-size: 12px;
   user-select: none;
@@ -769,25 +783,51 @@ openclaw-pending-session-create {
   animation: chat-history-comet 1.2s ease-in-out infinite;
 }
 
-.chat-history-boundary--loading .chat-history-boundary__line:last-child::after {
+.chat-history-boundary--loading .chat-history-boundary__line--trailing::after {
   animation-direction: reverse;
 }
 
 .chat-history-boundary__action {
   display: inline-flex;
+  min-width: 160px;
+  height: 44px;
+  flex-direction: column;
+  gap: 2px;
   align-items: center;
-  padding: 2px 10px;
-  border: 0;
-  background: none;
-  color: var(--muted-strong);
+  justify-content: center;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text);
   font: inherit;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+}
+
+.chat-history-boundary__status {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 12px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-history-boundary--error .chat-history-boundary__status {
+  color: var(--danger);
 }
 
 .chat-history-boundary__action:not([aria-disabled="true"]):hover {
-  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.chat-history-boundary__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 @keyframes chat-history-comet {
@@ -1097,7 +1137,7 @@ openclaw-pending-session-create {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--muted) 40%, transparent);
 }
 .context-usage__plan-badge:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
   text-decoration: none;
 }
 .context-usage__limits {
@@ -2723,6 +2763,11 @@ openclaw-chat-ci-details {
   flex: 0 0 auto;
 }
 
+.agent-chat__disabled-banner .btn[data-authority-pending] {
+  opacity: 1;
+  cursor: default;
+}
+
 .agent-chat__disabled-banner--neutral {
   color: inherit;
 }
@@ -2914,7 +2959,7 @@ openclaw-chat-ci-details {
       min-width: var(--chat-microphone-picker-width);
       height: var(--chat-microphone-picker-width);
       border: 1px solid var(--chat-composer-surface);
-      background: var(--chat-composer-popover-background);
+      background: var(--popover);
     }
 
     .agent-chat__input--chat .chat-talk-input-picker__trigger svg {

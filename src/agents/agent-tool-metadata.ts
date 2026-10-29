@@ -1,3 +1,8 @@
+import {
+  attachInternalToolExecutionPreparer,
+  copyInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { PluginHostObject } from "../plugins/plugin-instance-owned-values.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -10,11 +15,6 @@ import {
 import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { copyCodeModeControlToolIdentity } from "./code-mode-control-tools.js";
 import { copyCronScheduledToolProjection } from "./exec-tool-target-pinning.js";
-import {
-  attachInternalToolExecutionPreparer,
-  copyInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
 import { resolveCoreToolExecutionLocation } from "./tool-catalog.js";
 import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";

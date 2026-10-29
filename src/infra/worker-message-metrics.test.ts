@@ -17,16 +17,49 @@ function increment(kind: WorkerMessageKind, direction: WorkerMessageDirection) {
   const before = getWorkerMessageMetrics().find(
     (row) => row.kind === kind && row.direction === direction,
   );
-  return (messages: number, payloadBytes: number, unmeasuredMessages = 0) => ({
-    kind,
-    direction,
-    messages: (before?.messages ?? 0) + messages,
-    payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
-    unmeasuredMessages: (before?.unmeasuredMessages ?? 0) + unmeasuredMessages,
-  });
+  return (messages: number, payloadBytes: number, unmeasuredMessages = 0) =>
+    expect.objectContaining({
+      kind,
+      direction,
+      messages: (before?.messages ?? 0) + messages,
+      payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
+      unmeasuredMessages: (before?.unmeasuredMessages ?? 0) + unmeasuredMessages,
+    });
 }
 
 describe("worker message metrics", () => {
+  it.each(["sqlite_request", "sqlite_reply", "authority"] as const)(
+    "bounds %s byte classes and keeps totals and snapshots intact",
+    (kind) => {
+      const before = getWorkerMessageMetrics().find(
+        (row) => row.kind === kind && row.direction === "to_worker",
+      );
+      const expected = increment(kind, "to_worker");
+      for (const [requestClass, bytes] of [
+        ["audit.writer.process", 12],
+        ["session.actor.appendToolResult", 34],
+        ["private-suffix", 56],
+      ] as const) {
+        recordWorkerMessage(kind, "to_worker", bytes, requestClass);
+      }
+      const snapshot = getWorkerMessageMetrics().find(
+        (row) => row.kind === kind && row.direction === "to_worker",
+      );
+      expect(snapshot).toEqual(expected(3, 102));
+      const classes = {
+        ...before?.payloadBytesByRequestClass,
+        "audit.writer.process":
+          (before?.payloadBytesByRequestClass?.["audit.writer.process"] ?? 0) + 12,
+        "session.actor.appendToolResult":
+          (before?.payloadBytesByRequestClass?.["session.actor.appendToolResult"] ?? 0) + 34,
+        other: (before?.payloadBytesByRequestClass?.other ?? 0) + 56,
+      };
+      expect(snapshot?.payloadBytesByRequestClass).toEqual(classes);
+      recordWorkerMessage(kind, "to_worker", 1, "private-suffix");
+      expect(snapshot?.payloadBytesByRequestClass).toEqual(classes);
+    },
+  );
+
   it.each(["other", "lifecycle"] as const)(
     "attributes resource close requests through %s transport",
     (transport) => {

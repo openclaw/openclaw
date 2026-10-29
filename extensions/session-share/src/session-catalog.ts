@@ -379,7 +379,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
   ): Promise<SessionCatalogHost> {
     const hostId = `node:${node.nodeId}`;
     const { onHost, waitUntil, signal, allowPartialResults } = query;
-    const search = query.search?.trim().toLowerCase();
+    const search = query.search?.trim().toLowerCase().normalize("NFC");
     const cursor = query.cursors?.[hostId];
     const limit = sessionCatalogPaging.boundedLimit(query.limitPerHost);
     const common = {
@@ -420,8 +420,8 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       const sessions = search
         ? entry.sessions.filter(
             (session) =>
-              session.name?.toLowerCase().includes(search) ||
-              session.threadId.toLowerCase().includes(search),
+              session.name?.toLowerCase().normalize("NFC").includes(search) ||
+              session.threadId.toLowerCase().normalize("NFC").includes(search),
           )
         : entry.sessions;
       const offset = sessionCatalogPaging.decodeCursor(cursor);

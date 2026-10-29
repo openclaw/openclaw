@@ -13,7 +13,7 @@ import { captureGatewayStateOwner, resolveGatewayStateOwnerPath } from "../gatew
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
-import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocation } from "../sqlite-snapshot-source.js";
 import {
   createDatabaseStoreDiagnostic,
   type DatabaseStoreDiagnostic,
@@ -313,7 +313,9 @@ export async function inspectDatabaseStore(
       result.issues.push("Physical store custody could not be verified.");
       result.nextSteps.push("Check the Gateway owner and rerun openclaw doctor.");
     }
-    const prepared = prepareSqliteReadOnlyLocationSync(input.path);
+    const prepared = await prepareSqliteReadOnlyLocation(input.path, {
+      preserveSourceArtifacts: true,
+    });
     let engine: BackupEngine;
     try {
       engine = readBackupEngineImage(prepared.location, input.path);
@@ -334,7 +336,7 @@ export async function inspectDatabaseStore(
         inspectSqlite(result, db, input.descriptor);
       }
     } finally {
-      prepared.cleanup();
+      await prepared.cleanupAsync();
     }
     if (engine.engine === "postgres") {
       await inspectPostgres(result, engine, input.postgres);

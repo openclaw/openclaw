@@ -19,7 +19,8 @@ import type {
   SqliteReadOnlyWorkerSession,
 } from "./sqlite-readonly-worker-session-types.js";
 import { isSameSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker-session.js";
-import { classifyWorkerRequest, trackWorkerRequest } from "./worker-request-diagnostics.js";
+import { classifyWorkerRequest } from "./sqlite-worker-request-class.js";
+import { trackWorkerRequest } from "./worker-request-diagnostics.js";
 
 const log = createSubsystemLogger("state/sqlite");
 

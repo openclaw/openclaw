@@ -382,7 +382,6 @@ suite.define(() => {
     );
   });
   it.each([
-    { value: "all", label: "Show all Example models", native: false },
     { value: "keep", label: "Keep current restrictions", native: false },
     { value: "all", label: "Show all Example models", native: true },
   ])("keeps the default after $value model access (native: $native)", async (modelAccess) => {

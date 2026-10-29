@@ -88,6 +88,7 @@ export async function inspectActivatedUpdateState(
       nodeRunner: params.packageUpdateNodeRunner,
       timeoutMs: params.timeoutMs,
       includeRetainedAgentPaths: true,
+      preserveSourceArtifacts: true,
       onInventory: (files) => {
         for (const database of files.values()) {
           if (

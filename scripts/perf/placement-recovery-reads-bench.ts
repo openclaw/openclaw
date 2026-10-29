@@ -173,12 +173,12 @@ try {
       get: (id) => environments.get(id),
       reconcileOnce: async () => {},
       reconcileEnvironment: unexpected,
+      fenceWorkerTurnForRecovery: unexpected,
       supportsProviderExecutionMode: (_providerId, mode) => mode === "remote-exec",
       startTunnel: unexpected,
       stopTunnel: unexpected,
       destroy: unexpected,
       reclaim: unexpected,
-      fenceWorkerTurnForRecovery: unexpected,
     },
     failure: {
       failActive: unexpected,

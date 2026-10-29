@@ -11,7 +11,7 @@ import {
   runWithMetadataMessageAdmission,
   type MetadataWorkerAdmission,
 } from "../../agents/sessions/session-manager-message-admission.worker.js";
-import { readSessionManagerReload } from "../../agents/sessions/session-manager-reload.js";
+import { readSessionManagerReload } from "../../agents/sessions/session-manager-reload.kernel.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isUserMessage } from "../../sessions/user-turn-transcript.message.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";

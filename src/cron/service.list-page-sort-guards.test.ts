@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
+import * as nodeCrypto from "@openclaw/normalization-core/node-crypto";
 import * as stringCoerce from "@openclaw/normalization-core/string-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import * as snapshotRevisions from "./list-snapshot-revision.js";
@@ -59,7 +60,9 @@ it("preserves list revisions for large Unicode and escaped payloads", async () =
 
   const page = await listPage(state);
 
-  expect(page.snapshotRevision).toBe("sha256:fS8eVTHy9mbmpjFKHm3pEcvOobmxd1rMQpDjfh3qmKM");
+  expect((await listPage(state)).snapshotRevision).toBe(page.snapshotRevision);
+  state.store!.jobs[0]!.payload = { kind: "systemEvent", text: "changed 🦞" };
+  expect((await listPage(state)).snapshotRevision).not.toBe(page.snapshotRevision);
 });
 
 it("filters normalized agent owners across explicit, session-scoped, and default jobs", async () => {
@@ -103,7 +106,7 @@ it("shares immutable requested rows until a list revision changes", async () => 
   expect(() => {
     page.jobs[0]!.state.lastStatus = "error";
   }).toThrow(TypeError);
-  expect(clone).toHaveBeenCalledExactlyOnceWith(jobs[1]);
+  expect(clone).toHaveBeenCalledWith(jobs[1]);
   const visibilityPass = await listPage(state, options, () => false);
   expect(visibilityPass).toMatchObject({ jobs: [], total: 0 });
   const repeated = await listPage(state, options);
@@ -112,7 +115,7 @@ it("shares immutable requested rows until a list revision changes", async () => 
   expect(repeated.jobs[0]).toBe(page.jobs[0]);
   expect(await status(state)).toBe(firstStatus);
   expect(repeated.snapshotRevision).toBe(page.snapshotRevision);
-  expect(clone).toHaveBeenCalledTimes(1);
+  expect(clone).toHaveBeenCalledTimes(3);
   expect(revision).toHaveBeenCalledTimes(2);
   page.jobs.length = 0;
   expect(repeated.jobs).toHaveLength(1);
@@ -132,7 +135,7 @@ it("shares immutable requested rows until a list revision changes", async () => 
   expect(changedStatus.nextWakeAtMs).toBe(100);
   expect(changedStatus).not.toBe(firstStatus);
   expect(await status(state)).toBe(changedStatus);
-  expect(clone).toHaveBeenCalledTimes(2);
+  expect(clone).toHaveBeenCalledTimes(5);
 });
 
 it("reuses interleaved list variants while refreshing visibility and mutated rows", async () => {
@@ -209,16 +212,16 @@ it("applies schedule, status, trigger, and cross-field phrase filters before pag
   });
   expect(page).toMatchObject({ jobs: [{ id: "job-3" }], total: 1, hasMore: false });
 });
-it("prepares search text once per row generation while rechecking visibility", async () => {
+it("caches canonical search per row generation and rechecks visibility", async () => {
   const state = listState(
-    { id: "one", name: "Alpha", description: "Report", displayName: "日本語 🦞" },
+    { id: "one", name: "A\u0308 Alpha", description: "é Report", displayName: "日本語 🦞" },
     { id: "two", name: "Beta", agentId: "ops" },
   );
   state.schedulerStarted = true;
   const normalize = vi.spyOn(stringCoerce, "normalizeLowercaseStringOrEmpty");
   let visible = true;
   const matchesJob = vi.fn(() => visible);
-  const first = await listPage(state, { query: " ALPHA " }, matchesJob);
+  const first = await listPage(state, { query: " Ä ALPHA E\u0301 " }, matchesJob);
   expect(first.jobs.map((job) => job.id)).toEqual(["one"]);
   expect((await listPage(state, { query: "日本語 🦞" }, matchesJob)).jobs[0]).toBe(first.jobs[0]);
   expect((await listPage(state, { query: "ops" })).jobs.map((job) => job.id)).toEqual(["two"]);
@@ -226,22 +229,22 @@ it("prepares search text once per row generation while rechecking visibility", a
   expect(await listPage(state, { query: "report" }, matchesJob)).toMatchObject({ total: 0 });
   expect(matchesJob).toHaveBeenCalledTimes(3);
   expect(
-    normalize.mock.calls.filter(([value]) => value === "one Alpha Report  日本語 🦞"),
+    normalize.mock.calls.filter(([value]) => value === "one A\u0308 Alpha é Report  日本語 🦞"),
   ).toHaveLength(1);
   expect(normalize.mock.calls.filter(([value]) => value === "two Beta  ops")).toHaveLength(1);
 
   await locked(state, async () => {
     const job = state.store!.jobs[0]!;
     applyCronRuntimeRowsToState(state, [
-      { ...job, name: "Renamed", description: "Changed", displayName: undefined },
+      { ...job, name: "Ä Renamed", description: "Changed", displayName: undefined },
     ]);
   });
   expect(await listPage(state, { query: "alpha" })).toMatchObject({ total: 0 });
   expect(await listPage(state, { query: "日本語" })).toMatchObject({ total: 0 });
-  const changed = await listPage(state, { query: "changed" });
+  const changed = await listPage(state, { query: "A\u0308 Renamed Changed" });
   expect(changed.jobs.map((job) => job.id)).toEqual(["one"]);
   expect(changed.snapshotRevision).not.toBe(first.snapshotRevision);
-  expect(first.jobs[0]?.name).toBe("Alpha");
+  expect(first.jobs[0]?.name).toBe("A\u0308 Alpha");
 });
 
 it("preserves callback failure and subsequent reads when the logger throws", async () => {
@@ -282,4 +285,48 @@ it("preserves callback failure and subsequent reads when the logger throws", asy
   } finally {
     await state.op;
   }
+});
+
+it("hashes only changed rows across publications and interleaved list variants", async () => {
+  const state = listState({ name: "alpha" }, { name: "beta" }, { name: "gamma" });
+  state.schedulerStarted = true;
+  const hash = vi.spyOn(nodeCrypto, "sha256StableValue");
+  await status(state);
+  expect(hash).not.toHaveBeenCalled();
+  const first = await listPage(state, { limit: 1, query: "alpha" });
+  hash.mockClear();
+  for (const query of ["beta", "gamma", "", "alpha", "job"]) {
+    await listPage(state, { query });
+  }
+  expect(hash).not.toHaveBeenCalled();
+
+  // A reload can replace every source object without changing the published content.
+  await locked(state, async () => {
+    applyCronRuntimeRowsToState(state, structuredClone(state.store!.jobs));
+  });
+  expect((await listPage(state, { query: "alpha" })).snapshotRevision).toBe(first.snapshotRevision);
+  expect(hash).not.toHaveBeenCalled();
+
+  await locked(state, async () => {
+    const job = state.store!.jobs[1]!;
+    job.state.lastStatus = "ok";
+    applyCronRuntimeRowsToState(state, [job]);
+  });
+  expect((await listPage(state, { query: "alpha" })).snapshotRevision).toBe(first.snapshotRevision);
+  expect(hash).toHaveBeenCalledTimes(1);
+  const original = state.store!.jobs[1]!;
+  const beforeReplacement = await listPage(state, { query: "beta" });
+  expect(beforeReplacement.jobs[0]?.state.lastStatus).toBe("ok");
+  await locked(state, async () => {
+    state.store!.jobs[1] = { ...original, name: "beta replaced" };
+  });
+  const replaced = await listPage(state, { query: "beta" });
+  expect(replaced.jobs[0]?.name).toBe("beta replaced");
+  expect(replaced.snapshotRevision).not.toBe(beforeReplacement.snapshotRevision);
+  await locked(state, async () => {
+    state.store!.jobs[1] = original;
+  });
+  const restored = await listPage(state, { query: "beta" });
+  expect(restored.snapshotRevision).toBe(beforeReplacement.snapshotRevision);
+  expect(restored.jobs[0]).toBe(beforeReplacement.jobs[0]);
 });

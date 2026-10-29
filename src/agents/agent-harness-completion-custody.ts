@@ -1,6 +1,6 @@
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
   getSessionActorStorageBinding,
-  acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
@@ -212,7 +212,7 @@ export function captureAgentHarnessCompletionCustody(
   return ready.promise;
 }
 
-/** Capture during admission; assignment/recovery owners retain their own holds before yielding. */
+/** Capture during admission; assignment owners retain their own holds before yielding. */
 async function captureAgentHarnessCompletionCustodyOwner(
   scopeInput: AgentHarnessCompletionScope,
   assertRequesterCurrent: () => void,

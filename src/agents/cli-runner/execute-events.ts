@@ -9,6 +9,10 @@ import { projectProgressCardChannelUpdate } from "../../session-cards/progress-c
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
 import { projectAgentActivityItem } from "../agent-activity-presentation.js";
 import { prepareAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
+import {
+  recordSkillUsed,
+  resolvedSkillUsageMatch,
+} from "../agent-tools.before-tool-call.diagnostics.js";
 import type {
   CliCompactionDelta,
   CliStreamingDelta,
@@ -165,6 +169,10 @@ export function createCliEventHandlers(params: {
       });
     }
   };
+  const readNativeSkillCommand = (args: Record<string, unknown> | undefined) =>
+    typeof args?.skill === "string"
+      ? context.claudeSkillsPlugin.skillCommands?.get(args.skill.trim())
+      : undefined;
   const emitToolResult = (event: CliToolResultDelta, tracked: boolean) => {
     observedCliActivity = true;
     const readResult = prepareToolResult(event.result);
@@ -182,6 +190,20 @@ export function createCliEventHandlers(params: {
     const executedArgs = tracked ? params.toolTracking.handleCliToolResult(event) : undefined;
     const startedCall = toolArgsByCallId.get(event.toolCallId);
     toolArgsByCallId.delete(event.toolCallId);
+    // Claude loads plugin skills through its own Skill tool, which never passes the
+    // OpenClaw tool wrapper; map the materialized command back to its canonical SKILL.md.
+    const nativeSkill =
+      event.name === "Skill" && firstTerminal && !event.isError
+        ? readNativeSkillCommand(startedCall?.args)
+        : undefined;
+    if (nativeSkill) {
+      recordSkillUsed({
+        ctx: runParams,
+        match: resolvedSkillUsageMatch({ activation: "read", skill: nativeSkill }),
+        toolName: event.name,
+        toolCallId: event.toolCallId,
+      });
+    }
     // Gateway owns loopback completion even when CLI correlation is absent or ambiguous.
     if (
       event.name.trim() &&
@@ -492,9 +514,17 @@ export function createCliEventHandlers(params: {
 
   // Emit-always: thinking reaches the event bus and session archive like the
   // embedded reasoning stream; /reasoning and /verbose gate presentation only.
-  const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
+  const emitCliThinkingDelta = ({
+    text,
+    delta,
+    isReasoningSnapshot,
+    modelProgress,
+  }: CliThinkingDelta) => {
     if (params.toolTracking.shouldSuppressAssistantOutput()) {
       return;
+    }
+    if (modelProgress) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progressModel("cli:thinking");
     }
     if (text || delta) {
       observedCliActivity = true;
@@ -506,7 +536,10 @@ export function createCliEventHandlers(params: {
     }));
   };
 
-  const emitCliThinkingProgress = ({ progressTokens }: CliThinkingProgress) => {
+  const emitCliThinkingProgress = ({ progressTokens, modelProgress }: CliThinkingProgress) => {
+    if (!params.toolTracking.shouldSuppressAssistantOutput() && modelProgress) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progressModel("cli:thinking_tokens");
+    }
     observedCliActivity = true;
     emitLiveEvent("thinking", () => ({ progressTokens }));
   };

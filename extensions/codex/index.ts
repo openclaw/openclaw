@@ -273,7 +273,7 @@ export default definePluginEntry({
             });
           },
         },
-        { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] },
+        { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES], workspaceAccess: "execute" },
       );
     }
     const agentHarnessOptions = {
@@ -304,7 +304,7 @@ export default definePluginEntry({
             getPluginConfig: resolveCurrentPluginConfig,
           }),
       },
-      { name: "codex_threads" },
+      { name: "codex_threads", workspaceAccess: "execute" },
     );
     api.registerToolMetadata({
       toolName: "codex_threads",
@@ -323,7 +323,7 @@ export default definePluginEntry({
             getPluginConfig: resolveCurrentPluginConfig,
           }),
       },
-      { name: "codex_plugins" },
+      { name: "codex_plugins", workspaceAccess: "execute" },
     );
     api.registerToolMetadata({
       toolName: "codex_plugins",

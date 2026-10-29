@@ -132,7 +132,8 @@ it("records committed owner facts before cancellation observers", async () => {
   expect(facts.map((entry) => entry.skillsSnapshot)).toEqual([skillsSnapshot]);
   expect(observed).toEqual([{ acceptedId: "successor", persistedId: "successor" }]);
   expect(result?.skillsSnapshot).toEqual(skillsSnapshot);
-  result!.skillsSnapshot!.skills.push({ name: "caller-only" });
+  // Internal results share the frozen publication's nested facts (#186051).
+  expect(() => result!.skillsSnapshot!.skills.push({ name: "caller-only" })).toThrow(TypeError);
   expect(readEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
 });
 
@@ -216,7 +217,7 @@ it("does not mint creator authority when replacing an unstamped node", async () 
   expect(persisted).not.toHaveProperty("label");
 });
 
-it("persists private source and workspace facts but excludes runtime-only resolved skills from SQLite JSON", async () => {
+it("persists private workspace facts but excludes runtime-only resolved skills from SQLite JSON", async () => {
   const resolvedSkills = [createFixtureSkillEntry("demo").skill];
   const savedSkills = {
     prompt: "saved",
@@ -229,29 +230,12 @@ it("persists private source and workspace facts but excludes runtime-only resolv
     updatedAt: 42,
     pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
     pendingWorktree: { name: "session-startup", titleSource: "Start work" },
-    titleRefinement: {
-      sessionId: "runtime-skills-session",
-      generatedName: "Start work",
-      remainingMessages: 6,
-    },
-    restartRecoveryRequesterSource: {
-      agentId: "main",
-      sessionKey: scope.sessionKey,
-      sessionId: "runtime-skills-session",
-      sourceRunId: "original-run",
-      requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId: "original-requester" },
-    },
     skillsSnapshot: { ...savedSkills, resolvedSkills, discoverySkills: resolvedSkills },
   };
 
   await upsertEntry(scope, entry);
   const persisted = JSON.parse(String(readRow()?.entry_json)) as InternalSessionEntry;
-  for (const key of [
-    "pendingProjectGitUrl",
-    "pendingWorktree",
-    "titleRefinement",
-    "restartRecoveryRequesterSource",
-  ] as const) {
+  for (const key of ["pendingProjectGitUrl", "pendingWorktree"] as const) {
     expect(persisted[key]).toEqual(entry[key]);
     expect(readEntry(scope)?.[key]).toEqual(entry[key]);
     expect(projectPublicSessionEntry(entry)).not.toHaveProperty(key);

@@ -8,9 +8,9 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/help
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
+import * as gatewayLifecycle from "../../../gateway/server-lifecycle-runtime-context.js";
 import { registerPluginSubagentRunFromGateway } from "../../../gateway/server-methods/agent-subagent-registration.js";
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import * as gatewayLifecycle from "../../../gateway/server-recovery-runtime-context.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import {

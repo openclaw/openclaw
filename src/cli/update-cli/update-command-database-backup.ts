@@ -98,8 +98,9 @@ export async function captureUpdateDatabases(params: {
         // Database recovery outlives runtime retirement and stays outside the Git source fence.
         const artifactRoot = path.join(execution.root, ".artifacts");
         await fs.mkdir(artifactRoot, { recursive: true });
+        const physicalArtifactRoot = await fs.realpath(artifactRoot);
         params.assertCurrent();
-        backupRoot = path.join(artifactRoot, path.basename(backupRoot));
+        backupRoot = path.join(physicalArtifactRoot, path.basename(backupRoot));
       }
       const captured = await createUpdateDatabaseBackup({
         backupRoot,

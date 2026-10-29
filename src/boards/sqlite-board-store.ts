@@ -8,10 +8,8 @@ import type {
   BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   withSessionHistoryWorkerDatabase,
@@ -27,6 +25,7 @@ import {
   type DatabaseFileIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { assertAgentDatabaseReadAdmitted } from "../state/agent-database-admission.js";
 import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
 import {
   resolveOpenClawAgentSqlitePath,
@@ -256,7 +255,8 @@ export class SqliteBoardStore implements BoardStore {
     return this.withSession<BoardSnapshotWithHtmlViewMetadata>(
       target,
       (store) => store.getSnapshotWithHtmlViewMetadata(target),
-      (resolved) => this.consumeSnapshotWithHtmlViewMetadata(resolved, (snapshot) => snapshot),
+      (resolved) =>
+        this.consumeSnapshotWithHtmlViewMetadata(resolved, (snapshot) => snapshot, true),
       () => ({
         snapshot: { sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] },
         htmlViewMetadata: new Map(),
@@ -273,6 +273,7 @@ export class SqliteBoardStore implements BoardStore {
       expectedIdentity: DatabaseFileIdentity,
     ) => Promise<Value | undefined>,
     consume: (value: Value | undefined, sessionKey: string) => T,
+    snapshotOnly = false,
   ): Promise<Awaited<T>> {
     if (resolved.absent) {
       resolved.assertCurrent?.();
@@ -293,6 +294,9 @@ export class SqliteBoardStore implements BoardStore {
     const runInCallerContext = AsyncLocalStorage.snapshot();
     const accept = (value: Value | undefined) => {
       resolved.assertCurrent?.();
+      if (snapshotOnly) {
+        assertAgentDatabaseReadAdmitted(captured.agentId, { env });
+      }
       const result = runInCallerContext(consume, value, captured.sessionKey);
       // Cleanup may await the worker after consumption has already rejected.
       if (isPromise(result)) {
@@ -311,12 +315,16 @@ export class SqliteBoardStore implements BoardStore {
     const result = await withSessionHistoryWorkerDatabase(
       { ...captured, path: identity.canonicalPath, requestedPaths: [captured.path] },
       (reader) =>
-        runOpenClawAgentBoardReadAdmission(captured, async () => {
-          resolved.assertCurrent?.();
-          const value = await worker(reader, captured.sessionKey, env, identity);
-          reader.assertCurrent();
-          return accept(value);
-        }),
+        runOpenClawAgentBoardReadAdmission(
+          captured,
+          async () => {
+            resolved.assertCurrent?.();
+            const value = await worker(reader, captured.sessionKey, env, identity);
+            reader.assertCurrent();
+            return accept(value);
+          },
+          snapshotOnly,
+        ),
       targetDiscoveryLane,
     ).catch((error: unknown) => {
       throw restoreBoardError(error);
@@ -354,6 +362,7 @@ export class SqliteBoardStore implements BoardStore {
   private consumeSnapshotWithHtmlViewMetadata<T>(
     resolved: PreparedBoardSession,
     consume: (snapshot: BoardSnapshotWithHtmlViewMetadata) => T,
+    snapshotOnly = false,
   ): Promise<Awaited<T>> {
     return this.consumeRead(
       resolved,
@@ -366,6 +375,7 @@ export class SqliteBoardStore implements BoardStore {
             htmlViewMetadata: new Map(),
           },
         ),
+      snapshotOnly,
     );
   }
 

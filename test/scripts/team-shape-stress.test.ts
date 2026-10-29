@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTeamStressFanoutReceipts } from "../../scripts/perf/team-shape-stress-receipts.ts";
@@ -170,6 +170,47 @@ it.each(["session.message", "sessions.changed"])(
     expect(() => receipts.assertComplete()).toThrow("incomplete foreground fanout");
   },
 );
+
+it("preserves built source bytes and native dynamic imports in the main isolate and workers", async () => {
+  const root = temporary.make("team-stress-native-source-");
+  fs.writeFileSync(path.join(root, "dependency.cjs"), "module.exports = {value: 42};");
+  const source = 'export const load = () => import("./dependency.cjs");';
+  fs.writeFileSync(path.join(root, "built.mjs"), source);
+  const entry = path.join(root, "entry.mjs");
+  fs.writeFileSync(
+    entry,
+    `import {Session} from "node:inspector/promises";
+     import {Worker, isMainThread, parentPort} from "node:worker_threads";
+     import {load} from "./built.mjs";
+     const session = new Session();
+     session.connect();
+     let scriptId;
+     session.on("Debugger.scriptParsed", ({params}) => {
+       if (params.url === new URL("./built.mjs", import.meta.url).href) scriptId = params.scriptId;
+     });
+     await session.post("Debugger.enable");
+     const {scriptSource} = await session.post("Debugger.getScriptSource", {scriptId});
+     session.disconnect();
+     const result = {source: scriptSource, value: (await load()).default.value};
+     if (isMainThread) {
+       const worker = new Worker(new URL(import.meta.url));
+       worker.once("message", child => console.log(JSON.stringify({main: result, worker: child})));
+     } else parentPort.postMessage(result);`,
+  );
+  const loader = new URL("../../scripts/perf/team-shape-stress-loader.mjs", import.meta.url);
+  const { stdout } = await executeFile(
+    resolveTestNodeExecPath(),
+    ["--import", loader.href, entry],
+    {
+      cwd: root,
+      timeout: 15_000,
+    },
+  );
+  expect(JSON.parse(stdout)).toEqual({
+    main: { source, value: 42 },
+    worker: { source, value: 42 },
+  });
+});
 
 it("loads source worker telemetry through built package exports without redirecting built imports", async () => {
   const root = temporary.make("team-stress-worker-telemetry-");
@@ -456,6 +497,7 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     durationMs: 600_000,
     smoke: false,
     clients: 65,
+    agents: 4,
     pairs: 2,
     aaPairs: 0,
     pollMs: 25_000,
@@ -465,9 +507,12 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     operatorModelPolicy: false,
     workerHeapSnapshot: false,
   });
-  expect(parseStressOptions(["--output", "/unused", "--smoke-seconds", "1"])).toMatchObject({
+  expect(
+    parseStressOptions(["--output", "/unused", "--smoke-seconds", "1", "--agents", "8"]),
+  ).toMatchObject({
     durationMs: 1_000,
     smoke: true,
+    agents: 8,
   });
   expect(parseStressOptions(["--output", "/unused", "--operator-model-policy"])).toMatchObject({
     operatorModelPolicy: true,
@@ -498,6 +543,7 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     ["--output", "/unused", "--minutes", "10.5"],
     ["--output", "/unused", "--minutes", "Infinity"],
     ["--output", "/unused", "--clients", "1"],
+    ["--output", "/unused", "--agents", "0"],
     ["--output", "/unused", "--runs", "0"],
     ["--output", "/unused", "--plugins", "3"],
     ["--output", "/unused", "--plugins", "41"],
@@ -728,4 +774,83 @@ it.each([false, true])("keeps partial worker evidence (%s)", (worktreeToolChurn)
       context: "inconclusive: missing paired metric",
     });
   }
+});
+
+it("ranks allocating self bytes across stacks and preserves source-mapping uncertainty", async () => {
+  const root = temporary.make("survivor-leaf-rank-");
+  fs.mkdirSync(path.join(root, "dist"));
+  fs.mkdirSync(path.join(root, "src"));
+  fs.writeFileSync(path.join(root, "src/owner.ts"), "// fixture\nexport function allocate() {}\n");
+  const built = path.join(root, "dist/owner.js");
+  fs.writeFileSync(built, "//#region src/owner.ts\nfunction allocate() {}\n//#endregion\n");
+  const mapped = path.join(root, "dist/mapped.js");
+  fs.writeFileSync(mapped, "function mapped() {}\n//# sourceMappingURL=mapped.js.map\n");
+  fs.writeFileSync(
+    `${mapped}.map`,
+    JSON.stringify({
+      version: 3,
+      sourceRoot: "../src/",
+      sources: ["mapped.ts"],
+      names: [],
+      mappings: "AAAA",
+    }),
+  );
+  const leaf = (functionName: string, bytes: number, url = "", lineNumber = -1) => ({
+    id: 1,
+    selfSize: bytes,
+    callFrame: { functionName, url, lineNumber, columnNumber: 0 },
+    children: [] as unknown[],
+  });
+  const mib = 1024 ** 2;
+  const wrapper = leaf("wrapper", mib);
+  wrapper.children.push(leaf("allocate", 8 * mib, pathToFileURL(built).href, 1));
+  const head = leaf("root", 0);
+  head.children.push(
+    wrapper,
+    leaf("allocate", 4 * mib, pathToFileURL(built).href, 1),
+    leaf("mapped", 2 * mib, pathToFileURL(mapped).href, 0),
+    leaf("nativeLeaf", 3 * mib),
+  );
+  const capture = path.join(root, "capture.heapprofile");
+  fs.writeFileSync(capture, JSON.stringify({ head }));
+  const report = JSON.parse(
+    (
+      await executeFile(
+        process.execPath,
+        [
+          "scripts/perf/survivor-leaf-rank.mjs",
+          capture,
+          "--minutes",
+          "2",
+          "--source-root",
+          root,
+          "--format",
+          "json",
+        ],
+        { encoding: "utf8" },
+      )
+    ).stdout,
+  );
+  expect(report.totalSelfBytes).toBe(18 * mib);
+  expect(
+    report.rows.map((row: { functionName: string; survivorMiBPerMinute: number }) => [
+      row.functionName,
+      row.survivorMiBPerMinute,
+    ]),
+  ).toEqual([
+    ["allocate", 6],
+    ["nativeLeaf", 1.5],
+    ["mapped", 1],
+    ["wrapper", 0.5],
+  ]);
+  expect(report.rows[0]).toMatchObject({
+    source: { file: "src/owner.ts", line: 2 },
+    mapping: "region+unique-declaration (inferred)",
+    nodes: 2,
+  });
+  expect(report.rows[1]).toMatchObject({ mapping: "unmapped", source: { line: null } });
+  expect(report.rows[2]).toMatchObject({
+    mapping: "source-map",
+    source: { file: "src/mapped.ts", line: 1 },
+  });
 });

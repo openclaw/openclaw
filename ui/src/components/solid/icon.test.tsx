@@ -26,6 +26,11 @@ describe("Solid icons", () => {
       "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
     );
 
+    setName("lightbulb");
+    flush();
+    expect(svg.getAttribute("viewBox")).toBe("0 0 24 24");
+    expect(svg.querySelectorAll("path")).toHaveLength(3);
+
     setName("gripVertical");
     flush();
     expect(svg.querySelector("rect")).toBeNull();
@@ -84,5 +89,10 @@ describe("Solid icons", () => {
     flush();
     expect(view.queryByRole("img")).toBeNull();
     expect(svgs[0]?.getAttribute("aria-hidden")).toBe("true");
+    const independent = render(() => <Icon name="info" />);
+    const independentSvg = independent.container.querySelector("svg");
+    expect(svgs[0]).not.toBe(independentSvg);
+    view.unmount();
+    expect(independentSvg?.isConnected).toBe(true);
   });
 });

@@ -34,6 +34,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import * as stateWriter from "../state/openclaw-state-worker-store.js";
 import { VERSION } from "../version.js";
 import {
   keyedStores,
@@ -121,28 +122,12 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
-it("keeps reads behind earlier writes", async ({ state }) => {
-  const scope = { pluginId: "reader-fixture", namespace: "reconnect", env: state.env };
-  const store = createPluginStateKeyedStoreV2<string>(
-    scope.pluginId,
-    { ...scope, maxEntries: 10 },
-    { assertCurrent() {} },
-  );
-  const pendingWrite = store.register("b", "second");
-  await expect(store.lookup("b")).resolves.toBe("second");
-  await pendingWrite;
-});
-
 it.for([false, true])(
   "inspects durable plugin-state bytes with a warm resident view: %s",
   async (warm, { state }) => {
     const pluginId = "inspection-fixture";
     const namespace = "inspection-source";
-    const store = createPluginStateKeyedStore<string>(pluginId, {
-      namespace,
-      maxEntries: 1,
-      env: state.env,
-    });
+    const store = openStore<string>(pluginId, namespace, { maxEntries: 1, env: state.env });
     await store.register("key", "persisted");
     if (warm) {
       expect(await store.lookup("key")).toBe("persisted");
@@ -653,14 +638,34 @@ it("returns complete entries and bulk values beyond a broker frame", async ({ st
   expectNoSql(observation.calls);
 });
 
-it("preserves scalar equality, expiry, and corrupt JSON errors", async ({ state: _state }) => {
+it("preserves ordered claims, scalar equality, expiry, and corrupt JSON errors", async ({
+  state: _state,
+}) => {
   const options = {
     namespace: "conditional",
     maxEntries: 1,
     overflowPolicy: "reject-new" as const,
   };
   const { sync: legacy, store } = keyedStores<unknown>("slack", options);
+  const pendingWrite = store.registerIfAbsent("entry", 1);
+  await expect(store.lookup("entry")).resolves.toBe(1);
+  await expect(pendingWrite).resolves.toBe(true);
+  const original = await store.entries();
+  const claims = vi.spyOn(stateWriter, "runOpenClawStateWorkerOperation");
+  expect(await store.registerIfAbsent("entry", 2, { ttlMs: 60_000 })).toBe(false);
+  expect(await store.entries()).toEqual(original);
+  expect(claims.mock.calls.length).toBe(0);
+  await expect(
+    store.registerIfAbsent("entry", 2, { ttlMs: Number.MAX_SAFE_INTEGER }),
+  ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
+  seed("slack", options.namespace, [{ key: "expired", value: 0, expiresAt: 1 }]);
+  expect(await store.registerIfAbsent("entry", 2)).toBe(false);
+  const db = openOpenClawStateDatabase().db;
+  expect(db.prepare("SELECT 1 FROM plugin_state_entries WHERE expires_at = 1").all()).toEqual([]);
+  claims.mockRestore();
+  const deletion = store.delete("entry");
   expect(await store.registerIfAbsent("entry", 1)).toBe(true);
+  await deletion;
   expect(await store.deleteIfEqual("entry", "1")).toBe(false);
   seed("slack", options.namespace, [{ key: "entry", value: 1, expiresAt: Date.now() - 1 }]);
   expect(await store.deleteIfEqual("entry", 1)).toBe(false);
@@ -767,10 +772,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL complete plugin-state views",
       undefined,
       { resolve: () => module },
     );
-    const sync = createPluginStateSyncKeyedStore<string>(scope.pluginId, {
-      namespace: scope.namespace,
-      maxEntries: 10,
-    });
+    const sync = syncKeyedStore<string>(scope.pluginId, scope.namespace);
     expect(await store.lookup("a")).toBe("live");
     const reads = observePluginStateReads();
     withEngineStoreAdmission(() => sync.register("a", "sync"));
@@ -795,10 +797,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL complete plugin-state views",
     ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
     expect(reads).not.toHaveBeenCalled();
 
-    const oversized = createPluginStateKeyedStore<string>(scope.pluginId, {
-      namespace: "oversized",
-      maxEntries: 10,
-    });
+    const oversized = openStore<string>(scope.pluginId, "oversized");
     const largeValue = "x".repeat(840_000);
     withEngineStoreAdmission(() =>
       seed(

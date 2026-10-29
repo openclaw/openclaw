@@ -97,12 +97,30 @@ it("owns attempt counting, overrides, rebasing, exhaustion, and cancellation", a
   assert(step, "expected a retry");
   expect(step).toMatchObject({ attempt: 1, delayMs: 25 });
   const wait = retry.sleepWithAbort(step.delayMs, step.signal);
-  expectTimers(step.signal, 1);
-  const reason = new Error("stop");
-  supervisor.cancel(reason);
-  const expected = { name: "AbortError", message: "aborted", cause: reason };
-  await expect(wait).rejects.toMatchObject(expected);
-  expectTimers(step.signal);
+  const settled = Promise.allSettled([wait]);
+  try {
+    expectTimers(step.signal, 1);
+    const reason = new Error("stop");
+    supervisor.cancel(reason);
+    const expected = { name: "AbortError", message: "aborted", cause: reason };
+    await expect(wait).rejects.toMatchObject(expected);
+    expectTimers(step.signal);
+  } finally {
+    supervisor.cancel();
+    try {
+      await vi.runOnlyPendingTimersAsync();
+    } finally {
+      try {
+        await settled;
+      } finally {
+        try {
+          vi.restoreAllMocks();
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    }
+  }
 });
 
 it.each([
@@ -142,33 +160,63 @@ it.each([false, true])("abort during registration=%s", async (duringRegistration
 });
 
 it.each([50, Number.MAX_SAFE_INTEGER])("completes bounded sleep %s", async (input) => {
-  const signal = input === 50 ? new AbortController().signal : undefined;
+  const controller = input === 50 ? new AbortController() : undefined;
+  const signal = controller?.signal;
   const delay = input === 50 ? 50 : TIMER_MAX;
   const sleeper = retry.sleepWithAbort(input, signal);
   const onSettled = vi.fn();
-  void sleeper.then(onSettled);
-  expectTimers(signal, 1);
-  await vi.advanceTimersByTimeAsync(delay - 1);
-  expect(onSettled).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(1);
-  await expect(sleeper).resolves.toBeUndefined();
-  expectTimers(signal);
+  const observer = sleeper.then(onSettled);
+  const settled = Promise.allSettled([sleeper, observer]);
+  try {
+    expectTimers(signal, 1);
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(onSettled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(sleeper).resolves.toBeUndefined();
+    expectTimers(signal);
+  } finally {
+    controller?.abort();
+    try {
+      await vi.runOnlyPendingTimersAsync();
+    } finally {
+      try {
+        await settled;
+      } finally {
+        try {
+          vi.restoreAllMocks();
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    }
+  }
 });
 
 it.each(["deadline", "sleep"])("can unref the %s timer", async (kind) => {
   vi.useRealTimers();
   const controller = new AbortController();
   const scheduled = vi.spyOn(globalThis, "setTimeout");
+  let settled: Promise<unknown> | undefined;
   try {
     const pending =
       kind === "deadline"
         ? retry.raceWithTimeout(Promise.resolve("done"), 60_000, () => "expired", { ref: false })
-        : retry.sleepWithAbort(60_000, controller.signal, { ref: false });
+        : retry.sleepWithAbort(1, controller.signal, { ref: false });
+    settled = Promise.allSettled([pending]);
     expect(scheduled.mock.results.at(-1)?.value.hasRef()).toBe(false);
     controller.abort();
     await pending.catch(() => {});
   } finally {
     controller.abort();
+    try {
+      await settled;
+    } finally {
+      try {
+        scheduled.mockRestore();
+      } finally {
+        vi.useFakeTimers();
+      }
+    }
   }
 });
 
@@ -177,6 +225,9 @@ it.each([
   [1.4, 0, 10, 0.5, 2],
   [1_000, 1, 1_000, 0.5, 1_000],
   [10_000, 1, 1_000, 0.5, 500],
+  [500, 0, 1_000, 0, 500],
+  [500, 0, 100, 0, 100],
+  [50, 250, 1_000, 0, 250],
 ])("Retry-After case %#", async (hint, min, max, jitter, expected) => {
   const sleep = vi.fn(async (_ms: number) => undefined);
   const run = retry.createRetryRunner({ sleep });
@@ -190,6 +241,106 @@ it.each([
   };
   await expect(run(createRetryOperation(), options)).resolves.toBe("ok");
   expect(sleep).toHaveBeenCalledExactlyOnceWith(expected);
+});
+
+it.each<[string, number, number | retry.RetryOptions, number]>([
+  ["returns on first success", 0, 3, 1],
+  ["propagates after exhausting retries", 2, 2, 2],
+  ["clamps attempts to at least one", 1, { ...retryOptions, attempts: 0 }, 1],
+  ["defaults malformed numeric attempt counts", 3, Number.NaN, 3],
+])("%s", async (_name, failures, options, expectedCalls) => {
+  const operation = createRetryOperation(failures);
+  const outcome = retry.retryAsync(operation, options, 1).then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  await vi.runAllTimersAsync();
+  expect(await outcome).toEqual(
+    failures >= expectedCalls ? { error: new Error("retryable") } : { value: "ok" },
+  );
+  expect(operation).toHaveBeenCalledTimes(expectedCalls);
+});
+
+it("stops when shouldRetry returns false", async () => {
+  const error = new Error("terminal");
+  const operation = vi.fn<() => Promise<string>>().mockRejectedValue(error);
+  const shouldRetry = vi.fn(() => false);
+  await expect(retry.retryAsync(operation, { attempts: 3, shouldRetry })).rejects.toBe(error);
+  expect(operation).toHaveBeenCalledOnce();
+  expect(shouldRetry).toHaveBeenCalledExactlyOnceWith(error, 1);
+});
+
+it("reports the failed attempt and label to onRetry", async () => {
+  const error = new Error("retryable");
+  const operation = vi
+    .fn<() => Promise<string>>()
+    .mockRejectedValueOnce(error)
+    .mockResolvedValueOnce("ok");
+  const onRetry = vi.fn();
+  await expect(
+    retry.retryAsync(operation, { ...retryOptions, label: "telegram", onRetry }),
+  ).resolves.toBe("ok");
+  expect(onRetry).toHaveBeenCalledExactlyOnceWith({
+    attempt: 1,
+    maxAttempts: 2,
+    err: error,
+    label: "telegram",
+    delayMs: 0,
+  });
+});
+
+it.each<{
+  name: string;
+  draw: number;
+  options?: retry.RetryOptions;
+  delays: number[];
+}>([
+  {
+    name: "exponential backoff without jitter",
+    draw: 0.75,
+    options: { minDelayMs: 500, jitter: 0 },
+    delays: [500, 1_000],
+  },
+  { name: "full jitter midpoint", draw: 0.5, delays: [150, 300] },
+  { name: "full jitter floor", draw: 0, delays: [100, 200] },
+  { name: "full jitter ceiling", draw: 0.999, delays: [200, 400] },
+  {
+    name: "cap after the full-jitter draw",
+    draw: 0.75,
+    options: { minDelayMs: 1_000, maxDelayMs: 2_500 },
+    delays: [1_750, 2_500, 2_500],
+  },
+  {
+    name: "full jitter above the Retry-After minimum",
+    draw: 0.5,
+    options: { minDelayMs: 250, maxDelayMs: 1_000, retryAfterMs: () => 50 },
+    delays: [375],
+  },
+  {
+    name: "full jitter below an unsatisfiable Retry-After cap",
+    draw: 0.5,
+    options: { maxDelayMs: 1_000, retryAfterMs: () => 5_000 },
+    delays: [750],
+  },
+])("preserves $name", async ({ draw, options, delays }) => {
+  const operation = createRetryOperation(delays.length);
+  const notified: number[] = [];
+  const slept: number[] = [];
+  await expect(
+    retry.retryAsync(operation, {
+      attempts: delays.length + 1,
+      minDelayMs: 100,
+      maxDelayMs: 10_000,
+      jitter: "full",
+      random: () => draw,
+      ...options,
+      onRetry: ({ delayMs }) => notified.push(delayMs),
+      sleep: async (delayMs) => void slept.push(delayMs),
+    }),
+  ).resolves.toBe("ok");
+  expect(notified).toEqual(delays);
+  expect(slept).toEqual(delays);
+  expect(operation).toHaveBeenCalledTimes(delays.length + 1);
 });
 
 it("supports custom schedules and async retry hooks", async () => {
@@ -265,4 +416,56 @@ it.each<[retry.RetryOptions | number, number | undefined, number]>([
   if (typeof options !== "number") {
     expect(onRetry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ delayMs: total }));
   }
+});
+
+it("keeps successive overflowed numeric waits at the safe timer ceiling", async () => {
+  const operation = createRetryOperation(2);
+  const result = retry.retryAsync(operation, 3, Number.MAX_VALUE);
+  for (const calls of [1, 2]) {
+    await vi.advanceTimersByTimeAsync(TIMER_MAX - 1);
+    expect(operation).toHaveBeenCalledTimes(calls);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(operation).toHaveBeenCalledTimes(calls + 1);
+  }
+  await expect(result).resolves.toBe("ok");
+});
+
+it.each([
+  {
+    name: "rounds attempts and delays",
+    overrides: { attempts: 2.6, minDelayMs: 10.4, maxDelayMs: 99.8, jitter: 0.4 },
+    expected: { attempts: 3, minDelayMs: 10, maxDelayMs: 100, jitter: 0.4 },
+  },
+  {
+    name: "clamps attempts, delay bounds, and negative jitter",
+    overrides: { attempts: 0, minDelayMs: 250, maxDelayMs: 100, jitter: -1 },
+    expected: { attempts: 1, minDelayMs: 250, maxDelayMs: 250, jitter: 0 },
+  },
+  {
+    name: "defaults non-finite overrides and caps jitter",
+    overrides: {
+      attempts: Number.NaN,
+      minDelayMs: Number.POSITIVE_INFINITY,
+      maxDelayMs: Number.NaN,
+      jitter: 2,
+    },
+    expected: { attempts: 3, minDelayMs: 300, maxDelayMs: 30_000, jitter: 1 },
+  },
+  {
+    name: "caps huge delays to the safe timer range",
+    overrides: { minDelayMs: 3_000_000_000, maxDelayMs: 4_000_000_000 },
+    expected: { attempts: 3, minDelayMs: TIMER_MAX, maxDelayMs: TIMER_MAX, jitter: 0 },
+  },
+  {
+    name: "preserves full jitter",
+    overrides: { jitter: "full" as const },
+    expected: { attempts: 3, minDelayMs: 300, maxDelayMs: 30_000, jitter: "full" },
+  },
+])("normalizes retry config: $name", ({ overrides, expected }) => {
+  expect(retry.resolveRetryConfig(undefined, overrides)).toEqual(expected);
+});
+
+it("keeps full-jitter defaults when the override is malformed", () => {
+  const defaults = { attempts: 3, minDelayMs: 300, maxDelayMs: 30_000, jitter: "full" as const };
+  expect(retry.resolveRetryConfig(defaults, { jitter: Number.NaN })).toEqual(defaults);
 });

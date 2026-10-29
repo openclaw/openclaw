@@ -13,11 +13,8 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
-import {
-  readReplayedTaskId,
-  recordRunningDescendants,
-  recordTaskOwnership,
-} from "./cli-runtime-tasks.js";
+import { createClaudeTurnStatus } from "./cli-runtime-status.js";
+import * as tasks from "./cli-runtime-tasks.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
@@ -54,6 +51,7 @@ type ClaudeCliTurn = {
     string,
     {
       text: string;
+      promptContext?: CliBackendExecuteContext["promptContext"];
       started: ReturnType<typeof createDeferred<void>>;
     }
   >;
@@ -169,18 +167,18 @@ async function authorizeTool(
   }
 }
 
-function isInjectedPrompt(turn: ClaudeCliTurn, prompt: unknown): boolean {
+function resolvePromptContext(turn: ClaudeCliTurn, prompt: unknown) {
   if (turn.promptInputUuid !== turn.inputUuid) {
-    return true;
+    return turn.injectedInputs.get(turn.promptInputUuid)?.promptContext;
   }
   // Some native versions submit hooks before the started receipt. Match only the
   // first pass; subsequent passes belong to that UUID even when text is rewritten.
   const injected = [...turn.injectedInputs].find(([, input]) => input.text === prompt);
   if (!injected) {
-    return false;
+    return turn.context.promptContext;
   }
   turn.promptInputUuid = injected[0];
-  return true;
+  return injected[1].promptContext;
 }
 
 async function handleRequest(
@@ -197,14 +195,12 @@ async function handleRequest(
   const input = request.input;
   const turn = activeTurn(session);
   if (request.callback_id === "UserPromptSubmit" && input.hook_event_name === "UserPromptSubmit") {
-    if (!turn || signal.aborted || isInjectedPrompt(turn, input.prompt)) {
+    if (!turn || signal.aborted) {
       return {};
     }
     turn.promptSubmitted = true;
-    const additionalContext = [
-      turn.context.promptContext?.prependContext,
-      turn.context.promptContext?.appendContext,
-    ]
+    const promptContext = resolvePromptContext(turn, input.prompt);
+    const additionalContext = [promptContext?.prependContext, promptContext?.appendContext]
       .filter(Boolean)
       .join("\n\n");
     // Native can rewrite the prompt and rerun hooks; only its final pass is persisted.
@@ -245,12 +241,19 @@ async function handleRequest(
   throw new Error("Unknown Claude CLI hook callback.");
 }
 
-function createUserInput(context: CliBackendExecuteContext, text: string, uuid: string) {
+function createUserInput(
+  context: CliBackendExecuteContext,
+  text: string,
+  uuid: string,
+  hostGenerated = false,
+) {
   return {
     type: "user",
     message: { role: "user", content: text },
     parent_tool_use_id: null,
     uuid,
+    // Claude saves synthetic input as a meta row: the model reads it, history never shows it.
+    ...(hostGenerated ? { isSynthetic: true } : {}),
     ...(context.sessionId ? { session_id: context.sessionId } : {}),
   };
 }
@@ -261,11 +264,16 @@ function rejectInjectedInputs(turn: ClaudeCliTurn, error: Error) {
   }
 }
 
+function canInjectInput(session: ClaudeCliSession, turn: ClaudeCliTurn): boolean {
+  return session.hasInputLifecycle && turn.promptSubmitted && activeTurn(session) === turn;
+}
+
 async function injectInput(
   session: ClaudeCliSession,
   turn: ClaudeCliTurn,
   text: string,
   withCurrent: (submit: () => void) => Promise<void>,
+  options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext">,
 ): Promise<void> {
   const uuid = randomUUID();
   const started = createDeferred<void>();
@@ -274,17 +282,14 @@ async function injectInput(
   let written: Promise<void> | undefined;
   await withCurrent(() => {
     // Native lifecycle is the receipt; recheck availability after host preparation.
-    if (
-      !session.hasInputLifecycle ||
-      !session.transport ||
-      !turn.promptSubmitted ||
-      activeTurn(session) !== turn
-    ) {
+    if (!session.transport || !canInjectInput(session, turn)) {
       throw new Error("The Claude CLI turn cannot accept more input.");
     }
-    turn.injectedInputs.set(uuid, { text, started });
+    turn.injectedInputs.set(uuid, { text, started, promptContext: options?.promptContext });
     turn.submittedInputUuids.add(uuid);
-    written = session.transport.send(createUserInput(turn.context, text, uuid));
+    written = session.transport.send(
+      createUserInput(turn.context, text, uuid, options?.promptOrigin === "host"),
+    );
     // Host admission cleanup may await after the synchronous write.
     void written.catch(() => {});
   });
@@ -362,7 +367,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   let taskId: string | undefined;
   let parentRuns = false;
   if (message.type === "system") {
-    parentRuns = recordRunningDescendants(session.runningDescendants, message);
+    parentRuns = tasks.recordRunningDescendants(session.runningDescendants, message);
     const input = turn && (!session.hasInputLifecycle || turn.inputStarted) ? turn : undefined;
     const inputUuid = input?.inputUuid ?? "";
     if (message.subtype === "background_tasks_changed") {
@@ -371,7 +376,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
           if (!isRecord(task)) {
             continue;
           }
-          const id = recordTaskOwnership(session, task, inputUuid);
+          const id = tasks.recordTaskOwnership(session, task, inputUuid);
           const parentTaskId = id ? session.runningDescendants.get(id) : undefined;
           if (
             id &&
@@ -393,7 +398,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
         }
       }
     } else {
-      taskId = recordTaskOwnership(session, message, inputUuid);
+      taskId = tasks.recordTaskOwnership(session, message, inputUuid);
     }
   }
   if (!turn) {
@@ -474,7 +479,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   }
   // A replay receipt acknowledges consumption within the current query. Keep its
   // queue slot until that query's result so it cannot acknowledge the next task twice.
-  const replayedTaskId = readReplayedTaskId(message, turn.submittedInputUuids);
+  const replayedTaskId = tasks.readReplayedTaskId(message, turn.submittedInputUuids);
   if (replayedTaskId) {
     turn.pendingBackgroundTaskIds.delete(replayedTaskId);
     turn.foregroundTaskIds.delete(replayedTaskId);
@@ -706,6 +711,7 @@ export async function* executeClaudeCli(
       if (session.closed || session.currentTurn !== turn) {
         throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
       }
+      context.registerTurnStatus?.(createClaudeTurnStatus(context, session, turn));
       context.registerTurnInterrupt?.({
         async interrupt() {
           context.assertCurrent?.();
@@ -735,14 +741,12 @@ export async function* executeClaudeCli(
           await session.handle.waitForExit();
         },
       });
-      await transport.send(createUserInput(context, context.prompt, turn.inputUuid));
+      const hostGenerated = context.promptOrigin === "host";
+      await transport.send(createUserInput(context, context.prompt, turn.inputUuid, hostGenerated));
       context.registerMessageInjection?.({
-        isAvailable: () =>
-          session.hasInputLifecycle &&
-          turn.inputStarted &&
-          turn.promptSubmitted &&
-          activeTurn(session) === turn,
-        queueMessage: (text, withCurrent) => injectInput(session, turn, text, withCurrent),
+        isAvailable: () => canInjectInput(session, turn),
+        queueMessage: (text, withCurrent, options) =>
+          injectInput(session, turn, text, withCurrent, options),
       });
     })().catch((error: unknown) => session.handle.close("abort", error));
     for await (const record of turn.events) {

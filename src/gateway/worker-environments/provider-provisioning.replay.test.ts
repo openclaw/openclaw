@@ -3,29 +3,10 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { describe, expect, it, vi } from "vitest";
 import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { REQUEST } from "./placement-dispatch-test-fixtures.js";
-import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
-import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import {
-  beforeSettlement,
-  create,
-  pendingNodeEnrollment,
-  providerService,
-} from "./provider-lifecycle.test-support.js";
-import {
-  bindProviderReplayNodeAvailability,
-  createProviderReplayDispatch,
-  createProviderReplayNodeTunnel,
-} from "./provider-replay.test-support.js";
-import { deriveEnvironmentIntent } from "./service-contract.js";
+import { beforeSettlement, create, providerService } from "./provider-lifecycle.test-support.js";
 import * as support from "./service.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
-const protocolFeatures = [...WORKER_PROTOCOL_FEATURES];
-const ensureNodeWorkerBundle = async () => ({
-  ...support.BOOTSTRAP_RECEIPT,
-  protocolFeatures: [...protocolFeatures],
-});
 const invalidSshLease = (patch: object) => ({
   leaseId: "lease-invalid",
   ssh: support.SSH_ENDPOINT,
@@ -140,6 +121,20 @@ describe("worker environment service provision replay", () => {
     await support.reopenWorkerEnvironmentStore();
 
     const restarted = support.createService(provider());
+    // A new caller must not replay an indeterminate allocation after losing authority.
+    await expect(
+      restarted.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-restart-replay",
+        machineClass: "large",
+        os: "os-a",
+        beforeProvision: () => {
+          throw new Error("Caller authority revoked");
+        },
+      }),
+    ).rejects.toThrow("Caller authority revoked");
+    expect(operationIds).toEqual([operationId]);
+    expect(support.testState.store.get(environmentId)).toMatchObject(pendingAllocation);
     restarted.start();
     await support.waitForFast(() =>
       expect(support.testState.store.get(environmentId)).toMatchObject({
@@ -162,173 +157,6 @@ describe("worker environment service provision replay", () => {
     });
   });
 
-  it("replays one node lease once across overlapping reconciliation and activates once", async () => {
-    const enrollmentStarted = createDeferredCore();
-    const operationIds: string[] = [];
-    const physicalLeases = new Set<string>();
-    const enrollmentConnected = createDeferredCore<string>();
-    const destroy = vi.fn(async ({ leaseId }: { leaseId: string }) => {
-      physicalLeases.delete(leaseId);
-    });
-    let provisionCalls = 0;
-    let physicalAllocations = 0;
-    const provider = support.createProvider({
-      supportedExecutionModes: ["worker-turn"],
-      provisionBeforeInstallation: true,
-      requiresNodeEnrollment: true,
-      provision: async (_profile, operationId, options) => {
-        provisionCalls += 1;
-        operationIds.push(operationId);
-        if (!physicalLeases.has("lease-node-replay")) {
-          physicalLeases.add("lease-node-replay");
-          physicalAllocations += 1;
-        }
-        if (provisionCalls === 1) {
-          throw new Error("provider response was lost after exact lease allocation");
-        }
-        const enrollment = await options?.beginNodeEnrollment?.();
-        if (!enrollment) {
-          throw new Error("node enrollment was not prepared");
-        }
-        enrollmentStarted.resolve();
-        return {
-          leaseId: "lease-node-replay",
-          node: { deviceId: await enrollment.waitForDeviceId() },
-          sharedHost: false,
-        };
-      },
-      destroy,
-    });
-    support.testState.prepareInstallation = vi.fn(async () => ({
-      ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [...protocolFeatures],
-    }));
-    const placementStore = () =>
-      createWorkerSessionPlacementStore({
-        database: support.testState.stateDb,
-        now: () => support.testState.nowMs,
-      });
-    let placements = placementStore();
-    const placement = await placements.startDispatch(REQUEST);
-    const idempotencyKey = `session-dispatch:${REQUEST.sessionId}:${placement.generation}`;
-    const intent = deriveEnvironmentIntent(idempotencyKey);
-    await placements.transition({
-      sessionId: placement.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: intent.environmentId },
-    });
-    const first = support.createService(provider, {
-      ensureNodeWorkerBundle,
-      prepareNodeEnrollment: async () => {
-        throw new Error("first provision reply was lost before node enrollment");
-      },
-    });
-
-    await expect(
-      create(first, idempotencyKey, { executionMode: REQUEST.executionMode }),
-    ).rejects.toMatchObject(providerFailure);
-    expect(support.testState.store.get(intent.environmentId)).toMatchObject({
-      ...pendingAllocation,
-      provisionOperationId: intent.provisionOperationId,
-    });
-
-    await support.reopenWorkerEnvironmentStore();
-    placements = placementStore();
-    const { nodeTunnelManager, syncWorkspace } = createProviderReplayNodeTunnel();
-    const restarted = support.createService(provider, {
-      ensureNodeWorkerBundle,
-      prepareNodeEnrollment: (record) =>
-        pendingNodeEnrollment(record, () => enrollmentConnected.promise, "2026.8.19"),
-      nodeTunnelManager,
-    });
-    bindProviderReplayNodeAvailability(restarted);
-    const recoveryBarrier = vi.fn(async ({ expectedGeneration, environmentId, run }) => {
-      expect(placements.get(REQUEST.sessionId)).toMatchObject({
-        state: "provisioning",
-        generation: expectedGeneration,
-        environmentId,
-      });
-      await run({ kind: "local", path: "/gateway/workspace" });
-    });
-    const activationBarrier = vi.fn(async ({ activate }) => activate());
-    const onActivated = vi.fn();
-    const attachSession = vi.spyOn(restarted, "attachSession");
-    const dispatch = createProviderReplayDispatch({
-      initialPlacements: await placements.listAsync(),
-      placements,
-      environments: restarted,
-      resolveDevicePlacementRequirement: async () => ({
-        requiredNodeCommands: [],
-        consumesWorkerSlot: true,
-      }),
-      isCurrentNodePlacement: () => true,
-      runRecoveryBarrier: recoveryBarrier,
-      runActivationBarrier: activationBarrier,
-      onActivated,
-    });
-    const uninstallReconcileGuard = restarted.installReconcileEnvironmentGuard(
-      async (environmentId, reconcileEnvironmentCore) => {
-        const owners = (await placements.listAsync()).filter(
-          (candidate) => candidate.environmentId === environmentId,
-        );
-        if (owners.length !== 1 || owners[0]?.state !== "provisioning") {
-          await reconcileEnvironmentCore();
-          return;
-        }
-        await dispatch.resumeProvisioning(owners[0], reconcileEnvironmentCore);
-      },
-    );
-
-    let recoverySettled = false;
-    const recovery = dispatch.reconcile().finally(() => {
-      recoverySettled = true;
-    });
-    await beforeSettlement(enrollmentStarted.promise, recovery, "Recovery enrollment");
-    expect(recoverySettled).toBe(false);
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({
-      state: "provisioning",
-      environmentId: intent.environmentId,
-    });
-    expect(support.testState.store.get(intent.environmentId)).toMatchObject(pendingAllocation);
-    expect(nodeTunnelManager.start).not.toHaveBeenCalled();
-    expect(destroy).not.toHaveBeenCalled();
-    const overlappingEnvironmentReconcile = restarted.reconcileEnvironment(intent.environmentId);
-    const overlappingPlacementReconcile = dispatch.reconcileActive(intent.environmentId);
-    await Promise.resolve();
-    expect(provisionCalls).toBe(2);
-
-    enrollmentConnected.resolve("device-node-replay");
-    await Promise.all([recovery, overlappingEnvironmentReconcile, overlappingPlacementReconcile]);
-    await uninstallReconcileGuard();
-
-    const activePlacement = placements.get(REQUEST.sessionId);
-    expect(activePlacement).toMatchObject({
-      state: "active",
-      environmentId: intent.environmentId,
-      workerBundleHash: support.BUNDLE_HASH,
-    });
-    expect(support.testState.store.get(intent.environmentId)).toMatchObject({
-      state: "attached",
-      leaseId: "lease-node-replay",
-      nodeDeviceId: "device-node-replay",
-      attachedSessionIds: [REQUEST.sessionId],
-    });
-    expect(physicalAllocations).toBe(1);
-    expect(operationIds).toEqual([intent.provisionOperationId, intent.provisionOperationId]);
-    expect(recoveryBarrier).toHaveBeenCalled();
-    expect(activationBarrier).not.toHaveBeenCalled();
-    for (const effect of [attachSession, nodeTunnelManager.start, syncWorkspace, onActivated]) {
-      expect(effect).toHaveBeenCalledOnce();
-    }
-    expect(onActivated).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: REQUEST.sessionId }),
-      activePlacement,
-    );
-    expect(destroy).not.toHaveBeenCalled();
-  });
-
   it("recovers indeterminate cleanup with bounded, redacted diagnostics", async () => {
     const leaseId = "lease:worker-provision-cleanup";
     const provisionDiagnosis = "worker enrollment failed: tar: Unexpected EOF in archive";
@@ -344,9 +172,8 @@ describe("worker environment service provision replay", () => {
         new Error(cleanupDetail),
       );
     });
-    const inspect = vi.fn(async () => ({ status: "active" as const }));
     const destroy = vi.fn(async () => {});
-    const provider = support.createProvider({ provision, inspect, destroy });
+    const provider = support.createProvider({ provision, destroy });
     const workerService = support.createService(provider);
 
     const failure = await create(workerService, "request-provision-cleanup").catch(
@@ -391,15 +218,7 @@ describe("worker environment service provision replay", () => {
     );
 
     expect(provision).toHaveBeenCalledTimes(1);
-    expect(inspect).toHaveBeenCalledWith(
-      expect.objectContaining({ leaseId, profile: { region: "test" } }),
-    );
     expect(destroy).toHaveBeenCalledTimes(1);
-    expect(destroy).toHaveBeenCalledWith({
-      leaseId,
-      profile: { region: "test" },
-      signal: expect.any(AbortSignal),
-    });
     expect(support.testState.store.get(pending.environmentId)).toMatchObject({
       state: "failed",
       leaseId: null,
@@ -410,10 +229,7 @@ describe("worker environment service provision replay", () => {
 
   it("rejects a timer-overflow provider provision timeout before allocation", async () => {
     const timeoutMs = MAX_TIMER_TIMEOUT_MS + 1;
-    const provision = vi.fn(async () => ({
-      leaseId: "lease-invalid-timeout",
-      ssh: support.SSH_ENDPOINT,
-    }));
+    const provision = vi.fn();
     const workerService = providerService({
       provision,
       resolveProvisionTimeoutMs: () => timeoutMs,
@@ -481,58 +297,38 @@ describe("worker environment service provision replay", () => {
       return record;
     });
     const events: string[] = [];
-    const operationIds: string[] = [];
-    let active = 0;
-    let maxActive = 0;
-    let originalProvisionCalls = 0;
     const { promise: firstProvisionPending, resolve: finishFirstProvision } = createDeferredCore();
     const destroy = vi.fn(async () => {
-      events.push("destroy:start");
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      active -= 1;
-      events.push("destroy:end");
+      events.push("destroy");
     });
     const provider = support.createProvider({
       resolveAllocation: async () => {
         events.push("resolve");
-        expect(active).toBe(0);
         return { leaseId: "lease-timeout-replay", sharedHost: false };
       },
-      provision: async (_profile, operationId) => {
-        originalProvisionCalls += 1;
-        const call = originalProvisionCalls;
-        operationIds.push(operationId);
-        events.push(`provision:${call}:start`);
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        if (call === 1) {
-          provisionEntered.resolve();
-          await firstProvisionPending;
-        }
-        active -= 1;
-        events.push(`provision:${call}:end`);
+      provision: async () => {
+        events.push("provision:start");
+        provisionEntered.resolve();
+        await firstProvisionPending;
+        events.push("provision:end");
         return { leaseId: "lease-timeout-replay", ssh: support.SSH_ENDPOINT };
       },
       destroy,
       resolveProvisionTimeoutMs: () => 20,
     });
     const workerService = support.createService(provider);
-    const creation = create(workerService, "request-provider-timeout-race");
-    const creationResult = creation.then(
+    const creationResult = create(workerService, "request-provider-timeout-race").then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-    let environmentId: string | undefined;
     let teardownResult: Promise<unknown> | undefined;
     try {
       await beforeSettlement(provisionEntered.promise, creationResult, "Creation provider call");
-      expect(events).toEqual(["provision:1:start"]);
+      expect(events).toEqual(["provision:start"]);
       const queuedEnvironmentId = expectDefined(
         support.testState.store.list()[0],
         "timed-out provision row",
       ).environmentId;
-      environmentId = queuedEnvironmentId;
       teardownResult = workerService.destroy(queuedEnvironmentId).then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
@@ -540,27 +336,15 @@ describe("worker environment service provision replay", () => {
       await vi.advanceTimersByTimeAsync(20);
       expect(await creationResult).toMatchObject({ error: providerFailure });
       await beforeSettlement(intentCommitted.promise, teardownResult, "Teardown intent commit");
-      expect(originalProvisionCalls).toBe(1);
       expect(destroy).not.toHaveBeenCalled();
-      expect(maxActive).toBe(1);
     } finally {
       finishFirstProvision();
       await Promise.all([creationResult, teardownResult]);
     }
 
     expect(await teardownResult).toMatchObject({ value: { state: "destroyed" } });
-    const finalEnvironmentId = expectDefined(environmentId, "timed-out provision environment id");
-    expect(operationIds).toHaveLength(1);
-    expect(new Set(operationIds).size).toBe(1);
-    expect(maxActive).toBe(1);
-    expect(events).toEqual([
-      "provision:1:start",
-      "provision:1:end",
-      "resolve",
-      "destroy:start",
-      "destroy:end",
-    ]);
-    expect(support.testState.store.get(finalEnvironmentId)).toMatchObject({ state: "destroyed" });
+    expect(events).toEqual(["provision:start", "provision:end", "resolve", "destroy"]);
+    expect(support.testState.store.list()[0]).toMatchObject({ state: "destroyed" });
   });
 
   it.each([

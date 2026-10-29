@@ -1,15 +1,14 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
+import {
+  attachInternalToolResultContentSource,
+  copyInternalToolResultState,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindGatewayToolPolicyControl } from "./agent-tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
-import {
-  attachInternalToolResultContentSource,
-  copyInternalToolResultState,
-} from "./runtime/internal-hooks.js";
-import { bindAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   INCOMPLETE_INSTRUCTIONS_HINT,
@@ -404,8 +403,6 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
     },
   ].map((tool) => {
     bindGatewayToolPolicyControl(tool);
-    return tool.name === TOOL_CALL_RAW_TOOL_NAME
-      ? bindAgentToolReplaySafety(tool, "dispatcher")
-      : tool;
+    return tool;
   });
 }

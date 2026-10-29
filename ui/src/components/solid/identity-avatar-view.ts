@@ -17,19 +17,22 @@ const avatarGatewayContext = projectSource(null, {
   equality: "revision",
 });
 
-export function useIdentityAvatarView(identity: Accessor<IdentityAvatarInput>) {
+export function useIdentityAvatarView(
+  identity: Accessor<IdentityAvatarInput>,
+  cachedOnly?: Accessor<boolean>,
+) {
   const gateway = useAvatarGatewayContext();
   const application = useOptionalApplication();
-  const directory = application
-    ? sharedProfileDirectoryProjection(profileDirectory(application.gateway))
-    : undefined;
   return createMemo(() => {
     gateway();
     const input = identity();
     return resolveIdentityAvatarView(
-      input.identity?.type === "profile" && directory
-        ? directory.read().avatarIdentity(input)
+      input.identity?.type === "profile" && !input.profileAvatarUrl?.trim() && application
+        ? sharedProfileDirectoryProjection(profileDirectory(application.gateway))
+            .read()
+            .avatarIdentity(input)
         : input,
+      cachedOnly?.() ?? false,
     );
   });
 }

@@ -104,7 +104,10 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}logs`);
-        await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
+        await expect
+          .poll(() => page.locator(".log-row").first().getAttribute("aria-setsize"))
+          .toBe(String(logLines.length));
+        await expect.poll(() => page.locator(".log-row").count()).toBeLessThan(100);
         const limits = { limit: 500, maxBytes: 250_000 };
         expect((await gateway.getRequests("logs.tail"))[0]?.params).toEqual(limits);
         await expect
@@ -114,7 +117,9 @@ suite.define(() => {
           cursor: logLines.length,
           ...limits,
         });
-        await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length + 1);
+        await expect
+          .poll(() => page.locator(".log-row").first().getAttribute("aria-setsize"))
+          .toBe(String(logLines.length + 1));
         await page.locator(".log-row", { hasText: "log line 201" }).waitFor();
 
         const stream = page.locator(".log-stream");
@@ -140,5 +145,57 @@ suite.define(() => {
         expect(pageErrors).toEqual([]);
       },
     );
+  });
+
+  it("keeps End anchored to the final wrapped row as log heights settle", async () => {
+    await suite.withPage({ viewport }, async ({ page }) => {
+      const lines = Array.from({ length: 130 }, (_, index) =>
+        JSON.stringify({
+          time: "2026-10-01T12:00:00Z",
+          level: "info",
+          message: `Wrapped log ${index}: ${"Variable height synthetic content. ".repeat(22)}`,
+        }),
+      );
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "logs.tail": { sequence: [tail(80, lines.slice(0, 80), true), tail(80, [])] },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}logs`);
+      await expect
+        .poll(() => page.locator(".log-row").first().getAttribute("aria-setsize"))
+        .toBe("80");
+      await expect.poll(() => page.locator(".log-row").count()).toBeLessThan(80);
+      await page.getByRole("switch", { name: "Auto-follow", exact: true }).uncheck();
+      const stream = page.getByRole("region", { name: "Logs", exact: true });
+      await stream.evaluate((element) => (element.scrollTop = 0));
+      const after = await gateway.deferNext("logs.tail");
+      await gateway.waitForRequest("logs.tail", { after });
+      await gateway.resolveDeferred("logs.tail", tail(130, lines.slice(80)));
+      await gateway.setMethodResponse("logs.tail", tail(130, []));
+      await expect
+        .poll(() => page.locator(".log-row").first().getAttribute("aria-setsize"))
+        .toBe("130");
+
+      for (const size of [viewport, { width: 480, height: 850 }]) {
+        await page.setViewportSize(size);
+        await stream.evaluate((element) => (element.scrollTop = 0));
+        await stream.focus();
+        await page.keyboard.press("End");
+        await expect
+          .poll(() => stream.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight))
+          .toBeLessThan(2);
+        const lastRow = page.locator(".log-row", { hasText: "Wrapped log 129:" });
+        await expect
+          .poll(async () => {
+            const [row, region] = await Promise.all([lastRow.boundingBox(), stream.boundingBox()]);
+            return Boolean(
+              row && region && row.y < region.y + region.height && row.y + row.height > region.y,
+            );
+          })
+          .toBe(true);
+        await expect.poll(() => page.locator(".log-row").count()).toBeLessThan(100);
+      }
+    });
   });
 });

@@ -163,13 +163,6 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     previousSignature: attempt.bootstrapPromptWarningSignature,
   });
   const workspaceNotes: string[] = [];
-  if (
-    hookAdjustedBootstrapFiles.some(
-      (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
-    )
-  ) {
-    workspaceNotes.push("Reminder: commit your changes in this workspace after edits.");
-  }
   if (isEmbeddedMode()) {
     workspaceNotes.push(
       "Running in local embedded mode (no gateway). Most tools work locally. Gateway-dependent tools (canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway) are unavailable. Subagent kill/steer require a gateway. Do not attempt to read gateway-specific files such as sessions.json, gateway.log, or gateway.pid.",

@@ -17,7 +17,6 @@ import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 
 export type InitialChatHistoryReceipt = {
   paramsKey: string;
@@ -47,6 +46,7 @@ type ChatHistoryLoadRequest = {
 type ChatHistoryLoadState =
   | { phase: "idle" }
   | ({ phase: "pending-connection" } & ChatHistoryLoadRequest)
+  | ({ phase: "pending-presentation" } & ChatHistoryLoadRequest)
   | ({
       phase: "in-flight";
       client: GatewayBrowserClient;
@@ -84,6 +84,7 @@ type ChatHistoryPaneRequests = {
   subscriptionError?: string;
   subscriptionRetry?: AbortController;
   initialHistory?: InitialChatHistoryReceipt;
+  historyRead?: AbortController;
   syncRetries: Map<
     "subscription" | "history",
     {
@@ -103,8 +104,6 @@ export type InitialChatSnapshotHydration = {
   titlePending?: boolean;
   sessionKey: string;
   connected: boolean;
-  readReadyHistory?: () => Pick<ChatSessionSnapshot, "deltaCursor" | "historyState"> | undefined;
-  adoptReadySnapshot?: () => Promise<void>;
   promise: Promise<void>;
 };
 
@@ -176,8 +175,38 @@ export function synchronizeInitialChatSnapshotConnection(state: ChatState): void
   }
 }
 
-function isChatHistoryLoading(load: ChatHistoryLoadState): boolean {
-  return load.phase === "pending-connection" || load.phase === "in-flight";
+export function isChatHistoryLoading(load: ChatHistoryLoadState): boolean {
+  return (
+    load.phase === "pending-connection" ||
+    load.phase === "pending-presentation" ||
+    load.phase === "in-flight"
+  );
+}
+
+/** Retire only transcript reads; live subscriptions and input custody keep their owners. */
+export function retireChatHistoryRead(state: ChatState, resume = false): void {
+  const requests = chatHistoryRequests(state);
+  const read = requests.historyRead;
+  const load = requests.historyLoad;
+  if (!read && (resume || !isChatHistoryLoading(load))) {
+    return;
+  }
+  delete requests.historyRead;
+  requests.historyVersion += 1;
+  if (!resume && isChatHistoryLoading(load)) {
+    setChatHistoryLoad(state, { phase: "idle" });
+    state.chatLoading = false;
+  } else if (load.phase === "in-flight") {
+    setChatHistoryLoad(state, {
+      phase: "pending-presentation",
+      sessionKey: load.sessionKey,
+      requestAgentId: load.requestAgentId,
+      startup: load.startup || load.refresh?.startup === true,
+    });
+    state.chatLoading = true;
+  }
+  setChatHistoryRetrying(state, "history", false);
+  read?.abort();
 }
 
 /** Records the transcript load phase and reports loading edges to the pane. */
@@ -335,6 +364,7 @@ export function acceptsHistoryResult(
 }
 
 export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+  retireChatHistoryRead(state);
   retireInitialChatSnapshot(state);
   retirePullRequestRefreshes(state);
   clearChatPendingInputs(state);
@@ -383,7 +413,7 @@ export function readChatTranscriptAttachmentSource(state: ChatState) {
     messages: state.chatMessages,
     pagination: state.chatHistoryPagination,
     coverage: known ? (state.chatHistoryPagination.hasMore ? "partial" : "complete") : "unknown",
-    loading: load.phase === "in-flight" || load.phase === "pending-connection",
+    loading: isChatHistoryLoading(load),
     error: load.phase === "failed" ? load.message : undefined,
   } as const;
 }

@@ -60,6 +60,7 @@ import {
   readPostCorePreUpdateSourceConfig,
   readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -99,6 +100,17 @@ export async function updateFinalizeCommand(
   recoveryRunIds?: readonly string[],
   handoff?: ManagedHandoffRepair,
   // Finalization can succeed while repair-retained custody still blocks the next update.
+  retained?: RetainedUpdateCustodyReport,
+): Promise<void> {
+  await withUpdateDatabaseEngine(process.env, () =>
+    finalizeUpdate(opts, recoveryRunIds, handoff, retained),
+  );
+}
+
+async function finalizeUpdate(
+  opts: UpdateFinalizeOptions,
+  recoveryRunIds?: readonly string[],
+  handoff?: ManagedHandoffRepair,
   retained?: RetainedUpdateCustodyReport,
 ): Promise<void> {
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
@@ -389,6 +401,7 @@ async function updateFinalizeCommandInternal(
       options: { repair: true, nonInteractive: true, json: opts.json },
       runtime: { ...defaultRuntime, log: defaultRuntime.error },
       serviceInspectionDeadlineAtMs,
+      reportStoppedService: lifecycle.ownsUpdateRepairRun,
     });
     lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
     // Fresh Doctor owns database fences; the parent retains service custody.

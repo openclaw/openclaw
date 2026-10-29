@@ -2,14 +2,14 @@ import type { DatabaseSync } from "node:sqlite";
 import { CLIENT_CREDENTIAL_SOURCE_TABLES } from "../infra/client-credential-schema.js";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
-import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
   collectSqliteSchemaIssues,
+  createSqliteTableContractReader,
   getCanonicalSqliteNamedIndexContracts,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
@@ -64,11 +64,23 @@ import {
   migrateStateWriteIndexesV27,
   withLegacyStateWriteIndexes,
 } from "./openclaw-state-db-schema-v27-indexes.js";
-import { statePublicationDraftMigration } from "./openclaw-state-db-schema-v28-publication.js";
+import {
+  needsPublicationDraftMigration,
+  statePublicationDraftMigration,
+} from "./openclaw-state-db-schema-v28-publication.js";
 import {
   stateLocalWorkspaceManifestMigration,
   withLegacyLocalWorkspaceManifests,
 } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
+import {
+  stateLocalWorkspaceCasMigration,
+  withLegacyLocalWorkspaceCas,
+} from "./openclaw-state-db-schema-v35-workspace-cas.js";
+import {
+  stateTemplateNamesMigration,
+  withLegacyTemplateStateSchema,
+  withLegacyTemplateStateCompatibility,
+} from "./openclaw-state-db-schema-v36-template-names.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -77,9 +89,12 @@ import {
 import type { DB } from "./openclaw-state-db.generated.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
+  findMissingLazyStateStartupColumn,
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
   STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+  STATE_V5_ADDITIVE_TABLES,
+  STATE_V6_ADDITIVE_TABLES,
 } from "./openclaw-state-schema-compatibility.js";
 import {
   readStateSchemaPublicationBlocker,
@@ -178,30 +193,6 @@ export function prepareStateDatabaseSchemaRepair(
   };
 }
 
-const STATE_V6_ADDITIVE_TABLES = [
-  ...LAZY_ADDITIVE_STATE_TABLES,
-  "worker_session_tool_operations",
-  "worker_turn_tool_authorities",
-] as const;
-const STATE_V5_ADDITIVE_TABLES = [
-  "agent_database_leases",
-  "agent_deletion_journal",
-  "claw_cron_refs",
-  "claw_installs",
-  "claw_mcp_server_refs",
-  "claw_package_refs",
-  "claw_workspace_files",
-  "config_machine_state",
-  "cron_job_scratch",
-  "meeting_transcript_sessions",
-  "meeting_transcript_summaries",
-  "meeting_transcript_utterances",
-  "outbound_media_provenance",
-  "worker_environment_credentials",
-  "worker_transcript_commit_heads",
-  "worker_transcript_commits",
-  ...STATE_V6_ADDITIVE_TABLES,
-] as const;
 const STATE_MIGRATION_VERSIONS = [
   5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
 ] as const;
@@ -300,16 +291,21 @@ function assertOpenClawStateDatabaseVersionForMigration(
       `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; repair the ownership metadata before migrating it.`,
     );
   }
-  assertSqliteSchemaTablesPresent(database, options.pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-    allowedMissingTables: [
-      ...(options.version === 5
-        ? STATE_V5_ADDITIVE_TABLES
-        : options.version < 13
-          ? STATE_V6_ADDITIVE_TABLES
-          : LAZY_ADDITIVE_STATE_TABLES),
-      ...DOCTOR_OWNED_STATE_TABLES,
-    ],
-  });
+  assertSqliteSchemaTablesPresent(
+    database,
+    options.pathname,
+    withLegacyTemplateStateSchema(OPENCLAW_STATE_SCHEMA_SQL),
+    {
+      allowedMissingTables: [
+        ...(options.version === 5
+          ? STATE_V5_ADDITIVE_TABLES
+          : options.version < 13
+            ? STATE_V6_ADDITIVE_TABLES
+            : LAZY_ADDITIVE_STATE_TABLES),
+        ...DOCTOR_OWNED_STATE_TABLES,
+      ],
+    },
+  );
 }
 
 /** Keep historical migration gates beside their version-specific ownership assertions. */
@@ -549,6 +545,8 @@ export const versionedStateMigrations = [
   statePublicationDraftMigration,
   stateLocalWorkspaceManifestMigration,
   cronIdentity.stateCronIdentityMigration,
+  stateLocalWorkspaceCasMigration,
+  stateTemplateNamesMigration,
 ] as const;
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -571,6 +569,8 @@ export function migrateBoundedStateSchema(
     stateLocalWorkspaceManifestMigration,
     ...stateIndexOrderingMigrations,
     cronIdentity.stateCronIdentityMigration,
+    stateLocalWorkspaceCasMigration,
+    stateTemplateNamesMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
@@ -584,10 +584,14 @@ export function migrateBoundedStateSchema(
   const indexes = getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).filter((index) =>
     tables.has(index.tableName),
   );
-  const manifestSourceSchema =
-    previousVersion < 31
-      ? withLegacyLocalWorkspaceManifests(OPENCLAW_STATE_SCHEMA_SQL)
+  const predecessorSchema =
+    previousVersion < 36
+      ? withLegacyTemplateStateSchema(OPENCLAW_STATE_SCHEMA_SQL)
       : OPENCLAW_STATE_SCHEMA_SQL;
+  const casSourceSchema =
+    previousVersion < 35 ? withLegacyLocalWorkspaceCas(predecessorSchema) : predecessorSchema;
+  const manifestSourceSchema =
+    previousVersion < 31 ? withLegacyLocalWorkspaceManifests(casSourceSchema) : casSourceSchema;
   const indexSourceSchema =
     previousVersion < 27 ? withLegacyStateWriteIndexes(manifestSourceSchema) : manifestSourceSchema;
   const sourceSchema =
@@ -596,12 +600,14 @@ export function migrateBoundedStateSchema(
   if (
     !options.versionMigrationOnly &&
     (tableExists(db, "cron_run_logs") ||
+      (!pending.includes(statePublicationDraftMigration) && needsPublicationDraftMigration(db)) ||
+      findMissingLazyStateStartupColumn(createSqliteTableContractReader(db)) !== undefined ||
       collectSqliteSchemaIssues(db, sourceSchema, {
-        ...STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+        ...withLegacyTemplateStateCompatibility(STATE_RUNTIME_SCHEMA_COMPATIBILITY),
         allowedMissingColumns: [
           ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingColumns ?? []),
           ...pending.flatMap((migration) => migration.columns),
-        ],
+        ].map(withLegacyTemplateStateSchema),
         allowedMissingIndexes: [
           ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingIndexes ?? []),
           ...indexes.map((index) => index.name),

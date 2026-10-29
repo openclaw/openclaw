@@ -1,4 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import {
+  spawnSync,
+  type SpawnOptions,
+  type SpawnSyncOptions,
+  type SpawnSyncOptionsWithStringEncoding,
+} from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -314,11 +319,54 @@ export function evaluateWorkflowCondition(
 
 export const quoteShell = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
 
+const WORKFLOW_COMMAND_TIMEOUT_MS = 30_000;
+
+export function runWorkflowCommand(
+  command: string,
+  args: string[],
+  options: Omit<SpawnSyncOptions, "encoding" | "killSignal"> = {},
+) {
+  const timeout = options.timeout ?? WORKFLOW_COMMAND_TIMEOUT_MS;
+  // Node shares detached handling between spawn and spawnSync; its types expose it on spawn only.
+  const childOptions = {
+    ...options,
+    encoding: "utf8",
+    timeout,
+    detached: process.platform !== "win32",
+    // Synchronous fixture children must terminate even if they ignore SIGTERM.
+    killSignal: "SIGKILL",
+  } satisfies SpawnSyncOptionsWithStringEncoding & Pick<SpawnOptions, "detached">;
+  const result = spawnSync(command, args, childOptions);
+  const error: NodeJS.ErrnoException | undefined = result.error;
+  if (error) {
+    if (process.platform !== "win32" && result.pid > 0) {
+      try {
+        // Killing a timed-out shell alone leaves its stalled descendants running.
+        process.kill(-result.pid, "SIGKILL");
+      } catch {
+        // The group is already gone when the command had no surviving children.
+      }
+    }
+    const reason = error.code === "ETIMEDOUT" ? `timed out after ${timeout} ms` : error.message;
+    throw new Error(
+      `Workflow fixture command ${reason}: ${[command, ...args].map(quoteShell).join(" ")}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
+      { cause: error },
+    );
+  }
+  return result;
+}
+
 let linuxWorkflowBash: string | undefined;
 
 export function runWorkflowShellScript(
   script: string,
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; linuxWorkflow?: boolean; tempDir?: string },
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    linuxWorkflow?: boolean;
+    tempDir?: string;
+    timeout?: number;
+  },
 ) {
   const { linuxWorkflow, tempDir, ...spawnOptions } = options;
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-workflow-shell-"));
@@ -355,9 +403,8 @@ export function runWorkflowShellScript(
       linuxWorkflow && process.platform === "darwin"
         ? (linuxWorkflowBash ??= resolveWorkflowBash())
         : "bash";
-    return spawnSync(bash, [scriptPath], {
+    return runWorkflowCommand(bash, [scriptPath], {
       ...spawnOptions,
-      encoding: "utf8",
       // Child caches and temporary artifacts share the fixture's cleanup owner.
       // Inheriting a huge host tsx cache makes startup depend on unrelated runs.
       env: {
@@ -395,11 +442,21 @@ export function readWorkflow(filePath: string) {
 export function readTrackedText(relativePath: string): string {
   return existsSync(relativePath)
     ? readFileSync(relativePath, "utf8")
-    : execFileSync("git", ["show", `:${relativePath}`], { encoding: "utf8" });
+    : execGit(process.cwd(), ["show", `:${relativePath}`]);
+}
+
+function execGit(cwd: string, args: string[]): string {
+  const result = runWorkflowCommand("git", args, { cwd });
+  if (result.status !== 0) {
+    throw new Error(
+      `Workflow fixture command failed (${result.status ?? result.signal}): git ${args.map(quoteShell).join(" ")}\n${result.stdout}${result.stderr}`,
+    );
+  }
+  return result.stdout;
 }
 
 export function runGit(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  return execGit(cwd, args).trim();
 }
 
 export function writeExecutable(filePath: string, lines: string[]): void {
@@ -420,4 +477,42 @@ export function readWorkflowOutputs(outputPath: string): Record<string, string> 
         }),
       )
     : {};
+}
+
+/** Execute the UI phases with Actions' output/env handoff and stop-on-failure behavior. */
+export function runControlUiE2eWorkflow(options: { cwd: string; env: NodeJS.ProcessEnv }) {
+  const steps = readCiWorkflow().jobs["checks-ui-e2e"].steps as WorkflowStep[];
+  const first = steps.findIndex((step) => step.name === "Decode Control UI E2E selection");
+  const last = steps.findIndex((step) => step.name === "Test Control UI end-to-end");
+  expect(first).toBeGreaterThanOrEqual(0);
+  expect(last).toBeGreaterThan(first);
+  const envFile = path.join(options.cwd, "github-env");
+  const outputFile = path.join(options.cwd, "github-output");
+  const env = { ...options.env, GITHUB_ENV: envFile, GITHUB_OUTPUT: outputFile };
+  writeFileSync(envFile, "");
+  const context = {
+    ...defaultContext,
+    matrix: { task: "control-ui" },
+    steps: {} as Record<string, { outputs: Record<string, string> }>,
+  };
+  let result: ReturnType<typeof runWorkflowShellScript> | undefined;
+  let stdout = "";
+  let stderr = "";
+  for (const step of steps.slice(first, last + 1)) {
+    if (step.if && !evaluateWorkflowCondition(step.if, context)) {
+      continue;
+    }
+    writeFileSync(outputFile, "");
+    result = runWorkflowShellScript(`set -e\n${step.run}`, { cwd: options.cwd, env });
+    stdout += result.stdout;
+    stderr += result.stderr;
+    if (result.status !== 0) {
+      break;
+    }
+    Object.assign(env, readWorkflowOutputs(envFile));
+    if (step.id) {
+      context.steps[step.id] = { outputs: readWorkflowOutputs(outputFile) };
+    }
+  }
+  return { ...expectDefined(result, "Control UI E2E workflow result"), stdout, stderr };
 }

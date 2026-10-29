@@ -1,6 +1,4 @@
-import fs from "node:fs/promises";
 /** Tests live model switching behavior in active agent command sessions. */
-import os from "node:os";
 import path from "node:path";
 import { expectDefined, toStringifiedError } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -10,15 +8,11 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as sessionEntryRuntime from "../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  resolveSqliteScope,
-  runExclusiveSqliteSessionWrite,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
 import { reduceSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
 import { useBundledProviderPolicyArtifactsForTest } from "../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
@@ -26,18 +20,8 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { startSessionControllerInterruption } from "../sessions/session-controller.lifecycle.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../skills/types.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
-import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import {
-  getAdmittedRunDelegatedAuthority,
-  type AdmittedRunContext,
-  type PreparedAgentRunAdmission,
-} from "./admitted-run-context.js";
 import {
   type CommandSessionEntryFixture,
   createChannelModelRuntimeConfig,
@@ -280,25 +264,6 @@ vi.mock("./command/session.js", async () => {
 });
 
 vi.mock("./command/types.js", () => ({}));
-
-// Claim ownership has dedicated store-backed coverage. Keep real recovery commits
-// so command teardown can be tested against the canonical session writer queue.
-vi.mock("./main-session-recovery/main-session-recovery-store.js", () => ({
-  commitMainSessionRecovery: async (
-    ...args: Parameters<
-      typeof import("./main-session-recovery/main-session-recovery-store.js").commitMainSessionRecovery
-    >
-  ) => {
-    const actual = await vi.importActual<
-      typeof import("./main-session-recovery/main-session-recovery-store.js")
-    >("./main-session-recovery/main-session-recovery-store.js");
-    return actual.commitMainSessionRecovery(...args);
-  },
-  claimMainSessionRecoveryOwner: vi.fn(async () => ({ kind: "not_required" })),
-  inspectMainSessionRecoveryRequired: vi.fn(async () => ({ kind: "not_required" })),
-  releaseMainSessionRecoveryOwner: vi.fn(async () => undefined),
-  validateMainSessionRecoveryOwner: vi.fn(async () => true),
-}));
 
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
@@ -554,14 +519,21 @@ vi.mock("../utils/message-channel.js", () => ({
       .toLowerCase(),
 }));
 
+vi.mock("./agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
+  resolveSessionAgentIds: () => ({ defaultAgentId: "default", sessionAgentId: "default" }),
+}));
+
+vi.mock("./model-selection-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-selection-config.js")>()),
+  resolveEffectiveModelFallbacks: (...args: unknown[]) =>
+    state.resolveEffectiveModelFallbacksMock(...args),
+}));
+
 vi.mock("./agent-scope.js", async () => {
-  const { resolveAgentModelFallbacksOverride, resolveSubagentSpawnModelFallbacksOverride } =
-    await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
+  const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
   const { createTestAgentScope } = await import("./agent-command.live-model-switch.test-mocks.js");
-  return createTestAgentScope(state, {
-    resolveAgentModelFallbacksOverride,
-    resolveSubagentSpawnModelFallbacksOverride,
-  });
+  return { ...actual, ...createTestAgentScope(state, actual) };
 });
 
 vi.mock("./auth-profiles.js", async () => ({
@@ -1377,111 +1349,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
-  it.each(["completed", "failed"] as const)(
-    "persists a detached recovery start before closing a %s command",
-    async (outcome) => {
-      const stateDir = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-recovery-start-")),
-      );
-      try {
-        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-          const sessionKey = "agent:default:main";
-          const storePath = path.join(stateDir, "agents", "default", "sessions", "sessions.json");
-          const runId = "recovery-run";
-          const { entry } = setupStoredSession(
-            {
-              lifecycleRunId: runId,
-              restartRecoveryRuns: [{ runId, lifecycleGeneration: "test-generation" }],
-              mainRestartRecovery: { cycleId: "recovery-cycle", revision: 4, chargedAttempts: 3 },
-            },
-            storePath,
-            sessionKey,
-          );
-          state.resolvedSessionKeyMock = sessionKey;
-          await sessionAccessor.replaceSessionEntry({ sessionKey, storePath }, entry);
-          const started = createDeferred();
-          const releaseWriter = createDeferred();
-          let writer: Promise<void> | undefined;
-          let registration: Promise<void> | undefined;
-          let context: AdmittedRunContext | undefined;
-          let commandSettled = false;
-          const failure = new Error("runtime failed after accepting the recovery turn");
-          setupSingleAttemptFallback();
-          state.runAgentAttemptMock.mockImplementationOnce(
-            async (params: {
-              preparedRunAdmission: PreparedAgentRunAdmission;
-              onAgentEvent: (event: {
-                stream: string;
-                data: Record<string, unknown>;
-              }) => void | Promise<void>;
-            }) => {
-              context = await params.preparedRunAdmission.admit("embedded");
-              writer = runExclusiveSqliteSessionWrite(
-                resolveSqliteScope({ sessionKey, storePath }),
-                async () => await releaseWriter.promise,
-                "session.transcript.batch",
-              );
-              // Real CLI, Pi, and Codex event producers do not await this callback.
-              registration = Promise.resolve(
-                params.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } }),
-              );
-              started.resolve();
-              if (outcome === "failed") {
-                throw failure;
-              }
-              return makeSuccessResult("anthropic", "claude");
-            },
-          );
-          const command = agentCommand({
-            message: "continue interrupted work",
-            sessionKey,
-            runId,
-            mainRestartRecoveryAdmitted: true,
-            mainRestartRecoveryAttempt: 3,
-          }).then(
-            () => {
-              commandSettled = true;
-              return undefined;
-            },
-            (error: unknown) => {
-              commandSettled = true;
-              return error;
-            },
-          );
-          try {
-            await started.promise;
-            // Let the runner's resolved/rejected promise reach command teardown
-            // while the earlier SQLite writer still holds the registration.
-            await new Promise<void>((resolve) => {
-              setImmediate(resolve);
-            });
-            expect(commandSettled).toBe(false);
-            const admitted = expectDefined(context, "recovery admission");
-            expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
-            releaseWriter.resolve();
-            expect(await command).toBe(outcome === "failed" ? failure : undefined);
-            expect(sessionAccessor.loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-              mainRestartRecovery: { chargedAttempts: 3, startedAttempt: 3 },
-            });
-            expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-          } finally {
-            releaseWriter.resolve();
-            await writer;
-            await registration;
-            await command;
-          }
-        });
-      } finally {
-        await resetPreparedModelRuntimeSnapshotsForTest();
-        await closeOpenClawAgentDatabasesAsync(stateDir);
-        await closeOpenClawStateDatabaseByPathAsync(
-          resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateDir }),
-        );
-        await fs.rm(stateDir, { recursive: true, force: true });
-      }
-    },
-  );
-
   it.each(["configured", "aliased"] as const)(
     "forwards the %s model auth profile",
     async (source) => {
@@ -2224,29 +2091,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     },
   );
 
-  it("preserves restart recovery ownership when delivery fails after a session rebound", async () => {
-    setupSingleAttemptFallback();
-    const { store: sessionStore } = setupStoredSession({
-      restartRecoveryDeliveryRunId: "session-1",
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-      },
-    });
-    const result = makeCliSuccessResult();
-    state.runAgentAttemptMock.mockResolvedValue(result);
-    state.persistCliTurnTranscriptMock.mockResolvedValue({
-      kind: "session-rebound",
-      sessionEntry: undefined,
-    });
-    state.deliverAgentCommandResultMock.mockRejectedValue(new Error("delivery failed"));
-
-    await expect(runDiscordDelivery()).rejects.toThrow("delivery failed");
-
-    expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("session-1");
-  });
-
   it("does not duplicate unpersisted recorder-owned CLI input after completion", async () => {
     setupSingleAttemptFallback();
     setupStoredSession();
@@ -2499,265 +2343,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   registerAgentCommandRecoveryCases(getAgentCommandRecoveryFixture);
 
-  it("keeps a generated-media completion turn an ordinary run", async () => {
-    setupSuccessfulAttempt();
-    setupBareStoredSession();
-
-    await agentCommand({
-      message: "generated image ready",
-      sessionKey: "agent:main:main",
-      deliver: false,
-      runId: "image:unsafe-message-tool:agent-loop",
-      sourceReplyDeliveryMode: "message_tool_only",
-      inputProvenance: {
-        kind: "inter_session",
-        sourceChannel: "internal",
-        sourceTool: "image_generate",
-      },
-    });
-
-    expect(
-      persistedEntries().some((entry) => entry?.restartRecoveryDeliverySourceRunId !== undefined),
-    ).toBe(false);
-  });
-
-  it("clears the recovery cycle when a preclaimed transcript-only recovery run completes", async () => {
-    setupSuccessfulAttempt();
-    setupBareStoredSession({
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
-      restartRecoveryRuns: [
-        { runId: "older-recovery", lifecycleGeneration: "pre-restart" },
-        { runId: "recovery-run", lifecycleGeneration: "test-generation" },
-      ],
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 5,
-        chargedAttempts: 2,
-      },
-    });
-
-    await agentCommand({
-      message: "continue after restart",
-      sessionKey: "agent:main:main",
-      deliver: false,
-      runId: "recovery-run",
-      preserveUserFacingSessionModelState: true,
-    });
-
-    const persistedClaims = persistedEntries().map((entry) => ({
-      context: entry?.restartRecoveryDeliveryContext,
-      runId: entry?.restartRecoveryDeliveryRunId,
-      sourceRunId: entry?.restartRecoveryDeliverySourceRunId,
-    }));
-    expect(persistedClaims).toContainEqual({
-      context: undefined,
-      runId: "recovery-run",
-      sourceRunId: "control-ui-run",
-    });
-    expect(persistedClaims.at(-1)).toEqual({
-      context: undefined,
-      runId: undefined,
-      sourceRunId: undefined,
-    });
-    const cleanupParams = state.persistSessionEntryMock.mock.calls.at(-1)?.[0] as
-      | {
-          sessionStore?: Record<string, SessionEntry>;
-        }
-      | undefined;
-    const stored = cleanupParams?.sessionStore?.["agent:main:main"];
-    expectRecordFields(stored, {
-      restartRecoveryDeliveryContext: undefined,
-      restartRecoveryDeliveryRunId: undefined,
-      restartRecoveryDeliverySourceRunId: undefined,
-      restartRecoveryTerminalRunIds: ["control-ui-run", "recovery-run"],
-      restartRecoveryRuns: undefined,
-      mainRestartRecovery: undefined,
-    });
-  });
-
-  it.each(["explicit", "session", "default"] as const)(
-    "persists the %s delivery route for restart recovery",
-    async (source) => {
-      setupSuccessfulAttempt();
-      const context = {
-        channel: "discord",
-        to: "discord:channel:general",
-        accountId: "main",
-        threadId: "thread-1",
-      };
-      setupBareStoredSession(
-        source === "session"
-          ? { delivery: normalizeSessionDeliveryState({ context: { ...context } }) }
-          : {},
-      );
-      state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
-      if (source === "explicit") {
-        state.resolveAgentDeliveryPlanMock.mockReturnValueOnce({
-          baseDelivery: { mode: "explicit", threadId: "thread-1", threadIdSource: "explicit" },
-          resolvedChannel: "discord",
-          resolvedTo: "discord:channel:general",
-          resolvedAccountId: "main",
-          resolvedThreadId: "thread-1",
-          deliveryTargetMode: "explicit",
-        });
-      } else if (source === "default") {
-        state.resolveMessageChannelSelectionMock.mockResolvedValue({
-          channel: "discord",
-          configured: ["discord"],
-          source: "single-configured",
-        });
-        state.resolveAgentOutboundTargetMock.mockReturnValue({
-          resolvedTarget: { ok: true, to: "discord:channel:default" },
-          resolvedTo: "discord:channel:default",
-          targetMode: "implicit",
-        });
-      }
-
-      if (source === "explicit") {
-        await runDiscordDelivery({ to: "discord:channel:general/thread:thread-1" });
-      } else {
-        await agentCommand({ message: "hello", sessionKey: "agent:main:main", deliver: true });
-      }
-
-      const contexts = persistedEntries().map((entry) => entry?.restartRecoveryDeliveryContext);
-      expect(contexts).toContainEqual(
-        source === "default" ? { channel: "discord", to: "discord:channel:default" } : context,
-      );
-      if (source === "session") {
-        expect(state.resolveAgentDeliveryPlanMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            explicitTo: undefined,
-            requestedChannel: undefined,
-            wantsDelivery: true,
-            sessionEntry: expect.objectContaining({
-              delivery: expect.objectContaining({
-                context: expect.objectContaining({ to: "discord:channel:general" }),
-              }),
-            }),
-          }),
-        );
-      }
-    },
-  );
-
-  it("does not overwrite another active run's restart recovery context", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-    const staleEntry = createCommandSessionEntry();
-    const laterRunEntry = createCommandSessionEntry({
-      updatedAt: 2,
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:456",
-        accountId: "main",
-      },
-      restartRecoveryDeliveryRunId: "later-run",
-      restartRecoveryRuns: [{ runId: "later-run", lifecycleGeneration: "later-generation" }],
-      mainRestartRecovery: {
-        cycleId: "later-cycle",
-        revision: 1,
-        chargedAttempts: 0,
-      },
-    });
-    const sessionStore = { "agent:main:main": laterRunEntry };
-    state.sessionEntryMock = staleEntry;
-    state.sessionStoreMock = sessionStore;
-    state.storePathMock = commandPaths.sessions;
-
-    await runDiscordDelivery({ sessionKey: "agent:main:main", runId: "stale-run" });
-
-    expectRecordFields(sessionStore["agent:main:main"], {
-      restartRecoveryDeliveryContext: laterRunEntry.restartRecoveryDeliveryContext,
-      restartRecoveryDeliveryRunId: "later-run",
-      restartRecoveryRuns: laterRunEntry.restartRecoveryRuns,
-      mainRestartRecovery: laterRunEntry.mainRestartRecovery,
-    });
-  });
-
-  it("preserves a newly marked recovery cycle when restart wins the cleanup race", async () => {
-    setupSuccessfulAttempt();
-    const { store: sessionStore } = setupBareStoredSession();
-    const nextRecoveryRuns = [{ runId: "session-1", lifecycleGeneration: "next-generation" }];
-    const nextRecoveryCycle = {
-      cycleId: "next-cycle",
-      revision: 1,
-      chargedAttempts: 0,
-    };
-    state.deliverAgentCommandResultMock.mockImplementation(async () => {
-      const current = sessionStore["agent:main:main"] as
-        | (SessionEntry & { mainRestartRecovery?: typeof nextRecoveryCycle })
-        | undefined;
-      if (current) {
-        current.abortedLastRun = true;
-        current.restartRecoveryRuns = nextRecoveryRuns;
-        current.mainRestartRecovery = nextRecoveryCycle;
-      }
-      return { deliverySucceeded: false };
-    });
-
-    await runDiscordDelivery();
-
-    expect(sessionStore["agent:main:main"]?.abortedLastRun).toBe(true);
-    expect(sessionStore["agent:main:main"]?.restartRecoveryRuns).toEqual(nextRecoveryRuns);
-    expect(
-      (
-        sessionStore["agent:main:main"] as SessionEntry & {
-          mainRestartRecovery?: typeof nextRecoveryCycle;
-        }
-      ).mainRestartRecovery,
-    ).toEqual(nextRecoveryCycle);
-    expect(state.persistSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({
-          restartRecoveryDeliveryContext: {
-            channel: "discord",
-            to: "discord:dm:123",
-            accountId: "main",
-          },
-          restartRecoveryRuns: [{ runId: "session-1", lifecycleGeneration: "test-generation" }],
-          restartRecoveryDeliveryRunId: undefined,
-          restartRecoveryDeliverySourceRunId: undefined,
-        }),
-      }),
-    );
-  });
-
-  it.each(["deleted", "rotated", "new-run"] as const)(
-    "leaves %s sessions untouched during restart recovery cleanup",
-    async (change) => {
-      setupSingleAttemptFallback();
-      state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-      const { store } = setupBareStoredSession();
-      const replacement =
-        change === "deleted"
-          ? undefined
-          : createCommandSessionEntry({
-              updatedAt: 2,
-              ...(change === "rotated"
-                ? { sessionId: "session-2" }
-                : { restartRecoveryDeliveryRunId: "later-run" }),
-              restartRecoveryDeliveryContext: {
-                channel: "discord",
-                to: "discord:dm:456",
-                accountId: "main",
-              },
-            });
-      state.deliverAgentCommandResultMock.mockImplementation(async () => {
-        if (replacement) {
-          store["agent:main:main"] = replacement;
-        } else {
-          delete store["agent:main:main"];
-        }
-        return { deliverySucceeded: change !== "new-run" };
-      });
-
-      await runDiscordDelivery();
-
-      expect(store["agent:main:main"]).toEqual(replacement);
-    },
-  );
-
   it("stores and delivers with the prepared canonical current-run target", async () => {
     await withStoredAgentCommandRecoverySession(getAgentCommandRecoveryFixture(), async (scope) => {
       setupSuccessfulAttempt();
@@ -2772,17 +2357,28 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
       await runDiscordDelivery({ to: "channel:general" });
 
-      expect(sessionAccessor.loadSessionEntry(scope)?.pendingFinalDelivery).toMatchObject({
-        kind: "replayable",
-        text: "ok",
+      const entry = expectDefined(
+        sessionAccessor.loadSessionEntry(scope),
+        "current delivery session",
+      );
+      const pendingDelivery = expectDefined(
+        entry.pendingFinalDelivery,
+        "prepared delivery receipt",
+      );
+      expect(pendingDelivery).toMatchObject({
+        kind: "transport-only",
+        intentId: expect.any(String),
+        deliveries: [{ id: expect.any(String), state: "prepared" }],
         context: {
           channel: "discord",
           to: "channel:1524410080953634829",
           accountId: "main",
         },
       });
+      expect(pendingDelivery).not.toHaveProperty("text");
       expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
         expect.objectContaining({
+          payloads: [{ text: "ok" }],
           opts: expect.objectContaining({
             replyChannel: "discord",
             replyTo: "channel:1524410080953634829",
@@ -2791,6 +2387,19 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           }),
         }),
       );
+      const deliveredPayload = expectDefined(
+        state.deliverAgentCommandResultMock.mock.calls[0]?.[0]?.payloads?.[0],
+        "delivered payload",
+      );
+      expect(
+        getReplyPayloadMetadata(deliveredPayload)?.pendingFinalDeliveryCompletion,
+      ).toMatchObject({
+        deliveryId: expectDefined(pendingDelivery.deliveries?.[0], "prepared delivery").id,
+        intentId: pendingDelivery.intentId,
+        sessionId: entry.sessionId,
+        sessionKey: scope.sessionKey,
+        storePath: scope.storePath,
+      });
     });
   });
 
@@ -3541,7 +3150,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           expectRecordFields(requireRecord(params, "post-probe write").entry, lockedSelection);
         }
         expectRecordFields(store["agent:main:main"], lockedSelection);
-        expect(store["agent:main:main"]?.restartRecoveryDeliveryRunId).toBeUndefined();
       } else {
         expectRecordFields(store["agent:main:main"], {
           providerOverride: "google",
@@ -4038,4 +3646,3 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

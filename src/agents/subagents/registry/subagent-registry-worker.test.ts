@@ -1,9 +1,7 @@
-import { randomBytes } from "node:crypto";
-import { Session } from "node:inspector/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { setImmediate } from "node:timers/promises";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
@@ -18,6 +16,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-context-binding.js";
+import * as gatewayAdmission from "../../../process/gateway-work-admission.js";
 import * as sessionStateNotices from "../../../sessions/session-state-notices.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { clearOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.js";
@@ -29,18 +28,10 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../test-utils/openclaw-test-state.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
-import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
-import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
-import {
-  mutateSubagentRuns,
-  restoreSubagentRunsFromDisk,
-} from "./subagent-registry-persistence.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   getSubagentRegistryPublicationRevision,
   subscribeSubagentRunChanges,
@@ -52,24 +43,26 @@ import {
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import {
-  clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   prepareSubagentRegistrationRows,
-  prepareSubagentRunsSnapshotForRunIds,
 } from "./subagent-registry-state.js";
+import {
+  change,
+  entry,
+  postimages,
+  register,
+  restore,
+  stored,
+  useSubagentRegistryWorkerFixture,
+} from "./subagent-registry-worker.test-support.js";
 import { streamSubagentRegistryInWorker } from "./subagent-registry.store.restore.worker.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
-let state: OpenClawTestState;
-const restore = () => restoreSubagentRunsFromDisk({ runs: subagentRuns });
-const stored = (id: string) => loadSubagentRegistryFromSqlite().get(id);
+const fixture = useSubagentRegistryWorkerFixture();
 const projections = [getSubagentRunsSnapshotForRead, getSubagentSessionListRunsSnapshotForRead];
 
-function postimages(rows: Iterable<readonly [string, SubagentRunRecord | null]>) {
-  return { value: undefined, postimages: new Map(rows) };
-}
 function seed(...rows: SubagentRunRecord[]) {
   saveSubagentRegistryChangesToSqlite(
     new Map(rows.map((row) => [row.runId, row])),
@@ -94,141 +87,6 @@ function interceptChunks(
       }),
     );
 }
-
-beforeAll(async () => {
-  state = await createOpenClawTestState({ scenario: "minimal", applyEnv: true });
-  openOpenClawStateDatabase();
-});
-beforeEach(() => {
-  subagentRuns.clear();
-  clearSubagentRunsReadCacheForTest();
-});
-afterEach(async () => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  // Restore also reconciles uncertain or source-superseded writes before deleting fixture rows.
-  await restore();
-  const runIds = [...subagentRuns.keys()];
-  if (runIds.length) {
-    await mutateSubagentRuns(runIds, () => postimages(runIds.map((runId) => [runId, null])));
-  }
-  subagentRuns.clear();
-  clearSubagentRunsReadCacheForTest();
-});
-afterAll(async () => {
-  await state.cleanup();
-});
-
-function entry(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
-  return createSubagentRunRecord({
-    runId,
-    childSessionKey: `agent:main:subagent:${runId}`,
-    requesterSessionKey: "agent:main:requester",
-    createdAt: 1,
-    completion: { required: false },
-    delivery: { status: "not_required" },
-    ...overrides,
-  });
-}
-
-async function register(...entries: SubagentRunRecord[]) {
-  await mutateSubagentRuns(
-    entries.map((row) => row.runId),
-    () => postimages(entries.map((row) => [row.runId, row])),
-  );
-}
-
-it.each(["0", "1"])(
-  "releases completed payloads and persists their removal (catalog=%s)",
-  async (readPersisted) => {
-    vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", readPersisted);
-    const gc = async () => {
-      const inspector = new Session();
-      inspector.connect();
-      try {
-        await inspector.post("HeapProfiler.collectGarbage");
-      } finally {
-        inspector.disconnect();
-      }
-    };
-    await register(entry("warm-retention"));
-    await setImmediate();
-    await gc();
-    const before = process.memoryUsage().heapUsed;
-    // Independent flat strings expose sliced-preview and full-row cache retention.
-    for (let batch = 0; batch < 4; batch++) {
-      await register(
-        ...Array.from({ length: 16 }, (_, index) => {
-          const resultText = randomBytes(96 * 1024).toString("base64");
-          return entry(`retained-${batch * 16 + index}`, {
-            // A short-task row also catches equality-elided payload removal after compaction.
-            task:
-              batch === 0 && index === 1 ? "short task" : randomBytes(96 * 1024).toString("base64"),
-            execution: {
-              status: "terminal" as const,
-              endedAt: 2,
-              outcome: { status: "ok" as const },
-            },
-            cleanupCompletedAt: 3,
-            completion: {
-              required: false,
-              resultText,
-              fallbackResultText: "retained fallback",
-              terminalReply: { disposition: "visible" as const, text: resultText.slice(0, 4096) },
-            },
-          });
-        }),
-      );
-    }
-    await setImmediate();
-    await gc();
-    expect(process.memoryUsage().heapUsed - before).toBeLessThan(6 * 1024 * 1024);
-    expect(subagentRuns.get("retained-0")?.task.length).toBeLessThanOrEqual(160);
-    expect(subagentRuns.get("retained-0")?.completion?.resultText).toBeUndefined();
-
-    const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, ["retained-0"]);
-    const full = prepared.consume((rows) => rows.get("retained-0"));
-    expect(full.ready).toBe(true);
-    if (!full.ready) {
-      throw new Error("Expected a current completed run");
-    }
-    expect(full.value?.task).toHaveLength(128 * 1024);
-    expect(full.value?.completion?.resultText).toHaveLength(128 * 1024);
-    expect(full.value?.completion?.terminalReply).toEqual({
-      disposition: "visible",
-      text: full.value?.completion?.resultText?.slice(0, 4096),
-    });
-    await change("retained-0", { label: "updated after completion" });
-    const durable = stored("retained-0");
-    expect(durable?.task).toBe(full.value?.task);
-    expect(durable?.completion?.resultText).toBe(full.value?.completion?.resultText);
-    expect(durable?.completion?.terminalReply).toEqual(full.value?.completion?.terminalReply);
-    expect(durable?.label).toBe("updated after completion");
-    subagentRuns.clear();
-    await restore();
-    expect(subagentRuns.get("retained-0")?.task.length).toBeLessThanOrEqual(160);
-    expect(subagentRuns.get("retained-0")?.completion?.resultText).toBeUndefined();
-    const restarted = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, ["retained-0"]);
-    expect(restarted.consume((rows) => rows.get("retained-0")?.completion)).toEqual({
-      ready: true,
-      value: durable?.completion,
-    });
-    const resident = subagentRuns.get("retained-1");
-    expect(resident?.task).toBe("short task");
-    expect(resident?.completion?.resultText).toBeUndefined();
-    expect(resident?.completion?.fallbackResultText).toBeUndefined();
-    await change("retained-1", (row) => {
-      delete row.completion!.resultText;
-      delete row.completion!.fallbackResultText;
-      delete row.completion!.terminalReply;
-    });
-    const cleared = stored("retained-1");
-    expect(cleared).toBeDefined();
-    expect(cleared?.completion?.resultText).toBeUndefined();
-    expect(cleared?.completion?.fallbackResultText).toBeUndefined();
-    expect(cleared?.completion?.terminalReply).toBeUndefined();
-  },
-);
 
 it("restores rows without an explicit read transaction", async () => {
   seed(entry("autocommit-restore"));
@@ -323,7 +181,7 @@ it("refuses quarantined registry reads in the worker without replacing resident 
   subagentRuns.set(resident.runId, resident);
   const revision = getSubagentRegistryPublicationRevision();
   const reason = "synthetic registry quarantine";
-  seedOpenClawDatabaseQuarantine({ env: state.env, kind: "state", path: pathname, reason });
+  seedOpenClawDatabaseQuarantine({ env: fixture.state.env, kind: "state", path: pathname, reason });
   const staging = vi.spyOn(snapshotSource, "startSqliteReadOnlyLocationAsync");
   const hostSql = observeParentSqlite();
   try {
@@ -336,36 +194,10 @@ it("refuses quarantined registry reads in the worker without replacing resident 
   } finally {
     hostSql.restore();
     staging.mockRestore();
-    clearOpenClawDatabaseQuarantine(pathname, { env: state.env });
+    clearOpenClawDatabaseQuarantine(pathname, { env: fixture.state.env });
     await closeOpenClawStateDatabaseAsync();
   }
 });
-
-function change(
-  runId: string,
-  update: Partial<SubagentRunRecord> | ((row: SubagentRunRecord) => void),
-  options?: Pick<
-    NonNullable<Parameters<typeof mutateSubagentRuns>[2]>,
-    "assertCurrent" | "onPublished"
-  >,
-) {
-  return mutateSubagentRuns(
-    [runId],
-    (rows) => {
-      const current = rows.get(runId);
-      if (!current) {
-        throw new Error("Missing test row");
-      }
-      const next =
-        typeof update === "function" ? structuredClone(current) : { ...current, ...update };
-      if (typeof update === "function") {
-        update(next);
-      }
-      return postimages([[runId, next]]);
-    },
-    options,
-  );
-}
 
 function interceptWrites(callback: (phase: "before" | "after") => void | Promise<void>) {
   return probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -380,7 +212,7 @@ function interceptWrites(callback: (phase: "before" | "after") => void | Promise
   });
 }
 
-function holdFirstAck(onWrite = () => {}) {
+function holdFirstAck(onWrite = () => {}, waitForRelease = true) {
   const reached = createDeferredCore();
   const release = createDeferredCore();
   let held = false;
@@ -388,7 +220,7 @@ function holdFirstAck(onWrite = () => {}) {
     if (phase === "before") {
       onWrite();
     }
-    if (phase === "after" && !held) {
+    if (phase === "after" && !held && waitForRelease) {
       held = true;
       reached.resolve();
       await release.promise;
@@ -583,42 +415,6 @@ it("publishes overlapping durable and runtime-only mutations in FIFO order", asy
   }
 });
 
-it("rejects a runtime-only mutation when its Gateway recovery owner changes", async () => {
-  await register(
-    entry("recovery-noop", {
-      cleanupHandled: false,
-      execution: { status: "terminal", endedAt: 2 },
-      requesterSettleWake: { status: "pending", attemptCount: 0 },
-    }),
-  );
-  const expected = subagentRuns.get("recovery-noop")!;
-  const previousResolver = () => undefined;
-  bindGatewayContextResolver(expected, previousResolver);
-  const gateway = createGatewayContext();
-  let gatewayCurrent = true;
-  const resolver = () => (gatewayCurrent ? gateway : undefined);
-  const onPublished = vi.fn();
-
-  await expect(
-    mutateSubagentRuns(
-      [expected.runId],
-      (rows) => {
-        gatewayCurrent = false;
-        return postimages([
-          [expected.runId, { ...rows.get(expected.runId)!, cleanupHandled: true }],
-        ]);
-      },
-      {
-        gatewayRecovery: { expected, previousResolver, resolver, gateway },
-        onPublished,
-      },
-    ),
-  ).rejects.toThrow("Subagent Gateway recovery owner changed");
-  expect(subagentRuns.get(expected.runId)).toBe(expected);
-  expect(expected.cleanupHandled).toBe(false);
-  expect(onPublished).not.toHaveBeenCalled();
-});
-
 it("persists prepared-only registration without resurrecting it after a queued deletion", async () => {
   await register(entry("warm-registration"));
   const original = entry("prepared-deletion");
@@ -697,7 +493,7 @@ it("serializes opposite multi-row orders without a lock-order deadlock", async (
   ]);
 });
 
-it("settles a requester cohort while many children finish and one is killed", async () => {
+it("settles a requester cohort and killed-child cleanup after shutdown closes admission", async () => {
   const children = Array.from({ length: 18 }, (_, index) =>
     entry(`child-${index}`, {
       completion: { required: true },
@@ -706,15 +502,20 @@ it("settles a requester cohort while many children finish and one is killed", as
     }),
   );
   const stopped = entry("killed", {
+    attachmentId: "cc30d548-d417-46f1-a15f-f057e136f3ba",
     childSessionIdentity: { sessionId: "killed-session" },
     collect: true,
-    execution: {
-      status: "running" as const,
-      startedAt: 1,
-      suppressSessionEffects: true as const,
-    },
+    execution: { status: "running", startedAt: 1, suppressSessionEffects: true },
   });
   await register(...children, stopped);
+  const attachmentDir = path.join(
+    resolveSubagentSessionAttachmentRootDir({
+      agentId: "main",
+      childSessionKey: stopped.childSessionKey,
+    }),
+    stopped.attachmentId!,
+  );
+  await fs.mkdir(attachmentDir, { recursive: true });
   const manager = createSubagentRunManager(
     createSubagentManagerTestOptions(subagentRuns, async () => {
       throw new Error("Stress fixture unexpectedly called the Gateway");
@@ -732,8 +533,6 @@ it("settles a requester cohort while many children finish and one is killed", as
       entries: [child],
       context,
       assertCurrent: () => {},
-      onCommitted: () => {},
-      onPublished: () => {},
       operation: {
         kind: "transition",
         state: { status: "dispatching", attemptCount: 1, rearmGeneration: 1 },
@@ -742,25 +541,23 @@ it("settles a requester cohort while many children finish and one is killed", as
   );
   const settlement = Promise.all(wakes).then(() =>
     mutateRequesterCompletionBatch({
-      entries: children.map(({ runId }) => {
-        const subagent = subagentRuns.get(runId);
-        if (!subagent) {
-          throw new Error("Requester wake lost its acknowledged child");
-        }
-        return subagent;
-      }),
+      entries: [...subagentRuns.values()].filter(({ runId }) => runId !== stopped.runId),
       context,
       operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
       assertCurrent: () => {},
     }),
   );
+  gatewayAdmission.markGatewayRestartDraining("stop (SIGTERM)");
   const killed = manager.markSubagentRunTerminated({
     runId: stopped.runId,
     reason: "synthetic kill",
     suppressTaskDelivery: true,
   });
-  const results = await Promise.allSettled([...completions, settlement, killed]);
+  const results = await Promise.allSettled([...completions, settlement, killed]).finally(
+    gatewayAdmission.resetGatewayWorkAdmission,
+  );
   expect(results.filter((result) => result.status === "rejected")).toEqual([]);
+  await expect(fs.stat(attachmentDir)).rejects.toMatchObject({ code: "ENOENT" });
   const saved = loadSubagentRegistryFromSqlite();
   expect(saved.size).toBe(children.length + 1);
   for (const child of children) {
@@ -890,30 +687,21 @@ it.each(["before ACK", "inside failing callback"] as const)(
   "keeps an old-source commit from notifying a replacement database (%s)",
   async (transition) => {
     await register(entry("source"));
-    const reached = createDeferredCore();
-    const release = createDeferredCore();
+    const { reached, release } = holdFirstAck(undefined, transition === "before ACK");
     const observed = vi.fn();
     const stop = subscribeSubagentRunChanges("persistence", observed);
     const revision = getSubagentRegistryPublicationRevision();
     const replaceSource = () => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state.stateDir, "replacement"));
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixture.state.stateDir, "replacement"));
     };
-    interceptWrites(async (phase) => {
-      if (phase === "after" && transition === "before ACK") {
-        reached.resolve();
-        await release.promise;
-      }
-    });
     const pending = change(
       "source",
       { label: "old database commit" },
       {
         onPublished: () => {
-          if (transition !== "before ACK") {
+          if (transition === "inside failing callback") {
             replaceSource();
-            if (transition === "inside failing callback") {
-              throw new Error("Synthetic custody failure after source replacement");
-            }
+            throw new Error("Synthetic custody failure after source replacement");
           }
         },
       },
@@ -980,28 +768,6 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   expect(isSameSubagentRunOwner(published, alias)).toBe(true);
 
   gatewayOpen = false;
-  const replacementGateway = createGatewayContext();
-  const replacementResolver = () => replacementGateway;
-  await expect(
-    bindSubagentRunGatewayOwners({
-      runs: subagentRuns,
-      entries: [...getSubagentActivationRuns(subagentRuns)],
-      resumedRuns: new Set(),
-      getGatewayContextResolver: () => replacementResolver,
-      onRecovered: () => {},
-    }),
-  ).resolves.toBe(true);
-  const recovered = subagentRuns.get(child.runId)!;
-  expect(isSameSubagentRunOwner(recovered, alias)).toBe(false);
   expect(getGatewayContextResolver(initial)?.()).toBeUndefined();
-  expect(getGatewayContextResolver(recovered)?.()).toBe(replacementGateway);
-  expect(() => subagentRuns.runWithCompletionAuthority(alias, () => "stale")).toThrow(
-    "runtime owner is no longer active",
-  );
-  // Gateway ownership alone cannot authorize a continuation without its operator source.
-  const dispatch = vi.fn();
-  expect(() => subagentRuns.runWithCompletionAuthority(recovered, dispatch)).toThrow(
-    "Subagent completion authority is no longer active",
-  );
-  expect(dispatch).not.toHaveBeenCalled();
+  expect(getGatewayContextResolver(published)?.()).toBeUndefined();
 });

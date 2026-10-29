@@ -163,7 +163,6 @@ const subagentSessionListPaths = [
   "collectorCompletion.status",
   "runTimeoutSeconds",
   "execution.status",
-  "execution.interruptionReason",
   "execution.startedAt",
   "execution.endedAt",
   "execution.outcome.status",

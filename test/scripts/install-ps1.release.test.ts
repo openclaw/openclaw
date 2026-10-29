@@ -469,6 +469,9 @@ try {
         JSON.stringify([
           ["v24.22.1", "3.51.3", true, true],
           ["v24.22.1", "3.51.3", false, false],
+          ["v24.16.0+vendor.1", "3.51.3", true, true],
+          ["v26.1.0", "3.51.3", true, true],
+          ["v24.16.0", "3.51.3", false, false],
           ["v24.15.0+vendor.1", "3.51.3", true, false],
           ["v26.0.0+vendor.1", "3.51.3", true, false],
           ["v24.15.0", "3.51.3", false, false],

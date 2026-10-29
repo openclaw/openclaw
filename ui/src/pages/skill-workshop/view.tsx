@@ -19,6 +19,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/chat/text.css";
+import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";

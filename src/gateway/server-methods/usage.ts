@@ -7,10 +7,9 @@ import {
   ErrorCodes,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveUsageCostWorkerDayBucket } from "../../infra/session-cost-usage-worker-runtime.js";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../infra/session-cost-usage.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { readSessionRowChangeRevision } from "../../sessions/session-row-changes.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createUsageAggregateAccumulator } from "../../shared/usage-aggregates.js";
@@ -48,19 +47,16 @@ import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import { respondError } from "./response.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-import {
-  formatDateLabel,
-  resolveDateInterpretation,
-  resolveDateRange,
-  resolveDayBucket,
-  type DateInterpretation,
-  type DateRange,
-} from "./usage-date-range.js";
+import type { GatewayRequestHandlers } from "./types.js";
+import { formatDateLabel, resolveDayBucket } from "./usage-date-range.js";
 import {
   createUsageOverviewReporter,
   withVisibleUsageOverviewRows,
 } from "./usage-overview-report.js";
+import {
+  resolveSessionUsageFileOrRespond,
+  resolveUsageDateRangeOrRespond,
+} from "./usage-request.js";
 import {
   loadCostUsageSummaryCached,
   loadSessionsUsageSnapshotCached,
@@ -73,65 +69,12 @@ import {
 import {
   loadUsageSessionContext,
   projectUsageCreator,
-  resolveSessionUsageTarget,
   selectUsageSessions,
   UsageSessionInvalidRequestError,
   type UsageGroupingMode,
   type UsageSessionSelection,
 } from "./usage-session-selection.js";
 import { assertValidParams } from "./validation.js";
-
-async function resolveSessionUsageFileOrRespond(
-  params: { key?: unknown; agentId?: unknown } | undefined,
-  detail: "timeseries" | "logs",
-  respond: RespondFn,
-  config: OpenClawConfig,
-) {
-  const key = normalizeOptionalString(params?.key);
-  if (!key) {
-    respondError(respond, ErrorCodes.INVALID_REQUEST, `key is required for ${detail}`);
-    return null;
-  }
-  const sessionOwner = resolveRequestedSessionAgentId(
-    config,
-    key,
-    normalizeOptionalString(params?.agentId),
-  );
-  if (!sessionOwner.ok) {
-    respond(false, undefined, sessionOwner.error);
-    return null;
-  }
-  let resolved: Awaited<ReturnType<typeof resolveSessionUsageTarget>>;
-  try {
-    resolved = await resolveSessionUsageTarget(key, config, sessionOwner.agentId);
-  } catch {
-    getAsyncWorkSignal()?.throwIfAborted();
-    resolved = undefined;
-  }
-  if (!resolved) {
-    respondError(respond, ErrorCodes.INVALID_REQUEST, `Invalid session key: ${key}`);
-    return null;
-  }
-  return { config, key, ...resolved };
-}
-
-function resolveUsageDateRangeOrRespond(
-  params: Parameters<typeof resolveDateRange>[0],
-  respond: RespondFn,
-): { interpretation: DateInterpretation; range: DateRange } | null {
-  const interpretation = resolveDateInterpretation(params);
-  if (!interpretation.ok) {
-    respondError(respond, ErrorCodes.INVALID_REQUEST, interpretation.error);
-    return null;
-  }
-
-  const range = resolveDateRange(params, interpretation.value);
-  if (!range.ok) {
-    respondError(respond, ErrorCodes.INVALID_REQUEST, range.error);
-    return null;
-  }
-  return { interpretation: interpretation.value, range: range.value };
-}
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
@@ -161,7 +104,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
-    if (!isGatewayAdmin(client ?? null) && operatorSessionCap(client ?? null, config) === "none") {
+    if (
+      !isGatewayAdmin(client ?? null) &&
+      ["none", "invited"].includes(operatorSessionCap(client ?? null, config) ?? "")
+    ) {
       respondError(
         respond,
         ErrorCodes.FORBIDDEN,
@@ -170,8 +116,18 @@ export const usageHandlers: GatewayRequestHandlers = {
       return;
     }
     const { startMs, endMs } = range;
-    const agentId = normalizeOptionalString(params?.agentId);
-    if (params?.agentScope === "all" && agentId) {
+    const requestedAgentId = params?.agentId;
+    const requestedAgentScope = params?.agentScope;
+    if (requestedAgentId !== undefined && typeof requestedAgentId !== "string") {
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "agentId must be a string");
+      return;
+    }
+    if (requestedAgentScope !== undefined && requestedAgentScope !== "all") {
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "agentScope must be 'all' when provided");
+      return;
+    }
+    const agentId = normalizeOptionalString(requestedAgentId);
+    if (requestedAgentScope === "all" && agentId) {
       respondError(
         respond,
         ErrorCodes.INVALID_REQUEST,
@@ -179,7 +135,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const agentScope = params?.agentScope === "all" ? "all" : undefined;
+    const agentScope = requestedAgentScope === "all" ? "all" : undefined;
     let effectiveAgentId = agentId;
     if (!agentScope && !effectiveAgentId) {
       const requestedAgent = resolveRequestedSessionAgentId(config, "main");
@@ -212,9 +168,21 @@ export const usageHandlers: GatewayRequestHandlers = {
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
     const sessionCap = operatorSessionCap(client ?? null, config);
-    const visibilityFilter =
-      sessionCap === "none"
-        ? createSessionListEntryFilter({ client: client ?? null, cfg: config })
+    const visibilityFilter: Parameters<typeof selectUsageSessions>[0]["visibilityFilter"] =
+      sessionCap === "none" || sessionCap === "invited"
+        ? (key, entry, target) =>
+            createSessionListEntryFilter({
+              client: client ?? null,
+              cfg: context.getRuntimeConfig(),
+              membership:
+                target && !isIncognitoSessionKey(key)
+                  ? getSessionRowProjection(context)?.readMembership({
+                      agentId: target.agentId,
+                      key: target.storeKey ?? key,
+                      storePath: target.storeTarget.storePath,
+                    })
+                  : undefined,
+            })?.(key, entry) !== false
         : undefined;
     const profileId = gatewayClientSessionCreator(client ?? null)?.id;
     const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
@@ -509,11 +477,21 @@ export const usageHandlers: GatewayRequestHandlers = {
           const source = sourceFor(session);
           const committed = source && committedEntry(source);
           let current = committed?.entry;
+          let membership =
+            source?.contextTarget && !isIncognitoSessionKey(source.key)
+              ? getSessionRowProjection(context)?.readMembership({
+                  agentId: source.agentId,
+                  key: source.contextTarget.storedKey,
+                  storePath: source.contextTarget.storeTarget.storePath,
+                })
+              : undefined;
           if (committed === undefined && source) {
             const prepared = contextReads.get(source);
             if (prepared) {
               try {
-                current = prepared.readCurrent(currentConfig).target?.entry;
+                const facts = prepared.readCurrent(currentConfig);
+                current = facts.target?.entry;
+                membership = facts.membership;
               } catch (error) {
                 if (!(error instanceof SessionMutationFactsUnavailableError)) {
                   throw error;
@@ -526,8 +504,14 @@ export const usageHandlers: GatewayRequestHandlers = {
           // Cached reports are data; current receipt metadata owns publication authority.
           if (
             source?.storeEntry
-              ? !current || (currentFilter && !currentFilter(session.key, current))
-              : currentSessionCap === "none"
+              ? !current ||
+                (currentFilter &&
+                  !currentFilter(
+                    session.key,
+                    current,
+                    Boolean(profileId && membership?.has(profileId)),
+                  ))
+              : currentSessionCap === "none" || currentSessionCap === "invited"
           ) {
             return [];
           }

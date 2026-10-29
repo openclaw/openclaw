@@ -1,6 +1,94 @@
 // Doctor and runtime share record policy without loading a state-store implementation.
 import { createHash } from "node:crypto";
+import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
+import type { RecipePreparation } from "./crabbox-worker-warm-image-recipe.js";
+
+type WorkerNodeRuntimeIdentity = NonNullable<
+  NonNullable<Parameters<WorkerProvider["provision"]>[2]>["nodeRuntimeIdentity"]
+>;
+export type WarmStartStatus = Parameters<
+  NonNullable<NonNullable<Parameters<WorkerProvider["provision"]>[2]>["reportStartStatus"]>
+>[0];
+export type WarmColdReason = Extract<WarmStartStatus, { mode: "cold" }>["reason"];
+
+export type WarmImageRecord = {
+  checkpointId: string;
+  kind: string;
+  state: "pending" | "available";
+  createdAtMs: number;
+  preparationKey: string | null;
+  cacheKey: string | null;
+  purpose: "session" | "reserve" | null;
+  lastDemandAtMs: number | null;
+  pinned?: { atMs: number };
+  baseCommit?: string;
+  /** Runtime content attested by successful preparation before this capture. */
+  runtimeIdentity?: WorkerNodeRuntimeIdentity;
+};
+
+export type WarmAllocationRecord = {
+  coldReason?: WarmColdReason;
+  choice: { kind: "cold" } | { kind: "checkpoint"; checkpointId: string };
+  machineClass: string;
+  /** Absent in existing Linux allocations. */
+  os?: CrabboxOperatingSystem;
+  phase: "pending" | "prepared" | "enrolled";
+  /** Failed detected setup must never be published, including during teardown. */
+  captureSkipped?: string;
+  preparationKey: string | null;
+  cacheKey: string | null;
+  purpose: "session" | "reserve" | null;
+  demandAtMs: number | null;
+  imageGeneration: { checkpointId: string; createdAtMs: number } | null;
+  /** A cold preparation admitted against a pin may replace only that publication. */
+  publicationBase?: { checkpointId: string; createdAtMs: number };
+  baseCommit?: string;
+  /** Frozen target; preparation/enrollment must verify it before capture can publish it. */
+  runtimeIdentity?: WorkerNodeRuntimeIdentity;
+};
+
+export type WarmProfileRecord = {
+  version: 3;
+  latestColdReason?: WarmColdReason;
+  /** Configured profile that most recently allocated from this key; display only. */
+  profileId?: string;
+  backend?: string;
+  machineClass?: string;
+  os?: CrabboxOperatingSystem;
+  projectLabel?: string;
+  projectRoot?: string;
+  projectKey?: string;
+  recipePreparation?: RecipePreparation;
+  recipePreparationAtMs?: number;
+  image?: WarmImageRecord;
+  previous?: WarmImageRecord;
+  /** Latest native-capture refusal; retained for display without suppressing later attempts. */
+  captureUnsupported?: { atMs: number; provider: string; message: string };
+  allocations: Record<string, WarmAllocationRecord>;
+  operation?: WarmImageOperation;
+};
+
+const allocationHoldsCheckpoint = (allocation: WarmAllocationRecord, checkpointId: string) =>
+  (allocation.choice.kind === "checkpoint" && allocation.choice.checkpointId === checkpointId) ||
+  allocation.imageGeneration?.checkpointId === checkpointId;
+
+export const isCrabboxWarmImageHeld = (
+  record: Pick<WarmProfileRecord, "allocations">,
+  checkpointId: string,
+) =>
+  Object.values(record.allocations).some((allocation) =>
+    allocationHoldsCheckpoint(allocation, checkpointId),
+  );
+
+export const crabboxWarmImageHoldingLeaseIds = (
+  record: Pick<WarmProfileRecord, "allocations">,
+  checkpointId: string,
+) =>
+  Object.entries(record.allocations)
+    .filter(([, allocation]) => allocationHoldsCheckpoint(allocation, checkpointId))
+    .map(([id]) => id);
 
 export type WarmImageOperation =
   | {

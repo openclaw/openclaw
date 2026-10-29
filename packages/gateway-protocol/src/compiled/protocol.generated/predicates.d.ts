@@ -517,6 +517,11 @@ export function isMentionsChangedEvent(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").MentionsChangedEventSchema
 >;
+export function isMentionsFailedEvent(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").MentionsFailedEventSchema
+>;
 export function isUsersBackgroundGetParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -1968,11 +1973,6 @@ export function isSessionsTitlePrepareParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsTitlePrepareParamsSchema
 >;
-export function isSessionsRecoverParams(
-  value: unknown,
-): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").SessionsRecoverParamsSchema
->;
 export function isSessionsSendParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2442,110 +2442,110 @@ export function isExecApprovalsNodeSnapshot(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ExecApprovalsNodeSnapshotSchema
 >;
-export function isClawsCatalogSearchParams(
+export function isTemplatesCatalogSearchParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsCatalogSearchParamsSchema
+  typeof import("../../schema-modules.js").TemplatesCatalogSearchParamsSchema
 >;
-export function isClawDraftDocument(
+export function isTemplateDraftDocument(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawDraftDocumentSchema
+  typeof import("../../schema-modules.js").TemplateDraftDocumentSchema
 >;
-export function isClawsDraftsCreateParams(
+export function isTemplatesDraftsCreateParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsDraftsCreateParamsSchema
+  typeof import("../../schema-modules.js").TemplatesDraftsCreateParamsSchema
 >;
-export function isClawsDraftsReadParams(
+export function isTemplatesDraftsReadParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsDraftsReadParamsSchema
+  typeof import("../../schema-modules.js").TemplatesDraftsReadParamsSchema
 >;
-export function isClawsDraftsSaveParams(
+export function isTemplatesDraftsSaveParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsDraftsSaveParamsSchema
+  typeof import("../../schema-modules.js").TemplatesDraftsSaveParamsSchema
 >;
-export function isClawsDraftsReviewParams(
+export function isTemplatesDraftsReviewParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsDraftsReviewParamsSchema
+  typeof import("../../schema-modules.js").TemplatesDraftsReviewParamsSchema
 >;
-export function isClawsDraftsPublishParams(
+export function isTemplatesDraftsPublishParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsDraftsPublishParamsSchema
+  typeof import("../../schema-modules.js").TemplatesDraftsPublishParamsSchema
 >;
-export function isClawsCatalogSearchResult(
+export function isTemplatesCatalogSearchResult(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsCatalogSearchResultSchema
+  typeof import("../../schema-modules.js").TemplatesCatalogSearchResultSchema
 >;
-export function isClawsCatalogDetailParams(
+export function isTemplatesCatalogDetailParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsCatalogDetailParamsSchema
+  typeof import("../../schema-modules.js").TemplatesCatalogDetailParamsSchema
 >;
-export function isClawsCatalogDetailResult(
+export function isTemplatesCatalogDetailResult(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsCatalogDetailResultSchema
+  typeof import("../../schema-modules.js").TemplatesCatalogDetailResultSchema
 >;
-export function isClawsCatalogPreviewParams(
+export function isTemplatesCatalogPreviewParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsCatalogPreviewParamsSchema
+  typeof import("../../schema-modules.js").TemplatesCatalogPreviewParamsSchema
 >;
-export function isClawsCatalogPreviewResult(
+export function isTemplatesCatalogPreviewResult(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsCatalogPreviewResultSchema
+  typeof import("../../schema-modules.js").TemplatesCatalogPreviewResultSchema
 >;
-export function isClawsStatusParams(
+export function isTemplatesStatusParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsStatusParamsSchema
+  typeof import("../../schema-modules.js").TemplatesStatusParamsSchema
 >;
-export function isClawsStatusResult(
+export function isTemplatesStatusResult(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsStatusResultSchema
+  typeof import("../../schema-modules.js").TemplatesStatusResultSchema
 >;
-export function isClawsAddPlanParams(
+export function isTemplatesAddPlanParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsAddPlanParamsSchema
+  typeof import("../../schema-modules.js").TemplatesAddPlanParamsSchema
 >;
-export function isClawsAddApplyParams(
+export function isTemplatesAddApplyParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsAddApplyParamsSchema
+  typeof import("../../schema-modules.js").TemplatesAddApplyParamsSchema
 >;
-export function isClawsUpdatePlanParams(
+export function isTemplatesUpdatePlanParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsUpdatePlanParamsSchema
+  typeof import("../../schema-modules.js").TemplatesUpdatePlanParamsSchema
 >;
-export function isClawsUpdateApplyParams(
+export function isTemplatesUpdateApplyParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsUpdateApplyParamsSchema
+  typeof import("../../schema-modules.js").TemplatesUpdateApplyParamsSchema
 >;
-export function isClawsRemovePlanParams(
+export function isTemplatesRemovePlanParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsRemovePlanParamsSchema
+  typeof import("../../schema-modules.js").TemplatesRemovePlanParamsSchema
 >;
-export function isClawsRemoveApplyParams(
+export function isTemplatesRemoveApplyParams(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawsRemoveApplyParamsSchema
+  typeof import("../../schema-modules.js").TemplatesRemoveApplyParamsSchema
 >;
-export function isClawLifecyclePlanResult(
+export function isTemplateLifecyclePlanResult(
   value: unknown,
 ): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").ClawLifecyclePlanResultSchema
+  typeof import("../../schema-modules.js").TemplateLifecyclePlanResultSchema
 >;
 export function isCanvasDocumentPreviewParams(
   value: unknown,

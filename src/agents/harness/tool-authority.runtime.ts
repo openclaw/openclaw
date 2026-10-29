@@ -56,8 +56,6 @@ type ToolAuthorityAttempt = Pick<
   | "messageChannel"
   | "toolsAllow"
   | "disableTools"
-  | "forceRestartSafeTools"
-  | "forceCodeModeTools"
   | "runId"
   | "abortSignal"
   | "sessionTarget"
@@ -99,8 +97,10 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     },
     (replyOperation, abortSignal) =>
       withPreparedEmbeddedRunToolAuthorityOwned(
-        { ...internal, replyOperation },
-        { ...attempt, abortSignal },
+        internal,
+        attempt,
+        replyOperation,
+        abortSignal,
         narrow,
         run,
       ),
@@ -110,12 +110,17 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
 async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends ToolAuthorityAttempt>(
   internal: Parameters<typeof withPreparedEmbeddedRunToolAuthority>[0],
   attempt: Attempt,
+  turn: EmbeddedRunAttemptInternalParams["replyOperation"],
+  abortSignal: AbortSignal,
   narrow: ReplyToolAuthorityNarrow | undefined,
   run: Parameters<typeof withPreparedEmbeddedRunToolAuthority<T, Attempt>>[3],
 ): Promise<T> {
   const admitted = internal.admittedRunContext;
   const instance = admitted.operationalRunInstance;
-  const assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, attempt.abortSignal);
+  const assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, abortSignal);
+  if (!assertAdmitted) {
+    throw new Error("embedded tool authority is no longer active");
+  }
   const inherited = getGatewayToolCallerIdentity();
   const source = inherited?.operationalRunInstance === instance ? inherited : undefined;
   const { sessionId, sessionKey, sessionFile, agentId, runId } = attempt;
@@ -142,7 +147,6 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   });
   const route = { provider: attempt.provider, model: attempt.modelId };
   // Maintenance borrows an operation for cancellation, not its injection snapshot.
-  const turn = internal.replyOperation;
   const turnState = readSessionControllerOperationState(turn);
   const ownsDirectPolicy = turnState?.turnKind === "direct" && internal.trigger !== "memory";
   let operation =
@@ -151,6 +155,27 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
       : undefined;
   const assertHostActive = attempt.hostCapabilities?.assertActive;
   let live = true;
+  const assertActive = () => {
+    if (!live || admitted.operationalRunInstance !== instance || instance.runId !== runId) {
+      throw new Error("embedded tool authority is no longer active");
+    }
+    assertAdmitted();
+    if (turn) {
+      assertSessionControllerOperation(turn);
+    }
+    assertHostActive?.();
+    if (
+      (source && (source.agentId !== agentId || source.sessionKey !== sessionKey)) ||
+      (source?.workerTurnClaim &&
+        (source.workerTurnClaim.sessionId !== sessionId ||
+          source.workerTurnClaim.runId !== runId ||
+          !source.receiptAuthority)) ||
+      source?.receiptAuthority?.() === false ||
+      (source?.gatewayContextResolver && !source.gatewayContextResolver())
+    ) {
+      throw new Error("embedded tool authority lost its source execution claim");
+    }
+  };
   // Preserve the complete admitted snapshot, but bind its hash and projection
   // only after hooks or native ownership have selected the actual model.
   const direct = operation
@@ -160,8 +185,6 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           originatingChannel: attempt.messageChannel,
           toolsAllow: attempt.toolsAllow,
           disableTools: attempt.disableTools,
-          forceRestartSafeTools: attempt.forceRestartSafeTools,
-          forceCodeModeTools: attempt.forceCodeModeTools,
           operatorAuthority,
           run: {
             ...attempt,
@@ -208,32 +231,6 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   const personalToolParticipants = operation
     ? operation.personalToolParticipants
     : createReplyTurnParticipants(direct?.personalToolOwner);
-  function assertActive() {
-    if (
-      !live ||
-      !assertAdmitted ||
-      admitted.operationalRunInstance !== instance ||
-      instance.runId !== runId
-    ) {
-      throw new Error("embedded tool authority is no longer active");
-    }
-    assertAdmitted();
-    if (turn) {
-      assertSessionControllerOperation(turn);
-    }
-    assertHostActive?.();
-    if (
-      (source && (source.agentId !== agentId || source.sessionKey !== sessionKey)) ||
-      (source?.workerTurnClaim &&
-        (source.workerTurnClaim.sessionId !== sessionId ||
-          source.workerTurnClaim.runId !== runId ||
-          !source.receiptAuthority)) ||
-      source?.receiptAuthority?.() === false ||
-      (source?.gatewayContextResolver && !source.gatewayContextResolver())
-    ) {
-      throw new Error("embedded tool authority lost its source execution claim");
-    }
-  }
   const assertReplyActive = () => {
     assertActive();
     operatorAuthority?.assertCurrent();
@@ -250,10 +247,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   const watchdogAttempt = turn
     ? turn.watchdog.attachAttempt({
         assertCurrent: () => {
-          if (!assertAdmitted) {
-            throw new Error("Attempt admission retired");
-          }
-          assertAdmitted();
+          assertAdmitted.assertScopeCurrent();
           assertSessionControllerOperation(turn);
         },
       })
@@ -265,6 +259,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   // Retained authority assertions share this scope, but do not own the run payload.
   let executeAttempt: (() => Promise<T>) | undefined = run.bind(undefined, {
     ...attempt,
+    abortSignal,
     replyOperation: turn,
     toolAuthorityFingerprint: fingerprint,
   });

@@ -191,7 +191,9 @@ describe("AppSidebar gateway footer subtitle", () => {
     setNativeGatewayTestState(twoGateways);
     const { sidebar, q } = await mountFooter();
     sidebar.connectionStatus = "reconnecting";
+    sidebar.gatewayStatus = { kind: "reconnecting" };
     await sidebar.updateComplete;
+    expect(q(".sidebar-shell__connection")?.textContent).toContain("Reconnecting");
     const card = () => q(".sidebar-identity-card");
     expect(card()?.getAttribute("data-connection-status")).toBe("reconnecting");
 
@@ -202,9 +204,11 @@ describe("AppSidebar gateway footer subtitle", () => {
     await sidebar.updateComplete;
     expect(card()?.getAttribute("data-connection-status")).toBe("connected");
     expect(card()?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Connected");
+    expect(q(".sidebar-shell__connection")).toBeNull();
 
     sidebar.connectionRecovery = false;
     await sidebar.updateComplete;
+    expect(q(".sidebar-shell__connection .gateway-status")).toBeNull();
     expect(card()?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Owner: Local Gateway, primary",
     );

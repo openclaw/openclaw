@@ -7,7 +7,7 @@ import {
 } from "../../../components/session-progress-card.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { listSubagents } from "../chat-subagent-wait.ts";
+import { listSubagents, projectProgressCardRuntime } from "../chat-subagent-wait.ts";
 import {
   SessionAutomationMobileList,
   type SessionAutomationMobileListProps,
@@ -171,6 +171,12 @@ function MobileRoot(
           props.details.selectedSession?.startedAt,
           props.details.selectedSession?.endedAt,
           props.details.runActive,
+          projectProgressCardRuntime(
+            props.details.selectedSession,
+            props.details,
+            card.updatedAt,
+            props.details.connected,
+          ),
         )
       : undefined;
   });
@@ -439,6 +445,14 @@ function mobileProgressProps(
     startedAt: details.selectedSession?.startedAt,
     endedAt: details.selectedSession?.endedAt,
     hasActiveRun: details.runActive,
+    runtime: details.progressCard
+      ? projectProgressCardRuntime(
+          details.selectedSession,
+          details,
+          details.progressCard.updatedAt,
+          details.connected,
+        )
+      : undefined,
   };
 }
 

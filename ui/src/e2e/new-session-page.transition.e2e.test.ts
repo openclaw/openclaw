@@ -443,7 +443,7 @@ suite.define(() => {
       if (captureProofEnabled) {
         await page.waitForTimeout(800);
       }
-      await button(toast, "Open").click();
+      await toast.getByRole("link", { name: "Open session", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await waitForCommittedChatRoute(page);
       await page.locator("openclaw-chat-page").waitFor();

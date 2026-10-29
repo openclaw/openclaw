@@ -474,7 +474,14 @@ describe("spawn context-engine resource custody", () => {
         expect(completeLaunchCleanup).not.toHaveBeenCalled();
       }
       expect(fixture.rollback).toHaveBeenCalledTimes(
-        ["rollback-failure", "disposal-failure", "withdrawal", "retired-draining"].includes(mode)
+        [
+          "rollback-failure",
+          "disposal-failure",
+          "withdrawal",
+          "retired-draining",
+          "shutdown-disposal-failure",
+          "shutdown-draining",
+        ].includes(mode)
           ? 1
           : 0,
       );

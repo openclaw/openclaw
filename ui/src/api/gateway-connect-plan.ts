@@ -236,6 +236,7 @@ export async function buildBrowserGatewayConnectPlan({
           "terminal-upload-path-style",
           "tool-events",
           "chat-only-assistant-text",
+          "chat-queue-status",
           "hello-health-on-demand",
           "health-summary",
           "hello-presence-self",

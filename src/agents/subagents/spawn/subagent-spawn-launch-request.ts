@@ -1,7 +1,5 @@
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { FreshChildSession } from "../../../gateway/in-process-session-run.js";
-import { MAX_RECOVERY_SOURCE_BYTES } from "../../../gateway/operator-run-recovery-source.codec.js";
-import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
@@ -93,33 +91,10 @@ export function buildSubagentLaunchRequest(params: {
     ...(params.launchAuthorization ? { authorization: params.launchAuthorization } : {}),
     timeoutMs: resolveSubagentAgentGatewayTimeoutMs(params.runTimeoutSeconds),
   };
-  const operatorRecovery = collect
-    ? captureQueuedOperatorRecoverySource(params.operatorAuthority)
-    : undefined;
-  const queuedLaunch =
-    collect && params.swarmSchedulerGroupKey
-      ? {
-          ...childLaunch,
-          // Preserve the current in-memory launch even when restart cannot retain
-          // its exact requester; recovery will report that explicit missing basis.
-          requesterRecovery: {
-            facts:
-              params.requesterFacts &&
-              Buffer.byteLength(JSON.stringify(params.requesterFacts), "utf8") >
-                MAX_RECOVERY_SOURCE_BYTES
-                ? null
-                : params.requesterFacts,
-            operator: operatorRecovery,
-          },
-          schedulerGroupKey: params.swarmSchedulerGroupKey,
-          maxConcurrent: params.swarmMaxConcurrent,
-        }
-      : undefined;
   const childEntry = params.childSession.entry;
   return {
     childLaunch,
-    queuedLaunch,
-    // Private admission facts stay out of the persisted restart descriptor.
+    // Private admission facts stay attached to the live launch.
     preparedLaunch:
       childEntry?.sessionId && childEntry.lifecycleRevision
         ? {

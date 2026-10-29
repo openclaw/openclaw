@@ -83,29 +83,21 @@ async function controls(overrides: Partial<Props>) {
     setCurrent({ ...current(), ...next });
     flush();
   };
+  const query = container.querySelector.bind(container);
   return {
     container,
     update,
     onModelSelect,
     onThinkingSelect,
     onFastModeSelect,
-    model: expectDefined(container.querySelector<HTMLElement>("[data-chat-model-select]"), "model"),
+    model: expectDefined(query<HTMLElement>("[data-chat-model-select]"), "model"),
     option: expectDefined(
-      container.querySelector<HTMLButtonElement>('[data-chat-model-option="example/other"]'),
+      query<HTMLButtonElement>('[data-chat-model-option="example/other"]'),
       "model option",
     ),
-    effort: expectDefined(
-      container.querySelector<HTMLElement>("[data-chat-thinking-select]"),
-      "effort",
-    ),
-    slider: expectDefined(
-      container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]"),
-      "slider",
-    ),
-    speed: expectDefined(
-      container.querySelector<HTMLButtonElement>("[data-chat-speed-option=on]"),
-      "speed",
-    ),
+    effort: expectDefined(query<HTMLElement>("[data-chat-thinking-select]"), "effort"),
+    slider: expectDefined(query<HTMLInputElement>("[data-chat-thinking-slider]"), "slider"),
+    speed: expectDefined(query<HTMLButtonElement>("[data-chat-speed-option=on]"), "speed"),
   };
 }
 
@@ -114,27 +106,18 @@ it.each([
   { name: "preparing", activeRunId: "active-run" },
   { name: "streaming", stream: "A reply in progress" },
 ])("edits model, reasoning, and speed preferences while $name", async (busy) => {
-  const {
-    model,
-    option,
-    effort,
-    slider,
-    speed,
-    onModelSelect,
-    onThinkingSelect,
-    onFastModeSelect,
-  } = await controls(busy);
-  expect(model.getAttribute("aria-disabled")).toBe("false");
-  expect(effort.getAttribute("aria-disabled")).toBe("false");
-  option.click();
-  expect(onModelSelect).toHaveBeenCalledWith("example/other", "main", undefined);
-  expect(slider.disabled).toBe(false);
-  slider.value = "0";
-  slider.dispatchEvent(new Event("change", { bubbles: true }));
-  expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
-  expect(speed.disabled).toBe(false);
-  speed.click();
-  expect(onFastModeSelect).toHaveBeenCalledWith("on", "main");
+  const view = await controls(busy);
+  expect(view.model.getAttribute("aria-disabled")).toBe("false");
+  expect(view.effort.getAttribute("aria-disabled")).toBe("false");
+  view.option.click();
+  expect(view.onModelSelect).toHaveBeenCalledWith("example/other", "main", undefined);
+  expect(view.slider.disabled).toBe(false);
+  view.slider.value = "0";
+  view.slider.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(view.onThinkingSelect).toHaveBeenCalledWith("low", "main");
+  expect(view.speed.disabled).toBe(false);
+  view.speed.click();
+  expect(view.onFastModeSelect).toHaveBeenCalledWith("on", "main");
 });
 
 it.each([
@@ -418,6 +401,20 @@ it("retains the Access selection without borrowing entitlement from another runt
   expect(unavailable()).toContain("unavailable");
   view.update({ requestedAccessProgram: undefined });
   expect(options()[0]?.getAttribute("aria-pressed")).toBe("true");
+  const toggle = view.container.querySelector<HTMLInputElement>(
+    ".chat-controls__access-head input",
+  )!;
+  toggle.addEventListener("click", () => view.update({ stream: "New activity frame" }), {
+    capture: true,
+    once: true,
+  });
+  toggle.click();
+  expect(onSelect).toHaveBeenCalledExactlyOnceWith("standard", "main", "daybreak_blue");
+  view.update({ requestedAccessProgram: "standard" });
+  expect(toggle.checked).toBe(false);
+  view.update({ requestedAccessProgram: undefined });
+  expect(toggle.checked).toBe(true);
+  onSelect.mockClear();
   options()[0]?.click();
   expect(onSelect).not.toHaveBeenCalled();
   view.update({ modelCatalogState: { hasSnapshot: true, status: "loading", retired: true } });

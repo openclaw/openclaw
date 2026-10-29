@@ -15,8 +15,9 @@ import { Menu } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
@@ -37,6 +38,8 @@ import { hasTranscriptAttachments } from "./chat-transcript-attachments.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-session-workspace-desktop.css";
 import { FileDisclosure } from "./file-disclosure.tsx";
+
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 function WorkspaceGroup(props: {
   label?: string;
@@ -311,8 +314,11 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
             )}
           </Show>
           <Show when={searchTruncated()}>
-            <div class="workspace-desktop__notice" role="status">
-              {t("chat.workspaceFiles.truncated")}
+            <div class="workspace-desktop__notice">
+              <div role="status">{t("chat.workspaceFiles.searchIncomplete")}</div>
+              <button type="button" class="btn btn--sm" onClick={closeSearch}>
+                {t("chat.workspaceFiles.browseFiles")}
+              </button>
             </div>
           </Show>
           <Show

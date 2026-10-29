@@ -102,6 +102,48 @@ it("keeps authored URL and session destinations out of workspace file handling",
   );
 });
 
+it("scopes authored relative file links to document readers without changing message links", () => {
+  const source = [
+    "[Evidence](evidence/log.md#details)",
+    "[Plain](evidence/log.md)",
+    "[Encoded](evidence/hash%23name.md#details)",
+    "[Parent](../summary.md)",
+    "[Extensionless](./evidence/README)",
+    "[Heading](#details)",
+    "[Query](evidence/log.md?raw=1)",
+    "[External](https://example.com/log.md#details)",
+    "[Session](/chat/main/notes/readme.md)",
+    "`evidence/log.md`",
+  ].join("\n\n");
+  const options = { fileLinks: true, sessionLinks: true };
+  const message = render(source, options);
+  const document = render(source, { ...options, documentFileLinks: true });
+  const relative = [
+    ...document.querySelectorAll<HTMLAnchorElement>("[data-file-document-relative]"),
+  ];
+  expect(relative.map((link) => link.dataset.filePath)).toEqual([
+    "evidence/log.md",
+    "evidence/log.md",
+    "evidence/hash#name.md",
+    "../summary.md",
+    "./evidence/README",
+  ]);
+  expect(relative.every((link) => !link.hasAttribute("href"))).toBe(true);
+  expect(
+    [...document.querySelectorAll("a[href]")].map((link) => link.getAttribute("href")),
+  ).toEqual([
+    "#details",
+    "evidence/log.md?raw=1",
+    "https://example.com/log.md#details",
+    "/chat/main/notes/readme.md",
+  ]);
+  expect(fileLinks(document).at(-1)?.dataset.fileDocumentRelative).toBeUndefined();
+  // The render cache must not let either context lend its link behavior to the other.
+  expect(render(source, options).innerHTML).toBe(message.innerHTML);
+  expect(message.querySelector("[data-file-document-relative]")).toBeNull();
+  expect(message.querySelector('a[href="evidence/log.md#details"]')).not.toBeNull();
+});
+
 it.each(["portal.example/service.test", "münich.de/guide.md", "example.xn--p1ai/guide.md"])(
   "never treats the domain/path reference %s as a workspace file",
   (reference) => {

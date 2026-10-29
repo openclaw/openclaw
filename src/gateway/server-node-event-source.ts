@@ -4,8 +4,8 @@ import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coer
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   runWithSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";

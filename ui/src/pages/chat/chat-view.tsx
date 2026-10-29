@@ -19,10 +19,10 @@ import { orderSessionPullRequests } from "../../lib/session-pull-request-present
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { listDismissablePendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
-import { listSubagents } from "./chat-subagent-wait.ts";
+import { listSubagents, projectProgressCardRuntime } from "./chat-subagent-wait.ts";
 import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
 import {
   renderChatComposerNotices as ChatComposerNoticesView,
@@ -80,29 +80,34 @@ type ChatViewInput = {
   getScrollToLatestElement: () => HTMLButtonElement | null;
 };
 
+// Must match the fixed height of .chat-pending-inputs--history.
+const SAVED_INPUT_HISTORY_HEIGHT_PX = 44;
+
 function ChatTranscript(input: ChatViewInput) {
+  const savedInputNavigation = <ChatSavedInputNavigation {...input} />;
+  const hasSavedInputNavigation = () =>
+    input.frame.pendingInputs &&
+    (input.frame.pendingInputs.page.nextBefore !== undefined ||
+      input.frame.pendingInputs.before !== undefined);
   return (
     <ChatThread
       props={input.frame.threadProps}
       transcript={input.props.transcript}
       bindViewport={input.bindTranscriptViewport}
+      historySupplement={
+        hasSavedInputNavigation()
+          ? {
+              content: savedInputNavigation,
+              height: SAVED_INPUT_HISTORY_HEIGHT_PX,
+            }
+          : undefined
+      }
     />
   );
 }
 
-function ChatFooterContent(
-  input: ChatViewInput & {
-    mobileComposition?: boolean;
-    activities?: ChatActivityPillsProps;
-  },
-) {
+function ChatSavedInputNavigation(input: ChatViewInput) {
   const pendingInputs = () => input.frame.pendingInputs;
-  const dismissableInputIds = () => {
-    const view = pendingInputs();
-    return input.frame.dismissPendingInputs && view
-      ? listDismissablePendingInputs(view).map((pending) => pending.id)
-      : [];
-  };
   const pendingButton = (page: "earlier" | "latest") => (
     <button
       class="btn btn--sm"
@@ -121,34 +126,25 @@ function ChatFooterContent(
     </button>
   );
   return (
+    <div class="chat-pending-inputs chat-pending-inputs--history">
+      <Show when={pendingInputs()?.page.nextBefore !== undefined}>{pendingButton("earlier")}</Show>
+      <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
+    </div>
+  );
+}
+
+function ChatFooterContent(
+  input: ChatViewInput & {
+    mobileComposition?: boolean;
+    activities?: ChatActivityPillsProps;
+  },
+) {
+  const pendingInputs = () => input.frame.pendingInputs;
+  return (
     <>
-      <Show
-        when={
-          pendingInputs() &&
-          (pendingInputs()?.error ||
-            pendingInputs()?.page.nextBefore !== undefined ||
-            pendingInputs()?.before !== undefined ||
-            dismissableInputIds().length)
-        }
-      >
+      <Show when={pendingInputs()?.error}>
         <div class="chat-pending-inputs" role="status">
-          <Show when={pendingInputs()?.error}>
-            <span>{pendingInputs()?.error}</span>
-          </Show>
-          <Show when={pendingInputs()?.page.nextBefore !== undefined}>
-            {pendingButton("earlier")}
-          </Show>
-          <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
-          <Show when={dismissableInputIds().length}>
-            <button
-              class="btn btn--sm"
-              type="button"
-              aria-label={t("chat.pendingInputs.dismissAllLabel")}
-              onClick={() => input.frame.dismissPendingInputs?.(dismissableInputIds())}
-            >
-              {t("chat.pendingInputs.dismissAll")}
-            </button>
-          </Show>
+          <span>{pendingInputs()?.error}</span>
         </div>
       </Show>
       <Show
@@ -250,6 +246,12 @@ function ChatComposerView(input: ChatViewInput) {
               startedAt: input.props.selectedSession?.startedAt,
               endedAt: input.props.selectedSession?.endedAt,
               hasActiveRun: isChatRunWorking(input.props),
+              runtime: projectProgressCardRuntime(
+                input.props.selectedSession,
+                input.props,
+                card.updatedAt,
+                input.props.connected,
+              ),
               refresh: input.props.progressCardRefresh?.state,
               onOpen: destinations.onOpenProgress,
             }

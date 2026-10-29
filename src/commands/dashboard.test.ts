@@ -227,7 +227,7 @@ it("does not copy or open when gateway readiness fails", async () => {
   await dashboardCommand(runtime);
 
   expect(readConfigFileSnapshot).toHaveBeenCalledTimes(1);
-  expectNoCalls(copyToClipboard, openUrl, issueDeviceBootstrapToken);
+  expectHandoffFailure(copyToClipboard, openUrl, issueDeviceBootstrapToken);
 });
 
 it("fails closed when a browser pairing link cannot be issued", async () => {
@@ -235,7 +235,7 @@ it("fails closed when a browser pairing link cannot be issued", async () => {
 
   await dashboardCommand(runtime);
 
-  expectNoCalls(copyToClipboard, openUrl);
+  expectHandoffFailure(copyToClipboard, openUrl);
   expect(runtime.error).toHaveBeenCalledWith(
     "Could not create a one-time browser pairing link: state store unavailable",
   );
@@ -259,9 +259,10 @@ function mockAliasOwnership(host: string, loopbackPid = 4242) {
   });
 }
 
-function expectNoCredentials() {
-  expectNoCalls(copyToClipboard, issueDeviceBootstrapToken);
+function expectHandoffFailure(...untouched: unknown[]) {
+  expectNoCalls(...untouched);
   expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
+  expect(runtime.exit).toHaveBeenCalledWith(1);
 }
 
 describe("verified custom-bind handoff", () => {
@@ -293,8 +294,7 @@ describe("verified custom-bind handoff", () => {
         inspectPortUsage.mockRejectedValue(new Error("inspection unavailable"));
       }
       await dashboardCommand(runtime, cause === "different process" ? { noOpen: true } : {});
-      expectNoCredentials();
-      expect(openUrlPrivately).not.toHaveBeenCalled();
+      expectHandoffFailure(copyToClipboard, issueDeviceBootstrapToken, openUrlPrivately);
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("refusing to copy or open an authenticated URL"),
       );
@@ -314,11 +314,10 @@ describe("verified custom-bind handoff", () => {
       }
       await dashboardCommand(runtime);
       const untouched = missingDocument ? [copyToClipboard, openUrlPrivately] : [gatherStatus];
-      expectNoCalls(issueDeviceBootstrapToken, ...untouched);
+      expectHandoffFailure(issueDeviceBootstrapToken, ...untouched);
       expect(runtime.error).toHaveBeenCalledWith(
         missingDocument ? reason : expect.stringContaining("openclaw doctor --fix"),
       );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
     },
   );
 
@@ -347,7 +346,6 @@ describe("verified custom-bind handoff", () => {
       { url: "ws://10.0.0.6:18789" },
     ]);
     expect(startGateway).toHaveBeenCalledExactlyOnceWith({ json: false });
-    expectNoCredentials();
-    expectNoCalls(inspectPortUsage, runtime.exit);
+    expectHandoffFailure(copyToClipboard, issueDeviceBootstrapToken, inspectPortUsage);
   });
 });

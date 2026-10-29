@@ -18,6 +18,7 @@ import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-lo
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
+import type { SqliteSchemaErrorContext } from "../infra/sqlite-user-version.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import {
   assertExistingDatabaseIdentity,
@@ -79,6 +80,7 @@ function retireReader(reader: RetainedReader): void {
     return;
   }
   clearTimeout(reader.idleTimer);
+  reader.idleTimer = undefined;
   reader.retiring = true;
   reader.connection.close();
   retainedReaders.delete(reader.identity.key);
@@ -96,8 +98,7 @@ function scheduleReaderRetirement(reader: RetainedReader): void {
   ) {
     return;
   }
-  clearTimeout(reader.idleTimer);
-  reader.idleTimer = runInDetachedAsyncContext(() =>
+  reader.idleTimer ??= runInDetachedAsyncContext(() =>
     setTimeout(() => {
       try {
         retireReader(reader);
@@ -105,9 +106,9 @@ function scheduleReaderRetirement(reader: RetainedReader): void {
         process.emitWarning(`Idle shared-state reader cleanup failed: ${String(error)}`);
         scheduleReaderRetirement(reader);
       }
-    }, SQLITE_IDLE_HANDLE_TTL_MS),
+    }, SQLITE_IDLE_HANDLE_TTL_MS).unref(),
   );
-  reader.idleTimer.unref?.();
+  reader.idleTimer.refresh();
 }
 
 /** The host joins this receipt before allowing replacement or deletion of live state. */
@@ -168,8 +169,7 @@ function borrowStateReadConnection(
   }
   const retained = reader;
   observeOpenClawDatabaseMaintenanceResource(retained);
-  retained.borrowed = true;
-  clearTimeout(retained.idleTimer);
+  retained.borrowed = true; // Borrowing and settlement cannot yield to the idle timer.
   return {
     status: "available",
     value: {
@@ -201,12 +201,15 @@ export function assertStateReadSchema(
   database: EngineConnection,
   pathname: string,
   integrityPolicy?: OpenClawStateIntegrityPolicy,
+  context: SqliteSchemaErrorContext = "runtime",
 ): void {
   assertStateReadSchemaForPolicy(
     database,
     pathname,
     isExistingOpenClawStateSchema(pathname, database),
     integrityPolicy,
+    undefined,
+    context,
   );
 }
 
@@ -264,18 +267,20 @@ export function readOpenClawStateReadOnlyLocation<T>(
     }
     // Scope and path policy are authority, not ordinary schema SQL failure.
     const existingSchema = isExistingOpenClawStateSchema(pathname, opened.database.db);
+    const context = openStateSchemaReadAdmission ? "doctor-maintenance" : "runtime";
     try {
       let operationStarted = false;
       const snapshot = postgresStateReadSnapshot.getStore();
       const read = () =>
         runSqliteReadOperationSync(opened.database.db, () => {
-          admitStateSchemaFacts(opened.database.db, pathname);
+          admitStateSchemaFacts(opened.database.db, pathname, context);
           assertStateReadSchemaForPolicy(
             opened.database.db,
             pathname,
             existingSchema,
             undefined,
             readContentVersionRow,
+            context,
           );
           operationStarted = true;
           return operation(opened.database);

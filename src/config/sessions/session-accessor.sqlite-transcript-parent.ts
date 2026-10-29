@@ -32,7 +32,7 @@ import {
   preparedAssistantMessagesPreserveTurn,
   resolveTranscriptAppendParent,
 } from "./transcript-append-parent.js";
-import { transcriptEventNavigationSql, transcriptPredicateSql } from "./transcript-payload.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 import {
   isSessionTranscriptLeafControl,
@@ -152,7 +152,6 @@ export function canRebasePreparedAssistantInTransaction(
           "identity.parent_id",
           "active.message_position",
           "rewrite.generation",
-          transcriptPredicateSql(database.db, "navigation_valid", "event").as("navigation_valid"),
           jsonObjectFieldsForScan(database.db, transcriptEventNavigationSql(database.db, "event"), {
             message: {
               role: true,
@@ -171,8 +170,8 @@ export function canRebasePreparedAssistantInTransaction(
     ),
   );
   const newerFacts = newerRoles.map((row) => {
-    assertTranscriptNavigationValid(row.navigation_valid);
     const event = scanJsonObjectFields(row.message_json, ["message"]);
+    // SQLite's depth limit does not make a valid navigation envelope corrupt.
     assertTranscriptNavigationValid(event.valid ? 1 : 0);
     const message = event.first.get("message");
     const fields = scanJsonObjectFields(message?.kind === "object" ? message.text : "{}", [

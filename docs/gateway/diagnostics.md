@@ -203,7 +203,7 @@ known task segment from RPC handlers, scheduled jobs, diagnostic phases, timelin
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
 does not count as task execution. Prepared session-row reads carry the enclosing
 operation across waits and append `session-rows:select`, `session-rows:prepare`, or
-`session-rows:consume`; agent roster batches append `agent-roster`. For example,
+`session-rows:consume`; roster fact batches preserve their caller's task label. For example,
 `gateway:rpc:sessions.list:session-rows:select` identifies list selection, and
 scheduled work retains its `scheduler:<lane>:<task>` prefix. Labels contain only
 code-owned operation names, never session keys or request content. Labels cover
@@ -234,8 +234,9 @@ and can exceed `1`. See
 
 `sessions.patch` and `sessions.patchMany` calls lasting at least one second add
 an info-level `slow session patch` record even when diagnostics are disabled.
-The message includes total elapsed milliseconds, the method, and fixed phase
-durations, for example `slow session patch 1176ms method=sessions.patch catalog=1100ms response=20ms`.
+The message includes total elapsed milliseconds, the method, target count (at most
+100), up to eight sorted mutation field names (plus an omitted-field count), and fixed phase
+durations, for example `slow session patch 1176ms method=sessions.patch targets=1 fields=unread catalog=1100ms response=20ms`.
 Replacement snapshots use the metadata reader for bounded exact-key selections
 and the maintenance reader for larger or label-owner selections, independently of
 the transcript-history reader. Snapshot time includes worker preparation and reads.
@@ -267,6 +268,14 @@ These are elapsed times, including waits, with fixed phase names and no session
 keys or request values. Worktree preparation measures only work required before
 the response; provisioning already deferred to an initial turn stays with that
 turn's lifecycle.
+
+At trace log level, chat startup diagnostics break `detail.attempt.system-prompt`
+into sandbox policy,
+tool catalog text, session entry, runtime facts, reference paths, provider
+contributions, memory and watched-session context, project memory, TTS preferences,
+rendering, and reporting. These `detail.attempt.system-prompt.*` phases measure
+elapsed preparation time, including awaited work, without recording prompt content.
+The parent and nested phase totals overlap; do not add them together as CPU time.
 
 Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
@@ -855,13 +864,23 @@ close/checkpoint operations off the main thread. Active operations keep their
 custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
 
+Transcript history and search lanes retain one warm reader for up to five idle
+minutes. Other transcript lanes retire after 90 idle seconds to span minute-spaced
+bursts, keeping their independent request ordering and growing again on demand. Whole-lane idle cleanup
+uses the existing rotation path, so its retirement reason is `rotation`.
+
 When a task pool recreates an idle-retired Worker within five minutes, it keeps
 one replacement warm for five minutes of inactivity. Other slots retain their
-normal idle timeout. Git metadata readers use a two-minute idle timeout so the
-one-minute PR polling and repository-discovery refreshes can reuse both readers.
-Node Code Mode likewise retains at most one completed
-Worker for five minutes, reusing it only when its runtime entry and heap limit
-match. Code Mode relies on V8's normal garbage collection rather than inspector
+normal idle timeout. Git content and workspace-computation pools instead keep their
+most recently used idle worker warm after their first task. Git metadata, summary,
+worktree preparation, and maintenance pools keep their existing expiry because they
+retain repository observations. All surplus Git workers keep their existing timeout.
+Node Code Mode keeps one compatible completed worker warm for each host,
+runtime entry, and heap limit within its eight-worker warm-cache budget; surplus
+workers expire after 30 seconds. Neither owner starts workers before use.
+Critical memory pressure can evict these warm floors, and normal health,
+rotation, drain, and shutdown cleanup still retires them.
+Code Mode relies on V8's normal garbage collection rather than inspector
 collection at idle task boundaries. Other warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.

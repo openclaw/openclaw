@@ -95,7 +95,7 @@ describe("Gateway config selection before migration admission", () => {
       const { ExitError } = await import("./src/runtime.ts");
       const runtime = { log() {}, error: console.error, exit(code) { throw new ExitError(code); } };
       const params = { opts: {}, runtime };
-      await runDoctorConfigPreflight({ repairPrefixedConfig: true, doctorOnlyStateMigrations: true });
+      await runDoctorConfigPreflight({ repairPrefixedConfig: true, migrateState: false });
       const repairedBytes = fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8");
       if (!await selectGatewayRunEnvironment(params)) throw new Error("selection refused");
       if (!await prepareGatewayRunBootstrap(params)) throw new Error("preparation refused");

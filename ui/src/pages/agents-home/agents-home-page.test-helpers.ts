@@ -18,7 +18,7 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { ClawsPage } from "../claws/page.tsx";
+import { TemplatesPage } from "../templates/page.tsx";
 
 const roster: AgentsListResult = {
   defaultId: "harbor",
@@ -43,9 +43,9 @@ export const workflowOperator = {
 } as const;
 
 type PageOptions = {
-  clawsEnabled?: boolean;
+  templatesEnabled?: boolean;
   pathname?: string;
-  clawIconUrl?: string;
+  templateIconUrl?: string;
   workspaceFileNames?: string[];
   riskConsentRequired?: boolean;
   reviewRequiredOnce?: "plugin" | "skill";
@@ -64,7 +64,9 @@ export function createPage(options: PageOptions = {}) {
     state: {
       configSnapshot: {
         sourceConfig: {
-          gateway: { controlUi: { experimental: { claws: options.clawsEnabled ?? false } } },
+          gateway: {
+            controlUi: { experimental: { templates: options.templatesEnabled ?? false } },
+          },
         },
       },
     },
@@ -105,7 +107,7 @@ export function createPage(options: PageOptions = {}) {
     if (method === "sessions.subscribe") {
       return { subscribed: true };
     }
-    if (method === "claws.catalog.search") {
+    if (method === "templates.catalog.search") {
       const query = "query" in args ? String(args.query).trim().toLowerCase() : "";
       const category = "category" in args ? String(args.category) : "";
       const featured = "featured" in args ? Boolean(args.featured) : false;
@@ -117,17 +119,17 @@ export function createPage(options: PageOptions = {}) {
             !workflowOperator.displayName.toLowerCase().includes(query) &&
             !workflowOperator.packageName.toLowerCase().includes(query))
             ? []
-            : [{ ...workflowOperator, iconUrl: options.clawIconUrl }],
+            : [{ ...workflowOperator, iconUrl: options.templateIconUrl }],
       };
     }
-    if (method === "claws.catalog.detail") {
+    if (method === "templates.catalog.detail") {
       const instructions = (options.workspaceFileNames ?? ["AGENTS.md", "SOUL.md", "USER.md"]).map(
         (name) => ({ name, source: `workspace/${name}` }),
       );
       return {
         detail: {
           ...workflowOperator,
-          iconUrl: options.clawIconUrl,
+          iconUrl: options.templateIconUrl,
           version: "1.2.0",
           agentName: "Workflow Operator",
           workspaceFiles: instructions.length,
@@ -144,14 +146,14 @@ export function createPage(options: PageOptions = {}) {
         },
       };
     }
-    if (method === "claws.catalog.preview") {
+    if (method === "templates.catalog.preview") {
       const name = "name" in args ? String(args.name) : "";
       return { preview: { kind: "instruction", name, content: `# ${name}` } };
     }
     if (method === "plugins.list") {
       return { plugins: [], diagnostics: [], mutationAllowed: true };
     }
-    if (method === "claws.add.plan") {
+    if (method === "templates.add.plan") {
       return {
         operation: "add",
         planIntegrity: "sha256:reviewed-plan",
@@ -188,7 +190,7 @@ export function createPage(options: PageOptions = {}) {
             : [],
       };
     }
-    if (method === "claws.add.apply") {
+    if (method === "templates.add.apply") {
       await options.applyWait;
       const acknowledged = "acknowledgeClawHubRisk" in args && args.acknowledgeClawHubRisk === true;
       if (options.riskConsentRequired && !acknowledged) {
@@ -210,7 +212,7 @@ export function createPage(options: PageOptions = {}) {
         throw new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "Review the included dependencies before adding.",
-          details: { code: "CLAW_REVIEW_REQUIRED", kind: options.reviewRequiredOnce },
+          details: { code: "TEMPLATE_REVIEW_REQUIRED", kind: options.reviewRequiredOnce },
         });
       }
       addCount += 1;
@@ -228,7 +230,12 @@ export function createPage(options: PageOptions = {}) {
       client,
       phase: "connected",
       hello: gatewayHelloForMethods(
-        ["openclaw.chat", "claws.catalog.search", "claws.catalog.detail", "claws.add.apply"],
+        [
+          "openclaw.chat",
+          "templates.catalog.search",
+          "templates.catalog.detail",
+          "templates.add.apply",
+        ],
         ["operator.read", "operator.admin"],
       ),
       assistantAgentId: "harbor",
@@ -254,10 +261,10 @@ export function createPage(options: PageOptions = {}) {
   const solidProvider = createSolidApplicationContextProvider(context);
   const view = mountSolid(
     () =>
-      createComponent(ClawsPage, {
+      createComponent(TemplatesPage, {
         routeData: {
           basePath: "",
-          location: { pathname: options.pathname ?? "/claws", search: "", hash: "" },
+          location: { pathname: options.pathname ?? "/templates", search: "", hash: "" },
         },
       }),
     { wrapper: solidProvider.wrapper },
@@ -277,8 +284,8 @@ export function createPage(options: PageOptions = {}) {
     ensureConfigLoaded,
     setPhase: (phase: ApplicationGatewaySnapshot["phase"]) =>
       source.publish({ ...source.gateway.snapshot, phase }),
-    setClawsEnabled: (enabled: boolean) => {
-      runtimeConfig.state.configSnapshot.sourceConfig.gateway.controlUi.experimental.claws =
+    setTemplatesEnabled: (enabled: boolean) => {
+      runtimeConfig.state.configSnapshot.sourceConfig.gateway.controlUi.experimental.templates =
         enabled;
       for (const listener of runtimeConfigListeners) {
         listener();

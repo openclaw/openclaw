@@ -18,7 +18,10 @@ import {
   type ConnectionSessionRows,
 } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
-import { createSessionRowDeltaDiffer } from "./session-row-delta-fields.js";
+import {
+  createSessionRowDeltaDiffer,
+  prepareSessionRowDeltaFields,
+} from "./session-row-delta-fields.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -51,6 +54,7 @@ function prepareEnvelopeSerialization(
   payload: Record<string, unknown>,
   separateMessage: boolean,
   fields: [string, unknown][],
+  hasAncestors: boolean,
 ) {
   const segments: Array<{ prefix: string; field: "ancestorSessions" | "ancestorSessionRefs" }> = [];
   const entries: [string, unknown][] = [];
@@ -64,7 +68,7 @@ function prepareEnvelopeSerialization(
     if (field === "session" || (field === "message" && separateMessage)) {
       continue;
     }
-    if (field === "ancestorSessions" || field === "ancestorSessionRefs") {
+    if (hasAncestors && (field === "ancestorSessions" || field === "ancestorSessionRefs")) {
       segments.push({ prefix: prefix + flush(), field });
       prefix = "";
     } else {
@@ -218,7 +222,12 @@ export function prepareSessionEventProjection(
         const hiddenAncestors: Array<{ key: string; histories: Map<object, object> }> = [];
         const ancestorRows = ancestors?.every((ancestor) => projection.isCurrent(ancestor))
           ? ancestors.flatMap((ancestor) => {
-              if (presentation.sharing.entryFilter?.(ancestor.key, ancestor.entry) === false) {
+              const target = presentation.target({
+                key: ancestor.key,
+                agentId: ancestor.agentId,
+                storePath: ancestor.storeTarget.storePath,
+              });
+              if (!target || !presentation.sharing.canReadTarget(target)) {
                 hiddenAncestors.push({ key: ancestor.key, histories: new Map() });
                 return [];
               }
@@ -235,7 +244,6 @@ export function prepareSessionEventProjection(
         };
         audiences.set(audienceKey, audience);
       }
-      const { row } = audience;
       const rowDeltas = hasGatewayClientCap(
         client.connect.caps,
         GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
@@ -250,6 +258,10 @@ export function prepareSessionEventProjection(
       const deliveries = audience.deliveries[rowDeltas ? 1 : 0];
       let delivery = deliveries.get(references.history);
       if (!delivery) {
+        const { row } = audience;
+        if (rowDeltas) {
+          prepareSessionRowDeltaFields(row, record.materialized.row);
+        }
         const plan = references.prepareDelivery(
           row,
           audience.ancestors,
@@ -296,10 +308,17 @@ export function prepareSessionEventProjection(
           variants: [],
           envelope,
           plan,
-          serializeSession: () =>
-            (sessionJSON ??= plan.rows
-              ? JSON.stringify(plan.rows.wire[0])
-              : serializeSessionRow(row)),
+          serializeSession: () => {
+            if (sessionJSON === undefined) {
+              const encoded = serializeSessionRow(row);
+              const wire = plan.rows?.wire[0];
+              // Patches already carry their encoding; full wrappers vary only by history.
+              sessionJSON = wire
+                ? `${JSON.stringify({ key: wire.key, agentId: wire.agentId, version: wire.version }).slice(0, -1)},"full":${encoded}${"retain" in wire ? ',"retain":false' : ""}}`
+                : encoded;
+            }
+            return sessionJSON;
+          },
           delivered: (viewer) => connection.references(viewer).deliver(plan),
         };
         deliveries.set(references.history, delivery);
@@ -311,6 +330,7 @@ export function prepareSessionEventProjection(
       const variant = Number(fieldRefs) + (omitMessage ? 2 : 0);
       let projected = delivery.variants[variant];
       if (!projected) {
+        const { row } = audience;
         const envelope = delivery.envelope;
         let template = envelope.variants[variant];
         const reused = template !== undefined;
@@ -393,6 +413,7 @@ export function prepareSessionEventProjection(
                 template.payload,
                 Boolean(message),
                 envelopeFields,
+                Boolean(audience.ancestors?.length),
               ))
             : undefined;
         const serializeSession = delivery.serializeSession;

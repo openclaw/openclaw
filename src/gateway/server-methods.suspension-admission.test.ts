@@ -156,14 +156,14 @@ describe("gateway request suspension admission", () => {
           core: true,
         });
       const initial = await prepare();
-      expect(initial).toHaveBeenCalledWith(true, expect.objectContaining({ status: "draining" }));
+      expect(initial).toHaveBeenCalledWith(true, expect.objectContaining({ status: "ready" }));
       const fenced = read();
       await fenced.request;
       expectRejected(fenced.respond);
       await vi.advanceTimersByTimeAsync(30_000);
       if (renew) {
         const renewal = await prepare();
-        expect(renewal).toHaveBeenCalledWith(true, expect.objectContaining({ status: "draining" }));
+        expect(renewal).toHaveBeenCalledWith(true, expect.objectContaining({ status: "ready" }));
       }
       await vi.advanceTimersByTimeAsync(15_000);
       const reopened = read();

@@ -77,25 +77,6 @@ export function createActivityPageState(context: ApplicationContext) {
     sessionActivity,
   }));
   publish = projection.publish;
-  function setRouteLocation(location: RouteLocation | undefined) {
-    routeLocation = location;
-    routeData = location
-      ? resolveActivityRouteData(
-          location.search,
-          activityPersonFromPath(location.pathname, context.basePath),
-        )
-      : undefined;
-    if (location && routeData) {
-      presentedRoute = { location, data: routeData };
-    }
-    // Receipt focus must not retry a failed inspection of the same evidence page.
-    if (inspectorRequestKey(routeData) !== inspectorSelectorKey) {
-      syncRunInspector(context.gateway, context.gateway.snapshot);
-    }
-    syncSessionActivity();
-    reconcileSessions();
-  }
-
   function reconcileSessions() {
     if (!active) {
       return;
@@ -360,42 +341,6 @@ export function createActivityPageState(context: ApplicationContext) {
     }
   }
 
-  function loadMoreInspectorPage(kind: "executions" | "decisions") {
-    const route = routeData;
-    const gateway = context.gateway;
-    const snapshot = gateway.snapshot;
-    const inspectorState = runInspector;
-    if (
-      route?.mode !== "run" ||
-      !route.selector ||
-      snapshot.phase !== "connected" ||
-      !snapshot.client ||
-      inspectorState.status !== "ready"
-    ) {
-      return;
-    }
-    const available =
-      kind === "executions"
-        ? route.selector.kind === "run" &&
-          inspectorState.executionPageStatus !== "loading" &&
-          inspectorState.result.identity.state === "ambiguous" &&
-          inspectorState.result.nextExecutionCursor
-        : inspectorState.decisionPageStatus !== "loading" &&
-          inspectorState.result.identity.state === "present" &&
-          inspectorState.result.nextDecisionCursor;
-    if (available) {
-      void loadRunInspector(gateway, snapshot.client, route.selector, inspectorState, kind);
-    }
-  }
-
-  function restartRunInspector() {
-    const route = routeData;
-    if (route?.mode !== "run" || !route.selector) {
-      return;
-    }
-    context.navigate("activity", { search: activityRunInspectorSearch(route.selector) });
-  }
-
   function applyGatewayEvent(gateway: ApplicationContext["gateway"], event: GatewayEventFrame) {
     if (context.gateway !== gateway) {
       return;
@@ -439,10 +384,65 @@ export function createActivityPageState(context: ApplicationContext) {
     read: projection.read,
     revision: projection.revision,
     subscribe: projection.subscribe,
-    setRouteLocation,
+    setRouteLocation(location: RouteLocation | undefined) {
+      routeLocation = location;
+      routeData = location
+        ? resolveActivityRouteData(
+            location.search,
+            activityPersonFromPath(location.pathname, context.basePath),
+          )
+        : undefined;
+      if (location && routeData) {
+        presentedRoute = { location, data: routeData };
+      }
+      // Receipt focus must not retry a failed inspection of the same evidence page.
+      if (inspectorRequestKey(routeData) !== inspectorSelectorKey) {
+        syncRunInspector(context.gateway, context.gateway.snapshot);
+      }
+      syncSessionActivity();
+      reconcileSessions();
+    },
     syncSessionActivity,
     syncRunInspector,
-    loadMoreInspectorPage,
-    restartRunInspector,
+    loadMoreInspectorPage(kind: "executions" | "decisions") {
+      const route = routeData;
+      const inspectorGateway = context.gateway;
+      const snapshot = inspectorGateway.snapshot;
+      const inspectorState = runInspector;
+      if (
+        route?.mode !== "run" ||
+        !route.selector ||
+        snapshot.phase !== "connected" ||
+        !snapshot.client ||
+        inspectorState.status !== "ready"
+      ) {
+        return;
+      }
+      const available =
+        kind === "executions"
+          ? route.selector.kind === "run" &&
+            inspectorState.executionPageStatus !== "loading" &&
+            inspectorState.result.identity.state === "ambiguous" &&
+            inspectorState.result.nextExecutionCursor
+          : inspectorState.decisionPageStatus !== "loading" &&
+            inspectorState.result.identity.state === "present" &&
+            inspectorState.result.nextDecisionCursor;
+      if (available) {
+        void loadRunInspector(
+          inspectorGateway,
+          snapshot.client,
+          route.selector,
+          inspectorState,
+          kind,
+        );
+      }
+    },
+    restartRunInspector() {
+      const route = routeData;
+      if (route?.mode !== "run" || !route.selector) {
+        return;
+      }
+      context.navigate("activity", { search: activityRunInspectorSearch(route.selector) });
+    },
   };
 }

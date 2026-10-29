@@ -302,7 +302,6 @@
   padding: 6px;
   border: 1px solid var(--overlay-border);
   border-radius: 8px;
-  background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
 }
 
@@ -907,10 +906,6 @@
     display: none;
   }
 
-  & .chat-pane__sharing-access-option[aria-checked="true"] {
-    background: var(--menu-selected);
-  }
-
   & .chat-pane__sharing-back {
     min-height: 32px;
     margin-bottom: 4px;
@@ -1197,12 +1192,12 @@
 
   &::before {
     top: 0;
-    background: linear-gradient(to bottom, var(--bg-elevated), transparent);
+    background: linear-gradient(to bottom, var(--popover), transparent);
   }
 
   &::after {
     bottom: 0;
-    background: linear-gradient(to top, var(--bg-elevated), transparent);
+    background: linear-gradient(to top, var(--popover), transparent);
   }
 
   &:has([data-at-start="false"])::before,

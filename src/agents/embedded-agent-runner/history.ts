@@ -1,6 +1,10 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveChannelEntryMatchWithFallback } from "../../channels/channel-config.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -171,9 +175,15 @@ export function getHistoryLimitFromSessionKey(
   if (kind === "direct") {
     // An explicit account `dms` map replaces the root map under the account
     // merge contract, so pick the owning map before indexing. Falling back per
-    // entry would leak root per-peer overrides into that account.
+    // entry would leak root per-peer overrides into that account. Session peers
+    // are lowercase, but operators key `dms` by native ids such as Slack `U…`
+    // ids, so match case-insensitively after an exact key.
     const perDmLimit = userId
-      ? (accountConfig?.dms ?? providerConfig.dms)?.[userId]?.historyLimit
+      ? resolveChannelEntryMatchWithFallback({
+          entries: accountConfig?.dms ?? providerConfig.dms,
+          keys: [userId],
+          normalizeKey: normalizeLowercaseStringOrEmpty,
+        }).entry?.historyLimit
       : undefined;
     return perDmLimit !== undefined
       ? perDmLimit

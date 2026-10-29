@@ -18,9 +18,9 @@ import {
 import { makeTerminalInput } from "./terminal-resolution.test-support.js";
 
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";
 const REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+  "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";
 
 describe("resolveSettledTurnFinalizationRequest", () => {
   it.each([

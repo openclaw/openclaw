@@ -92,9 +92,8 @@ vi.mock("./http-utils.js", () => ({
 
 // mock-isolation: HTTP history fixtures control visibility and target replacement during awaited reads.
 vi.mock("./session-sharing.js", () => ({
-  prepareProjectedSessionSharing: ({ client }: { client: unknown }) => ({
-    entryFilter: client ? () => fixture.visible : undefined,
-  }),
+  createSessionListEntryFilter: ({ client }: { client: unknown }) =>
+    client ? () => fixture.visible : undefined,
 }));
 
 // mock-isolation: Revocation tests retain synthetic mutation facts without admitting a physical store.

@@ -257,7 +257,7 @@ suite.define(() => {
         await page
           .getByText("Synthetic final reply: the report is ready.", { exact: true })
           .waitFor();
-        await page.getByText("Worked for 3 minutes", { exact: true }).waitFor();
+        await page.getByText("Done in 3 minutes", { exact: true }).waitFor();
         await page.locator(".chat-reply-attribution__name").filter({ hasText: "Avery" }).waitFor();
         const progress = await openChatTaskProgress(page);
         await progress
@@ -302,7 +302,7 @@ suite.define(() => {
                 pane?.querySelector(".chat-pane__session-title-text")?.textContent?.trim() ?? null,
               top: thread.scrollTop,
               max: thread.scrollHeight - thread.clientHeight,
-              duration: thread.textContent.includes("Worked for 3 minutes"),
+              duration: thread.textContent.includes("Done in 3 minutes"),
               reply: Array.from(thread.querySelectorAll(".chat-reply-attribution__name")).some(
                 (element) => element.textContent?.trim() === "Avery",
               ),
@@ -393,11 +393,15 @@ suite.define(() => {
         expect(titleWrites?.[0]?.title).toBe("expected-title");
         expect(titleWrites?.some((event) => event.title === "New session")).toBe(false);
         expectFrames(samples, session.label);
+        expect(await gateway.getRequests("sessions.messages.unsubscribe")).toHaveLength(0);
         await gateway.waitForRequest("connect");
         await page.evaluate(() => {
           window.coldLoadReconcileStart = window.coldLoadSamples?.length ?? 0;
           window.coldLoadTitleTrace?.mark("reconcile");
         });
+        // Cached presentation must not send subscription traffic before hello admission.
+        expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.messages.unsubscribe")).toHaveLength(0);
         await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("chat.startup");
         await gateway.waitForRequest("progressCard.get");

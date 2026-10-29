@@ -162,7 +162,7 @@ export function resolveExplicitProviderNoAuth(params: {
 
 /** Clears auth after the caller has merged all headers for a no-auth request. */
 export function applyLocalNoAuthHeaders(
-  api: string,
+  api: string | undefined,
   apiKey: string | undefined,
   headers: ModelRequestHeaders | undefined,
 ): ModelRequestHeaders | undefined {

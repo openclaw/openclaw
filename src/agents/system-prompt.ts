@@ -694,7 +694,7 @@ export function buildAgentSystemPrompt(params: {
     ],
     renderOpenClawToolWorkflowHints &&
       subagentStatusTools.length > 0 &&
-      `Never loop-poll ${subagentStatusTools.map((name) => (name === "subagents" ? "`subagents list`" : `\`${name}\``)).join("/")}.${availableTools.has("sessions_yield") ? " Announcing children: Wait with `sessions_yield`." : ""} Status only on-demand/intervention/debug/request.`,
+      `Never loop-poll ${subagentStatusTools.map((name) => (name === "subagents" ? "`subagents list`" : `\`${name}\``)).join("/")}.${availableTools.has("sessions_yield") && !inTurnCollectionGuidance ? " Announcing children: Wait with `sessions_yield`." : ""} Status only on-demand/intervention/debug/request.`,
     renderOpenClawToolWorkflowHints &&
       sessionLookupTools.length > 0 &&
       `Asked about another chat/group/session not in context: check ${sessionLookupTools.map((name) => `\`${name}\``).join("/")} before claiming no access.`,

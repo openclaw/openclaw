@@ -13,7 +13,11 @@ import {
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { activeWorkspaceHashContext, workspaceStatIdentity } from "./workspace-hash-memo.js";
+import {
+  activeWorkspaceHashContext,
+  workspaceCtimeIsReusable,
+  workspaceStatIdentity,
+} from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
   MAX_WORKSPACE_INVENTORY_PATH_BYTES,
@@ -94,6 +98,7 @@ async function readWorkspaceFile(
   params: WorkspaceFileRead & { contents: boolean },
 ): Promise<WorkspaceFileSnapshot | WorkspaceFileContents> {
   const { expectedPath, maxBytes, root, signal } = params;
+  const startedAtMs = Date.now();
   signal?.throwIfAborted();
   const handle = await fs.open(
     expectedPath,
@@ -115,7 +120,8 @@ async function readWorkspaceFile(
       return { type: "unsupported" };
     }
     const identity = workspaceStatIdentity(owner, before);
-    let sha256 = params.contents ? undefined : hashMemo?.get(identity);
+    const reusable = workspaceCtimeIsReusable(before.ctimeNs, startedAtMs);
+    let sha256 = params.contents || !reusable ? undefined : hashMemo?.get(identity);
     let size = Number(before.size);
     if (sha256) {
       if (metrics) {
@@ -157,7 +163,9 @@ async function readWorkspaceFile(
     if (after.size !== BigInt(size) || workspaceStatIdentity(owner, after) !== identity) {
       throw new Error("Gateway workspace file changed while it was being read");
     }
-    hashMemo?.set(identity, sha256);
+    if (reusable) {
+      hashMemo?.set(identity, sha256);
+    }
     params.onIdentity?.(identity);
     const snapshot = {
       type: "file" as const,
@@ -190,9 +198,11 @@ export async function scanActualWorkspaceManifest(
     reuseFile?: (
       entryPath: string,
       identity: string,
+      stats: Pick<BigIntStats, "dev" | "ino" | "size" | "ctimeNs">,
     ) => Extract<WorkerWorkspaceManifestEntry, { type: "file" }> | undefined;
   },
 ): Promise<void> {
+  const startedAtMs = Date.now();
   params.signal?.throwIfAborted();
   let root: string;
   let isStagedInput: ReturnType<typeof createStagedInputPathMatcher>;
@@ -244,22 +254,25 @@ export async function scanActualWorkspaceManifest(
   };
   const filePaths: string[] = [];
   const hashContext = activeWorkspaceHashContext();
+  const scanConcurrency = 4;
+  const discoveryBatchSize = 32;
+  // Nested discovery batches must not replace their first failure with a later caller abort.
+  let taskFailureWasFirst = false;
   const runScans = async (
     start: number,
     end: number,
     scan: (index: number) => Promise<void>,
   ): Promise<void> => {
     let next = start;
-    let taskFailureWasFirst = false;
     const result = await runTasksWithConcurrency({
       // Keep the queued graph bounded too: each worker claims an index before
       // awaiting I/O, rather than retaining one task per inventory entry.
-      tasks: Array.from({ length: Math.min(4, end - start) }, () => async () => {
+      tasks: Array.from({ length: Math.min(scanConcurrency, end - start) }, () => async () => {
         while (next < end && !scanSignal.aborted) {
           await scan(next++);
         }
       }),
-      limit: 4,
+      limit: scanConcurrency,
       errorMode: "stop",
       onTaskError: (error) => {
         // Composite signals can resolve reasons lazily; record ordering at the owner.
@@ -310,8 +323,12 @@ export async function scanActualWorkspaceManifest(
       addEntry({ path: relative, type: "symlink", mode: 0o777, target }, Buffer.byteLength(target));
     } else if (stats.isFile()) {
       const identity = workspaceStatIdentity(hashContext?.owner ?? "gateway", stats);
-      const reusable = params.reuseFile?.(relative, identity);
-      const sha256 = reusable?.sha256 ?? hashContext?.memo.get(identity);
+      const reusable = params.reuseFile?.(relative, identity, stats);
+      const sha256 =
+        reusable?.sha256 ??
+        (workspaceCtimeIsReusable(stats.ctimeNs, startedAtMs)
+          ? hashContext?.memo.get(identity)
+          : undefined);
       if (sha256) {
         // Included paths can cross a replaced parent directory even when the
         // leaf inode still matches a prior content hash.
@@ -395,26 +412,37 @@ export async function scanActualWorkspaceManifest(
     const absoluteDirectory = relativeDirectory ? path.join(root, relativeDirectory) : root;
     let hasDerivedEntry = false;
     let hasNonDerivedEntry = false;
-    for await (const directoryEntry of await fs.opendir(absoluteDirectory)) {
-      const name = directoryEntry.name;
-      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
-      checkTraversal(relative);
-      if (!relativeDirectory && name === ".git") {
-        continue;
-      }
-      if (
-        isDerivedWorkspacePath(
-          relative,
-          retained.has(relative) || (await isStagedInput(relative)),
-          params.buildCacheInputs !== undefined,
-        )
-      ) {
-        hasDerivedEntry = true;
-        continue;
-      }
-      const absolute = path.join(root, relative);
-      const stats = await fs.lstat(absolute, { bigint: true });
-      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+    const batch: string[] = [];
+    const scanBatch = async () => {
+      const directories: Array<string | undefined> = [];
+      await runScans(0, batch.length, async (index) => {
+        const relative = batch[index]!;
+        if (
+          isDerivedWorkspacePath(
+            relative,
+            retained.has(relative) || (await isStagedInput(relative)),
+            params.buildCacheInputs !== undefined,
+          )
+        ) {
+          hasDerivedEntry = true;
+          return;
+        }
+        const absolute = path.join(root, relative);
+        const stats = await fs.lstat(absolute, { bigint: true });
+        if (stats.isDirectory() && !stats.isSymbolicLink()) {
+          directories[index] = relative;
+        } else {
+          // Unsupported nodes and escaping links still make their directory nonempty;
+          // they stay local and become conflicts if a worker changes the same path.
+          hasNonDerivedEntry = true;
+          await addLeaf(relative, absolute, stats);
+        }
+      });
+      // Join sibling I/O before descending, so nested directories share the same bound.
+      for (const relative of directories) {
+        if (relative === undefined) {
+          continue;
+        }
         const child = await walk(relative);
         if (child.included || params.preserveDirectories?.has(relative)) {
           addEntry({ path: relative, type: "directory" });
@@ -422,12 +450,23 @@ export async function scanActualWorkspaceManifest(
         } else {
           hasDerivedEntry ||= child.hasDerivedEntry;
         }
-      } else {
-        // Unsupported nodes and escaping links still make their directory nonempty;
-        // they stay local and become conflicts if a worker changes the same path.
-        hasNonDerivedEntry = true;
-        await addLeaf(relative, absolute, stats);
       }
+      batch.length = 0;
+    };
+    for await (const directoryEntry of await fs.opendir(absoluteDirectory)) {
+      const name = directoryEntry.name;
+      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name;
+      checkTraversal(relative);
+      if (!relativeDirectory && name === ".git") {
+        continue;
+      }
+      batch.push(relative);
+      if (batch.length === discoveryBatchSize) {
+        await scanBatch();
+      }
+    }
+    if (batch.length) {
+      await scanBatch();
     }
     return {
       hasDerivedEntry,

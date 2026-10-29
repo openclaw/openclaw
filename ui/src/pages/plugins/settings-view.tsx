@@ -24,6 +24,7 @@ import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import { PluginNativeUiDisclosure } from "./native-ui-disclosure.tsx";
 import {
   renderPluginCapabilitySection,
   renderPluginCompatibilityNotices,
@@ -133,14 +134,6 @@ function PluginConnectionAction(props: {
   const verb = () => (props.ready ? "edit" : props.kind === "Account" ? "connect" : "configure");
   return (
     <>
-      {props.ready ? (
-        <span class="plugin-connection-status" role="status">
-          <Icon name="check" />
-          {t(
-            props.kind === "Account" ? "pluginsPage.auth.connected" : "pluginsPage.auth.configured",
-          )}
-        </span>
-      ) : null}
       <button
         type="button"
         class="btn btn--sm oc-action oc-action-secondary"
@@ -150,6 +143,14 @@ function PluginConnectionAction(props: {
       >
         {t(`pluginsPage.auth.${verb()}`)}
       </button>
+      {props.ready ? (
+        <span class="plugin-connection-status" role="status">
+          <Icon name="check" />
+          {t(
+            props.kind === "Account" ? "pluginsPage.auth.connected" : "pluginsPage.auth.configured",
+          )}
+        </span>
+      ) : null}
     </>
   );
 }
@@ -586,6 +587,11 @@ function PluginOverview(props: DetailProps): JSX.Element {
           />
         }
         identity={renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName)}
+        notice={
+          (props.inspection?.overview?.hasNativeUi ?? plugin().hasNativeUi) ? (
+            <PluginNativeUiDisclosure />
+          ) : undefined
+        }
         titleAction={
           <Show
             when={Boolean(props.installProgress)}

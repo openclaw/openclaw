@@ -198,10 +198,11 @@ function runOpenClawStateCurrentReadConnection<T>(
     }
     // Explicit Doctor inspection retains its checks; ordinary runtime reads have no callback.
     closeAdmission = openStateSchemaReadAdmission?.(db);
+    const context = openStateSchemaReadAdmission ? "doctor-maintenance" : "runtime";
     runSqliteReadOperationSync(db, () => {
       // The schema owner already retains validation for this physical database.
-      admitStateSchemaFacts(db, pathname);
-      assertStateReadSchema(db, pathname);
+      admitStateSchemaFacts(db, pathname, context);
+      assertStateReadSchema(db, pathname, undefined, context);
     });
     result = runSqliteReadSnapshotSync(db, () => {
       const value = operation(connection.database);

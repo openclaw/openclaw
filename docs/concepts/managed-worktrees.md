@@ -92,6 +92,10 @@ See [Workspace access](/gateway/sandboxing/workspace-access#managed-project-work
 for write policy, reconciliation, and conflict recovery. To update an existing
 local sandbox workspace from its selected repository base, use `github_publish`
 action `refresh_base` before tests and Auto Review.
+For an open PR originally published from this conversation, refresh uses that
+PR's current destination, including an externally changed base branch. It keeps
+the original PR selected for subsequent publication; the earlier publication
+receipt remains unchanged.
 Publication and base refresh reuse exact commits already stored locally instead
 of fetching them again. Partial clones still fetch missing contents when the
 operation needs those files.
@@ -103,11 +107,19 @@ retaining its HEAD and commit
 history; use the returned local/base Auto Review target before publishing. The host retains the integrated base ancestry; guest Git metadata,
 host credentials, and unrelated ignored host files remain separate.
 
-The projection binding and pending reconciliation journal are additive SQLite
-state. They do not change the database version. Before downgrading, let pending
-workspace operations settle. Older versions do not reconcile these projections;
-they leave their additive state and private files intact. Return to a supporting
-version to recover pending changes rather than deleting a projection directory.
+Local sandbox baselines share immutable directory packs and compressed source path
+sets in the existing shared-state database. Sessions on the same source tree
+reuse those records. Compact file fingerprints let a restarted Gateway reuse
+unchanged hashes while detecting same-size edits and files moved by directory
+renames. Filesystem discovery still checks for additions and deletions on every
+scan. Existing projections convert one at a time during reconciliation; database
+open does not rewrite their inventories.
+
+This storage format requires [shared-state schema 35](/reference/database-schemas/state-schema-history#state-schema-35).
+Let pending workspace operations settle before downgrading. Older builds refuse
+the newer schema; rollback requires the verified pre-upgrade backup and its
+matching build. Keep private projection files and pending recovery data intact
+when returning to a supporting version.
 Versions that support projections but predate `refresh_base` reject a retained
 result from an interrupted base transfer. After both copies accept, that result is
 cleaned and native merge state owns any remaining conflict resolution. Complete
@@ -157,7 +169,7 @@ Repository-backed creation discovers unmanaged Git branches and checkout paths b
 
 If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. Registered-source waits share the existing 30-minute creation contention budget, including source checks before checkout and before final session binding. The accepted request stays pending and cancellable while waiting; it continues when access becomes available without another request. Source contention after checkout or setup waits at that stage without repeating completed work.
 
-Source custody inspects managed checkout and Git storage ownership once per operation. Destination protection reuses that inventory while reserving a slot, so ordinary repository creation does not rescan every managed repository under the allocation lease. The inventory ends with the operation; cleanup still checks live dependencies before deleting a checkout.
+Source custody inspects managed checkout and Git storage ownership once per operation. Destination protection reuses that inventory while reserving a slot, so ordinary repository creation does not rescan every managed repository under the allocation lease. Unchanged inspected paths reuse the database owner's prepared ancestry index; changed paths update it while in-flight operations retain their original snapshot. Filesystem aliases and external Git metadata are still inspected for each operation, and cleanup checks live dependencies before deleting a checkout.
 
 A failed creation releases its slot after confirmed cleanup. If the caller crashes or a native operation has an uncertain outcome, the next allocation or `openclaw worktrees gc` reclaims count capacity after proving the caller is dead. It retains the unfinished checkout and its name in recovery custody and reports its path. Inspect the Git registration and any surviving native processes before manually recovering those files; cleanup does not assume parent-process death stopped a native write. Recovery custody does not publish an incomplete checkout as ready or block a new checkout with an unused name. Creation shares one 30-minute contention budget across admission retries and lease waits. Successful checkout, provisioning, setup, and publication do not consume that budget; an available lease can still be acquired after the wait budget is exhausted. Further contention reports the inspection and cleanup commands instead of starting another wait. Existing records need no schema migration. Let pending operations settle before downgrading to a version that does not understand these reservations.
 
@@ -270,7 +282,7 @@ Each worktree lives at:
 
 The repository fingerprint is the first 16 hexadecimal characters of a SHA-256 hash over the resolved Git common directory and origin URL. A supplied name must match `[a-z0-9][a-z0-9-]{0,63}`. Without a name, OpenClaw generates a readable crustacean-themed name such as `brisk-lobster`. Inferred names already occupied by any registered worktree (including the caller's own removed checkout), local branch, or unmanaged path get a numeric suffix such as `brisk-lobster-2`; only a supplied name reuses or restores the caller's existing record.
 
-OpenClaw creates branch `openclaw/<name>` at the requested base ref. Without a base ref, repositories with an `origin` remote discover and fetch its default branch, reusing a successful preparation for up to 30 seconds across nearby creates. To use a freshly fetched commit immediately, fetch it and select its explicit base ref. If the fetch fails, it uses the last-fetched remote default and logs a warning with the Git failure reason. When `origin` is configured, OpenClaw never substitutes local `HEAD`; if no remote default is available, repair `origin` or choose an explicit base ref. When no `origin` remote is configured, OpenClaw instead uses the primary checkout's current `HEAD` commit, including a detached `HEAD`, without remote discovery, fetching, or local fast-forwarding. Concurrent creates share that local base decision, record `HEAD` as the base ref, and log `local HEAD (no origin remote)` with the chosen SHA and commit age. A local default branch is fast-forwarded when it is a strict ancestor of the selected remote commit and the clean primary checkout is on that branch. Dirty, diverged, sparse, locked, separately checked-out, and detached checkouts are preserved. An active Git rebase, am, or bisect in the primary checkout also defers local advancement. Linked-checkout operations defer advancement only when they reserve the default branch, including a rebase that names it in `--update-refs`; unrelated operations do not block it. Creation logs identify the worktree and session owner, chosen base SHA, commit age, and fetch outcome; commits older than seven days produce a warning. An explicitly requested base must resolve to a commit; OpenClaw never substitutes another base for it. Git first registers the branch without materializing files, preserving its normal upstream-tracking rules. OpenClaw then captures that branch's commit and uses it for the size estimate, source template, and checkout. Later changes to the source ref cannot switch the files being written or reuse a smaller commit's allowance.
+OpenClaw creates branch `openclaw/<name>` at the requested base ref. Without a base ref, repositories with an `origin` remote discover and fetch its default branch, reusing a successful preparation for up to 30 seconds across nearby creates. To use a freshly fetched commit immediately, fetch it and select its explicit base ref. If the fetch fails, it uses the last-fetched remote default and logs a warning with the Git failure reason. When `origin` is configured, OpenClaw never substitutes local `HEAD`; if no remote default is available, repair `origin` or choose an explicit base ref. When no `origin` remote is configured, OpenClaw instead uses the primary checkout's current `HEAD` commit, including a detached `HEAD`, without remote discovery, fetching, or local fast-forwarding. Remote options such as `remote.origin.prune` alone do not prevent this local-HEAD path. Concurrent creates share that local base decision, record `HEAD` as the base ref, and log `local HEAD (no origin remote)` with the chosen SHA and commit age. A local default branch is fast-forwarded when it is a strict ancestor of the selected remote commit and the clean primary checkout is on that branch. Dirty, diverged, sparse, locked, separately checked-out, and detached checkouts are preserved. An active Git rebase, am, or bisect in the primary checkout also defers local advancement. Linked-checkout operations defer advancement only when they reserve the default branch, including a rebase that names it in `--update-refs`; unrelated operations do not block it. Creation logs identify the worktree and session owner, chosen base SHA, commit age, and fetch outcome; commits older than seven days produce a warning. An explicitly requested base must resolve to a commit; OpenClaw never substitutes another base for it. Git first registers the branch without materializing files, preserving its normal upstream-tracking rules. OpenClaw then captures that branch's commit and uses it for the size estimate, source template, and checkout. Later changes to the source ref cannot switch the files being written or reuse a smaller commit's allowance.
 
 When a session starts from a GitHub URL and its explicit base is missing locally,
 OpenClaw refreshes the managed clone from its recorded remote before resolving
@@ -358,7 +370,7 @@ Add `.worktreeinclude` at the source repository root to copy selected ignored, u
 fixtures/generated/**
 ```
 
-Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
+Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes and access/modification times at the filesystem’s supported precision. This keeps the timestamp ordering of prepared build inputs and outputs instead of making every copied file look newly written. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
 
 ## Run repository setup
 
@@ -524,6 +536,8 @@ Run-end cleanup records its outcome on the worktree record: lossless removal, re
 Ordinary forced checkout removal first renames the captured file tree, then lets Git remove the original registration. File deletion runs serially in the background, so cleanup can release the checkout name without waiting for every file to be unlinked. A deletion failure logs the retained directory for manual cleanup; a crash before background deletion starts can leave a sibling `.openclaw-removing-*` directory for inspection. Non-force lossless removal and explicit interrupted-removal recovery keep Git's final check and joined file deletion.
 
 Orphan cleanup retries permission-denied deletion once after restoring owner write permission on directories owned by the Gateway user. It never changes file permissions or follows symlink targets. If deletion still fails, cleanup reports the orphan and warns once while continuing with other orphans. Automatic passes skip that directory until the Gateway restarts, the directory is replaced, or you run `openclaw worktrees gc --retry-deferred` after repairing access.
+
+Idle artifact sweeps skip the allocation lease when all observed checkout directories are already registered and no pending creation or expired snapshot needs work. Unknown paths still take the lease and receive the full cleanup checks. A checkout that becomes unregistered during this read-only inspection is reconsidered on a later sweep.
 
 If checkout deletion fails or is interrupted, OpenClaw preserves the completed capture at `refs/openclaw/removals/<id>`. A later removal refuses to replace that capture with files from a possibly partial checkout. Preserve the remaining files, recorded branch, snapshot refs, and shared-state database for recovery. Inspect the original removal error and Git worktree registration before attempting cleanup; do not repeatedly force removal or prune registrations. A normal completed removal, successful restore, or snapshot expiry clears this recovery ref. A failure after checkout removal can leave its branch retained and require operator reconciliation before restore can recreate that branch.
 

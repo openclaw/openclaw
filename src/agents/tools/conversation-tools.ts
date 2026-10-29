@@ -197,7 +197,14 @@ export function createHostedConversationTools(
         channel: options?.agentChannel,
         accountId: options?.agentAccountId,
         to: options?.currentMessagingTarget ?? options?.currentChannelId ?? options?.agentTo,
-        threadId: options?.currentThreadTs ?? options?.agentThreadId,
+        // A top-level Slack message's reply anchor is not a conversation thread.
+        threadId:
+          options?.agentChannel === "slack" &&
+          options.replyToMode === "off" &&
+          options.currentThreadTs !== undefined &&
+          options.currentThreadTs === options.currentMessageId
+            ? undefined
+            : (options?.currentThreadTs ?? options?.agentThreadId),
       },
       config: sessionConfig,
     }),

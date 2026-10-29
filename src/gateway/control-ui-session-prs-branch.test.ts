@@ -329,4 +329,78 @@ describe("session branch diff stats", () => {
     // A merge base containing the landing proves this new commit is a second PR.
     expect(result.branch).toEqual(expectedBranch(1, 0, 1));
   });
+
+  describe("fork head discovery", () => {
+    const forkOwner = "PratikRai0101";
+    const forkContext = () => runGitReadOperation({ type: "checkout.context", input: { root } });
+
+    it("derives bounded candidates from tracking refs and invalidates a renamed remote", async () => {
+      await initializeFeatureWork();
+      await connectGithub();
+      await git("remote", "add", "fork", `https://github.com/${forkOwner}/openclaw.git`);
+      vi.stubGlobal(
+        "fetch",
+        routedFetch([
+          {
+            match: `/pulls?head=${forkOwner}%3A`,
+            response: () =>
+              githubJson([
+                pullListItem({
+                  head: {
+                    sha: "a".repeat(40),
+                    ref: "feature",
+                    repo: { full_name: `${forkOwner}/openclaw` },
+                  },
+                }),
+              ]),
+          },
+          { match: "/pulls?head=", response: () => githubJson([]) },
+          { match: "/pulls/103469", response: () => githubJson({ additions: 1, deletions: 0 }) },
+          { match: "/commits/", response: () => githubJson({ total_count: 0, check_runs: [] }) },
+          { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+        ]),
+      );
+      const load = () => loadCheckout("fork-discovery");
+      // Prove ref-only invalidation before other remotes also change Git config.
+      expect((await load()).pullRequests).toEqual([]);
+      await git("update-ref", "refs/remotes/fork/feature", "HEAD");
+      await git("pack-refs", "--all", "--prune");
+      const discovered = await load();
+      expect(discovered.repository).toEqual({ owner: "openclaw", repo: "openclaw" });
+      expect(discovered.pullRequests.map((pull) => pull.number)).toEqual([103469]);
+      for (const name of ["zz-a", "zz-b", "zz-c"]) {
+        await git("remote", "add", name, `https://github.com/${name}/openclaw.git`);
+        await git("update-ref", `refs/remotes/${name}/feature`, "HEAD");
+      }
+      await git("remote", "add", "not-github", "https://gitlab.com/someone/openclaw.git");
+      await git("update-ref", "refs/remotes/not-github/feature", "HEAD");
+      await git("remote", "add", "same-owner", "https://github.com/openclaw/openclaw.git");
+      await git("update-ref", "refs/remotes/same-owner/feature", "HEAD");
+      await git("remote", "add", "untracked", "https://github.com/untracked/openclaw.git");
+      // No push or tracking configuration names the fork.
+      const keys = ["branch.feature.pushRemote", "remote.pushDefault", "branch.feature.remote"];
+      for (const key of keys) {
+        await expect(git("config", "--get", key)).rejects.toThrow();
+      }
+
+      expect(await forkContext()).toMatchObject({
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: "feature",
+        defaultBranch: "main",
+        forkHeadCandidates: [
+          { owner: forkOwner, repo: "openclaw" },
+          { owner: "zz-a", repo: "openclaw" },
+          { owner: "zz-b", repo: "openclaw" },
+        ],
+      });
+
+      await git("remote", "set-url", "fork", "https://github.com/lonexreb/paloa-claw.git");
+      expect((await forkContext())?.forkHeadCandidates?.[0]).toEqual({
+        owner: "lonexreb",
+        repo: "paloa-claw",
+      });
+      expect((await load()).pullRequests).toEqual([]);
+    });
+  });
 });

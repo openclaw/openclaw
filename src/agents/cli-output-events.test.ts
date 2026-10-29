@@ -217,8 +217,7 @@ describe("createCliJsonlStreamingParser events", () => {
       ),
       claudeBlockStop(0),
     ];
-    parser.push(joinJsonlFrames(...events) + "\n");
-    parser.finish();
+    finishCliFrames(parser, ...events);
     expect(progress).toEqual([]);
     expect(starts).toEqual([toolStart("large", "Write", args)]);
   });
@@ -323,8 +322,8 @@ describe("createCliJsonlStreamingParser events", () => {
       assistantDelta("Hello world", "world", "custom-session"),
     ]);
     expect(thinkingDeltas).toEqual([
-      { text: "Checking ", delta: "Checking ", isReasoningSnapshot: true },
-      { text: "Checking facts.", delta: "facts.", isReasoningSnapshot: true },
+      { text: "Checking ", delta: "Checking ", isReasoningSnapshot: true, modelProgress: true },
+      { text: "Checking facts.", delta: "facts.", isReasoningSnapshot: true, modelProgress: true },
     ]);
     expect(displayStarts).toEqual([toolStart("call-1", "search", { query: "weather" })]);
     expect(displayResults).toEqual([
@@ -375,7 +374,9 @@ describe("createCliJsonlStreamingParser events", () => {
   it("lets plugin parsers own their frames before lazily parsing fallback JSON", () => {
     using parseSpy = vi.spyOn(JSON, "parse");
     const parseCountsAtPluginEntry: number[] = [];
+    const assistant: Array<{ text: string; delta: string }> = [];
     const parser = createPluginParser({
+      onAssistantDelta: ({ text, delta }) => assistant.push({ text, delta }),
       parseJsonlEvent: (line) => {
         parseCountsAtPluginEntry.push(parseSpy.mock.calls.length);
         if (line === "plain provider frame") {
@@ -394,6 +395,10 @@ describe("createCliJsonlStreamingParser events", () => {
 
     parser.push(`${JSON.stringify({ text: " provider JSON" })}\n`);
     expect(parseSpy).toHaveBeenCalledTimes(1);
+    expect(assistant).toEqual([
+      { text: "plain", delta: "plain" },
+      { text: "plain provider JSON", delta: " provider JSON" },
+    ]);
 
     parser.push(
       `${JSON.stringify({
@@ -403,6 +408,8 @@ describe("createCliJsonlStreamingParser events", () => {
     );
     expect(parseCountsAtPluginEntry).toEqual([0, 0, 1]);
     expect(parseSpy).toHaveBeenCalledTimes(2);
+    parser.finish();
+    expect(parser.getOutput()?.text).toBe("fallback");
   });
 
   it("projects lifecycle events without dropping fork-successor session metadata", () => {
@@ -481,62 +488,14 @@ describe("createCliJsonlStreamingParser events", () => {
     });
   });
 
-  it("surfaces Claude tool_use start and result events", () => {
-    const { starts, results, parser } = createToolEventParser();
-
-    parser.push(
-      joinJsonlFrames(
-        {
-          type: "assistant",
-          message: {
-            role: "assistant",
-            content: [
-              { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls -la" } },
-            ],
-          },
-        },
-        {
-          type: "user",
-          message: {
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: "toolu_1",
-                content: "total 0\n",
-                is_error: false,
-              },
-            ],
-          },
-        },
-      ) + "\n",
-    );
-    parser.finish();
-
-    expect(starts).toEqual([
-      { toolCallId: "toolu_1", name: "Bash", kind: "tool_use", args: { command: "ls -la" } },
-    ]);
-    expect(results).toEqual([
-      { toolCallId: "toolu_1", name: "Bash", isError: false, result: "total 0\n" },
-    ]);
-  });
-
   it.each(["server_tool_use", "mcp_tool_use"])("recognizes %s blocks", (type) => {
-    const starts: CliToolUseStartDelta[] = [];
-    const parser = createClaudeParser({
-      backend: createClaudeBackend(),
-      onToolUseStart: (delta) => starts.push(delta),
-    });
-
-    parser.push(
-      joinJsonlFrames(
-        claudeBlockStart({ type, id: "toolu_hosted", name: "web_search", input: {} }, 0),
-        claudeInputJsonDelta('{"query":"openclaw"}', 0),
-        claudeBlockStop(0),
-        "",
-      ),
+    const { starts, parser } = createToolEventParser();
+    finishCliFrames(
+      parser,
+      claudeBlockStart({ type, id: "toolu_hosted", name: "web_search", input: {} }, 0),
+      claudeInputJsonDelta('{"query":"openclaw"}', 0),
+      claudeBlockStop(0),
     );
-    parser.finish();
 
     expect(starts).toEqual([
       {
@@ -550,6 +509,17 @@ describe("createCliJsonlStreamingParser events", () => {
 
   it.each([
     {
+      useType: "tool_use",
+      resultType: "tool_result",
+      resultRole: "user",
+      toolCallId: "toolu_1",
+      name: "Bash",
+      input: { command: "ls -la" },
+      result: "total 0\n",
+      isError: false,
+    },
+    {
+      resultRole: "assistant",
       useType: "server_tool_use",
       resultType: "web_search_tool_result",
       toolCallId: "srvtoolu_1",
@@ -559,6 +529,7 @@ describe("createCliJsonlStreamingParser events", () => {
       isError: false,
     },
     {
+      resultRole: "assistant",
       useType: "mcp_tool_use",
       resultType: "mcp_tool_result",
       toolCallId: "mcptoolu_1",
@@ -567,32 +538,30 @@ describe("createCliJsonlStreamingParser events", () => {
       result: [{ type: "text", text: "hello" }],
       isError: false,
     },
-  ])("emits hosted result events for $useType", (fixture) => {
+  ])("emits $resultRole result events for $useType", (fixture) => {
     const { starts, results, parser } = createToolEventParser();
 
-    parser.push(
-      joinJsonlFrames({
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: fixture.useType,
-              id: fixture.toolCallId,
-              name: fixture.name,
-              input: fixture.input,
-            },
-            {
-              type: fixture.resultType,
-              tool_use_id: fixture.toolCallId,
-              content: fixture.result,
-              is_error: fixture.isError,
-            },
-          ],
-        },
-      }) + "\n",
+    const tool = {
+      type: fixture.useType,
+      id: fixture.toolCallId,
+      name: fixture.name,
+      input: fixture.input,
+    };
+    const result = {
+      type: fixture.resultType,
+      tool_use_id: fixture.toolCallId,
+      content: fixture.result,
+      is_error: fixture.isError,
+    };
+    finishCliFrames(
+      parser,
+      ...(fixture.resultRole === "user"
+        ? [
+            { type: "assistant", message: { content: [tool] } },
+            { type: "user", message: { content: [result] } },
+          ]
+        : [{ type: "assistant", message: { content: [tool, result] } }]),
     );
-    parser.finish();
 
     expect(starts).toEqual([
       {

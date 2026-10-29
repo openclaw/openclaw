@@ -51,6 +51,13 @@ precedes the rejected response in the current turn. Failures that may have cause
 side effects, unfinished tools, and asynchronous work still block it; the
 continuation does not replay the original task or increase the retry budget.
 
+If a model prints a complete tool call as text, including a call to an available
+deferred tool, the built-in runner can request one native correction when replay
+is safe. Recognition does not authorize executing a deferred call as text. The
+model must reissue it through its native tool interface (`dispatch_action` in
+Tool Search's `tools` mode). A repeated text call produces a visible failure instead
+of silently reporting success.
+
 Recovery history stays available across attempts within the same run. The run
 releases message payloads from replaced recovery envelopes and when it ends,
 including envelopes retained by copied attempt parameters. Each accepted
@@ -310,6 +317,10 @@ reasoning. To tolerate long hidden-reasoning phases, Responses uses a 15-minute
 model-progress deadline, or the effective idle budget when larger. Real progress
 resets this deadline; ordinary network silence retains the existing idle budget.
 Computation that emits only bookkeeping can still time out at this long ceiling.
+The session watchdog follows the request guard's current deadline with a recovery
+margin derived from its warning interval. Request stalls therefore surface as
+transient timeouts for bounded retry and configured model fallback before the
+watchdog stops the whole reply. Explicit execution deadlines still apply.
 
 The built-in OpenClaw harness publishes the current model attempt's execution
 deadline to the queue. When an attempt times out, configured fallback can start

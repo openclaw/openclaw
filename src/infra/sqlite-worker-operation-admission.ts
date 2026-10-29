@@ -70,6 +70,7 @@ type DatabaseAuthority = {
 
 export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner & {
   readonly port: MessagePort;
+  requestClass?: string; // Broker-owned telemetry, never authority.
   readonly attachment?: { value: unknown };
   readonly failure: unknown;
   readonly failureSource: AdmissionFailureSource | undefined;
@@ -182,7 +183,7 @@ function createOperationAdmission(
   let observingCommit = false;
   let failure: { error: unknown; source: AdmissionFailureSource } | undefined;
   let committed: SqliteWorkerNativeSettlementOwner["committed"];
-  let nativeReceipt: NativeCommitReceipt | undefined;
+  let nativeReceiptSequence = 0;
   let settlement: SqliteWorkerNativeSettlement | undefined;
   let databaseAuthority:
     | (DatabaseAuthority & { lease?: ReturnType<DatabaseAuthority["acquireSchema"]> })
@@ -208,10 +209,10 @@ function createOperationAdmission(
   ) => recordFailure(new SqliteWorkerError(`SQLite worker ${kind} is invalid`, code), "protocol");
   const installCommitted = (receipt: NativeCommitReceipt): void => {
     // Each private port delivers receipts in order; repeated receipts remain idempotent.
-    if (nativeReceipt && receipt.sequence <= nativeReceipt.sequence) {
+    if (receipt.sequence <= nativeReceiptSequence) {
       return;
     }
-    nativeReceipt = receipt;
+    nativeReceiptSequence = receipt.sequence;
     const publication = { facts: receipt.facts };
     committed = publication;
     observingCommit = true;
@@ -234,14 +235,12 @@ function createOperationAdmission(
     }
   };
   const receive = (message: unknown) => {
+    const metric = isRecord(message) ? message : undefined;
     recordWorkerMessage(
-      isRecord(message) && message.kind === "sqlite-database-admissions"
-        ? "admission"
-        : "authority",
+      metric?.kind === "sqlite-database-admissions" ? "admission" : "authority",
       "from_worker",
-      isRecord(message) && typeof message.payloadBytes === "number"
-        ? message.payloadBytes
-        : undefined,
+      typeof metric?.payloadBytes === "number" ? metric.payloadBytes : undefined,
+      admission.requestClass,
     );
     started = true;
     if (isRecord(message) && message.kind === "sqlite-database-admissions") {
@@ -687,6 +686,15 @@ function createOperationAdmission(
       }
       port1.close();
       port2.close();
+      // Preserve an active observer iteration when publication itself ends custody.
+      if (observingCommit) {
+        queueMicrotask(() => {
+          commitObservers.length = 0;
+        });
+      } else {
+        commitObservers.length = 0;
+      }
+      observeRequest = undefined;
       if (databaseAuthority?.lease) {
         try {
           databaseAuthority.lease.release();
@@ -694,6 +702,9 @@ function createOperationAdmission(
         } catch (error) {
           cleanupFailures.push(error);
         }
+      }
+      if (!databaseAuthority?.lease) {
+        databaseAuthority = undefined;
       }
     },
   };
