@@ -94,23 +94,6 @@ function setAttempt(
   });
 }
 
-function makeToolRejectionInput(model = "claude-opus-5") {
-  const fixture = makeExhaustedCredentialFailureInput();
-  setAttempt(
-    fixture.input,
-    buildEmbeddedRunnerAssistant({
-      api: "anthropic-messages",
-      provider: "anthropic",
-      model,
-      stopReason: "error",
-      errorMessage: "Provider completed tool call with malformed JSON arguments",
-      content: [],
-      usage: createMockUsage(640, 1329),
-    }),
-  );
-  return fixture;
-}
-
 function expectNoRecovery(fixture: ReturnType<typeof makeExhaustedCredentialFailureInput>) {
   expect(fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
   expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
@@ -210,6 +193,23 @@ async function streamIncompleteMistralResponseOverLoopback() {
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it.each([
+    "Session transcript anchor was not returned: 00000000-0000-4000-8000-000000000101",
+    "Session transcript changed during context read",
+    "session writer claim changed before transcript persistence",
+  ])("does not retry serialized transcript continuity failure: %s", async (errorMessage) => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    setAttempt(
+      fixture.input,
+      buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage, content: [] }),
+    );
+    fixture.input.emptyErrorRetries = 0;
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toThrow(errorMessage);
+    expect(fixture.input.emptyErrorRetries).toBe(0);
+    expectNoRecovery(fixture);
+  });
+
   it("surfaces storage failure without replaying the run or rotating credentials", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
     fixture.input.normalizedAttempt.attemptAssistant = buildEmbeddedRunnerAssistant({
@@ -470,71 +470,44 @@ describe("handleEmbeddedAssistantFailure", () => {
     },
   );
 
-  it("retries a replay-safe reasoning-only assistant error before failover", async () => {
-    const fixture = makeExhaustedCredentialFailureInput();
-    const assistant = buildEmbeddedRunnerAssistant({
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      stopReason: "error",
-      errorMessage: "provider failed after emitting reasoning",
-      content: [
-        {
-          type: "thinking",
-          thinking: "internal reasoning",
-          thinkingSignature: JSON.stringify({ id: "rs_error_turn", type: "reasoning" }),
-        },
-      ],
-    });
-    setAttempt(fixture.input, assistant);
-    fixture.input.emptyErrorRetries = 0;
-    fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
-
-    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
-
-    expect(outcome).toMatchObject({
-      action: "retry",
-      emptyErrorRetries: 1,
-    });
-    expectNoRecovery(fixture);
-  });
-
-  it("retries a blank runtime failure and advances to fallback when its budget is spent", async () => {
-    const fixture = makeExhaustedCredentialFailureInput();
-    const assistant = buildEmbeddedRunnerAssistant({
-      api: "github-copilot",
-      provider: "anthropic",
-      model: "mock-1",
-      stopReason: "error",
-      errorMessage: "No API provider registered for api: github-copilot",
-      content: [{ type: "text", text: "" }],
-      usage: createMockUsage(0, 0),
-    });
-    setAttempt(fixture.input, assistant);
-    fixture.input.emptyErrorRetries = 0;
-
-    await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({
-      action: "retry",
-      emptyErrorRetries: 1,
-    });
-
-    fixture.input.emptyErrorRetries = 3;
-    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
-      reason: "unknown",
-      provider: "anthropic",
-      model: "mock-1",
-      rawError: assistant.errorMessage,
-    });
-    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-  });
-
   it.each([
-    ["retries discarded content", 0, true, "claude-opus-5", true],
-    ["surfaces the exhausted rejection", 3, false, "claude-opus-5", true],
-    ["falls back after exhausting retries", 3, true, "mock-1", false],
+    ["reasoning-only", 0, true, "gpt-5.6-luna", true],
+    ["blank runtime", 0, true, "mock-1", false],
+    ["pre-dispatch tool rejection", 0, true, "claude-opus-5", true],
+    ["pre-dispatch tool rejection", 3, false, "claude-opus-5", true],
+    ["pre-dispatch tool rejection", 3, true, "mock-1", false],
   ] as const)(
-    "%s for a pre-dispatch tool-call rejection",
-    async (_name, retries, fallback, model, refresh) => {
-      const fixture = makeToolRejectionInput(model);
+    "routes replay-safe %s with retries=%s, fallback=%s, model=%s",
+    async (kind, retries, fallback, model, refresh) => {
+      const fixture = makeExhaustedCredentialFailureInput();
+      const reasoning = kind === "reasoning-only";
+      const blank = kind === "blank runtime";
+      const assistant = buildEmbeddedRunnerAssistant({
+        ...(!reasoning ? { api: blank ? "github-copilot" : "anthropic-messages" } : {}),
+        provider: reasoning ? "openai" : "anthropic",
+        model,
+        stopReason: "error",
+        errorMessage: reasoning
+          ? "provider failed after emitting reasoning"
+          : blank
+            ? "No API provider registered for api: github-copilot"
+            : "Provider completed tool call with malformed JSON arguments",
+        content: reasoning
+          ? [
+              {
+                type: "thinking",
+                thinking: "internal reasoning",
+                thinkingSignature: JSON.stringify({ id: "rs_error_turn", type: "reasoning" }),
+              },
+            ]
+          : blank
+            ? [{ type: "text", text: "" }]
+            : [],
+        ...(!reasoning
+          ? { usage: blank ? createMockUsage(0, 0) : createMockUsage(640, 1329) }
+          : {}),
+      });
+      setAttempt(fixture.input, assistant);
       fixture.input.emptyErrorRetries = retries;
       fixture.input.runInput.fallbackConfigured = fallback;
       if (refresh) {
@@ -545,29 +518,35 @@ describe("handleEmbeddedAssistantFailure", () => {
           action: "retry",
           emptyErrorRetries: 1,
         });
-        expectNoRecovery(fixture);
+        if (!blank) {
+          expectNoRecovery(fixture);
+        }
       } else if (!fallback) {
         expect(await handleEmbeddedAssistantFailure(fixture.input)).toMatchObject({
           action: "proceed",
           emptyErrorRetries: 3,
         });
-      } else {
+      }
+      if (blank || (retries > 0 && fallback)) {
+        fixture.input.emptyErrorRetries = 3;
         await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
           reason: "unknown",
           provider: "anthropic",
           model: "mock-1",
-          rawError: "Provider completed tool call with malformed JSON arguments",
+          rawError: assistant.errorMessage,
         });
         expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-        expect(fixture.traceAttempts).toEqual([
-          {
-            provider: "anthropic",
-            model: "mock-1",
-            result: "fallback_model",
-            reason: "unknown",
-            stage: "assistant",
-          },
-        ]);
+        if (!blank) {
+          expect(fixture.traceAttempts).toEqual([
+            {
+              provider: "anthropic",
+              model: "mock-1",
+              result: "fallback_model",
+              reason: "unknown",
+              stage: "assistant",
+            },
+          ]);
+        }
       }
     },
   );

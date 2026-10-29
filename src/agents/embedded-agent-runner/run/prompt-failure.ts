@@ -20,6 +20,7 @@ import { classifyFailoverReason } from "../../failover/classify.js";
 import { classifyRateLimitWindow, resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
+import { classifySessionTranscriptContinuityError } from "../../sessions/transcript-turn-error.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { NormalizedEmbeddedRunAttempt } from "./attempt-normalization.js";
@@ -92,6 +93,15 @@ export async function handleEmbeddedPromptFailure(input: {
   rateLimitRetriesExhausted?: number;
 }): Promise<PromptFailureOutcome> {
   const { runInput, preparedRuntime, normalizedAttempt, runtime, terminal } = input;
+  const continuityKind = classifySessionTranscriptContinuityError(terminal.promptError);
+  if (continuityKind) {
+    log.warn("turn_continuity_failure", {
+      kind: continuityKind,
+      unchangedAnchorRetries: 0,
+      providerFallback: false,
+    });
+    throw terminal.promptError;
+  }
   if (
     isNonProviderRuntimeCoordinationError(terminal.promptError) ||
     hasRecordedModelFallbackStop(terminal.promptError)

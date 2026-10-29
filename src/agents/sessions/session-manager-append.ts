@@ -51,6 +51,7 @@ import type {
   SessionEntry,
   SessionMessageEntry,
 } from "./session-manager-types.js";
+import { SessionTranscriptContinuityError } from "./transcript-turn-error.js";
 
 export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   #lastMessageAppend:
@@ -692,7 +693,10 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           ? readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId: current.id })
           : undefined;
         if (this.persistenceTarget && !anchor) {
-          throw new Error(`Session transcript anchor was not returned: ${current.id}`);
+          throw new SessionTranscriptContinuityError(
+            "missing_active_anchor",
+            `Session transcript anchor was not returned: ${current.id}`,
+          );
         }
         return {
           entryId: current.id,

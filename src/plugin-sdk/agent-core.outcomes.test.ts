@@ -249,67 +249,75 @@ it.each([
   );
 });
 
-it("preserves ordinary caller abort behavior", async () => {
-  const reason = Object.assign(new Error("Synthetic user cancellation"), { name: "AbortError" });
-  const agent = new Agent({
-    streamFn: vi.fn(() => {
-      throw new Error("Unexpected provider request");
-    }),
-  });
-  agent.subscribe((event) => {
-    if (event.type === "turn_start") {
-      agent.abort(reason);
-    }
-  });
-  await expect(agent.prompt("Synthetic cancelled turn")).resolves.toBeUndefined();
-  expect(agent.state.isStreaming).toBe(false);
-  expect(agent.state.messages).toContainEqual(
-    expect.objectContaining({
-      role: "assistant",
-      stopReason: "aborted",
-    }),
-  );
-});
-
 it.each([
-  new SqliteWorkerError("Synthetic unacknowledged write", "outcome-unknown"),
-  decodePostgresError({ name: "error", code: "57014", message: "Synthetic cancellation" }),
-])("retains local database failures through the agent loop", async (failure) => {
-  const agent = new Agent({
-    transformContext: async () => {
-      throw failure;
-    },
-    streamFn: vi.fn(() => {
-      throw new Error("Unexpected provider request");
-    }),
-  });
-  const events: AgentEvent[] = [];
-  agent.subscribe((event) => {
-    events.push(event);
-  });
-  await expect(agent.prompt("Synthetic turn")).rejects.toBe(failure);
-  expect(agent.state.isStreaming).toBe(false);
-  expect(
-    events.some((event) => event.type === "message_end" && event.message.role === "assistant"),
-  ).toBe(false);
-});
-
-it.each(["before-provider", "after-provider-abort"] as const)(
-  "retains a local abort reason %s",
-  async (phase) => {
-    const failure = new SqliteWorkerError("Synthetic lost connection", "outcome-unknown");
+  [new SqliteWorkerError("Synthetic unacknowledged write", "outcome-unknown"), "context"],
+  [
+    decodePostgresError({ name: "error", code: "57014", message: "Synthetic cancellation" }),
+    "context",
+  ],
+  ...[
+    "Session transcript anchor was not returned: 00000000-0000-4000-8000-000000000101",
+    "Session transcript changed during context read",
+    "session writer claim changed before transcript persistence",
+  ].map((message) => [new Error(message), "user-persistence"] as const),
+] as const)(
+  "preserves local failure %s at %s without a terminal-error append",
+  async (failure, phase) => {
+    const streamFn = vi.fn(createTurnSequenceStream([[]]));
     const agent = new Agent({
-      streamFn: () => {
-        const stream = createAssistantMessageEventStream();
-        const message = { ...makeAssistantMessage([]), stopReason: "aborted" as const };
-        stream.push({ type: "error", reason: "aborted", error: message });
-        stream.end();
-        return stream;
+      streamFn,
+      transformContext: async (messages) => {
+        if (phase === "context") {
+          throw failure;
+        }
+        return messages;
       },
     });
+    const events: AgentEvent[] = [];
+    let terminalErrorWrites = 0;
+    agent.subscribe((event) => {
+      events.push(event);
+      if (phase === "user-persistence" && event.type === "message_end") {
+        if (event.message.role === "user") {
+          throw failure;
+        }
+        if (event.message.role === "assistant" && event.message.stopReason === "error") {
+          terminalErrorWrites++;
+          throw new Error("Synthetic obsolete writer refuses terminal error");
+        }
+      }
+    });
+    await expect(agent.prompt("Synthetic turn")).rejects.toBe(failure);
+    expect(streamFn).not.toHaveBeenCalled();
+    expect(terminalErrorWrites).toBe(0);
+    expect(agent.state.isStreaming).toBe(false);
+    expect(
+      events.some((event) => event.type === "message_end" && event.message.role === "assistant"),
+    ).toBe(false);
+  },
+);
+
+it.each(["caller", "before-provider", "after-provider-abort"] as const)(
+  "preserves the %s abort contract",
+  async (phase) => {
+    const local = phase !== "caller";
+    const failure = local
+      ? new SqliteWorkerError("Synthetic lost connection", "outcome-unknown")
+      : Object.assign(new Error("Synthetic user cancellation"), { name: "AbortError" });
+    const streamFn = vi.fn(() => {
+      if (phase !== "after-provider-abort") {
+        throw new Error("Unexpected provider request");
+      }
+      const stream = createAssistantMessageEventStream();
+      const message = { ...makeAssistantMessage([]), stopReason: "aborted" as const };
+      stream.push({ type: "error", reason: "aborted", error: message });
+      stream.end();
+      return stream;
+    });
+    const agent = new Agent({ streamFn });
     agent.subscribe((event) => {
       if (
-        (phase === "before-provider" && event.type === "turn_start") ||
+        (phase !== "after-provider-abort" && event.type === "turn_start") ||
         (phase === "after-provider-abort" &&
           event.type === "message_end" &&
           event.message.role === "assistant")
@@ -317,7 +325,16 @@ it.each(["before-provider", "after-provider-abort"] as const)(
         agent.abort(failure);
       }
     });
-    await expect(agent.prompt("Synthetic abort")).rejects.toBe(failure);
+    const pending = agent.prompt("Synthetic abort");
+    if (local) {
+      await expect(pending).rejects.toBe(failure);
+    } else {
+      await expect(pending).resolves.toBeUndefined();
+      expect(agent.state.messages).toContainEqual(
+        expect.objectContaining({ role: "assistant", stopReason: "aborted" }),
+      );
+    }
+    expect(streamFn).toHaveBeenCalledTimes(phase === "after-provider-abort" ? 1 : 0);
     expect(agent.state.isStreaming).toBe(false);
   },
 );

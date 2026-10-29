@@ -99,6 +99,25 @@ it.each([
   ],
   ["missing controller admission", () => new SessionControllerAdmissionRequiredError(), false],
   [
+    "serialized missing active anchor inside an aggregate",
+    () =>
+      new AggregateError(
+        [
+          new Error("terminal persistence failed"),
+          new Error(
+            "Session transcript anchor was not returned: 00000000-0000-4000-8000-000000000101",
+          ),
+        ],
+        "turn failed",
+      ),
+    true,
+  ],
+  [
+    "serialized projection fence",
+    () => new Error("Session transcript changed during context read"),
+    true,
+  ],
+  [
     "superseded publication",
     () => new PreparedModelRuntimePublicationSupersededError("publication failed"),
     false,

@@ -14,6 +14,7 @@ import type {
 } from "./session-manager-types.js";
 import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
 import { shareSessionSystemPrompt } from "./system-prompt-pool.js";
+import { SessionTranscriptContinuityError } from "./transcript-turn-error.js";
 
 export type PersistRecordResult =
   | undefined
@@ -103,7 +104,10 @@ export function adoptPersistedMessage(
   if (result.messageId !== entry.id) {
     // A concurrent keyed user is adopted only after reloading its current path.
     if (!result.anchor) {
-      throw new Error(`Session transcript anchor was not returned: ${result.messageId}`);
+      throw new SessionTranscriptContinuityError(
+        "missing_active_anchor",
+        `Session transcript anchor was not returned: ${result.messageId}`,
+      );
     }
     return {
       adoptedMessageId: result.messageId,

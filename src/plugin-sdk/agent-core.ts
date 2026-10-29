@@ -4,6 +4,7 @@ import {
 } from "../../packages/agent-core/src/agent.js";
 import type { AgentCoreRuntimeDeps } from "../../packages/agent-core/src/runtime-deps.js";
 import type { CompleteSimpleFn, StreamFn } from "../../packages/llm-core/src/index.js";
+import { classifySessionTranscriptContinuityError } from "../agents/sessions/transcript-turn-error.js";
 import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-mutation-conflict-error.js";
 import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
 import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
@@ -16,9 +17,12 @@ export const openClawAgentCoreRuntime = {
       return true;
     }
     try {
-      return isSqliteTranscriptMutationConflict(error);
+      return (
+        classifySessionTranscriptContinuityError(error) !== undefined ||
+        isSqliteTranscriptMutationConflict(error)
+      );
     } catch {
-      // Optional conflict diagnostics must not replace an ordinary tool failure.
+      // Optional local-error diagnostics must not replace an ordinary tool failure.
       return false;
     }
   },

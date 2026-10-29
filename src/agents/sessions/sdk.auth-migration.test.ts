@@ -579,7 +579,7 @@ it.each(["metadata", "context loading"] as const)(
       if (after === "context loading") {
         expect(await loadTranscriptEvents(original)).toEqual(originalBefore);
         expect(error).toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
-        expect(hasModelFallbackStop(error)).toBe(false);
+        expect(hasModelFallbackStop(error)).toBe(true);
       } else {
         const records = await loadTranscriptEvents(original);
         const watermark = readSessionTranscriptWatermark(original);

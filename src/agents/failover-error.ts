@@ -42,7 +42,10 @@ import {
   isSessionPlacementSettlementClosedError,
   isAgentRunSupersededAbortReason,
 } from "./run-termination.js";
-import { isSessionTranscriptTurnMismatchErrorMessage } from "./sessions/transcript-turn-error.js";
+import {
+  classifySessionTranscriptContinuityError,
+  isSessionTranscriptTurnMismatchErrorMessage,
+} from "./sessions/transcript-turn-error.js";
 
 export {
   FailoverError,
@@ -77,6 +80,7 @@ export function hasRecordedModelFallbackStop(error: unknown): boolean {
 
 export function hasModelFallbackStop(error: unknown): boolean {
   return (
+    classifySessionTranscriptContinuityError(error) !== undefined ||
     isSessionPlacementSettlementClosedError(error) ||
     isAgentRunSupersededAbortReason(error) ||
     collectErrorGraphCandidates(error, resolveNestedErrors).some(

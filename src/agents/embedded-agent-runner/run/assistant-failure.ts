@@ -36,7 +36,11 @@ import {
   renderRateLimitRetryExhaustion,
 } from "../../failover/user-copy.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
-import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
+import {
+  classifySessionTranscriptContinuityError,
+  isSessionTranscriptTurnMismatchErrorMessage,
+  SessionTranscriptContinuityError,
+} from "../../sessions/transcript-turn-error.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
 import type { NormalizedEmbeddedRunAttempt } from "./attempt-normalization.js";
@@ -115,6 +119,15 @@ export async function handleEmbeddedAssistantFailure(input: {
   // may drive retries, profile health, or failure copy.
   const failedAssistant = attemptAssistant?.stopReason === "error" ? attemptAssistant : undefined;
   const transcriptError = failedAssistant?.errorMessage;
+  const continuityKind = classifySessionTranscriptContinuityError(transcriptError);
+  if (continuityKind && transcriptError) {
+    log.warn("turn_continuity_failure", {
+      kind: continuityKind,
+      unchangedAnchorRetries: 0,
+      providerFallback: false,
+    });
+    throw new SessionTranscriptContinuityError(continuityKind, transcriptError);
+  }
   if (failedAssistant && log.isEnabled("debug")) {
     log.debug("Assistant attempt failed", {
       provider: failedAssistant.provider,
