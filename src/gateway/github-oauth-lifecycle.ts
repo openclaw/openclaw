@@ -367,7 +367,9 @@ export function createGitHubOAuthLifecycle(params: {
     if (currentIdentity?.kind !== "oauth" || currentIdentity.profileId !== profileId) {
       return;
     }
-    const claimedRecord: GitHubOAuthRecord = { ...currentRecord, refreshClaim: randomUUID() };
+    // A new attempt starts clean, so a kept claim plus failure always means a stuck grant.
+    const { refreshFailure: _previousFailure, ...unclaimedRecord } = currentRecord;
+    const claimedRecord: GitHubOAuthRecord = { ...unclaimedRecord, refreshClaim: randomUUID() };
     await settleGitHubOAuthRefreshRecord(claimedRecord, currentRecord);
     let refreshed;
     try {

@@ -32,7 +32,10 @@ import {
 } from "./github-host-runtime.js";
 import { resolveConfiguredGitHubApiBaseUrl } from "./github-host.js";
 import { verifyGitHubCredential } from "./github-oauth-client.js";
-import { inspectGitHubOAuthRecord } from "./github-oauth-records.js";
+import {
+  inspectGitHubOAuthRecord,
+  resolveGitHubOAuthRefreshState,
+} from "./github-oauth-records.js";
 import {
   clearNativeGitHubTokenCache,
   createGitHubReadIdentity,
@@ -350,10 +353,7 @@ async function resolveGitHubIdentityFacts(
       ? "not_applicable"
       : oauth.state !== "valid"
         ? "unavailable"
-        : oauth.record.pendingRefresh
-          ? "refreshing"
-          : (oauth.record.refreshFailure ??
-            (oauth.record.refreshExpiresAtMs <= Date.now() ? "expired" : "available"));
+        : resolveGitHubOAuthRefreshState(oauth.record, Date.now());
   return {
     source: identity.source,
     ...(probe?.status === "available" && probe.stale ? { stale: true } : {}),

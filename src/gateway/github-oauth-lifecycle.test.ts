@@ -889,6 +889,11 @@ describe("GitHub OAuth refresh and maintenance", () => {
       }),
     );
     await lifecycle.refreshEffectiveIdentity("main");
+    const retryClaim = mocks.writeOAuthRecord.mock.calls
+      .map(([, record, expected]) => ({ record, expected }))
+      .findLast(({ record, expected }) => record.refreshClaim && !expected?.refreshClaim);
+    expect(retryClaim?.expected?.refreshFailure).toBe("failed");
+    expect(retryClaim?.record.refreshFailure).toBeUndefined();
     expect(refreshedTokens).toEqual(["access-token-after-outage"]);
     expect(await inspectGitHubOAuthRecord(OLD_PROFILE)).toEqual({
       state: "valid",
