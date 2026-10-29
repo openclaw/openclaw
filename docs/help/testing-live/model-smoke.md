@@ -93,6 +93,36 @@ inference for models omitted by a cap.
     - Embedded agent forwards a multimodal user message to the model
     - Assertion: reply contains `cat` + the code (OCR tolerance: minor mistakes allowed)
 
+### Thinking probe (what a route accepts per level)
+
+The thinking probe runs one real Gateway turn for every thinking level in
+`MODEL_DATA_THINKING_LEVELS` on each route, and writes the raw result as dated
+data. Use it to support a catalog change such as `thinkingLevelMap.off: null`.
+
+```bash
+pnpm test:live:thinking-probe -- --provider moonshot --model kimi-k3
+pnpm test:live:thinking-probe -- --provider kimi --model k3
+```
+
+- A route is a provider id. `--routes` defaults to `--provider`. Use
+  `--routes a,b` only for routes that share the model id; otherwise run one
+  command per route with that route's own id.
+- Each route runs on a config-only copy of its shipped manifest row (same API,
+  base URL and headers) that offers every level, with each level sent as its own
+  value. Plugin thinking hooks can hide levels on the shipped provider; the copy
+  shows what the route itself accepts. The file records the row it used.
+- Keys come only from the env vars in the owning manifest's
+  `setup.providers[].envVars`. The probe does not read the auth-profile store,
+  and it refuses to run in CI.
+- Output: `extensions/<plugin>/probes/<model>.<provider>.<YYYY-MM-DD>.json`. Each turn has
+  the request URL (no query), the request params without conversation content
+  (so the thinking or effort value actually sent), the HTTP status, redacted
+  error text, the model id and usage. The file stores the env var name, never
+  its value.
+- The record holds facts only. Read it and decide; the probe does not classify
+  errors.
+- Cost: about 15k input tokens per turn, so 7 turns per route.
+
 <Tip>
 To see what you can test on your machine (and the exact `provider/model` ids), run:
 
