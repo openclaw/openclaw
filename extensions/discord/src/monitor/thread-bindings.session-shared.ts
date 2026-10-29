@@ -9,6 +9,7 @@ import {
 import {
   BINDINGS_BY_THREAD_ID,
   ensureBindingsLoadedAsync,
+  getThreadBindingRuntime,
   resolveBindingIdsForSession,
   MANAGERS_BY_ACCOUNT_ID,
 } from "./thread-bindings.state.js";
@@ -69,6 +70,7 @@ export function mutateBindingsForTargetSession(
         const manager = MANAGERS_BY_ACCOUNT_ID.get(existing.accountId);
         const nextRecord = update(existing, now);
         await commitBindingRecord({
+          runtime: getThreadBindingRuntime(manager),
           bindingKey,
           previous: existing,
           next: nextRecord,
@@ -96,10 +98,12 @@ export function updateBindingsForTargetSessionSync(
     if (!existing) {
       continue;
     }
-    if (MANAGERS_BY_ACCOUNT_ID.get(existing.accountId)?.isStopping()) {
+    const manager = MANAGERS_BY_ACCOUNT_ID.get(existing.accountId);
+    if (manager?.isStopping()) {
       throw new Error("Discord thread binding manager is stopping");
     }
     const next = updateBindingRecordSync({
+      runtime: getThreadBindingRuntime(manager),
       bindingKey,
       transform: (record) =>
         record.targetSessionKey === existing.targetSessionKey ? update(record, now) : record,
