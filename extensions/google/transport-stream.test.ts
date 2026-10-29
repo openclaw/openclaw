@@ -1852,13 +1852,13 @@ describe("google transport stream", () => {
   });
 
   it.each([
-    ["aiplatform.eu.rep", "us-central1", "eu"],
-    ["aiplatform.us.rep", "us-central1", "us"],
+    ["aiplatform.eu.rep", "us-central1", "eu", false],
+    ["aiplatform.us.rep", "us-central1", "us", false],
     ["aiplatform.eu.rep", "eu", "eu", true],
     ["aiplatform.us.rep", "us", "us", true],
-    ["aiplatform", "us-central1", "global"],
-    ["us-east5-aiplatform", "global", "us-east5"],
-    ["custom", "us-central1", "us-central1"],
+    ["aiplatform", "us-central1", "global", false],
+    ["us-east5-aiplatform", "global", "us-east5", false],
+    ["custom", "us-central1", "us-central1", false],
   ] as const)(
     "routes %s through the Vertex stream",
     async (host, environment, location, template) => {
