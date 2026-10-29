@@ -2,6 +2,12 @@ import { expect, test } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import type { ToolsEffectiveResult } from "../../packages/gateway-protocol/src/schema/tools-catalog.js";
 import type { UsersSelfResult } from "../../packages/gateway-protocol/src/schema/users.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { registerAgentHarness } from "../agents/harness/registry.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -14,13 +20,36 @@ import {
   connectReq,
   installGatewayTestHooks,
   openWs,
+  onceMessage,
   rpcReq,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-test("authenticated session readers can preview only accessible sessions", async () => {
+test("authenticated session readers can preview only accessible sessions and lose access before egress", async ({
+  signal,
+}) => {
+  const entered = createDeferred();
+  const resume = createDeferred();
+  let holdPreview = false;
+  const harnessId = "tool-preview-gate";
+  const sharedKey = "agent:main:shared-tool-preview";
+  registerAgentHarness({
+    id: harnessId,
+    label: "Tool preview fixture",
+    supports: () => ({ supported: false }),
+    runAttempt: async () => {
+      throw new Error("Preview must not run an agent");
+    },
+    loadMcpToolCatalog: async ({ sessionKey }) => {
+      if (holdPreview && sessionKey === sharedKey) {
+        entered.resolve();
+        await resume.promise;
+      }
+      return undefined;
+    },
+  });
   await configureBrowserAuth(browserProxyAuth(), {
     roles: {
       default: "guest",
@@ -30,6 +59,11 @@ test("authenticated session readers can preview only accessible sessions", async
         admin: { agents: "*", sessions: { others: "write" }, scopes: ["operator.admin"] },
       },
     },
+  });
+  const { getRuntimeConfig, writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile({
+    ...getRuntimeConfig(),
+    mcp: { servers: { previewFixture: { command: "not-executed" } } },
   });
   const viewer = ensureProfileForEmail("tool-preview-viewer@example.test");
   const admin = ensureProfileForEmail("tool-preview-admin@example.test");
@@ -55,12 +89,12 @@ test("authenticated session readers can preview only accessible sessions", async
     const reader = await connect("tool-preview-viewer@example.test", ["operator.sessions.read"]);
     const administrator = await connect("tool-preview-admin@example.test", ["operator.admin"]);
     const ownKey = "agent:main:guest-tool-preview";
-    const sharedKey = "agent:main:shared-tool-preview";
     const seed = (sessionKey: string, owner: string, visibility: "shared" | "draft") =>
       upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: sessionKey,
+          agentHarnessId: harnessId,
           updatedAt: 1,
           visibility,
           createdActor: { type: "human", source: "profile", id: owner },
@@ -100,5 +134,44 @@ test("authenticated session readers can preview only accessible sessions", async
       ok: false,
       error: { code: "FORBIDDEN" },
     });
+    // Pause the real inventory owner's awaited harness hook, across the bundled-server boundary.
+    holdPreview = true;
+    const pending = rpcReq(reader.ws, "tools.effective", { sessionKey: sharedKey });
+    const settled = Promise.allSettled([pending]);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "preview did not enter the catalog hook",
+        ),
+        signal,
+      );
+      const id = "revoke-preview";
+      // rpcReq republishes config; raw transport keeps visibility as the sole invalidation.
+      const revoked = onceMessage<Awaited<ReturnType<typeof rpcReq>>>(
+        administrator.ws,
+        (frame) => frame.type === "res" && frame.id === id,
+      );
+      administrator.ws.send(
+        JSON.stringify({
+          type: "req",
+          id,
+          method: "session.visibility.set",
+          params: { sessionKey: sharedKey, visibility: "draft" },
+        }),
+      );
+      const response = await revoked;
+      expect(response.ok, JSON.stringify(response.error)).toBe(true);
+    } finally {
+      resume.resolve();
+      await settled;
+    }
+    const revokedPreview = await pending;
+    expect(revokedPreview).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("not found") },
+    });
+    expect(revokedPreview.payload).toBeUndefined();
   });
 });

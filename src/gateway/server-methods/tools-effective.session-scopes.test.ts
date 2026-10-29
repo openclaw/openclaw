@@ -1,10 +1,5 @@
 import { expect, test, vi } from "vitest";
 import type { ToolsEffectiveResult } from "../../../packages/gateway-protocol/src/schema/tools-catalog.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -16,7 +11,7 @@ import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { toolsEffectiveInventoryMocks as inventoryMocks } from "./tools-effective.test-support.js";
 const { toolsEffectiveHandlers, testing } = await import("./tools-effective.js");
 
-// Fixed inventory I/O; authentication, router admission, sharing and egress are real.
+// Fixed inventory I/O; router admission, sharing and response projection are real.
 const privateDetail = "/private/runtime/mcp-launch --private-option";
 const githubSummary = "GitHub actions in this preview: inspect_pr.";
 const inventory: ToolsEffectiveResult = {
@@ -83,9 +78,7 @@ const inventory: ToolsEffectiveResult = {
   },
 };
 
-test("scoped tool previews preserve useful identities while withholding diagnostics and revoked reads", async ({
-  signal,
-}) => {
+test("scoped tool previews preserve useful identities while withholding diagnostics", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
     setRuntimeConfigSnapshot(cfg);
@@ -158,39 +151,6 @@ test("scoped tool previews preserve useful identities while withholding diagnost
     expect(broad.respond).toHaveBeenCalledWith(true, inventory, undefined);
     reader.connect.scopes = ["operator.sessions.read"];
 
-    testing.resetToolsEffectiveCacheForTest();
-    const entered = createDeferred();
-    const resume = createDeferred();
-    inventoryMocks.resolveEffectiveToolInventory.mockImplementationOnce(async () => {
-      entered.resolve();
-      await resume.promise;
-      return inventory;
-    });
-    const delayed = request();
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          delayed.pending,
-          "preview did not reach inventory",
-        ),
-        signal,
-      );
-      await seed("draft");
-    } finally {
-      resume.resolve();
-      await delayed.pending;
-    }
-    expect(delayed.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("not found"),
-      }),
-    );
-
-    await seed("shared");
     testing.resetToolsEffectiveCacheForTest();
     inventoryMocks.resolveEffectiveToolInventory.mockRejectedValueOnce(new Error(privateDetail));
     const failed = request();
