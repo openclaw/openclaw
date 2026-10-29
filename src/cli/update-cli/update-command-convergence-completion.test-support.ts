@@ -90,13 +90,16 @@ export function registerConvergenceCompletionTests({
         });
       }
       const incomingSteps: UpdateStepResult[] = [
-        ...[0, 86].map((exitCode) => ({
-          name: `package-doctor-${exitCode}`,
-          command: "openclaw doctor --fix",
-          cwd: "/tmp/openclaw",
-          durationMs: 1,
-          ...markPackagePostInstallDoctorAdvisory(
-            { exitCode, termination: "exit" as const },
+        ...[0, 86].map((exitCode) =>
+          markPackagePostInstallDoctorAdvisory(
+            {
+              name: `package-doctor-${exitCode}`,
+              command: "openclaw doctor --fix",
+              cwd: "/tmp/openclaw",
+              durationMs: 1,
+              exitCode,
+              termination: "exit" as const,
+            },
             exitCode === 0
               ? { status: "ok", warnings: [DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING] }
               : {
@@ -110,7 +113,7 @@ export function registerConvergenceCompletionTests({
                   },
                 },
           ),
-        })),
+        ),
         {
           name: "earlier-attempt",
           command: "verify",
