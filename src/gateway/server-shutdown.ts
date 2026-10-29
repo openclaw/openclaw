@@ -139,14 +139,20 @@ export async function runGatewayCloseSteps(params: {
     }
   }
   if (leftovers.length > 0) {
-    const retained = new GatewayShutdownCleanupRetainedError(leftovers);
+    const retained = new GatewayShutdownCleanupRetainedError(
+      leftovers,
+      leftovers.map(formatErrorMessage).join("; "),
+    );
     if (errors.length === 0) {
       throw retained;
     }
     errors.push(retained);
   }
   if (errors.length > 0) {
-    throw new AggregateError(errors, "Gateway shutdown did not complete cleanly");
+    throw new AggregateError(
+      errors,
+      `Gateway shutdown did not complete cleanly: ${errors.map(formatErrorMessage).join("; ")}`,
+    );
   }
 }
 

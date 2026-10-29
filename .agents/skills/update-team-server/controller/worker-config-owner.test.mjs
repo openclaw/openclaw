@@ -101,22 +101,18 @@ test("the real canonical lock excludes a second owner while the native writer is
   assert.equal(events(f).split("gateway config set\n").length - 1, 1);
 });
 
-test("always-DRAINING interruption arms the exact native handoff before stop", linuxRoot, (t) => {
+test("always-DRAINING interruption commits the exact native handoff before stop", linuxRoot, (t) => {
   const f = makeWorkerConfigFixture(t, "always-draining");
   f.env.OPENCLAW_TEAM_DRAIN_BUDGET = "1";
   const result = runOwner(f, [...args(f), "--interrupt-after-drain"], replacement);
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr + events(f));
   assert.match(result.stdout, /INTERRUPTING authorized after 1-second graceful drain/u);
-  assert.match(result.stdout, /HANDOFF_ARMED/u);
+  assert.match(result.stdout, /HANDOFF_COMMITTED/u);
   const log = events(f);
   assert.ok(log.includes("suspension.draining"));
-  assert.ok(
-    log.indexOf("handoff.armed") >= 0 &&
-      log.indexOf("handoff.armed") < log.indexOf("service.system.stop"),
-    log,
-  );
-  assert.ok(log.indexOf("handoff.consumed") > log.indexOf("service.system.stop"), log);
+  const committed = log.indexOf("handoff.committed");
+  assert.ok(committed >= 0 && committed < log.indexOf("service.system.stop"), log);
   assert.equal(readFileSync(join(f.state, "shutdown-kind"), "utf8"), "external-restart");
   assert.equal(config(f).cloudWorkers.profiles.aws.settings.setup, replacement);
   assertNoDeployment(f);
@@ -130,12 +126,12 @@ test("always-DRAINING work defers without interruption authority", linuxRoot, (t
   assertOriginalConfig(f);
   assert.doesNotMatch(
     events(f),
-    /gateway.suspend.handoff|handoff.armed|service.system.stop|config.write.committed/u,
+    /gateway.suspend.handoff|handoff.committed|service.system.stop|config.write.committed/u,
   );
   assert.equal(existsSync(f.journal), false);
 });
 
-test("refused or uncertain DRAINING handoff never reaches stop and safely cancels", linuxRoot, async (suite) => {
+test("refused handoff cancels; uncertain committed handoff retains recovery", linuxRoot, async (suite) => {
   for (const scenario of ["handoff-refused", "handoff-uncertain"]) {
     await suite.test(scenario, (t) => {
       const f = makeWorkerConfigFixture(t, scenario);
@@ -145,11 +141,11 @@ test("refused or uncertain DRAINING handoff never reaches stop and safely cancel
       assert.notEqual(result.status, 0);
       assert.match(events(f), /gateway.suspend.handoff/u);
       assert.doesNotMatch(events(f), /service.system.stop|config.write.committed/u);
-      assert.match(result.stdout, /RECOVERED .*result=RESTORED/u, result.stderr + events(f));
+      assert.equal(/RECOVERED .*result=RESTORED/u.test(result.stdout), scenario === "handoff-refused");
       assertOriginalConfig(f);
-      assert.equal(existsSync(f.journal), false);
+      assert.equal(existsSync(f.journal), scenario === "handoff-uncertain");
       assert.equal(existsSync(f.permit), true);
-      assert.equal(existsSync(join(f.state, "armed-handoff")), false);
+      assert.equal(existsSync(join(f.state, "committed-handoff")), scenario === "handoff-uncertain");
     });
   }
 });

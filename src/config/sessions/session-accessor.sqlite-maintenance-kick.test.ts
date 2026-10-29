@@ -238,11 +238,11 @@ it.for(["young", "capacity", "expired"] as const)(
   },
 );
 
-it.for(["activity", "insert", "unlock", "remove"] as const)(
-  "settles a consumed protected-only worker plan after %s during result delivery",
+it.for(["activity", "young-activity", "insert", "unlock", "remove"] as const)(
+  "settles a consumed worker plan after %s during result delivery",
   async (change, { signal }) => {
     const { request, scope, updatedAt, archived, write, read } = createWorkerStore();
-    request.maintenanceConfig.maxEntries = 1;
+    request.maintenanceConfig.maxEntries = change === "young-activity" ? 100 : 1;
     const protectedKey = "agent:main:durable-worker-protected";
     const insertedKey = "agent:main:durable-worker-inserted";
     write(
@@ -269,9 +269,9 @@ it.for(["activity", "insert", "unlock", "remove"] as const)(
     dispatch.mockImplementation(async (params) => {
       const result = await run(params);
       if (!delivered && result.kind === "maintenance-plan") {
-        expect(result.value.durableNoCandidates).toBe(true);
+        expect(result.value.durableNoCandidates === true).toBe(change !== "young-activity");
         delivered = true;
-        if (change === "activity") {
+        if (change === "activity" || change === "young-activity") {
           writeActivity();
         } else {
           runOpenClawAgentWriteTransaction((owner) => {
@@ -293,7 +293,7 @@ it.for(["activity", "insert", "unlock", "remove"] as const)(
     await withinTest(firstPass.promise, signal);
     await yieldToEventLoop();
     const passes = countPlanningPasses();
-    if (change !== "activity") {
+    if (change !== "activity" && change !== "young-activity") {
       await vi.advanceTimersByTimeAsync(1_001);
       await withinTest(nextPass.promise, signal);
       if (change === "insert" || change === "unlock") {
@@ -479,6 +479,26 @@ it("resumes automatic maintenance after Gateway work admission resets", async ({
   await vi.advanceTimersByTimeAsync(1_001);
   await withinTest(archived, signal);
   expectArchive(sessionKey, "age-retention");
+});
+
+it("keeps periodic retry cadence after planning fails with retained age facts", async ({
+  signal,
+}) => {
+  const { request } = createStore();
+  const firstDeadline = observeNextPeriodicMaintenance(1_001);
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await firstDeadline(signal);
+  const warn = observeWarnings();
+  vi.mocked(reclamationRun.runSqliteSessionReclamation).mockRejectedValue(
+    new Error("disk I/O error"),
+  );
+  await vi.advanceTimersByTimeAsync(1_001);
+  await yieldToEventLoop();
+  expect(countPlanningPasses()).toBe(2);
+  await vi.advanceTimersByTimeAsync(100);
+  await yieldToEventLoop();
+  expect(countPlanningPasses()).toBe(2);
+  expect(warn).toHaveBeenCalledTimes(1);
 });
 
 it("does not dispatch maintenance in warn mode", async () => {

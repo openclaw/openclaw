@@ -424,6 +424,10 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "session-pending-input-history", ...input }),
     (value) => value.snapshot,
   ),
+  readPendingInputOrphans: reader(
+    (input) => ({ kind: "session-pending-input-orphans", ...input }),
+    (value) => value.targets,
+  ),
   readPendingInputReceipts: reader(
     (input) => ({ kind: "session-pending-input-receipts", ...input }),
     (value) => value.receipts,

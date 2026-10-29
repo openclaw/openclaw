@@ -6,11 +6,14 @@ import {
   resolveGatewayShutdownNotice,
   runGatewayCloseSteps,
 } from "./server-shutdown.js";
+import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
 it("omits invalid restart metadata and normalizes the reason", () => {
   expect(
     resolveGatewayShutdownNotice({ reason: "  upgrade  ", restartExpectedMs: Number.NaN }),
-  ).toEqual({ reason: "upgrade" });
+  ).toEqual({
+    reason: "upgrade",
+  });
   expect(resolveGatewayShutdownNotice({ restartExpectedMs: -2 })).toEqual({
     reason: "gateway stopping",
     restartExpectedMs: 0,
@@ -22,6 +25,8 @@ it.for([false, true])(
   async (fatal) => {
     vi.useFakeTimers();
     const sidecar = createDeferredCore();
+    const sidecars = createGatewaySidecarStopOwner();
+    sidecars.publish({ name: "synthetic-held-worker", stop: () => sidecar.promise });
     const close = vi.fn(async () => {
       if (fatal) {
         throw new Error("synthetic persistence failure");
@@ -33,7 +38,7 @@ it.for([false, true])(
       owner: {
         connectionWork: { drain: noWork },
         stopConnectionDependentSidecars: noWork,
-        stopRegisteredGatewayLifetimeSidecars: () => sidecar.promise,
+        stopRegisteredGatewayLifetimeSidecars: sidecars.stop,
         stopRegisteredPostReadySidecars: noWork,
         runClosePrelude: noWork,
         sealAndJoinRegisteredSidecarStops: noWork,
@@ -48,9 +53,10 @@ it.for([false, true])(
       const failure = await closing;
       expect(hasGatewayCleanupRetainedError(failure)).toBe(true);
       expect(isGatewayCleanupRetainedError(failure)).toBe(!fatal);
+      expect(failure).toHaveProperty("message", expect.stringContaining("synthetic-held-worker"));
       expect(onError).toHaveBeenCalledWith(
         expect.stringMatching(
-          /^gateway lifetime sidecars cleanup exceeded 5000ms; resources remain; pending: shutdown\.gateway-lifetime-sidecars=\d+ms$/,
+          /^gateway lifetime sidecars cleanup exceeded 5000ms; resources remain; pending: shutdown\.gateway-lifetime-sidecars=\d+ms, shutdown\.sidecar\.synthetic-held-worker=\d+ms$/,
         ),
       );
     } finally {

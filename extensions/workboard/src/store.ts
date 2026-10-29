@@ -43,6 +43,7 @@ import { readCards } from "./store-read.js";
 import { finishRun } from "./store-status-write.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
+export { WorkboardCardConflictError } from "./store-core.js";
 
 const log = createSubsystemLogger("workboard");
 
