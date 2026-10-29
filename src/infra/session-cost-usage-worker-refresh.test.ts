@@ -188,9 +188,16 @@ it("aggregates duplicate-ID paths in selected ancestry order when sequence numbe
   ).toMatchObject({ count: 1, min: 1000, max: 1000, sum: 1000 });
 });
 
-it.each(["rewind", "fork", "parent fork"] as const)(
+// Each copy adds one 5-token turn. Copied turns on the source's active path count in the source;
+// a switch to the inactive branch still counts that branch's reply (40), which the source never did.
+it.each([
+  ["rewind", 5],
+  ["fork", 5],
+  ["parent fork", 5],
+  ["switch", 45],
+] as const)(
   "counts history copied by a %s once, in its source transcript",
-  async (mode) => {
+  async (mode, expected) => {
     const user = (id: string, parentId: string | null) => ({
       type: "message",
       id,
@@ -210,6 +217,8 @@ it.each(["rewind", "fork", "parent fork"] as const)(
       createSessionTranscriptHeader({ sessionId: "source" }),
       user("u1", null),
       answer("a1", "u1", 10),
+      user("u2b", "a1"),
+      answer("a2b", "u2b", 40),
       user("u2", "a1"),
       answer("a2", "u2", 20),
     ];
@@ -226,7 +235,7 @@ it.each(["rewind", "fork", "parent fork"] as const)(
       const entry = { sessionId: "source", lifecycleRevision: "r1", updatedAt: timestamp };
       const plan = planSessionMessageCut(entry, source, {
         mode,
-        entryId: "u2",
+        entryId: mode === "switch" ? "a2b" : "u2",
         expectedState: { sessionId: "source", lifecycleRevision: "r1" },
         sourceKey: "agent:main:source",
         canonicalSourceKey: "agent:main:source",
@@ -238,13 +247,12 @@ it.each(["rewind", "fork", "parent fork"] as const)(
     // A new turn continues from the copy's visible leaf.
     const rows = [
       ...copy.filter(isRecord),
-      answer("new", mode === "parent fork" ? "a2" : "a1", 5),
+      answer("new", { "parent fork": "a2", switch: "a2b" }[mode as string] ?? "a1", 5),
       // Stored transcripts keep the session header at seq 0.
     ].map((event, index) => ({ seq: index, event }));
     const result = await scan(rows);
-    // The copy counts only its new turn; the source transcript keeps counting a1 and a2.
     expect(
       Object.values(result.rollup.buckets).reduce((sum, b) => sum + b.totals.totalTokens, 0),
-    ).toBe(5);
+    ).toBe(expected);
   },
 );

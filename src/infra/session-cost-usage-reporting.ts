@@ -33,6 +33,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import { dropInheritedTranscriptEvents } from "./session-cost-usage-inherited.js";
 import {
   createUsageCostResolver,
   parseUsageCostTranscriptEntryAsync,
@@ -211,27 +212,19 @@ export async function loadSessionUsageTimeSeries(
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
     const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
 
-    // Copied history (see dropInheritedTranscriptEvents) stays charted in its source session.
-    let inheritedThrough: string | undefined;
-    let inheritedPoints = 0;
-    for await (const record of readTranscriptRecords(sessionFile)) {
-      if (record.type === "session" && typeof record.inheritedThrough === "string") {
-        inheritedThrough = record.inheritedThrough;
-      }
+    // Copied history stays charted in its source session, as in the usage rollups.
+    for await (const record of readTranscriptRecords(sessionFile, { countedOnly: true })) {
       const entry = await parseUsageCostTranscriptEntryAsync(record, resolveCost, scoped.config);
       const timestamp = entry?.timestamp?.getTime();
-      if (entry?.usage && timestamp) {
-        points.push({
-          timestamp,
-          ...computeUsageTokenTotals(entry.usage),
-          cost: entry.costTotal ?? 0,
-        });
+      if (!entry?.usage || !timestamp) {
+        continue;
       }
-      if (inheritedThrough !== undefined && record.id === inheritedThrough) {
-        inheritedPoints = points.length;
-      }
+      points.push({
+        timestamp,
+        ...computeUsageTokenTotals(entry.usage),
+        cost: entry.costTotal ?? 0,
+      });
     }
-    points = points.slice(inheritedPoints);
 
     points.sort((a, b) => a.timestamp - b.timestamp);
 
@@ -409,7 +402,11 @@ export async function loadSessionLogs(
   });
 }
 
-async function* readTranscriptRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
+/** `countedOnly` drops copied history that its source transcript counts, as usage rollups do. */
+async function* readTranscriptRecords(
+  filePath: string,
+  options: { countedOnly?: boolean } = {},
+): AsyncGenerator<Record<string, unknown>> {
   const marker = parseSqliteSessionFileMarker(filePath);
   if (marker) {
     const signal = getAsyncWorkSignal();
@@ -444,15 +441,14 @@ async function* readTranscriptRecords(filePath: string): AsyncGenerator<Record<s
     } else {
       events = await loadSessionTranscriptEvents(marker);
     }
-    for (const event of selectVisibleTranscriptEvents(events)) {
-      if (isRecord(event)) {
-        yield event;
-      }
-    }
+    const records = events.filter(isRecord);
+    const visible = selectVisibleTranscriptEvents(records);
+    yield* options.countedOnly ? dropInheritedTranscriptEvents(records, visible) : visible;
     return;
   }
   // Durable byte-offset scans own their checkpoint reader. Diagnostic history
   // shares the canonical transcript stream and materializes archive bytes once.
+  // Legacy JSONL transcripts predate the inherited-history marker, as in their rollup scan.
   const transcriptPath = materializeSessionArchiveForRead(filePath);
   for await (const line of streamSessionTranscriptLines(transcriptPath)) {
     try {

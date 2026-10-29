@@ -13,13 +13,13 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { sha256Base64Url } from "./crypto-digest.js";
-import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js";
-import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import {
-  createUsageRollupScan,
   dropInheritedTranscriptEvents,
   projectUsageScanFields,
-} from "./session-cost-usage-rollup-scan.js";
+} from "./session-cost-usage-inherited.js";
+import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js";
+import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
+import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
 import type { ParsedTranscriptEntry, UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 /** Reuse resolved model prices across the bounded pages of one worker operation. */

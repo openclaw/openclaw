@@ -135,6 +135,8 @@ export class SessionManagerBranching extends SessionManagerMetadata {
       this.assertTranscriptWriteActive();
       const assertNavigation = this.captureTranscriptNavigationAssertion();
       const previousSessionId = this.sessionId;
+      // The source counts its active path; copied entries off it still count in the branch.
+      const countedIds = new Set(this.getBranch().map((entry) => entry.id));
       const branchPath = this.collectBranchedSessionPath(leafId);
       if (branchPath.entries.length === 0) {
         throw new Error(`Entry ${leafId} not found`);
@@ -151,7 +153,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         timestamp,
         cwd: this.cwd,
         parentSession: persistenceTarget ? previousSessionId : undefined,
-        inheritedThrough: branchPath.tailId ?? undefined,
+        inheritedThrough: branchPath.entries.findLast((entry) => countedIds.has(entry.id))?.id,
       };
       const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
       const labelEntries: LabelEntry[] = [];

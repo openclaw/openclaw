@@ -1,10 +1,13 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { projectTranscriptNavigationFields } from "../config/sessions/transcript-navigation-fields.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { sha256Base64Url } from "./crypto-digest.js";
+import {
+  dropInheritedTranscriptEvents,
+  projectUsageScanFields,
+} from "./session-cost-usage-inherited.js";
 import {
   computeUsageTokenTotals,
   parseUsageCostTranscriptRecord,
@@ -38,34 +41,6 @@ type UsageCostRollupScanInput = {
 
 function hashUsageCostCheckpointEvent(event: unknown): string {
   return sha256Base64Url(JSON.stringify(event));
-}
-
-/** Navigation fields plus the header's inherited-history marker, for usage scans. */
-export function projectUsageScanFields(
-  event: Record<string, unknown>,
-  record: Record<string, unknown>,
-): void {
-  projectTranscriptNavigationFields(event, record);
-  if (event.type === "session" && typeof event.inheritedThrough === "string") {
-    record.inheritedThrough = event.inheritedThrough;
-  }
-}
-
-/**
- * Rewind, branch switch, fork and subagent parent fork copy history into a new transcript;
- * the source transcript already counts it. Drops records up to the header's marker.
- */
-export function dropInheritedTranscriptEvents<T extends Record<string, unknown>>(
-  records: readonly T[],
-  selected: T[],
-): T[] {
-  const through = records.find((record) => record.type === "session")?.inheritedThrough;
-  const last = typeof through === "string" ? records.findIndex((r) => r.id === through) : -1;
-  if (last < 0) {
-    return selected;
-  }
-  const inherited = new Set(records.slice(0, last + 1));
-  return selected.filter((record) => !inherited.has(record));
 }
 
 export function createUsageRollupScan(params: UsageCostRollupScanInput & { appendOnly: boolean }) {
