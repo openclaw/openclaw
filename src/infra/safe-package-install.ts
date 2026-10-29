@@ -1,6 +1,26 @@
 import type { NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import { createNpmProjectInstallEnv, findExplicitNpmConfigKeys } from "./npm-install-env.js";
 
+export function hasPackageRuntimeDependencies(
+  manifest: {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+  },
+  ignoredPeerDependencies: readonly string[] = [],
+): boolean {
+  return (
+    Object.keys(manifest.dependencies ?? {}).length > 0 ||
+    Object.keys(manifest.optionalDependencies ?? {}).length > 0 ||
+    Object.keys(manifest.peerDependencies ?? {}).some(
+      (name) =>
+        !ignoredPeerDependencies.includes(name) &&
+        manifest.peerDependenciesMeta?.[name]?.optional !== true,
+    )
+  );
+}
+
 type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
   ignoreWorkspaces?: boolean;
   legacyPeerDeps?: boolean;
