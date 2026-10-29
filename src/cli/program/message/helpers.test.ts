@@ -218,7 +218,6 @@ describe("message actions through the CLI parser", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getChannelPluginMock.mockReset();
-    resolveGatewayDelegatedChannelPluginMock.mockReset();
     mockChannelExecutionModes({ telegram: "gateway" });
     ensureConfigReadyMock.mockReset().mockResolvedValue(undefined);
     messageCommandMock.mockResolvedValue(undefined);
@@ -306,13 +305,12 @@ describe("message actions through the CLI parser", () => {
   it("skips local preload for reads an external channel manifest delegates to the Gateway", async () => {
     getChannelPluginMock.mockReturnValue(undefined);
     const delegate = { id: "discord", meta: { id: "discord" } };
-    resolveGatewayDelegatedChannelPluginMock.mockReturnValue(delegate);
+    resolveGatewayDelegatedChannelPluginMock.mockReturnValueOnce(delegate);
     const { getPluginRuntimeGatewayRequestScope } =
       await import("../../../plugins/runtime/gateway-request-scope.js");
     let scopedChannels: unknown;
     messageCommandMock.mockImplementationOnce(async () => {
       scopedChannels = getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.channels;
-      return undefined;
     });
     await runAction("read", { channel: "discord", target: "channel:12345" });
     expectConfigReady("read", true);

@@ -159,20 +159,19 @@ describe("discordMessageActions", () => {
   });
 
   it("declares every Gateway-executed action in the manifest", () => {
-    const manifest = JSON.parse(
-      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
-    );
+    const manifestPath = new URL("../openclaw.plugin.json", import.meta.url);
+    const actions = { roles: true, moderation: true, presence: true };
     const discovery = discordMessageActions.describeMessageTool?.({
-      cfg: discordCfg({
-        token: "Bot token-main",
-        actions: { roles: true, moderation: true, presence: true },
-      }),
+      cfg: discordCfg({ token: "Bot token-main", actions }),
     });
-    const gatewayActions = (discovery?.actions ?? []).filter(
-      (action) => discordMessageActions.resolveExecutionMode?.({ action }) === "gateway",
+    expect(
+      JSON.parse(fs.readFileSync(manifestPath, "utf8")).channelConfigs.discord
+        .gatewayMessageActions,
+    ).toEqual(
+      (discovery?.actions ?? []).filter(
+        (action) => discordMessageActions.resolveExecutionMode?.({ action }) === "gateway",
+      ),
     );
-
-    expect(manifest.channelConfigs.discord.gatewayMessageActions).toEqual(gatewayActions);
   });
 
   it("keeps sticker-upload on local execution mode", () => {

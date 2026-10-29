@@ -724,42 +724,26 @@ Object.assign(module.exports.plugin.config, {
 });
 
 describe("resolveGatewayDelegatedChannelPlugin", () => {
-  it("does not delegate undeclared actions", () => {
-    const { cfg } = setupFixture({
-      setupEntry: false,
-      manifestChannelConfig: true,
-      manifestGatewayMessageActions: ["read"],
-    });
-    const plugin = resolveGatewayDelegatedChannelPlugin({
-      channelId: "external-chat",
-      action: "send",
-      config: cfg,
-      env: { ...process.env },
-    });
-
-    expect(plugin).toBeUndefined();
-  });
-
-  it("sends a delegated read to the Gateway without bootstrapping channel runtime", async () => {
+  it("sends only declared actions of enabled plugins to the Gateway without channel runtime", async () => {
     const { cfg, fullMarker, setupMarker } = setupFixture({
       setupEntry: false,
       manifestChannelConfig: true,
       manifestGatewayMessageActions: ["read"],
     });
-    const plugin = resolveGatewayDelegatedChannelPlugin({
-      channelId: "external-chat",
-      action: "read",
-      config: cfg,
-      env: { ...process.env },
-    });
+    const resolve = (action: "read" | "send", config = cfg) =>
+      resolveGatewayDelegatedChannelPlugin({ channelId: "external-chat", action, config });
+    expect(resolve("send")).toBeUndefined();
+    expect(
+      resolve("read", { ...cfg, plugins: { ...cfg.plugins, enabled: false } }),
+    ).toBeUndefined();
+    const plugin = resolve("read");
     if (!plugin) {
       throw new Error("expected a delegated channel plugin");
     }
     const registry = createEmptyPluginRegistry();
     registry.channels.push({ pluginId: plugin.id, source: "manifest", plugin });
     // Vitest mocks erase the generic request signature, so leave this one untyped.
-    const request = vi.fn();
-    request.mockResolvedValue({ ok: true, messages: [] });
+    const request = vi.fn().mockResolvedValue({ ok: true, messages: [] });
     const { runMessageAction } = await import("../../infra/outbound/message-action-runner.js");
 
     const result = await withPluginRuntimeRegistryScope(registry, () =>
@@ -782,21 +766,5 @@ describe("resolveGatewayDelegatedChannelPlugin", () => {
     );
     expect(result).toMatchObject({ channel: "external-chat", action: "read" });
     expectMarkers(setupMarker, fullMarker);
-  });
-
-  it("ignores disabled plugins", () => {
-    const { cfg } = setupFixture({
-      setupEntry: false,
-      manifestChannelConfig: true,
-      manifestGatewayMessageActions: ["read"],
-    });
-    expect(
-      resolveGatewayDelegatedChannelPlugin({
-        channelId: "external-chat",
-        action: "read",
-        config: { ...cfg, plugins: { ...cfg.plugins, enabled: false } },
-        env: { ...process.env },
-      }),
-    ).toBeUndefined();
   });
 });
