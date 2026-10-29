@@ -1874,12 +1874,15 @@ describe("installPluginFromNpmSpec", () => {
               },
               "node-domexception": "npm:@nolyfill/domexception@1.0.28",
               "range-target@>1": "2.0.0",
+              // npm's nested form of pnpm's exact-parent child rule.
+              "werift-ice@0.2.2": { ip: "npm:neoip@3.1.0" },
             });
             expect(manifest.openclaw?.managedOverrides).toEqual([
               "axios",
               "nested",
               "node-domexception",
               "range-target@>1",
+              "werift-ice@0.2.2",
             ]);
             return {
               code: 1,
