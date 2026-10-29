@@ -17,6 +17,14 @@ const GITHUB_CREDENTIAL_VERIFICATION_TTL_MS = 60_000;
 
 const DEVICE_CODE = "a".repeat(40);
 
+const systemError = (message: string, code: string, syscall?: string) =>
+  Object.assign(new Error(message), { code, ...(syscall ? { syscall } : {}) });
+const fetchFailed = (cause: unknown) => new TypeError("fetch failed", { cause });
+const refused = () =>
+  systemError("connect ECONNREFUSED 140.82.112.3:443", "ECONNREFUSED", "connect");
+const addressAggregate = (errors: Error[]) =>
+  Object.assign(new AggregateError(errors), { code: "ECONNREFUSED" });
+
 const unavailable = { status: "unavailable" };
 const unverified = { status: "unverified" };
 const respond = (body: unknown, status = 200) =>
@@ -254,6 +262,56 @@ describe("GitHub OAuth client", () => {
     }).catch((error: unknown) => error);
     expect(fetch).not.toHaveBeenCalled();
     expect(isRecoverableOAuthRefreshFailure(failure)).toBe(true);
+  });
+
+  it.each([
+    ["DNS lookup", systemError("getaddrinfo ENOTFOUND github.com", "ENOTFOUND", "getaddrinfo")],
+    ["DNS retry", systemError("getaddrinfo EAI_AGAIN github.com", "EAI_AGAIN", "getaddrinfo")],
+    ["refused connect", refused()],
+    ["unreachable network", systemError("connect ENETUNREACH", "ENETUNREACH", "connect")],
+    [
+      "connect timeout",
+      Object.assign(new Error("Connect Timeout Error"), {
+        name: "ConnectTimeoutError",
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    ],
+    ["connect to every address", addressAggregate([refused(), refused()])],
+  ])("restores a refresh whose %s failed before the request was written", async (_name, cause) => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(fetchFailed(cause));
+    const failure = await refreshGitHubOAuthToken({ refreshToken: "synthetic-refresh" }).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toMatchObject({
+      oauthRefreshOutcome: { phase: "before-dispatch", outcome: "not-attempted" },
+    });
+    expect(isRecoverableOAuthRefreshFailure(failure)).toBe(true);
+  });
+
+  it.each([
+    ["reset after writing", fetchFailed(systemError("read ECONNRESET", "ECONNRESET", "read"))],
+    ["closed socket", fetchFailed(systemError("other side closed", "UND_ERR_SOCKET"))],
+    ["request timeout", new DOMException("The operation timed out", "TimeoutError")],
+    ["refusal without a syscall", fetchFailed(systemError("refused", "ECONNREFUSED"))],
+    [
+      "coded wrapper",
+      fetchFailed(Object.assign(new Error("wrapped"), { code: "ECONNRESET", cause: refused() })),
+    ],
+    [
+      "mixed address outcomes",
+      fetchFailed(
+        addressAggregate([refused(), systemError("read ECONNRESET", "ECONNRESET", "read")]),
+      ),
+    ],
+  ])("keeps the refresh grant fenced after an ambiguous %s", async (_name, error) => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(error);
+    const failure = await refreshGitHubOAuthToken({ refreshToken: "synthetic-refresh" }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(failure).toMatchObject({
+      oauthRefreshOutcome: { phase: "token-response", outcome: "unknown" },
+    });
+    expect(isRecoverableOAuthRefreshFailure(failure)).toBe(false);
   });
 
   it.each([
