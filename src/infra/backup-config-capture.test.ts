@@ -14,17 +14,16 @@ import { createConfigIO } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  withOpenClawTestState as withState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive as backup } from "./backup-create.js";
-import { listArchiveEntries, useIsolatedBackupTempRoot } from "./backup-create.test-support.js";
+import {
+  listArchiveEntries,
+  withIsolatedBackupState as withState,
+} from "./backup-create.test-support.js";
 import * as sqliteCapture from "./backup-sqlite-snapshot.js";
 import { requireNodeSqlite, resolveSqliteFilesystemPath } from "./node-sqlite.js";
 
 const runtime: RuntimeEnv = { log: () => {}, error: () => {}, exit: () => {} };
-useIsolatedBackupTempRoot();
 
 afterEach(() => {
   vi.restoreAllMocks();

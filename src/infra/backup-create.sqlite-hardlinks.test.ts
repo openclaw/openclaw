@@ -1,12 +1,21 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { verifyBackupArchive } from "../commands/backup-verify.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   withBackupFixture,
   createVerifiedBackup,
@@ -15,20 +24,123 @@ import {
   createOwnedSqliteDatabase,
   declarePluginSqliteResources,
   inspectDatabase,
+  isolateBackupScratch,
   mkdirs,
 } from "./backup-create-family.test-support.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
-import {
-  listArchiveEntryDetails,
-  useIsolatedBackupTempRoot,
-} from "./backup-create.test-support.js";
+import { listArchiveEntryDetails } from "./backup-create.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 
-useIsolatedBackupTempRoot();
+const systemTempRoot = os.tmpdir();
 
 afterEach(() => vi.restoreAllMocks());
+
+it("preserves fixture inputs after a retained backup reader cannot close", async () => {
+  // Keep the real snapshot outside the parent under test so even the broken
+  // parent cleanup leaves its native owner available for supported retirement.
+  const snapshots = createTempDirTracker();
+  const cacheRoot = snapshots.make("backup-retained-reader-", systemTempRoot);
+  const environment = { ...process.env };
+  const restores: Array<() => void> = [];
+  const failure = new Error("retained backup reader close incomplete");
+  let fixture: OpenClawTestState | undefined;
+  let input = "";
+  let snapshotPath = "";
+  let snapshotBytes: Buffer | undefined;
+  let readSucceeded = false;
+  let closeAttempts = 0;
+
+  onTestFinished(async () => {
+    try {
+      expect(readSucceeded).toBe(true);
+      expect(closeAttempts).toBeGreaterThan(1);
+      expect(await fs.readFile(input, "utf8")).toBe("retained fixture input\n");
+      expect(await fs.readFile(snapshotPath)).toEqual(snapshotBytes);
+    } finally {
+      for (const restore of restores.toReversed()) {
+        restore();
+      }
+      if (fixture) {
+        // The fixture caches its failed cleanup. Rejoin the real retained
+        // owner before removing any bytes or restoring its selectors.
+        await cleanupSessionStateForTest({ rootPath: fixture.root, stateDir: fixture.stateDir });
+        if (snapshotPath) {
+          await expect(fs.stat(snapshotPath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        await fs.rm(fixture.root, { recursive: true, force: true });
+      }
+      snapshots.cleanup();
+      // Other keys already belong to the enclosing hooks' restoration.
+      for (const key of Object.keys(fixture?.envVars ?? {})) {
+        const value = environment[key];
+        if (value === undefined) {
+          deleteTestEnvValue(key);
+        } else {
+          setTestEnvValue(key, value);
+        }
+      }
+    }
+  });
+
+  const captureSource = stateReadWorker.captureOpenClawStateReadSource;
+  const capture = vi
+    .spyOn(stateReadWorker, "captureOpenClawStateReadSource")
+    .mockImplementation(() => {
+      const source = captureSource();
+      const createTransport = source.createTransport.bind(source);
+      const create = vi
+        .spyOn(source, "createTransport")
+        .mockImplementation((command, onChunk, onChunkAsync, awaitedOnly) => {
+          const transport = createTransport(command, onChunk, onChunkAsync, awaitedOnly);
+          if (command.type === "worktrees.livePaths") {
+            const startRead = transport.startRead.bind(transport);
+            const read = vi
+              .spyOn(transport, "startRead")
+              .mockImplementation(async (...readArgs) => {
+                snapshotPath = readArgs[0].location;
+                const outcome = await startRead(...readArgs);
+                readSucceeded = "value" in outcome && outcome.value.ok;
+                return outcome;
+              });
+            const close = transport.startClose;
+            // Keep the retained refusal active through the sibling mock-reset hook.
+            transport.startClose = async () => {
+              closeAttempts++;
+              throw failure;
+            };
+            restores.push(
+              () => read.mockRestore(),
+              () => {
+                transport.startClose = close;
+              },
+            );
+          }
+          return transport;
+        });
+      restores.push(() => create.mockRestore());
+      return source;
+    });
+  restores.push(() => capture.mockRestore());
+
+  await expect(
+    withBackupFixture({ prefix: "backup-retained-fixture-" }, async (state) => {
+      fixture = state;
+      await isolateBackupScratch(state);
+      state.envVars.XDG_CACHE_HOME = cacheRoot;
+      state.applyEnv();
+      input = await state.writeText("retained-input.txt", "retained fixture input\n");
+      const owner = openOpenClawStateDatabase({ env: state.env });
+      await closeOpenClawStateDatabaseByPathAsync(owner.path);
+      const output = state.path("backup.tar.gz");
+      await expect(createArchive(state)).rejects.toThrow();
+      expect(snapshotPath).not.toBe(owner.path);
+      snapshotBytes = await fs.readFile(snapshotPath);
+      await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+    }),
+  ).rejects.toThrow();
+});
 
 function mutateAfterSnapshot(paths: string[], mutate: () => void | Promise<void>) {
   const capture = sqliteSnapshot.createVerifiedSqliteSnapshot;
@@ -58,6 +170,7 @@ function hardlinkCase<Args extends unknown[]>(
   const aliasName = ownerName.replace("alpha", "zeta");
   return (...args: Args) =>
     withBackupFixture({ layout: "split", prefix: "backup-plugin-hardlinks-" }, async (state) => {
+      await isolateBackupScratch(state);
       if (!opaque) {
         await declarePluginSqliteResources(state, "plugins/hardlinks");
       }
@@ -116,6 +229,12 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
   it(
     "copies undeclared hardlinks and sidecars as opaque bytes",
     hardlinkCase(async ({ state, ownerPath, aliasPath }) => {
+      const scratchRoot = os.tmpdir();
+      onTestFinished(async () => {
+        for (const root of [state.root, scratchRoot]) {
+          await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      });
       await fs.copyFile(`${ownerPath}-wal`, `${aliasPath}-wal`);
       await fs.link(ownerPath, state.path("outside.sqlite"));
       const directory = path.dirname(ownerPath);
