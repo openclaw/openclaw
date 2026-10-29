@@ -7,7 +7,6 @@ import {
   validateNodePresenceActivityPayload,
 } from "../../packages/gateway-protocol/src/index.js";
 import { DesktopAvailabilitySchema } from "../../packages/gateway-protocol/src/schema/environments.js";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
@@ -489,13 +488,17 @@ async function handlePreparedNodeEvent(
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
-      const { storePath, entry, canonicalKey } =
-        source?.loaded ??
-        (await loadGatewaySessionEntryReadOnlyInWorker({
-          cfg,
-          key: sessionKey,
-          excludeInternalEffects: true,
-        }));
+      const {
+        storePath,
+        entry,
+        canonicalKey,
+        agentId: sessionAgentId,
+      } = source?.loaded ??
+      (await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg,
+        key: sessionKey,
+        excludeInternalEffects: true,
+      }));
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -516,7 +519,6 @@ async function handlePreparedNodeEvent(
         return undefined;
       }
       if (normalizedAttachments.length > 0) {
-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
         const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const supportsInlineImages = await resolveGatewayModelSupportsImages({
           loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
