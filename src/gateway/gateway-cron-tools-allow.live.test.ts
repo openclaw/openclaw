@@ -25,12 +25,27 @@ const MODEL_ID = "gpt-5.6-luna";
 const MODEL_KEY = `openai/${MODEL_ID}`;
 const RUN_TIMEOUT_MS = 300_000;
 
-async function cliJson(instance: OpenClawTestInstance, args: string[]): Promise<unknown> {
+async function cliJson(
+  instance: OpenClawTestInstance,
+  args: string[],
+  onFailure?: () => Promise<unknown>,
+): Promise<unknown> {
   const result = await instance.cli(
     [...args, "--url", instance.url, "--token", instance.gatewayToken, "--json"],
     { timeoutMs: RUN_TIMEOUT_MS + 30_000 },
   );
-  expect(result.code, `${args[0]} ${args[1]}: ${result.stderr}\n${result.stdout}`).toBe(0);
+  let failureContext = "";
+  if (result.code !== 0 && onFailure) {
+    try {
+      failureContext = `\nFailure context: ${JSON.stringify(await onFailure())}`;
+    } catch {
+      failureContext = "\nFailure context unavailable";
+    }
+  }
+  expect(
+    result.code,
+    `${args[0]} ${args[1]}: ${result.stderr}\n${result.stdout}${failureContext}`,
+  ).toBe(0);
   return JSON.parse(result.stdout);
 }
 
@@ -136,18 +151,37 @@ describeLive("cron tool allowlists through live harnesses", () => {
               "--tools",
               cap,
               "--message",
-              `${instruction} Reply with the file contents. If no tools are available, reply exactly NO_TOOLS.`,
+              `${instruction} Reply with the file contents. If the requested tool is unavailable, reply exactly NO_TOOLS. An exec/wait wrapper with no callable tools does not provide file access.`,
             ])) as CronJob;
             expect(updated.payload).toMatchObject({ toolsAllow: cap ? [cap] : [] });
 
-            const completed = (await cliJson(instance, [
-              "cron",
-              "run",
-              job.id,
-              "--wait",
-              "--wait-timeout",
-              "5m",
-            ])) as { completed: boolean; status: string; run: CronRunLogEntry };
+            // Failed runs also retire their alias; capture the stable row before asserting.
+            const historyArgs = [
+              "gateway",
+              "call",
+              "chat.history",
+              "--params",
+              JSON.stringify({ sessionKey: `agent:probe:cron:${job.id}`, limit: 100 }),
+            ];
+            const completed = (await cliJson(
+              instance,
+              ["cron", "run", job.id, "--wait", "--wait-timeout", "5m"],
+              async () => {
+                const history = (await cliJson(instance, historyArgs)) as { messages: Message[] };
+                return {
+                  runtime,
+                  cap,
+                  roles: history.messages.map((message) => message.role),
+                  calls: history.messages.flatMap((message) =>
+                    message.role === "assistant" && Array.isArray(message.content)
+                      ? message.content
+                          .filter((block) => block.type === "toolCall")
+                          .map((block) => block.name)
+                      : [],
+                  ),
+                };
+              },
+            )) as { completed: boolean; status: string; run: CronRunLogEntry };
             expect(completed).toMatchObject({ completed: true, status: "ok" });
             expect(completed.run).toMatchObject({
               completionStatus: "succeeded",
@@ -165,13 +199,7 @@ describeLive("cron tool allowlists through live harnesses", () => {
             sessionKeys.add(sessionKey);
 
             // Completed runs retire their alias; the stable row owns this transcript generation.
-            const history = (await cliJson(instance, [
-              "gateway",
-              "call",
-              "chat.history",
-              "--params",
-              JSON.stringify({ sessionKey: `agent:probe:cron:${job.id}`, limit: 100 }),
-            ])) as {
+            const history = (await cliJson(instance, historyArgs)) as {
               sessionId: string;
               messages: Array<Message | { role: "assistant"; content: string }>;
               sessionInfo: { agentRuntime?: { id: string } };
