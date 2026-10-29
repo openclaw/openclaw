@@ -289,3 +289,6 @@ describe("RequestClient", () => {
 function readRequestUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
+
+// Claimed for #187537 by scripts/claim-window.sh; replaced by the real regression.
+it.todo("settles a queued request when its caller aborts");
