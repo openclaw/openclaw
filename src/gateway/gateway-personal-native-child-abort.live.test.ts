@@ -9,6 +9,8 @@ import { createServer } from "node:tls";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { bundledPluginFileAt } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import type { NativeSubagentsSnapshot } from "../../packages/gateway-protocol/src/index.js";
+import type { ModelsListResult } from "../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { assertGatewayAgentsAdmitted } from "../../test/helpers/gateway-agent-admission.js";
 import { withCodexNativeThreadReader } from "../../test/helpers/gateway-codex-harness-native-subagent.js";
@@ -17,6 +19,8 @@ import {
   createCodexHarnessWorkspace,
   parseCodexHarnessModelKey,
 } from "../../test/helpers/gateway-codex-harness.js";
+import { waitForFile } from "../../test/helpers/process-wait.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
@@ -24,6 +28,7 @@ import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
@@ -32,7 +37,10 @@ import { liveOpenAiApiKeyModels } from "./live-openai-models.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 
-const describeLive = isLiveTestEnabled() ? describe : describe.skip;
+const describeLive =
+  isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS)
+    ? describe
+    : describe.skip;
 const WAIT_MS = 180_000;
 const pollOptions = { timeout: WAIT_MS, interval: 250 };
 type NativeRecord = Record<string, unknown>;
@@ -87,7 +95,15 @@ describeLive("gateway live (personal native descendant Stop)", () => {
     const clients: GatewayClient[] = [];
     const sockets = new Set<net.Socket>();
     const releases: string[] = [];
-    const events: Array<{ event?: string; payload?: unknown }> = [];
+    const starts = new Map<
+      string,
+      {
+        thread: ReturnType<typeof createDeferred<string>>;
+        ended: AbortController;
+        key: string;
+        yielded: boolean;
+      }
+    >();
     let frontClaim: Awaited<ReturnType<typeof acquireTestPortBlock>> | undefined;
     const front = createServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM }, (socket) => {
       const upstream = net.connect(instance.port, "127.0.0.1");
@@ -159,7 +175,6 @@ describeLive("gateway live (personal native descendant Stop)", () => {
                 enabled: true,
                 config: {
                   appServer: {
-                    command: codexCommand,
                     args: nativeArgs,
                     mode: "yolo",
                     homeScope: "agent",
@@ -169,7 +184,6 @@ describeLive("gateway live (personal native descendant Stop)", () => {
             },
           },
           secrets: { providers: { default: { source: "env" } } },
-          tools: { deny: ["sessions_spawn"] },
           models: liveOpenAiApiKeyModels(),
         };
         await instance.state.writeConfig(config);
@@ -211,11 +225,36 @@ describeLive("gateway live (personal native descendant Stop)", () => {
               requestTimeoutMs: WAIT_MS,
               onHelloOk: (hello) => expect(hello.auth?.scopes).not.toContain("operator.admin"),
               onEvent: (event) => {
-                if (
-                  event.event === "agent" &&
-                  asOptionalRecord(event.payload)?.stream === "codex_app_server.lifecycle"
+                const payload = asOptionalRecord(event.payload);
+                const pending =
+                  typeof payload?.runId === "string" ? starts.get(payload.runId) : undefined;
+                if (!pending || payload?.sessionKey !== pending.key) {
+                  return;
+                }
+                if (event.event === "agent" && payload?.stream === "codex_app_server.lifecycle") {
+                  const data = asOptionalRecord(payload.data);
+                  if (data?.phase === "thread_ready" && typeof data.threadId === "string") {
+                    pending.thread.resolve(data.threadId);
+                  }
+                } else if (event.event === "agent" && payload?.stream === "lifecycle") {
+                  const data = asOptionalRecord(payload.data);
+                  if (
+                    data?.phase === "end" &&
+                    data.yielded === true &&
+                    data.livenessState === "paused" &&
+                    data.stopReason === "end_turn" &&
+                    data.aborted !== true &&
+                    !data.error
+                  ) {
+                    pending.yielded = true;
+                  }
+                } else if (
+                  event.event === "chat" &&
+                  (payload?.state === "error" || payload?.state === "aborted")
                 ) {
-                  events.push(event);
+                  pending.ended.abort(
+                    new Error(`Native parent ended with ${payload?.state} before child readiness`),
+                  );
                 }
               },
             }),
@@ -244,6 +283,21 @@ describeLive("gateway live (personal native descendant Stop)", () => {
             visibility: "shared",
           });
           expect(created.key).toBe(key);
+          const expected = parseCodexHarnessModelKey(modelKey);
+          const catalog = await client.request<ModelsListResult>("models.list", {
+            agentId: "dev",
+            sessionKey: key,
+          });
+          const selected = catalog.models.filter(
+            (entry) => entry.id === expected.modelId && entry.provider === expected.provider,
+          );
+          expect(selected.length > 0, "Configured model is available to the personal caller").toBe(
+            true,
+          );
+          expect(
+            selected.some((entry) => entry.agentRuntime?.id === "codex"),
+            "Configured native runtime is available",
+          ).toBe(true);
           const heartbeat = path.join(workspace, `${name}-heartbeat`);
           const release = path.join(workspace, `${name}-release`);
           const command = path.join(workspace, `${name}-wait.cjs`);
@@ -255,7 +309,8 @@ describeLive("gateway live (personal native descendant Stop)", () => {
               "let ticks = 0;",
               "const deadline = Date.now() + 600000;",
               "const timer = setInterval(() => {",
-              `  fs.writeFileSync(${JSON.stringify(heartbeat)}, String(++ticks));`,
+              `  fs.writeFileSync(${JSON.stringify(heartbeat + ".pending")}, JSON.stringify({ ticks: ++ticks, threadId: process.env.CODEX_THREAD_ID }));`,
+              `  fs.renameSync(${JSON.stringify(heartbeat + ".pending")}, ${JSON.stringify(heartbeat)});`,
               `  if (fs.existsSync(${JSON.stringify(release)})) {`,
               "    clearInterval(timer);",
               '    process.stdout.write("NATIVE-BARRIER-RELEASED\\n");',
@@ -264,43 +319,38 @@ describeLive("gateway live (personal native descendant Stop)", () => {
             ].join("\n"),
           );
           const runId = randomUUID();
-          expect(
-            await client.request("chat.send", {
-              sessionKey: key,
-              idempotencyKey: runId,
-              message: [
-                "This is a synthetic native cancellation test.",
-                "Delegate the following task to one helper and wait for that helper to finish.",
-                `Have the helper run the existing Node.js script at ${JSON.stringify(command)}. It waits for the fixture owner to release it. Do not create, edit, or remove files.`,
-                "Stay active until the helper finishes; do not run its script yourself.",
-              ].join("\n"),
-            }),
-          ).toMatchObject({ runId, status: "started" });
-          await expect
-            .poll(() => fs.readFile(heartbeat, "utf8").catch(() => ""), pollOptions)
-            .not.toBe("");
-          let threadId: string | undefined;
-          await expect
-            .poll(() => {
-              const readyEvent = events.find((event) => {
-                const payload = asOptionalRecord(event.payload);
-                return (
-                  event.event === "agent" &&
-                  payload?.runId === runId &&
-                  payload.sessionKey === key &&
-                  payload.stream === "codex_app_server.lifecycle" &&
-                  asOptionalRecord(payload.data)?.phase === "thread_ready"
-                );
-              });
-              const value = asOptionalRecord(asOptionalRecord(readyEvent?.payload)?.data)?.threadId;
-              threadId = typeof value === "string" ? value : undefined;
-              return threadId;
-            }, pollOptions)
-            .toBeTypeOf("string");
-          if (!threadId) {
-            throw new Error("Native parent thread was not observed");
+          const pending = {
+            thread: createDeferred<string>(),
+            ended: new AbortController(),
+            key,
+            yielded: false,
+          };
+          starts.set(runId, pending);
+          const setupSignal = AbortSignal.any([
+            signal,
+            pending.ended.signal,
+            AbortSignal.timeout(WAIT_MS),
+          ]);
+          try {
+            expect(
+              await client.request("chat.send", {
+                sessionKey: key,
+                idempotencyKey: runId,
+                message: [
+                  "This is a synthetic native cancellation test.",
+                  "Delegate the following task to one helper and wait for that helper to finish.",
+                  `Have the helper run the existing Node.js script at ${JSON.stringify(command)}. It records progress while waiting for the fixture owner to release it. Do not modify the script or create its release file.`,
+                  "Stay active until the helper finishes; do not run its script yourself.",
+                ].join("\n"),
+              }),
+            ).toMatchObject({ runId, status: "started" });
+            const threadId = await withinTest(pending.thread.promise, setupSignal);
+            await waitForFile(heartbeat, setupSignal);
+            return { key, runId, threadId, heartbeat, command, pending, client };
+          } catch (error) {
+            starts.delete(runId);
+            throw error;
           }
-          return { key, runId, threadId, heartbeat, command };
         };
         const alice = await start(aliceA, "alice");
         const foreign = await start(bob, "bob");
@@ -315,84 +365,179 @@ describeLive("gateway live (personal native descendant Stop)", () => {
             requestTimeoutMs: WAIT_MS,
           },
           async (readNativeThread) => {
+            const assertRunning = async (parent: typeof alice, childId: string) => {
+              await expect
+                .poll(async () => {
+                  const result = await parent.client.request<{
+                    nativeSubagents?: NativeSubagentsSnapshot;
+                  }>("sessions.describe", { key: parent.key, includeNativeSubagents: true });
+                  const roster = result.nativeSubagents;
+                  return (
+                    roster?.coverage === "live" &&
+                    roster.children.some(
+                      (child) => child.id === `codex:${childId}` && child.status === "running",
+                    )
+                  );
+                }, pollOptions)
+                .toBe(true);
+            };
             const captureChild = async (parent: typeof alice) => {
-              let childId: string | undefined;
-              let parentTurnId: string | undefined;
+              let spawned: { id: string; parentTurnId: string } | undefined;
+              const inheritedTurnIds = new Set<string>();
               await expect
                 .poll(async () => {
                   const thread = nativeThread(
                     await readNativeThread(parent.threadId),
                     parent.threadId,
                   );
-                  const active = records(thread.turns).find((turn) => turn.status === "inProgress");
-                  parentTurnId = typeof active?.id === "string" ? active.id : undefined;
-                  const children = new Set(
-                    records(thread.turns)
-                      .flatMap((turn) => records(turn.items))
-                      .flatMap((item) =>
-                        item.type === "subAgentActivity" &&
-                        item.kind === "started" &&
-                        typeof item.agentThreadId === "string"
-                          ? [item.agentThreadId]
-                          : [],
-                      ),
+                  for (const turn of records(thread.turns)) {
+                    if (typeof turn.id === "string") {
+                      inheritedTurnIds.add(turn.id);
+                    }
+                  }
+                  const children = records(thread.turns).flatMap((turn) =>
+                    records(turn.items).flatMap((item) =>
+                      item.type === "subAgentActivity" &&
+                      item.kind === "started" &&
+                      typeof item.agentThreadId === "string" &&
+                      typeof turn.id === "string"
+                        ? [{ id: item.agentThreadId, parentTurnId: turn.id }]
+                        : [],
+                    ),
                   );
-                  expect(children.size).toBeLessThanOrEqual(1);
-                  childId = [...children][0];
-                  return children.size;
+                  expect(children.length).toBeLessThanOrEqual(1);
+                  spawned = children[0];
+                  return children.length;
                 }, pollOptions)
                 .toBe(1);
-              if (!childId || !parentTurnId) {
+              if (!spawned) {
+                throw new Error("Native child must belong to an exact spawning parent turn");
+              }
+              const { id, parentTurnId } = spawned;
+              const heartbeat = asOptionalRecord(
+                JSON.parse(await fs.readFile(parent.heartbeat, "utf8")),
+              );
+              expect(heartbeat?.threadId).toBe(id);
+              expect(Number.isFinite(heartbeat?.ticks)).toBe(true);
+              await assertRunning(parent, id);
+              let turnId: string | undefined;
+              let observation: unknown;
+              try {
+                await expect
+                  .poll(async () => {
+                    const thread = nativeThread(await readNativeThread(id), id);
+                    expect(thread.parentThreadId).toBe(parent.threadId);
+                    observation = records(thread.turns)
+                      .slice(-10)
+                      .map((turn) => ({
+                        id: turn.id,
+                        status: turn.status,
+                        startedAt: turn.startedAt,
+                        completedAt: turn.completedAt,
+                        items: records(turn.items)
+                          .slice(-20)
+                          .map((item) => ({
+                            type: item.type,
+                            fixtureCommand:
+                              typeof item.command === "string" &&
+                              item.command.includes(path.basename(parent.command)),
+                          })),
+                      }));
+                    const unfinished = records(thread.turns).filter(
+                      (candidate) =>
+                        typeof candidate.id === "string" &&
+                        !inheritedTurnIds.has(candidate.id) &&
+                        Number.isFinite(candidate.startedAt) &&
+                        candidate.completedAt == null &&
+                        candidate.status !== "failed" &&
+                        candidate.status !== "completed",
+                    );
+                    expect(
+                      unfinished.length,
+                      "Exactly one child-owned unfinished native turn",
+                    ).toBeLessThanOrEqual(1);
+                    turnId = typeof unfinished[0]?.id === "string" ? unfinished[0].id : undefined;
+                    return turnId;
+                  }, pollOptions)
+                  .toBeTypeOf("string");
+              } catch (error) {
+                const described = await parent.client.request<{
+                  nativeSubagents?: NativeSubagentsSnapshot;
+                }>("sessions.describe", { key: parent.key, includeNativeSubagents: true });
                 throw new Error(
-                  "Native parent must retain an active turn while its child is working",
+                  `Native barrier turn unavailable: ${JSON.stringify({
+                    turns: observation,
+                    native: described.nativeSubagents && {
+                      coverage: described.nativeSubagents.coverage,
+                      children: described.nativeSubagents.children.map((child) => ({
+                        id: child.id,
+                        status: child.status,
+                      })),
+                    },
+                  })}`,
+                  { cause: error },
                 );
               }
-              const id = childId;
-              const capturedParentTurnId = parentTurnId;
-              let turnId: string | undefined;
-              await expect
-                .poll(async () => {
-                  const thread = nativeThread(await readNativeThread(id), id);
-                  expect(thread.parentThreadId).toBe(parent.threadId);
-                  const turn = records(thread.turns).find(
-                    (candidate) => candidate.status === "inProgress",
-                  );
-                  const ownsBarrier =
-                    turn &&
-                    records(turn.items).some(
-                      (item) =>
-                        item.type === "commandExecution" &&
-                        typeof item.command === "string" &&
-                        item.command.includes(parent.command),
-                    );
-                  turnId = ownsBarrier && typeof turn?.id === "string" ? turn.id : undefined;
-                  return turnId;
-                }, pollOptions)
-                .toBeTypeOf("string");
               if (!turnId) {
                 throw new Error("Native child did not expose an active turn");
               }
-              return { id, turnId, parentTurnId: capturedParentTurnId };
+              await assertRunning(parent, id);
+              return { id, turnId, parentTurnId };
             };
             const child = await captureChild(alice);
             const otherChild = await captureChild(foreign);
             expect(child.id).not.toBe(otherChild.id);
-            const status = async (threadId: string, turnId: string) => {
+            // Cold reads normalize active status but never invent completedAt. The live
+            // roster proves activity; this exact turn's real timestamp proves settlement.
+            const readTurn = async (threadId: string, turnId: string) => {
               const thread = nativeThread(await readNativeThread(threadId), threadId);
-              return records(thread.turns).find((turn) => turn.id === turnId)?.status;
+              const turn = records(thread.turns).find((candidate) => candidate.id === turnId);
+              if (!turn) {
+                throw new Error("Native history omitted the exact observed turn");
+              }
+              return turn;
             };
-            expect(await status(alice.threadId, child.parentTurnId)).toBe("inProgress");
-            expect(await status(foreign.threadId, otherChild.parentTurnId)).toBe("inProgress");
+            const assertInterrupted = async (threadId: string, turnId: string) => {
+              await expect
+                .poll(async () => {
+                  const turn = await readTurn(threadId, turnId);
+                  return turn.status === "interrupted" && Number.isFinite(turn.completedAt);
+                }, pollOptions)
+                .toBe(true);
+            };
+            const qualifyParent = async (parent: typeof alice, parentTurnId: string) => {
+              let observed: unknown;
+              await expect
+                .poll(async () => {
+                  const turn = await readTurn(parent.threadId, parentTurnId);
+                  observed = { status: turn.status, completedAt: turn.completedAt };
+                  return (
+                    turn.completedAt == null ||
+                    ((turn.status === "completed" || turn.status === "interrupted") &&
+                      Number.isFinite(turn.completedAt) &&
+                      parent.pending.yielded)
+                  );
+                }, pollOptions)
+                .toBe(true);
+              return { nativeTurn: observed, hostYielded: parent.pending.yielded };
+            };
+            const aliceBefore = await qualifyParent(alice, child.parentTurnId);
+            const bobBefore = await qualifyParent(foreign, otherChild.parentTurnId);
+            const threadTurns = async (id: string) =>
+              records(nativeThread(await readNativeThread(id), id).turns);
+            const aliceParentTurnIds = (await threadTurns(alice.threadId)).map((turn) => turn.id);
+            const aliceChildTurnIds = (await threadTurns(child.id)).map((turn) => turn.id);
             // This is the product's session Stop action, deliberately without a runId.
             expect(await aliceB.request("sessions.abort", { key: alice.key })).toMatchObject({
               status: "aborted",
             });
-            await expect
-              .poll(() => status(child.id, child.turnId), pollOptions)
-              .toBe("interrupted");
-            await expect
-              .poll(() => status(alice.threadId, child.parentTurnId), pollOptions)
-              .toBe("interrupted");
+            await assertInterrupted(child.id, child.turnId);
+            const parentAfterStop = await readTurn(alice.threadId, child.parentTurnId);
+            expect(Number.isFinite(parentAfterStop.completedAt)).toBe(true);
+            expect(
+              parentAfterStop.status === "interrupted" ||
+                (parentAfterStop.status === "completed" && alice.pending.yielded),
+            ).toBe(true);
             await expect
               .poll(async () => {
                 const result = await aliceB.request<{
@@ -404,12 +549,33 @@ describeLive("gateway live (personal native descendant Stop)", () => {
                 };
               }, pollOptions)
               .toEqual({ aborted: true, active: false });
+            const stoppedHeartbeat = await fs.readFile(alice.heartbeat, "utf8");
+            const assertAliceRemainsStopped = async () => {
+              const parentTurns = await threadTurns(alice.threadId);
+              const childTurns = await threadTurns(child.id);
+              expect(parentTurns.map((turn) => turn.id)).toEqual(aliceParentTurnIds);
+              expect(childTurns.map((turn) => turn.id)).toEqual(aliceChildTurnIds);
+              expect(
+                Number.isFinite(
+                  parentTurns.find((turn) => turn.id === child.parentTurnId)?.completedAt,
+                ),
+              ).toBe(true);
+              expect(
+                Number.isFinite(childTurns.find((turn) => turn.id === child.turnId)?.completedAt),
+              ).toBe(true);
+              expect(await fs.readFile(alice.heartbeat, "utf8")).toBe(stoppedHeartbeat);
+            };
+            await assertAliceRemainsStopped();
             const before = await fs.readFile(foreign.heartbeat, "utf8");
             await expect
               .poll(() => fs.readFile(foreign.heartbeat, "utf8"), pollOptions)
               .not.toBe(before);
-            expect(await status(otherChild.id, otherChild.turnId)).toBe("inProgress");
-            expect(await status(foreign.threadId, otherChild.parentTurnId)).toBe("inProgress");
+            await assertRunning(foreign, otherChild.id);
+            expect((await readTurn(otherChild.id, otherChild.turnId)).completedAt == null).toBe(
+              true,
+            );
+            await qualifyParent(foreign, otherChild.parentTurnId);
+            await assertAliceRemainsStopped();
             expect(await bob.request("sessions.describe", { key: foreign.key })).not.toMatchObject({
               session: { abortedLastRun: true },
             });
@@ -417,9 +583,8 @@ describeLive("gateway live (personal native descendant Stop)", () => {
             expect(await bob.request("sessions.abort", { key: foreign.key })).toMatchObject({
               status: "aborted",
             });
-            await expect
-              .poll(() => status(otherChild.id, otherChild.turnId), pollOptions)
-              .toBe("interrupted");
+            await assertInterrupted(otherChild.id, otherChild.turnId);
+            await assertAliceRemainsStopped();
             await annotate("native-session-stop", {
               body: JSON.stringify({
                 alice: {
@@ -428,12 +593,19 @@ describeLive("gateway live (personal native descendant Stop)", () => {
                   parentTurnId: child.parentTurnId,
                   childThreadId: child.id,
                   childTurnId: child.turnId,
-                  state: "interrupted",
+                  parentBeforeStop: aliceBefore,
+                  parentAfterStop: {
+                    status: parentAfterStop.status,
+                    completedAt: parentAfterStop.completedAt,
+                  },
+                  childState: "interrupted",
+                  noResurrection: true,
                 },
                 bob: {
                   runId: foreign.runId,
                   childThreadId: otherChild.id,
                   childTurnId: otherChild.turnId,
+                  parentBeforeStop: bobBefore,
                   preservedUntilExplicitStop: true,
                 },
                 sameAgent: "dev",
