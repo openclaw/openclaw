@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, assert, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { publicationIntentInputs } from "../../scripts/full-release-publication-contract.mjs";
 import {
@@ -2616,7 +2617,18 @@ console.log(JSON.stringify({
     if (reuse.name === "changelog-only") {
       const drainPath = join(root, "drain.json");
       writeFileSync(drainPath, serializeReleaseArtifact({ children: {} }));
+      const workflow = parseYaml(
+        readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+      ) as { jobs: { summary: { steps: Array<{ name: string; env?: Record<string, string> }> } } };
+      const manifestEnv = workflow.jobs.summary.steps.find(
+        (step) => step.name === "Write release validation manifest",
+      )?.env;
       const writeResult = runCollector("write-manifest", {
+        // Exercise the workflow handoff, not collectorEnv's default target.
+        TARGET_SHA: manifestEnv?.TARGET_SHA?.replace(
+          "${{ needs.resolve_target.outputs.sha }}",
+          TARGET_SHA,
+        ),
         FRV_EXPECTED_REUSE: JSON.stringify({
           "--expected-changed-paths-json": JSON.stringify(reuse.changedPaths),
           "--expected-evidence-policy": reuse.policy,
