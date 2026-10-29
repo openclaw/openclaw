@@ -11,7 +11,6 @@ import {
 import {
   createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { completionConfig } from "../../agents/bash-tools.lifecycle.test-support.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
@@ -37,6 +36,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { isCronExecutionInputProvenance } from "../../sessions/input-provenance.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -66,18 +66,12 @@ await Promise.all([
 ]);
 
 /** Uses the real managed write tool; the model decision alone is mocked. */
-async function attemptRealWrite(
-  params: RunEmbeddedAgentParams,
-  filePath: string,
-  operatorAuthority?: AdmittedRunOperatorAuthority,
-) {
+async function attemptRealWrite(params: RunEmbeddedAgentParams, filePath: string) {
   const { admittedRunContext, tools, close } = await openEventToolHost(params, "reply admission");
   try {
-    if (operatorAuthority) {
-      expect(readAdmittedRunOperatorAuthority(admittedRunContext)?.profileId).toBe(
-        "original-guest",
-      );
-    }
+    expect(readAdmittedRunOperatorAuthority(admittedRunContext)?.profileId).toBe(
+      isCronExecutionInputProvenance(params.inputProvenance) ? "original-guest" : undefined,
+    );
     await tools
       .find((tool) => tool.name === "write")
       ?.execute("readmission-write", { path: filePath, content: "written\n" })
@@ -260,7 +254,7 @@ it.for([
                 binding.assertCurrent();
                 expect(params.allowAuthProfileFallback).toBe(false);
               }
-              await attemptRealWrite(params, filePath, operatorAuthority);
+              await attemptRealWrite(params, filePath);
             }
             return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
           });

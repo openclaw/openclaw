@@ -22,7 +22,10 @@ import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
 import { isFollowupRunAborted, type FollowupRun, type QueueSettings } from "./queue/types.js";
-import { buildTranscriptFollowupRun } from "./transcript-followup-run.js";
+import {
+  buildTranscriptFollowupRun,
+  resolveTranscriptFollowupOperatorAuthority,
+} from "./transcript-followup-run.js";
 
 export type { GoalContinuation } from "./goal-continuation.types.js";
 
@@ -150,7 +153,14 @@ type GoalContinuationParams = {
   runFollowup: (run: FollowupRun) => Promise<void>;
 };
 
-export async function enqueueGoalContinuation(params: GoalContinuationParams): Promise<boolean> {
+export async function enqueueGoalContinuation(input: GoalContinuationParams): Promise<boolean> {
+  const params = {
+    ...input,
+    base: {
+      ...input.base,
+      operatorAuthority: resolveTranscriptFollowupOperatorAuthority(input.base),
+    },
+  };
   const eligible = () =>
     params.isCurrent?.() !== false &&
     !params.controllerInput?.abortSignal.aborted &&
@@ -181,7 +191,7 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     return false;
   }
   const codexPlacement =
-    entry.agentHarnessId === "codex" && params.base.operatorAuthority
+    entry.agentHarnessId === "codex"
       ? await resolveCodexGoalPlacement({
           agentId: params.base.run.agentId,
           sessionKey: params.sessionKey,

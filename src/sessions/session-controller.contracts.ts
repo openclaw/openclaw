@@ -654,6 +654,8 @@ export type SessionControllerWithdrawalHold = (() => void) & {
 export const inputCancellation = Symbol.for("openclaw.sessionControllerInputCancellation");
 
 export type FollowupRun = FollowupRunPayload & {
+  /** @internal Host-owned system input may resolve the current session principal at admission. */
+  sessionPrincipalTurn?: true;
   run: FollowupRunPayload["run"] & {
     /** Observe admission without transferring the runner's settlement custody. */
     onOperationAdmitted?: (operation: ReplyOperation) => void;

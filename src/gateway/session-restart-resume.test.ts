@@ -191,12 +191,16 @@ it("settles captured queued sends as failed when the recorded owner's authority 
       await receipt.settled?.();
       setUserProfileRole(profile.id, "reader");
       const warn = vi.fn();
+      const context = createContext([], () => cfg);
+      context.resolveGatewayContext = () => context;
       await resumeMarkedSessions({
-        context: createContext([], () => cfg),
+        context,
         signal: new AbortController().signal,
         log: { warn },
       });
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Skipped restart resume"));
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("Restart resume input failed")),
+      );
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
       expect(await readSessionPendingInput(target, receipt.inputId)).toMatchObject({
         state: "cancelled",

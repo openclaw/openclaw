@@ -74,6 +74,8 @@ type InternalReplySessionOptions = {
   scheduledAutomation?: ScheduledSessionAutomation;
   /** Producer callbacks follow this occurrence through queueing and delivery. */
   internalEventExecution?: SessionEventExecution;
+  /** Trusted host admission, never inferred from caller-supplied provenance. */
+  sessionPrincipalTurn?: true;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
   queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */

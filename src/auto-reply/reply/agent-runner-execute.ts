@@ -37,6 +37,7 @@ import {
   resolveReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { buildStalledTurnRecoveryRun, STALLED_TURN_GUIDANCE } from "./stalled-turn-recovery.js";
+import { resolveTranscriptFollowupOperatorAuthority } from "./transcript-followup-run.js";
 
 export function prependCompactionNotices(
   result: ReplyPayload | ReplyPayload[] | undefined,
@@ -75,7 +76,7 @@ export function continueStalledReplyTurn({
     return false;
   }
   try {
-    followupRun.operatorAuthority?.assertCurrent();
+    resolveTranscriptFollowupOperatorAuthority(followupRun)?.assertCurrent();
   } catch {
     return false;
   }

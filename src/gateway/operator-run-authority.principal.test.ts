@@ -1,17 +1,23 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
-import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import { resolveGatewayToolOperatorSelection } from "../agents/tools/gateway-caller-context.js";
 import {
-  buildSessionEventContext,
-  prepareSessionEventInput,
-} from "../auto-reply/reply/session-event-context.js";
-import type { SessionEventOptions } from "../auto-reply/reply/session-event-contract.js";
-import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-target.js";
+  captureSessionEventTargetForHost,
+  enqueueSessionEventForHost,
+} from "../auto-reply/reply/session-event-handoff.js";
+import {
+  configureEventState,
+  openEventToolHost,
+  runEventFixture,
+} from "../auto-reply/reply/session-event.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  assignSessionOwner,
   deleteSessionEntryLifecycle,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -20,6 +26,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
@@ -32,7 +39,16 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
-
+// mock-isolation: Only model execution and the final child launch are synthetic.
+vi.mock("../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
+const spawn = vi.hoisted(() => vi.fn());
+vi.mock("../agents/subagents/spawn/subagent-spawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/subagents/spawn/subagent-spawn.js")>()),
+  spawnSubagentDirect: spawn,
+}));
+await import("../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+  runtime.prewarmConfigDrivenReplyRuntime(),
+);
 const scope = { agentId: "main", sessionKey: "agent:main:resume-principal" };
 const sessionId = "resume-principal-session";
 const config: OpenClawConfig = {
@@ -131,60 +147,6 @@ it("admits a recorded person's current role and refuses revoked, demoted, archiv
     linkEmail("resume-principal@example.test", replacement.id);
     await expect(admit()).rejects.toThrow();
   }));
-
-it.each([
-  { scopes: ["operator.admin"], owner: true },
-  { scopes: ["operator.read", "operator.write"], owner: false },
-  { scopes: ["operator.sessions.write"], owner: false },
-] as const)(
-  "keeps resumed principal scopes $scopes separate from owner authority",
-  ({ scopes, owner }) =>
-    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "writer",
-            definitions: {
-              writer: { scopes: [...scopes], agents: "*", sessions: { others: "none" } },
-              reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
-            },
-          },
-        },
-      };
-      const { profile, admit } = fixture(cfg);
-      const accepted = await admit();
-      try {
-        const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey, {
-          env: state.env,
-          operatorAuthority: accepted.authority,
-        });
-        const options: SessionEventOptions = {
-          ...scope,
-          source: "restart",
-          expectedTarget: target,
-        };
-        const input = prepareSessionEventInput("Resume current work.", options);
-        expect(input.operatorAuthority).toBe(accepted.authority);
-        expect(input.operatorAuthority?.assertCurrent).not.toThrow();
-        const ctx = buildSessionEventContext({
-          ...input,
-          text: "Resume current work.",
-          options,
-          occurrenceId: "principal-resume",
-          target,
-          assertCurrent: () => accepted.authority.assertCurrent(),
-        });
-        expect(ctx.CommandAuthorized).toBe(false);
-        expect(
-          resolveCommandAuthorization({ ctx, cfg, commandAuthorized: false }).senderIsOwner,
-        ).toBe(owner);
-        setUserProfileRole(profile.id, "reader");
-        expect(input.operatorAuthority?.assertCurrent).toThrow();
-      } finally {
-        accepted.release();
-      }
-    }),
-);
 
 it("retains current session access through run custody and revokes it before later effects", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -401,3 +363,75 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
       prepareSessionPrincipalRunAuthority({ ...params, profileId: other.id }),
     ).rejects.toThrow("no current run authority");
   }));
+
+it("exec completion uses the current principal and refuses revocation at effect", async ({
+  signal,
+  onTestFinished,
+}) => {
+  await runEventFixture("event-principal", onTestFinished, async (state) => {
+    const cfg = await configureEventState(state, {
+      ...config,
+      tools: { profile: "coding", codeMode: false, toolSearch: false },
+    });
+    const { profile: principal } = fixture(cfg);
+    assignSessionOwner(scope, {
+      owner: { type: "human", id: principal.id },
+      assignedBy: { type: "system", id: "exec-completion-fixture" },
+    });
+    const effects: string[] = [];
+    spawn.mockReset().mockImplementation(async (_request, context) => {
+      expect(resolveGatewayToolOperatorSelection().operatorAuthority).toMatchObject({
+        profileId: principal.id,
+        scopes: ["operator.read", "operator.write"],
+      });
+      if (effects.length) {
+        setUserProfileRole(principal.id, "reader");
+      }
+      // The child executor checks the supplied authority after preparation, before launching.
+      context.assertActive();
+      effects.push("spawned");
+      return { status: "accepted", runId: "event-child" };
+    });
+    vi.mocked(runEmbeddedAgent)
+      .mockReset()
+      .mockImplementation(async (params) => {
+        expect(params.senderIsOwner).toBe(false);
+        expect(params.inputProvenance).toMatchObject({
+          kind: "internal_system",
+          sourceTool: "exec",
+        });
+        const { tools, close } = await openEventToolHost(params, "exec completion admission", {
+          includeOpenClawTools: true,
+        });
+        try {
+          const tool = tools.find((candidate) => candidate.name === "sessions_spawn")!;
+          await expect(
+            tool.execute("event-spawn", { task: "Continue requested work" }),
+          ).resolves.toMatchObject({ details: { status: "accepted" } });
+          await expect(
+            tool.execute("revoked-spawn", { task: "Continue requested work" }),
+          ).rejects.toThrow(/access changed|authority|role|aborted/i);
+        } finally {
+          close();
+        }
+        return { payloads: [{ text: "Completion processed" }], meta: { durationMs: 1 } };
+      });
+    const context = principalContext(cfg);
+    const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey);
+    const receipt = withPluginRuntimeGatewayContextResolver(
+      () => context,
+      () =>
+        enqueueSessionEventForHost("Process completed; continue requested work.", {
+          ...scope,
+          source: "exec",
+          expectedTarget: target,
+          abortSignal: signal,
+          deliver: false,
+        }),
+    );
+    const outcome = await receipt.settled;
+    expect(outcome, outcome.error).toMatchObject({ executionStarted: true });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(effects).toEqual(["spawned"]);
+  });
+});
