@@ -3,6 +3,7 @@ import type { ConfigWriteOptions } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
 import type { ProviderAuthResult } from "../../plugins/types.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import type { runModelsAuthLoginFlowCore } from "./auth.js";
 
 type PersistProviderAuthCall = Parameters<typeof persistProviderAuthProfilesAfterLogin>[0];
@@ -13,6 +14,7 @@ type LoginOptions = Partial<Parameters<typeof runModelsAuthLoginFlowCore>[0]>;
 
 export function registerModelsAuthAuthorityTests(fixture: {
   mocks: {
+    callGateway: Mock;
     persistProviderAuthProfilesAfterLogin: Mock;
     promoteAuthProfileInOrder: Mock;
     updateConfig: Mock;
@@ -95,8 +97,10 @@ export function registerModelsAuthAuthorityTests(fixture: {
           },
         );
       }
-      await reject(authority);
+      const refreshAfterLogin = vi.fn();
+      await reject(authority, gate === "beforeCommit" ? { refreshAfterLogin } : {});
       expect(published).toBe(false);
+      expectNoCalls(refreshAfterLogin, mocks.callGateway);
       if (credentialGate) {
         expect(mocks.updateConfig).not.toHaveBeenCalled();
       }

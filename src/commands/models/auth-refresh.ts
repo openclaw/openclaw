@@ -30,6 +30,22 @@ export async function refreshProviderAuthAfterLogin(params: {
   }
 }
 
+/** Publishes saved credentials after a rejected settings write; the caller still reports that error. */
+export async function refreshSavedAuthAfterRejectedSettings(
+  params: Parameters<typeof refreshProviderAuthAfterLogin>[0],
+): Promise<void> {
+  // A cancelled or revoked login must not publish anything.
+  if (params.signal?.aborted) {
+    return;
+  }
+  try {
+    params.assertCurrent?.();
+    await refreshProviderAuthAfterLogin(params);
+  } catch {
+    // Best effort: never replace the settings error with a recovery failure.
+  }
+}
+
 export async function refreshRunningGatewayAuthState(
   agentId: string | undefined,
   operation: "login" | "logout" | "update",

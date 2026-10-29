@@ -9,7 +9,6 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
 import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { registerModelsAuthAuthorityTests } from "./auth-authority.test-support.js";
 
@@ -561,24 +560,34 @@ it("retains the imported profile and model-access choice after direct refresh fa
   });
 });
 
-it("identifies a config failure after credentials are saved and preserves its cause", async () => {
-  const cause = new Error("config write failed");
-  runProviderAuth.mockResolvedValueOnce({
-    profiles: [tokenProfile("openai:saved")],
-    configPatch: { logging: { level: "debug" } },
-  });
-  mocks.updateConfig.mockRejectedValueOnce(cause);
-
-  const login = loginFlow();
-  await expect(login).rejects.toBeInstanceOf(ProviderAuthConfigApplyError);
-  await expect(login).rejects.toMatchObject({
-    name: "ProviderAuthConfigApplyError",
-    message: "Credentials saved, but provider settings could not be applied: config write failed",
-    cause,
-  });
-  expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
-  expect(mocks.callGateway.mock.calls.map(([call]) => call.method)).toEqual(["models.authRefresh"]);
-});
+it.each(["Gateway", "hosted"] as const)(
+  "identifies a config failure after credentials are saved and preserves its cause (%s refresh)",
+  async (route) => {
+    const cause = new Error("config write failed");
+    const abort = new AbortController();
+    runProviderAuth.mockResolvedValueOnce({
+      profiles: [tokenProfile("openai:saved")],
+      configPatch: { logging: { level: "debug" } },
+    });
+    mocks.updateConfig.mockRejectedValueOnce(cause);
+    const refreshAfterLogin = async () => {
+      abort.abort();
+      throw new Error("refresh aborted");
+    };
+    await expect(
+      loginFlow(route === "hosted" ? { signal: abort.signal, refreshAfterLogin } : {}),
+    ).rejects.toMatchObject({
+      name: "ProviderAuthConfigApplyError",
+      message: "Credentials saved, but provider settings could not be applied: config write failed",
+      cause,
+    });
+    expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
+    expect(abort.signal.aborted).toBe(route === "hosted");
+    expect(mocks.callGateway.mock.calls.map(([call]) => call.method)).toEqual(
+      route === "Gateway" ? ["models.authRefresh"] : [],
+    );
+  },
+);
 
 it("creates store order for relogin when configured profiles would shadow the new profile", async () => {
   currentConfig = {
