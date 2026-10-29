@@ -1,4 +1,4 @@
-// Local release-line adaptation: guard the dedicated graph without repo dependencies.
+// Local release-line adaptation: guard the dedicated graph with the canonical tooling runner.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -13,12 +13,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 const root = resolve(import.meta.dirname, "../..");
 const sourceRoot = join(root, ".github/release/clawhub-cli");
 const lockBytes = readFileSync(join(sourceRoot, "package-lock.json"));
-const lock = JSON.parse(lockBytes);
+const lock = JSON.parse(lockBytes.toString("utf8"));
 const manifest = JSON.parse(readFileSync(join(sourceRoot, "package.json"), "utf8"));
 const script = join(root, "scripts/materialize-clawhub-cli.sh");
 const hash = createHash("sha256").update(lockBytes).digest("hex");
