@@ -67,7 +67,15 @@ describe("ACP event ledger", () => {
       expect(replay.events.map((event) => event.runId)).toEqual(["run-1", "run-1", "run-1"]);
       expect(replay.events.map(({ seq, sessionKey, update }) => [seq, sessionKey, update])).toEqual(
         [
-          [1, original.sessionKey, { sessionUpdate: "user_message_chunk", content: prompt[0] }],
+          [
+            1,
+            original.sessionKey,
+            {
+              sessionUpdate: "user_message_chunk",
+              messageId: "user:run-1",
+              content: prompt[0],
+            },
+          ],
           [2, original.sessionKey, thought],
           [3, session.sessionKey, answer],
         ],

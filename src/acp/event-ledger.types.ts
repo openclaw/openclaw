@@ -44,9 +44,13 @@ export type AcpEventLedger = {
   readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;
 };
 
-export function createAcpPromptUpdates(prompt: readonly ContentBlock[]): SessionUpdate[] {
+export function createAcpPromptUpdates(
+  prompt: readonly ContentBlock[],
+  runId: string,
+): SessionUpdate[] {
   return prompt.map((content) => ({
     sessionUpdate: "user_message_chunk",
+    messageId: `user:${runId}`,
     content: structuredClone(content),
   }));
 }

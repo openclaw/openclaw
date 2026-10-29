@@ -122,7 +122,11 @@ it("replays transcript text and thinking with current session controls and usage
     ["agent_thought_chunk", "Internal loop about NO_REPLY"],
     ["agent_message_chunk", "Answer"],
   ] as const) {
-    expectUpdate({ sessionUpdate: kind, content: { type: "text", text } });
+    expectUpdate({
+      sessionUpdate: kind,
+      messageId: kind === "user_message_chunk" ? "transcript:0" : "transcript:1",
+      content: { type: "text", text },
+    });
   }
   expectSessionUpdate(sessionUpdate, sessionId, "available_commands_update");
   expectUpdate({
@@ -274,3 +278,94 @@ it("rejects non-string ACP config option values", async () => {
   );
   expect(request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
 });
+
+it.each([
+  { type: "custom", customType: "run-failed-before-reply" },
+  { role: "assistant", content: [], stopReason: "error" },
+])(
+  "keeps repeated prompts separate across a silent failure on session/load: %j",
+  async (failure) => {
+    const prompt = [
+      { type: "text", text: "Try " },
+      { type: "text", text: "again" },
+    ];
+    const h = harness({
+      transcript: () => ({
+        messages: [
+          { role: "user", content: prompt, __openclaw: { id: "user-1" } },
+          failure,
+          { role: "user", content: prompt, __openclaw: { id: "user-2" } },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "Thinking" },
+              { type: "text", text: "Answer" },
+              { type: "text", text: "." },
+            ],
+            __openclaw: { id: "assistant-1" },
+          },
+          { role: "assistant", content: "Answer.", __openclaw: { id: "assistant-2" } },
+          { role: "user", content: prompt },
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+    const chunks = () =>
+      h.sessionUpdate.mock.calls.flatMap(([{ update }]) =>
+        update.sessionUpdate === "user_message_chunk" ||
+        update.sessionUpdate === "agent_message_chunk" ||
+        update.sessionUpdate === "agent_thought_chunk"
+          ? [update]
+          : [],
+      );
+    try {
+      await h.agent.loadSession(createLoadSessionRequest("replay-session"));
+      const replay = chunks();
+      expect(replay.slice(0, 8)).toEqual([
+        ...["user-1", "user-2"].flatMap((messageId) =>
+          prompt.map((content) => ({
+            sessionUpdate: "user_message_chunk",
+            messageId,
+            content,
+          })),
+        ),
+        {
+          sessionUpdate: "agent_thought_chunk",
+          messageId: "assistant-1",
+          content: { type: "text", text: "Thinking" },
+        },
+        {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "assistant-1",
+          content: { type: "text", text: "Answer" },
+        },
+        {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "assistant-1",
+          content: { type: "text", text: "." },
+        },
+        {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "assistant-2",
+          content: { type: "text", text: "Answer." },
+        },
+      ]);
+      const legacyIds = replay.slice(8).map((chunk) => chunk.messageId);
+      expect(legacyIds).toEqual([
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+      ]);
+      expect(legacyIds[0]).toBe(legacyIds[1]);
+      expect(legacyIds[2]).toBe(legacyIds[3]);
+      expect(legacyIds[0]).not.toBe(legacyIds[2]);
+      h.sessionUpdate.mockClear();
+      await h.agent.loadSession(createLoadSessionRequest("replay-session"));
+      expect(chunks()).toEqual(replay);
+    } finally {
+      await h.agent.shutdown();
+      h.sessionStore.dispose();
+    }
+  },
+);

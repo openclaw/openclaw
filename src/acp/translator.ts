@@ -314,19 +314,27 @@ export class AcpGatewayAgent implements Agent {
     const replaySessionId = session.sessionId;
     if (ledgerReplay.complete) {
       for (const event of ledgerReplay.events) {
+        const update = event.update;
         await this.sessionUpdates.emit({
           sessionId: replaySessionId,
-          update: event.update,
+          // Older prompt records already share a run ID across their content blocks.
+          update:
+            update.sessionUpdate === "user_message_chunk" && !update.messageId
+              ? { ...update, messageId: `user:${event.runId ?? `event:${event.seq}`}` }
+              : update,
           record: false,
         });
       }
     } else {
-      for (const message of transcript) {
+      for (const [index, message] of transcript.entries()) {
+        const metadata = isRecord(message["__openclaw"]) ? message["__openclaw"] : undefined;
+        const messageId = normalizeOptionalString(metadata?.id) ?? `transcript:${index}`;
         for (const chunk of extractReplayChunks(message)) {
           await this.sessionUpdates.emit({
             sessionId: replaySessionId,
             update: {
               sessionUpdate: chunk.sessionUpdate,
+              messageId,
               content: { type: "text", text: chunk.text },
             },
           });

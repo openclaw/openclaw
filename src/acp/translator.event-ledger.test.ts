@@ -51,12 +51,16 @@ async function userPrompts(ledger: AcpEventLedger, ref: { sessionId: string; ses
   );
 }
 
-function expectReplay(harness: Awaited<ReturnType<typeof createHarness>>) {
+function expectReplay(harness: Awaited<ReturnType<typeof createHarness>>, runId: string) {
   expect(harness.request.mock.calls.map(([method]) => method)).not.toContain("sessions.get");
   expect(harness.updates()).toMatchObject([
     { sessionUpdate: "session_info_update" },
     { sessionUpdate: "available_commands_update" },
-    { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Question" } },
+    {
+      sessionUpdate: "user_message_chunk",
+      messageId: `user:${runId}`,
+      content: { type: "text", text: "Question" },
+    },
     { sessionUpdate: "tool_call", toolCallId: "tool-1" },
     { sessionUpdate: "tool_call_update", toolCallId: "tool-1" },
     { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Answer" } },
@@ -97,11 +101,11 @@ it("replays complete sessions by ACP ID and Gateway key into one canonical ledge
   await expect(prompt).resolves.toEqual({ stopReason: "end_turn" });
 
   const second = await createHarness(ledger, { load: ref.sessionId });
-  expectReplay(second);
+  expectReplay(second, runId);
   expect(await userPrompts(ledger, ref)).toHaveLength(1);
 
   const listed = await createHarness(ledger, { load: ref.sessionKey });
-  expectReplay(listed);
+  expectReplay(listed, runId);
   recorded = createDeferred();
   const { result: followUp, sent: followUpSent } = listed.start("Follow-up");
   const followUpRun = await followUpSent;
@@ -114,6 +118,72 @@ it("replays complete sessions by ACP ID and Gateway key into one canonical ledge
     events: [],
   });
 });
+
+it.each(["recorded", "legacy"] as const)(
+  "replays %s prompt chunks with one identity per prompt",
+  async (kind) => {
+    const ledger = createTestAcpEventLedger();
+    const ref = { sessionId: "repeated-prompts", sessionKey: "agent:main:repeated-prompts" };
+    await ledger.startSession({ ...ref, cwd: "/tmp", complete: true });
+    const prompt = [
+      { type: "text" as const, text: "Try " },
+      { type: "text" as const, text: "again" },
+    ];
+    for (const runId of ["failed-run", "retry-run"]) {
+      if (kind === "recorded") {
+        await ledger.recordUserPrompt({ ...ref, runId, prompt });
+      } else {
+        for (const content of prompt) {
+          await ledger.recordUpdate({
+            ...ref,
+            runId,
+            update: { sessionUpdate: "user_message_chunk", content },
+          });
+        }
+      }
+    }
+    const stored = (await ledger.readReplay(ref)).events;
+    if (kind === "recorded") {
+      expect(
+        stored.map(({ update }) => ("messageId" in update ? update.messageId : undefined)),
+      ).toEqual(["user:failed-run", "user:failed-run", "user:retry-run", "user:retry-run"]);
+    }
+    // An existing explicit identity must survive mixed old/new ledger history.
+    await ledger.recordUpdate({
+      ...ref,
+      runId: "retry-run",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "answer-1",
+        content: { type: "text", text: "Answer" },
+      },
+    });
+    const loaded = await createHarness(ledger, { load: ref.sessionId });
+    const replay = loaded
+      .updates()
+      .filter((update) => update.sessionUpdate === "user_message_chunk");
+    expect(replay).toEqual(
+      ["failed-run", "retry-run"].flatMap((runId) =>
+        prompt.map((content) => ({
+          sessionUpdate: "user_message_chunk",
+          messageId: `user:${runId}`,
+          content,
+        })),
+      ),
+    );
+    expect(loaded.updates()).toContainEqual({
+      sessionUpdate: "agent_message_chunk",
+      messageId: "answer-1",
+      content: { type: "text", text: "Answer" },
+    });
+    const listed = await createHarness(ledger, { load: ref.sessionKey });
+    expect(listed.updates()).toEqual(loaded.updates());
+    expect((await ledger.readReplay(ref)).events).toEqual([
+      ...stored,
+      expect.objectContaining({ update: expect.objectContaining({ messageId: "answer-1" }) }),
+    ]);
+  },
+);
 
 it("does not replay prompts rejected before Gateway acceptance", async () => {
   const ledger = createTestAcpEventLedger();
