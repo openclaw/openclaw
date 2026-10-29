@@ -207,34 +207,6 @@ it("uses autocomplete for /acp action so inline action values are accepted", asy
   expect(respond).toHaveBeenCalledWith(expectedChoices("steer", "status", "install"));
 });
 
-it("matches canonically equivalent autocomplete labels without rewriting them", async () => {
-  const label = "Mu\u0308nchen";
-  const options = buildDiscordCommandOptions({
-    command: {
-      key: "canonical",
-      description: "Canonical",
-      textAliases: ["/canonical"],
-      scope: "both",
-      args: [
-        {
-          name: "value",
-          description: "Value",
-          type: "string",
-          choices: () => [{ value: "nfc", label }],
-          preferAutocomplete: true,
-        },
-      ],
-    },
-    cfg: {},
-    authorizeChoiceContext: async () => true,
-    resolveChoiceContext: async () => ({ provider: "openai", model: "gpt-5.6-luna" }),
-  });
-  const respond = await runAutocomplete(autocompleteFor({ options }, "value"), {
-    focusedValue: "München",
-  });
-  expect(respond).toHaveBeenCalledWith([{ name: label, value: "nfc" }]);
-});
-
 it("passes the effective agent runtime into dynamic /think choices", async () => {
   let agentRuntime = "codex";
   const options = buildDiscordCommandOptions({
