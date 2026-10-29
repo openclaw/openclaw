@@ -99,7 +99,7 @@ suite.define(() => {
     });
     const row = listed.sessions.find((entry) => entry.key === sessionKey);
     expect(row, JSON.stringify(listed.sessions.map((entry) => entry.key))).toBeTruthy();
-    const ownerAvatar = row?.owner?.actor?.avatarUrl ?? row?.owner?.avatarUrl;
+    const ownerAvatar = row?.owner?.actor?.avatarUrl;
     expect(ownerAvatar, JSON.stringify(row?.owner)).toMatch(
       /^\/(?:control\/)?avatar\/main\?v=[a-f0-9]+$/,
     );
