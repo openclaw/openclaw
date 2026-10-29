@@ -267,18 +267,14 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
   it.for(["immediate", "stdin EOF"])(
     "orders native lifecycle events for %s exits",
     async (timing, { signal }) => {
-      const argv =
-        timing === "immediate"
-          ? [process.platform === "darwin" ? "/usr/bin/true" : "/bin/true"]
-          : [process.execPath, "-e", "process.stdin.resume()"];
-      const child = await withinTest(
-        runWithSpawnBroker(host, () =>
-          spawnAndWait({
-            argv,
-            options: { stdio: timing === "immediate" ? "ignore" : ["pipe", "ignore", "ignore"] },
-          }),
-        ),
-        signal,
+      const child = await runWithSpawnBroker(host, () =>
+        spawnAndWait({
+          argv:
+            timing === "immediate"
+              ? [process.platform === "darwin" ? "/usr/bin/true" : "/bin/true"]
+              : [process.execPath, "-e", "process.stdin.resume()"],
+          options: { stdio: timing === "immediate" ? "ignore" : ["pipe", "ignore", "ignore"] },
+        }),
       );
       try {
         const events: string[] = [];

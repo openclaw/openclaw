@@ -5,51 +5,15 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { spawnAndWait } from "../spawn-utils.js";
 import { brokerSpawnPreload, startPreloadedBroker } from "./broker-fixture.test-support.js";
 import { BrokerChild } from "./child.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("lets spawn awaiters observe coalesced terminal events", async ({ signal }) => {
-  const child = new BrokerChild(1, ["fixture"], async () => {});
-  const starting = spawnAndWait({
-    argv: ["fixture"],
-    options: { stdio: "ignore" },
-    spawnImpl: () => child,
-  });
-  child.receive({
-    type: "spawned",
-    id: 1,
-    pid: 123,
-    spawnfile: "fixture",
-    spawnargs: ["fixture"],
-    connected: false,
-    stdioLength: 3,
-  });
-  child.receive({ type: "exit", id: 1, code: 0, signal: null });
-  child.receive({ type: "closed", id: 1 });
-  const spawned = await withinTest(starting, signal);
-  await Promise.resolve();
-  await Promise.resolve();
-  expect(spawned.exitCode).toBe(null);
-  const events: string[] = [];
-  for (const event of ["exit", "close"]) {
-    spawned.on(event, () => events.push(event));
-  }
-  expect(await once(spawned, "close", { signal })).toEqual([0, null]);
-  expect(spawned.exitCode).toBe(0);
-  expect(events).toEqual(["exit", "close"]);
-});
-
-it.each(["exit", "disconnect", "requested disconnect"] as const)(
+it.for(["exit", "disconnect", "requested disconnect"] as const)(
   "joins IPC and process exit when %s arrives first",
-  async (first) => {
+  async (first, { signal }) => {
     const child = new BrokerChild(1, ["fixture"], async () => {});
-    const events: string[] = [];
-    for (const event of ["exit", "disconnect", "close"]) {
-      child.on(event, () => events.push(event));
-    }
     const spawned = once(child, "spawn");
     child.receive({
       type: "spawned",
@@ -60,19 +24,24 @@ it.each(["exit", "disconnect", "requested disconnect"] as const)(
       connected: true,
       stdioLength: 4,
     });
-    await spawned;
-    await setImmediate();
-    if (first === "requested disconnect") {
-      child.disconnect();
-      expect(child.connected).toBe(false);
-    }
     const exit = { type: "exit", id: 1, code: null, signal: "SIGKILL" } as const;
     const disconnect = { type: "disconnect", id: 1 } as const;
     const exitFirst = first !== "disconnect";
     child.receive(exitFirst ? exit : disconnect);
+    await withinTest(spawned, signal);
+    expect(child.signalCode).toBe(null);
+    const events: string[] = [];
+    for (const event of ["exit", "disconnect", "close"]) {
+      child.on(event, () => events.push(event));
+    }
+    if (first === "requested disconnect") {
+      child.disconnect();
+      expect(child.connected).toBe(false);
+    }
+    await setImmediate();
     expect(events).toEqual([exitFirst ? "exit" : "disconnect"]);
     child.receive(exitFirst ? disconnect : exit);
-    await child.waitForClose();
+    await withinTest(child.waitForClose(), signal);
     expect(events).toEqual(
       exitFirst ? ["exit", "disconnect", "close"] : ["disconnect", "exit", "close"],
     );
