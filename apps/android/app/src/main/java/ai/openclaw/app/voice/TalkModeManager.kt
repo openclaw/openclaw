@@ -323,6 +323,10 @@ class TalkModeManager internal constructor(
   private var stopRequested = false
 
   @Volatile private var listeningMode = false
+
+  // True while an admitted native Talk session runs (start until stop), spanning
+  // reply playback where the per-utterance listeningMode flag is already cleared.
+  @Volatile private var nativeTalkSessionActive = false
   private var activePttCaptureId: String? = null
   private var pttAutoStopEnabled = false
   private var pttTimeoutJob: Job? = null
@@ -1010,6 +1014,7 @@ class TalkModeManager internal constructor(
       synchronized(realtimeCapturePauseLock) {
         stopRequested = true
         listeningMode = false
+        nativeTalkSessionActive = false
         activePttCaptureId = null
         startGeneration.incrementAndGet()
         val jobs =
@@ -1363,6 +1368,7 @@ class TalkModeManager internal constructor(
       synchronized(realtimeCapturePauseLock) {
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@withContext
         recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(recognitionListener(null, it)) }
+        nativeTalkSessionActive = true
         // Record the admitted route, not a later config refresh, for this native speech loop.
         setStatus(nativeText("Listening"), route = route)
         startListeningInternal(markListening = true)
@@ -1390,6 +1396,7 @@ class TalkModeManager internal constructor(
     if (!_isEnabled.value) return null
     _isEnabled.value = false
     _isListening.value = false
+    nativeTalkSessionActive = false
     val generation = startGeneration.get()
     val notify = relayStopNotification
     return { notify { synchronized(realtimeCapturePauseLock) { startGeneration.get() == generation && !_isEnabled.value } } }
@@ -2919,7 +2926,7 @@ class TalkModeManager internal constructor(
       }
     }
 
-  internal fun shouldAllowSpeechInterrupt(): Boolean = listeningMode && !isRealtimeCapturePaused()
+  internal fun shouldAllowSpeechInterrupt(): Boolean = (listeningMode || nativeTalkSessionActive) && !isRealtimeCapturePaused()
 
   private fun requestAudioFocusForTts(lease: PlaybackLease) {
     if (realtimeAudioInput != null) return

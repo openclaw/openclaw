@@ -907,6 +907,69 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun speechInterruptStopsNativeReplyPlaybackAfterCompletedUtterance() =
+    runBlocking {
+      withInterruptibleNativeTalk { proof, sends ->
+        // Complete a recognized utterance first: silence finalization sends it and
+        // the assistant reply starts playing before any barge-in is attempted.
+        val utteranceRecognizer = currentRecognizer()
+        awaitNativeReplyPlayback(proof, sends)
+
+        val interruptRecognizer = currentRecognizer()
+        assertFalse(
+          "A live interrupt recognizer must listen during native reply playback",
+          interruptRecognizer.isDestroyed,
+        )
+        assertTrue(interruptRecognizer !== utteranceRecognizer)
+        val stopCallsBeforeBargeIn = proof.player.stopCalls
+
+        interruptRecognizer.triggerOnResults(recognitionResults("Please stop talking"))
+        proof.scheduler.runCurrent()
+
+        assertFalse("Recognized speech during playback must stop assistant audio", proof.manager.isSpeaking.value)
+        assertTrue(
+          "Barge-in must stop the audio player (before=$stopCallsBeforeBargeIn, after=${proof.player.stopCalls})",
+          proof.player.stopCalls > stopCallsBeforeBargeIn,
+        )
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        assertTrue("Native Talk must resume listening after barge-in", proof.manager.isListening.value)
+      }
+    }
+
+  @Test
+  fun pushToTalkOwnsMicrophoneDuringInterruptibleNativePlayback() =
+    runBlocking {
+      withInterruptibleNativeTalk { proof, sends ->
+        awaitNativeReplyPlayback(proof, sends)
+        val interruptRecognizer = currentRecognizer()
+        assertFalse("A live interrupt recognizer must listen during native reply playback", interruptRecognizer.isDestroyed)
+        assertTrue("Opt-in interruption must be eligible during native reply playback", proof.manager.shouldAllowSpeechInterrupt())
+
+        // A push-to-talk turn takes the microphone through the public capture operations:
+        // it cancels playback, retires the interrupt recognizer, and owns capture exclusively.
+        val beginning = proof.scope.async { proof.manager.beginPushToTalk(allowNewCapture = true) }
+        awaitTalkWork(proof) { beginning.isCompleted }
+        val capture = beginning.await()
+        val pttRecognizer = currentRecognizer()
+        assertEquals(capture.captureId, proof.manager.activePushToTalkCaptureId)
+        assertFalse("Push-to-talk must cancel the assistant reply it takes over", proof.manager.isSpeaking.value)
+        assertTrue("Push-to-talk must own the microphone exclusively", interruptRecognizer.isDestroyed)
+        assertTrue(pttRecognizer !== interruptRecognizer)
+        assertFalse("Push-to-talk ownership must suppress speech interruption", proof.manager.shouldAllowSpeechInterrupt())
+
+        // Releasing the turn hands the microphone back to native Talk, which resumes
+        // listening and stays eligible for opt-in interruption.
+        val ending = proof.scope.async { proof.manager.cancelPushToTalk() }
+        awaitTalkWork(proof) { ending.isCompleted }
+        assertEquals("cancelled", ending.await().status)
+        awaitTalkWork(proof) { proof.manager.isListening.value && proof.manager.shouldAllowSpeechInterrupt() }
+        assertTrue("Native Talk must resume listening after the push-to-talk turn", proof.manager.isListening.value)
+        assertTrue("Speech interruption must be eligible again after the turn is released", proof.manager.shouldAllowSpeechInterrupt())
+        assertFalse(currentRecognizer().isDestroyed)
+      }
+    }
+
+  @Test
   fun failedCurrentConfigReadReturnsOnceAndCanRetryOnNextUse() =
     runBlocking {
       installSpeechRecognitionService()
@@ -1412,6 +1475,56 @@ class TalkModeManagerTest {
       assertTrue(relayCreates.isEmpty())
       block(proof, sends)
     }
+  }
+
+  /** Runs [block] against native Talk whose `talk.config` enables opt-in speech interruption. */
+  private suspend fun withInterruptibleNativeTalk(block: suspend (RealtimePlaybackProof, ConcurrentLinkedQueue<JsonObject>) -> Unit) {
+    installSpeechRecognitionService()
+    val interruptConfig =
+      buildJsonObject {
+        put(
+          "config",
+          buildJsonObject {
+            put(
+              "talk",
+              buildJsonObject {
+                put("realtime", buildJsonObject { put("model", "gpt-live") })
+                put("silenceTimeoutMs", 800)
+                put("interruptOnSpeech", true)
+              },
+            )
+          },
+        )
+      }.toString()
+    val sends = ConcurrentLinkedQueue<JsonObject>()
+    val history = """{"messages":[{"role":"assistant","content":[{"type":"text","text":"Synthetic native reply"}]}]}"""
+    withStartedTalk(
+      responseForRequest = { request, _ ->
+        if (request.getValue("method").jsonPrimitive.content == "chat.send") sends.add(request.getValue("params").jsonObject)
+        when (request.getValue("method").jsonPrimitive.content) {
+          "talk.config" -> interruptConfig
+          "chat.send" -> """{"runId":"native-talk-turn","status":"ok"}"""
+          "chat.history" -> history
+          else -> null
+        }
+      },
+    ) { proof ->
+      block(proof, sends)
+    }
+  }
+
+  /** Completes a recognized utterance and waits until the native assistant reply is playing. */
+  private suspend fun awaitNativeReplyPlayback(
+    proof: RealtimePlaybackProof,
+    sends: ConcurrentLinkedQueue<JsonObject>,
+  ) {
+    currentRecognizer().triggerOnResults(recognitionResults("What should I do next"))
+    advanceTalkSilence(proof)
+    awaitTalkWork(proof) { sends.isNotEmpty() }
+    awaitTalkWork(proof) { proof.synthesizer.requested.isCompleted }
+    completeRemoteSynthesis(proof.synthesizer)
+    proof.scheduler.runCurrent()
+    assertTrue("Native reply playback must be active", proof.manager.isSpeaking.value)
   }
 
   private fun currentRecognizer(): ShadowSpeechRecognizer {
