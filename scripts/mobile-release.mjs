@@ -394,6 +394,10 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
         throw new Error("OPENAI_API_KEY is required to prepare TestFlight notes.");
       }
     }
+    // Deferred TestFlight attempts need no history; notes require complete source ancestry.
+    if (git(root, "rev-parse", "--is-shallow-repository") === "true") {
+      git(root, "fetch", "--no-tags", "--filter=blob:none", "--unshallow", "origin", sourceSha);
+    }
     run(
       process.execPath,
       [
