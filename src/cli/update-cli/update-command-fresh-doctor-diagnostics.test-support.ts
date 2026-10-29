@@ -39,7 +39,7 @@ export function registerFreshDoctorDiagnosticTests({
   tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker>;
   updateOptions: Parameters<typeof completePostCorePluginUpdate>[0];
 }): void {
-  it.each(["pre-plugin", "post-plugin"] as const)(
+  it.for(["pre-plugin", "post-plugin"] as const)(
     "shows %s Doctor phases before settlement without losing captured diagnostics",
     async (phase, { signal }) => {
       setLoggerOverride({ consoleLevel: "info", consoleStyle: "compact" });
