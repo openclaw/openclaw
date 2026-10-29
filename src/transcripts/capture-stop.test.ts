@@ -432,3 +432,44 @@ describe("retained transcript source", () => {
     },
   );
 });
+
+describe("auto-start stop deadline", () => {
+  const fixture = useTranscriptStatusFixture();
+  it.each([0, -60_000, 60_000])(
+    "keeps the pending-start stop budget when the wall clock jumps %i ms",
+    async (wallClockJumpMs) => {
+      const f = fixture();
+      const started = createDeferred<Start>();
+      const releaseStart = createDeferred();
+      f.provider.start = async (request) => {
+        started.resolve(request);
+        await releaseStart.promise;
+        return { ok: true, session: request.session };
+      };
+      const service = createTranscriptsAutoStartService({
+        ...f.ctx,
+        caller: { kind: "operator", source: "local" },
+      });
+      const { settled } = service.start();
+      await started.promise;
+      vi.useFakeTimers();
+      const stopped = service.stop();
+      vi.setSystemTime(Date.now() + wallClockJumpMs);
+      await vi.advanceTimersByTimeAsync(5_000);
+      try {
+        const settlement = await Promise.race([
+          stopped.then(() => "settled" as const),
+          Promise.resolve().then(() => "pending" as const),
+        ]);
+        expect(settlement).toBe("settled");
+        expect(f.ctx.logger.warn).toHaveBeenCalledWith(
+          "transcripts autoStart stop timed out waiting for pending starts",
+        );
+      } finally {
+        releaseStart.resolve();
+        await vi.advanceTimersByTimeAsync(65_000);
+        await Promise.allSettled([stopped, settled]);
+      }
+    },
+  );
+});

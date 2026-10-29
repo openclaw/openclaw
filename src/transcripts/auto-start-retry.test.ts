@@ -32,7 +32,7 @@ function retryFixture(
   } = {},
 ) {
   if (!options.realTimers) {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
   }
   const { realTimers: _realTimers, acceptFrom, ...source } = options;
   const f = fixture({ transcripts: { autoStart: [{ ...room, ...source }] } });
