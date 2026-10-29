@@ -70,6 +70,11 @@ export async function reportGitHubPublicationTranscript(
         };
       })();
   const { target, entry } = selected;
+  // A reset or rotation ended that transcript for good; the receipt stays readable by request id.
+  if (entry && entry.sessionId !== params.sessionId && target.canonicalKey === params.sessionKey) {
+    await coordinator.markReportedAsync(params.result.requestId);
+    return;
+  }
   if (entry?.sessionId !== params.sessionId || target.canonicalKey !== params.sessionKey) {
     throw new Error("GitHub publication transcript owner changed");
   }

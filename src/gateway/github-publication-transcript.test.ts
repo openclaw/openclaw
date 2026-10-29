@@ -280,6 +280,19 @@ describe("GitHub publication transcript reporting", () => {
       expect(markReportedAsync).toHaveBeenCalledOnce();
     });
   });
+  it("retires a result from an earlier session lifecycle without writing into its successor", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const previous = await createSession("publication-before-reset");
+      const current = await createSession("publication-after-reset");
+      const markReportedAsync = vi.fn().mockResolvedValue(undefined);
+      await report(previous, publishedResult, markReportedAsync);
+      expect(markReportedAsync).toHaveBeenCalledExactlyOnceWith(publishedResult.requestId);
+      expect(
+        reportMessages(await loadTranscriptEvents(current), publishedResult.requestId),
+      ).toEqual([]);
+    });
+  });
+
   it("reports on the active branch while preserving large unrelated evidence", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const identity = await createSession("publication-branch");
