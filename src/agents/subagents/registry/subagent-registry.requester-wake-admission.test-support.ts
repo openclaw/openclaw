@@ -1,5 +1,4 @@
 import { expect, it, vi } from "vitest";
-import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { WorkerTaskError } from "../../../infra/worker-task-pool.js";
 import {
@@ -8,6 +7,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../../../state/agent-database-admission.js";
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import * as deliveryRuntime from "../announce/subagent-announce-delivery.runtime.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import type {
   GatewayRequest,
@@ -80,10 +80,10 @@ export function registerRequesterStartupAdmissionTests({
         },
       });
       const original = registry.getSubagentRunByRunId(runId)!;
+      // Delivered results are not re-read (#181260), so requester preparation meets capacity.
       const read = vi
-        .spyOn(sessionAccessor, "findTranscriptEvent")
-        .mockRejectedValueOnce(new WorkerTaskError("worker task capacity reached", "overloaded"))
-        .mockResolvedValue(undefined);
+        .spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent")
+        .mockRejectedValueOnce(new WorkerTaskError("worker task capacity reached", "overloaded"));
       const context = createGatewayContext();
       await registry.initSubagentRegistry();
       await registry.activateSubagentRegistry(() => context);
@@ -126,7 +126,7 @@ export function registerRequesterStartupAdmissionTests({
         expect(wakes[0]?.params?.idempotencyKey).toBe(
           `announce:requester-settle:main:${MAIN_REQUESTER_SESSION_KEY}:${runId}:yield-1`,
         );
-        expect(wakes[0]?.params?.message).toContain("old result");
+        expect(wakes[0]?.params?.message).not.toContain("old result");
         expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
       } else if (outcome === "cancel") {
         expect(registry.getSubagentRunByRunId(runId)?.requesterSettleWake).toBeUndefined();
