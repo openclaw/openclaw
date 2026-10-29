@@ -1,2 +1,2 @@
-# Extend the release cache trust-boundary test to cover SwiftPM downloads.
+# Extend the workflow cache-write guard to cover release SwiftPM downloads.
 3
