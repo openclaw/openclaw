@@ -22,8 +22,7 @@ import {
   SKILL_FILE,
   validateSkillFile,
   WorkshopWriteError,
-  publishSkillBundle,
-  writeStagedFile,
+  publishSkillOverlay,
   type WorkshopMutationContext,
 } from "./library.js";
 import { resolveWorkshopDraftsDir, resolveWorkshopSkillsDir } from "./skills-root.js";
@@ -244,18 +243,7 @@ export async function applyWorkshopDraft(
                 `Skill "${name}" changed while the draft was being applied; open the draft again.`,
               );
             }
-            const versionId = await publishSkillBundle(paths, "write_file", async (staging) => {
-              // The live copy carries unchanged files, binary assets included, byte for byte.
-              if (live) {
-                await fs.cp(paths.skillDir, staging, {
-                  recursive: true,
-                  filter: async (source) => !(await fs.lstat(source)).isSymbolicLink(),
-                });
-              }
-              for (const [file, content] of files) {
-                await writeStagedFile(staging, file, content);
-              }
-            });
+            const versionId = await publishSkillOverlay(paths, files);
             return { summary, ...(versionId ? { versionId } : {}) };
           }),
         ];
