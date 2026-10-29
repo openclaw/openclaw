@@ -209,6 +209,8 @@ export type EmbeddedAgentRunMeta = {
     attempts?: TraceAttempt[];
     fallbackUsed?: boolean;
     runner?: "embedded" | "cli";
+    /** CLI backend that ran the turn; unlike the winner, it survives a failed terminal. */
+    cliBackendId?: string;
     providerPolicyRetry?: {
       category: "cyber";
       provider: string;
