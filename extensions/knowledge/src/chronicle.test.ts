@@ -317,6 +317,21 @@ it("group source derives an entity Timeline from relationship notes and sourced 
     ["event_undated_source", "2020-03-01", "Launch review evidence", undefined, undefined],
     ["event_past", "2019-01-15", "Alice founded the team.", undefined, undefined],
   ]);
+  // A standalone claim keeps its source reference and source summary.
+  const past = await f.service.timeline(
+    {
+      entity: "person_alice",
+      group: "source",
+      includeSources: true,
+      since: "2019-01-15",
+      until: "2019-01-15",
+    },
+    f.owner,
+  );
+  expect(past.items.map((row) => [row.record.id, row.sourcePage])).toStrictEqual([
+    ["event_past", "meeting_review"],
+  ]);
+  expect(past.sources?.map((source) => source.id)).toStrictEqual(["meeting_review"]);
   const history = await f.service.timeline(
     { entity: "person_alice", group: "source", eligibility: "include_inactive" },
     f.owner,

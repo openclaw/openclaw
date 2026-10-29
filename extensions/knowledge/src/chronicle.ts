@@ -250,6 +250,10 @@ function groupedRows(
         sign * (a.row.record.id < b.row.record.id ? -1 : a.row.record.id > b.row.record.id ? 1 : 0),
     )
     .map(({ row }) => () => {
+      // A standalone claim keeps its source reference, as an ungrouped row does.
+      const sourcePage = row.record.metadata.source_page;
+      const cited = sourcePage && visible.has(sourcePage) ? sourcePage : undefined;
+      const source = row.record.kind === "page" ? row.record : cited ? byId.get(cited) : undefined;
       // Resolve links in the record the summary came from, as a record read does.
       const links = row.author
         ? resolveLinks(row.author, targets.candidates, targets.canonical)
@@ -268,12 +272,13 @@ function groupedRows(
           precision: row.date.length === 10 ? "day" : "instant",
           summary: truncateUtf16Safe(row.summary, 1000),
           entities: (row.record.metadata.entities ?? []).filter((id) => visible.has(id)),
+          ...(cited ? { sourcePage: cited } : {}),
           evidenceCount: row.record.metadata.evidence?.length ?? 0,
           ...(row.claims === undefined ? {} : { claims: row.claims }),
           ...(row.note ? { noteRecord: row.note.id } : {}),
           ...(links.length ? { links } : {}),
         },
-        ...(row.record.kind === "page" ? { source: row.record } : {}),
+        ...(source ? { source } : {}),
       };
     });
 }

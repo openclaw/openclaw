@@ -66,13 +66,18 @@ run, largest first; the Knowledge Consolidation scribe retires the rest.
 2. Give every entry a record, then check the rows cover them all:
    - The first entry for a dated source with no note on its row becomes a
      `discusses` relationship (source → entity) whose body is the entry's
-     sentence, citing the lines the entry cites.
+     sentence, citing the lines the entry cites. Copy the cited file's path,
+     sha256, filename, mediaType and size from the source page's evidence; a
+     citation that differs from the retained source is rejected.
    - Any other entry becomes an event claim with the entry's date as
      `occurred_at`, the entity in `entities`, and the source as `source_page`
      when there is one. That covers a second entry from the same source, an
      entry dated differently from its source, an undated source and no source.
-   - Batch the writes, then reread the rows. Every entry's date and sentence
-     must appear before you delete anything.
+   - Batch the writes, then check every entry before you delete anything.
+     A note shows as its source's row in the grouped rows. A claim from a
+     source that already has a row is folded into that row's claim count, so
+     check claims in the publication receipt or with
+     `knowledge_timeline({entity})` without `group`, which lists each claim.
 3. Delete the whole section with `knowledge_edit_body`. Shrinking edits always
    succeed, and revision history keeps the old text.
 
