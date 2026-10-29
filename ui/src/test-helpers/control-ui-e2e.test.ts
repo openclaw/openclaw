@@ -24,6 +24,7 @@ describe("shared proof capture", () => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     document.body.replaceChildren();
   });
 
@@ -263,6 +264,9 @@ describe("shared proof capture", () => {
   ])(
     "retains safe failure state despite $failure failure ($sendLabel; $shardIndex/$shardCount)",
     async ({ shardIndex, shardCount, failure, sendLabel }) => {
+      // Model a captured DOM, not live components registered by earlier suites.
+      // Their connected callbacks can otherwise append loading UI to these fixtures.
+      vi.stubGlobal("document", document.implementation.createHTMLDocument());
       vi.useFakeTimers();
       const parent = tempDirs.make("control-ui-failure-proof-");
       const diagnosticParent = failure === "storage" ? path.join(parent, "blocked") : parent;
