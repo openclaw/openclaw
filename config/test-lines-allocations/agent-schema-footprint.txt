@@ -1,0 +1,2 @@
+# SQLite admission must not construct PostgreSQL history; requested migrations retain identity.
+24
