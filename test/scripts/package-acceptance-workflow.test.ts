@@ -9409,7 +9409,11 @@ test "$package_manager" = "pnpm@12.1.0"
     const manifest = workflowStep(summary, "Write release validation manifest");
     const evidenceDispatch = workflowStep(summary, "Request release evidence update");
 
-    expect(manifest.env).not.toHaveProperty("TARGET_SHA");
+    // Revalidation needs the resolved target; the sealed plan still owns the manifest.
+    expect(manifest.env?.TARGET_SHA).toBe("${{ needs.resolve_target.outputs.sha }}");
+    expect(manifest.env?.RELEASE_EXECUTION_PLAN_PATH).toBe(
+      "${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json",
+    );
     expect(manifest.env).not.toHaveProperty("NORMAL_CI_RUN_ID");
     expect(manifest.env).not.toHaveProperty("EVIDENCE_REUSE");
     expect(manifest.run).not.toContain("needs.evidence_reuse.outputs");
