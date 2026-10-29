@@ -121,6 +121,39 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     });
   }
 
+  it("executes static assignments and blocks recursive assignments before process creation", async () => {
+    const echoPath = fs.realpathSync("/bin/echo");
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+      agents: { main: { allowlist: [{ pattern: echoPath }] } },
+    });
+    const review = reviewer();
+
+    const allowed = await tool(review, "allowlist").execute("static-assignment", {
+      command: `STATIC=value; ${echoPath} static-ok`,
+    });
+    if (allowed.details.status !== "completed") {
+      throw new Error(`Unexpected exec status: ${allowed.details.status}`);
+    }
+    expect(allowed.details.exitCode).toBe(0);
+    expect(allowed.details.aggregated).toBe("static-ok");
+    expect(boundary.spawn).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+    expect(callGatewayTool).not.toHaveBeenCalled();
+
+    boundary.spawn.mockClear();
+    const marker = path.join(root, "recursive-assignment-ran");
+    const command = `y='a[$(touch ${JSON.stringify(marker)})]'; x=$((y)); ${echoPath} unsafe`;
+
+    const denied = await tool(review, "ask").execute("recursive-assignment", { command });
+    expect(denied.details.status).toBe("failed");
+    expect(boundary.spawn).not.toHaveBeenCalled();
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(review).not.toHaveBeenCalled();
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
   for (const shell of ["/bin/bash", "/bin/zsh"]) {
     it.skipIf(!fs.existsSync(shell))(
       `executes bound globs and chains without startup substitutions in ${shell}`,
