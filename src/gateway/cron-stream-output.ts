@@ -28,7 +28,8 @@ const MAX_BUFFERED_OUTPUT_SEGMENTS = 64;
 const INTAKE_CAP_MULTIPLIER = 4;
 // A fire that rejects because the state database stayed locked past its busy
 // timeout did not run, so the batch is retried instead of counted as lost.
-// Lock storms under host I/O stalls last tens of seconds: back off 5s, 10s, 20s.
+// Lock storms under host I/O stalls last tens of seconds: each retry waits at least
+// 5s, 10s, then 20s after the rejection, and never sooner than the stream's cadence.
 const LOCKED_FIRE_RETRY_LIMIT = 3;
 const LOCKED_FIRE_RETRY_BASE_MS = 5_000;
 
@@ -577,6 +578,8 @@ export class CronStreamOutput {
         this.pendingBatch === undefined
           ? firing.batch
           : appendBatch(firing.batch, this.pendingBatch, maxBatchBytes);
+      // A busy settlement keeps the lock retries this batch already spent.
+      this.pendingLockedRetries = Math.max(this.pendingLockedRetries, firing.lockedRetries);
       return;
     }
     await this.params.recordLoss("not-running");

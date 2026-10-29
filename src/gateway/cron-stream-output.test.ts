@@ -262,7 +262,15 @@ describe("cron stream output", () => {
       code: "ERR_SQLITE_ERROR",
       errcode: 5,
     });
-    const fireBatch = vi.fn<() => Promise<"fired">>().mockRejectedValue(locked);
+    // A busy job between lock rejections must not refill the same batch's retry budget.
+    const fireBatch = vi
+      .fn<() => Promise<"fired" | "busy">>()
+      .mockRejectedValueOnce(locked)
+      .mockResolvedValueOnce("busy")
+      .mockRejectedValueOnce(locked)
+      .mockResolvedValueOnce("busy")
+      .mockRejectedValueOnce(locked)
+      .mockRejectedValue(locked);
     const { fake, updateState, watchers } = createCronStreamWatcherFixture({
       minIntervalMs: 1,
       fireBatch,
@@ -272,14 +280,14 @@ describe("cron stream output", () => {
 
     fake.inputs[0]?.onStdout?.("turn ended\n");
     await vi.advanceTimersByTimeAsync(50);
-    // Backoff 5s, 10s, 20s, then the fourth rejection is counted.
-    for (const delayMs of [5_000, 10_000, 20_000]) {
+    for (let step = 0; step < 12; step += 1) {
       await settle();
-      await vi.advanceTimersByTimeAsync(delayMs);
+      await vi.advanceTimersByTimeAsync(20_000);
     }
     await settle();
 
-    expect(fireBatch).toHaveBeenCalledTimes(4);
+    // Four lock rejections and two busy settlements, then the batch is counted.
+    expect(fireBatch).toHaveBeenCalledTimes(6);
     expect(updateState).toHaveBeenCalledWith(...stateArgs({ streamDroppedBatches: 1 }));
     await watchers.stopAll("shutdown");
   });
