@@ -385,7 +385,8 @@ export function createMarkdownParser(): MarkdownItParser {
             } catch {
               // Keep the raw href when malformed percent escapes cannot be decoded.
             }
-            if (!decodedHref.includes("://")) {
+            // Query values may contain URLs; selection parsing owns the destination's scheme check.
+            if (env.documentFileLinks === "select" || !decodedHref.includes("://")) {
               const documentTarget = env.documentFileLinks
                 ? parseMarkdownDocumentFileLinkTarget(
                     href,

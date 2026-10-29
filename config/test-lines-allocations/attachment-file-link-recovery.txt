@@ -1,2 +1,2 @@
 # Detail attachment recovery and catalog focus regressions.
-81
+79
