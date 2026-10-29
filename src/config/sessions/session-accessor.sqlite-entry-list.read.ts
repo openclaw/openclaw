@@ -1,4 +1,4 @@
-import { expressionBuilder } from "kysely";
+import { expressionBuilder, type ExpressionBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -66,6 +66,17 @@ function captureListingSource(
   );
 }
 
+// Release-only legacy locator projection. Malformed entry_json rows must reach
+// parseSessionEntryJson, which owns their skip/reject policy, so SQLite must not
+// raise "malformed JSON" while projecting them.
+function legacySessionFile(eb: ExpressionBuilder<DB, "session_nodes">) {
+  return eb.fn<unknown>("iif", [
+    eb.fn("json_valid", ["entry_json"]),
+    eb.fn("json_extract", ["entry_json", eb.val("$.sessionFile")]),
+    eb.val(null),
+  ]);
+}
+
 /** Select listing facts without hydrating the store; creation retains only its target payloads. */
 export function readSelectedSessionEntriesInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
@@ -129,7 +140,7 @@ export function readSelectedSessionEntriesInDatabase(
         .where("session_key", "in", sqliteStringSet(sessionKeys))
         .where(trimmed, "!=", "");
       const file = eb.fn<string>("trim", [
-        eb.fn<string>("json_extract", ["entry_json", eb.val("$.sessionFile")]),
+        legacySessionFile(eb),
         eb.val(SESSION_ID_TRIM_CHARACTERS),
       ]);
       const seedFiles = db
@@ -155,14 +166,14 @@ export function readSelectedSessionEntriesInDatabase(
     // Warm admission permits raw metadata changes. The listing contract still
     // rejects delivery-canonical sibling drift, so include its existing dirty set.
     // Older readers have no dirty set and retain their full validation inventory.
-    const selectedQuery = query.select((eb) => [
-      eb
-        .fn<unknown>("json_extract", ["entry_json", eb.val("$.sessionFile")])
-        .as("transcript_session_file"),
+    const selectedQuery = query.select((eb) =>
       options.transcriptSessionIds === undefined
-        ? eb.val(0).as("transcript_selected")
-        : eb("session_key", "in", selected).as("transcript_selected"),
-    ]);
+        ? [eb.val(null).as("transcript_session_file"), eb.val(0).as("transcript_selected")]
+        : [
+            legacySessionFile(eb).as("transcript_session_file"),
+            eb("session_key", "in", selected).as("transcript_selected"),
+          ],
+    );
     const rows = iterateSqliteQuerySync(
       database.db,
       hasCanonicalSessionValidationProjection(database)
