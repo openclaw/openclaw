@@ -759,6 +759,7 @@
                 },
                 "owner": {
                   "additionalProperties": false,
+                  "description": "Creator ownership (add only).",
                   "properties": {
                     "agentId": {
                       "type": "string"
