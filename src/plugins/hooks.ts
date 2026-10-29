@@ -1109,6 +1109,7 @@ export function createHookRunner(
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
     runChannelPairingRequested: bindVoidHook("channel_pairing_requested"),
+    runChannelGroupMembershipChanged: bindVoidHook("channel_group_membership_changed"),
     runMessageReceived: bindVoidHook("message_received"),
     runBeforeDispatch,
     runReplyDispatch: bindClaimingHook("reply_dispatch"),

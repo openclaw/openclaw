@@ -137,6 +137,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/whatsapp/src/monitor-inbox.append.test.ts",
   "extensions/whatsapp/src/monitor-inbox.debounce-policy.test.ts",
   "extensions/whatsapp/src/monitor-inbox.delivery-and-dedupe.test.ts",
+  "extensions/whatsapp/src/monitor-inbox.group-membership.test.ts",
   "extensions/whatsapp/src/monitor-inbox.media-and-session.test.ts",
   "extensions/whatsapp/src/monitor-inbox.metadata-cache.test.ts",
   "extensions/whatsapp/src/monitor-inbox.policy.test.ts",

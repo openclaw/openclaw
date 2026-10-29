@@ -51,13 +51,18 @@ describe("pre-durable channel ingress policy", () => {
     return { api, instance, registry: builder.registry };
   }
 
-  it.each([false, true])("requires the existing conversation-access grant (%s)", (allowed) => {
-    const owner = ownedPolicy(allowed);
-    owner.api.on("before_channel_ingress", () => undefined);
-    expect(owner.registry.typedHooks.map((entry) => entry.hookName)).toEqual(
-      allowed ? ["before_channel_ingress"] : [],
-    );
-  });
+  it.each(["before_channel_ingress", "channel_group_membership_changed"] as const)(
+    "requires the existing conversation-access grant for %s",
+    (hookName) => {
+      for (const allowed of [false, true]) {
+        const owner = ownedPolicy(allowed);
+        owner.api.on(hookName, () => undefined);
+        expect(owner.registry.typedHooks.map((entry) => entry.hookName)).toEqual(
+          allowed ? [hookName] : [],
+        );
+      }
+    },
+  );
 
   it("chains isolated transformed events and retains the earlier replacement on a later decline", async () => {
     const runner = hookRunner([

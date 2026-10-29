@@ -228,6 +228,42 @@ sanitized row is claimed. Direct queue callers retain their own preparation
 contract. It runs before `inbound_claim`, `message_received`, and transcript
 hooks, which cannot protect the raw durable ingress payload.
 
+### Group membership observations
+
+`channel_group_membership_changed` exposes provider membership notifications
+before message admission, including groups that are not allowed to converse.
+It requires `plugins.entries.<id>.hooks.allowConversationAccess: true`.
+This is an observation hook: it cannot allow a message, change permissions,
+send a reply, or start a model turn by returning a value.
+
+The context supplies `channelId`, `accountId`, `conversationId`, and a `signal`
+aborted when the source connection closes. Pass that signal through plugin I/O.
+The event includes `selfIds`, `participants` with transport-native `id` and
+optional `phoneNumberId`, and optional `actorId` and `actorPhoneNumberId`.
+Phone-number identities are supplied by the provider; an opaque ID is never
+treated as a phone number. A missing actor remains unknown.
+
+WhatsApp emits two event kinds:
+
+- `group_observed`: a live `groups.upsert` notification, including its roster
+  and event-scoped actor when supplied. It may recur and does not establish a
+  new invitation by itself.
+- `participants_changed`: a `group-participants.update` notification with
+  `action` (`add`, `remove`, `promote`, `demote`, or `modify`) and the affected
+  participants. Compare their IDs with `selfIds` to identify account changes.
+
+An actor is the actor of that notification, not a permanent group inviter.
+Check the event kind, action and affected account before interpreting it as an
+invitation. Current group owners, renamed-group metadata, cached rosters and
+startup roster fetches do not establish an inviter and emit no observation.
+
+Notifications are best effort, can repeat after reconnect, and are not stored
+or replayed by this hook. Observers must bound their work; the default hook
+timeout is two seconds. Existing message admission and tool/send permissions
+remain authoritative. Channel plugins can publish these facts through
+`emitChannelGroupMembershipChanged` from
+`openclaw/plugin-sdk/channel-activity-runtime`.
+
 ## Troubleshooting
 
 | Symptom                                    | Check                                                                                                                                                                                                                                                          |

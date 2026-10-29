@@ -78,6 +78,8 @@ export type {
   PluginHeartbeatPromptContributionResult,
 } from "./host-hook-turn-types.js";
 export type {
+  PluginHookChannelGroupMembershipContext,
+  PluginHookChannelGroupMembershipEvent,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundMessageMetadata,
@@ -130,6 +132,7 @@ export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMet
   after_compaction: { voidTimeoutMs: 30_000 },
   before_reset: {},
   before_channel_ingress: { conversationAccess: true, modifyingTimeoutMs: 15_000 },
+  channel_group_membership_changed: { conversationAccess: true, voidTimeoutMs: 2_000 },
   inbound_claim: {},
   channel_pairing_requested: { voidTimeoutMs: 2_000 },
   message_received: {},

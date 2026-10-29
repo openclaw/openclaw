@@ -171,7 +171,12 @@ describe("web monitor inbox metadata cache", () => {
       await listener.sendMessage("123@g.us", "before @15551234567");
       sock.groupMetadata.mockRejectedValue(new Error("408 timed out"));
 
-      sock.ev.emit("group-participants.update", { id: "123@g.us" });
+      sock.ev.emit("group-participants.update", {
+        id: "123@g.us",
+        action: "remove",
+        author: "444@s.whatsapp.net",
+        participants: [{ id: "15551234567@s.whatsapp.net" }],
+      });
       await listener.sendMessage("123@g.us", "after @15551234567");
 
       expectGroupSend("before @15551234567", ["15551234567@s.whatsapp.net"]);
@@ -211,7 +216,12 @@ describe("web monitor inbox metadata cache", () => {
       try {
         const sending = listener.sendMessage("123@g.us", "hello @15551234567");
         await entered.promise;
-        sock.ev.emit("group-participants.update", { id: "123@g.us" });
+        sock.ev.emit("group-participants.update", {
+          id: "123@g.us",
+          action: "remove",
+          author: "444@s.whatsapp.net",
+          participants: [{ id: "15551234567@s.whatsapp.net" }],
+        });
         resume.resolve();
         await sending;
         // Baileys must miss the invalidated cache and fetch current recipients itself.
@@ -229,7 +239,12 @@ describe("web monitor inbox metadata cache", () => {
     sock.groupFetchAllParticipating.mockReturnValueOnce(hydration.promise);
     const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
     try {
-      sock.ev.emit("group-participants.update", { id: "123@g.us" });
+      sock.ev.emit("group-participants.update", {
+        id: "123@g.us",
+        action: "remove",
+        author: "444@s.whatsapp.net",
+        participants: [{ id: "15551234567@s.whatsapp.net" }],
+      });
       hydration.resolve({
         "123@g.us": groupMetadata({ subject: "Former Group" }),
       });
@@ -288,7 +303,12 @@ describe("web monitor inbox metadata cache", () => {
       }),
     ]);
     expect(groupMetadataCache.has("123@g.us")).toBe(true);
-    sock.ev.emit("group-participants.update", { id: "123@g.us" });
+    sock.ev.emit("group-participants.update", {
+      id: "123@g.us",
+      action: "remove",
+      author: "444@s.whatsapp.net",
+      participants: [{ id: "15551234567@s.whatsapp.net" }],
+    });
     expect(groupMetadataCache.has("123@g.us")).toBe(false);
     await expect(
       baileysCache.socketOptions.cachedGroupMetadata("123@g.us"),
@@ -339,9 +359,9 @@ describe("web monitor inbox metadata cache", () => {
       baileysGroupMetaCache: baileysCache.baileysGroupMetaCache,
     });
 
-    expect(sock.ev.listenerCount("groups.upsert")).toBe(1);
+    expect(sock.ev.listenerCount("groups.upsert")).toBe(2);
     expect(sock.ev.listenerCount("groups.update")).toBe(1);
-    expect(sock.ev.listenerCount("group-participants.update")).toBe(1);
+    expect(sock.ev.listenerCount("group-participants.update")).toBe(2);
 
     await listener.close();
 
