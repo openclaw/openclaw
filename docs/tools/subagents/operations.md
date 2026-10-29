@@ -78,10 +78,10 @@ whichever is longer). These retained counts govern `/subagents list`,
 status summaries, descendant completion gating, and per-session concurrency
 checks; they are not proof that an executor is live.
 
-After execution ownership ends, the sweeper can reconcile the child's persisted
-terminal state even if routing metadata remains in memory. The completed result
-then follows normal completion delivery and retry; retained routing metadata does
-not keep the child running.
+Normal completion uses that execution's wait or lifecycle result, then follows
+completion delivery and retry. A collector that yields retains its terminal timing
+and reply even if a later turn advances the child session. Retained routing
+metadata does not keep the child running.
 
 A graceful Gateway shutdown records the top-level requesters of running children,
 then cancels the children through the ordinary abort path. They settle terminally
