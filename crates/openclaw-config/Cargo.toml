@@ -1,0 +1,15 @@
+[package]
+name = "openclaw-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Configuration system for the OpenClaw Rust rewrite"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+openclaw-core.workspace = true
+subtle = "2.6.1"

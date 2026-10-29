@@ -1,0 +1,22 @@
+[package]
+name = "openclaw-dashboard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Web Control UI, WebChat, Pairing API, and OpenAI-compatible HTTP endpoint for OpenClaw"
+
+[dependencies]
+openclaw-core.workspace = true
+openclaw-gateway.workspace = true
+openclaw-config.workspace = true
+openclaw-state.workspace = true
+openclaw-skills.workspace = true
+openclaw-llm.workspace = true
+openclaw-protocol.workspace = true
+openclaw-channels.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+chrono.workspace = true

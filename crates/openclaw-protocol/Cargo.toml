@@ -1,0 +1,12 @@
+[package]
+name = "openclaw-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Gateway WebSocket protocol types for the OpenClaw Rust rewrite"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+openclaw-core.workspace = true

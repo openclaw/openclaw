@@ -1,0 +1,47 @@
+# Multi-stage build for Linux ARM64 (aarch64) and AMD64.
+#
+# State and config follow the documented contract: OPENCLAW_STATE_DIR and
+# OPENCLAW_CONFIG_PATH point into a mounted volume, so a container restart keeps
+# sessions, pairings, and memory. Credentials arrive at runtime through the
+# environment; nothing is baked into the image.
+
+FROM --platform=$BUILDPLATFORM rust:1.93-bookworm AS builder
+ARG TARGETARCH
+WORKDIR /src
+COPY . .
+
+RUN case "$TARGETARCH" in \
+      arm64) \
+        apt-get update && apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross && \
+        rustup target add aarch64-unknown-linux-gnu && \
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+        cargo build --release --locked --target aarch64-unknown-linux-gnu -p openclaw-cli && \
+        cp target/aarch64-unknown-linux-gnu/release/openclaw /out-openclaw ;; \
+      amd64) \
+        cargo build --release --locked -p openclaw-cli && \
+        cp target/release/openclaw /out-openclaw ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /var/lib/openclaw /etc/openclaw
+COPY --from=builder /out-openclaw /usr/local/bin/openclaw
+COPY entrypoint.sh /usr/local/bin/openclaw-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/openclaw-entrypoint.sh
+
+# Documented paths: mutable state on the volume, config beside it.
+ENV OPENCLAW_STATE_DIR=/var/lib/openclaw \
+    OPENCLAW_CONFIG_PATH=/var/lib/openclaw/openclaw.json \
+    OPENCLAW_GATEWAY_TOKEN=""
+
+EXPOSE 18789 18790
+VOLUME ["/var/lib/openclaw"]
+
+# The entrypoint onboards on first run (so a config exists and the database path
+# is absolute inside the volume) and then execs the Gateway. The Gateway refuses a
+# non-loopback listener without a token, so a missing OPENCLAW_GATEWAY_TOKEN fails
+# loudly instead of serving open.
+ENTRYPOINT ["/usr/local/bin/openclaw-entrypoint.sh"]

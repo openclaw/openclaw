@@ -1,0 +1,41 @@
+[gateway]
+listen = "127.0.0.1:18789"
+requireAuth = true
+# Required when requireAuth = true. Use "$ENV_VAR" to keep the secret out of
+# this file, and set the variable in the service environment file.
+authToken = "$OPENCLAW_GATEWAY_TOKEN"
+maxConnections = 256
+maxFrameBytes = 16777216
+pingIntervalSecs = 30
+
+[database]
+engine = "sqlite"
+path = "/var/lib/openclaw/openclaw.db"
+maxConnections = 8
+
+[logging]
+level = "info"
+json = false
+
+[telemetry]
+anonymousStats = false
+checkOnStart = false
+
+[providers.anthropic]
+type = "anthropic"
+apiKey = "$ANTHROPIC_API_KEY"
+model = "claude-sonnet-4-20250514"
+
+[providers.openai]
+type = "openai"
+apiKey = "$OPENAI_API_KEY"
+model = "gpt-4o"
+
+[agents.default]
+systemPrompt = "You are OpenClaw, a helpful AI assistant."
+provider = "anthropic"
+maxTokens = 4096
+
+[channels."telegram:main"]
+enabled = true
+token = "$TELEGRAM_BOT_TOKEN"

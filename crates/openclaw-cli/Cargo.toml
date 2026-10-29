@@ -1,0 +1,31 @@
+[package]
+name = "openclaw-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "CLI entry point for the OpenClaw Rust rewrite"
+
+[[bin]]
+name = "openclaw"
+path = "src/main.rs"
+
+[dependencies]
+openclaw-core.workspace = true
+openclaw-config.workspace = true
+openclaw-protocol.workspace = true
+openclaw-gateway.workspace = true
+openclaw-channels.workspace = true
+openclaw-llm.workspace = true
+openclaw-state.workspace = true
+openclaw-skills.workspace = true
+openclaw-dashboard.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true

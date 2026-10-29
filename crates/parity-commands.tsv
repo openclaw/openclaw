@@ -1,0 +1,50 @@
+# Official command surface vs the Rust build. Tab-separated: command, status, note.
+# Source of truth: docs/cli/*.md at the pinned checkout.
+# Status values: MATCH | PARTIAL | MISSING. Anything MISSING is open work.
+# Enforced by openclaw-cli/tests/parity_table.rs in both directions.
+gateway	PARTIAL	run/status/install/uninstall; no start/stop/restart/probe/deep/--json
+gateway status	PARTIAL	--json/service.loaded/--port/--token/--no-probe + exit codes; no WS RPC probe, no --deep scan
+gateway install	MATCH	writes + activates systemd/launchd service; refuses unsupported hosts
+gateway uninstall	MATCH	removes official + legacy unit names
+daemon	MISSING	official installers call `daemon status/restart`; alias absent
+onboard	PARTIAL	writes config+token+gateway.mode, --install-daemon/--no-install-daemon; no wizard
+setup	MISSING	official alias for onboarding/chat bootstrap
+config	PARTIAL	get/set/patch/unset/file/schema/validate + --dry-run + read-only; no --json/--strict-json/Gateway routing
+configure	PARTIAL	alias for config; no interactive wizard
+dashboard	PARTIAL	--json/--no-open/--yes; reports pairing_handoff_unavailable instead of faking success
+pairing	PARTIAL	list/approve --channel/--account/--notify/--json; no owner bootstrap, --notify undelivered
+doctor	PARTIAL	checks + nonzero exit gate; no --fix migrations, no --json/--lint, creates DB when missing
+uninstall	MATCH	service/state/workspace/app/all + dry-run; preserves workspaces unless --workspace
+update	MISSING	no channel switching, no self-update
+backup	MISSING	no backup create/verify/restore
+restore	MISSING	no restore flow
+migrate	MISSING	no migration flow
+agents	MISSING	no multi-agent roster/bindings/identity
+agent	MISSING	no one-shot agent turn
+channels	MISSING	no channels add/remove/status/login
+models	MISSING	no model catalog/selection
+plugins	MISSING	no plugin install/enable/disable
+skills	PARTIAL	list/info only; no install/update/remove
+memory	PARTIAL	list/add; no search/prune
+cron	PARTIAL	list only; no scheduler or job execution
+sessions	MISSING	no sessions list/get/end
+logs	MISSING	no logs tail
+health	MISSING	no health probe command
+status	MISSING	no aggregate status
+devices	MISSING	no node device pairing
+nodes	MISSING	no node capability approvals
+qr	MISSING	no setup-code/QR issuance
+security	MISSING	no security audit command
+secrets	MISSING	no secret management
+sandbox	MISSING	no sandbox management
+approvals	MISSING	no approval queue
+mcp	MISSING	no MCP server management
+acp	MISSING	no ACP integration
+hooks	MISSING	no hooks relay
+webhooks	MISSING	no webhook ingress
+message	MISSING	no outbound message command
+infer	MISSING	no inference command
+tui	MISSING	no terminal UI
+completion	MISSING	no shell completion generation
+version	MATCH	prints version
+help	MATCH	prints command list and names unimplemented commands

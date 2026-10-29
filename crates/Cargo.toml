@@ -1,3 +1,57 @@
 [workspace]
-members = ["openclaw-gateway-client", "openclaw-node-host"]
+members = [
+    "openclaw-core",
+    "openclaw-config",
+    "openclaw-protocol",
+    "openclaw-gateway",
+    "openclaw-channels",
+    "openclaw-llm",
+    "openclaw-state",
+    "openclaw-skills",
+    "openclaw-dashboard",
+    "openclaw-cli",
+    "openclaw-gateway-client",
+    "openclaw-node-host",
+]
 resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.93"
+license = "MIT"
+
+[workspace.dependencies]
+# Internal
+openclaw-core = { path = "openclaw-core" }
+openclaw-config = { path = "openclaw-config" }
+openclaw-protocol = { path = "openclaw-protocol" }
+openclaw-gateway = { path = "openclaw-gateway" }
+openclaw-channels = { path = "openclaw-channels" }
+openclaw-llm = { path = "openclaw-llm" }
+openclaw-state = { path = "openclaw-state" }
+openclaw-skills = { path = "openclaw-skills" }
+openclaw-dashboard = { path = "openclaw-dashboard" }
+openclaw-gateway-client = { path = "openclaw-gateway-client" }
+openclaw-node-host = { path = "openclaw-node-host" }
+
+# External
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.53.2", features = ["full"] }
+tokio-tungstenite = "0.30.0"
+futures-util = "0.3.34"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+uuid = { version = "1.18.1", features = ["v4"] }
+chrono = { version = "0.4.42", features = ["serde"] }
+reqwest = { version = "0.13.1", features = ["json", "stream"] }
+async-trait = "0.1.89"
+dashmap = "6.1.0"
+toml = "0.9.8"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

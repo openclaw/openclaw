@@ -1,1 +1,6 @@
 /target/
+# Local runtime databases; never commit operator state or test artifacts.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
