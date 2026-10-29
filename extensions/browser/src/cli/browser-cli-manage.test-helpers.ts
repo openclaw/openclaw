@@ -2,9 +2,7 @@
  * Test helpers for Browser CLI manage command suites.
  */
 import type { Command } from "commander";
-import { vi } from "vitest";
 import { mockBrowserGateway } from "./browser-cli.test-support.js";
-import * as cliCoreApiModule from "./core-api.js";
 
 const gatewayMock = mockBrowserGateway();
 gatewayMock.mockImplementation(async (_method, _opts, request) =>
@@ -23,15 +21,9 @@ gatewayMock.mockImplementation(async (_method, _opts, request) =>
     : {},
 );
 
-const { createBrowserProgram, getBrowserCliRuntime } =
+const { createBrowserProgram, mockBrowserCliRuntime } =
   await import("./browser-cli.test-support.js");
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+mockBrowserCliRuntime();
 
 const { registerBrowserManageCommands } = await import("./browser-cli-manage.js");
 

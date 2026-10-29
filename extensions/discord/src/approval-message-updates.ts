@@ -1,6 +1,6 @@
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { parseExecApprovalData } from "./approval-custom-id.js";
-import { parseCustomId } from "./internal/discord.js";
+import { parseCustomId } from "./internal/components.base.js";
 
 export const discordApprovalMessageUpdates = new KeyedAsyncQueue();
 

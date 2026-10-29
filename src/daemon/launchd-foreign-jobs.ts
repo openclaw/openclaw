@@ -1,16 +1,16 @@
-/** Live launchd diagnostics and narrowly scoped Doctor repair for auxiliary jobs. */
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveGatewayLaunchAgentLabel, resolveNodeLaunchAgentLabel } from "./constants.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { resolveGatewayLaunchAgentLabel, isNodeLaunchAgentLabel } from "./constants.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
   isLaunchctlNotLoaded,
 } from "./launchd-exec.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
-import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
+import { parseLaunchctlJob, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 
 type GatewayAction = "restart" | "start" | "stop";
 export type ForeignLaunchdJob = {
@@ -52,11 +52,11 @@ function hasShellExecutionEnvironment(environment: string): boolean {
 function isCandidate(label: string, env: NodeJS.ProcessEnv): boolean {
   return (
     /^ai\.openclaw\.[A-Za-z0-9._-]+$/.test(label) &&
+    !isNodeLaunchAgentLabel(label) &&
     !new Set([
       resolveGatewayLaunchAgentLabel(),
       resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE),
       resolveLaunchAgentLabel(env),
-      resolveNodeLaunchAgentLabel(),
     ]).has(label)
   );
 }
@@ -233,26 +233,16 @@ async function inspectJob(
   if (result.code !== 0) {
     throw new Error(`Cannot inspect launchd job ${label}: ${formatLaunchctlResultDetail(result)}`);
   }
-  const output = result.stdout;
-  if (!output.startsWith(`${target} = {\n`)) {
-    throw new Error(`Cannot parse launchd job ${label}`);
-  }
-  const field = (name: string) => output.match(new RegExp(`^\\t${name} = (.+)$`, "m"))?.[1];
+  const job = parseLaunchctlJob(result.stdout, target);
+  const field = (name: string) => job.fields.get(name);
   const program = field("program") ?? "unknown";
   const rawPath = field("path");
   const plistPath = rawPath?.startsWith("/") ? rawPath : undefined;
-  const args = (output.match(/^\targuments = \{\n([\s\S]*?)^\t\}/m)?.[1] ?? "")
-    .split("\n")
-    .filter((line) => line.startsWith("\t\t"))
-    .map((line) => line.slice(2));
-  const environment = output.match(/^\tenvironment = \{\n([\s\S]*?)^\t\}/m)?.[1] ?? "";
+  const args = job.arguments ?? [];
+  const environment = job.environment;
   // launchd also injects the `inherited environment` and `default environment`
   // blocks into the process; a shell reads BASH_ENV/SHELLOPTS from any of them.
-  const environmentBlocks = [
-    ...output.matchAll(/^\t(?:inherited |default )?environment = \{\n([\s\S]*?)^\t\}/gm),
-  ]
-    .map((match) => match[1] ?? "")
-    .join("\n");
+  const environmentBlocks = job.environmentBlocks;
   const plist = plistPath ? await readOwnedText(plistPath) : undefined;
   const hasServiceMarker =
     /^\t\tOPENCLAW_SERVICE_MARKER => openclaw$/m.test(environment) &&
@@ -353,11 +343,11 @@ export function formatForeignLaunchdJobs(jobs: ForeignLaunchdJob[]): string {
   return jobs
     .map((job) =>
       [
-        `${job.label}: program=${job.program}, keepalive=${job.keepAlive}, Gateway lifecycle=${job.gatewayActions.join("|") || "not verified"}`,
+        terminalText`${job.label}: program=${job.program}, keepalive=${job.keepAlive}, Gateway lifecycle=${job.gatewayActions.join("|") || "not verified"}`,
         job.safeToRemove
           ? "  Removable with openclaw doctor --fix."
           : "  Report only; left unchanged.",
-        ...(job.diagnostic ? [`  ${job.diagnostic}`] : []),
+        ...(job.diagnostic ? [terminalText`  ${job.diagnostic}`] : []),
       ].join("\n"),
     )
     .join("\n");

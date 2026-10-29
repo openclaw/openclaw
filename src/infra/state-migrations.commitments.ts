@@ -15,7 +15,6 @@ import {
 import {
   LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
-  legacyMigrationSourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
@@ -32,17 +31,13 @@ type LegacyCommitmentsSnapshot = LegacyMigrationSourceSnapshot & {
   recordCount: number;
 };
 
-function resolveLegacyCommitmentsPath(stateDir: string): string {
-  return path.join(stateDir, LEGACY_COMMITMENTS_PATH);
-}
-
 /** Detect the exact retired store only when an explicit Doctor flow opts in. */
 export async function detectLegacyCommitments(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
 }): Promise<NonNullable<LegacyStateDetection["commitments"]>> {
-  const sourcePath = resolveLegacyCommitmentsPath(params.stateDir);
+  const sourcePath = path.join(params.stateDir, LEGACY_COMMITMENTS_PATH);
   let hasPendingReceipt = false;
   if (
     params.doctorOnlyStateMigrations === true &&
@@ -150,9 +145,6 @@ async function migrateWithExclusiveStateOwnership(params: {
   detected: NonNullable<LegacyStateDetection["commitments"]>;
   stateDir: string;
   env: NodeJS.ProcessEnv;
-  beforeClaim?: () => void;
-  beforeVerify?: () => void;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
   const sourcePath = params.detected.sourcePath;
   const sourceKey = resolveLegacyMigrationSourceKey("commitments-json", sourcePath);
@@ -201,30 +193,10 @@ async function migrateWithExclusiveStateOwnership(params: {
   let snapshot: LegacyCommitmentsSnapshot;
   try {
     snapshot = await source.read();
-    params.beforeVerify?.();
-    if (!legacyMigrationSourceSnapshotsMatch(snapshot, await source.read())) {
-      throw new Error("retired commitments source changed after Doctor loaded it");
-    }
   } catch (error) {
     return {
       changes: [],
       warnings: [`Failed reading retired commitments JSON: ${String(error)}`],
-    };
-  }
-
-  try {
-    await source.claim({
-      snapshot,
-      mismatchMessage: "retired commitments source changed before Doctor could claim it",
-      beforeClaim: params.beforeClaim,
-    });
-  } catch (error) {
-    const restoreError = await source.restore();
-    return {
-      changes: [],
-      warnings: [
-        `Failed claiming retired commitments JSON: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-      ],
     };
   }
 
@@ -236,25 +208,15 @@ async function migrateWithExclusiveStateOwnership(params: {
       snapshot,
     });
   } catch (error) {
-    const restoreError = await source.restore();
     return {
       changes: [],
-      warnings: [
-        `Failed recording retired commitments discard: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-      ],
+      warnings: [`Failed recording retired commitments discard: ${String(error)}`],
     };
   }
 
   try {
-    if (!legacyMigrationSourceSnapshotsMatch(snapshot, await source.read(true))) {
-      throw new Error("retired commitments Doctor claim changed before cleanup");
-    }
-    await source.remove({
-      removeSource: params.removeSource,
-      sourceReappearedMessage: "retired commitments source reappeared during cleanup",
-      sourceRemainingMessage: "retired commitments source remains after cleanup",
-      claimRemainingMessage: "retired commitments Doctor claim remains after cleanup",
-    });
+    await source.verify(snapshot, "retired commitments source changed before cleanup");
+    await params.stateRoot.remove(source.sourceRelativePath);
   } catch (error) {
     return {
       changes: [],
@@ -286,9 +248,6 @@ export async function migrateLegacyCommitments(params: {
   detected: NonNullable<LegacyStateDetection["commitments"]>;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
-  beforeClaim?: () => void;
-  beforeVerify?: () => void;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
   if (!params.detected.hasLegacy) {
     return { changes: [], warnings: [] };

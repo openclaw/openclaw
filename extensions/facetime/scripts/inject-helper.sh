@@ -10,7 +10,7 @@ if [[ "${1:-}" == "--app" ]]; then
   shift 2
 fi
 if [[ $# -gt 0 ]]; then
-  echo "Usage: $0 [--app FaceTime|Phone]" >&2
+  echo "Usage: $0 [--app FaceTime]" >&2
   exit 2
 fi
 
@@ -19,12 +19,8 @@ case "${target_app}" in
     target_bundle="com.apple.FaceTime"
     target_executable="/System/Applications/FaceTime.app/Contents/MacOS/FaceTime"
     ;;
-  Phone)
-    target_bundle="com.apple.mobilephone"
-    target_executable="/System/Applications/Phone.app/Contents/MacOS/Phone"
-    ;;
   *)
-    echo "Unsupported helper app: ${target_app}. Use FaceTime or Phone." >&2
+    echo "Unsupported helper app: ${target_app}. Use FaceTime." >&2
     exit 1
     ;;
 esac
@@ -58,7 +54,7 @@ if [[ "$sip_debugging" == enabled ]]; then
   cat >&2 <<'EOF'
 System Integrity Protection debugging restrictions are enabled.
 
-This helper uses LLDB to load into Apple's protected FaceTime and Phone apps.
+This helper uses LLDB to load into Apple's protected FaceTime app.
 Apple's SIP runtime protections reject that attach even for root. Disable SIP
 debugging restrictions from macOS Recovery, reboot, and rerun facetime.setup
 before injecting:

@@ -6,6 +6,28 @@ import type {
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 
+function createBuiltinRuntimeChoice(): ModelsRuntimeChoice {
+  return {
+    id: "openclaw",
+    label: "OpenClaw Default",
+    description: "Use the built-in OpenClaw runtime.",
+  };
+}
+
+export function createFixtureRuntimeChoices(
+  runtime: "codex" | "google-gemini-cli",
+): ModelsRuntimeChoice[] {
+  const label = runtime === "codex" ? "OpenAI Codex" : "Google Gemini CLI";
+  return [
+    {
+      id: runtime,
+      label,
+      description: `Use the ${label} runtime selected by the effective harness policy.`,
+    },
+    createBuiltinRuntimeChoice(),
+  ];
+}
+
 export function createModelsProviderData(
   entries: Record<string, string[]>,
   opts?: { defaultProviderOrder?: "insertion" | "sorted" },
@@ -20,11 +42,7 @@ export function createModelsProviderData(
     opts?.defaultProviderOrder === "sorted"
       ? (providers[0] ?? "openai")
       : (insertionProvider ?? "openai");
-  const builtin = {
-    id: "openclaw",
-    label: "OpenClaw Default",
-    description: "Use the built-in OpenClaw runtime.",
-  };
+  const builtin = createBuiltinRuntimeChoice();
   const runtimeChoicesByProvider = new Map(providers.map((provider) => [provider, [builtin]]));
   const runtimeChoicesByModel = new Map(
     [...byProvider].flatMap(([provider, models]) =>
@@ -73,9 +91,7 @@ export function setFixtureRuntimeChoices(
   }
 }
 
-export function createResolvedAgentRoute(
-  overrides: Partial<ResolvedAgentRoute> = {},
-): ResolvedAgentRoute {
+export function createResolvedAgentRoute(): ResolvedAgentRoute {
   return {
     agentId: "main",
     channel: "discord",
@@ -84,6 +100,5 @@ export function createResolvedAgentRoute(
     mainSessionKey: "agent:main:main",
     lastRoutePolicy: "session",
     matchedBy: "default",
-    ...overrides,
   };
 }

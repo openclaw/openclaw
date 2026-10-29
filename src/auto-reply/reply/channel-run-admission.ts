@@ -1,5 +1,6 @@
 import {
   createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
@@ -11,18 +12,39 @@ import {
   recordChannelAdmissionDecision,
   type ChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
+import {
+  admitChildSessionPublication,
+  prepareChildSessionPublication,
+} from "../../channels/message-access/child-session-publication.js";
+import { ChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  readGatewayLocalUserIngressFacts,
+  type GatewayLocalUserIngress,
+} from "../../gateway/local-user-ingress.js";
 
-/** Adapt one opaque channel carrier to the canonical admitted-run facts and decision FIFO. */
-export function consumeChannelRunAdmission(evidence: ChannelAdmissionEvidence | undefined): {
+/** Adapt reply ingress to admission; authenticated Gateway attach has no plugin-channel decision. */
+function consumeChannelRunAdmission(
+  evidence: ChannelAdmissionEvidence | undefined,
+  gatewayLocalUserIngress?: GatewayLocalUserIngress,
+): {
   ingressState: ExecutionIdentityAdmissionFacts["ingress"]["state"];
-  facts: Pick<ExecutionIdentityAdmissionFacts, "invoker" | "assurance">;
+  facts: Pick<ExecutionIdentityAdmissionFacts, "invoker" | "assurance" | "representedSubject"> &
+    Partial<Pick<ExecutionIdentityAdmissionFacts, "ingress">>;
   onAdmitted: (context: AdmittedRunContext) => void;
 } {
+  const gatewayFacts = readGatewayLocalUserIngressFacts(gatewayLocalUserIngress);
+  if (gatewayFacts) {
+    return {
+      ingressState: gatewayFacts.ingress.state,
+      facts: gatewayFacts,
+      onAdmitted: () => undefined,
+    };
+  }
   const admission = consumeChannelAdmissionEvidence(evidence);
-  return Object.freeze({
+  return {
     ingressState: admission.ingressState,
-    facts: Object.freeze({
+    facts: {
       invoker: admission.invoker,
       ...(admission.assuranceRef
         ? {
@@ -37,7 +59,7 @@ export function consumeChannelRunAdmission(evidence: ChannelAdmissionEvidence | 
             ],
           }
         : {}),
-    }),
+    },
     onAdmitted: (context) => {
       const token = context.executionIdentityToken;
       if (token && admission.decisionCoverage && admission.identifierAuthentication) {
@@ -51,17 +73,19 @@ export function consumeChannelRunAdmission(evidence: ChannelAdmissionEvidence | 
         });
       }
     },
-  });
+  };
 }
 
 /** Defer evidence consumption until the selected runtime actually admits the run. */
 export function prepareChannelRunAdmission(params: {
   cfg: OpenClawConfig;
+  sourceContext?: object;
   runId: string;
   agentId: string;
   ingressKind: ExecutionIdentityAdmissionFacts["ingress"]["kind"];
   boundary: string;
   evidence?: ChannelAdmissionEvidence;
+  gatewayLocalUserIngress?: GatewayLocalUserIngress;
   assertSourceCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   onAdmitted?: (context: AdmittedRunContext) => void;
@@ -92,7 +116,10 @@ export function prepareChannelRunAdmission(params: {
         return Promise.reject(new Error("prepared execution context is already closed"));
       }
       if (!prepared) {
-        const channelAdmission = consumeChannelRunAdmission(params.evidence);
+        const channelAdmission = consumeChannelRunAdmission(
+          params.evidence,
+          params.gatewayLocalUserIngress,
+        );
         prepared = prepareAgentRunAdmission({
           cfg: params.cfg,
           assertSourceCurrent: params.assertSourceCurrent,
@@ -108,8 +135,26 @@ export function prepareChannelRunAdmission(params: {
             },
             ...channelAdmission.facts,
           },
-          onAdmitted: (context) => {
+          onAdmitted: async (context) => {
+            if (params.sourceContext) {
+              await prepareChildSessionPublication(params.sourceContext);
+            }
             channelAdmission.onAdmitted(context);
+            if (params.sourceContext) {
+              try {
+                admitChildSessionPublication(
+                  params.sourceContext,
+                  context.operationalRunInstance,
+                  () => {
+                    if (!getAdmittedRunDelegatedAuthority(context)) {
+                      throw new Error("Public ingress run is no longer active.");
+                    }
+                  },
+                );
+              } catch (error) {
+                throw new ChannelRunAuthorizationError(error);
+              }
+            }
             params.onAdmitted?.(context);
           },
         });

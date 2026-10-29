@@ -3,25 +3,20 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { InstantThreadHandoff } from "./instant-thread-handoff.ts";
 import { restoredInstantThreadPage, takeInstantThreadRestore } from "./instant-thread-restore.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 
 describe("retained page render ownership", () => {
-  it.each(["main", "previous"])(
-    "rejects a private page after authentication changes between loader and renderer (prior agent: %s)",
-    async (previousAgentId) => {
+  it.each(["loading", "restored"] as const)(
+    "keeps retained page ownership while %s and rejects a changed principal",
+    async (phase) => {
+      const previousAgentId = "previous";
       const { context } = createDraftFixture();
       context.agentSelection.state.selectedId = previousAgentId;
       vi.mocked(context.agentSelection.set).mockImplementation((agentId) => {
         context.agentSelection.state.selectedId = agentId;
       });
-      const data: NewSessionRouteData = {
-        agentId: "main",
-        requestedAgentId: "main",
-        catalogId: "",
-        model: "",
-        catalogLabel: "",
-        startTerminal: false,
-      };
+      const data: NewSessionRouteData = createNewSessionRouteData();
       const page = document.createElement("div");
       page.textContent = "private incognito draft";
       let consumed: NewSessionRouteData | undefined;
@@ -65,6 +60,14 @@ describe("retained page render ownership", () => {
         await vi.waitFor(() => expect(consumed).toBe(data));
         expect(context.agentSelection.state.selectedId).toBe(previousAgentId);
         expect(restoredInstantThreadPage(consumed)).toBe(page);
+        if (phase === "restored") {
+          releaseRoute();
+          await rollback;
+          Object.assign(context.gateway.snapshot, { phase: "reconnecting" });
+          expect(restoredInstantThreadPage(consumed)).toBe(page);
+          Object.assign(context.gateway.snapshot, { phase: "connected" });
+          expect(restoredInstantThreadPage(consumed)).toBe(page);
+        }
         const auth = context.gateway.snapshot.hello?.auth;
         if (!auth) {
           throw new Error("fixture requires authenticated hello");

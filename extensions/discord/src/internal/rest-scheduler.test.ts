@@ -1,191 +1,98 @@
-// Discord tests cover rest scheduler plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_DATE_TIMESTAMP_MS, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./rest-errors.js";
 import { RestScheduler } from "./rest-scheduler.js";
 import { createJsonResponse } from "./test-builders.test-support.js";
 
-type RestSchedulerOptions = ConstructorParameters<typeof RestScheduler>[0];
-
-function createOptions(overrides: Partial<RestSchedulerOptions> = {}): RestSchedulerOptions {
-  return {
-    lanes: {
-      critical: { maxQueueSize: 10, weight: 3 },
-      standard: { maxQueueSize: 10, weight: 2 },
-      background: { maxQueueSize: 10, staleAfterMs: 20_000, weight: 1 },
-    },
-    maxConcurrency: 2,
-    maxQueueSize: 20,
-    maxRateLimitRetries: 1,
-    ...overrides,
-  };
+const messageRequest = {
+  method: "POST",
+  path: "/channels/c1/messages",
+  priority: "standard",
+} as const;
+function recordLimit(
+  scheduler: RestScheduler<unknown>,
+  retry_after: number,
+  headers?: HeadersInit,
+) {
+  const body = { retry_after, global: headers === undefined };
+  scheduler.recordResponse(
+    "POST /channels/c1/messages",
+    messageRequest.path,
+    createJsonResponse(body, { status: 429, headers }),
+    body,
+  );
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
 describe("RestScheduler", () => {
-  it("defaults non-finite scheduler options before dispatching", async () => {
-    const executor = vi.fn(async () => ({ ok: true }));
-    const scheduler = new RestScheduler(
-      createOptions({
-        lanes: {
-          critical: { maxQueueSize: Number.NaN, weight: Number.POSITIVE_INFINITY },
-          standard: { maxQueueSize: Number.NaN, weight: Number.NaN },
-          background: {
-            maxQueueSize: Number.NaN,
-            staleAfterMs: Number.NaN,
-            weight: Number.NEGATIVE_INFINITY,
-          },
-        },
-        maxConcurrency: Number.NaN,
-        maxQueueSize: Number.NaN,
-        maxRateLimitRetries: Number.NaN,
-      }),
-      executor,
-    );
+  it("bounds the queue at 1000 requests and accepts work after draining", async () => {
+    const release = createDeferred<void>();
+    let active = 0;
+    let peak = 0;
+    const scheduler = new RestScheduler(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await release.promise;
+      active -= 1;
+    });
+    const enqueue = (guild: string) =>
+      scheduler.enqueue({ method: "GET", path: `/guilds/${guild}/roles`, priority: "background" });
+    const requests = Array.from({ length: 1000 }, (_, index) => enqueue(`g${index}`));
 
-    await expect(
-      scheduler.enqueue({ method: "GET", path: "/guilds/g1/roles", priority: "background" }),
-    ).resolves.toEqual({ ok: true });
+    expect(() => enqueue("overflow")).toThrow("Discord request queue is full");
 
-    expect(executor).toHaveBeenCalledTimes(1);
-    expect(scheduler.getMetrics().maxConcurrentWorkers).toBe(1);
+    release.resolve();
+    await Promise.all(requests);
+    await enqueue("after-drain");
+    expect(peak).toBe(4);
   });
 
-  it("does not retry forever when maxRateLimitRetries is non-finite", async () => {
+  it("limits a rate-limited request to three retries", async () => {
     const executor = vi.fn(async () => {
-      throw new RateLimitError(
-        createJsonResponse(
-          { message: "Rate limited", retry_after: 0.1, global: false },
-          { status: 429 },
-        ),
-        { message: "Rate limited", retry_after: 0.1, global: false },
-      );
+      const body = { message: "Rate limited", retry_after: 0.1, global: false };
+      throw new RateLimitError(createJsonResponse(body, { status: 429 }), body);
     });
-    const scheduler = new RestScheduler(
-      createOptions({ maxRateLimitRetries: Number.POSITIVE_INFINITY }),
-      executor,
-    );
+    const scheduler = new RestScheduler(executor);
 
     await expect(
       scheduler.enqueue({ method: "GET", path: "/channels/c1/messages", priority: "background" }),
     ).rejects.toBeInstanceOf(RateLimitError);
 
+    expect(executor).toHaveBeenCalledTimes(4);
+  });
+
+  it("ignores deadlines beyond the Date range", async () => {
+    vi.useFakeTimers({ now: MAX_DATE_TIMESTAMP_MS });
+    const executor = vi.fn(async () => "sent");
+    const scheduler = new RestScheduler(executor);
+    recordLimit(scheduler, 1);
+    const request = scheduler.enqueue(messageRequest);
     expect(executor).toHaveBeenCalledTimes(1);
-    expect(scheduler.queueSize).toBe(0);
-  });
-
-  it("ignores 429 retry deadlines that exceed the Date range", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(MAX_DATE_TIMESTAMP_MS);
-    try {
-      const scheduler = new RestScheduler(createOptions(), vi.fn());
-      scheduler.recordResponse(
-        "GET /channels/c1/messages",
-        "/channels/c1/messages",
-        createJsonResponse(
-          { message: "Rate limited", retry_after: 1, global: true },
-          { status: 429 },
-        ),
-        { message: "Rate limited", retry_after: 1, global: true },
-      );
-
-      expect(scheduler.getMetrics().globalRateLimitUntil).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps immediate 429 retry deadlines working", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
-    try {
-      const scheduler = new RestScheduler(createOptions(), vi.fn());
-      scheduler.recordResponse(
-        "GET /channels/c1/messages",
-        "/channels/c1/messages",
-        createJsonResponse(
-          { message: "Rate limited", retry_after: 0, global: true },
-          { status: 429 },
-        ),
-        { message: "Rate limited", retry_after: 0, global: true },
-      );
-
-      expect(scheduler.getMetrics().globalRateLimitUntil).toBe(Date.now());
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("rounds fractional millisecond 429 retry deadlines up", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
-    try {
-      const scheduler = new RestScheduler(createOptions(), vi.fn());
-      scheduler.recordResponse(
-        "GET /channels/c1/messages",
-        "/channels/c1/messages",
-        createJsonResponse(
-          { message: "Rate limited", retry_after: 0.0004, global: true },
-          { status: 429 },
-        ),
-        { message: "Rate limited", retry_after: 0.0004, global: true },
-      );
-
-      expect(scheduler.getMetrics().globalRateLimitUntil).toBe(Date.now() + 1);
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(request).resolves.toBe("sent");
   });
 
   it("caps oversized route rate-limit drain waits before scheduling", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
+    vi.useFakeTimers({ now: 1_000 });
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const first = createDeferred<unknown>();
-      const executor = vi.fn(async () => await first.promise);
-      const scheduler = new RestScheduler(createOptions({ maxConcurrency: 1 }), executor);
+    const first = createDeferred<unknown>();
+    const scheduler = new RestScheduler(() => first.promise);
 
-      const active = scheduler.enqueue({
-        method: "POST",
-        path: "/channels/c1/messages",
-        priority: "standard",
-      });
-      await vi.waitFor(() => expect(executor).toHaveBeenCalledTimes(1));
-      scheduler.recordResponse(
-        "POST /channels/c1/messages",
-        "/channels/c1/messages",
-        createJsonResponse(
-          { message: "Rate limited", retry_after: 0, global: false },
-          {
-            status: 429,
-            headers: {
-              "X-RateLimit-Bucket": "bucket-1",
-              "X-RateLimit-Remaining": "0",
-              "X-RateLimit-Reset-After": String((MAX_TIMER_TIMEOUT_MS + 1_000_000) / 1000),
-            },
-          },
-        ),
-        { message: "Rate limited", retry_after: 0, global: false },
-      );
+    const active = scheduler.enqueue(messageRequest);
+    recordLimit(scheduler, 0, {
+      "X-RateLimit-Bucket": "bucket-1",
+      "X-RateLimit-Remaining": "0",
+      "X-RateLimit-Reset-After": String((MAX_TIMER_TIMEOUT_MS + 1_000_000) / 1000),
+    });
+    const queued = scheduler.enqueue(messageRequest);
+    first.resolve({ ok: true });
+    await expect(active).resolves.toEqual({ ok: true });
 
-      const queued = scheduler.enqueue({
-        method: "POST",
-        path: "/channels/c1/messages",
-        priority: "standard",
-      });
-      first.resolve({ ok: true });
-      await expect(active).resolves.toEqual({ ok: true });
-
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-      queued.catch(() => undefined);
-    } finally {
-      schedulerCleanup(timeoutSpy);
-      vi.useRealTimers();
-    }
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    queued.catch(() => undefined);
   });
 });
-
-function schedulerCleanup(timeoutSpy: ReturnType<typeof vi.spyOn>): void {
-  timeoutSpy.mockRestore();
-}

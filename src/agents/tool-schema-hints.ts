@@ -239,7 +239,8 @@ function compactObjectHint(
     ) {
       return UNKNOWN_HINT;
     }
-    const fields = keys.toSorted().map((key) => {
+    // oxlint-disable-next-line unicorn/no-array-sort -- keys is a private array freshly spread from the Set above.
+    const fields = keys.sort().map((key) => {
       const hint = compactSchemaType(properties[key], depth, limits);
       return (
         (IDENTIFIER_RE.test(key) ? key : JSON.stringify(key)) +

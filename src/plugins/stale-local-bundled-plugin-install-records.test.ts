@@ -1,6 +1,5 @@
-// Covers stale local bundled plugin install record detection.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
 import {
@@ -8,152 +7,82 @@ import {
   pruneStaleLocalBundledPluginInstallRecords,
 } from "./stale-local-bundled-plugin-install-records.js";
 
-function bundledSource(pluginId: string, localPath: string): Map<string, BundledPluginSource> {
-  return new Map([
-    [
+const currentPath = (id: string) => path.join("/opt/openclaw", "dist", "extensions", id);
+function bundledSources(...ids: string[]): Map<string, BundledPluginSource> {
+  return new Map(
+    ids.map((pluginId) => [
       pluginId,
       {
         pluginId,
-        localPath,
+        localPath: currentPath(pluginId),
         version: "2026.5.20",
       },
-    ],
-  ]);
+    ]),
+  );
 }
+const localRecord = (installPath: string, version = "2026.5.4-beta.3"): PluginInstallRecord => ({
+  source: "path",
+  installPath,
+  version,
+});
 
-describe("listStaleLocalBundledPluginInstallRecords", () => {
-  it("lists path install records that point at stale compiled bundled output", () => {
-    const currentPath = path.join("/opt/openclaw", "dist", "extensions", "discord");
-    const stalePath = path.join("/tmp/old-openclaw", "dist", "extensions", "discord");
-    const records: Record<string, PluginInstallRecord> = {
+const retainedRecords: Array<{ name: string; records: Record<string, PluginInstallRecord> }> = [
+  { name: "the current bundled path", records: { discord: localRecord(currentPath("discord")) } },
+  {
+    name: "compiled bundled paths without a stale version",
+    records: {
       discord: {
         source: "path",
-        installPath: stalePath,
-        version: "2026.5.4-beta.3",
+        installPath: path.join("/tmp/local-openclaw", "dist", "extensions", "discord"),
       },
-      brave: {
-        source: "npm",
-        installPath: "/tmp/plugins/brave",
-      },
-    };
+      acpx: localRecord(
+        path.join("/tmp/local-openclaw", "dist", "extensions", "acpx"),
+        "2026.5.20",
+      ),
+    },
+  },
+  {
+    name: "source checkout or arbitrary local plugin paths",
+    records: {
+      discord: localRecord(path.join("/tmp/openclaw", "extensions", "discord")),
+      acpx: localRecord(path.join("/tmp/custom-plugins", "acpx")),
+    },
+  },
+];
 
-    expect(
-      listStaleLocalBundledPluginInstallRecords({
-        installRecords: records,
-        bundled: bundledSource("discord", currentPath),
-      }),
-    ).toStrictEqual([
+it.each(retainedRecords)("does not list $name", ({ records }) => {
+  expect(
+    listStaleLocalBundledPluginInstallRecords({
+      installRecords: records,
+      bundled: bundledSources(...Object.keys(records)),
+    }),
+  ).toStrictEqual([]);
+});
+
+it("removes only stale local bundled plugin install records", () => {
+  const stalePath = path.join("/tmp/old-openclaw", "dist", "extensions", "discord");
+  const records: Record<string, PluginInstallRecord> = {
+    discord: localRecord(stalePath),
+    brave: {
+      source: "npm",
+      installPath: "/tmp/plugins/brave",
+    },
+  };
+
+  expect(
+    pruneStaleLocalBundledPluginInstallRecords({
+      installRecords: records,
+      bundled: bundledSources("discord"),
+    }),
+  ).toStrictEqual({
+    records: { brave: records.brave },
+    stale: [
       {
         pluginId: "discord",
         record: records.discord,
-        recordPathField: "installPath",
         stalePath,
-        bundledPath: currentPath,
+        bundledPath: currentPath("discord"),
       },
-    ]);
-  });
-
-  it("does not list the current bundled path", () => {
-    const currentPath = path.join("/opt/openclaw", "dist", "extensions", "discord");
-
-    expect(
-      listStaleLocalBundledPluginInstallRecords({
-        installRecords: {
-          discord: {
-            source: "path",
-            installPath: currentPath,
-            version: "2026.5.4-beta.3",
-          },
-        },
-        bundled: bundledSource("discord", currentPath),
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("does not list compiled bundled paths without a stale version", () => {
-    const currentPath = path.join("/opt/openclaw", "dist", "extensions", "discord");
-
-    expect(
-      listStaleLocalBundledPluginInstallRecords({
-        installRecords: {
-          discord: {
-            source: "path",
-            installPath: path.join("/tmp/local-openclaw", "dist", "extensions", "discord"),
-          },
-          acpx: {
-            source: "path",
-            installPath: path.join("/tmp/local-openclaw", "dist", "extensions", "acpx"),
-            version: "2026.5.20",
-          },
-        },
-        bundled: new Map([
-          ...bundledSource("discord", currentPath),
-          ...bundledSource("acpx", path.join("/opt/openclaw", "dist", "extensions", "acpx")),
-        ]),
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("does not list source checkout or arbitrary local plugin paths", () => {
-    const currentPath = path.join("/opt/openclaw", "dist", "extensions", "discord");
-
-    expect(
-      listStaleLocalBundledPluginInstallRecords({
-        installRecords: {
-          discord: {
-            source: "path",
-            installPath: path.join("/tmp/openclaw", "extensions", "discord"),
-            version: "2026.5.4-beta.3",
-          },
-          acpx: {
-            source: "path",
-            installPath: path.join("/tmp/custom-plugins", "acpx"),
-            version: "2026.5.4-beta.3",
-          },
-        },
-        bundled: new Map([
-          ...bundledSource("discord", currentPath),
-          ...bundledSource("acpx", path.join("/opt/openclaw", "dist", "extensions", "acpx")),
-        ]),
-      }),
-    ).toStrictEqual([]);
-  });
-});
-
-describe("pruneStaleLocalBundledPluginInstallRecords", () => {
-  it("removes only stale local bundled plugin install records", () => {
-    const currentPath = path.join("/opt/openclaw", "dist", "extensions", "discord");
-    const stalePath = path.join("/tmp/old-openclaw", "dist", "extensions", "discord");
-    const records: Record<string, PluginInstallRecord> = {
-      discord: {
-        source: "path",
-        installPath: stalePath,
-        version: "2026.5.4-beta.3",
-      },
-      brave: {
-        source: "npm",
-        installPath: "/tmp/plugins/brave",
-      },
-    };
-
-    expect(
-      pruneStaleLocalBundledPluginInstallRecords({
-        installRecords: records,
-        bundled: bundledSource("discord", currentPath),
-      }),
-    ).toStrictEqual({
-      records: {
-        brave: records.brave,
-      },
-      stale: [
-        {
-          pluginId: "discord",
-          record: records.discord,
-          recordPathField: "installPath",
-          stalePath,
-          bundledPath: currentPath,
-        },
-      ],
-    });
+    ],
   });
 });

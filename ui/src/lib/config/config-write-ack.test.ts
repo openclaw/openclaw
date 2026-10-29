@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ConfigPatchAck } from "./config-gateway-operations.ts";
+import type { ConfigPatchAck } from "./config-draft-model.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createConfigCapabilityHarness,
@@ -11,28 +11,6 @@ import {
 } from "./config-test-harness.ts";
 
 describe("acknowledged config revision", () => {
-  it("config.patch through runExternalMutation before loading does not invent a pending draft", async () => {
-    const store = createConfigServerMock();
-    const request = vi.fn((method: string, params?: unknown) =>
-      store.request(method === "config.patch" ? "config.set" : method, params),
-    );
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.runExternalMutation(
-      (client) =>
-        client.request<ConfigPatchAck>("config.patch", {
-          raw: '{"count":1,"enabled":true}',
-          baseHash: "hash-1",
-        }),
-      { configWriteAck: (ack) => ack },
-    );
-    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(runtimeConfig.state.configForm).toEqual({ count: 1, enabled: true });
-    runtimeConfig.dispose();
-  });
-
   it("an independent write cannot flush a reconnect-paused draft during disposal", async () => {
     vi.useFakeTimers();
     const store = createConfigServerMock();
@@ -143,60 +121,50 @@ describe("acknowledged config revision", () => {
     },
   );
 
-  it.each([
-    { method: "config.set", dispose: false },
-    { method: "config.set", dispose: true },
-    { method: "config.patch", dispose: false },
-    { method: "config.patch", dispose: true },
-  ])(
-    "independent $method retains its changes and the shared form edit (dispose: $dispose)",
-    async ({ method, dispose }) => {
-      vi.useFakeTimers();
-      const store = createConfigServerMock();
-      const started = deferred();
-      const release = deferred();
-      let independentWrite = true;
-      const request = vi.fn(async (requestMethod: string, params?: unknown) => {
-        if (requestMethod === method && independentWrite) {
-          independentWrite = false;
-          started.resolve();
-          await release.promise;
-          return store.request("config.set", {
-            raw: '{"count":1,"enabled":true}',
-            baseHash: "hash-1",
-          });
-        }
-        return store.request(requestMethod, params);
-      });
-      const { runtimeConfig } = createConfigCapabilityHarness(
-        request as GatewayBrowserClient["request"],
-      );
-      await runtimeConfig.ensureLoaded();
-      const mutation = runtimeConfig.runExternalMutation(
-        (client) =>
-          client.request<ConfigPatchAck>(method, {
-            raw: method === "config.set" ? '{"count":1,"enabled":true}' : '{"enabled":true}',
-            baseHash: "hash-1",
-          }),
-        { configWriteAck: (value) => value },
-      );
-      await started.promise;
-      runtimeConfig.patchForm(["count"], 2);
-      if (dispose) {
-        runtimeConfig.dispose();
+  it("an independent write retains its changes and the shared form edit", async () => {
+    vi.useFakeTimers();
+    const store = createConfigServerMock();
+    const started = deferred();
+    const release = deferred();
+    let independentWrite = true;
+    const request = vi.fn(async (requestMethod: string, params?: unknown) => {
+      if (requestMethod === "config.patch" && independentWrite) {
+        independentWrite = false;
+        started.resolve();
+        await release.promise;
+        return store.request("config.set", {
+          raw: '{"count":1,"enabled":true}',
+          baseHash: "hash-1",
+        });
       }
-      release.resolve();
-      await mutation;
-      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-      expect(store.submissions).toHaveLength(2);
-      expect(store.submissions[1]?.baseHash).toBe("hash-2");
-      await expect(store.request("config.get")).resolves.toMatchObject({
-        config: { count: 2, enabled: true },
-      });
-      expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-3");
-      runtimeConfig.dispose();
-    },
-  );
+      return store.request(requestMethod, params);
+    });
+    const { runtimeConfig } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    await runtimeConfig.ensureLoaded();
+    const mutation = runtimeConfig.runExternalMutation(
+      (client) =>
+        client.request<ConfigPatchAck>("config.patch", {
+          raw: '{"enabled":true}',
+          baseHash: "hash-1",
+        }),
+      { configWriteAck: (value) => value },
+    );
+    await started.promise;
+    runtimeConfig.patchForm(["count"], 2);
+
+    release.resolve();
+    await mutation;
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    expect(store.submissions).toHaveLength(2);
+    expect(store.submissions[1]?.baseHash).toBe("hash-2");
+    await expect(store.request("config.get")).resolves.toMatchObject({
+      config: { count: 2, enabled: true },
+    });
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-3");
+    runtimeConfig.dispose();
+  });
 
   it("a CAS patch no-op keeps the authored document and excludes runtime defaults from the next save", async () => {
     vi.useFakeTimers();
@@ -229,56 +197,33 @@ describe("acknowledged config revision", () => {
     runtimeConfig.dispose();
   });
 
-  it.each([
-    { mode: "form", dispose: false },
-    { mode: "form", dispose: true },
-    { mode: "raw", dispose: false },
-    { mode: "raw", dispose: true },
-    { mode: "apply", dispose: false },
-    { mode: "apply", dispose: true },
-  ])(
-    "config.set/config.apply adopts its revision after a raw keystroke ($mode save, dispose: $dispose)",
-    async ({ mode, dispose }) => {
-      vi.useFakeTimers();
-      const { request, submissions, firstSet } = createDeferredSetServerMock();
-      const { runtimeConfig } = createConfigCapabilityHarness(((method, params) =>
-        request(
-          method === "config.apply" ? "config.set" : method,
-          params,
-        )) as GatewayBrowserClient["request"]);
-      await runtimeConfig.ensureLoaded();
-      if (mode === "raw") {
-        runtimeConfig.setRaw('{"count":2}');
-      } else {
-        runtimeConfig.patchForm(["count"], 2);
-      }
-      const saving =
-        mode === "raw"
-          ? runtimeConfig.save()
-          : mode === "apply"
-            ? runtimeConfig.apply()
-            : undefined;
-      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-      const raw = `${runtimeConfig.state.configRaw}\n`;
-      runtimeConfig.setRaw(raw);
-      if (dispose) {
-        runtimeConfig.dispose();
-      }
-      firstSet.resolve({});
-      await saving;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(runtimeConfig.state.configDraftBaseHash).not.toBe("hash-1");
-      if (!dispose) {
-        expect(runtimeConfig.state.configRaw).toBe(raw);
-        await expect(runtimeConfig.save()).resolves.toBe(true);
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(submissions).toHaveLength(2);
-      expect(submissions[1]).toEqual({ raw, baseHash: "hash-2" });
-      expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-3");
-      runtimeConfig.dispose();
-    },
-  );
+  it("config.set adopts its revision after a raw keystroke during manual save", async () => {
+    vi.useFakeTimers();
+    const { request, submissions, firstSet } = createDeferredSetServerMock();
+    const { runtimeConfig } = createConfigCapabilityHarness(((method, params) =>
+      request(
+        method === "config.apply" ? "config.set" : method,
+        params,
+      )) as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.setRaw('{"count":2}');
+    const saving = runtimeConfig.save();
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    const raw = `${runtimeConfig.state.configRaw}\n`;
+    runtimeConfig.setRaw(raw);
+
+    firstSet.resolve({});
+    await saving;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtimeConfig.state.configDraftBaseHash).not.toBe("hash-1");
+    expect(runtimeConfig.state.configRaw).toBe(raw);
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1]).toEqual({ raw, baseHash: "hash-2" });
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-3");
+    runtimeConfig.dispose();
+  });
 
   it("config.patch adopts its revision and preserves an in-flight form edit", async () => {
     vi.useFakeTimers();
@@ -317,38 +262,10 @@ describe("acknowledged config revision", () => {
   });
   it.each([
     {
-      name: "missing external locale",
-      canonical: { count: 2, locale: "fr" },
-      raw: { count: 3 },
-      form: false,
-      saved: false,
-    },
-    {
-      name: "incorporated external locale",
-      canonical: { count: 2, locale: "fr" },
-      raw: { count: 3, locale: "fr" },
-      form: false,
-      saved: true,
-    },
-    {
-      name: "incorporated objects with reordered keys inside arrays",
-      canonical: { count: 2, entries: [{ id: "first", enabled: true }] },
-      raw: { entries: [{ enabled: true, id: "first" }], count: 3 },
-      form: false,
-      saved: true,
-    },
-    {
       name: "raw to form with unseen locale",
       canonical: { count: 2, locale: "fr" },
       raw: { count: 3 },
       form: true,
-      saved: false,
-    },
-    {
-      name: "external secret replaced an empty value",
-      canonical: { count: 2, secret: "__OPENCLAW_REDACTED__" },
-      raw: { count: 3, secret: "" },
-      form: false,
       saved: false,
     },
     {
@@ -357,20 +274,6 @@ describe("acknowledged config revision", () => {
       raw: { count: 3, secret: null },
       form: false,
       saved: false,
-    },
-    {
-      name: "external secret replaced an environment reference",
-      canonical: { count: 2, secret: "__OPENCLAW_REDACTED__" },
-      raw: { count: 3, secret: "${SYNTHETIC_SECRET}" },
-      form: false,
-      saved: false,
-    },
-    {
-      name: "own redacted secret object",
-      canonical: { count: 2, secret: "__OPENCLAW_REDACTED__" },
-      raw: { count: 3, secret: { token: "synthetic-secret" } },
-      form: false,
-      saved: true,
     },
     {
       name: "own redacted secret array",

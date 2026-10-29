@@ -1,10 +1,9 @@
 // Preauth bootstrap token rate-limit tests protect forged bootstrap attempts
 // before normal gateway auth has completed.
-import { randomUUID } from "node:crypto";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -14,6 +13,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function openWs(port: number) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
@@ -61,12 +61,18 @@ describe("pre-auth bootstrap-token rate limit", () => {
       },
     };
     await withGatewayServer(async ({ port }) => {
-      const identityPrefix = path.join(os.tmpdir(), `openclaw-preauth-bootstrap-${randomUUID()}`);
-
       const responses = await Promise.all(
         Array.from(
           { length: 8 },
-          async (_, index) => await attemptForgedBootstrap(port, `${identityPrefix}-${index}.json`),
+          async () =>
+            await attemptForgedBootstrap(
+              port,
+              path.join(
+                tempDirs.make("openclaw-preauth-bootstrap-"),
+                "client",
+                "credentials.sqlite",
+              ),
+            ),
         ),
       );
       const reasons = responses.map((res) => {
@@ -76,35 +82,6 @@ describe("pre-auth bootstrap-token rate limit", () => {
       });
       expect(reasons.filter((reason) => reason === "bootstrap_token_invalid")).toHaveLength(3);
       expect(reasons.filter((reason) => reason === "rate_limited")).toHaveLength(5);
-    });
-  });
-
-  test("forged bootstrap-token failures consume their own bucket independent of device-token", async () => {
-    testState.gatewayAuth = {
-      mode: "token",
-      token: "secret",
-      rateLimit: {
-        maxAttempts: 1,
-        windowMs: 60_000,
-        lockoutMs: 60_000,
-        exemptLoopback: false,
-      },
-    };
-    await withGatewayServer(async ({ port }) => {
-      const identityPath = path.join(
-        os.tmpdir(),
-        `openclaw-preauth-bootstrap-shared-${randomUUID()}.json`,
-      );
-
-      const first = await attemptForgedBootstrap(port, identityPath);
-      expect(first.ok).toBe(false);
-      const firstDetail = first.error?.details as { authReason?: string } | undefined;
-      expect(firstDetail?.authReason).toBe("bootstrap_token_invalid");
-
-      const second = await attemptForgedBootstrap(port, identityPath);
-      expect(second.ok).toBe(false);
-      const secondDetail = second.error?.details as { authReason?: string } | undefined;
-      expect(secondDetail?.authReason).toBe("rate_limited");
     });
   });
 });

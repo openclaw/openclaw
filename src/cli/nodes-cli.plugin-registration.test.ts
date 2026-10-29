@@ -1,11 +1,12 @@
-// Nodes CLI plugin registration tests cover node command plugin registration.
-// Built-in node command registration runs for real so the guard is exercised against the actual
-// registered subcommand names; only the plugin-loader boundary is stubbed.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../logging/state.js";
 
-const registerPluginCliCommandsFromValidatedConfig = vi.fn(async () => ({}));
+let routed: boolean | undefined;
+const registerPluginCliCommandsFromValidatedConfig = vi.fn(async () => {
+  routed = loggingState.forceConsoleToStderr;
+  return {};
+});
 
 vi.mock("../plugins/cli.js", () => ({
   registerPluginCliCommandsFromValidatedConfig,
@@ -20,6 +21,7 @@ describe("registerNodesCli plugin registration", () => {
   beforeEach(() => {
     originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
     loggingState.forceConsoleToStderr = false;
+    routed = undefined;
     registerPluginCliCommandsFromValidatedConfig.mockClear();
   });
 
@@ -28,8 +30,8 @@ describe("registerNodesCli plugin registration", () => {
     loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
   });
 
-  async function registerWithArgv(argv: string[]) {
-    process.argv = argv;
+  async function registerWithArgv(...args: string[]) {
+    process.argv = ["node", "openclaw", "nodes", ...args];
     const program = new Command();
     await registerNodesCli(program);
     return program;
@@ -38,49 +40,31 @@ describe("registerNodesCli plugin registration", () => {
   it("skips plugin CLI/runtime registration for built-in nodes subcommands", async () => {
     for (const subcommand of ["status", "list", "describe", "invoke", "pending", "camera"]) {
       registerPluginCliCommandsFromValidatedConfig.mockClear();
-      await registerWithArgv(["node", "openclaw", "nodes", subcommand, "--json"]);
+      await registerWithArgv(subcommand, "--json");
       expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
     }
   });
 
-  it("registers plugin-provided node subcommands lazily and routes their logs to stderr", async () => {
-    let forceStderrDuringRegistration = false;
-    registerPluginCliCommandsFromValidatedConfig.mockImplementationOnce(async () => {
-      forceStderrDuringRegistration = loggingState.forceConsoleToStderr;
-      return {};
+  it.each([
+    { args: ["canvas", "snapshot", "--json"], stderr: true },
+    { args: [], stderr: false },
+    { args: ["canvas", "--", "--json"], stderr: false },
+  ])("lazily registers nodes $args with stderr routing=$stderr", async ({ args, stderr }) => {
+    const program = await registerWithArgv(...args);
+    expect(registerPluginCliCommandsFromValidatedConfig).toHaveBeenCalledWith(
+      program,
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "nodes" },
+    );
+    expect({ during: routed, after: loggingState.forceConsoleToStderr }).toEqual({
+      during: stderr,
+      after: false,
     });
-
-    const program = await registerWithArgv([
-      "node",
-      "openclaw",
-      "nodes",
-      "canvas",
-      "snapshot",
-      "--json",
-    ]);
-
-    expect(registerPluginCliCommandsFromValidatedConfig).toHaveBeenCalledWith(
-      program,
-      undefined,
-      undefined,
-      { mode: "lazy", primary: "nodes" },
-    );
-    expect(forceStderrDuringRegistration).toBe(true);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
-  it("surfaces plugin subcommands for bare `nodes` listing", async () => {
-    const program = await registerWithArgv(["node", "openclaw", "nodes"]);
-    expect(registerPluginCliCommandsFromValidatedConfig).toHaveBeenCalledWith(
-      program,
-      undefined,
-      undefined,
-      { mode: "lazy", primary: "nodes" },
-    );
-  });
-
-  it("documents the supported system.which parameter shape", async () => {
-    const program = await registerWithArgv(["node", "openclaw", "nodes", "--help"]);
+  it("documents current pairing and system.which command syntax", async () => {
+    const program = await registerWithArgv("--help");
     const nodesCommand = program.commands.find((command) => command.name() === "nodes");
     const output: string[] = [];
 
@@ -93,18 +77,7 @@ describe("registerNodesCli plugin registration", () => {
 
     expect(help).toContain(`--params '{"bins":["uname"]}'`);
     expect(help).not.toContain(`--params '{"name":"uname"}'`);
-  });
-
-  it("does not route pass-through --json after the terminator", async () => {
-    let forceStderrDuringRegistration = true;
-    registerPluginCliCommandsFromValidatedConfig.mockImplementationOnce(async () => {
-      forceStderrDuringRegistration = loggingState.forceConsoleToStderr;
-      return {};
-    });
-
-    await registerWithArgv(["node", "openclaw", "nodes", "canvas", "--", "--json"]);
-
-    expect(forceStderrDuringRegistration).toBe(false);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
+    expect(help).toContain("openclaw nodes pending");
+    expect(help).not.toContain("openclaw nodes pairing pending");
   });
 });

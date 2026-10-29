@@ -1,79 +1,69 @@
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import { peekSystemEvents } from "../../infra/system-events.js";
-import { createQueuedTaskRunCore as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
+import type { SessionManagerCore } from "../sessions/session-manager-core.js";
 
-export function createQueuedTaskRunCore(
-  params: Parameters<typeof createQueuedTaskRunOrNull>[0],
-): TaskRecord {
-  // Task creation can legally return null for invalid inputs; tests here always
-  // need a concrete queued task record.
-  const task = createQueuedTaskRunOrNull(params);
-  if (!task) {
-    throw new Error("expected queued task creation to succeed");
-  }
-  return task;
-}
-export function createBackgroundMaintenanceEngine(
+export function createMaintenanceEngine(
   maintain: NonNullable<ContextEngine["maintain"]>,
-  id = "test",
+  overrides: Partial<ContextEngine> = {},
 ): ContextEngine {
   return {
-    info: { id, name: "Test Engine", turnMaintenanceMode: "background" },
+    info: { id: "test", name: "Test Engine" },
     ingest: async () => ({ ingested: true }),
     assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
     compact: async () => ({ ok: true, compacted: false }),
     maintain,
+    ...overrides,
   };
 }
 
-export async function flushAsyncWork(times = 4): Promise<void> {
-  for (let index = 0; index < times; index += 1) {
-    await Promise.resolve();
-  }
+export function createMaintenanceGate() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  return {
+    entered,
+    release,
+    [Symbol.dispose]: release.resolve,
+    async run<T>(finish: () => T) {
+      entered.resolve();
+      await release.promise;
+      return finish();
+    },
+  };
 }
 
-export async function waitForAssertion(
-  assertion: () => void,
-  timeoutMs = 2_000,
-  stepMs = 5,
-): Promise<void> {
-  // Timed polling lets fake-timer tasks advance through queue and delivery
-  // microtasks without binding assertions to a specific internal await count.
-  const startedAt = Date.now();
-  for (;;) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      if (Date.now() - startedAt >= timeoutMs) {
-        throw error;
-      }
-      await vi.advanceTimersByTimeAsync(stepMs);
-      await flushAsyncWork();
-    }
-  }
+export function createBackgroundMaintenanceEngine(
+  maintain: NonNullable<ContextEngine["maintain"]>,
+  id = "test",
+): ContextEngine & { started: Promise<void> } {
+  const started = createDeferred();
+  return {
+    started: started.promise,
+    ...createMaintenanceEngine(
+      (params) => {
+        started.resolve();
+        return maintain(params);
+      },
+      { info: { id, name: "Test Engine", turnMaintenanceMode: "background" } },
+    ),
+  };
 }
 
-export const requireRecord = createRequireRecord("record", "expected-label");
-
-export function firstMaintainParams(maintain: {
-  mock: { calls: unknown[][] };
-}): Record<string, unknown> {
-  return requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
-}
-
-export function expectRecordFields(
-  record: Record<string, unknown>,
-  expected: Record<string, unknown>,
-) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key]).toBe(value);
-  }
-}
-
-export function expectSystemEventContaining(sessionKey: string, text: string) {
-  expect(peekSystemEvents(sessionKey).join("\n")).toContain(text);
+export function createMaintenanceSessionManagerOpenFixture() {
+  let current: Pick<SessionManagerCore, "getSessionTarget" | "getSessionId"> | undefined;
+  const openAsync = vi.fn(async (target: SessionTranscriptRuntimeTarget) => {
+    current = { getSessionTarget: () => target, getSessionId: () => target.sessionId };
+    return current;
+  });
+  return {
+    openAsync,
+    get current() {
+      return current;
+    },
+    reset() {
+      current = undefined;
+      openAsync.mockClear();
+    },
+  };
 }

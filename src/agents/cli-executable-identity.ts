@@ -2,9 +2,9 @@ import crypto from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { sha256File } from "../infra/directory-durability.js";
 import { resolveExecutablePath, resolveExecutablePathCandidate } from "../infra/executable-path.js";
-import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   resolveWindowsExecutablePath,
@@ -75,23 +75,13 @@ function sameOpenedFile(left: StableBigIntFileStat, right: StableBigIntFileStat)
   );
 }
 
-function compareArtifactEntryNames(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 async function readExecutableFileIdentity(
   filePath: string,
   includePrefix = false,
 ): Promise<ReadIdentityResult | null> {
-  let canonicalPath: string;
-  try {
-    canonicalPath = await fs.realpath(filePath);
-  } catch {
-    return null;
-  }
-
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
+    const canonicalPath = await fs.realpath(filePath);
     handle = await fs.open(canonicalPath, "r");
     const before = await handle.stat({ bigint: true });
     if (!before.isFile()) {
@@ -202,17 +192,23 @@ function parseShebangInterpreter(
   return { executable, viaEnv, args: envArgs.slice(commandStart + 1) };
 }
 
-async function findOwnedPackageRoot(params: {
+async function resolvePackageTreeArtifact(params: {
   entrypointPath: string;
-  policy: CliBackendRuntimeArtifactPolicy;
-}): Promise<string | undefined> {
+  policy: CliBackendRuntimeArtifactPolicy | undefined;
+}): Promise<CliExecutableIdentity["runtimeArtifact"] | undefined> {
+  if (!params.policy || params.policy.kind !== "bundled-package-tree") {
+    return undefined;
+  }
+  const policy = params.policy;
   let directory = path.dirname(params.entrypointPath);
+  let rootPath: string;
   for (;;) {
     const packageJsonPath = path.join(directory, "package.json");
     try {
       const parsed = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as { name?: unknown };
-      if (parsed.name === params.policy.packageName) {
-        return await fs.realpath(directory);
+      if (parsed.name === policy.packageName) {
+        rootPath = await fs.realpath(directory);
+        break;
       }
     } catch {
       // Continue through parent package scopes.
@@ -222,23 +218,6 @@ async function findOwnedPackageRoot(params: {
       return undefined;
     }
     directory = parent;
-  }
-}
-
-async function resolvePackageTreeArtifact(params: {
-  entrypointPath: string;
-  policy: CliBackendRuntimeArtifactPolicy | undefined;
-}): Promise<CliExecutableIdentity["runtimeArtifact"] | undefined> {
-  if (!params.policy || params.policy.kind !== "bundled-package-tree") {
-    return undefined;
-  }
-  const policy = params.policy;
-  const rootPath = await findOwnedPackageRoot({
-    entrypointPath: params.entrypointPath,
-    policy,
-  });
-  if (!rootPath) {
-    return undefined;
   }
   try {
     const packageJson = JSON.parse(
@@ -270,23 +249,23 @@ async function resolvePackageTreeArtifact(params: {
   let fileCount = 0;
   let totalBytes = 0n;
   let packageVersion: string | undefined;
-  const visit = async (directory: string): Promise<boolean> => {
+  const visit = async (visitDirectory: string): Promise<boolean> => {
     let entries: Dirent[];
     try {
-      entries = await fs.readdir(directory, { withFileTypes: true, encoding: "utf8" });
+      entries = await fs.readdir(visitDirectory, { withFileTypes: true, encoding: "utf8" });
     } catch {
       return false;
     }
     // Locale collation can differ across hosts. Artifact bytes must have one
     // process- and locale-independent traversal order.
     for (const entry of entries.toSorted((left, right) =>
-      compareArtifactEntryNames(left.name, right.name),
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
     )) {
       entryCount += 1;
       if (entryCount > MAX_PACKAGE_ARTIFACT_ENTRIES) {
         return false;
       }
-      const entryPath = path.join(directory, entry.name);
+      const entryPath = path.join(visitDirectory, entry.name);
       if (entry.isDirectory()) {
         if (!(await visit(entryPath))) {
           return false;
@@ -371,13 +350,15 @@ async function resolvePackageTreeArtifact(params: {
   };
 }
 
-function allowsSelfContainedExecutable(
+function resolveSelfContainedArtifact(
   filePath: string,
   resolvedCommandPath: string,
   policy: CliBackendRuntimeArtifactPolicy | undefined,
-): boolean {
+):
+  | Extract<CliExecutableIdentity["runtimeArtifact"], { kind: "self-contained-executable" }>
+  | undefined {
   if (!policy) {
-    return false;
+    return undefined;
   }
   const basenames = new Set(
     [filePath, resolvedCommandPath].map((candidate) => {
@@ -385,108 +366,11 @@ function allowsSelfContainedExecutable(
       return process.platform === "win32" ? basename.toLowerCase() : basename;
     }),
   );
-  return (
-    policy.nativeExecutableNames?.some((name) =>
-      basenames.has(process.platform === "win32" ? name.toLowerCase() : name),
-    ) === true
-  );
-}
-
-async function resolvePosixIdentity(params: {
-  command: string;
-  resolvedPath: string;
-  cwd?: string;
-  env: NodeJS.ProcessEnv;
-  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
-}): Promise<CliExecutableIdentity | undefined> {
-  const commandFile = await readExecutableFileIdentity(params.resolvedPath, true);
-  if (!commandFile) {
-    return undefined;
-  }
-  const files = [commandFile.identity];
-  const commandHasShebang = hasShebang(commandFile.prefix);
-  const shebang = parseShebangInterpreter(commandFile.prefix);
-  if (commandHasShebang && !shebang) {
-    return undefined;
-  }
-  if (shebang && shebang.args.length > 0) {
-    // Interpreter flags can load code outside the declared package tree.
-    return undefined;
-  }
-  const packageEntrypoint = shebang ? commandFile.identity : undefined;
-  const runtimeArtifact = packageEntrypoint
-    ? await resolvePackageTreeArtifact({
-        entrypointPath: packageEntrypoint.path,
-        policy: params.runtimeArtifact,
-      })
-    : allowsSelfContainedExecutable(
-          commandFile.identity.path,
-          params.resolvedPath,
-          params.runtimeArtifact,
-        )
-      ? ({ kind: "self-contained-executable" } as const)
-      : undefined;
-  if (!runtimeArtifact) {
-    return undefined;
-  }
-  if (shebang) {
-    const interpreterPath = resolveCommandPath({
-      command: shebang.executable,
-      cwd: params.cwd,
-      env: params.env,
-    });
-    if (!interpreterPath) {
-      return undefined;
-    }
-    const interpreter = await readExecutableFileIdentity(interpreterPath, true);
-    if (!interpreter || hasShebang(interpreter.prefix)) {
-      return undefined;
-    }
-    files.push(interpreter.identity);
-    let invocationInterpreter = interpreter.identity.path;
-    if (shebang.viaEnv) {
-      const targetPath = resolveCommandPath({
-        command: shebang.viaEnv,
-        cwd: params.cwd,
-        env: params.env,
-      });
-      if (!targetPath) {
-        return undefined;
-      }
-      const target = await readExecutableFileIdentity(targetPath, true);
-      if (!target || hasShebang(target.prefix)) {
-        return undefined;
-      }
-      files.push(target.identity);
-      invocationInterpreter = target.identity.path;
-    }
-    return {
-      command: params.command,
-      resolvedPath: commandFile.identity.path,
-      invocation: {
-        command: invocationInterpreter,
-        leadingArgv: [...shebang.args, commandFile.identity.path],
-        resolution: "direct",
-      },
-      files: dedupeFileIdentities(files),
-      runtimeArtifact,
-    };
-  }
-  const resolvedPath = commandFile.identity.path;
-  return {
-    command: params.command,
-    resolvedPath,
-    invocation: {
-      // Execute the exact file opened and hashed, while preserving a symlink's
-      // invocation name for runtimes that dispatch from argv0.
-      command: resolvedPath,
-      ...(params.resolvedPath !== resolvedPath ? { argv0: params.resolvedPath } : {}),
-      leadingArgv: [],
-      resolution: "direct",
-    },
-    files: dedupeFileIdentities(files),
-    runtimeArtifact,
-  };
+  return policy.nativeExecutableNames?.some((name) =>
+    basenames.has(process.platform === "win32" ? name.toLowerCase() : name),
+  ) === true
+    ? { kind: "self-contained-executable" }
+    : undefined;
 }
 
 function dedupeFileIdentities(
@@ -495,89 +379,6 @@ function dedupeFileIdentities(
   return files.filter(
     (file, index) => files.findIndex((candidate) => candidate.path === file.path) === index,
   );
-}
-
-async function resolveWindowsIdentity(params: {
-  command: string;
-  resolvedPath: string;
-  env: NodeJS.ProcessEnv;
-  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
-}): Promise<CliExecutableIdentity | undefined> {
-  const nodePath = resolveWindowsExecutablePath("node", params.env);
-  const candidate = resolveWindowsSpawnProgramCandidate({
-    command: params.resolvedPath,
-    env: params.env,
-    execPath: nodePath,
-  });
-  if (candidate.resolution === "unresolved-wrapper") {
-    return undefined;
-  }
-  // The Windows adapter binds supported scripts to Node; PATHEXT only governs
-  // commands that still need native executable admission.
-  if (
-    candidate.resolution !== "node-entrypoint" &&
-    !resolveExecutablePath(params.resolvedPath, { env: params.env })
-  ) {
-    return undefined;
-  }
-  if (
-    candidate.resolution === "node-entrypoint" &&
-    path.extname(candidate.command).toLowerCase() !== ".exe"
-  ) {
-    return undefined;
-  }
-  const configuredFile = await readExecutableFileIdentity(params.resolvedPath);
-  const invocationFile = await readExecutableFileIdentity(
-    candidate.command,
-    candidate.resolution === "direct",
-  );
-  if (!configuredFile || !invocationFile) {
-    return undefined;
-  }
-  const files = [configuredFile.identity, invocationFile.identity];
-  const leadingArgv: string[] = [];
-  for (const entry of candidate.leadingArgv) {
-    const entryFile = await readExecutableFileIdentity(entry);
-    if (!entryFile) {
-      return undefined;
-    }
-    files.push(entryFile.identity);
-    leadingArgv.push(entryFile.identity.path);
-  }
-  const commandEntrypoint =
-    candidate.resolution === "node-entrypoint"
-      ? files.find((file) => file.path === leadingArgv[0])
-      : undefined;
-  if (candidate.resolution === "direct" && hasShebang(invocationFile.prefix)) {
-    return undefined;
-  }
-  const scriptEntrypoint = commandEntrypoint;
-  const runtimeArtifact = scriptEntrypoint
-    ? await resolvePackageTreeArtifact({
-        entrypointPath: scriptEntrypoint.path,
-        policy: params.runtimeArtifact,
-      })
-    : allowsSelfContainedExecutable(
-          invocationFile.identity.path,
-          params.resolvedPath,
-          params.runtimeArtifact,
-        )
-      ? ({ kind: "self-contained-executable" } as const)
-      : undefined;
-  if (!runtimeArtifact) {
-    return undefined;
-  }
-  return {
-    command: params.command,
-    resolvedPath: configuredFile.identity.path,
-    invocation: {
-      command: invocationFile.identity.path,
-      leadingArgv,
-      resolution: candidate.resolution,
-    },
-    files: dedupeFileIdentities(files),
-    runtimeArtifact,
-  };
 }
 
 /**
@@ -605,18 +406,148 @@ export async function resolveCliExecutableIdentity(params: {
   if (!resolvedPath) {
     return undefined;
   }
-  return process.platform === "win32"
-    ? await resolveWindowsIdentity({
-        command,
-        resolvedPath,
-        env,
-        ...(params.runtimeArtifact ? { runtimeArtifact: params.runtimeArtifact } : {}),
+  const windows = process.platform === "win32";
+  const cwd = !windows && params.cwd ? params.cwd : undefined;
+  const runtimeArtifactPolicy = params.runtimeArtifact ? params.runtimeArtifact : undefined;
+  if (windows) {
+    const nodePath = resolveWindowsExecutablePath("node", env);
+    const candidate = resolveWindowsSpawnProgramCandidate({
+      command: resolvedPath,
+      env,
+      execPath: nodePath,
+    });
+    if (candidate.resolution === "unresolved-wrapper") {
+      return undefined;
+    }
+    // The Windows adapter binds supported scripts to Node; PATHEXT only governs
+    // commands that still need native executable admission.
+    if (
+      candidate.resolution !== "node-entrypoint" &&
+      !resolveExecutablePath(resolvedPath, { env })
+    ) {
+      return undefined;
+    }
+    if (
+      candidate.resolution === "node-entrypoint" &&
+      path.extname(candidate.command).toLowerCase() !== ".exe"
+    ) {
+      return undefined;
+    }
+    const configuredFile = await readExecutableFileIdentity(resolvedPath);
+    const invocationFile = await readExecutableFileIdentity(
+      candidate.command,
+      candidate.resolution === "direct",
+    );
+    if (!configuredFile || !invocationFile) {
+      return undefined;
+    }
+    const files = [configuredFile.identity, invocationFile.identity];
+    const leadingArgv: string[] = [];
+    for (const entry of candidate.leadingArgv) {
+      const entryFile = await readExecutableFileIdentity(entry);
+      if (!entryFile) {
+        return undefined;
+      }
+      files.push(entryFile.identity);
+      leadingArgv.push(entryFile.identity.path);
+    }
+    const commandEntrypoint =
+      candidate.resolution === "node-entrypoint"
+        ? files.find((file) => file.path === leadingArgv[0])
+        : undefined;
+    if (candidate.resolution === "direct" && hasShebang(invocationFile.prefix)) {
+      return undefined;
+    }
+    const runtimeArtifact = commandEntrypoint
+      ? await resolvePackageTreeArtifact({
+          entrypointPath: commandEntrypoint.path,
+          policy: runtimeArtifactPolicy,
+        })
+      : resolveSelfContainedArtifact(
+          invocationFile.identity.path,
+          resolvedPath,
+          runtimeArtifactPolicy,
+        );
+    if (!runtimeArtifact) {
+      return undefined;
+    }
+    return {
+      command,
+      resolvedPath: configuredFile.identity.path,
+      invocation: {
+        command: invocationFile.identity.path,
+        leadingArgv,
+        resolution: candidate.resolution,
+      },
+      files: dedupeFileIdentities(files),
+      runtimeArtifact,
+    };
+  }
+  const commandFile = await readExecutableFileIdentity(resolvedPath, true);
+  if (!commandFile) {
+    return undefined;
+  }
+  const files = [commandFile.identity];
+  const commandHasShebang = hasShebang(commandFile.prefix);
+  const shebang = parseShebangInterpreter(commandFile.prefix);
+  if (commandHasShebang && !shebang) {
+    return undefined;
+  }
+  if (shebang && shebang.args.length > 0) {
+    // Interpreter flags can load code outside the declared package tree.
+    return undefined;
+  }
+  const packageEntrypoint = shebang ? commandFile.identity : undefined;
+  const runtimeArtifact = packageEntrypoint
+    ? await resolvePackageTreeArtifact({
+        entrypointPath: packageEntrypoint.path,
+        policy: runtimeArtifactPolicy,
       })
-    : await resolvePosixIdentity({
-        command,
-        resolvedPath,
-        ...(params.cwd ? { cwd: params.cwd } : {}),
+    : resolveSelfContainedArtifact(commandFile.identity.path, resolvedPath, runtimeArtifactPolicy);
+  if (!runtimeArtifact) {
+    return undefined;
+  }
+  const canonicalPath = commandFile.identity.path;
+  let invocation: CliExecutableIdentity["invocation"];
+  if (shebang) {
+    for (const interpreterCommand of [
+      shebang.executable,
+      ...(shebang.viaEnv ? [shebang.viaEnv] : []),
+    ]) {
+      const interpreterPath = resolveCommandPath({
+        command: interpreterCommand,
+        cwd,
         env,
-        ...(params.runtimeArtifact ? { runtimeArtifact: params.runtimeArtifact } : {}),
       });
+      if (!interpreterPath) {
+        return undefined;
+      }
+      const interpreter = await readExecutableFileIdentity(interpreterPath, true);
+      if (!interpreter || hasShebang(interpreter.prefix)) {
+        return undefined;
+      }
+      files.push(interpreter.identity);
+    }
+    invocation = {
+      command: files.at(-1)!.path,
+      leadingArgv: [...shebang.args, canonicalPath],
+      resolution: "direct",
+    };
+  } else {
+    invocation = {
+      // Execute the exact file opened and hashed, while preserving a symlink's
+      // invocation name for runtimes that dispatch from argv0.
+      command: canonicalPath,
+      ...(resolvedPath !== canonicalPath ? { argv0: resolvedPath } : {}),
+      leadingArgv: [],
+      resolution: "direct",
+    };
+  }
+  return {
+    command,
+    resolvedPath: canonicalPath,
+    invocation,
+    files: dedupeFileIdentities(files),
+    runtimeArtifact,
+  };
 }

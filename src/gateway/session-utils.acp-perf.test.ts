@@ -1,24 +1,44 @@
 import { expect, test, vi } from "vitest";
-import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
-import * as acpSessionMeta from "../acp/runtime/session-meta-readonly.js";
 import {
-  readAcpSessionMetaBatch,
-  writeAcpSessionMetaForMigration,
-} from "../acp/runtime/session-meta.js";
+  observeSqliteReadSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
+import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeRetainedOpenClawStateReadConnections } from "../state/openclaw-state-db-read-connection.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import type {
+  OpenClawStateReadReply,
+  OpenClawStateReadRequest,
+} from "../state/openclaw-state-read.types.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
-import * as rowProjection from "./session-utils-row.js";
 import { writeResidentEntries } from "./session-utils.perf.test-support.js";
 
-test("retains ACP batch bounds while clean lists and inline dirty metadata reuse resident facts", async () => {
-  await withStateDirEnv("openclaw-perf-acp-", async () => {
+const stateWorker = vi.hoisted(() => ({
+  read: vi.fn<(input: OpenClawStateReadRequest) => Promise<OpenClawStateReadReply>>(),
+}));
+vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-task-server.js")>()),
+  serveOwnedWorkerTasks(
+    handler: (input: OpenClawStateReadRequest) => Promise<OpenClawStateReadReply>,
+  ) {
+    stateWorker.read.mockImplementation(handler);
+  },
+}));
+import "../state/openclaw-state-read.worker.js";
+
+test("retains ACP batch bounds while clean lists and canonical metadata updates reuse resident facts", async () => {
+  await withStateDirEnv("openclaw-perf-acp-", async ({ stateDir }) => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     const cfg = {
@@ -36,24 +56,14 @@ test("retains ACP batch bounds while clean lists and inline dirty metadata reuse
     const stateKey = "agent:default:webchat:dm:state";
     const missingKey = "agent:default:webchat:dm:missing";
     const markerKey = "agent:default:webchat:dm:marker";
-    const stateEntry: SessionEntry = {
-      sessionId: "state-session",
-      updatedAt: 3,
+    const makeEntry = (sessionId: string, updatedAt: number): SessionEntry => ({
+      sessionId,
+      updatedAt,
       modelProvider: "openai",
       model: "gpt-5",
-    };
-    const missingEntry: SessionEntry = {
-      sessionId: "missing-session",
-      updatedAt: 2,
-      modelProvider: "openai",
-      model: "gpt-5",
-    };
-    const staleAliasEntry: SessionEntry = {
-      sessionId: "stale-alias-session",
-      updatedAt: 1,
-      modelProvider: "openai",
-      model: "gpt-5",
-    };
+    });
+    const stateEntry = makeEntry("state-session", 3);
+    const missingEntry = makeEntry("missing-session", 2);
     const markerMeta = {
       backend: "marker",
       agent: "marker-agent",
@@ -62,75 +72,95 @@ test("retains ACP batch bounds while clean lists and inline dirty metadata reuse
       state: "idle" as const,
       lastActivityAt: 1,
     };
-    const markerEntry: SessionEntry = {
-      sessionId: "marker-session",
-      updatedAt: 1,
-      modelProvider: "openai",
-      model: "gpt-5",
-      acp: markerMeta,
-    };
-    const stateMeta = {
-      backend: "acpx",
-      agent: "codex",
-      runtimeSessionName: stateKey,
-      mode: "persistent" as const,
-      state: "idle" as const,
-      lastActivityAt: 2,
-    };
-    writeAcpSessionMetaForMigration({
+    const markerEntry = makeEntry("marker-session", 1);
+    seedCanonicalAcpSessionMeta({
       sessionKey: stateKey,
       sessionId: stateEntry.sessionId,
-      meta: stateMeta,
+      meta: {
+        ...markerMeta,
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: stateKey,
+        lastActivityAt: 2,
+      },
+      now: () => 100,
     });
-
-    const perRowState = readAcpSessionMetaForEntry({ sessionKey: stateKey, entry: stateEntry });
-    const perRowMissing = readAcpSessionMetaForEntry({
-      sessionKey: missingKey,
-      entry: missingEntry,
+    seedCanonicalAcpSessionMeta({
+      sessionKey: markerKey,
+      sessionId: markerEntry.sessionId,
+      meta: markerMeta,
     });
-    expect(
-      readAcpSessionMetaBatch({
-        entries: [
-          { sessionKey: stateKey, entry: stateEntry },
-          { sessionKey: stateKey, entry: staleAliasEntry },
-          { sessionKey: missingKey, entry: missingEntry },
-          { sessionKey: markerKey, entry: markerEntry },
-        ],
-      }),
-    ).toEqual(
-      new Map<SessionEntry, ReturnType<typeof readAcpSessionMetaForEntry>>([
-        [markerEntry, markerMeta],
-        [stateEntry, perRowState],
-        [staleAliasEntry, undefined],
-        [missingEntry, perRowMissing],
-      ]),
-    );
 
     const database = openOpenClawStateDatabase();
-    const originalPrepare = database.db.prepare.bind(database.db);
-    let acpSelects = 0;
-    let projection: SessionRowProjection | undefined;
-    const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql: string) => {
-      if (/^select\b.*\bacp_sessions\b/is.test(sql)) {
-        acpSelects += 1;
+    async function readMetadata(entries: AcpSessionReadInput[], expectedQueries: number) {
+      const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      try {
+        const reply = await stateWorker.read({
+          context: { environment: { OPENCLAW_STATE_DIR: stateDir } },
+          databasePath: database.path,
+          location: database.path,
+          checkFreshAdmission: false,
+          command: { type: "acpSessions.metadata", entries },
+        });
+        if (!reply.ok || reply.type !== "acpSessions.metadata") {
+          throw new Error("ACP worker metadata read failed");
+        }
+        expect(
+          sql.queries.filter((query) => /^select\b.*\bacp_sessions\b/is.test(query)),
+        ).toHaveLength(expectedQueries);
+        return reply.rows;
+      } finally {
+        sql.restore();
+        closeRetainedOpenClawStateReadConnections();
       }
-      return originalPrepare(sql);
-    });
+    }
+    let projection: SessionRowProjection | undefined;
+    const acpSelects = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["metadata"],
+      (sql) => (/^select\b.*\bacp_sessions\b/is.test(sql) ? "metadata" : null),
+    );
     try {
-      // Composite and legacy identities share the production 500-key chunks.
-      // Cross two boundaries without materializing tens of thousands of rows.
+      const key = (sessionKey: string, agentId = "default") =>
+        buildAcpDatabaseSessionKey(sessionKey, agentId);
+      const cohort: [
+        keys: readonly string[],
+        entry: AcpSessionReadInput["entry"],
+        expected: string | null,
+      ][] = [
+        [[key(stateKey)], stateEntry, stateKey],
+        [[key(missingKey), key(stateKey)], stateEntry, stateKey],
+        [[key(stateKey), key(markerKey)], markerEntry, markerKey],
+        [[key(markerKey), key(stateKey)], markerEntry, markerKey],
+        [
+          [key(stateKey)],
+          { lifecycleRevision: "state-session", sessionId: "other", sessionStartedAt: 101 },
+          stateKey,
+        ],
+        [[key(stateKey, "other")], stateEntry, null],
+        [[key(stateKey), key(stateKey)], stateEntry, stateKey],
+      ];
+      const metadata = await readMetadata(
+        cohort.map(([keys, entry]) => ({ keys, entry })),
+        1,
+      );
+      expect(metadata.map((row) => row?.runtime_session_name ?? null)).toEqual(
+        cohort.map((scenario) => scenario[2]),
+      );
+      acpSelects.counts.metadata = 0;
       const aboveBatchChunkSize = Array.from({ length: 501 }, (_, index) => ({
         sessionKey: `agent:default:webchat:dm:missing-${index}`,
-        entry: {
-          sessionId: `missing-session-${index}`,
-          updatedAt: index,
-        } satisfies SessionEntry,
+        entry: { sessionId: `missing-session-${index}`, updatedAt: index },
       }));
-      const chunkedBatch = readAcpSessionMetaBatch({ entries: aboveBatchChunkSize });
-      expect(chunkedBatch.size).toBe(aboveBatchChunkSize.length);
-      expect(chunkedBatch.get(aboveBatchChunkSize[0]!.entry)).toBeUndefined();
-      expect(chunkedBatch.get(aboveBatchChunkSize.at(-1)!.entry)).toBeUndefined();
-      expect(acpSelects).toBe(3);
+      const chunkedBatch = await readMetadata(
+        aboveBatchChunkSize.map(({ sessionKey, entry }) => ({
+          keys: [key(sessionKey)],
+          entry,
+        })),
+        2,
+      );
+      expect(chunkedBatch).toHaveLength(aboveBatchChunkSize.length);
+      expect(chunkedBatch.every((row) => row === null)).toBe(true);
 
       const runtimeEntries = Object.fromEntries(
         aboveBatchChunkSize
@@ -146,55 +176,41 @@ test("retains ACP batch bounds while clean lists and inline dirty metadata reuse
         [markerKey]: markerEntry,
         ...runtimeEntries,
       });
-      projection = await createSessionRowProjection({ cfg });
-      await projection.ensureMaterialized();
-      acpSelects = 0;
-      const rows = vi.spyOn(rowProjection, "readSessionRowInputs");
-      const metadataReads = vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntry");
-      try {
-        const result = await listProjectedSessions({
-          projection,
-          opts: { agentId: "default", limit: 3 },
+      const resident = await createSessionRowProjection({ cfg });
+      projection = resident;
+      const list = (agentId = "default", search?: string) =>
+        listProjectedSessions({
+          projection: resident,
+          opts: { agentId, limit: agentId === "default" ? 3 : 1, search },
         });
-        expect(result.sessions).toHaveLength(3);
-        expect(acpSelects).toBe(0);
-        for (const search of ["openclaw", "unmatched-runtime"]) {
-          const searched = await listProjectedSessions({
-            projection,
-            opts: { agentId: "runtime", search, limit: 1 },
-          });
-          expect(searched.totalCount).toBe(search === "openclaw" ? 55 : 0);
-          expect(rows).not.toHaveBeenCalled();
-          expect(acpSelects).toBe(0);
-        }
-        expect(
-          projection.snapshot({ agentId: "default", key: missingKey }).row?.runtimeSelectionLocked,
-        ).toBe(false);
-        writeResidentEntries(
-          {
-            [missingKey]: {
-              ...missingEntry,
-              acp: { ...markerMeta, runtimeSessionName: missingKey },
-            },
-          },
-          1,
-        );
-        acpSelects = 0;
-        await projection.ensureMaterialized();
-        expect(rows).toHaveBeenCalledOnce();
-        expect(rows.mock.calls[0]?.[0].key).toBe(missingKey);
-        expect(metadataReads).not.toHaveBeenCalled();
-        expect(acpSelects).toBe(0);
-        expect(
-          projection.snapshot({ agentId: "default", key: missingKey }).row?.runtimeSelectionLocked,
-        ).toBe(true);
-      } finally {
-        metadataReads.mockRestore();
-        rows.mockRestore();
+      const locked = () =>
+        resident.snapshot({ agentId: "default", key: missingKey }).row?.runtimeSelectionLocked;
+      await projection.ensureMaterialized();
+      await list();
+      await list("runtime");
+      acpSelects.counts.metadata = 0;
+      const result = await list();
+      expect(result.sessions).toHaveLength(3);
+      expect(acpSelects.counts.metadata).toBe(0);
+      for (const search of ["openclaw", "unmatched-runtime"]) {
+        const searched = await list("runtime", search);
+        expect(searched.totalCount).toBe(search === "openclaw" ? 55 : 0);
+        expect(acpSelects.counts.metadata).toBe(0);
       }
+      expect(locked()).toBe(false);
+      seedCanonicalAcpSessionMeta({
+        sessionKey: missingKey,
+        sessionId: missingEntry.sessionId,
+        meta: { ...markerMeta, runtimeSessionName: missingKey },
+      });
+      writeResidentEntries({ [missingKey]: missingEntry }, 1);
+      acpSelects.counts.metadata = 0;
+      await projection.ensureMaterialized();
+      expect(acpSelects.counts.metadata).toBe(0);
+      expect(locked()).toBe(true);
     } finally {
       projection?.dispose();
-      prepareSpy.mockRestore();
+      acpSelects.restore();
     }
   });
 });

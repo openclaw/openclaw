@@ -25,12 +25,14 @@ import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.AbstractComposeView
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -40,6 +42,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -59,6 +63,7 @@ import java.util.UUID
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ChatMediaTranscriptLayoutTest {
   @get:Rule val composeRule = createComposeRule()
+  private val imageDecodeDispatcher = StandardTestDispatcher(TestCoroutineScheduler())
 
   @Test
   fun captionedPhotosStayReadableBesideTheActualChatComposer() {
@@ -82,7 +87,9 @@ class ChatMediaTranscriptLayoutTest {
         SideEffect { root = generateSequence(view) { it.parent as? View }.filterIsInstance<AbstractComposeView>().single() }
         ClawDesignTheme {
           Box(Modifier.fillMaxSize().background(ClawTheme.colors.canvas).testTag("full-chat")) {
-            ChatScreen(model, false, true, {}, {}, {}, {})
+            CompositionLocalProvider(LocalChatImageDecodeDispatcher provides imageDecodeDispatcher) {
+              ChatScreen(model, false, true, {}, {}, {}, {})
+            }
           }
         }
       }
@@ -124,7 +131,11 @@ class ChatMediaTranscriptLayoutTest {
             ChatMessage("garden-answer", "assistant", listOf(ChatMessageContent(text = "The sunny bed has room for herbs. Keep a clear path between the planters.")), null),
           )
       }
-      composeRule.waitUntil { composeRule.onAllNodesWithContentDescription("Open image preview").fetchSemanticsNodes().size == 2 }
+      composeRule.waitForIdle()
+      composeRule.onAllNodesWithContentDescription("image/png", useUnmergedTree = true).assertCountEquals(0)
+      imageDecodeDispatcher.scheduler.advanceUntilIdle()
+      composeRule.waitForIdle()
+      composeRule.onAllNodesWithContentDescription("image/png", useUnmergedTree = true).assertCountEquals(2)
       composeRule.onNodeWithText("Which garden layout works best?", useUnmergedTree = true).assertIsDisplayed()
       composeRule.onNodeWithText("The sunny bed has room for herbs. Keep a clear path between the planters.", useUnmergedTree = true).assertIsDisplayed()
       System.getenv("OPENCLAW_MEDIA_PROOF_DIR")?.let { directory ->

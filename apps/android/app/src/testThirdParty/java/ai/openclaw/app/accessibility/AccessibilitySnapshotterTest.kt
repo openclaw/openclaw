@@ -15,9 +15,13 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowAccessibilityNodeInfo
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [SnapshotNodeShadow::class])
 class AccessibilitySnapshotterTest {
   @Test
   fun observableServiceInstanceTracksTheLiveInstance() {
@@ -47,33 +51,33 @@ class AccessibilitySnapshotterTest {
 
   @Test
   fun normalizerCapsSnapshotsAtMaximumNodeCountAndRecyclesDiscardedNodes() {
-    val children = List(MAX_NODES + 5) { index -> FakeNode(text = "node-$index") }
-    val root = FakeNode(boundsInScreen = Rect(), children = children)
+    val children = List(MAX_NODES + 5) { index -> snapshotNode(text = "node-$index") }
+    val root = snapshotNode(boundsInScreen = Rect(), children = children)
 
     val result = AccessibilityTreeNormalizer.normalize(root)
 
     assertEquals(MAX_NODES, result.nodes.size)
     assertEquals("n0", result.nodes.first().ref)
     assertEquals("n${MAX_NODES - 1}", result.nodes.last().ref)
-    assertTrue(root.recycled)
-    assertTrue(children.takeLast(5).all(FakeNode::recycled))
-    assertFalse(children.take(MAX_NODES).any(FakeNode::recycled))
+    assertTrue(root.snapshotShadow.recycled)
+    assertTrue(children.takeLast(5).all { it.snapshotShadow.recycled })
+    assertFalse(children.take(MAX_NODES).any { it.snapshotShadow.recycled })
 
-    result.retainedNodes.values.forEach(AccessibilityNodeAdapter::recycle)
-    assertTrue(children.all(FakeNode::recycled))
+    result.retainedNodes.values.forEach { it.snapshotShadow.recycle() }
+    assertTrue(children.all { it.snapshotShadow.recycled })
   }
 
   @Test
   fun normalizerDoesNotWalkBelowMaximumDepth() {
-    var root = FakeNode(text = "deepest")
+    var root = snapshotNode(text = "deepest")
     repeat(MAX_DEPTH + 2) { depth ->
-      root = FakeNode(text = "depth-$depth", children = listOf(root))
+      root = snapshotNode(text = "depth-$depth", children = listOf(root))
     }
 
     val result = AccessibilityTreeNormalizer.normalize(root)
 
     assertEquals(MAX_DEPTH + 1, result.nodes.size)
-    result.retainedNodes.values.forEach(AccessibilityNodeAdapter::recycle)
+    result.retainedNodes.values.forEach { it.snapshotShadow.recycle() }
   }
 
   @Test
@@ -128,9 +132,9 @@ class AccessibilitySnapshotterTest {
       values = mapOf("n0" to "first"),
     )
 
-    assertEquals(GenerationTarget.Stale, store.resolve("wrong-snapshot", "n0"))
-    assertEquals(GenerationTarget.Stale, store.resolve("snapshot-1", "missing"))
-    assertEquals(GenerationTarget.Found("first"), store.resolve("snapshot-1", "n0"))
+    assertEquals(null, store.resolve("wrong-snapshot", "n0"))
+    assertEquals(null, store.resolve("snapshot-1", "missing"))
+    assertEquals("first", store.resolve("snapshot-1", "n0"))
 
     store.replace(
       snapshotId = "snapshot-2",
@@ -160,36 +164,53 @@ class AccessibilitySnapshotterTest {
     }
 
   @Test
-  fun sensitiveNodeRedactsTextAndContentDescription() {
+  fun platformNodeFieldsArePreservedAndSensitiveTextIsRedacted() {
     val sensitiveNode =
-      FakeNode(
+      snapshotNode(
         text = "secret text",
         contentDescription = "secret description",
         viewId = "example:id/password",
         password = true,
-      )
+      ).apply {
+        className = "android.widget.EditText"
+        isClickable = true
+        isEditable = true
+        isScrollable = true
+        isEnabled = false
+        isFocused = true
+        addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_TEXT)
+        addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
+      }
 
     val result = AccessibilityTreeNormalizer.normalize(sensitiveNode)
 
     assertEquals("[redacted]", result.nodes.single().text)
     assertEquals("[redacted]", result.nodes.single().contentDescription)
     assertEquals("example:id/password", result.nodes.single().viewId)
-    result.retainedNodes.values.forEach(AccessibilityNodeAdapter::recycle)
+    assertEquals("text_field", result.nodes.single().role)
+    assertEquals(Rect(0, 0, 10, 10), result.nodes.single().boundsInScreen)
+    assertTrue(result.nodes.single().clickable)
+    assertTrue(result.nodes.single().editable)
+    assertTrue(result.nodes.single().scrollable)
+    assertFalse(result.nodes.single().enabled)
+    assertTrue(result.nodes.single().focused)
+    assertEquals(listOf("set_text", "focus"), result.nodes.single().actions)
+    result.retainedNodes.values.forEach { it.snapshotShadow.recycle() }
   }
 
   @Test
   fun normalizerDoesNotFetchBeyondTraversalBudget() {
-    val children = List(MAX_VISITED_NODES * 2) { index -> FakeNode(text = "wide-$index") }
-    val root = FakeNode(boundsInScreen = Rect(), children = children)
+    val children = List(MAX_VISITED_NODES * 2) { index -> snapshotNode(text = "wide-$index") }
+    val root = snapshotNode(boundsInScreen = Rect(), children = children)
 
     val result = AccessibilityTreeNormalizer.normalize(root)
 
     assertEquals(MAX_NODES, result.nodes.size)
-    assertEquals(MAX_VISITED_NODES - 1, root.childRequests)
-    result.retainedNodes.values.forEach(AccessibilityNodeAdapter::recycle)
-    assertTrue(root.recycled)
-    assertTrue(children.take(MAX_VISITED_NODES - 1).all(FakeNode::recycled))
-    assertFalse(children.drop(MAX_VISITED_NODES - 1).any(FakeNode::recycled))
+    assertEquals(MAX_VISITED_NODES - 1, root.snapshotShadow.childRequests)
+    result.retainedNodes.values.forEach { it.snapshotShadow.recycle() }
+    assertTrue(root.snapshotShadow.recycled)
+    assertTrue(children.take(MAX_VISITED_NODES - 1).all { it.snapshotShadow.recycled })
+    assertFalse(children.drop(MAX_VISITED_NODES - 1).any { it.snapshotShadow.recycled })
   }
 
   @Test
@@ -464,36 +485,48 @@ private fun sendAccessibilityEvent(
   }
 }
 
-private class FakeNode(
-  override val className: String? = "android.view.View",
-  override val text: String? = null,
-  override val contentDescription: String? = null,
-  override val viewId: String? = null,
-  override val boundsInScreen: Rect = Rect(0, 0, 10, 10),
-  override val clickable: Boolean = false,
-  override val editable: Boolean = false,
-  override val scrollable: Boolean = false,
-  override val enabled: Boolean = true,
-  override val focused: Boolean = false,
-  override val password: Boolean = false,
-  override val inputType: Int = 0,
-  override val actionIds: List<Int> = emptyList(),
-  private val children: List<FakeNode> = emptyList(),
-) : AccessibilityNodeAdapter {
+private fun snapshotNode(
+  text: String? = null,
+  contentDescription: String? = null,
+  viewId: String? = null,
+  boundsInScreen: Rect = Rect(0, 0, 10, 10),
+  password: Boolean = false,
+  children: List<AccessibilityNodeInfo> = emptyList(),
+): AccessibilityNodeInfo =
+  AccessibilityNodeInfo().apply {
+    className = "android.view.View"
+    this.text = text
+    this.contentDescription = contentDescription
+    viewIdResourceName = viewId
+    setBoundsInScreen(boundsInScreen)
+    isPassword = password
+    isEnabled = true
+    snapshotShadow.children = children
+  }
+
+private val AccessibilityNodeInfo.snapshotShadow: SnapshotNodeShadow
+  get() = Shadow.extract(this)
+
+// Only child acquisition and recycling are instrumented; node fields use Android's real accessors.
+@Implements(AccessibilityNodeInfo::class)
+class SnapshotNodeShadow : ShadowAccessibilityNodeInfo() {
+  var children: List<AccessibilityNodeInfo> = emptyList()
   var childRequests: Int = 0
     private set
   var recycled: Boolean = false
     private set
 
-  override val childCount: Int
-    get() = children.size
+  @Implementation
+  public override fun getChildCount(): Int = children.size
 
-  override fun childAt(index: Int): AccessibilityNodeAdapter {
+  @Implementation
+  public override fun getChild(index: Int): AccessibilityNodeInfo {
     childRequests += 1
     return children[index]
   }
 
-  override fun recycle() {
+  @Implementation
+  public override fun recycle() {
     check(!recycled) { "Fake node recycled twice" }
     recycled = true
   }

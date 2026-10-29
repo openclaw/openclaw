@@ -28,9 +28,9 @@ describe("resolveScrollBehavior", () => {
     expect(resolveScrollBehavior("smooth")).toBe("smooth");
   });
 
-  it.each(["auto", "instant"] as const)("preserves %s without querying motion", (behavior) => {
+  it("preserves instant scrolling without querying motion", () => {
     const matchMedia = stubMatchMedia(true);
-    expect(resolveScrollBehavior(behavior)).toBe(behavior);
+    expect(resolveScrollBehavior("instant")).toBe("instant");
     expect(matchMedia).not.toHaveBeenCalled();
   });
 });

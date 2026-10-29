@@ -1,4 +1,3 @@
-// Telegram plugin module owns supersede sender authorization policy.
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTelegramDmAllow } from "./access-groups.js";
@@ -11,62 +10,42 @@ import { resolveTelegramEffectiveGroupPolicy } from "./group-access.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 
-type UpdateSenderFacts = {
-  senderId: string;
-  senderUsername?: string;
-  chatId: number;
-  isGroup: boolean;
-  message: Message;
-};
-
-function extractUpdateSenderFacts(update: unknown): UpdateSenderFacts | null {
+function extractUpdateSenderFacts(update: unknown) {
   if (!update || typeof update !== "object") {
     return null;
   }
   const root = update as Record<string, unknown>;
-  let message: Record<string, unknown> | undefined;
+  let message: Message | undefined;
   for (const key of ["message", "edited_message", "channel_post", "edited_channel_post"] as const) {
     const candidate = root[key];
     if (candidate && typeof candidate === "object") {
-      message = candidate as Record<string, unknown>;
+      message = candidate as Message;
       break;
     }
   }
+  let from = message?.from;
   if (!message) {
     const callback = root.callback_query;
     if (callback && typeof callback === "object") {
       const cb = callback as Record<string, unknown>;
-      const from = cb.from;
+      const sender = cb.from;
       const msg = cb.message;
-      if (from && typeof from === "object" && msg && typeof msg === "object") {
-        const chat = (msg as { chat?: { id?: unknown; type?: unknown; is_forum?: unknown } }).chat;
-        const fromObj = from as { id?: unknown; username?: unknown };
-        if (typeof chat?.id === "number" && typeof fromObj.id === "number") {
-          const chatType = typeof chat.type === "string" ? chat.type : "private";
-          return {
-            senderId: String(fromObj.id),
-            ...(typeof fromObj.username === "string" ? { senderUsername: fromObj.username } : {}),
-            chatId: chat.id,
-            isGroup: chatType !== "private",
-            message: msg as Message,
-          };
-        }
+      if (sender && typeof sender === "object" && msg && typeof msg === "object") {
+        message = msg as Message;
+        from = sender as Message["from"];
       }
     }
-    return null;
   }
-  const chat = message.chat as { id?: unknown; type?: unknown; is_forum?: unknown } | undefined;
-  const from = message.from as { id?: unknown; username?: unknown } | undefined;
-  if (typeof chat?.id !== "number" || typeof from?.id !== "number") {
+  const chat = message?.chat;
+  if (!message || typeof chat?.id !== "number" || typeof from?.id !== "number") {
     return null;
   }
   const chatType = typeof chat.type === "string" ? chat.type : "private";
   return {
     senderId: String(from.id),
-    ...(typeof from.username === "string" ? { senderUsername: from.username } : {}),
     chatId: chat.id,
     isGroup: chatType !== "private",
-    message: message as unknown as Message,
+    message,
   };
 }
 

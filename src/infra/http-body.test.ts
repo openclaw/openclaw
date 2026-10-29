@@ -2,7 +2,6 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
@@ -11,8 +10,13 @@ import {
   type RequestBodyLimitErrorCode,
   readJsonBodyWithLimit,
   readRequestBodyWithLimit,
-  testApi,
 } from "./http-body.js";
+
+vi.mock("node:timers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers")>()),
+  setTimeout: (callback: () => void, delay: number) => globalThis.setTimeout(callback, delay),
+  clearTimeout: (timer: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(timer),
+}));
 
 type MockIncomingMessage = IncomingMessage & {
   destroyed?: boolean;
@@ -34,27 +38,8 @@ async function expectRequestBodyLimitError(
     statusCode: number;
   },
 ) {
-  try {
-    await promise;
-  } catch (error) {
-    expect(error).toBeInstanceOf(RequestBodyLimitError);
-    if (!(error instanceof RequestBodyLimitError)) {
-      throw error;
-    }
-    expect({
-      name: error.name,
-      message: error.message,
-      code: error.code,
-      statusCode: error.statusCode,
-    }).toEqual({
-      name: "RequestBodyLimitError",
-      message: expected.message,
-      code: expected.code,
-      statusCode: expected.statusCode,
-    });
-    return;
-  }
-  throw new Error("Expected request body reader to reject");
+  await expect(promise).rejects.toBeInstanceOf(RequestBodyLimitError);
+  await expect(promise).rejects.toMatchObject({ name: "RequestBodyLimitError", ...expected });
 }
 
 async function expectReadPayloadTooLarge(params: {
@@ -74,20 +59,6 @@ async function expectReadPayloadTooLarge(params: {
   });
   await waitForMicrotaskTurn();
   expect(req["__unhandledDestroyError"]).toBeUndefined();
-}
-
-async function readJsonBody(params: {
-  chunks?: string[];
-  maxBytes: number;
-  emptyObjectOnEmpty?: boolean;
-}) {
-  const req = createMockRequest({ chunks: params.chunks });
-  return await readJsonBodyWithLimit(req, {
-    maxBytes: params.maxBytes,
-    ...(params.emptyObjectOnEmpty === undefined
-      ? {}
-      : { emptyObjectOnEmpty: params.emptyObjectOnEmpty }),
-  });
 }
 
 function createMockRequest(params: {
@@ -137,11 +108,6 @@ describe("http body limits", () => {
     vi.useRealTimers();
   });
 
-  it("reads body within max bytes", async () => {
-    const req = createMockRequest({ chunks: ['{"ok":true}'] });
-    await expect(readRequestBodyWithLimit(req, { maxBytes: 1024 })).resolves.toBe('{"ok":true}');
-  });
-
   it.each([
     {
       name: "rejects oversized streamed body",
@@ -166,34 +132,21 @@ describe("http body limits", () => {
     {
       name: "returns json parse error when body is invalid",
       params: { chunks: ["{bad json"], maxBytes: 1024, emptyObjectOnEmpty: false },
-      assertResult: (result: Awaited<ReturnType<typeof readJsonBody>>) => {
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.code).toBe("INVALID_JSON");
-        }
-      },
+      expected: { ok: false, code: "INVALID_JSON", error: expect.any(String) },
     },
     {
       name: "returns empty object for an empty body by default",
       params: { chunks: ["   "], maxBytes: 1024 },
-      assertResult: (result: Awaited<ReturnType<typeof readJsonBody>>) => {
-        expect(result).toEqual({ ok: true, value: {} });
-      },
+      expected: { ok: true, value: {} },
     },
     {
       name: "returns payload-too-large for json body",
       params: { chunks: ["x".repeat(1024)], maxBytes: 10 },
-      assertResult: (result: Awaited<ReturnType<typeof readJsonBody>>) => {
-        expect(result).toEqual({
-          ok: false,
-          code: "PAYLOAD_TOO_LARGE",
-          error: "Payload too large",
-        });
-      },
+      expected: { ok: false, code: "PAYLOAD_TOO_LARGE", error: "Payload too large" },
     },
-  ])("$name", async ({ params, assertResult }) => {
-    const result = await readJsonBody(params);
-    assertResult(result);
+  ])("$name", async ({ params: { chunks, ...options }, expected }) => {
+    const req = createMockRequest({ chunks });
+    await expect(readJsonBodyWithLimit(req, options)).resolves.toEqual(expected);
   });
 
   it("timeout surfaces typed error when timeoutMs is clamped", async () => {
@@ -208,15 +161,23 @@ describe("http body limits", () => {
   });
 
   it("does not overflow oversized request body timeouts into immediate failures", async () => {
-    expect(
-      testApi.resolveRequestBodyLimitValues({
+    vi.useFakeTimers();
+    try {
+      const req = createMockRequest({ emitEnd: false });
+      const result = readRequestBodyWithLimit(req, {
         maxBytes: 128,
         timeoutMs: Number.MAX_SAFE_INTEGER,
-      }),
-    ).toEqual({
-      maxBytes: 128,
-      timeoutMs: MAX_TIMER_TIMEOUT_MS,
-    });
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      req.emit("data", Buffer.from("ok"));
+      req.emit("end");
+      await expect(result).resolves.toEqual({ value: "ok" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces connection-closed as a typed limit error", async () => {

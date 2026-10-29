@@ -1,4 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
+import { sameRouteLocation } from "../../app-route-paths.ts";
 import { locationWithoutDraft } from "./route-draft.ts";
 
 export function currentRouteLocation(): RouteLocation {
@@ -9,12 +10,6 @@ export function currentRouteLocation(): RouteLocation {
   };
 }
 
-function routeLocationsMatch(left: RouteLocation, right: RouteLocation): boolean {
-  return (
-    left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
-  );
-}
-
 export function stillOwnsCanonicalLocation(
   source: RouteLocation | undefined,
   consumedSourceDraft: boolean,
@@ -23,7 +18,7 @@ export function stillOwnsCanonicalLocation(
     return false;
   }
   const current = currentRouteLocation();
-  if (routeLocationsMatch(current, source)) {
+  if (sameRouteLocation(current, source)) {
     return true;
   }
   const sourceHasDraft = new URLSearchParams(source.search).has("draft");
@@ -34,6 +29,6 @@ export function stillOwnsCanonicalLocation(
     consumedSourceDraft &&
     sourceHasDraft &&
     !currentHasDraft &&
-    routeLocationsMatch(locationWithoutDraft(current), locationWithoutDraft(source))
+    sameRouteLocation(locationWithoutDraft(current), locationWithoutDraft(source))
   );
 }

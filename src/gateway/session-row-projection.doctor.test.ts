@@ -12,9 +12,46 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+it("keeps an unscoped repair publication distinct from session-entry writes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const key = "agent:main:repaired";
+    const options = { agentId: "main", env: state.env };
+    runOpenClawAgentWriteTransaction((database) => {
+      writeSessionEntry(database, key, { sessionId: "repaired", updatedAt: 1 });
+    }, options);
+    const projection = await createSessionRowProjection({ cfg });
+    try {
+      await projection.ensureMaterialized();
+      const changes: unknown[] = [];
+      projection.onSelectionChange((change) => changes.push(change));
+      runOpenClawAgentWriteTransaction((database) => {
+        writeSessionEntry(
+          database,
+          key,
+          { sessionId: "repaired", updatedAt: 2, label: "Repaired label" },
+          { allowStoredAliases: true },
+        );
+      }, options);
+      expect(changes).toContainEqual(
+        expect.objectContaining({
+          kind: "row",
+          key,
+          row: expect.objectContaining({
+            entry: expect.objectContaining({ label: "Repaired label" }),
+          }),
+        }),
+      );
+      expect(changes).not.toContainEqual(expect.objectContaining({ scope: "session-entry" }));
+    } finally {
+      projection.dispose();
+    }
+  });
+});
+
 it("admits a Doctor-renamed legacy key into an already resident store without reloading it", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const oldKey = "agent:main:dashboard:incognito-legacy";
     const newKey = "agent:main:dashboard:legacy-incognito-legacy";
     const existingKey = "agent:main:existing";

@@ -52,8 +52,9 @@ sidebarTitle: "Voice and speech"
     Talk over a ChatGPT subscription when the account has access (see the
     Realtime accordion).
     OpenAI TTS and GA realtime Voice Call, Gateway relay, and Discord sessions
-    still require a Platform API key. Codex GPT-Live supports ChatGPT OAuth
-    through the shared Gateway-owned bridge, including Discord and Voice Call.
+    still require a Platform API key. Codex GPT-Live supports ChatGPT OAuth and
+    pasted ChatGPT access-token profiles through the shared Gateway-owned bridge,
+    including Discord and Voice Call.
     </Note>
 
   </Accordion>
@@ -151,6 +152,52 @@ sidebarTitle: "Voice and speech"
     such as `fable`, `nova`, or `onyx` is not valid for Realtime sessions.
     Set the model explicitly to `gpt-realtime-2.1-mini` when you prefer the
     smaller, lower-cost Realtime 2.1 variant.
+
+    #### Custom Realtime endpoints
+
+    Set `talk.realtime.providers.openai.baseUrl` to the full WebSocket endpoint
+    of an OpenAI Realtime-compatible server, and select `gateway-relay`. Keep
+    `provider: "openai"`: a custom URL does not register a new provider.
+
+    ```json5
+    {
+      talk: {
+        realtime: {
+          provider: "openai",
+          transport: "gateway-relay",
+          model: "your-realtime-model",
+          providers: {
+            openai: {
+              apiKey: "${REALTIME_API_KEY}",
+              baseUrl: "wss://voice.example.com/custom/realtime?realtime=true",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The default is `wss://api.openai.com/v1/realtime`. The URL's path and
+    query parameters are preserved; OpenClaw sets the `model` query parameter
+    from the selected model. Standard URL parsing applies; use a properly
+    URL-encoded query for signed endpoints. Include the complete endpoint path, not only an
+    API root such as `/v1`. `https:` and `http:` URLs are converted to
+    `wss:` and `ws:` respectively. Prefer TLS outside trusted local networks.
+    URLs with embedded credentials or fragments are rejected.
+
+    The same `baseUrl` option is available in the OpenAI realtime provider
+    block for Voice Call and other Gateway-side voice bridges. It does not
+    change chat, transcription, or TTS endpoints. When a custom endpoint has no
+    explicit model, the GA Realtime default remains in use rather than GPT-Live.
+
+    This is a server-side Realtime WebSocket override, not a general protocol
+    adapter: the service must support OpenClaw's Realtime session events, audio
+    formats, voices, and tools. Provider-specific compatibility, including
+    DashScope, is not implied. The API key stays on the Gateway and authenticates
+    the socket directly; no browser client-secret endpoint is required.
+    Browser WebRTC, GPT-Live, and Azure endpoint/deployment settings cannot be
+    combined with this override. Those combinations fail rather than sending
+    credentials or audio to the default OpenAI endpoint.
 
     #### Gateway-controlled Realtime call cleanup
 
@@ -443,15 +490,48 @@ sidebarTitle: "Voice and speech"
     OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_GPT_LIVE=1 node --import tsx scripts/test-live.mts -- extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts
     ```
 
-    <Note>
-    GA backend OpenAI realtime bridges use the Realtime WebSocket session
-    shape, which does not accept `session.temperature`; the public GPT-Live API
-    uses its own Live session shape, while the Codex and unlisted/private routes
-    retain their separate transport contracts. Azure OpenAI
-    deployments remain available via `azureEndpoint` and `azureDeployment` and
-    keep the deployment-compatible session shape (including `temperature`).
+    #### Azure OpenAI Realtime deployments
+
+    Configure Azure on the Voice Call realtime provider. The Realtime
+    conversation deployment and input-transcription deployment may be different:
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: {
+                providers: {
+                  openai: {
+                    azureEndpoint: "https://<resource>.openai.azure.com/openai",
+                    azureDeployment: "<realtime-deployment>",
+                    apiKey: "<azure-resource-key>",
+                    inputTranscriptionModel: "<transcription-deployment>",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Azure Realtime uses the GA WebSocket route
+    `/openai/v1/realtime?model=<realtime-deployment>` and sends the GA
+    `session.update` payload. Authentication uses the Azure `api-key` header.
+    Microsoft deprecated the Preview Realtime API on April 30, 2026 and directs
+    applications to migrate to GA. If `azureApiVersion` is explicitly set, the
+    bridge preserves the preview WebSocket route and matching session payload;
+    remove that setting to use the GA route and session payload instead. The GA
+    session configuration does not send `temperature`; the preview session
+    continues to use `temperature` when configured.
+
+    `inputTranscriptionModel` selects the Azure deployment used only for input
+    transcription. If omitted, Azure defaults to `whisper-1`; the value must
+    identify a transcription deployment available on the Azure resource.
     Supports bidirectional tool calling and G.711 u-law audio.
-    </Note>
 
     <Note>
     Realtime voice is selected when the session is created. GA Realtime allows

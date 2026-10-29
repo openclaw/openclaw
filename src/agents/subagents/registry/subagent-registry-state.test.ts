@@ -1,1071 +1,600 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 // Subagent registry state tests cover hot read caching over the persisted SQLite snapshot.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  onSessionLifecycleEvent,
-  type SessionLifecycleEvent,
-} from "../../../sessions/session-lifecycle-events.js";
-import { sessionChanges } from "../../../sessions/session-row-changes.js";
+import { readSqliteUserVersion } from "../../../infra/sqlite-user-version.js";
+import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
+import * as databaseCache from "../../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
-import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import { withExistingOpenClawStateSchema } from "../../../state/openclaw-state-db-schema-policy.js";
+import * as stateDatabase from "../../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../../../test-utils/native-sqlite.js";
 import {
-  clearSubagentRunsReadCacheForTest,
-  getSubagentMaintenanceRunsSnapshotForRead,
-  getSubagentSessionListRunsSnapshotForRead,
-  getSubagentSessionListRunsSnapshotForSessions,
+  createOpenClawTestState,
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../test-utils/openclaw-test-state.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  buildControlledSubagentRunsReadContext as readContext,
+  listControlledSubagentRunFacts,
+} from "./subagent-control-scope.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
+import { registerSubagentCollectorPublicationCases } from "./subagent-registry-state.collector.test-support.js";
+import {
+  persistRegistryFixture as publish,
+  saveSubagentRegistryToSqlite as save,
+} from "./subagent-registry-state.fixture.test-support.js";
+import {
+  clearSubagentRunsReadCacheForTest as clearCache,
+  getSubagentSessionListRunsSnapshotForRead as readSnapshot,
+  getSubagentSessionListRunsSnapshotForSessions as readTree,
   getSubagentRunsSnapshotForChildSession,
-  getSubagentSessionListRunsSnapshotForChildSessions,
-  getSubagentRunsSnapshotForController,
-  getSubagentRunsSnapshotForRead,
-  getSubagentRunsSnapshotForSessions,
-  prepareSubagentRunsSnapshotForRunIds,
-  onSubagentRegistryPersisted,
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-  prepareSubagentSessionListReadCache,
-  publishSubagentRunsAfterAtomicStore,
-  restoreSubagentRunsFromDisk,
+  getSubagentSessionListRunsSnapshotForChildSessions as readChildren,
+  prepareSubagentSessionListReadCache as prepare,
+  createSubagentSessionListReadView as readView,
+  getSubagentSessionListReadSnapshotIdentity as snapshotIdentity,
+  prepareOptionalSubagentSessionListReadCache as prepareOptional,
+  withSubagentRunReadSnapshot as withSnapshot,
+  prepareSubagentRunsSnapshotForRunIds as prepareSelected,
 } from "./subagent-registry-state.js";
-import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { holdFirstCompactRead } from "./subagent-registry-state.read.test-support.js";
+import { registerSubagentRestoreCacheCases } from "./subagent-registry-state.restore.test-support.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-const mocks = vi.hoisted(() => ({
-  loadSubagentRunsForChildSessionFromSqlite:
-    vi.fn<(childSessionKey: string) => SubagentRunRecord[]>(),
-  loadSubagentRunsForControllerFromSqlite:
-    vi.fn<(controllerSessionKey: string) => SubagentRunRecord[]>(),
-  readRunsByIds: vi.fn<(runIds: readonly string[]) => SubagentRunRecord[]>(),
-  loadSubagentRegistryFromSqlite: vi.fn<() => Map<string, SubagentRunRecord>>(),
-  loadSubagentMaintenanceRunsFromSqlite: vi.fn<() => Map<string, SubagentRunMaintenanceRecord>>(),
-  readCompactRuns: vi.fn<() => Map<string, SubagentRunReadRecord>>(),
-  nativeCompactRead: vi.fn<() => Map<string, SubagentRunReadRecord>>(),
-  loadSubagentRunsForSessionsFromSqlite: vi.fn<
-    () => {
-      sessionKeys: Set<string>;
-      runs: Map<string, SubagentRunReadRecord>;
-      complete: boolean;
-    }
-  >(),
-  saveSubagentRegistryChangesToSqlite:
-    vi.fn<(runs: Map<string, SubagentRunRecord>, changedRunIds: readonly string[]) => void>(),
-  saveSubagentRegistryToSqlite: vi.fn<(runs: Map<string, SubagentRunRecord>) => void>(),
-}));
-
-vi.mock("./subagent-registry.store.sqlite.js", () => ({
-  loadSubagentRunsForChildSessionFromSqlite: mocks.loadSubagentRunsForChildSessionFromSqlite,
-  loadSubagentRunsForControllerFromSqlite: mocks.loadSubagentRunsForControllerFromSqlite,
-  loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
-  loadSubagentMaintenanceRunsFromSqlite: mocks.loadSubagentMaintenanceRunsFromSqlite,
-  loadSubagentSessionListRunsFromSqlite: mocks.nativeCompactRead,
-  loadSubagentRunsForSessionsFromSqlite: mocks.loadSubagentRunsForSessionsFromSqlite,
-  saveSubagentRegistryChangesToSqlite: mocks.saveSubagentRegistryChangesToSqlite,
-  saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,
-}));
-
-function createRun(runId: string): SubagentRunRecord {
-  return {
+function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+  return createSubagentRunRecord({
     runId,
     childSessionKey: `agent:main:subagent:${runId}`,
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
     task: `task ${runId}`,
-    cleanup: "keep",
     createdAt: 1,
     execution: { status: "running", startedAt: 1 },
-  };
+    completion: { required: false },
+    delivery: { status: "pending" },
+    ...overrides,
+  });
 }
 
-describe("subagent registry state read cache", () => {
-  const previousReadSqliteFlag = process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE;
+const runMap = (...runs: SubagentRunRecord[]) => new Map(runs.map((run) => [run.runId, run]));
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE = "1";
-    clearSubagentRunsReadCacheForTest();
-    mocks.loadSubagentRunsForChildSessionFromSqlite.mockReset();
-    mocks.loadSubagentRunsForControllerFromSqlite.mockReset();
-    mocks.readRunsByIds.mockReset();
-    mocks.loadSubagentRegistryFromSqlite.mockReset();
-    mocks.loadSubagentMaintenanceRunsFromSqlite.mockReset();
-    mocks.readCompactRuns.mockReset();
-    mocks.nativeCompactRead.mockReset().mockImplementation(() => {
-      throw new Error("Compact registry reads must use the read worker");
-    });
-    mocks.loadSubagentRunsForSessionsFromSqlite.mockReset();
-    mocks.saveSubagentRegistryChangesToSqlite.mockReset();
-    mocks.saveSubagentRegistryToSqlite.mockReset();
-    vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
-      async (_options, command) => {
-        if (command.type === "subagents.sessionList") {
-          return {
-            ok: true,
-            type: command.type,
-            sourceAdmitted: true,
-            runs: mocks.readCompactRuns(),
-          };
-        }
-        if (command.type === "subagents.runs" && command.scope.kind === "ids") {
-          return {
-            ok: true,
-            type: command.type,
-            sourceAdmitted: true,
-            runs: new Map(mocks.readRunsByIds(command.scope.runIds).map((run) => [run.runId, run])),
-          };
-        }
-        throw new Error(`Unexpected registry read: ${command.type}`);
-      },
-    );
+describe("subagent registry state", () => {
+  let state: OpenClawTestState;
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ scenario: "minimal", applyEnv: true });
+    stateDatabase.openOpenClawStateDatabase();
+    vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
+    clearCache();
   });
-
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
-    clearSubagentRunsReadCacheForTest();
-    if (previousReadSqliteFlag === undefined) {
-      delete process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE;
-    } else {
-      process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE = previousReadSqliteFlag;
-    }
+    vi.unstubAllEnvs();
+    clearCache();
     vi.useRealTimers();
-    expect(mocks.nativeCompactRead).not.toHaveBeenCalled();
+    await state.cleanup();
   });
-
-  it("publishes old and new retained-run keys only after their owner accepts the write", async () => {
-    const previous = {
-      ...createRun("retained"),
-      requesterSessionKey: "agent:main:old-parent",
-    };
-    mocks.readCompactRuns.mockReturnValue(new Map([[previous.runId, previous]]));
-    await prepareSubagentSessionListReadCache();
-    getSubagentSessionListRunsSnapshotForRead(new Map());
-    const changed = vi.fn();
-    const stop = sessionChanges.subscribe(changed);
-    try {
-      const current = {
-        ...previous,
-        childSessionKey: "agent:main:subagent:moved",
-        requesterSessionKey: "agent:main:new-parent",
-        controllerSessionKey: "agent:main:controller",
-        swarmRequesterSessionKey: "agent:main:swarm",
-        collect: true,
-      };
-      const currentRuns = new Map([[current.runId, current]]);
-      persistSubagentRunsToDiskOrThrow(currentRuns, [current.runId]);
-      expect(changed.mock.calls.map(([event]) => event)).toEqual([
-        { sessionKey: previous.childSessionKey, scope: "runtime" },
-        { sessionKey: previous.requesterSessionKey, scope: "runtime" },
-        { sessionKey: current.childSessionKey, scope: "runtime" },
-        { sessionKey: current.requesterSessionKey, scope: "runtime" },
-        { sessionKey: current.controllerSessionKey, scope: "runtime" },
-        { sessionKey: current.swarmRequesterSessionKey, scope: "runtime" },
-      ]);
-      changed.mockClear();
-
-      mocks.saveSubagentRegistryChangesToSqlite.mockImplementationOnce(() => {
-        throw new Error("write rolled back");
-      });
-      expect(() => persistSubagentRunsToDiskOrThrow(new Map(), [current.runId])).toThrow(
-        "write rolled back",
-      );
-      expect(changed).not.toHaveBeenCalled();
-
-      const deferred: Array<() => void> = [];
-      publishSubagentRunsAfterAtomicStore(new Map(), [current.runId], deferred);
-      expect(changed).not.toHaveBeenCalled();
-      deferred.forEach((publish) => publish());
-      expect(changed.mock.calls.map(([event]) => event)).toEqual([
-        { sessionKey: current.childSessionKey, scope: "runtime" },
-        { sessionKey: current.requesterSessionKey, scope: "runtime" },
-        { sessionKey: current.controllerSessionKey, scope: "runtime" },
-        { sessionKey: current.swarmRequesterSessionKey, scope: "runtime" },
-      ]);
-      changed.mockClear();
-      persistSubagentRunsToDiskOrThrow(new Map());
-      expect(changed.mock.calls).toEqual([[{ all: true, scope: "subagent-runs" }]]);
-    } finally {
-      stop();
+  describe("read cache", () => {
+    async function prepareEmptyReadCaches() {
+      save(new Map());
+      await restoreSubagentRunsFromDisk({ runs: new Map() });
     }
-  });
-
-  it.each([
-    ["full", getSubagentRunsSnapshotForRead, mocks.loadSubagentRegistryFromSqlite],
-    ["session-list", getSubagentSessionListRunsSnapshotForRead, mocks.readCompactRuns],
-    [
-      "maintenance",
-      getSubagentMaintenanceRunsSnapshotForRead,
-      mocks.loadSubagentMaintenanceRunsFromSqlite,
-    ],
-  ] as const)("keeps the loaded %s snapshot until an owner mutation", async (kind, read, load) => {
-    const firstRun = createRun("run-first");
-    load.mockReturnValue(new Map([[firstRun.runId, firstRun]]));
-    if (kind === "session-list") {
-      await prepareSubagentSessionListReadCache();
-    }
-
-    expect([...read(new Map()).keys()]).toEqual(["run-first"]);
-    vi.advanceTimersByTime(60_000);
-    expect([...read(new Map()).keys()]).toEqual(["run-first"]);
-    expect(load).toHaveBeenCalledOnce();
-
-    const changed = { ...firstRun, execution: { status: "terminal" as const, endedAt: 2 } };
-    persistSubagentRunsToDisk(new Map([[changed.runId, changed]]), [changed.runId]);
-    vi.advanceTimersByTime(60_000);
-    expect(read(new Map()).get(firstRun.runId)?.execution.status).toBe("terminal");
-    expect(load).toHaveBeenCalledOnce();
-
-    const replacement = createRun("replacement");
-    persistSubagentRunsToDisk(new Map([[replacement.runId, replacement]]));
-    vi.advanceTimersByTime(60_000);
-    expect([...read(new Map()).keys()]).toEqual(["replacement"]);
-    expect(load).toHaveBeenCalledOnce();
-  });
-
-  it.each([false, true])(
-    "invalidates loaded snapshots on restore, including empty stores (%s)",
-    (empty) => {
-      const stale = createRun("stale");
-      persistSubagentRunsToDisk(new Map([[stale.runId, stale]]));
-      const restored = empty
-        ? new Map<string, SubagentRunRecord>()
-        : new Map([["restored", createRun("restored")]]);
-      mocks.loadSubagentRegistryFromSqlite.mockReturnValue(restored);
-      mocks.readCompactRuns.mockReturnValue(restored);
-      mocks.loadSubagentMaintenanceRunsFromSqlite.mockReturnValue(restored);
-
-      restoreSubagentRunsFromDisk({ runs: new Map() });
-
-      for (const read of [
-        getSubagentRunsSnapshotForRead,
-        getSubagentSessionListRunsSnapshotForRead,
-        getSubagentMaintenanceRunsSnapshotForRead,
-      ]) {
-        expect([...read(new Map()).keys()]).toEqual([...restored.keys()]);
-      }
-    },
-  );
-
-  it("loads retained rows when an incremental write precedes the first read", async () => {
-    const retained = createRun("retained");
-    const active = createRun("active");
-    mocks.readCompactRuns.mockReturnValue(
-      new Map([
-        [retained.runId, retained],
-        [active.runId, active],
-      ]),
-    );
-    persistSubagentRunsToDisk(new Map([[active.runId, active]]), [active.runId]);
-    await prepareSubagentSessionListReadCache();
-    expect([...getSubagentSessionListRunsSnapshotForRead(new Map()).keys()]).toEqual([
-      "retained",
-      "active",
-    ]);
-    expect(mocks.readCompactRuns).toHaveBeenCalledOnce();
-  });
-
-  it("refreshes the local read cache after successful writes", () => {
-    const firstRun = createRun("run-first");
-    const savedRun = createRun("run-saved");
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[firstRun.runId, firstRun]]));
-
-    expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["run-first"]);
-
-    persistSubagentRunsToDisk(new Map([[savedRun.runId, savedRun]]));
-
-    expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["run-saved"]);
-    expect(mocks.saveSubagentRegistryToSqlite).toHaveBeenCalledOnce();
-    expect(mocks.loadSubagentRegistryFromSqlite).toHaveBeenCalledTimes(1);
-  });
-
-  it("refreshes session-list projections from authoritative writes", () => {
-    const savedRun = createRun("run-saved");
-    savedRun.model = "openai/gpt-5.6";
-    savedRun.swarmRunId = "stable-collector";
-    savedRun.execution.outcome = { status: "ok", error: "not projected" };
-    mocks.saveSubagentRegistryToSqlite.mockImplementationOnce(() => {
-      throw new Error("disk unavailable");
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(1_000);
+      vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     });
-
-    persistSubagentRunsToDisk(new Map([[savedRun.runId, savedRun]]));
-
-    const projected = getSubagentSessionListRunsSnapshotForRead(new Map()).get(savedRun.runId);
-    expect(projected).toMatchObject({
-      runId: savedRun.runId,
-      model: savedRun.model,
-      swarmRunId: "stable-collector",
-      execution: { outcome: { status: "ok" } },
-    });
-    expect(projected?.execution.outcome).not.toHaveProperty("error");
-    expect(mocks.readCompactRuns).not.toHaveBeenCalled();
-  });
-
-  it("scopes compact reads while preserving owner writes and live controller moves", async () => {
-    const parent = "agent:main:parent";
-    const selected = { ...createRun("selected"), controllerSessionKey: parent };
-    const unrelated = createRun("unrelated");
-    const runs = new Map([selected, unrelated].map((entry) => [entry.runId, entry]));
-    mocks.readCompactRuns.mockReturnValueOnce(new Map(runs));
-    await prepareSubagentSessionListReadCache();
-    getSubagentSessionListRunsSnapshotForRead(new Map());
-
-    expect([...getSubagentSessionListRunsSnapshotForRead(new Map(), [parent]).keys()]).toEqual([
-      "selected",
-    ]);
-    expect(mocks.readCompactRuns).toHaveBeenCalledOnce();
-    const moved = { ...selected, controllerSessionKey: "agent:main:other" };
-    expect(
-      getSubagentSessionListRunsSnapshotForRead(new Map([[moved.runId, moved]]), [parent]),
-    ).toEqual(new Map());
-
-    vi.advanceTimersByTime(500);
-    const refreshed = { ...selected, model: "updated-model" };
-    runs.set(refreshed.runId, refreshed);
-    persistSubagentRunsToDisk(runs, [refreshed.runId]);
-    expect(
-      getSubagentSessionListRunsSnapshotForRead(new Map(), [parent]).get("selected")?.model,
-    ).toBe("updated-model");
-    runs.set(refreshed.runId, { ...refreshed, controllerSessionKey: moved.controllerSessionKey });
-    persistSubagentRunsToDisk(runs, [refreshed.runId]);
-    expect(getSubagentSessionListRunsSnapshotForRead(new Map(), [parent])).toEqual(new Map());
-    expect([
-      ...getSubagentSessionListRunsSnapshotForRead(new Map(), [moved.controllerSessionKey]).keys(),
-    ]).toEqual([selected.runId]);
-    expect(mocks.readCompactRuns).toHaveBeenCalledOnce();
-    expect(getSubagentSessionListRunsSnapshotForRead(new Map(), [" "])).toEqual(new Map());
-  });
-
-  it.each([
-    ["session-list", getSubagentSessionListRunsSnapshotForSessions],
-    ["full", getSubagentRunsSnapshotForSessions],
-  ] as const)("keeps %s tree reads on the shared write-through cache", (_kind, read) => {
-    const root = "agent:main:tree";
-    const child = { ...createRun("child"), requesterSessionKey: root };
-    const grandchild = { ...createRun("grandchild"), requesterSessionKey: child.childSessionKey };
-    const cycle = {
-      ...createRun("cycle"),
-      childSessionKey: root,
-      requesterSessionKey: grandchild.childSessionKey,
-    };
-    const unrelated = createRun("unrelated");
-    const runs = new Map([child, grandchild, cycle, unrelated].map((run) => [run.runId, run]));
-    mocks.saveSubagentRegistryToSqlite.mockImplementationOnce(() => {
-      throw new Error("best-effort write failed");
-    });
-    persistSubagentRunsToDisk(runs);
-    vi.setSystemTime(1_499);
-    expect([...read(new Map(), [root]).keys()]).toEqual(["child", "grandchild", "cycle"]);
-    const moved = { ...grandchild, requesterSessionKey: "agent:main:other" };
-    expect(
-      read(new Map([[moved.runId, moved]]), [root]).get(moved.runId)?.requesterSessionKey,
-    ).toBe(moved.requesterSessionKey);
-    const memory = new Map([[grandchild.runId, grandchild]]);
-    expect(read(memory, [root]).has(grandchild.runId)).toBe(true);
-    const movedOut = { ...moved, childSessionKey: "agent:main:subagent:moved-out" };
-    memory.set(movedOut.runId, movedOut);
-    expect(read(memory, [root]).has(grandchild.runId)).toBe(false);
-    expect(read(memory, [movedOut.requesterSessionKey]).get(movedOut.runId)).toMatchObject({
-      childSessionKey: movedOut.childSessionKey,
-      requesterSessionKey: movedOut.requesterSessionKey,
-    });
-    expect(mocks.loadSubagentRunsForSessionsFromSqlite).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(60_000);
-    const updated = { ...child, model: "updated-model" };
-    runs.set(updated.runId, updated);
-    persistSubagentRunsToDisk(runs, [updated.runId]);
-    expect(read(new Map(), [root]).get(child.runId)).toMatchObject({ model: "updated-model" });
-    const renamed = { ...updated, childSessionKey: "agent:main:subagent:renamed-child" };
-    runs.set(renamed.runId, renamed);
-    persistSubagentRunsToDisk(runs, [renamed.runId]);
-    expect([...read(new Map(), [root]).keys()]).toEqual([child.runId, cycle.runId]);
-    expect(read(new Map(), [root]).get(child.runId)?.childSessionKey).toBe(renamed.childSessionKey);
-    expect(mocks.loadSubagentRunsForSessionsFromSqlite).not.toHaveBeenCalled();
-    expect(mocks.readCompactRuns).not.toHaveBeenCalled();
-  });
-
-  it.each(["agent:main:unrelated-requester", "global"])(
-    "retains all child generations when a newer %s requester vetoes old descendants",
-    (requesterSessionKey) => {
-      const root = "agent:main:tree";
-      const older = { ...createRun("older"), requesterSessionKey: root };
-      const descendant = { ...createRun("descendant"), requesterSessionKey: older.childSessionKey };
-      const newer = {
-        ...createRun("newer"),
-        childSessionKey: older.childSessionKey,
-        requesterSessionKey,
-        createdAt: 2,
-        execution: { status: "running" as const, startedAt: 2 },
-      };
-      persistSubagentRunsToDisk(new Map([older, descendant, newer].map((run) => [run.runId, run])));
-
-      const selected = getSubagentSessionListRunsSnapshotForSessions(new Map(), [root]);
-      expect([...selected.keys()]).toEqual([older.runId, descendant.runId, newer.runId]);
-      const index = buildSubagentRunReadIndexFromRuns({ runs: selected, now: Date.now() });
-      expect(index.latestRunsByChildSessionKey.get(older.childSessionKey)?.runId).toBe(newer.runId);
-      expect(index.listDescendantRunsForRequester(root)).toEqual([]);
-      expect(
-        index.listDescendantRunsForRequester(requesterSessionKey).map((run) => run.runId),
-      ).toEqual([newer.runId, descendant.runId]);
-      expect(mocks.loadSubagentRunsForSessionsFromSqlite).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["session-list", getSubagentSessionListRunsSnapshotForSessions],
-    ["full", getSubagentRunsSnapshotForSessions],
-  ] as const)("keeps a shared %s requester edge until its last member moves", (_kind, read) => {
-    const root = "agent:main:shared-edge";
-    const first = { ...createRun("first"), requesterSessionKey: root };
-    const second = {
-      ...createRun("second"),
-      childSessionKey: first.childSessionKey,
-      requesterSessionKey: root,
-    };
-    const descendant = { ...createRun("descendant"), requesterSessionKey: first.childSessionKey };
-    const runs = new Map([first, second, descendant].map((run) => [run.runId, run]));
-    persistSubagentRunsToDisk(runs);
-    expect([...read(new Map(), [root]).keys()]).toEqual([
-      first.runId,
-      second.runId,
-      descendant.runId,
-    ]);
-
-    runs.delete(first.runId);
-    persistSubagentRunsToDisk(runs, [first.runId]);
-    expect([...read(new Map(), [root]).keys()]).toEqual([second.runId, descendant.runId]);
-
-    runs.set(first.runId, first);
-    persistSubagentRunsToDisk(runs, [first.runId]);
-    runs.set(second.runId, { ...second, requesterSessionKey: "agent:main:other" });
-    persistSubagentRunsToDisk(runs, [second.runId]);
-    expect([...read(new Map(), [root]).keys()]).toEqual([
-      second.runId,
-      descendant.runId,
-      first.runId,
-    ]);
-
-    runs.set(first.runId, { ...first, requesterSessionKey: "agent:main:other" });
-    persistSubagentRunsToDisk(runs, [first.runId]);
-    expect(read(new Map(), [root])).toEqual(new Map());
-    expect([...read(new Map(), ["agent:main:other"]).keys()]).toEqual([
-      second.runId,
-      descendant.runId,
-      first.runId,
-    ]);
-    expect(mocks.loadSubagentRunsForSessionsFromSqlite).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [
-      "session-list",
-      getSubagentSessionListRunsSnapshotForSessions,
-      getSubagentSessionListRunsSnapshotForRead,
-      mocks.readCompactRuns,
-    ],
-    [
-      "full",
-      getSubagentRunsSnapshotForSessions,
-      getSubagentRunsSnapshotForRead,
-      mocks.loadSubagentRegistryFromSqlite,
-    ],
-  ] as const)(
-    "preserves %s snapshot order through named updates and delete/reinsert",
-    async (kind, read, readAll, load) => {
-      const root = "agent:main:first-parent";
-      const other = "agent:main:second-parent";
-      const first = { ...createRun("first"), requesterSessionKey: root };
-      const middle = { ...createRun("middle"), requesterSessionKey: other };
-      const last = { ...createRun("last"), requesterSessionKey: root };
-      load.mockReturnValueOnce(
-        new Map([
-          ["cached-alias-for-first", first],
-          [middle.runId, middle],
-          [last.runId, last],
-        ]),
-      );
-      if (kind === "session-list") {
-        await prepareSubagentSessionListReadCache();
-      }
-      expect([...readAll(new Map()).keys()]).toEqual([first.runId, middle.runId, last.runId]);
-      const keys = [other, root];
-      expect([...read(new Map(), keys).keys()]).toEqual([first.runId, middle.runId, last.runId]);
-
-      const changed = { ...middle, model: "updated-model" };
-      const writes = new Map([[changed.runId, changed]]);
-      persistSubagentRunsToDisk(writes, [changed.runId]);
-      const updated = read(new Map(), keys);
-      expect([...updated.keys()]).toEqual([first.runId, middle.runId, last.runId]);
-      expect(updated.get(middle.runId)?.model).toBe("updated-model");
-
-      writes.delete(middle.runId);
-      persistSubagentRunsToDisk(writes, [middle.runId]);
-      expect([...read(new Map(), keys).keys()]).toEqual([first.runId, last.runId]);
-      writes.set(middle.runId, changed);
-      persistSubagentRunsToDisk(writes, [middle.runId]);
-      expect([...read(new Map(), keys).keys()]).toEqual([first.runId, last.runId, middle.runId]);
-      expect(load).toHaveBeenCalledOnce();
-      expect(mocks.loadSubagentRunsForSessionsFromSqlite).not.toHaveBeenCalled();
-    },
-  );
-
-  it("reuses a complete tree snapshot without making a partial tree globally authoritative", () => {
-    const root = "agent:main:tree";
-    const child = { ...createRun("child"), requesterSessionKey: root };
-    const unrelated = createRun("unrelated");
-    mocks.loadSubagentRunsForSessionsFromSqlite.mockReturnValue({
-      sessionKeys: new Set([root, child.childSessionKey]),
-      runs: new Map([[child.runId, child]]),
-      complete: false,
-    });
-    expect(getSubagentRunsSnapshotForSessions(new Map(), [root]).size).toBe(1);
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[unrelated.runId, unrelated]]));
-    expect(getSubagentRunsSnapshotForRead(new Map()).has(unrelated.runId)).toBe(true);
-
-    clearSubagentRunsReadCacheForTest();
-    mocks.loadSubagentRunsForSessionsFromSqlite.mockReturnValue({
-      sessionKeys: new Set([root, child.childSessionKey]),
-      runs: new Map([[child.runId, child]]),
-      complete: true,
-    });
-    expect(getSubagentRunsSnapshotForSessions(new Map(), [root]).size).toBe(1);
-    expect(getSubagentRunsSnapshotForRead(new Map()).has(child.runId)).toBe(true);
-    expect(getSubagentRunsSnapshotForRead(new Map()).has(unrelated.runId)).toBe(false);
-    expect(mocks.loadSubagentRegistryFromSqlite).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    ["full", getSubagentRunsSnapshotForSessions, getSubagentRunsSnapshotForRead],
-    [
-      "session-list",
-      getSubagentSessionListRunsSnapshotForSessions,
-      getSubagentSessionListRunsSnapshotForRead,
-    ],
-  ] as const)(
-    "keeps cold failed deletions when complete %s facts become ready",
-    async (kind, readTree, readAll) => {
-      const removed = createRun("removed");
-      const retained = createRun("retained");
-      const nested = { ...createRun("nested"), requesterSessionKey: removed.childSessionKey };
-      const stored = new Map([removed, retained, nested].map((run) => [run.runId, run]));
-      mocks.readCompactRuns.mockReturnValue(stored);
-      mocks.loadSubagentRunsForSessionsFromSqlite.mockReturnValue({
-        sessionKeys: new Set([
-          removed.requesterSessionKey,
-          removed.childSessionKey,
-          retained.childSessionKey,
-          nested.childSessionKey,
-        ]),
-        runs: stored,
-        complete: true,
-      });
-      mocks.saveSubagentRegistryChangesToSqlite.mockImplementationOnce(() => {
-        throw new Error("disk unavailable");
-      });
-      persistSubagentRunsToDisk(new Map(), [removed.runId]);
-      if (kind === "session-list") {
-        await prepareSubagentSessionListReadCache();
-      }
-
-      expect([...readTree(new Map(), [removed.requesterSessionKey]).keys()]).toEqual([
-        retained.runId,
-      ]);
-      expect([...readAll(new Map()).keys()]).toEqual([retained.runId, nested.runId]);
-      expect(mocks.loadSubagentRunsForSessionsFromSqlite).toHaveBeenCalledTimes(
-        kind === "full" ? 1 : 0,
-      );
-      expect(mocks.readCompactRuns).toHaveBeenCalledTimes(kind === "session-list" ? 1 : 0);
-    },
-  );
-
-  it("preserves unrelated projected rows across incremental writes", async () => {
-    const retained = createRun("retained");
-    const changed = createRun("changed");
-    mocks.readCompactRuns.mockReturnValue(
-      new Map([
-        [retained.runId, retained],
-        [changed.runId, changed],
-      ]),
-    );
-    await prepareSubagentSessionListReadCache();
-    expect([...getSubagentSessionListRunsSnapshotForRead(new Map()).keys()]).toEqual([
-      "retained",
-      "changed",
-    ]);
-
-    changed.model = "openai/gpt-5.6";
-    persistSubagentRunsToDisk(new Map([[changed.runId, changed]]), [changed.runId]);
-
-    const projected = getSubagentSessionListRunsSnapshotForRead(new Map());
-    expect([...projected.keys()]).toEqual(["retained", "changed"]);
-    expect(projected.get(changed.runId)?.model).toBe("openai/gpt-5.6");
-    expect(mocks.readCompactRuns).toHaveBeenCalledOnce();
-  });
-
-  it("updates only named runs in the local read cache", () => {
-    const changed = createRun("changed");
-    const untouched = createRun("untouched");
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
-      new Map([
-        [changed.runId, changed],
-        [untouched.runId, untouched],
-      ]),
-    );
-    expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["changed", "untouched"]);
-
-    changed.task = "updated";
-    const runs = new Map([
-      [changed.runId, changed],
-      [untouched.runId, untouched],
-    ]);
-    persistSubagentRunsToDisk(runs, [changed.runId]);
-
-    expect(mocks.saveSubagentRegistryChangesToSqlite).toHaveBeenCalledWith(runs, [changed.runId]);
-    expect(mocks.saveSubagentRegistryToSqlite).not.toHaveBeenCalled();
-    expect(getSubagentRunsSnapshotForRead(new Map()).get(changed.runId)?.task).toBe("updated");
-    expect(getSubagentRunsSnapshotForRead(new Map()).get(untouched.runId)?.task).toBe(
-      untouched.task,
-    );
-  });
-
-  it("keeps an exact deletion authoritative after a best-effort write failure", () => {
-    const retained = createRun("retained");
-    const removed = createRun("removed");
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
-      new Map([
-        [retained.runId, retained],
-        [removed.runId, removed],
-      ]),
-    );
-    expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["retained", "removed"]);
-    mocks.saveSubagentRegistryChangesToSqlite.mockImplementationOnce(() => {
-      throw new Error("disk unavailable");
-    });
-
-    persistSubagentRunsToDisk(new Map([[retained.runId, retained]]), [removed.runId]);
-
-    expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["retained"]);
-  });
-
-  it("wakes local readers when a best-effort write fails", () => {
-    const staleRun = createRun("stale");
-    const updatedRun = createRun("updated");
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[staleRun.runId, staleRun]]));
-    expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["stale"]);
-    const listener = vi.fn();
-    const unsubscribe = onSubagentRegistryPersisted(listener);
-    mocks.saveSubagentRegistryToSqlite.mockImplementationOnce(() => {
-      throw new Error("disk unavailable");
-    });
-
-    persistSubagentRunsToDisk(new Map([[updatedRun.runId, updatedRun]]));
-
-    expect(listener).toHaveBeenCalledOnce();
-    expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["updated"]);
-    unsubscribe();
-  });
-
-  it("queries controller rows directly and overlays matching in-memory state", () => {
-    const persisted = createRun("shared");
-    persisted.controllerSessionKey = "agent:main:controller";
-    persisted.task = "persisted";
-    const inMemory = { ...persisted, task: "in-memory" };
-    mocks.loadSubagentRunsForControllerFromSqlite.mockReturnValue([persisted]);
-
-    const result = getSubagentRunsSnapshotForController(
-      new Map([[inMemory.runId, inMemory]]),
-      "agent:main:controller",
-    );
-
-    expect(result.get("shared")?.task).toBe("in-memory");
-    expect(mocks.loadSubagentRunsForControllerFromSqlite).toHaveBeenCalledOnce();
-    expect(getSubagentRunsSnapshotForController(new Map(), "   ")).toEqual(new Map());
-  });
-
-  it("keeps exact child generations current through named moves, deletion, and live overlays", async () => {
-    const old = createRun("old");
-    const successor = {
-      ...createRun("successor"),
-      childSessionKey: old.childSessionKey,
-      generation: 2,
-      requesterSessionKey: "agent:main:other",
-    };
-    const unrelated = createRun("unrelated");
-    mocks.readCompactRuns.mockReturnValue(
-      new Map([old, successor, unrelated].map((run) => [run.runId, run])),
-    );
-    await prepareSubagentSessionListReadCache();
-    const read = () => [
-      ...getSubagentSessionListRunsSnapshotForChildSessions([
-        `  ${old.childSessionKey}  `,
-        old.childSessionKey,
-        " ",
-      ]).keys(),
-    ];
-    const listener = vi.fn();
-    const stop = onSubagentRegistryPersisted(listener);
-    try {
-      expect(read()).toEqual(["old", "successor"]);
-      expect(
-        getSubagentSessionListRunsSnapshotForChildSessions([old.childSessionKey]).get("successor")
-          ?.generation,
-      ).toBe(2);
-      const moved = { ...successor, childSessionKey: "agent:main:moved" };
-      persistSubagentRunsToDisk(new Map([[moved.runId, moved]]), [moved.runId]);
-      expect(read()).toEqual(["old"]);
-      expect(listener).toHaveBeenLastCalledWith(
-        expect.arrayContaining([old.childSessionKey, moved.childSessionKey]),
-      );
-      subagentRuns.set(old.runId, { ...old, childSessionKey: moved.childSessionKey });
-      expect(read()).toEqual([]);
-      subagentRuns.delete(old.runId);
-      persistSubagentRunsToDisk(new Map(), [old.runId]);
-      expect(read()).toEqual([]);
-      expect(mocks.readCompactRuns).toHaveBeenCalledOnce();
-      expect(mocks.loadSubagentRegistryFromSqlite).not.toHaveBeenCalled();
-      persistSubagentRunsToDisk(new Map([[old.runId, old]]));
-      expect(read()).toEqual(["old"]);
-      expect(listener).toHaveBeenLastCalledWith(undefined);
-    } finally {
-      stop();
-      subagentRuns.delete(old.runId);
-    }
-  });
-
-  it("requires prepared exact-child facts and keeps live moves authoritative", async () => {
-    const persisted = createRun("cold-move");
-    persistSubagentRunsToDisk(new Map([[persisted.runId, persisted]]), [persisted.runId]);
-    mocks.readCompactRuns.mockReturnValue(new Map([[persisted.runId, persisted]]));
-    subagentRuns.set(persisted.runId, { ...persisted, childSessionKey: "agent:main:moved" });
-    try {
-      expect(getSubagentSessionListRunsSnapshotForChildSessions([" "])).toEqual(new Map());
-      expect(() =>
-        getSubagentSessionListRunsSnapshotForChildSessions([persisted.childSessionKey]),
-      ).toThrow("must be prepared");
-      await prepareSubagentSessionListReadCache();
-      expect(
-        getSubagentSessionListRunsSnapshotForChildSessions([persisted.childSessionKey]),
-      ).toEqual(new Map());
-      expect([
-        ...getSubagentSessionListRunsSnapshotForChildSessions(["agent:main:moved"]).keys(),
-      ]).toEqual([persisted.runId]);
-      expect(mocks.loadSubagentRegistryFromSqlite).not.toHaveBeenCalled();
-    } finally {
-      subagentRuns.delete(persisted.runId);
-    }
-  });
-
-  it("queries one child directly and returns isolated snapshots", () => {
-    const childSessionKey = "agent:main:subagent:child";
-    const persisted = createRun("child");
-    persisted.childSessionKey = childSessionKey;
-    persisted.task = "persisted";
-    mocks.loadSubagentRunsForChildSessionFromSqlite.mockReturnValue([persisted]);
-
-    const first = getSubagentRunsSnapshotForChildSession(new Map(), childSessionKey);
-    first.get("child")!.task = "mutated";
-    const second = getSubagentRunsSnapshotForChildSession(new Map(), childSessionKey);
-
-    expect(second.get("child")?.task).toBe("persisted");
-    expect(mocks.loadSubagentRunsForChildSessionFromSqlite).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(["child", "controller"] as const)(
-    "keeps warm %s lookups scoped through cache publications and live moves",
-    (kind) => {
-      const key = "agent:main:selected";
-      const first = {
-        ...createRun("first"),
-        ...(kind === "child" ? { childSessionKey: key } : { requesterSessionKey: key }),
-      };
-      const second = {
-        ...createRun("second"),
-        ...(kind === "child" ? { childSessionKey: key } : { controllerSessionKey: key }),
-      };
-      const unrelated = createRun("unrelated");
-      mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
-        new Map([first, unrelated, second].map((run) => [run.runId, run])),
-      );
-      const retained = getSubagentRunsSnapshotForRead(new Map());
-      const read =
-        kind === "child"
-          ? getSubagentRunsSnapshotForChildSession
-          : getSubagentRunsSnapshotForController;
-      expect([...read(new Map(), key).keys()]).toEqual([first.runId, second.runId]);
-
-      const field = kind === "child" ? "childSessionKey" : "controllerSessionKey";
-      const original = unrelated[field];
-      let unrelatedReads = 0;
-      Object.defineProperty(retained.get(unrelated.runId)!, field, {
-        enumerable: true,
-        configurable: true,
-        get() {
-          unrelatedReads++;
-          return original;
-        },
-      });
-      const copied = read(new Map(), key);
-      copied.get(first.runId)!.task = "caller-local change";
-      expect(read(new Map(), key).get(first.runId)?.task).toBe(first.task);
-
-      const moved = { ...first, [field]: "agent:main:elsewhere" };
-      persistSubagentRunsToDisk(new Map([[moved.runId, moved]]), [moved.runId]);
-      expect([...read(new Map(), key).keys()]).toEqual([second.runId]);
-      const live = new Map([[first.runId, first]]);
-      expect([...read(live, key).keys()]).toEqual([second.runId, first.runId]);
-      expect(read(live, key).get(first.runId)).toBe(first);
-
-      persistSubagentRunsToDisk(new Map([[first.runId, first]]), [first.runId]);
-      expect([...read(new Map(), key).keys()]).toEqual([first.runId, second.runId]);
-      persistSubagentRunsToDisk(new Map(), [first.runId]);
-      persistSubagentRunsToDisk(new Map([[first.runId, first]]), [first.runId]);
-      expect([...read(new Map(), key).keys()]).toEqual([second.runId, first.runId]);
-      expect(unrelatedReads).toBe(0);
-      expect(mocks.loadSubagentRegistryFromSqlite).toHaveBeenCalledOnce();
-      expect(mocks.loadSubagentRunsForChildSessionFromSqlite).not.toHaveBeenCalled();
-      expect(mocks.loadSubagentRunsForControllerFromSqlite).not.toHaveBeenCalled();
-    },
-  );
-
-  it("masks persisted scope membership when the live run moved", () => {
-    const persisted = createRun("moved");
-    persisted.controllerSessionKey = "agent:main:controller:old";
-    persisted.childSessionKey = "agent:main:subagent:old";
-    const inMemory = {
-      ...persisted,
-      controllerSessionKey: "agent:main:controller:new",
-      childSessionKey: "agent:main:subagent:new",
-    };
-    mocks.loadSubagentRunsForControllerFromSqlite.mockReturnValue([persisted]);
-    mocks.loadSubagentRunsForChildSessionFromSqlite.mockReturnValue([persisted]);
-    const live = new Map([[inMemory.runId, inMemory]]);
-
-    expect(getSubagentRunsSnapshotForController(live, "agent:main:controller:old")).toEqual(
-      new Map(),
-    );
-    expect(getSubagentRunsSnapshotForChildSession(live, "agent:main:subagent:old")).toEqual(
-      new Map(),
-    );
-  });
-
-  it("shares the compact read cache while hydrating only known physical run ids", async () => {
-    const selected = { ...createRun("selected"), swarmRunId: "collector" };
-    const unrelated = createRun("unrelated");
-    mocks.readCompactRuns.mockReturnValue(
-      new Map([
-        [selected.runId, selected],
-        [unrelated.runId, unrelated],
-      ]),
-    );
-    mocks.readRunsByIds.mockReturnValue([selected]);
-    await prepareSubagentSessionListReadCache();
-    getSubagentSessionListRunsSnapshotForRead(new Map());
-
-    const prepared = await prepareSubagentRunsSnapshotForRunIds(new Map(), ["collector"]);
-    expect(
-      prepared.consume((runs) => {
-        expect([...runs.keys()]).toEqual(["selected"]);
-      }),
-    ).toEqual({ ready: true, value: undefined });
-    expect(mocks.readRunsByIds).toHaveBeenCalledExactlyOnceWith(["selected"]);
-    expect(mocks.readCompactRuns).toHaveBeenCalledOnce();
-    expect(mocks.loadSubagentRegistryFromSqlite).not.toHaveBeenCalled();
-  });
-
-  it("preserves authoritative writes in scoped reads across idle time", () => {
-    const controllerSessionKey = "agent:main:controller";
-    const saved = createRun("saved");
-    saved.controllerSessionKey = controllerSessionKey;
-    mocks.saveSubagentRegistryToSqlite.mockImplementationOnce(() => {
-      throw new Error("disk unavailable");
-    });
-    mocks.loadSubagentRunsForControllerFromSqlite.mockReturnValue([]);
-
-    persistSubagentRunsToDisk(new Map([[saved.runId, saved]]));
-
-    expect([
-      ...getSubagentRunsSnapshotForController(new Map(), controllerSessionKey).keys(),
-    ]).toEqual(["saved"]);
-    expect(mocks.loadSubagentRunsForControllerFromSqlite).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(500);
-    expect([
-      ...getSubagentRunsSnapshotForController(new Map(), controllerSessionKey).keys(),
-    ]).toEqual(["saved"]);
-    expect(mocks.loadSubagentRunsForControllerFromSqlite).not.toHaveBeenCalled();
-  });
-
-  it("invalidates the strict collector parent after each committed lifecycle transition", () => {
-    const run: SubagentRunRecord = {
-      ...createRun("cross-agent"),
-      childSessionKey: "agent:research:subagent:child",
-      collect: true,
-      swarmRequesterSessionKey: "global",
-      requesterAgentId: "ops",
-      groupId: "opaque-group",
-      execution: { status: "queued" as const },
-    };
-    const runs = new Map([[run.runId, run]]);
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map());
-    getSubagentRunsSnapshotForRead(new Map());
-    const observed: Array<{ event: SessionLifecycleEvent; stored?: SubagentRunRecord }> = [];
-    const unsubscribe = onSessionLifecycleEvent((event) => {
-      observed.push({ event, stored: getSubagentRunsSnapshotForRead(new Map()).get(run.runId) });
-    });
-    try {
-      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
-      run.execution = { status: "running", startedAt: 2 };
-      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
-      run.execution = { status: "terminal", endedAt: 3, outcome: { status: "ok" } };
-      run.collectorCompletion = { status: "done", structured: { private: "child result" } };
-      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
-      run.task = "unrelated bookkeeping";
-      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
-      runs.delete(run.runId);
-      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
-      expect(observed.map(({ event }) => event)).toEqual(
-        Array.from({ length: 4 }, () => ({
-          sessionKey: "global",
-          agentId: "ops",
-          reason: "swarm",
-          scope: "runtime",
-        })),
-      );
-      expect(
-        observed.map(
-          ({ stored }) => stored?.collectorCompletion?.status ?? stored?.execution.status,
-        ),
-      ).toEqual(["queued", "running", "done", undefined]);
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  it.each([false, true])(
-    "does not advance collector notifications on failed writes (strict=%s)",
-    (strict) => {
-      const run: SubagentRunRecord = {
-        ...createRun("retry"),
-        collect: true,
-        swarmRequesterSessionKey: "agent:ops:parent",
-        requesterAgentId: "ops",
-        groupId: "batch",
-      };
-      const runs = new Map([[run.runId, run]]);
-      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
-      const received = vi.fn();
-      const unsubscribe = onSessionLifecycleEvent(received);
-      try {
-        run.collectorCompletion = { status: "failed" };
-        mocks.saveSubagentRegistryChangesToSqlite.mockImplementationOnce(() => {
-          throw new Error("disk unavailable");
+    registerSubagentRestoreCacheCases({
+      createRun,
+      mockRestoredRows: save,
+      refuseNextWrite: () => {
+        vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction").mockImplementationOnce(() => {
+          throw new Error("write refused");
         });
-        if (strict) {
-          expect(() => persistSubagentRunsToDiskOrThrow(runs, [run.runId])).toThrow(
-            "disk unavailable",
-          );
-        } else {
-          persistSubagentRunsToDisk(runs, [run.runId]);
-        }
-        expect(received).not.toHaveBeenCalled();
-        persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
-        expect(received).toHaveBeenCalledExactlyOnceWith({
-          sessionKey: "agent:ops:parent",
-          agentId: "ops",
-          reason: "swarm",
-          scope: "runtime",
-        });
-      } finally {
-        unsubscribe();
-      }
-    },
-  );
-
-  it("invalidates archived cold-restored groups once per exact parent", () => {
-    const rows = ["a", "b"].map((runId) => {
-      const run = createRun(runId);
-      run.collect = true;
-      run.swarmRequesterSessionKey = "global";
-      run.requesterAgentId = "ops";
-      run.groupId = "batch";
-      run.collectorCompletion = { status: "done" };
-      return run;
-    });
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
-      new Map(rows.map((row) => [row.runId, row])),
-    );
-    const runs = new Map<string, SubagentRunRecord>();
-    const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      restoreSubagentRunsFromDisk({ runs });
-      expect(received).not.toHaveBeenCalled();
-      runs.clear();
-      persistSubagentRunsToDiskOrThrow(
-        runs,
-        rows.map((row) => row.runId),
-      );
-      expect(received).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: "global",
-        agentId: "ops",
-        reason: "swarm",
-        scope: "runtime",
-      });
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  it("defers atomic collector notifications until all owner snapshots are published", () => {
-    const run: SubagentRunRecord = {
-      ...createRun("atomic"),
-      collect: true,
-      swarmRequesterSessionKey: "agent:ops:parent",
-      requesterAgentId: "ops",
-      groupId: "batch",
-    };
-    const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      const deferred: Array<() => void> = [];
-      mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map());
-      getSubagentRunsSnapshotForRead(new Map());
-      publishSubagentRunsAfterAtomicStore(new Map([[run.runId, run]]), [run.runId], deferred);
-      expect(received).not.toHaveBeenCalled();
-      expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)?.groupId).toBe("batch");
-      for (const publish of deferred) {
-        publish();
-      }
-      expect(received).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: "agent:ops:parent",
-        agentId: "ops",
-        reason: "swarm",
-        scope: "runtime",
-      });
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  it("does not infer collector parent ownership from requester or group strings", () => {
-    const base = { ...createRun("missing"), collect: true, groupId: "swarm:agent:ops:parent:run" };
-    const rows: SubagentRunRecord[] = [
-      base,
-      { ...base, runId: "no-agent", swarmRequesterSessionKey: "agent:ops:parent" },
-      { ...base, runId: "no-key", requesterAgentId: "ops" },
-      {
-        ...base,
-        runId: "ordinary",
-        collect: false,
-        swarmRequesterSessionKey: "agent:ops:parent",
-        requesterAgentId: "ops",
       },
-    ];
-    const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      persistSubagentRunsToDiskOrThrow(new Map(rows.map((row) => [row.runId, row])));
-      expect(received).not.toHaveBeenCalled();
-    } finally {
-      unsubscribe();
+    });
+
+    it("keeps control selection grouped and distinguishes agents sharing a child key", async () => {
+      const parent = "agent:main:parent";
+      const old = createRun("old", {
+        childSessionKey: "global",
+        childAgentId: "main",
+        requesterSessionKey: parent,
+        generation: 1,
+      });
+      const sibling = createRun("sibling", { requesterSessionKey: parent });
+      const latest = { ...old, runId: "latest", generation: 2 };
+      const foreign = {
+        ...old,
+        runId: "foreign",
+        childAgentId: "research",
+        requesterSessionKey: "agent:main:other",
+        generation: 3,
+      };
+      save(runMap(old, sibling, latest, foreign));
+      await prepare();
+      const read = () =>
+        listControlledSubagentRunFacts(parent, "main", {}).map((entry) => entry.runId);
+      expect(read()).toEqual([latest.runId, sibling.runId]);
+      const controlled = { ...latest, controllerSessionKey: "agent:main:controller" };
+      publish(runMap(controlled), [controlled.runId]);
+      expect(read()).toEqual([latest.runId, sibling.runId]);
+      expect(
+        listControlledSubagentRunFacts("agent:main:controller", "main", {}).map((run) => run.runId),
+      ).toEqual([latest.runId]);
+      const moved = {
+        ...controlled,
+        controllerSessionKey: undefined,
+        runId: "moved",
+        requesterSessionKey: foreign.requesterSessionKey,
+        generation: 4,
+      };
+      publish(runMap(moved), [moved.runId]);
+      expect(read()).toEqual([sibling.runId]);
+    });
+
+    it("scopes compact reads while preserving owner writes and live controller moves", async () => {
+      const parent = "agent:main:parent";
+      const selected = createRun("selected", { controllerSessionKey: parent });
+      const unrelated = createRun("unrelated");
+      const runs = runMap(selected, unrelated);
+      save(runs);
+      await prepare();
+      readSnapshot(new Map());
+
+      expect([...readSnapshot(new Map(), [parent]).keys()]).toEqual(["selected"]);
+      const moved = { ...selected, controllerSessionKey: "agent:main:other" };
+      expect(readSnapshot(runMap(moved), [parent])).toEqual(new Map());
+
+      vi.setSystemTime(1_500);
+      const refreshed = { ...selected, model: "updated-model" };
+      runs.set(refreshed.runId, refreshed);
+      publish(runs, [refreshed.runId]);
+      expect(readSnapshot(new Map(), [parent]).get("selected")?.model).toBe("updated-model");
+      runs.set(refreshed.runId, { ...refreshed, controllerSessionKey: moved.controllerSessionKey });
+      publish(runs, [refreshed.runId]);
+      expect(readSnapshot(new Map(), [parent])).toEqual(new Map());
+      expect([...readSnapshot(new Map(), [moved.controllerSessionKey]).keys()]).toEqual([
+        selected.runId,
+      ]);
+      expect(readSnapshot(new Map(), [" "])).toEqual(new Map());
+    });
+
+    it("keeps a warm session tree scoped when a live child moves", async () => {
+      await prepareEmptyReadCaches();
+      const root = "agent:main:indexed-tree";
+      const child = createRun("indexed-child", { requesterSessionKey: root });
+      const grandchild = createRun("indexed-grandchild", {
+        requesterSessionKey: child.childSessionKey,
+      });
+      const unrelated = createRun("indexed-unrelated");
+      publish(runMap(grandchild));
+      subagentRuns.set(child.runId, child);
+      subagentRuns.set(unrelated.runId, unrelated);
+      const read = () => [...readTree(subagentRuns, [root]).keys()];
+      try {
+        expect(read()).toEqual([grandchild.runId, child.runId]);
+        subagentRuns.set(child.runId, { ...child, childSessionKey: "agent:main:moved" });
+        expect(read()).toEqual([child.runId]);
+      } finally {
+        subagentRuns.delete(child.runId);
+        subagentRuns.delete(unrelated.runId);
+      }
+    });
+
+    it.each(["global"])(
+      "retains all child generations when a newer %s requester vetoes old descendants",
+      async (requesterSessionKey) => {
+        await prepareEmptyReadCaches();
+        const root = "agent:main:tree";
+        const older = createRun("older", { requesterSessionKey: root });
+        const descendant = createRun("descendant", {
+          requesterSessionKey: older.childSessionKey,
+        });
+        const newer = createRun("newer", {
+          childSessionKey: older.childSessionKey,
+          requesterSessionKey,
+          createdAt: 2,
+          execution: { status: "running", startedAt: 2 },
+        });
+        publish(runMap(older, descendant, newer));
+
+        const selected = readTree(new Map(), [root]);
+        expect([...selected.keys()]).toEqual([older.runId, descendant.runId, newer.runId]);
+        const index = buildSubagentRunReadIndexFromRuns({ runs: selected, now: Date.now() });
+        expect(index.latestRunsByChildSessionKey.get(older.childSessionKey)?.runId).toBe(
+          newer.runId,
+        );
+        expect(index.listDescendantRunsForRequester(root)).toEqual([]);
+        expect(
+          index.listDescendantRunsForRequester(requesterSessionKey).map((run) => run.runId),
+        ).toEqual([newer.runId, descendant.runId]);
+      },
+    );
+
+    it("keeps exact child generations current through named moves, deletion, and live overlays", async () => {
+      const old = createRun("old");
+      const successor = createRun("successor", {
+        childSessionKey: old.childSessionKey,
+        generation: 2,
+        requesterSessionKey: "agent:main:other",
+      });
+      const unrelated = createRun("unrelated");
+      save(runMap(old, successor, unrelated));
+      await prepare();
+      const read = () => [
+        ...readChildren([`  ${old.childSessionKey}  `, old.childSessionKey, " "]).keys(),
+      ];
+      const listener = vi.fn();
+      const stop = subscribeSubagentRunChanges("persistence", ({ sessionKeys }) =>
+        listener(sessionKeys),
+      );
+      try {
+        expect(read()).toEqual(["old", "successor"]);
+        expect(readChildren([old.childSessionKey]).get("successor")?.generation).toBe(2);
+        const moved = { ...successor, childSessionKey: "agent:main:moved" };
+        publish(runMap(moved), [moved.runId]);
+        expect(read()).toEqual(["old"]);
+        expect(listener).toHaveBeenLastCalledWith(
+          expect.arrayContaining([old.childSessionKey, moved.childSessionKey]),
+        );
+        subagentRuns.set(old.runId, { ...old, childSessionKey: moved.childSessionKey });
+        expect(read()).toEqual([]);
+        subagentRuns.delete(old.runId);
+        publish(new Map(), [old.runId]);
+        expect(read()).toEqual([]);
+        publish(runMap(old));
+        expect(read()).toEqual(["old"]);
+        expect(listener).toHaveBeenLastCalledWith(undefined);
+      } finally {
+        stop();
+        subagentRuns.delete(old.runId);
+      }
+    });
+
+    it("requires prepared exact-child facts and keeps live moves authoritative", async () => {
+      const persisted = createRun("cold-move");
+      publish(runMap(persisted), [persisted.runId]);
+      save(runMap(persisted));
+      subagentRuns.set(persisted.runId, { ...persisted, childSessionKey: "agent:main:moved" });
+      try {
+        expect(readChildren([" "])).toEqual(new Map());
+        expect(() => readChildren([persisted.childSessionKey])).toThrow("must be prepared");
+        await prepare();
+        expect(readChildren([persisted.childSessionKey])).toEqual(new Map());
+        expect([...readChildren(["agent:main:moved"]).keys()]).toEqual([persisted.runId]);
+      } finally {
+        subagentRuns.delete(persisted.runId);
+      }
+    });
+
+    it("keeps warm child lookups scoped through cache publications and live moves", async () => {
+      const key = "agent:main:selected";
+      const first = createRun("first", { childSessionKey: key });
+      const second = createRun("second", { childSessionKey: key });
+      const unrelated = createRun("unrelated");
+      save(runMap(first, unrelated, second));
+      await restoreSubagentRunsFromDisk({ runs: new Map() });
+      const read = getSubagentRunsSnapshotForChildSession;
+      expect([...(await read(new Map(), key)).keys()]).toEqual([first.runId, second.runId]);
+      const retained = (await read(new Map(), key)).get(first.runId)!;
+      expect(() => {
+        retained.task = "caller-local change";
+      }).toThrow(TypeError);
+      expect((await read(new Map(), key)).get(first.runId)?.task).toBe(first.task);
+
+      const moved = { ...first, childSessionKey: "agent:main:elsewhere" };
+      publish(runMap(moved), [moved.runId]);
+      expect([...(await read(new Map(), key)).keys()]).toEqual([second.runId]);
+      const live = runMap(first);
+      expect([...(await read(live, key)).keys()]).toEqual([second.runId, first.runId]);
+      publish(runMap(first), [first.runId]);
+      expect([...(await read(new Map(), key)).keys()]).toEqual([first.runId, second.runId]);
+      const movedLive = runMap({ ...first, childSessionKey: "agent:main:elsewhere" });
+      expect([...(await read(movedLive, key)).keys()]).toEqual([second.runId]);
+      publish(new Map(), [first.runId]);
+      publish(runMap(first), [first.runId]);
+      expect([...(await read(new Map(), key)).keys()]).toEqual([second.runId, first.runId]);
+    });
+
+    registerSubagentCollectorPublicationCases({
+      createRun,
+      mockRestoredRows: save,
+    });
+  });
+  describe("worker snapshots", () => {
+    function snapshot() {
+      return readSnapshot(new Map());
     }
+
+    function record(
+      runId: string,
+      overrides: Omit<Parameters<typeof createSubagentRunRecord>[0], "runId"> = {},
+    ) {
+      return createSubagentRunRecord({
+        runId,
+        childSessionKey: `agent:main:subagent:${runId}`,
+        completion: { required: false },
+        delivery: { status: "not_required" },
+        ...overrides,
+      });
+    }
+    function runs(model: string, runId = "one") {
+      return runMap(record(runId, { model }));
+    }
+    function models(rows = snapshot()) {
+      return [...rows].map(([id, row]) => `${id}:${row.model}`);
+    }
+    function cleanupFailure() {
+      return new AggregateError(
+        [new Error("query failed"), new Error("reader cleanup failed")],
+        "read and cleanup failed",
+      );
+    }
+
+    it.each(["maintenance", "schema"] as const)(
+      "rejects resident session-list reads from an ended %s scope",
+      async (kind) => {
+        publish(runs("retained"));
+        const identity = snapshotIdentity();
+        const maintenance = createOpenClawDatabaseMaintenanceScope();
+        const bind = () => {
+          const prepared = readView({ env: state.env });
+          expect(prepared.snapshotIdentity()).toBe(identity);
+          return { current: AsyncLocalStorage.bind(snapshot), prepared };
+        };
+        const read =
+          kind === "maintenance"
+            ? maintenance.run(bind)
+            : withExistingOpenClawStateSchema(
+                { path: captureOpenClawStateWorkerContext().admission.databasePath },
+                bind,
+              );
+        await maintenance.close();
+        const failure = kind === "maintenance" ? "scope is closed" : "admission has ended";
+        expect(read.current).toThrow(failure);
+        expect(read.prepared.runs).toThrow(failure);
+        await expect(read.prepared.prepare()).rejects.toThrow(failure);
+        expect(snapshotIdentity()).toBe(identity);
+      },
+    );
+
+    it("hydrates latest controlled payloads with requester descendant topology", async () => {
+      const requesterSessionKey = "agent:main:parent";
+      const latest = record("latest", {
+        childSessionKey: "agent:main:subagent:visible",
+        requesterSessionKey,
+        generation: 2,
+      });
+      const old = { ...latest, runId: "old", generation: 1, task: "retained historical payload" };
+      const descendant = record("descendant", {
+        requesterSessionKey: latest.childSessionKey,
+        controllerSessionKey: latest.childSessionKey,
+      });
+      save(runMap(old, latest, descendant));
+
+      const context = await readContext(requesterSessionKey);
+
+      expect(context.runs.map((entry) => entry.runId)).toEqual([latest.runId]);
+      expect(context.list.pendingDescendants.get(latest.childSessionKey)).toBe(1);
+      expect(context.list.childSessionsByController.get(latest.childSessionKey)).toEqual([
+        descendant.childSessionKey,
+      ]);
+      const moved = {
+        ...latest,
+        runId: "moved",
+        generation: 3,
+        requesterSessionKey: "agent:main:moved",
+      };
+      publish(runMap(moved), [moved.runId]);
+      expect((await readContext(requesterSessionKey)).runs).toEqual([]);
+    });
+
+    it("captures parent and yielded-child facts after the final scoped hydration", async () => {
+      const parent = record("parent", {
+        pauseReason: "sessions_yield",
+        endedAt: Date.now(),
+      });
+      const child = record("child", {
+        requesterSessionKey: parent.childSessionKey,
+        expectsCompletionMessage: true,
+        completion: { required: true },
+        delivery: { status: "pending" },
+      });
+      save(runMap(parent, child));
+      const gate = holdFirstCompactRead("subagents.runs", "session");
+      const reading = readContext(parent.requesterSessionKey);
+      const context = await gate.during(reading, () => {
+        const changedParent = { ...parent, task: "published during child hydration" };
+        const settledChild = {
+          ...child,
+          execution: { status: "terminal" as const, endedAt: Date.now() },
+          cleanupCompletedAt: Date.now(),
+        };
+        publish(runMap(changedParent, settledChild), [parent.runId, child.runId]);
+      });
+      expect(context.list.view.latest[0]?.task).toBe("published during child hydration");
+      expect(context.list.pendingDescendants.get(parent.childSessionKey)).toBe(0);
+      expect(context.list.execution.get(parent.runId)).toEqual({
+        state: "waiting",
+        wait: { kind: "external" },
+      });
+    });
+
+    it("omits optional hints only for a settled unavailable read without caching an empty roster", async () => {
+      stateDatabase.openOpenClawStateDatabase().db.exec("DROP TABLE subagent_runs");
+      expect(await prepareOptional()).toBe(false);
+      expect(snapshotIdentity()).toBeUndefined();
+
+      const failure = cleanupFailure();
+      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockRejectedValueOnce(failure);
+      await expect(prepareOptional()).rejects.toBe(failure);
+      expect(snapshotIdentity()).toBeUndefined();
+    });
+
+    it("rejects newer schema admission before optional compact hints can be omitted", async () => {
+      save(runs("retained"));
+      const { db } = stateDatabase.openOpenClawStateDatabase();
+      const version = readSqliteUserVersion(requireNativeSqliteDatabase(db));
+      db.exec("PRAGMA user_version = 2147483647");
+      try {
+        await expect(prepareOptional()).rejects.toThrow("newer schema version");
+        expect(snapshotIdentity()).toBeUndefined();
+      } finally {
+        db.exec(`PRAGMA user_version = ${version}`);
+      }
+      await expect(prepareOptional()).resolves.toBe(true);
+      expect(snapshot().get("one")?.model).toBe("retained");
+    });
+
+    it("preserves an optional read cleanup failure when its caller also cancels", async () => {
+      save(runs("retained"));
+      const failure = cleanupFailure();
+      const gate = holdFirstCompactRead("subagents.sessionList", undefined, failure);
+      const work = new AsyncWorkScope();
+      const observed = work.track(prepareOptional).catch((error: unknown) => error);
+      try {
+        expect(
+          await gate.during(observed, () => work.beginClose(new Error("request canceled"))),
+        ).toBe(failure);
+        expect(snapshotIdentity()).toBeUndefined();
+      } finally {
+        await work.drain();
+      }
+    });
+
+    it("consumes only selected full rows with current raw ownership after worker hydration", async () => {
+      const retained = record("one", { swarmRunId: "collector" });
+      save(runMap(retained, record("other")));
+      const memory = new Map<string, typeof retained>();
+      const gate = holdFirstCompactRead("subagents.runs");
+      const read = prepareSelected(memory, ["collector"]);
+      const prepared = await gate.during(read, () => {
+        memory.set("one", { ...retained, requesterSessionKey: "agent:other:parent" });
+      });
+      expect(
+        prepared.consume((selected) => {
+          expect([...selected.keys()]).toEqual(["one"]);
+          expect(selected.get("one")?.task).toBe(retained.task);
+          return selected.get("one")?.requesterSessionKey;
+        }),
+      ).toEqual({ ready: true, value: "agent:other:parent" });
+      expect(() => prepared.consume(async () => "late")).toThrow(
+        "consumers must remain synchronous",
+      );
+    });
+
+    it.each([
+      ["update", ["changed:after", "other:retained"]],
+      ["delete", ["other:retained"]],
+      ["replace", ["new:replacement"]],
+    ])(
+      "retains a named %s publication while a real worker fill is pending",
+      async (change, expected) => {
+        save(new Map([...runs("before", "changed"), ...runs("retained", "other")]));
+        const gate = holdFirstCompactRead();
+        const prepared = prepare();
+        await gate.during(prepared, () => {
+          if (change === "replace") {
+            publish(runs("replacement", "new"));
+          } else {
+            publish(change === "update" ? runs("after", "changed") : new Map(), ["changed"]);
+          }
+        });
+        expect(models()).toEqual(expected);
+      },
+    );
+
+    it.each(["during", "after a named publication"] as const)(
+      "rechecks first database creation following an absent read (%s)",
+      async (creation) => {
+        await withOpenClawTestState(
+          { scenario: "empty", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+          async () => {
+            clearCache();
+            const admission = captureOpenClawStateWorkerContext().admission;
+            expect(admission.identity.key).toMatch(/^path:/);
+            const gate = creation === "during" ? holdFirstCompactRead() : undefined;
+            const prepared = prepare();
+            try {
+              if (gate) {
+                await gate.entered;
+              } else {
+                await prepared;
+                expect(snapshot().size).toBe(0);
+              }
+              save(runs("created"));
+              admission.assertCurrent();
+              expect(admission.identity.key).toMatch(/^file:/);
+              if (creation === "after a named publication") {
+                publish(runs("published", "own"), ["own"]);
+              }
+              gate?.release();
+              await prepared;
+              await prepare();
+              expect(snapshot().get("one")?.model).toBe("created");
+              if (creation === "after a named publication") {
+                expect(snapshot().get("own")?.model).toBe("published");
+              }
+            } finally {
+              gate?.release();
+              await prepared.catch(() => {});
+              clearCache();
+            }
+          },
+        );
+      },
+    );
+
+    it("does not install private snapshot bytes into canonical compact facts", async () => {
+      save(runs("snapshot"));
+      await stateReads.withOpenClawStateDatabaseReadSnapshot(async () => {
+        save(runs("canonical"));
+        const privateRows = await withSnapshot(
+          new Map(),
+          (rows) => ({ rows, runIds: [...rows.keys()], sessionKeys: [] }),
+          ({ rows }) => rows,
+          "all",
+        );
+        expect(privateRows.get("one")?.model).toBe("snapshot");
+        expect(snapshotIdentity()).toBeUndefined();
+      });
+      await prepare();
+      expect(snapshot().get("one")?.model).toBe("canonical");
+    });
+
+    it("keeps published compact facts through a temporary writer scope without reloading", async () => {
+      const changed = record("changed", { model: "before", createdAt: 20 });
+      publish(runMap(changed, record("other", { model: "retained", createdAt: 10 })));
+      const initial = snapshot();
+      const admission = captureOpenClawStateWorkerContext().admission;
+      const observed: string[][] = [];
+      const stop = subscribeSubagentRunChanges("persistence", () => observed.push(models()));
+      const writer = createOpenClawDatabaseMaintenanceScope();
+      try {
+        writer.run(() => publish(runMap({ ...changed, model: "after" }), [changed.runId]));
+        await writer.close();
+        admission.assertCurrent();
+        const current = snapshot();
+        expect(observed).toEqual([["changed:after", "other:retained"]]);
+        expect(models(current)).toEqual(["changed:after", "other:retained"]);
+        expect(initial.get("changed")?.model).toBe("before");
+      } finally {
+        stop();
+        await writer.close();
+      }
+    });
+
+    it("keeps unrelated publication context failures visible", () => {
+      const failure = new Error("synthetic context failure");
+      vi.spyOn(databaseCache, "captureOpenClawStateDatabaseReadAdmission").mockImplementationOnce(
+        () => {
+          throw failure;
+        },
+      );
+      expect(() => publish(runs("current"), ["one"])).toThrow(failure);
+    });
   });
 });

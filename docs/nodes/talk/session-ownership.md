@@ -26,14 +26,22 @@ its recorded owner for unqualified keys, and conflicting explicit ownership is r
 even when a main alias becomes `global`. If routing or access changes during
 startup, creation fails rather than switching sessions; retry the request.
 
+When a human starts realtime Talk from a connected client, the Gateway restores an archived backing session in place, preserving its session ID and history; if active lifecycle work or worker placement prevents restoration, creation fails with restore guidance before the voice provider connects.
+
 Client tool calls, Gateway-owned provider consultations, and steering retain the prepared agent,
-canonical session key, and store. Agent replies stay in the same session as voice
+resolved session key, and store. Agent replies stay in the same session as voice
 transcripts, including under global scope, while the original key continues to
 identify the voice call. Provider-attached controls and `talk.session.steer` select
 only work bound to that logical voice call. Reusing `voiceSessionId` to replace a
 browser transport preserves control of its accepted work. The legacy
 `talk.client.steer` RPC remains session-scoped: it selects owned work by
 `sessionKey`, not by a voice call ID.
+
+If a hot configuration change moves that session's storage route, a new native
+provider consultation rejects the old target before updating consultation metadata
+or starting model work. Start a new call to use the current route. Changing only
+the default Talk agent preserves an existing call's selected agent, and ending
+its audio transport does not cancel work already accepted by the Gateway.
 
 Native steering uses the current caller's tool policy and session permissions. The
 host captures the actual backend attempt's authority after policy preparation and
@@ -68,5 +76,5 @@ Keep the original `sessionKey` for client transcript, tool-call, and close reque
 `talk.client.close` requires both that exact key and the returned `voiceSessionId`;
 an equivalent storage alias is not a replacement. A `talk.client.toolCall` acknowledgement
 returns `agentId`, `agentSessionKey`, and `runId`; use that exact target for chat
-cancellation, history, and completion events, including when the canonical key is `global`. Transcription-only sessions
+cancellation, history, and completion events, including when the resolved key is `global`. Transcription-only sessions
 without a key remain sessionless and do not select a default chat.

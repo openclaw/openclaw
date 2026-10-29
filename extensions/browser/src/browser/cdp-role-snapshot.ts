@@ -1,43 +1,215 @@
 import type { lookup as dnsLookupCb } from "node:dns";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CdpProtocolSend, RawAXNode } from "./cdp-ax.js";
 import { prepareCdpPageSession } from "./cdp-page-session.js";
-import {
-  findCursorInteractiveElements,
-  resolveLinkUrls,
-  resolveIframeFrameIds,
-} from "./cdp-role-snapshot-dom.js";
 import {
   buildRoleTree,
   renderRoleTree,
   type CdpRoleRef,
-  type CdpRoleSnapshotOptions,
   type CursorInteractiveInfo,
+  type RoleTreeNode,
 } from "./cdp-role-snapshot-tree.js";
 import { withCdpSocket } from "./cdp.helpers.js";
-import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
+import {
+  finalizeRoleSnapshot,
+  type RoleSnapshotIdentityMode,
+  type RoleSnapshotOptions,
+  type RoleSnapshotResult,
+} from "./pw-role-snapshot.js";
 import { appendRoleSnapshotDepthTruncationMarker } from "./snapshot-depth-limit.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES } from "./snapshot-roles.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
 
+async function findCursorInteractiveElements(
+  send: CdpProtocolSend,
+): Promise<Map<number, CursorInteractiveInfo>> {
+  const attr = "data-openclaw-cdp-ci";
+  try {
+    const evaluated = (await send("Runtime.evaluate", {
+      expression: `(() => {
+          const out = [];
+          const roles = new Set(${JSON.stringify([...INTERACTIVE_ROLES])});
+          const tags = new Set(["a","button","input","select","textarea","details","summary"]);
+          document.querySelectorAll("[${attr}]").forEach((el) => el.removeAttribute("${attr}"));
+          for (const el of document.body ? document.body.querySelectorAll("*") : []) {
+            if (!(el instanceof HTMLElement) || el.closest("[hidden],[aria-hidden='true']")) continue;
+            const tagName = el.tagName.toLowerCase();
+            if (tags.has(tagName)) continue;
+            const role = String(el.getAttribute("role") || "").toLowerCase();
+            if (roles.has(role)) continue;
+            const style = getComputedStyle(el);
+            const hasCursorPointer = style.cursor === "pointer";
+            const hasOnClick = el.hasAttribute("onclick") || el.onclick !== null;
+            const tabIndex = el.getAttribute("tabindex");
+            const hasTabIndex = tabIndex !== null && tabIndex !== "-1";
+            const ce = el.getAttribute("contenteditable");
+            const isEditable = ce === "" || ce === "true";
+            if (!hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) continue;
+            if (hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) {
+              const parent = el.parentElement;
+              if (parent && getComputedStyle(parent).cursor === "pointer") continue;
+            }
+            const rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) continue;
+            let hiddenInputType = "";
+            const hiddenInput = el.querySelector("input[type='radio'],input[type='checkbox']");
+            if (hiddenInput instanceof HTMLInputElement) {
+              const hiddenStyle = getComputedStyle(hiddenInput);
+              if (hiddenInput.hidden || hiddenStyle.display === "none" || hiddenStyle.visibility === "hidden") {
+                hiddenInputType = hiddenInput.type;
+              }
+            }
+            el.setAttribute("${attr}", String(out.length));
+            out.push({
+              text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
+              hasCursorPointer,
+              hasOnClick,
+              hasTabIndex,
+              isEditable,
+              hiddenInputType,
+            });
+          }
+          return out;
+        })()`,
+      returnByValue: true,
+      awaitPromise: false,
+    }).catch(() => null)) as { result?: { value?: unknown } } | null; // SAFETY: Runtime returns a RemoteObject result; its page-derived by-value data is validated below.
+    const values: unknown[] = Array.isArray(evaluated?.result?.value) ? evaluated.result.value : [];
+    const entries: (CursorInteractiveInfo | undefined)[] = values.map((value) => {
+      const entry = asOptionalRecord(value);
+      if (typeof entry?.text !== "string") {
+        return undefined;
+      }
+      return {
+        text: truncateUtf16Safe(entry.text, 100),
+        hasOnClick: entry.hasOnClick === true,
+        hasCursorPointer: entry.hasCursorPointer === true,
+        hasTabIndex: entry.hasTabIndex === true,
+        isEditable: entry.isEditable === true,
+        hiddenInputType:
+          typeof entry.hiddenInputType === "string" ? entry.hiddenInputType : undefined,
+      };
+    });
+    if (!entries.some((entry) => entry !== undefined)) {
+      return new Map();
+    }
+
+    const documentResult = await send("DOM.getDocument", { depth: 0 }).catch(() => null);
+    // SAFETY: DOM.getDocument returns its root DOM.Node; nodeId is checked before use.
+    const doc = documentResult as {
+      root?: { nodeId?: number };
+    } | null;
+    const rootNodeId = doc?.root?.nodeId;
+    if (typeof rootNodeId !== "number") {
+      return new Map();
+    }
+    const queried = (await send("DOM.querySelectorAll", {
+      nodeId: rootNodeId,
+      selector: `[${attr}]`,
+    }).catch(() => null)) as { nodeIds?: number[] } | null; // SAFETY: DOM.querySelectorAll returns browser-owned integer NodeIds.
+    const out = new Map<number, CursorInteractiveInfo>();
+    await Promise.all(
+      (queried?.nodeIds ?? []).map(async (nodeId) => {
+        // SAFETY: DOM.describeNode returns native node identity and alternating string attributes.
+        const described = (await send("DOM.describeNode", { nodeId }).catch(() => null)) as {
+          node?: { backendNodeId?: number; attributes?: string[] };
+        } | null;
+        const attrs = described?.node?.attributes ?? [];
+        const attrIndex = attrs.indexOf(attr);
+        const rawIndex = attrIndex >= 0 ? attrs[attrIndex + 1] : undefined;
+        const index = typeof rawIndex === "string" ? Number(rawIndex) : Number.NaN;
+        const backendNodeId = described?.node?.backendNodeId;
+        if (typeof backendNodeId === "number" && Number.isInteger(index) && entries[index]) {
+          out.set(backendNodeId, entries[index]);
+        }
+      }),
+    );
+    return out;
+  } finally {
+    await send("Runtime.evaluate", {
+      expression: `document.querySelectorAll("[${attr}]").forEach((el) => el.removeAttribute("${attr}"))`,
+      returnByValue: true,
+    }).catch(() => {});
+  }
+}
+
+async function resolveLinkUrls(
+  send: CdpProtocolSend,
+  refs: Record<string, CdpRoleRef>,
+): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const linkRefs = Object.values(refs).filter(
+    (ref): ref is CdpRoleRef & { backendDOMNodeId: number } =>
+      ref.role === "link" && Boolean(ref.backendDOMNodeId),
+  );
+  await Promise.all(
+    linkRefs.map(async (ref) => {
+      const resolved = (await send("DOM.resolveNode", {
+        backendNodeId: ref.backendDOMNodeId,
+      }).catch(() => null)) as { object?: { objectId?: string } } | null; // SAFETY: DOM.resolveNode returns a RemoteObject; its objectId is required below.
+      const objectId = resolved?.object?.objectId;
+      if (!objectId) {
+        return;
+      }
+      const hrefResult = (await send("Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: "function() { return this.href || ''; }",
+        returnByValue: true,
+      }).catch(() => null)) as { result?: { value?: unknown } } | null; // SAFETY: Runtime returns a RemoteObject result; its page-derived by-value data is validated below.
+      const href = typeof hrefResult?.result?.value === "string" ? hrefResult.result.value : "";
+      if (href) {
+        out.set(ref.backendDOMNodeId, href);
+      }
+    }),
+  );
+  return out;
+}
+
+async function resolveIframeFrameIds(
+  send: CdpProtocolSend,
+  tree: RoleTreeNode[],
+): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const iframeNodes = tree.filter(
+    (node): node is RoleTreeNode & { backendDOMNodeId: number } =>
+      node.role.toLowerCase() === "iframe" && Boolean(node.backendDOMNodeId),
+  );
+  await Promise.all(
+    iframeNodes.map(async (node) => {
+      const description = await send("DOM.describeNode", {
+        backendNodeId: node.backendDOMNodeId,
+        depth: 1,
+      }).catch(() => null);
+      // SAFETY: DOM.describeNode includes optional native frameId and contentDocument metadata.
+      const described = description as {
+        node?: { frameId?: string; contentDocument?: { frameId?: string } };
+      } | null;
+      const frameId = described?.node?.contentDocument?.frameId ?? described?.node?.frameId ?? "";
+      if (frameId) {
+        out.set(node.backendDOMNodeId, frameId);
+      }
+    }),
+  );
+  return out;
+}
+
 async function readScopedAXNodes(
   send: CdpProtocolSend,
   backendNodeId: number,
-  sessionId?: string,
 ): Promise<RawAXNode[]> {
   // Chromium queryAXTree omits an ignored root, including its visible descendants.
   // SAFETY: queryAXTree returns native AXNodes in its protocol-defined nodes array.
-  const queried = (await send("Accessibility.queryAXTree", { backendNodeId }, sessionId)) as {
+  const queried = (await send("Accessibility.queryAXTree", { backendNodeId })) as {
     nodes: RawAXNode[];
   };
   if (queried.nodes.some((node) => node.backendDOMNodeId === backendNodeId)) {
     return queried.nodes;
   }
-  const partial = (await send(
-    "Accessibility.getPartialAXTree",
-    { backendNodeId, fetchRelatives: true },
-    sessionId,
-  )) as { nodes: RawAXNode[] }; // SAFETY: getPartialAXTree returns native AXNodes and their ancestors.
+  const partial = (await send("Accessibility.getPartialAXTree", {
+    backendNodeId,
+    fetchRelatives: true,
+  })) as { nodes: RawAXNode[] }; // SAFETY: getPartialAXTree returns native AXNodes and their ancestors.
   const root = partial.nodes.find((node) => node.backendDOMNodeId === backendNodeId);
   if (!root?.ignored || !root.nodeId) {
     throw new Error("Snapshot root is no longer present in the accessibility tree; retry.");
@@ -50,7 +222,7 @@ async function readScopedAXNodes(
     throw new Error("Snapshot frame identity is unavailable; retry.");
   }
   // SAFETY: getFullAXTree returns native AXNodes for the identified frame.
-  const full = (await send("Accessibility.getFullAXTree", { frameId }, sessionId)) as {
+  const full = (await send("Accessibility.getFullAXTree", { frameId })) as {
     nodes: RawAXNode[];
   };
   const byId = new Map(full.nodes.map((node) => [node.nodeId, node]));
@@ -71,9 +243,8 @@ async function readScopedAXNodes(
 async function buildCdpRoleSnapshot(params: {
   send: CdpProtocolSend;
   rootBackendNodeId?: number;
-  sessionId?: string;
   frameId?: string;
-  options: CdpRoleSnapshotOptions;
+  options: RoleSnapshotOptions;
   urls?: boolean;
   recurseIframes?: boolean;
   nextRef: { value: number };
@@ -84,11 +255,10 @@ async function buildCdpRoleSnapshot(params: {
 }> {
   const res =
     params.rootBackendNodeId !== undefined
-      ? { nodes: await readScopedAXNodes(params.send, params.rootBackendNodeId, params.sessionId) }
+      ? { nodes: await readScopedAXNodes(params.send, params.rootBackendNodeId) }
       : ((await params.send(
           "Accessibility.getFullAXTree",
           params.frameId ? { frameId: params.frameId } : undefined,
-          params.sessionId,
         )) as { nodes?: RawAXNode[] }); // SAFETY: Accessibility commands return native AXNode arrays.
   const { tree, roots } = buildRoleTree(
     Array.isArray(res.nodes) ? res.nodes : [],
@@ -99,12 +269,14 @@ async function buildCdpRoleSnapshot(params: {
   const cursorElements =
     params.rootBackendNodeId !== undefined
       ? new Map<number, CursorInteractiveInfo>()
-      : await findCursorInteractiveElements(params.send, params.sessionId);
+      : await findCursorInteractiveElements(params.send);
   for (const node of tree) {
-    if (node.backendDOMNodeId && cursorElements.has(node.backendDOMNodeId)) {
-      const cursorInfo = cursorElements.get(node.backendDOMNodeId);
+    const cursorInfo = node.backendDOMNodeId
+      ? cursorElements.get(node.backendDOMNodeId)
+      : undefined;
+    if (cursorInfo !== undefined) {
       node.cursorInfo = cursorInfo;
-      if (!node.name && cursorInfo?.text) {
+      if (!node.name && cursorInfo.text) {
         node.name = cursorInfo.text;
       }
     }
@@ -143,21 +315,24 @@ async function buildCdpRoleSnapshot(params: {
     }
   }
 
-  const iframeFrameIds = await resolveIframeFrameIds(params.send, tree, params.sessionId);
+  const iframeFrameIds = await resolveIframeFrameIds(params.send, tree);
   for (const node of tree) {
-    if (node.backendDOMNodeId && iframeFrameIds.has(node.backendDOMNodeId)) {
-      node.frameId = iframeFrameIds.get(node.backendDOMNodeId);
-      if (node.ref && refs[node.ref]) {
-        expectDefined(refs[node.ref], "owned CDP role reference").frameId = node.frameId;
+    const frameId = node.backendDOMNodeId ? iframeFrameIds.get(node.backendDOMNodeId) : undefined;
+    if (frameId !== undefined) {
+      node.frameId = frameId;
+      const ref = node.ref ? refs[node.ref] : undefined;
+      if (ref) {
+        ref.frameId = node.frameId;
       }
     }
   }
 
   if (params.urls) {
-    const urls = await resolveLinkUrls(params.send, refs, params.sessionId);
+    const urls = await resolveLinkUrls(params.send, refs);
     for (const node of tree) {
-      if (node.backendDOMNodeId && urls.has(node.backendDOMNodeId)) {
-        node.url = urls.get(node.backendDOMNodeId);
+      const url = node.backendDOMNodeId ? urls.get(node.backendDOMNodeId) : undefined;
+      if (url !== undefined) {
+        node.url = url;
       }
     }
   }
@@ -173,7 +348,7 @@ async function buildCdpRoleSnapshot(params: {
   }
 
   if (params.recurseIframes) {
-    let childLinesByIndex: Map<number, string[]> | undefined;
+    const childLinesByIndex = new Map<number, string[]>();
     for (const iframe of tree) {
       if (iframe.iframeLineIndex === undefined || !iframe.frameId) {
         continue;
@@ -191,21 +366,12 @@ async function buildCdpRoleSnapshot(params: {
         continue;
       }
       Object.assign(refs, child.refs);
-      (childLinesByIndex ??= new Map()).set(iframe.iframeLineIndex, child.lines);
+      childLinesByIndex.set(iframe.iframeLineIndex, child.lines);
     }
-    if (childLinesByIndex) {
-      const expanded: string[] = [];
-      for (let index = 0; index < lines.length; index++) {
-        expanded.push(lines[index]!);
-        const childLines = childLinesByIndex.get(index);
-        if (childLines) {
-          for (const childLine of childLines) {
-            expanded.push(`  ${childLine}`);
-          }
-        }
-      }
-      lines = expanded;
-    }
+    lines = lines.flatMap((line, index) => [
+      line,
+      ...(childLinesByIndex.get(index) ?? []).map((childLine) => `  ${childLine}`),
+    ]);
   }
 
   return {
@@ -215,10 +381,9 @@ async function buildCdpRoleSnapshot(params: {
   };
 }
 
-/** Build a role/name text snapshot with stable refs from CDP DOM and AX data. */
 type CdpRoleSnapshotRequest = {
   urlEntries?: SnapshotUrlEntry[];
-  options?: CdpRoleSnapshotOptions;
+  options?: RoleSnapshotOptions;
   urls?: boolean;
   recurseIframes?: boolean;
   timeoutMs?: number;
@@ -232,13 +397,7 @@ export async function snapshotRoleViaCdpSession(
     send: CdpProtocolSend;
     rootBackendNodeId?: number;
   },
-): Promise<{
-  snapshot: string;
-  truncated?: boolean;
-  refs: Record<string, CdpRoleRef>;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
-  newElements?: number;
-}> {
+): Promise<RoleSnapshotResult<CdpRoleRef>> {
   await prepareCdpPageSession(opts.send);
   const built = await buildCdpRoleSnapshot({
     send: opts.send,

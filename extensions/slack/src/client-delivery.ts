@@ -14,16 +14,22 @@ import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatSlackError } from "./errors.js";
 import {
-  postSlackMessageWithIdentityFallback,
+  asOptionalObjectRecord,
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatSlackError, getSlackWebApiErrorData } from "./errors.js";
+import {
+  buildSlackMessageIdentityPayload,
+  hasSlackMessageIdentity,
   type SlackPostMessageIdentity,
 } from "./post-message-identity.js";
-import {
-  buildSlackPostMessagePayload,
-  type SlackPostMessagePayload,
-  type SlackUnfurlOptions,
+import type {
+  SlackBasePostMessagePayload,
+  SlackPostMessagePayload,
+  SlackUnfurlOptions,
 } from "./post-message-payload.js";
 
 const SLACK_COMMERCIAL_API_HOSTNAME = "slack.com";
@@ -63,40 +69,24 @@ export function rethrowSlackPermanentOutboundApiRejection(err: unknown): never {
   throw err;
 }
 
-function readSlackRequestErrorCode(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const code = (value as { code?: unknown }).code;
-  return typeof code === "string" ? code.toUpperCase() : undefined;
-}
-
-function readSlackRequestErrorMessage(value: unknown): string {
-  if (value instanceof Error) {
-    return value.message;
-  }
-  return typeof value === "string" ? value : "";
-}
-
 function hasSlackDnsRequestSignal(err: unknown): boolean {
-  let current: unknown = err;
+  let current = asOptionalObjectRecord(err);
   const seen = new Set<unknown>();
-  for (let depth = 0; current && typeof current === "object" && depth < 6; depth += 1) {
+  for (let depth = 0; current && depth < 6; depth += 1) {
     if (seen.has(current)) {
       return false;
     }
     seen.add(current);
-    const code = readSlackRequestErrorCode(current);
+    const rawCode = current.code;
+    const code = typeof rawCode === "string" ? rawCode.toUpperCase() : undefined;
     if (code && SLACK_DNS_RETRY_CODES.has(code)) {
       return true;
     }
-    const message = readSlackRequestErrorMessage(current);
+    const message = current instanceof Error ? current.message : "";
     if (/\b(EAI_AGAIN|ENOTFOUND|UND_ERR_DNS_RESOLVE_FAILED)\b/i.test(message)) {
       return true;
     }
-    current =
-      (current as { original?: unknown; cause?: unknown }).original ??
-      (current as { cause?: unknown }).cause;
+    current = asOptionalObjectRecord(current.original ?? current.cause);
   }
   return false;
 }
@@ -104,11 +94,7 @@ function hasSlackDnsRequestSignal(err: unknown): boolean {
 function resolveSlackUploadTimeoutLogUrl(url: string): string | undefined {
   // Slack puts the upload capability in the URL path. Timeout diagnostics may
   // name the origin, but must not retain that capability-bearing path.
-  try {
-    return new URL(url).origin;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(url)?.origin;
 }
 
 function buildSlackUploadFailureCause(error: unknown): Error {
@@ -130,13 +116,9 @@ function buildSlackUploadFailureCause(error: unknown): Error {
 }
 
 function parseSlackUploadHttpUrl(value: string, label: string): URL {
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-      return parsed;
-    }
-  } catch {
-    // Fall through to the same capability-safe error below.
+  const parsed = URL.parse(value);
+  if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
+    return parsed;
   }
   throw new Error(`${label} must use a valid HTTP or HTTPS URL`);
 }
@@ -145,32 +127,22 @@ function normalizeSlackHostname(hostname: string): string {
   return hostname.trim().toLowerCase().replace(/\.$/, "");
 }
 
-function resolveSlackOwnedUploadPolicy(url: URL): SsrFPolicy | undefined {
-  if (url.protocol !== "https:") {
+function resolveSlackUploadPolicy(url: URL, source: "api" | "upload"): SsrFPolicy | undefined {
+  if (url.protocol !== "https:" || (source === "api" && url.port)) {
     return undefined;
   }
-  switch (normalizeSlackHostname(url.hostname)) {
-    case SLACK_COMMERCIAL_UPLOAD_HOSTNAME:
-      return SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY;
-    case SLACK_GOV_UPLOAD_HOSTNAME:
-      return SLACK_GOV_UPLOAD_SSRF_POLICY;
-    default:
-      return undefined;
+  const hostname = normalizeSlackHostname(url.hostname);
+  const [commercial, government] =
+    source === "api"
+      ? [SLACK_COMMERCIAL_API_HOSTNAME, SLACK_GOV_API_HOSTNAME]
+      : [SLACK_COMMERCIAL_UPLOAD_HOSTNAME, SLACK_GOV_UPLOAD_HOSTNAME];
+  if (hostname === commercial) {
+    return SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY;
   }
-}
-
-function resolveOfficialSlackApiUploadPolicy(url: URL): SsrFPolicy | undefined {
-  if (url.protocol !== "https:" || url.port) {
-    return undefined;
+  if (hostname === government) {
+    return SLACK_GOV_UPLOAD_SSRF_POLICY;
   }
-  switch (normalizeSlackHostname(url.hostname)) {
-    case SLACK_COMMERCIAL_API_HOSTNAME:
-      return SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY;
-    case SLACK_GOV_API_HOSTNAME:
-      return SLACK_GOV_UPLOAD_SSRF_POLICY;
-    default:
-      return undefined;
-  }
+  return undefined;
 }
 
 function normalizeSlackOrigin(url: URL): string {
@@ -186,12 +158,12 @@ function resolveSlackUploadTransportPolicy(params: { uploadUrl: string; slackApi
     return { requireHttps: true, policy: SLACK_COMMERCIAL_UPLOAD_SSRF_POLICY };
   }
   const apiUrl = parseSlackUploadHttpUrl(params.slackApiUrl, "Configured Slack API URL");
-  const officialApiPolicy = resolveOfficialSlackApiUploadPolicy(apiUrl);
+  const officialApiPolicy = resolveSlackUploadPolicy(apiUrl, "api");
   if (officialApiPolicy) {
     return { requireHttps: true, policy: officialApiPolicy };
   }
   const uploadUrl = parseSlackUploadHttpUrl(params.uploadUrl, "Slack external upload URL");
-  const slackOwnedUploadPolicy = resolveSlackOwnedUploadPolicy(uploadUrl);
+  const slackOwnedUploadPolicy = resolveSlackUploadPolicy(uploadUrl, "upload");
   if (slackOwnedUploadPolicy) {
     return { requireHttps: true, policy: slackOwnedUploadPolicy };
   }
@@ -243,6 +215,26 @@ export function requireSlackPostMessageTimestamp(
   return timestamp;
 }
 
+function classifySlackCustomIdentityError(err: unknown): "scope" | "argument" | undefined {
+  const data = getSlackWebApiErrorData(err);
+  const code = normalizeLowercaseStringOrEmpty(data?.error);
+  if (code === "invalid_arguments" || code === "invalid_arg_name") {
+    return "argument";
+  }
+  if (code !== "missing_scope") {
+    return undefined;
+  }
+  const needed = normalizeLowercaseStringOrEmpty(data?.needed);
+  if (needed.includes("chat:write.customize")) {
+    return "scope";
+  }
+  const scopes = [
+    ...normalizeTrimmedStringList(data?.response_metadata?.scopes),
+    ...normalizeTrimmedStringList(data?.response_metadata?.acceptedScopes),
+  ].map((scope) => normalizeLowercaseStringOrEmpty(scope));
+  return scopes.includes("chat:write.customize") ? "scope" : undefined;
+}
+
 export async function postSlackMessageBestEffort(params: {
   client: WebClient;
   channelId: string;
@@ -255,7 +247,27 @@ export async function postSlackMessageBestEffort(params: {
   mrkdwn?: boolean;
   unfurl?: SlackUnfurlOptions;
 }) {
-  const basePayload = buildSlackPostMessagePayload(params);
+  const threadPayload =
+    params.replyBroadcast && params.threadTs
+      ? { thread_ts: params.threadTs, reply_broadcast: true as const }
+      : params.threadTs
+        ? { thread_ts: params.threadTs }
+        : {};
+  const basePayload: SlackBasePostMessagePayload = {
+    channel: params.channelId,
+    text: params.text,
+    ...(params.blocks?.length ? { blocks: params.blocks } : {}),
+    ...(params.metadata ? { metadata: params.metadata } : {}),
+    ...(params.mrkdwn !== undefined ? { mrkdwn: params.mrkdwn } : {}),
+    ...threadPayload,
+    // Default unfurl_links to false so bot messages don't expand inline
+    // link previews (Slack message links, URLs, etc.) unless the operator
+    // explicitly opts in via `channels.slack.unfurlLinks: true`.
+    unfurl_links: params.unfurl?.unfurlLinks ?? false,
+    ...(params.unfurl?.unfurlMedia !== undefined
+      ? { unfurl_media: params.unfurl.unfurlMedia }
+      : {}),
+  };
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   const post = async (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => ({
     response: await withSlackDnsRequestRetry("chat.postMessage", () =>
@@ -263,11 +275,45 @@ export async function postSlackMessageBestEffort(params: {
     ).catch(rethrowSlackPermanentOutboundApiRejection),
     identity,
   });
-  const posted = await postSlackMessageWithIdentityFallback({
-    basePayload,
-    identity: params.identity,
-    post,
-  });
+  const identity = params.identity;
+  const posted = await (async () => {
+    try {
+      if (!identity) {
+        return await post(basePayload);
+      }
+      return await post(
+        { ...basePayload, ...buildSlackMessageIdentityPayload(identity) },
+        identity,
+      );
+    } catch (err) {
+      if (!identity || !hasSlackMessageIdentity(identity)) {
+        throw err;
+      }
+      const rejection = classifySlackCustomIdentityError(err);
+      if (!rejection) {
+        throw err;
+      }
+      if (
+        rejection === "argument" &&
+        identity.username &&
+        (identity.iconUrl || identity.iconEmoji)
+      ) {
+        logVerbose("slack send: custom icon rejected, retrying with username only");
+        try {
+          return await post(
+            { ...basePayload, username: identity.username },
+            { username: identity.username },
+          );
+        } catch (retryError) {
+          if (!classifySlackCustomIdentityError(retryError)) {
+            throw retryError;
+          }
+        }
+      }
+      logVerbose("slack send: custom identity rejected, retrying without custom identity");
+      return post(basePayload);
+    }
+  })();
   const timestamp = requireSlackPostMessageTimestamp(posted.response);
   return {
     ...posted,

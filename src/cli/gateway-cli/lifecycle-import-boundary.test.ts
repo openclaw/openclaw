@@ -1,11 +1,7 @@
-// The run loop primes lifecycle.runtime.ts before the HTTP listener binds, so the
-// hub's re-exports decide how much module graph loads during gateway cold start.
 import { readFileSync } from "node:fs";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  createActiveWorkSnapshot,
   createCloseMock,
   createRuntimeWithExitSignal,
   createSignaledStart,
@@ -33,8 +29,9 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 vi.mock("../../logging/logger.js", () => ({ flushLogger: async () => {} }));
 
-// Acquire the runner's compiled subprocess generation before case deadlines.
+// Prepare transforms and compiled subprocesses before case deadlines; cases reset evaluation.
 await import("../../infra/runtime-process-entrypoints.js");
+await import("./run-loop.js");
 
 let activeCase: Promise<void> | undefined;
 afterEach(async () => {
@@ -48,29 +45,13 @@ afterEach(async () => {
 
 type LifecycleRuntime = typeof import("./lifecycle.runtime.js");
 
-const repoRoot = path.resolve(import.meta.dirname, "../../..");
-
-function readSource(relativePath: string): string {
-  return readFileSync(path.join(repoRoot, relativePath), "utf8");
-}
-
 describe("gateway lifecycle hub import boundaries", () => {
   it("re-exports primed symbols from their defining modules instead of facades", () => {
-    const hub = readSource("src/cli/gateway-cli/lifecycle.runtime.ts");
-
-    // The generation owner must not pull hot-reload or managed-reloader graphs
-    // into the lifecycle hub before the gateway can accept a connection.
+    const hub = readFileSync(new URL("./lifecycle.runtime.ts", import.meta.url), "utf8");
     expect(hub).toContain('from "../../gateway/server-reload-generation.js"');
     expect(hub).not.toContain('from "../../gateway/server-reload-hot.js"');
     expect(hub).not.toContain('from "../../gateway/server-reload-managed.js"');
-
-    // Restart marking belongs to server close, after the drain identifies the
-    // exact runs that still need abort. The primed run-loop hub must not regain
-    // the earlier duplicate owner.
     expect(hub).not.toContain("main-session-restart-recovery");
-    expect(hub).not.toContain(
-      'from "../../agents/main-session-recovery/main-session-restart-recovery.js"',
-    );
   });
 
   it.for(["SIGTERM", "SIGUSR2"] as const)(
@@ -93,32 +74,30 @@ describe("gateway lifecycle hub import boundaries", () => {
         }
         try {
           let primed = false;
-          const idle = createActiveWorkSnapshot();
           const hub = {
             detectGatewayRespawnSupervisorIdentity: () => ({
               kind: "systemd" as const,
               name: "test",
             }),
             resolveGatewayRestartDecision: () => ({ mode: "supervised", supervisor: "systemd" }),
+            registerGatewayRuntimeRecovery: () => () => {},
             requestGatewayRestartWithSignalAdmission:
               vi.fn<LifecycleRuntime["requestGatewayRestartWithSignalAdmission"]>(),
             captureForegroundUpdateHandoffStop: () => undefined,
+            waitForSystemServiceUpdateHandoffs: () => undefined,
             isGatewayRestartExternallyAllowed: () => false,
             scheduleGatewayRestart: vi.fn<LifecycleRuntime["scheduleGatewayRestart"]>(),
-            abortEmbeddedAgentRun: () => false,
-            consumeGatewayRestartIntentPayloadSync: vi.fn(() => null),
+            prepareGatewayRestartIntentConsumption: vi.fn(() => async () => null),
             consumeGatewayRestartAuthorization: () => true,
             consumeGatewayRestartIntent: () => null,
             peekGatewayRestartReason: () => undefined,
             markGatewayRestartHandled: vi.fn(),
             abortPendingChannelReloads: vi.fn(),
             markGatewayDraining: vi.fn(),
-            resolveGatewayRestartDrainTimeoutMs: () => 300_000,
-            createGatewayActiveWorkSnapshot: () => idle,
-            waitForGatewayActiveWork: vi.fn(async () => ({ drained: true, snapshot: idle })),
-            stopGatewayManagedProviderLocalServices: vi.fn(async () => {}),
+            abortActiveCronTaskRuns: vi.fn(() => 0),
+            stopActiveManagedProviderLocalServices: vi.fn(async () => {}),
             restartGatewayProcessWithFreshPid: vi.fn(() => ({ mode: "supervised" as const })),
-            writeGatewayRestartHandoffSync: vi.fn(() => null),
+            writeGatewayRestartHandoff: vi.fn(async () => null),
           } satisfies Partial<LifecycleRuntime>;
           vi.doMock("./lifecycle.runtime.js", async () => {
             importing.resolve();
@@ -126,7 +105,7 @@ describe("gateway lifecycle hub import boundaries", () => {
             primed = true;
             return hub;
           });
-          const { runGatewayLoop } = await import("./run-loop.js");
+          const { runGatewayLoop } = await import("./run-loop.test-support.js");
           abortSignal.throwIfAborted();
           await withIsolatedSignals(async ({ captureSignal }) => {
             const originalOn = process.on.bind(process);
@@ -170,10 +149,9 @@ describe("gateway lifecycle hub import boundaries", () => {
               await vi.waitFor(() => expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0));
               await expect(exited).resolves.toBe(0);
               expect(missingChunk).not.toHaveBeenCalled();
-              expect(hub.consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledOnce();
-              expect(hub.waitForGatewayActiveWork).toHaveBeenCalledOnce();
+              expect(hub.prepareGatewayRestartIntentConsumption).toHaveBeenCalledOnce();
               expect(close).toHaveBeenCalledOnce();
-              expect(hub.stopGatewayManagedProviderLocalServices).toHaveBeenCalledOnce();
+              expect(hub.stopActiveManagedProviderLocalServices).toHaveBeenCalledOnce();
               expect(fixture.releaseLock).toHaveBeenCalledOnce();
               expect(fixture.error).not.toHaveBeenCalled();
               expect(completeBoot).toHaveBeenCalledWith(
@@ -183,7 +161,7 @@ describe("gateway lifecycle hub import boundaries", () => {
               );
               if (signal === "SIGUSR2") {
                 expect(hub.restartGatewayProcessWithFreshPid).toHaveBeenCalledOnce();
-                expect(hub.writeGatewayRestartHandoffSync).toHaveBeenCalledOnce();
+                expect(hub.writeGatewayRestartHandoff).toHaveBeenCalledOnce();
               }
             } finally {
               releaseFixture();

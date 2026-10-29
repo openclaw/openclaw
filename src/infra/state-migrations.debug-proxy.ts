@@ -3,10 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { engineNullSafeEqual } from "./database-engine/scalar.js";
+import { getNodeSqliteKysely, prepareSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { safeStatSync } from "./path-guards.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 const DEBUG_PROXY_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
@@ -17,75 +21,62 @@ type LegacyDebugProxyCaptureDetection = {
   hasLegacy: boolean;
 };
 
-type LegacyCaptureSessionRow = {
-  id: string;
+type LegacyCaptureSessionRow = Pick<
+  DB["capture_sessions"],
+  "id" | "mode" | "source_scope" | "source_process" | "proxy_url"
+> & {
   started_at: number | bigint;
   ended_at: number | bigint | null;
-  mode: string;
-  source_scope: string;
-  source_process: string;
-  proxy_url: string | null;
   blob_dir: string;
 };
 
-type LegacyCaptureEventRow = {
-  session_id: string;
+type LegacyCaptureEventRow = Omit<
+  Pick<DB["capture_events"], (typeof CAPTURE_EVENT_COLUMNS)[number]>,
+  "ts" | "status" | "close_code"
+> & {
   ts: number | bigint;
-  source_scope: string;
-  source_process: string;
-  protocol: string;
-  direction: string;
-  kind: string;
-  flow_id: string;
-  method: string | null;
-  host: string | null;
-  path: string | null;
   status: number | bigint | null;
   close_code: number | bigint | null;
-  content_type: string | null;
-  headers_json: string | null;
-  data_text: string | null;
-  data_blob_id: string | null;
-  data_sha256: string | null;
-  error_text: string | null;
-  meta_json: string | null;
 };
+
+const CAPTURE_EVENT_COLUMNS = [
+  "session_id",
+  "ts",
+  "source_scope",
+  "source_process",
+  "protocol",
+  "direction",
+  "kind",
+  "flow_id",
+  "method",
+  "host",
+  "path",
+  "status",
+  "close_code",
+  "content_type",
+  "headers_json",
+  "data_text",
+  "data_blob_id",
+  "data_sha256",
+  "error_text",
+  "meta_json",
+] as const satisfies readonly (keyof DB["capture_events"])[];
 
 type LegacyCaptureBlobRow = {
   blobId: string;
   contentType: string | null;
-  encoding: "gzip";
   sizeBytes: number;
   sha256: string;
   data: Buffer;
   createdAt: number;
 };
 
-class LegacyDebugProxyBlobConflictError extends Error {
-  constructor(readonly blobId: string) {
-    super(`legacy debug proxy blob conflicts with shared state: ${blobId}`);
-  }
-}
-
-class LegacyDebugProxySessionConflictError extends Error {
-  constructor(readonly sessionId: string) {
-    super(`legacy debug proxy session conflicts with shared state: ${sessionId}`);
-  }
-}
-
-function fileExists(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function dirExists(dirPath: string): boolean {
-  try {
-    return fs.statSync(dirPath).isDirectory();
-  } catch {
-    return false;
+class LegacyDebugProxyConflictError extends Error {
+  constructor(
+    readonly kind: "blob" | "session",
+    readonly id: string,
+  ) {
+    super(`legacy debug proxy ${kind} conflicts with shared state: ${id}`);
   }
 }
 
@@ -102,10 +93,10 @@ function resolveLegacyDebugProxyCapturePaths(stateDir: string): {
 
 function hasPendingSqliteArchive(sourcePath: string): boolean {
   return (
-    !fileExists(sourcePath) &&
-    fileExists(`${sourcePath}.migrated`) &&
+    !safeStatSync(sourcePath)?.isFile() &&
+    safeStatSync(`${sourcePath}.migrated`)?.isFile() === true &&
     DEBUG_PROXY_SQLITE_SIDECAR_SUFFIXES.some(
-      (suffix) => suffix !== "" && fileExists(`${sourcePath}${suffix}`),
+      (suffix) => suffix !== "" && safeStatSync(`${sourcePath}${suffix}`)?.isFile(),
     )
   );
 }
@@ -121,13 +112,13 @@ export function detectLegacyDebugProxyCaptureSidecar(
   ) {
     return { ...paths, hasLegacy: false };
   }
-  const hasArchivedDatabase = fileExists(`${paths.sourcePath}.migrated`);
+  const hasArchivedDatabase = safeStatSync(`${paths.sourcePath}.migrated`)?.isFile() === true;
   return {
     ...paths,
     hasLegacy:
-      fileExists(paths.sourcePath) ||
+      safeStatSync(paths.sourcePath)?.isFile() === true ||
       hasPendingSqliteArchive(paths.sourcePath) ||
-      (hasArchivedDatabase && dirExists(paths.blobDir)),
+      (hasArchivedDatabase && safeStatSync(paths.blobDir)?.isDirectory() === true),
   };
 }
 
@@ -169,28 +160,7 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
       "db_path",
       "blob_dir",
     ]);
-    assertTableColumns(db, "capture_events", [
-      "session_id",
-      "ts",
-      "source_scope",
-      "source_process",
-      "protocol",
-      "direction",
-      "kind",
-      "flow_id",
-      "method",
-      "host",
-      "path",
-      "status",
-      "close_code",
-      "content_type",
-      "headers_json",
-      "data_text",
-      "data_blob_id",
-      "data_sha256",
-      "error_text",
-      "meta_json",
-    ]);
+    assertTableColumns(db, "capture_events", CAPTURE_EVENT_COLUMNS);
     const sessions = db
       .prepare(
         `SELECT id, started_at, ended_at, mode, source_scope, source_process, proxy_url, blob_dir
@@ -200,10 +170,7 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
       .all() as LegacyCaptureSessionRow[];
     const events = db
       .prepare(
-        `SELECT
-           session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
-           method, host, path, status, close_code, content_type, headers_json, data_text,
-           data_blob_id, data_sha256, error_text, meta_json
+        `SELECT ${CAPTURE_EVENT_COLUMNS.join(", ")}
          FROM capture_events
          ORDER BY ts ASC, id ASC`,
       )
@@ -252,7 +219,7 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
       const blobPath =
         candidateBlobDirs
           .map((blobDir) => path.join(blobDir, `${blobId}.bin.gz`))
-          .find(fileExists) ??
+          .find((candidate) => safeStatSync(candidate)?.isFile()) ??
         path.join(candidateBlobDirs[0] ?? params.blobDir, `${blobId}.bin.gz`);
       const data = fs.readFileSync(blobPath);
       const raw = gunzipSync(data);
@@ -264,7 +231,6 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
       blobs.push({
         blobId,
         contentType: referencingEvents.find((event) => event.content_type)?.content_type ?? null,
-        encoding: "gzip",
         sizeBytes: raw.byteLength,
         sha256,
         data,
@@ -280,32 +246,11 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
 }
 
 function eventValues(event: LegacyCaptureEventRow): SQLInputValue[] {
-  return [
-    event.session_id,
-    normalizeSqliteInteger(event.ts),
-    event.source_scope,
-    event.source_process,
-    event.protocol,
-    event.direction,
-    event.kind,
-    event.flow_id,
-    event.method,
-    event.host,
-    event.path,
-    normalizeSqliteInteger(event.status),
-    normalizeSqliteInteger(event.close_code),
-    event.content_type,
-    event.headers_json,
-    event.data_text,
-    event.data_blob_id,
-    event.data_sha256,
-    event.error_text,
-    event.meta_json,
-  ];
-}
-
-function eventKey(values: SQLInputValue[]): string {
-  return JSON.stringify(values);
+  return CAPTURE_EVENT_COLUMNS.map((column) =>
+    column === "ts" || column === "status" || column === "close_code"
+      ? normalizeSqliteInteger(event[column])
+      : event[column],
+  );
 }
 
 function archiveLegacyDebugProxySqlite(params: {
@@ -315,15 +260,15 @@ function archiveLegacyDebugProxySqlite(params: {
 }): void {
   const existingSources = DEBUG_PROXY_SQLITE_SIDECAR_SUFFIXES.map(
     (suffix) => `${params.sourcePath}${suffix}`,
-  ).filter(fileExists);
+  ).filter((candidate) => safeStatSync(candidate)?.isFile());
   if (existingSources.length === 0) {
     return;
   }
   const resolutions: Array<{ sourcePath: string; targetPath: string; removed: boolean }> = [];
   for (const sourcePath of existingSources) {
-    const archivedPath = `${sourcePath}.migrated`;
+    let archivedPath = `${sourcePath}.migrated`;
     try {
-      if (fileExists(archivedPath)) {
+      if (safeStatSync(archivedPath)?.isFile()) {
         if (fs.readFileSync(sourcePath).equals(fs.readFileSync(archivedPath))) {
           fs.rmSync(sourcePath, { force: true });
           resolutions.push({ sourcePath, targetPath: archivedPath, removed: true });
@@ -333,10 +278,7 @@ function archiveLegacyDebugProxySqlite(params: {
         while (fs.existsSync(`${sourcePath}.migrated.${index}`)) {
           index++;
         }
-        const nextArchivePath = `${sourcePath}.migrated.${index}`;
-        fs.renameSync(sourcePath, nextArchivePath);
-        resolutions.push({ sourcePath, targetPath: nextArchivePath, removed: false });
-        continue;
+        archivedPath = `${sourcePath}.migrated.${index}`;
       }
       fs.renameSync(sourcePath, archivedPath);
       resolutions.push({ sourcePath, targetPath: archivedPath, removed: false });
@@ -372,13 +314,13 @@ function archiveLegacyDebugProxyBlobs(params: {
   changes: string[];
   warnings: string[];
 }): void {
-  if (!dirExists(params.blobDir)) {
+  if (!safeStatSync(params.blobDir)?.isDirectory()) {
     return;
   }
   const archivePath = `${params.blobDir}.migrated`;
   try {
     let targetPath = archivePath;
-    if (dirExists(archivePath)) {
+    if (safeStatSync(archivePath)?.isDirectory()) {
       let index = 2;
       while (fs.existsSync(`${params.blobDir}.migrated.${index}`)) {
         index++;
@@ -404,9 +346,9 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
   if (!detected.hasLegacy) {
     return { changes, warnings };
   }
-  if (!fileExists(detected.sourcePath)) {
+  if (!safeStatSync(detected.sourcePath)?.isFile()) {
     archiveLegacyDebugProxySqlite({ sourcePath: detected.sourcePath, changes, warnings });
-    if (fileExists(`${detected.sourcePath}.migrated`)) {
+    if (safeStatSync(`${detected.sourcePath}.migrated`)?.isFile()) {
       archiveLegacyDebugProxyBlobs({ blobDir: detected.blobDir, changes, warnings });
     }
     return { changes, warnings };
@@ -443,20 +385,20 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
             | undefined;
           if (existing) {
             if (
-              existing.encoding !== blob.encoding ||
+              existing.encoding !== "gzip" ||
               Number(existing.sizeBytes) !== blob.sizeBytes ||
               existing.sha256 !== blob.sha256 ||
               !existing.data ||
               !Buffer.from(existing.data).equals(blob.data)
             ) {
-              throw new LegacyDebugProxyBlobConflictError(blob.blobId);
+              throw new LegacyDebugProxyConflictError("blob", blob.blobId);
             }
             continue;
           }
           insertBlob.run(
             blob.blobId,
             blob.contentType,
-            blob.encoding,
+            "gzip",
             blob.sizeBytes,
             blob.sha256,
             blob.data,
@@ -464,16 +406,33 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
           );
         }
 
-        const selectSession = db.prepare(
-          `SELECT
-            started_at AS startedAt,
-            ended_at AS endedAt,
-            mode,
-            source_scope AS sourceScope,
-            source_process AS sourceProcess,
-            proxy_url AS proxyUrl
-           FROM capture_sessions
-           WHERE id = ?`,
+        const query = getNodeSqliteKysely<Pick<DB, "capture_sessions" | "capture_events">>(db);
+        const selectSession = prepareSqliteQueryTakeFirstSync<
+          string,
+          {
+            startedAt: number;
+            endedAt: number | null;
+            mode: string;
+            sourceScope: string;
+            sourceProcess: string;
+            proxyUrl: string | null;
+          }
+        >(db, (parameter) =>
+          query
+            .selectFrom("capture_sessions")
+            .select([
+              "started_at as startedAt",
+              "ended_at as endedAt",
+              "mode",
+              "source_scope as sourceScope",
+              "source_process as sourceProcess",
+              "proxy_url as proxyUrl",
+            ])
+            .where(
+              "id",
+              "=",
+              parameter((id) => id),
+            ),
         );
         const insertSession = db.prepare(
           `INSERT INTO capture_sessions (
@@ -490,7 +449,7 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
             session.source_process,
             session.proxy_url,
           ] satisfies SQLInputValue[];
-          const existing = selectSession.get(session.id);
+          const existing = selectSession(session.id);
           if (existing) {
             const expected = {
               startedAt: values[1],
@@ -501,41 +460,48 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
               proxyUrl: values[6],
             };
             if (JSON.stringify(existing) !== JSON.stringify(expected)) {
-              throw new LegacyDebugProxySessionConflictError(session.id);
+              throw new LegacyDebugProxyConflictError("session", session.id);
             }
             continue;
           }
           insertSession.run(...values);
         }
 
-        const existingEventCount = db.prepare(
-          `SELECT COUNT(*) AS count
-           FROM capture_events
-           WHERE session_id IS ? AND ts IS ? AND source_scope IS ? AND source_process IS ?
-             AND protocol IS ? AND direction IS ? AND kind IS ? AND flow_id IS ?
-             AND method IS ? AND host IS ? AND path IS ? AND status IS ? AND close_code IS ?
-             AND content_type IS ? AND headers_json IS ? AND data_text IS ? AND data_blob_id IS ?
-             AND data_sha256 IS ? AND error_text IS ? AND meta_json IS ?
-          `,
+        const existingEventCount = prepareSqliteQueryTakeFirstSync<
+          SQLInputValue[],
+          { count: number }
+        >(db, (parameter) =>
+          query
+            .selectFrom("capture_events")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where((eb) =>
+              eb.and(
+                CAPTURE_EVENT_COLUMNS.map((column, index) =>
+                  engineNullSafeEqual(
+                    db,
+                    eb.ref(column),
+                    // SAFETY: eventValues maps these same columns in this order.
+                    parameter((values) => values[index]!),
+                  ),
+                ),
+              ),
+            ),
         );
         const insertEvent = db.prepare(
-          `INSERT INTO capture_events (
-            session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
-            method, host, path, status, close_code, content_type, headers_json, data_text,
-            data_blob_id, data_sha256, error_text, meta_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO capture_events (${CAPTURE_EVENT_COLUMNS.join(", ")})
+           VALUES (${CAPTURE_EVENT_COLUMNS.map(() => "?").join(", ")})`,
         );
         const existingCounts = new Map<string, number>();
         const seenCounts = new Map<string, number>();
         for (const event of legacy.events) {
           const values = eventValues(event);
-          const key = eventKey(values);
+          const key = JSON.stringify(values);
           const seenCount = (seenCounts.get(key) ?? 0) + 1;
           seenCounts.set(key, seenCount);
           let existingCount = existingCounts.get(key);
           if (existingCount === undefined) {
-            const row = existingEventCount.get(...values) as { count?: unknown } | undefined;
-            existingCount = Number(row?.count ?? 0);
+            const row = existingEventCount(values);
+            existingCount = row?.count ?? 0;
             existingCounts.set(key, existingCount);
           }
           if (seenCount > existingCount) {
@@ -550,11 +516,9 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
     );
   } catch (err) {
     const detail =
-      err instanceof LegacyDebugProxyBlobConflictError
-        ? `blob ${err.blobId} already exists with different data`
-        : err instanceof LegacyDebugProxySessionConflictError
-          ? `session ${err.sessionId} already exists with different data`
-          : String(err);
+      err instanceof LegacyDebugProxyConflictError
+        ? `${err.kind} ${err.id} already exists with different data`
+        : String(err);
     return {
       changes,
       warnings: [`Failed migrating debug proxy capture sidecar ${detected.sourcePath}: ${detail}`],
@@ -562,10 +526,16 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
   }
 
   archiveLegacyDebugProxySqlite({ sourcePath: detected.sourcePath, changes, warnings });
-  if (!fileExists(detected.sourcePath) && fileExists(`${detected.sourcePath}.migrated`)) {
+  if (
+    !safeStatSync(detected.sourcePath)?.isFile() &&
+    safeStatSync(`${detected.sourcePath}.migrated`)?.isFile()
+  ) {
     archiveLegacyDebugProxyBlobs({ blobDir: detected.blobDir, changes, warnings });
     for (const blobDir of legacy.blobDirs) {
-      if (path.resolve(blobDir) === path.resolve(detected.blobDir) || !dirExists(blobDir)) {
+      if (
+        path.resolve(blobDir) === path.resolve(detected.blobDir) ||
+        !safeStatSync(blobDir)?.isDirectory()
+      ) {
         continue;
       }
       warnings.push(

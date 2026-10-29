@@ -4,6 +4,7 @@ import Subprocess
 import Testing
 @testable import OpenClaw
 
+@Suite(.testWaitLimit)
 struct BoundedProcessTests {
     @Test func `timeout terminates the helper before joining a suspended observer`() async throws {
         let held = AsyncStream.makeStream(of: (ChildProcessExit, CheckedContinuation<Void, Never>).self)
@@ -76,9 +77,8 @@ struct BoundedProcessTests {
     /// instrumenting the deadline showed every one of the 64 exits observed at
     /// ~3.1s, clustered within 100ms of each other, rather than a single slow
     /// straggler. A 1s per-process budget lost that coin flip roughly one run in
-    /// five, failing 63 of 64 at once. A generous budget still fails hard if an
-    /// exit is genuinely missed — the 50ms `pollUntilExit` fallback would never
-    /// complete — while a merely-loaded machine passes.
+    /// five, failing 63 of 64 at once. The budget allows process startup under load;
+    /// the launcher's final non-reaping probe preserves the actual exit result.
     private static let concurrentSpawnTimeout: TimeInterval = 30
 
     @Test func `captures output without waiting for inherited handles`() async throws {
@@ -311,16 +311,12 @@ struct BoundedProcessTests {
     }
 
     /// `echo $$ > file` creates the file and writes to it in two steps, so a single
-    /// read can observe a missing *or* empty file. Poll until it parses, and only
-    /// then fall back to the recording read so a genuine absence still fails.
-    private func waitForPID(in file: URL) async throws -> pid_t {
-        let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline {
-            if let value = self.pollPID(from: file) {
-                return value
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+    /// read can observe a missing *or* empty file. Poll until it parses before recording the read.
+    private func waitForPID(
+        in file: URL,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws -> pid_t
+    {
+        try await TestWait.state("process PID file", sourceLocation: sourceLocation) { self.pollPID(from: file) != nil }
         let text = try String(contentsOf: file, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return try #require(pid_t(text))

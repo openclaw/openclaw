@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/nostr",
-  "version": "2026.9.5",
+  "version": "2026.10.8",
   "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.",
   "repository": {
     "type": "git",
@@ -8,15 +8,19 @@
   },
   "type": "module",
   "dependencies": {
+    "@solidjs/web": "2.0.0-rc.18",
     "nostr-tools": "2.25.2",
-    "zod": "4.6.5"
+    "solid-js": "2.0.0-rc.18",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
+    "@solidjs/compiler": "2.0.0-rc.18",
+    "esbuild": "0.28.2",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.5"
+    "openclaw": ">=2026.10.8"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -84,14 +88,22 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.9.5"
+      "pluginApi": ">=2026.10.8"
     },
     "build": {
-      "openclawVersion": "2026.9.5"
+      "openclawVersion": "2026.10.8"
     },
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true
+    },
+    "controlUi": "./browser/index.tsx",
+    "assetScripts": {
+      "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/nostr",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/nostr --copy",
+      "buildOutputs": [
+        "dist/openclaw.plugin.json"
+      ]
     }
   }
 }

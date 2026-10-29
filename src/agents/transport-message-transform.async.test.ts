@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import type { Context, Model } from "../llm/types.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
@@ -9,16 +10,13 @@ it.each([
   { id: "gpt-5.6-luna", provider: "openai", api: "openai-completions" },
   { id: "claude-sonnet-4-6", provider: "anthropic", api: "anthropic-messages" },
 ])("pairs an async source result before replaying on $api/$id", (target) => {
-  const model: Model = {
+  const model: Model = makeProviderModelFixture({
     ...target,
-    name: target.id,
     baseUrl: "https://example.test",
     reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 1000,
     maxTokens: 1000,
-  };
+  });
   const assistant = {
     role: "assistant" as const,
     provider: "openai",

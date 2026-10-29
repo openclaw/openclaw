@@ -1,109 +1,123 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import {
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
+  recordUpdateRunPhase,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
-import { renderUpdateRunNotice } from "../infra/update-run-report.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createUpdateRunNotifier } from "./update-run-notice.runtime.js";
 
-const confirmGatewayReachable = vi.hoisted(() =>
-  vi.fn<typeof import("../cli/daemon-cli/restart-health-probe.js").confirmGatewayReachable>(),
-);
-vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({ confirmGatewayReachable }));
-
 describe("host-owned update notices", () => {
   let state: OpenClawTestState;
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix: "openclaw-update-notice-" });
+    await captureRuntimeConfigAsyncReader()();
   });
-  afterEach(async () => {
-    await state.cleanup();
+  afterEach(() => state.cleanup());
+  const target = () => ({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    sessionId: "update-session",
+    storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
   });
+  const messages = async () =>
+    (await loadTranscriptEvents(target())).filter(
+      (event) => asOptionalRecord(event)?.type === "message",
+    );
+  const assistantMessage = (text: string) => ({
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  const seedSession = (lifecycleRevision?: string, updatedAt = 1) =>
+    upsertSessionEntryCore(target(), {
+      sessionId: target().sessionId,
+      updatedAt,
+      lifecycleRevision,
+    });
 
-  it("delivers failed-update advice as superseded history after the Gateway answers", async () => {
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionId: "update-session",
-      storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const advice =
-      "Managed gateway remains stopped. Keep the gateway stopped until the update succeeds.";
+  it.each([
+    ["succeeded", "verifying", ""],
+    ["failed", "requested", "before the update started"],
+    ["failed", "staging", "while preparing the update"],
+    ["failed", "validating", "while validating the update"],
+    ["failed", "repairing", "while repairing the installation"],
+    ["failed", "activating", "while activating"],
+    ["recovered", "activating", "while activating"],
+    ["failed", "restarting", "while restarting the Gateway"],
+    ["failed", "verifying", "while checking Gateway readiness"],
+  ] as const)("delivers %s outcome in %s", async (kind, phase, description) => {
+    const recovered = kind === "recovered";
+    const status = kind === "succeeded" ? "succeeded" : "failed";
+    const version = "2026.10.4";
+    await seedSession();
+    const advice = "Run openclaw update status, then retry openclaw update.";
     const initial = createUpdateRun({
       trigger: "chat",
-      origin: { sessionKey: target.sessionKey, nextAction: advice },
+      before: { version },
+      origin: { sessionKey: target().sessionKey, nextAction: advice },
     });
-    recordUpdateRunVerification(initial.runId, { port: 19123, versionMatch: false });
-    const finished = finishUpdateRun(initial.runId, {
-      status: "failed",
-      reason: "restart-unhealthy",
+    recordUpdateRunPhase(initial.runId, phase);
+    recordUpdateRunVerification(initial.runId, {
+      port: 19123,
+      versionMatch: false,
+      recovery: { serviceRestartSafe: true, version, service: recovered ? "healthy" : undefined },
     });
-    if (!finished) {
-      throw new Error("Missing failed update");
-    }
-    confirmGatewayReachable.mockResolvedValue({
-      reachable: true,
-      gatewayVersion: "2026.9.4",
-      gatewayBuildId: undefined,
-      activatedPluginErrors: [],
-      unavailablePlugins: [],
-      channelProbeErrors: [],
-    });
+    const finished = expectDefined(
+      finishUpdateRun(initial.runId, {
+        status,
+        ...(status === "failed" ? { reason: "restart-unhealthy" } : {}),
+      }),
+      "finished update",
+    );
 
     const notify = await createUpdateRunNotifier(initial, () => ({}), {});
-    expect(await notify(finished, "finished")).toEqual({
-      delivered: true,
-      owned: true,
+    expect(await notify(finished, "finished")).toEqual({ delivered: true, owned: true });
+    const headline =
+      status === "failed" ? "⚠️ OpenClaw couldn't finish updating." : "✅ OpenClaw updated.";
+    expect(await messages()).toMatchObject([
+      assistantMessage(
+        status === "failed"
+          ? [
+              headline,
+              ...(recovered ? ["The previous version (2026.10.4) is still serving."] : []),
+              `Update failed ${description} (restart-unhealthy).`,
+              `Next: ${advice}`,
+            ].join("\n")
+          : `${headline}\nFor details, open Settings → Updates in the Control UI or run \`openclaw update status\` in your terminal.`,
+      ),
+    ]);
+    expect(getUpdateRun(initial.runId)).toMatchObject({
+      status,
+      origin: { nextAction: advice },
+      verification: { port: 19123, versionMatch: false, noticeDelivered: true },
     });
-
-    const transcript = JSON.stringify(await loadTranscriptEvents(target));
-    expect(transcript).toContain("service identity unavailable");
-    expect(transcript).toContain("Historical recovery advice:");
-    expect(transcript).toContain("supersedes saved claims that the Gateway is stopped");
-    expect(transcript).toContain("Gateway answered on the recorded port (2026.9.4)");
-    expect(getUpdateRun(initial.runId)?.origin.nextAction).toBe(advice);
-    expect(getUpdateRun(initial.runId)?.status).toBe("failed");
   });
 
   it.each([false, true])(
-    "outlives the requesting attempt while honoring session replacement (%s)",
+    "delivers after attempt disposal unless the session was replaced (%s)",
     async (replaced) => {
-      const target = {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionId: "update-session",
-        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-      };
-      await upsertSessionEntryCore(target, {
-        sessionId: target.sessionId,
-        lifecycleRevision: "admitted-session",
-        updatedAt: 1,
-      });
-      const run = createUpdateRun({ trigger: "chat", origin: { sessionKey: target.sessionKey } });
+      await seedSession("admitted-session");
+      const run = createUpdateRun({ trigger: "chat", origin: { sessionKey: target().sessionKey } });
       const notify = await createUpdateRunNotifier(run, () => ({}), {});
       if (replaced) {
-        await upsertSessionEntryCore(target, {
-          sessionId: target.sessionId,
-          lifecycleRevision: "replacement-session",
-          updatedAt: 2,
-        });
+        await seedSession("replacement-session", 2);
       }
       const result = await withOwnedSessionTranscriptWrites(
         {
-          sessionTarget: target,
+          sessionTarget: target(),
           withTranscriptWrite: async () => {
             throw new Error("attempt disposed before transcript write");
           },
@@ -111,21 +125,68 @@ describe("host-owned update notices", () => {
         () => notify(run, "parking"),
       );
       expect(result).toEqual({ delivered: !replaced, owned: !replaced });
-      const events = await loadTranscriptEvents(target);
-      const messages = events.filter((event) => asOptionalRecord(event)?.type === "message");
-      expect(messages).toHaveLength(replaced ? 0 : 1);
+      expect(await messages()).toMatchObject(
+        replaced
+          ? []
+          : [assistantMessage("⏳ Preparing to restart OpenClaw… The update is not complete yet.")],
+      );
       if (!replaced) {
-        expect(messages[0]).toMatchObject({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: renderUpdateRunNotice(run, "parking") }],
-          },
-        });
         expect(getUpdateRun(run.runId)?.steps).toContainEqual(
           expect.objectContaining({ step: "notice:activating", status: "completed" }),
         );
       }
       expect(getUpdateRun(run.runId)?.phase).toBe("requested");
+    },
+  );
+
+  it("records a targetless milestone once across notifier recreation", async () => {
+    const initial = createUpdateRun({ trigger: "cli" });
+    const run = recordUpdateRunPhase(initial.runId, "verifying");
+    const notify = await createUpdateRunNotifier(run, () => ({}), {});
+    expect(await notify(run, "verifying")).toEqual({ delivered: false, owned: false });
+    const skipped = expectDefined(getUpdateRun(run.runId), "skipped notice");
+    expect(skipped.steps).toContainEqual(
+      expect.objectContaining({ step: "notice:verifying", status: "skipped" }),
+    );
+    expect(skipped.verification.noticeDelivered).toBe(false);
+    const recovered = await createUpdateRunNotifier(skipped, () => ({}), {});
+    expect(await recovered(skipped, "verifying")).toEqual({ delivered: false, owned: false });
+    expect(getUpdateRun(run.runId)).toEqual(skipped);
+  });
+
+  it.each(["legacy", "recovered", "kept-serving", "pending"] as const)(
+    "reconciles only a previously admitted terminal completion (%s)",
+    async (kind) => {
+      const terminal = kind !== "pending";
+      await seedSession();
+      const initial = createUpdateRun({
+        trigger: "chat",
+        origin: { sessionKey: target().sessionKey },
+      });
+      const finished = expectDefined(
+        finishUpdateRun(initial.runId, { status: "succeeded" }),
+        "finished update",
+      );
+      const previousText =
+        kind === "recovered"
+          ? "⚠️ OpenClaw couldn't finish updating.\nThe previous version (2026.10.4) is still serving.\nUpdate failed while activating (managed-service-stop-failed).\nNext: Retry openclaw update."
+          : kind === "kept-serving"
+            ? "⚠️ OpenClaw couldn't finish updating.\nThe current version (2026.10.4) is still running.\nUpdate failed before the update started (managed-service-handoff-failed).\nNext: Retry openclaw update."
+            : terminal
+              ? "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal."
+              : "🔁 Checking that OpenClaw is ready…";
+      expect(
+        await appendAssistantMessageToSessionTranscript({
+          ...target(),
+          expectedSessionId: target().sessionId,
+          text: previousText,
+          idempotencyKey: `update-run-finished:${initial.runId}`,
+        }),
+      ).toMatchObject({ ok: true });
+      const notify = await createUpdateRunNotifier(initial, () => ({}), {});
+      expect(await notify(finished, "finished")).toEqual({ delivered: terminal, owned: terminal });
+      expect(getUpdateRun(initial.runId)?.verification.noticeDelivered === true).toBe(terminal);
+      expect(await messages()).toMatchObject([assistantMessage(previousText)]);
     },
   );
 });

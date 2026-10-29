@@ -1,80 +1,39 @@
-import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
-import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
+import assert from "node:assert/strict";
+import { vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import type { WorkerProvisioningDispatchPlacement } from "./placement-dispatch-failure.js";
+import { REQUEST as DISPATCH_REQUEST } from "./placement-dispatch-test-fixtures.js";
+import type { WorkerPlacementDispatchService as DispatchService } from "./placement-dispatch.js";
+import { localPlacement, sessionIdentity } from "./placement-suite.test-support.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementMoveRequest,
 } from "./service-contract.js";
 
-type DispatchService = WorkerPlacementDispatchService;
-
-export function admittedRecovery(
-  run: (
-    placement: Parameters<DispatchService["resumeProvisioning"]>[0],
-    core: Parameters<DispatchService["resumeProvisioning"]>[1],
-  ) => Promise<void>,
-): DispatchService["resumeProvisioning"] {
-  return async (placement, core, _onTransition, admit) => {
-    if (!admit) {
-      throw new Error("Recovery fixture requires the coordinator admission owner");
-    }
-    return await admit(async (signal) => {
-      await run(placement, async () => await core(signal));
-      return undefined;
-    });
+export const preparedReclaim =
+  (run: () => ReturnType<DispatchService["reclaim"]>): DispatchService["reclaim"] =>
+  async (_request, _authorize, _beforeDrain, serialize) => {
+    assert(serialize, "Reclaim fixture requires session admission");
+    return await serialize(run);
   };
-}
 
-export function preparedReclaim(run: () => Promise<unknown>) {
-  return async (
-    _request: unknown,
-    _authorize: unknown,
-    _beforeDrain: unknown,
-    serialize: (operation: () => Promise<unknown>) => Promise<unknown>,
-  ) => await serialize(run);
-}
-
-export const REQUEST: WorkerPlacementDispatchRequest = {
-  sessionId: "session-1",
-  sessionKey: "agent:main:session-1",
-  agentId: "main",
-  profileId: "test",
-  executionMode: "worker-turn",
-};
+export const REQUEST: WorkerPlacementDispatchRequest = { ...DISPATCH_REQUEST, profileId: "test" };
 
 export const MOVE_REQUEST: WorkerPlacementMoveRequest = {
-  sessionId: REQUEST.sessionId,
-  sessionKey: REQUEST.sessionKey,
-  agentId: REQUEST.agentId,
+  ...sessionIdentity(REQUEST.sessionId),
   source: { generation: 4, environmentId: "worker-source", ownerEpoch: 7 },
   target: { kind: "gateway" },
 };
 
-export const LOCAL_PLACEMENT = {
-  ...REQUEST,
-  state: "local",
-  generation: 1,
-  turnClaim: null,
-  createdAtMs: 1,
-  updatedAtMs: 1,
-  stateChangedAtMs: 1,
-  environmentId: null,
-  activeOwnerEpoch: null,
-  workspaceBaseManifestRef: null,
-  remoteWorkspaceDir: null,
-  workerBundleHash: null,
-  lastTranscriptAckCursor: null,
-  lastLiveEventAckCursor: null,
-  recoveryError: null,
-  terminalReason: null,
-  terminalAtMs: null,
-} satisfies WorkerDispatchPlacement;
+export const LOCAL_PLACEMENT = Object.assign(localPlacement(), REQUEST);
 
 export const PROVISIONING_PLACEMENT = {
   ...LOCAL_PLACEMENT,
   state: "provisioning",
   sessionId: "cloud",
   environmentId: "worker-cloud",
-} satisfies Parameters<DispatchService["resumeProvisioning"]>[0];
+} satisfies WorkerProvisioningDispatchPlacement;
 
 export const ACTIVE_PLACEMENT = {
   ...LOCAL_PLACEMENT,
@@ -95,9 +54,32 @@ export function createCoordinatorTestService(overrides: Partial<DispatchService>
     move: unexpected,
     reclaim: unexpected,
     forceDestroyEnvironment: unexpected,
+    getEnvironmentAttachedSessionIds: () => [],
+    readEnvironmentSessionIds: async () => [],
+    subscribeOrphanWorkspaceChanges: () => () => {},
     reconcile: unexpected,
     reconcileActive: unexpected,
-    resumeProvisioning: unexpected,
     ...overrides,
+  };
+}
+
+export function coordinate(
+  overrides: Partial<DispatchService>,
+  admit: Parameters<typeof coordinateWorkerPlacementDispatch>[1] = (_request, run) => run(),
+) {
+  return coordinateWorkerPlacementDispatch(createCoordinatorTestService(overrides), admit);
+}
+
+export function createOperationGate<T>(value: T) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  return {
+    entered: entered.promise,
+    release: () => release.resolve(),
+    run: vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      return value;
+    }),
   };
 }
