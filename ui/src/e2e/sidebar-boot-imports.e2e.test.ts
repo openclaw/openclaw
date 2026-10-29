@@ -56,6 +56,10 @@ suite.define(() => {
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");
       await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+      // Main proves 11 rows with its sessions.list owner fixture (#172946), which this release
+      // lacks; held connects here render one live row, so the saved rows identify the cache.
+      const savedRows = await page.locator(".sidebar-recent-session").count();
+      expect(savedRows).toBeGreaterThan(1);
       const peer = await context.newPage();
       const peerGateway = await install(peer, true);
       await peer.goto(controlUiSessionUrl(suite.server.baseUrl, archived.key, "chat"));
@@ -75,7 +79,7 @@ suite.define(() => {
         );
         await gateway.waitForRequest("connect");
         await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-        await page.locator(".sidebar-recent-session").nth(10).waitFor();
+        await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(savedRows);
       }
     });
   });

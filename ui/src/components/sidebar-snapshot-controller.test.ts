@@ -438,14 +438,38 @@ describe("sidebar snapshot lifecycle", () => {
     await saved;
   });
 
-  it.each(["profile", "connection"] as const)(
+  it("keeps the admitted scope through unresolved hello and saves only after identity resolves", async () => {
+    const test = await warmFixture();
+    test.publish({ selfUser: undefined });
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    const saved = test.settle();
+    test.controller.synchronize();
+    expect(test.host.sidebarSnapshot).toBeNull();
+    test.controller.capture();
+    expect(test.capture).not.toHaveBeenCalled();
+    expect(
+      await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
+    ).toEqual(model);
+    test.publish();
+    test.controller.capture();
+    await saved;
+    expect(test.capture).toHaveBeenCalledOnce();
+  });
+
+  it.each(["profile", "profileless", "connection"] as const)(
     "clears cached display when the %s changes even with the same recovery scope",
     async (change) => {
       const test = await warmFixture();
       if (change === "connection") {
         test.gateway.connectionRevision += 1;
       }
-      test.publish(change === "profile" ? { selfUser: { id: "profile-b" } } : {});
+      test.publish(
+        change === "profile"
+          ? { selfUser: { id: "profile-b" } }
+          : change === "profileless"
+            ? { selfUser: null }
+            : {},
+      );
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.controller.saved).toBe(false);
     },
