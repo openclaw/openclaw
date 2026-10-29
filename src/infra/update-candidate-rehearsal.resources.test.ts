@@ -442,9 +442,7 @@ it("preflights activation backup separately from candidate copy capacity", async
     }
   }
   await expect(fs.stat(backupDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-  for (const [index, bytes] of (await readFiles(f.files)).entries()) {
-    expect(bytes.equals(before[index])).toBe(true);
-  }
+  expect(await readFiles(f.files)).toEqual(before);
 });
 
 it("copies and verifies both databases within capacity despite a sub-floor caller timeout", async () => {
