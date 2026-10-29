@@ -12,14 +12,17 @@ async function runRecoveryFlow(
     duplicate?: boolean;
     replacement?: boolean;
     delayTerminal?: boolean;
+    /** Crabline-style drivers expose bus outbound messages without a native reader. */
+    busOnly?: boolean;
   } = {},
 ) {
   const state = createQaBusState();
   const marker = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
-  const terminal = `${marker}\n\nSynthetic provider request failed.`;
+  const terminal = `${marker}\n\n⚠️ Synthetic provider request failed.`;
   let currentId = "";
   let nextId = 10;
-  const messages = new Map<string, Array<{ chatId: number; messageId: number; text: string }>>();
+  type Row = { chatId: number; messageId: number; text: string; busId: string };
+  const messages = new Map<string, Row[]>();
   const polls = new Map<string, number>();
   const gatewayCall = vi.fn(async () => {
     const count = (polls.get(currentId) ?? 0) + 1;
@@ -28,11 +31,13 @@ async function runRecoveryFlow(
       return { sessions: count === 1 ? [] : [{ key: "session-under-test", hasActiveRun: true }] };
     }
     const rows = messages.get(currentId)!;
-    rows[0] = {
-      ...rows[0]!,
-      ...(options.replacement ? { messageId: 999 } : {}),
-      text: rows[0]!.text.includes(marker) ? terminal : "Synthetic provider request failed.",
-    };
+    const text = rows[0]!.text.includes(marker)
+      ? terminal
+      : "⚠️ Synthetic provider request failed.";
+    const busId = options.replacement
+      ? state.addOutboundMessage({ to: "group:telegram-partial-failure-room", text }).id
+      : state.editMessage({ messageId: rows[0]!.busId, text }).id;
+    rows[0] = { ...rows[0]!, ...(options.replacement ? { messageId: 999 } : {}), text, busId };
     return { sessions: [{ key: "session-under-test", hasActiveRun: false }] };
   });
   const transport = {
@@ -52,19 +57,18 @@ async function runRecoveryFlow(
         ? options.initiallyRecovered
           ? terminal
           : marker
-        : "Synthetic provider request failed.";
-      const rows = [{ chatId: -100123, messageId: nextId++, text }];
-      if (options.duplicate && partialCase) {
-        rows.push({ ...rows[0]!, messageId: nextId++ });
-      }
-      messages.set(inbound.id, rows);
-      for (const row of rows) {
-        state.addOutboundMessage({
+        : "⚠️ Synthetic provider request failed.";
+      const rows = Array.from({ length: options.duplicate && partialCase ? 2 : 1 }, () => ({
+        chatId: -100123,
+        messageId: nextId++,
+        text,
+        busId: state.addOutboundMessage({
           to: "group:telegram-partial-failure-room",
-          text: row.text,
+          text,
           replyToId: inbound.id,
-        });
-      }
+        }).id,
+      }));
+      messages.set(inbound.id, rows);
       return inbound;
     },
   };
@@ -75,7 +79,12 @@ async function runRecoveryFlow(
       env: { providerMode: "mock-openai", cfg: {}, gateway: { call: gatewayCall } },
       getTransportSnapshot: () => state.getSnapshot(),
       buildAgentSessionKey: () => "session-under-test",
-      readTelegramMessages: (id: string) => structuredClone(messages.get(id) ?? []),
+      ...(options.busOnly
+        ? {}
+        : {
+            readTelegramMessages: (id: string) =>
+              (messages.get(id) ?? []).map(({ busId: _busId, ...row }) => row),
+          }),
       waitForCondition: (check: () => unknown) =>
         waitForQaTransportCondition(
           check,
@@ -133,12 +142,29 @@ describe("Telegram recovery scenario native observations", () => {
 
   it("rejects two native replies even when both contain recovery text", async () => {
     await expect(runRecoveryFlow({ initiallyRecovered: true, duplicate: true })).rejects.toThrow(
-      "expected one correlated native Telegram recovery",
+      "expected one correlated Telegram recovery",
     );
   });
 
   it("rejects recovery that replaces the partial with another native identity", async () => {
     await expect(runRecoveryFlow({ replacement: true })).rejects.toThrow(
+      "correlated terminal observation was not met",
+    );
+  });
+
+  it.each([false, true])(
+    "qualifies bus-only drivers without a native reader (already recovered: %s)",
+    async (initiallyRecovered) => {
+      const { result } = await runRecoveryFlow({ busOnly: true, initiallyRecovered });
+      expect(result.status).toBe("pass");
+    },
+  );
+
+  it("rejects duplicate and replaced recoveries on bus-only drivers", async () => {
+    await expect(
+      runRecoveryFlow({ busOnly: true, initiallyRecovered: true, duplicate: true }),
+    ).rejects.toThrow("expected one correlated Telegram recovery");
+    await expect(runRecoveryFlow({ busOnly: true, replacement: true })).rejects.toThrow(
       "correlated terminal observation was not met",
     );
   });
