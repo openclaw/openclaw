@@ -95,4 +95,48 @@ describe("RestScheduler", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     queued.catch(() => undefined);
   });
+
+  it("cancels only the aborted queued request and keeps draining the rest", async () => {
+    const release = createDeferred<void>();
+    const started: string[] = [];
+    const scheduler = new RestScheduler<string>(async (request) => {
+      const label = request.data ?? "";
+      started.push(label);
+      if (label === "holder") {
+        await release.promise;
+      }
+      return label;
+    });
+
+    const holder = scheduler.enqueue({
+      method: "POST",
+      path: "/channels/c1/messages",
+      priority: "standard",
+      data: "holder",
+    });
+    expect(started).toEqual(["holder"]);
+
+    const controller = new AbortController();
+    const cancelled = scheduler.enqueue({
+      method: "POST",
+      path: "/channels/c1/messages",
+      priority: "standard",
+      data: "cancelled",
+      signal: controller.signal,
+    });
+    const sibling = scheduler.enqueue({
+      method: "POST",
+      path: "/channels/c1/messages",
+      priority: "standard",
+      data: "sibling",
+    });
+
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+
+    release.resolve();
+    await expect(holder).resolves.toBe("holder");
+    await expect(sibling).resolves.toBe("sibling");
+    expect(started).toEqual(["holder", "sibling"]);
+  });
 });

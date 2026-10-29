@@ -10,6 +10,13 @@ import {
 
 export type RequestPriority = "critical" | "standard" | "background";
 export type RequestQuery = Record<string, string | number | boolean>;
+
+/**
+ * Cancellation may drop work only before its first dispatch. A dispatched write
+ * keeps its normal outcome (#149277), so state decides instead of a flag.
+ */
+type ScheduledRequestState = "queued" | "dispatched" | "settled";
+
 type ScheduledRequest<TData> = {
   method: string;
   path: string;
@@ -18,10 +25,11 @@ type ScheduledRequest<TData> = {
   query?: RequestQuery;
   routeKey: string;
   retryCount: number;
+  state: ScheduledRequestState;
   signal?: AbortSignal;
-  cancelled?: boolean;
+  detachAbort?: () => void;
   resolve: (value?: unknown) => void;
-  reject: (reason?: unknown) => void;
+  reject: (reason: Error) => void;
 };
 
 type LaneQueues<TData> = Record<RequestPriority, Array<ScheduledRequest<TData>>>;
@@ -94,18 +102,21 @@ export class RestScheduler<TData> {
         ...params,
         routeKey,
         retryCount: 0,
+        state: "queued",
         resolve: (value) => {
-          cleanup();
+          this.settleRequest(request);
           resolve(value);
         },
         reject: (reason) => {
-          cleanup();
+          this.settleRequest(request);
           reject(reason);
         },
       };
-      const onAbort = () => this.cancelQueuedRequest(request, signal);
-      const cleanup = () => signal?.removeEventListener("abort", onAbort);
-      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal) {
+        const onAbort = () => this.cancelQueuedRequest(request);
+        signal.addEventListener("abort", onAbort, { once: true });
+        request.detachAbort = () => signal.removeEventListener("abort", onAbort);
+      }
       this.queuedRequests += 1;
       this.queuedByLane[params.priority] += 1;
       bucket.pending[params.priority].push(request);
@@ -113,13 +124,22 @@ export class RestScheduler<TData> {
     });
   }
 
-  /** Settles a cancelled caller immediately; queued work is removed, or the
-   *  in-flight request is left to finish without holding the caller. */
-  private cancelQueuedRequest(request: ScheduledRequest<TData>, signal?: AbortSignal): void {
-    if (request.cancelled) {
+  /** Settles each request once, whether it completed, failed, or was cancelled. */
+  private settleRequest(request: ScheduledRequest<TData>): void {
+    if (request.state === "settled") {
       return;
     }
-    request.cancelled = true;
+    request.state = "settled";
+    request.detachAbort?.();
+    request.detachAbort = undefined;
+    this.queuedRequests = Math.max(0, this.queuedRequests - 1);
+  }
+
+  /** Drops a caller-cancelled request that was never issued; dispatched work settles normally. */
+  private cancelQueuedRequest(request: ScheduledRequest<TData>): void {
+    if (request.state !== "queued") {
+      return;
+    }
     for (const bucket of this.buckets.values()) {
       for (const lane of requestPriorities) {
         const queue = bucket.pending[lane];
@@ -129,12 +149,11 @@ export class RestScheduler<TData> {
         }
         queue.splice(index, 1);
         this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
-        this.queuedRequests = Math.max(0, this.queuedRequests - 1);
-        request.reject(abortReason(signal));
+        request.reject(abortReason(request.signal));
         return;
       }
     }
-    request.reject(abortReason(signal));
+    request.reject(abortReason(request.signal));
   }
 
   private getBucket(key: string): BucketState<TData> {
@@ -290,6 +309,7 @@ export class RestScheduler<TData> {
         if (!queued) {
           continue;
         }
+        queued.state = "dispatched";
         this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
         this.laneCursor = (this.laneCursor + laneOffset + 1) % laneSchedule.length;
         return { bucket, queued };
@@ -302,45 +322,43 @@ export class RestScheduler<TData> {
     queued: ScheduledRequest<TData>,
     bucket: BucketState<TData>,
   ): Promise<void> {
-    let requeued = false;
     try {
-      if (queued.cancelled) {
-        this.queuedRequests = Math.max(0, this.queuedRequests - 1);
-        return;
-      }
       queued.resolve(await this.executor(queued));
     } catch (error) {
       if (error instanceof RateLimitError && this.requeueRateLimitedRequest(queued)) {
-        requeued = true;
         return;
       }
-      queued.reject(error);
+      // A caller that cancelled during the issued attempt still learns the real
+      // transport outcome rather than a synthetic abort.
+      queued.reject(error instanceof Error ? error : new Error(String(error)));
     } finally {
       bucket.active = Math.max(0, bucket.active - 1);
       this.activeWorkers = Math.max(0, this.activeWorkers - 1);
-      if (!requeued) {
-        this.queuedRequests = Math.max(0, this.queuedRequests - 1);
-      }
       this.drainQueues();
     }
   }
 
   private requeueRateLimitedRequest(queued: ScheduledRequest<TData>): boolean {
-    if (queued.cancelled || queued.retryCount >= MAX_RATE_LIMIT_RETRIES) {
+    // A caller that aborted while the attempt was in flight must not have its
+    // never-issued retry queued again.
+    if (queued.signal?.aborted || queued.retryCount >= MAX_RATE_LIMIT_RETRIES) {
       return false;
     }
     const bucketKey = this.routeBuckets.get(queued.routeKey) ?? queued.routeKey;
-    this.getBucket(bucketKey).pending[queued.priority].push({
-      ...queued,
-      retryCount: queued.retryCount + 1,
-    });
+    queued.retryCount += 1;
+    queued.state = "queued";
+    this.getBucket(bucketKey).pending[queued.priority].push(queued);
     this.queuedByLane[queued.priority] += 1;
     return true;
   }
 }
 
-function abortReason(signal?: AbortSignal): unknown {
-  return signal?.reason ?? new DOMException("The operation was aborted.", "AbortError");
+/** Promise rejections always carry an Error; a non-Error abort reason uses the standard shape. */
+function abortReason(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  return reason instanceof Error
+    ? reason
+    : new DOMException("The operation was aborted.", "AbortError");
 }
 
 function isGlobalRateLimit(parsed: unknown): boolean {
