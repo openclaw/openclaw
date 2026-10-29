@@ -41,10 +41,6 @@ type Args = {
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
-const REVISION_COMPILER_LOADER_PATH = fileURLToPath(
-  new URL("./plugin-sdk-api-revision-compiler-loader.mjs", import.meta.url),
-);
-const TSX_IMPORT_PATH = import.meta.resolve("tsx");
 
 function usage(): never {
   console.error(
@@ -161,7 +157,6 @@ async function runAbortableChild(params: {
   args: string[];
   command: string;
   cwd: string;
-  env?: NodeJS.ProcessEnv;
   failureMessage: string;
   signal: AbortSignal;
 }): Promise<void> {
@@ -171,7 +166,6 @@ async function runAbortableChild(params: {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(params.command, params.args, {
       cwd: params.cwd,
-      env: params.env,
       signal: params.signal,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -212,32 +206,24 @@ async function writeFile(filePath: string, content: string): Promise<void> {
 }
 
 async function renderRevision(
+  repoRoot: string,
   revisionRoot: string,
   outputPath: string,
   signal: AbortSignal,
-  useRevisionCompiler: boolean,
 ): Promise<void> {
   await runAbortableChild({
-    // The trusted compiler loader uses Node's synchronous module hooks. Bun
-    // test shards must still render revisions in the checked Node runtime.
-    command: process.versions.bun ? "node" : process.execPath,
+    command: process.execPath,
     args: [
       "--max-old-space-size=6144",
-      ...(useRevisionCompiler
-        ? ["--import", pathToFileURL(REVISION_COMPILER_LOADER_PATH).href]
-        : []),
       "--import",
-      TSX_IMPORT_PATH,
+      "tsx",
       SCRIPT_PATH,
       "--render-root",
       revisionRoot,
       "--output",
       outputPath,
     ],
-    cwd: revisionRoot,
-    env: useRevisionCompiler
-      ? { ...process.env, OPENCLAW_PLUGIN_SDK_TYPESCRIPT_ROOT: revisionRoot }
-      : process.env,
+    cwd: repoRoot,
     failureMessage: "Plugin SDK API render failed",
     signal,
   });
@@ -268,11 +254,7 @@ async function renderWorker(argv: string[]): Promise<boolean> {
 export async function renderPluginSdkApiRevisions(
   repoRoot: string,
   commits: readonly string[],
-  trustedCompilerCommit: string | null = null,
 ): Promise<Map<string, PluginSdkApiDiffSurface>> {
-  if (trustedCompilerCommit && commits.length > 0 && !commits.includes(trustedCompilerCommit)) {
-    throw new Error("Plugin SDK trusted compiler commit is not selected for rendering");
-  }
   const temporaryParent = process.env.RUNNER_TEMP ?? os.tmpdir();
   await fs.mkdir(temporaryParent, { recursive: true });
   const temporaryRoot = await fs.mkdtemp(
@@ -358,12 +340,7 @@ export async function renderPluginSdkApiRevisions(
         const renderPath = path.join(temporaryRoot, `${commit}.json`);
         const renderStartedAt = performance.now();
         console.error(`[plugin-sdk-api-diff] ${commit} render started`);
-        await renderRevision(
-          worktree,
-          renderPath,
-          abortController.signal,
-          commit !== trustedCompilerCommit,
-        );
+        await renderRevision(repoRoot, worktree, renderPath, abortController.signal);
         console.error(
           `[plugin-sdk-api-diff] ${commit} render completed in ${Math.round(performance.now() - renderStartedAt)}ms`,
         );
@@ -406,7 +383,7 @@ async function main(): Promise<void> {
   if (commits.length > 0) {
     commits.push(headCommit);
   }
-  const surfaces = await renderPluginSdkApiRevisions(repoRoot, commits, headCommit);
+  const surfaces = await renderPluginSdkApiRevisions(repoRoot, commits);
   const diffs = new Map<string, PluginSdkApiDiff>([
     [
       headCommit,

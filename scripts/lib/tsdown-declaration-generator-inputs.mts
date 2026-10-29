@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
 import { API } from "typescript/unstable/sync";
 import { collectModuleReferencesFromSource } from "./guard-inventory-utils.mjs";
+import { isRecord } from "./record-shared.mjs";
 import { createRuntimeImportGraph } from "./runtime-import-closure.mts";
 import { STATE_SCHEMA_GENERATOR_INPUTS } from "./state-schema-inline-plugin.mts";
 import { resolveTsxImport } from "./tsx-cli-shim.mjs";
@@ -45,6 +46,22 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
   const nativeManifest = createRequire(path.join(root, "package.json")).resolve(
     "typescript/package.json",
   );
+  const nativeManifestJson: unknown = JSON.parse(fs.readFileSync(nativeManifest, "utf8"));
+  const nativeExports =
+    isRecord(nativeManifestJson) && isRecord(nativeManifestJson.exports)
+      ? nativeManifestJson.exports
+      : {};
+  const nativeExport = (...names: string[]) => {
+    for (const name of names) {
+      const target = nativeExports[name];
+      if (typeof target === "string") {
+        return path.join(path.dirname(nativeManifest), target);
+      }
+    }
+    throw new Error(`Missing native TypeScript export: ${names.join(" or ")}`);
+  };
+  // Producers traverse only their own reachable owners. Every reached computed
+  // import must still match its exact expression and declared targets.
   const dynamicOwners = new Map<string, { expressions: string[]; targets: string[] }>([
     ["scripts/lib/dist-artifact-lock.mts", { expressions: ["script"], targets: [generatorEntry] }],
     [
@@ -52,6 +69,18 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       {
         expressions: ['inputs.assert(path.join(nativeRoot, "lib/getExePath.js"))'],
         targets: [nativeManifest, path.join(path.dirname(nativeManifest), "lib/getExePath.js")],
+      },
+    ],
+    [
+      "scripts/lib/native-declaration-emitter.mts",
+      {
+        // Compiler roots load their own API client; the producer's root is the installed one.
+        expressions: ["compilerModuleUrl"],
+        targets: [
+          nativeManifest,
+          nativeExport("./async", "./unstable/async"),
+          nativeExport("./fs", "./unstable/fs"),
+        ],
       },
     ],
     [
