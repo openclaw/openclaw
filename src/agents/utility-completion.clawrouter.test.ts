@@ -29,6 +29,8 @@ import {
 import { prepareUtilityCompletionForAgent } from "./utility-completion.js";
 
 const modelId = "openai/gpt-6-luna";
+const chatModelId = "openai/gpt-6.1-sol";
+const chatRow = { id: chatModelId, upstream: "gpt-6.1-sol", capabilities: ["llm.chat"] };
 const baseUrl = "https://clawrouter.openclaw.ai/v1";
 const unsupported = "Model clawrouter/openai/gpt-6-luna does not support chat inference";
 
@@ -76,12 +78,7 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
       vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
         const url = input instanceof Request ? input.url : input.toString();
         if (url === baseUrl + "/responses") {
-          return nativeFetch(server.baseUrl + "/responses", {
-            method: init?.method,
-            headers: init?.headers,
-            body: init?.body,
-            signal: init?.signal,
-          });
+          return nativeFetch(server.baseUrl + "/responses", init);
         }
         expect(url).toBe(baseUrl + "/catalog");
         const credential = new Headers(init?.headers).get("authorization") ?? "";
@@ -105,6 +102,7 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
                       ? ["llm.responses", "llm.decisions"]
                       : ["llm.decisions"],
                 },
+                ...(granted ? [chatRow] : []),
               ],
             },
           ],
@@ -148,7 +146,6 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
         pluginMetadataSnapshot: lease.snapshot.metadataSnapshot,
       });
       const provider = providers.find((entry) => entry.id === "clawrouter" && entry.catalog);
-      expect(provider).toBeDefined();
       if (!provider) {
         throw new Error("Missing bundled ClawRouter discovery owner");
       }
@@ -158,6 +155,15 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
         useUtilityModel: true,
         manifestPlugins: lease.snapshot.metadataSnapshot,
       });
+      const prepare = (runtime: typeof lease.snapshot, config = cfg, model = selected.model) =>
+        prepareSimpleCompletionModel({
+          cfg: config,
+          provider: selected.provider,
+          modelId: model,
+          agentId: "main",
+          agentDir: state.agentDir(),
+          preparedModelRuntime: runtime,
+        });
       // v2026.10.7 (157d8c2bc3ea) persisted this generated-catalog shape without
       // inference. Keep its rows/settings readable, but do not invent a chat grant
       // until the normal credential-scoped discovery refresh supplies one.
@@ -210,17 +216,10 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
         configuredRuntimeModels: [],
       });
       await expect(
-        prepareSimpleCompletionModel({
-          cfg,
-          provider: selected.provider,
-          modelId: selected.model,
-          agentId: "main",
-          agentDir: state.agentDir(),
-          preparedModelRuntime: {
-            ...lease.snapshot,
-            modelCatalog: retained.modelCatalog,
-            createStores: () => ({ authStorage: retainedAuth, modelRegistry: retainedRegistry }),
-          },
+        prepare({
+          ...lease.snapshot,
+          modelCatalog: retained.modelCatalog,
+          createStores: () => ({ authStorage: retainedAuth, modelRegistry: retainedRegistry }),
         }),
       ).resolves.toMatchObject({ error: unsupported });
       expect(fetched).toEqual([]);
@@ -230,6 +229,7 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
         { key: "synthetic-incompatible" },
         { key: "synthetic-granted", route: { baseUrl: "https://other.fixture.invalid/v1" } },
         { key: "synthetic-granted", route: { api: "openai-completions" as const } },
+        { key: "synthetic-granted", route: { baseUrl: "https://clawrouter.openclaw.ai" } },
       ]) {
         const config: OpenClawConfig = route
           ? {
@@ -240,7 +240,9 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
                     baseUrl,
                     api: "openai-responses",
                     apiKey: key,
-                    models: [completionModelDefinition({ id: modelId, ...route })],
+                    models: [modelId, chatModelId].map((id) =>
+                      completionModelDefinition({ id, ...route }),
+                    ),
                   },
                 },
               },
@@ -262,7 +264,7 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
           resolveProviderAuth: () => auth,
         });
         const discovered = normalizePluginDiscoveryResult({ provider, result });
-        expect(discovered.clawrouter?.models).toHaveLength(key === "synthetic-granted" ? 1 : 0);
+        expect(discovered.clawrouter?.models).toHaveLength(key === "synthetic-granted" ? 2 : 0);
         const contents = stripPluginModelCatalogCredentials(
           JSON.stringify({
             generatedBy: "openclaw-plugin-model-catalog-v1",
@@ -306,14 +308,7 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
             modelCatalog: catalog,
             createStores: () => ({ authStorage, modelRegistry: registry }),
           };
-          const prepared = await prepareSimpleCompletionModel({
-            cfg: config,
-            provider: selected.provider,
-            modelId: selected.model,
-            agentId: "main",
-            agentDir: state.agentDir(),
-            preparedModelRuntime: snapshot,
-          });
+          const prepared = await prepare(snapshot, config);
           if (key === "synthetic-granted" && !route) {
             expect(prepared).not.toHaveProperty("error");
             assertPrepared(prepared);
@@ -339,6 +334,10 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
             });
           } else {
             expect(prepared).toMatchObject({ error: unsupported });
+          }
+          // A plain chat grant survives a configured route change; only typed rows are vetoed.
+          if (key === "synthetic-granted") {
+            expect(await prepare(snapshot, config, chatModelId)).not.toHaveProperty("error");
           }
         }
       }

@@ -208,11 +208,6 @@ async function releaseLatched(target: HTMLElement): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
 }
 
-async function commitLatched(controller: ComposerDictationOwner, target: HTMLElement) {
-  await releaseLatched(target);
-  void controller.finishActive();
-}
-
 function captureStop() {
   const stop = vi.fn();
   getUserMedia.mockResolvedValue(microphone(stop));
@@ -315,47 +310,30 @@ describe("ComposerDictationOwner", () => {
     },
   );
 
-  it("retires capture before a retained owner adopts another draft's callbacks", async () => {
-    const { controller, options, onCommit } = createHarness({ draftKey: "first" });
-    const stopTrack = captureStop();
-    await startDirect(controller);
-    emit({ type: "partial", text: "Old draft words" });
-    const nextCommit = vi.fn();
-
-    controller.update({ ...options, draftKey: "next", onCommit: nextCommit });
-    transcript("Old draft final words");
-
-    expect(controller.active).toBe(false);
-    expect(stopTrack).toHaveBeenCalledOnce();
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(nextCommit).not.toHaveBeenCalled();
-    await waitForFast(() => expectClosed("dictation-1", true));
-  });
-
-  it.each(["", "Keep the preview"])(
-    "preserves %j when final transcription fails",
-    async (preview) => {
-      const { controller, onCommit, onError } = createHarness();
-      const publishedErrors: unknown[] = [];
-      const unsubscribe = controller.subscribe(() => {
-        publishedErrors.push(onError.mock.lastCall?.[0]);
-      });
-
+  it.each(["draft replacement", "Escape", "hidden"])(
+    "discards active capture on %s",
+    async (action) => {
+      const { controller, options, onCommit } = createHarness({ draftKey: "first" });
+      const stopTrack = captureStop();
       await startDirect(controller);
-      emit({ type: "partial", text: preview });
-      const finished = controller.finishActive();
-      transcript("failed result");
-      emit({ type: "error", message: "Local transcription failed" });
-      expect(onError).toHaveBeenCalledExactlyOnceWith("Local transcription failed", {
-        kind: "interrupted",
-        preservesText: Boolean(preview),
-      });
-      await expect(finished).resolves.toBe(Boolean(preview));
-      expectCommit(onCommit, preview);
-      expect(controller.locksComposer).toBe(false);
-      expect(listeners.size).toBe(0);
-      expect(publishedErrors).toContain("Local transcription failed");
-      unsubscribe();
+      expect(getUserMedia).toHaveBeenCalledOnce();
+      expect(controller.active).toBe(true);
+      emit({ type: "partial", text: "discard me" });
+      const nextCommit = vi.fn();
+      if (action === "draft replacement") {
+        controller.update({ ...options, draftKey: "next", onCommit: nextCommit });
+      } else if (action === "Escape") {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      } else {
+        vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+      transcript("Old draft final words");
+      expect(controller.active).toBe(false);
+      expect(stopTrack).toHaveBeenCalledOnce();
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(nextCommit).not.toHaveBeenCalled();
+      await waitForFast(() => expectClosed("dictation-1", true));
     },
   );
 
@@ -427,28 +405,6 @@ describe("ComposerDictationOwner", () => {
     expect(listeners.size).toBe(0);
     expect(processors[0]?.onaudioprocess).toBeNull();
     await waitForFast(() => expectClosed());
-  });
-
-  it.each(["Escape", "hidden"])("discards direct dictation on %s", async (action) => {
-    const { controller, onCommit } = createHarness();
-    const stopTrack = captureStop();
-
-    await startDirect(controller);
-    expect(getUserMedia).toHaveBeenCalledOnce();
-    expect(controller.active).toBe(true);
-    emit({ type: "partial", text: "discard me" });
-
-    if (action === "Escape") {
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    } else {
-      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-      document.dispatchEvent(new Event("visibilitychange"));
-    }
-
-    expect(controller.active).toBe(false);
-    expect(stopTrack).toHaveBeenCalledOnce();
-    expect(onCommit).not.toHaveBeenCalled();
-    await waitForFast(() => expectClosed("dictation-1", true));
   });
 
   it("Escape discards startup finalization after capture ends before session creation", async () => {
@@ -655,22 +611,43 @@ describe("ComposerDictationOwner", () => {
   });
 
   it.each([
+    ["", "error"],
+    ["Keep the preview", "error"],
     ["", "timeout"],
     ["Keep the preview", "timeout"],
     ["Keep the preview", "disconnect"],
   ])("preserves %j when the final drain ends through %s", async (preview, outcome) => {
-    const { controller, options, onCommit } = createHarness();
+    const { controller, options, onCommit, onError } = createHarness();
+    const publishedErrors: unknown[] = [];
+    const unsubscribe = controller.subscribe(() => {
+      publishedErrors.push(onError.mock.lastCall?.[0]);
+    });
     await startDirect(controller);
     emit({ type: "partial", text: preview });
     const finished = controller.finishActive();
-    await vi.advanceTimersByTimeAsync(0);
-    if (outcome === "disconnect") {
-      controller.update({ ...options, connected: false });
+    if (outcome === "error") {
+      transcript("failed result");
+      emit({ type: "error", message: "Local transcription failed" });
+      expect(onError).toHaveBeenCalledExactlyOnceWith("Local transcription failed", {
+        kind: "interrupted",
+        preservesText: Boolean(preview),
+      });
     } else {
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(0);
+      if (outcome === "disconnect") {
+        controller.update({ ...options, connected: false });
+      } else {
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
     }
     await expect(finished).resolves.toBe(Boolean(preview));
     expectCommit(onCommit, preview);
+    if (outcome === "error") {
+      expect(controller.locksComposer).toBe(false);
+      expect(listeners.size).toBe(0);
+      expect(publishedErrors).toContain("Local transcription failed");
+    }
+    unsubscribe();
   });
 
   it("buffers microphone audio while the transcription session is being created", async () => {
@@ -682,7 +659,8 @@ describe("ComposerDictationOwner", () => {
     captureAudio();
     expect(request).not.toHaveBeenCalledWith("talk.session.appendAudio", expect.anything());
 
-    await commitLatched(controller, target);
+    await releaseLatched(target);
+    void controller.finishActive();
     resolveCreate(sessionResult("late-session"));
 
     await waitForFast(() => expectAppended("late-session"));

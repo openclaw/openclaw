@@ -1,10 +1,9 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import type { contract } from "./contract.js";
+import { button, el } from "./page-dom.js";
 import {
   accessText,
   andList,
-  button,
-  el,
   recordsText,
   storeIcon,
   storeLabel,
@@ -16,7 +15,6 @@ import type { StoreChange, StoreEntry } from "./stores-contract.js";
 import { icon, type IconName } from "./ui-icons.js";
 
 export { accessText, storeLabel, storeOf, type Names } from "./store-entries.js";
-export { storeDialog } from "./store-dialog.js";
 
 /** Agent viewing selector and the viewed agent's store context (spec §8.1).
  * Selecting an agent only changes what is viewed. */

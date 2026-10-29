@@ -145,6 +145,19 @@ describe("doctor config analysis helpers", () => {
     expect(stripUnknownConfigKeys(input as never)).toEqual({ config, removed: [removed] });
   });
 
+  it.each(["personal", "corporate"])(
+    "removes the unreleased %s preset without expanding or erasing explicit policy",
+    (preset) => {
+      const security = { audit: { suppressions: [{ checkId: "example.check" }] } };
+      const tools = { exec: { mode: "deny" as const }, fs: { workspaceOnly: true } };
+      const input = { security: { ...security, preset }, tools };
+      expect(stripUnknownConfigKeys(input)).toEqual({
+        config: { security, tools },
+        removed: ["security.preset"],
+      });
+    },
+  );
+
   it("preserves heartbeat migration input while stripping unrelated unknown keys", () => {
     const config = {
       agents: {

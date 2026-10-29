@@ -4,6 +4,7 @@ import { requireNativeDatabaseFile } from "../infra/database-engine/physical-fac
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
@@ -37,6 +38,10 @@ import type {
   RetainedReadScope,
 } from "./openclaw-state-read.types.js";
 import type { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+import {
+  hydrateOpenClawStateWorkerError,
+  retainOpenClawStateWorkerErrorPayload,
+} from "./openclaw-state-worker-error.js";
 
 export type OpenClawStateReadCompletion = Promise<OpenClawStateReadReply | undefined>;
 
@@ -274,18 +279,19 @@ export function startOpenClawStateReadOperation(
       const validation = selectedTransport.startValidateFresh(context, authority);
       await validation;
       if (
-        command.type === "plugins.metadata.read" &&
+        (command.type === "plugins.metadata.read" || command.type === "config.health.read") &&
         !context.existingSchemaPath &&
         !context.maintenanceScope &&
         !getStateDatabaseSchemaLease(pathname) &&
-        hasVerifiedLiveSqliteOwner(pathname)
+        (hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname))
       ) {
-        // Read the two metadata rows in the child's pinned transaction instead of
-        // copying unrelated state. Offline and retained snapshots keep their owner.
+        // Read startup metadata in the child's pinned transaction instead of
+        // copying unrelated state. Sealed files retain custody in that child;
+        // unclean and retained snapshots keep their private recovery owner.
         authority.assertCurrent();
         const inspected = await runSqliteReadOnlyOperation(
           pathname,
-          { type: "pluginMetadata.readLive", input: command.input },
+          { type: "startupMetadata.readCurrent", input: command },
           {
             source: "canonical",
             expectedIdentity: context.admission.identity.key,
@@ -297,9 +303,7 @@ export function startOpenClawStateReadOperation(
         if (inspected) {
           const result = inspected.value;
           if (!result.ok) {
-            const { retainOpenClawStateWorkerErrorPayload, hydrateOpenClawStateWorkerError } =
-              await import("./openclaw-state-worker-error.js");
-            const error = new Error("Live plugin metadata inspection failed");
+            const error = new Error("Startup metadata inspection failed");
             retainOpenClawStateWorkerErrorPayload(error, result.error);
             return consume({
               error: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
@@ -309,9 +313,8 @@ export function startOpenClawStateReadOperation(
           return consume({
             value: {
               ok: true,
-              type: command.type,
               sourceAdmitted: true,
-              rows: result.rows,
+              ...result.result,
             },
           });
         }

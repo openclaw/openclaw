@@ -2,19 +2,12 @@ import { describe, expect, it } from "vitest";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { pendingSessionsYield } from "../chat-sessions-yield.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
-import { createProps } from "../chat-thread.test-support.ts";
+import { createProps, makeMessage } from "../chat-thread.test-support.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import { projectTranscriptChain } from "./chat-transcript-message-index.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
-function makeMessage(
-  id: string,
-  seq: number,
-  fields: { role?: string; timestamp?: number; runId?: string; [key: string]: unknown } = {},
-) {
-  const { role = "assistant", timestamp = seq * 10, runId = "run-1", ...extra } = fields;
-  return { role, content: id, timestamp, __openclaw: { id, seq, runId }, ...extra };
-}
+
 const chatItems = (overrides: Partial<BuildChatItemsProps>) =>
   buildChatItems(createProps({ sessionKey, ...overrides }));
 type Chain = ReturnType<typeof projectTranscriptChain>;
@@ -169,10 +162,9 @@ describe("PR preparation handoff", () => {
     { name: "not async", details: { status: "started", yielded: true } },
     { name: "failed result", details: receipt, isError: true },
     { name: "unpaired result", details: receipt, unpaired: true },
-    { name: "another action", details: receipt, action: "publish" },
     {
-      name: "another action with tools hidden",
-      details: receipt,
+      name: "a synchronous publish result with tools hidden",
+      details: { status: "published" },
       action: "publish",
       showToolCalls: false,
     },
@@ -255,5 +247,72 @@ describe("PR preparation handoff", () => {
       ["later-run", "active"],
     ]);
     expect(chain.transcriptItems.at(-2)).toMatchObject({ kind: "group", role: "user" });
+  });
+});
+
+describe("workspace publication handoff", () => {
+  const publishCall = {
+    type: "toolCall",
+    id: "publish-call",
+    name: "github_publish",
+    arguments: { action: "publish", workspacePath: "/work/app" },
+  };
+  const report =
+    "Published example/app branch fix/menus: https://github.com/example/app/pull/2 Using @bot (Agent override).";
+  const messages = [
+    makeMessage("publish-request", 1, {
+      role: "user",
+      runId: "publish-run",
+      content: "Publish my fix.",
+      timestamp: 1_000,
+    }),
+    {
+      role: "assistant",
+      runId: "publish-run",
+      timestamp: 2_000,
+      stopReason: "toolUse",
+      content: [publishCall],
+    },
+    {
+      role: "toolResult",
+      runId: "publish-run",
+      timestamp: 2_001,
+      toolCallId: "publish-call",
+      toolName: "github_publish",
+      content: [
+        { type: "text", text: JSON.stringify({ status: "started", async: true, yielded: true }) },
+      ],
+    },
+    // The Gateway reports the result without a run; the next run resumes after it.
+    {
+      role: "assistant",
+      timestamp: 3_000,
+      stopReason: "stop",
+      model: "gateway-publication",
+      content: [{ type: "text", text: report }],
+    },
+    {
+      role: "assistant",
+      runId: "resume-run",
+      timestamp: 4_000,
+      stopReason: "stop",
+      content: "The PR is green.",
+    },
+  ];
+
+  it("continues one answer through its result report", () => {
+    const chain = projectHistory(messages, { messages });
+    expect(chain.transcriptItems.map((item) => item.kind)).toEqual(["group", "agent-run-frame"]);
+    const [frame] = framesOf(chain);
+    expect(frame?.outcome.kind).toBe("completed");
+    expect(JSON.stringify(messagesIn([frame!]))).toContain(report);
+    expect(JSON.stringify(messagesIn([frame!]))).toContain("The PR is green.");
+  });
+
+  it("does not mark a handoff awaiting its continuation as interrupted", () => {
+    const entries = messages.slice(0, 4);
+    const frames = framesOf(projectHistory(entries, { messages: entries }));
+    expect(frames.map((frame) => frame.outcome.kind)).toEqual(["completed"]);
+    expect(JSON.stringify(messagesIn(frames))).toContain(report);
   });
 });

@@ -16,6 +16,14 @@ reports that Doctor finished with plugin load errors. When an updater invokes
 Doctor, the same failures remain recorded warnings so an otherwise safe update
 can continue; rerun Doctor after resolving the reported cause.
 
+`--fix` (alias `--repair`) and `--yes` authorize safe migrations with closed or
+piped stdin, including with `--non-interactive`; a PTY is not required. Ambiguous
+ownership changes still need an operator decision. If config cannot be parsed or
+the database target cannot be resolved, Doctor exits `2` and names the blocker;
+no state migrations ran. Invalid config or required migrations left deferred at
+final validation exit `1`, with the rejected paths and next steps. A successful
+run with no pending work can still exit `0`.
+
 The CLI drains its shared-state database workers before exiting. Scripted callers
 must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
@@ -23,6 +31,11 @@ during an update.
 
 Doctor checks every configured agent. Plugin metadata retained between workspace
 checks is bounded, so adding agents does not retain a full plugin inventory per agent.
+
+Healthy transcript history does not require stopping the Gateway just to record
+historical migration completion. Doctor defers that bookkeeping while any agent
+database is in use. History that actually needs repair still requires exclusive
+maintenance custody.
 
 SIGINT and SIGTERM cancel Doctor's preparation before it stops a Gateway or
 starts repairs. If repair already owns state, Doctor settles its admitted work
@@ -318,6 +331,7 @@ openclaw channels status --probe
 | `--no-workspace-suggestions`    | Disable workspace memory/search suggestions.                                                                                                                                                                                                          |
 | `--yes`                         | Accept defaults and enter repair maintenance without prompting.                                                                                                                                                                                       |
 | `--repair` / `--fix`            | Apply recommended repairs while coordinating maintenance with the matching managed Gateway (`--fix` is an alias). Refresh outdated Linux policy and reconcile eligible running-service installation drift; preserve stopped launchers and stop state. |
+| `--replace-model <json>`        | With `--fix` or `--repair`, explicitly replace a retiring Daybreak alias with a specific OpenAI model and Access program. Repeat for both aliases; see below.                                                                                         |
 | `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, uses the same policy-refresh and installation-drift rules.                                                                                              |
 | `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                                                                 |
 | `--client-credentials`          | Prepare only client credentials and their required source schema. Requires `--repair` or `--fix` with `--non-interactive`; optionally accepts `--json`.                                                                                               |
@@ -413,3 +427,45 @@ current account before retrying migration. Do not overwrite a current account
 or delete recovery data merely to clear a notice. For unavailable credentials,
 use the configured provider's `openclaw models auth login --provider <provider-id>`
 flow. Pre-June `oauth.json` requires the documented [2026.9.5 bridge upgrade](/install/updating#upgrading-very-old-versions).
+
+## Daybreak alias migration
+
+The Blue/Red aliases retire on October 28, 2026. Doctor does not infer their
+successors. First check the specific model IDs and Access programs approved for
+your account, then inventory the references:
+
+```bash
+openclaw doctor --lint --only openai/daybreak-alias-retirement
+```
+
+Use a JSON mapping with `--fix --replace-model`. For example, **only if your
+account supports this model and Blue Access**:
+
+```bash
+openclaw doctor --fix --replace-model '{"from":"openai/gpt-daybreak-blue-latest","to":"openai/gpt-6.1-sol","accessProgram":"daybreak_blue"}'
+```
+
+Repeat `--replace-model` for Red if needed. Both references must use the
+`openai/` provider; the source must be a retiring Blue/Red alias, and the
+target must not be either alias. Choose `standard`, `daybreak_blue`, or
+`daybreak_red` explicitly. This selects request behavior, not account entitlement.
+It neither changes account pins nor grants Daybreak access.
+
+Doctor saves the chosen target's model-scoped Access setting, then applies the
+normal guarded model-reference repair to config, unlocked saved sessions, and
+scheduled jobs. Model aliases, supported model settings, and account suffixes
+are retained on the replacement. The chosen Access program overrides the old
+alias's program; conflicting pre-existing target settings stop the migration.
+Existing model-policy and pinned-account safeguards still apply. Cyber failover's
+`mode` and `cooloffMs` settings are unchanged.
+
+Before retargeting config aliases, Doctor expands saved session and cron aliases
+to their original model IDs without changing their model, account, or Access
+choice. This makes a retry safe if the process stops after saving config. A locked
+alias or an incomplete store scan defers config retargeting; unlock the affected
+selection or restore store access and rerun the same command.
+
+Review the repair notes and rerun the read-only check. Locked sessions and
+references with unsupported accounts or model policies may need manual changes.
+The command uses Doctor's normal maintenance and backup workflow; it does not
+perform a live inference or entitlement probe.

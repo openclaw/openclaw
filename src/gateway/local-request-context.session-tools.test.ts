@@ -1,4 +1,5 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
+import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
@@ -380,9 +381,9 @@ describe("built-in session tool role authority", () => {
       });
       try {
         expect(custody?.isCurrent()).toBe(true);
-        // The closed recovery principal owns accepted cross-session delivery independently.
+        // The closed lifecycle principal owns accepted cross-session delivery independently.
         await expect(
-          runtime.recovery.dispatchSessionMethod("chat.history", {
+          runtime.lifecycle.dispatchSessionMethod("chat.history", {
             sessionKey: PARTICIPANT_DRAFT,
           }),
         ).resolves.toMatchObject(draftMessages);
@@ -402,9 +403,7 @@ describe("built-in session tool role authority", () => {
     await withParticipantSessionToolsFixture(async ({ turn, alice, bob }) => {
       const context = localContext();
       const operatorRunAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
-      if (!operatorRunAuthority) {
-        throw new Error("expected local Gateway context and admitted operator");
-      }
+      assert(operatorRunAuthority, "expected local Gateway context and admitted operator");
       const client = sharingPolicyClient({ user: alice.profileId });
       client.connect.client.id = "gateway-client";
       client.internal = {
@@ -559,9 +558,7 @@ describe("built-in session tool role authority", () => {
           const result = await spawn();
           expect(result).toMatchObject({ status: "accepted" });
           const childKey = result?.childSessionKey;
-          if (typeof childKey !== "string") {
-            throw new Error("expected created child session key");
-          }
+          assert(typeof childKey === "string", "expected created child session key");
           const child = expectDefined(mainSession(childKey), "persisted child session");
           expect(child.parentSessionId).toBe(sessionId);
           const transcript = await sessionToolsTranscript(childKey, child.sessionId);
@@ -622,9 +619,7 @@ describe("built-in session tool role authority", () => {
           // Initial task dispatch and explicit-model catalog preparation are outside rollback.
           const { task: _task, model: _model, ...creation } = params;
           const created = await callInProcessGatewayTool<SessionsCreateResult>(method, creation);
-          if (!created.sessionId) {
-            throw new Error("session creation did not return its incarnation");
-          }
+          assert(created.sessionId, "session creation did not return its incarnation");
           childKey = created.key;
           if (generation === "replaced") {
             await callInProcessGatewayTool("sessions.delete", { key: childKey });
@@ -632,10 +627,7 @@ describe("built-in session tool role authority", () => {
           } else if (generation === "reset") {
             await callInProcessGatewayTool("sessions.reset", { key: childKey });
           }
-          successor = mainSession(childKey);
-          if (!successor) {
-            throw new Error("expected persisted child before rollback");
-          }
+          successor = expectDefined(mainSession(childKey), "persisted child before rollback");
           if (generation === "replaced") {
             expect(successor.sessionId).not.toBe(created.sessionId);
           } else if (generation === "reset") {
@@ -681,9 +673,7 @@ describe("built-in session tool role authority", () => {
                 : "Session changed; newer session kept.",
             ),
           });
-          if (!childKey) {
-            throw new Error("expected a created child");
-          }
+          assert(childKey, "expected a created child");
           if (registeredRun) {
             expect.soft(registeredRun.controller.signal.aborted).toBe(generation === "active");
           }

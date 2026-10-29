@@ -283,6 +283,7 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
         version: 31,
         postgresVectorDecoderVersion: 1,
         postgresVectorSearchVersion: 1,
+        postgresTextSearchVersion: 1,
       };
       let db = open(predecessor);
       const namespace = getPostgresPhysicalFacts(db)!.namespace;

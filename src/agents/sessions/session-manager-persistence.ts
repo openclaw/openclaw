@@ -264,6 +264,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           assertCurrent,
           beforeFreshMessageCommit,
           toolResult: entry.type === "message" && entry.message.role === "toolResult",
+          message: entry.type === "message" ? entry.message : null,
           append: {
             kind: "metadata",
             ...(modelPromptProjection ? { modelPromptProjection } : {}),

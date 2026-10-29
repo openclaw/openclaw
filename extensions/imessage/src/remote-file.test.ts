@@ -42,6 +42,7 @@ function respond(...overrides: Partial<CommandResult>[]) {
     runCommand.mockResolvedValueOnce({ ...success, ...override });
   }
 }
+const commands = () => runCommand.mock.calls.map(([argv]) => argv[0]);
 
 beforeEach(() => {
   warnMock.mockReset();
@@ -50,46 +51,38 @@ beforeEach(() => {
   randomUUIDMock.mockReturnValue("01234567-89ab-cdef-0123-456789abcdef");
 });
 
-it.each(["allocation", "upload"] as const)(
-  "stops later work after retirement during %s and still cleans the remote directory",
-  async (phase) => {
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const retired = new Error("iMessage delivery retired");
-    let current = true;
-    runCommand.mockImplementation(async (argv: string[]) => {
-      if (current && argv[0] === (phase === "allocation" ? "ssh" : "scp")) {
-        entered.resolve();
-        await release.promise;
-      }
-      return success;
-    });
-    const settled = stage({
-      assertDirectAdapterHandoff: () => {
-        if (!current) {
-          throw retired;
-        }
-      },
-    }).then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-    try {
-      expect(
-        await Promise.race([entered.promise.then(() => true), settled.then(() => false)]),
-      ).toBe(true);
-      current = false;
-    } finally {
-      release.resolve();
-      await settled;
+it.each(["allocation", "upload"] as const)("retires during %s", async (phase) => {
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  const retired = new Error("iMessage delivery retired");
+  let current = true;
+  runCommand.mockImplementation(async (argv: string[]) => {
+    if (current && argv[0] === (phase === "allocation" ? "ssh" : "scp")) {
+      entered.resolve();
+      await release.promise;
     }
-    expect(await settled).toEqual({ error: retired });
-    expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(
-      phase === "allocation" ? ["ssh", "ssh"] : ["ssh", "scp", "ssh"],
+    return success;
+  });
+  const settled = stage({
+    assertDirectAdapterHandoff: () => {
+      if (!current) {
+        throw retired;
+      }
+    },
+  }).catch((error: unknown) => error);
+  try {
+    expect(await Promise.race([entered.promise.then(() => true), settled.then(() => false)])).toBe(
+      true,
     );
-    expect(use).not.toHaveBeenCalled();
-  },
-);
+    current = false;
+  } finally {
+    release.resolve();
+    await settled;
+  }
+  expect(await settled).toBe(retired);
+  expect(commands()).toEqual(phase === "allocation" ? ["ssh", "ssh"] : ["ssh", "scp", "ssh"]);
+  expect(use).not.toHaveBeenCalled();
+});
 
 it("does not allocate or clean a directory when authority is already retired", async () => {
   runCommand.mockResolvedValue(success);
@@ -112,7 +105,7 @@ it("uploads into an owner-only remote directory and cleans after success", async
   await expect(stage({ remoteHost: "bot@messages-mac", localPath })).resolves.toBe("sent");
 
   const [allocate, upload, cleanup] = runCommand.mock.calls;
-  expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "scp", "ssh"]);
+  expect(commands()).toEqual(["ssh", "scp", "ssh"]);
   expect(allocate?.[0].at(-1)).toBe("sh -s");
   expect(allocate?.[1].input).toContain("umask 077");
   expect(allocate?.[1].input).not.toContain("a file");
@@ -133,7 +126,7 @@ it("cleans the token-owned parent after setup timeout", async () => {
   respond({ code: null, termination: "timeout" }, {});
 
   await expect(stage()).rejects.toThrow("allocation failed (timeout)");
-  expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "ssh"]);
+  expect(commands()).toEqual(["ssh", "ssh"]);
   expect(runCommand.mock.calls[1]?.[1].input).toContain(`rm -rf -- ${remoteDir}`);
 });
 
@@ -142,6 +135,5 @@ it("warns once without replacing the primary failure when cleanup also fails", a
   respond({}, {}, { code: 1, stderr: "cleanup failed" });
   use.mockRejectedValueOnce(primary);
   await expect(stage()).rejects.toBe(primary);
-  expect(warnMock).toHaveBeenCalledOnce();
-  expect(warnMock).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
+  expect(warnMock).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("cleanup failed"));
 });

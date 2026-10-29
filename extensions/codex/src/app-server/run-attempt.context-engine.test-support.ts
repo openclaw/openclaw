@@ -11,13 +11,12 @@ import {
   userMessage,
 } from "./run-attempt-test-harness.js";
 import { writeCodexAppServerBinding as writeRawCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import { withoutCodexTurnContextHandoffs } from "./test-support.js";
 
 export function requestMethodsExcludingSkillDiscovery(harness: {
   requests: ReadonlyArray<{ method: string }>;
 }): string[] {
-  return harness.requests
-    .filter(({ method }) => method !== "skills/list")
-    .map(({ method }) => method);
+  return withoutCodexTurnContextHandoffs(harness.requests);
 }
 
 export function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {

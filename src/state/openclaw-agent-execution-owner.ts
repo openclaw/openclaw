@@ -1,8 +1,8 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { addAbortListener } from "node:events";
 import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
@@ -17,10 +17,14 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { notifyListeners } from "../shared/listeners.js";
 import * as creationClaims from "./agent-creation-claim.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
-import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
+import {
+  captureAgentDatabaseAdmission,
+  retainAgentDatabaseStartupWorker,
+} from "./agent-database-admission.js";
 import {
   assertAgentDeletionExecutionCleanupAccess,
   getAgentDeletionDatabaseCleanup,
@@ -69,7 +73,6 @@ export type AgentDatabaseExecutionState = {
 
 const log = createSubsystemLogger("state/agent-db");
 const MAX_IDLE_EXECUTORS = 4;
-const runInExecutionOwnerContext = AsyncLocalStorage.snapshot();
 
 export function createAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
@@ -185,6 +188,7 @@ export function createAgentDatabaseExecution(
           }
         },
         (error: unknown) => {
+          materializeErrorStack(error);
           cleanupFailure = { error };
           throw error;
         },
@@ -254,6 +258,9 @@ export function createAgentDatabaseExecution(
         reportTerminal,
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
         creationClaim?.witness,
+        retainAgentDatabaseStartupWorker(agentId, { env: context.environment }, () =>
+          closeNative(created),
+        ),
       );
       generation = created;
     }
@@ -591,7 +598,7 @@ export function createAgentDatabaseExecution(
             }
             if (canRetain() && executionState.idle.size < MAX_IDLE_EXECUTORS) {
               executionState.idle.add(owner);
-              const timer = runInExecutionOwnerContext(() =>
+              const timer = runInDetachedAsyncContext(() =>
                 setTimeout(() => {
                   if (idleTimer !== timer || !executionState.idle.has(owner)) {
                     return;
@@ -603,7 +610,7 @@ export function createAgentDatabaseExecution(
               timer.unref();
               // Restart drain retires idle generations without interrupting accepted writers.
               idleDrainListener = addAbortListener(drainSignal, () => {
-                runInExecutionOwnerContext(() => {
+                runInDetachedAsyncContext(() => {
                   void owner.closeIdle().catch(reportCleanupFailure);
                 });
               });

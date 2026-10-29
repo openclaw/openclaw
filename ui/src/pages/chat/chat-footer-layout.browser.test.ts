@@ -418,7 +418,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
             '<openclaw-chat-outbox-recovery style="display:contents"></openclaw-chat-outbox-recovery>',
           );
           notices.innerHTML =
-            '<span class="chat-composer-lit-content" style="display:contents"><openclaw-chat-child-attention style="display:contents"></openclaw-chat-child-attention></span>';
+            '<span class="chat-composer-lit-content" style="display:contents"></span>';
         });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);

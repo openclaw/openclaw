@@ -5,7 +5,6 @@ import {
   buildGatewayConnectAuth,
   selectGatewayConnectAuth,
 } from "../../packages/gateway-client/src/connect-auth.js";
-import type { EventLoopReadyResult } from "../../packages/gateway-client/src/event-loop-ready.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as oneShotExit from "../cli/one-shot-exit.js";
@@ -23,7 +22,6 @@ import {
   lastCapturedOptions,
   loadResumableNodeHostGateway,
   mocks,
-  readyNodeHost,
   receiveHello,
   resetRunnerTestState,
   runNodeHost,
@@ -36,8 +34,6 @@ const deviceIdentity = {
   publicKeyPem: "public-key-test",
   privateKeyPem: "private-key-test",
 };
-const failedReadiness = { ready: false, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 };
-const nodeOptions = { gatewayHost: "127.0.0.1", gatewayPort: 18789 };
 const pairedToken = { role: "node", token: "paired-node-token", scopes: [], updatedAtMs: 1 };
 const connectAuth = (storedToken: string | undefined = "paired-node-token") =>
   buildGatewayConnectAuth(selectGatewayConnectAuth({ ...lastCapturedOptions(), storedToken }));
@@ -125,59 +121,48 @@ describe("runNodeHost", () => {
 
   it("retains managed state admission while an external signal closes the runtime", async () => {
     mocks.useFakeRuntime = true;
-    readyNodeHost();
     const statePath = resolveOpenClawStateSqlitePath();
     let cleanupStatePath: string | undefined;
     mocks.activeRuntime.close.mockImplementationOnce(async () => {
       cleanupStatePath = getExistingOpenClawStateSchemaPath();
     });
-    const on = vi.spyOn(process, "on");
-    const previousExitCode = process.exitCode;
-    const running = withExistingOpenClawStateSchema({ path: statePath }, () =>
-      runNodeHost(nodeOptions),
+    await withReadyNodeHost(
+      async ({ running, stop }) => {
+        expect(getExistingOpenClawStateSchemaPath()).toBeUndefined();
+        stop();
+        await running;
+        expect(cleanupStatePath).toBe(statePath);
+        expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
+        expect(getExistingOpenClawStateSchemaPath()).toBeUndefined();
+      },
+      {},
+      undefined,
+      (options) => withExistingOpenClawStateSchema({ path: statePath }, () => runNodeHost(options)),
     );
-    const stop = () => on.mock.calls.find(([event]) => event === "SIGTERM")?.[1]?.("SIGTERM");
-    try {
-      await vi.waitFor(() => expect(on).toHaveBeenCalledWith("SIGTERM", expect.any(Function)));
-      expect(getExistingOpenClawStateSchemaPath()).toBeUndefined();
-      stop();
-      await running;
-      expect(cleanupStatePath).toBe(statePath);
-      expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-      expect(getExistingOpenClawStateSchemaPath()).toBeUndefined();
-    } finally {
-      stop();
-      await running;
-      process.exitCode = previousExitCode;
-      on.mockRestore();
-    }
   });
 
   it("joins the source node runtime when its companion stdin closes", async () => {
     mocks.useFakeRuntime = true;
-    readyNodeHost();
     const input = new PassThrough();
     const previous = Object.getOwnPropertyDescriptor(process, "stdin");
-    const previousExit = process.exitCode;
     Object.defineProperty(process, "stdin", { configurable: true, value: input });
-    const running = runNodeHost({
-      ...nodeOptions,
-      parentStdin: true,
-    });
     try {
-      await vi.waitFor(() => expect(input.listenerCount("end")).toBe(1));
-      input.end();
-      await running;
-      expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
-      expect(input.listenerCount("end")).toBe(0);
+      await withReadyNodeHost(
+        async ({ running, client }) => {
+          await vi.waitFor(() => expect(input.listenerCount("end")).toBe(1));
+          input.end();
+          await running;
+          expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
+          expect(client.stopAndWait).toHaveBeenCalledOnce();
+          expect(input.listenerCount("end")).toBe(0);
+        },
+        { parentStdin: true },
+        () => input.end(),
+      );
     } finally {
-      input.end();
-      await running;
       if (previous) {
         Object.defineProperty(process, "stdin", previous);
       }
-      process.exitCode = previousExit;
     }
   });
 
@@ -431,76 +416,57 @@ describe("runNodeHost", () => {
     });
   });
 
-  it("keeps a ref'd lifetime handle until a ready foreground host stops", async () => {
-    const unref = vi.fn();
-    const interval = { unref } as unknown as ReturnType<typeof setInterval>;
-    const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
-    const clearIntervalSpy = vi.spyOn(global, "clearInterval").mockImplementation(() => {});
-    const mcpClose = createDeferred<undefined>();
-    mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
-    await withReadyNodeHost(
-      async ({ running, stop }) => {
-        await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
-
-        expect(setIntervalSpy).toHaveBeenCalledOnce();
-        expect(unref).not.toHaveBeenCalled();
-        expect(clearIntervalSpy).not.toHaveBeenCalledWith(interval);
-
-        expect(stop()).toBeTypeOf("function");
-        await expectCalls(mocks.capturedGatewayClients[0]?.stopAndWait);
-
-        expect(clearIntervalSpy).not.toHaveBeenCalledWith(interval);
-        await expectCalls(mocks.closeMcpManager);
-        mcpClose.resolve(undefined);
-        await running;
-
-        expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
-      },
-      {},
-      () => mcpClose.resolve(undefined),
-    );
-  });
-
-  it("closes MCP clients before exiting on a terminal reconnect pause", async () => {
-    const readiness = createDeferred<EventLoopReadyResult>();
-    const mcpClose = createDeferred<undefined>();
-    mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(readiness.promise);
-    mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
-    const exit = vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true);
-    const previousExitCode = process.exitCode;
-    const running = runNodeHost(nodeOptions);
-    const stopped = expect(running).resolves.toBeUndefined();
-    try {
-      await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
-      lastCapturedOptions()?.onReconnectPaused?.({
-        code: 1008,
-        reason: "connect failed",
-        detailCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
-      });
-      await expectCalls(mocks.closeMcpManager);
-      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalled();
-      expect(exit).not.toHaveBeenCalled();
-
-      mcpClose.resolve(undefined);
-      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(undefined, 1));
-
-      readiness.resolve(failedReadiness);
-      await stopped;
-      expect(process.exitCode).toBe(1);
-      expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
-      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
-    } finally {
-      mcpClose.resolve(undefined);
-      readiness.resolve(failedReadiness);
-      try {
-        // Shutdown owns the exit callback; keep it intercepted until the run settles.
-        await stopped;
-      } finally {
-        process.exitCode = previousExitCode;
-        exit.mockRestore();
-      }
-    }
-  });
+  it.each(["signal", "terminal reconnect pause"])(
+    "drains MCP before exit on %s",
+    async (reason) => {
+      const unref = vi.fn();
+      const interval = { unref } as unknown as ReturnType<typeof setInterval>;
+      const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
+      const clearIntervalSpy = vi.spyOn(global, "clearInterval").mockImplementation(() => {});
+      const readiness = createDeferred<ReturnType<typeof mocks.readiness>>();
+      const mcpClose = createDeferred<undefined>();
+      mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(readiness.promise);
+      mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
+      const exit = vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true);
+      await withReadyNodeHost(
+        async ({ running, stop, client, options }) => {
+          await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
+          expect(setIntervalSpy).toHaveBeenCalledOnce();
+          expect(unref).not.toHaveBeenCalled();
+          expect(clearIntervalSpy).not.toHaveBeenCalledWith(interval);
+          if (reason === "signal") {
+            readiness.resolve(mocks.readiness(true));
+            expect(stop()).toBeTypeOf("function");
+          } else {
+            options.onReconnectPaused?.({
+              code: 1008,
+              reason: "connect failed",
+              detailCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+            });
+          }
+          await expectCalls(client.stopAndWait);
+          expect(clearIntervalSpy).not.toHaveBeenCalledWith(interval);
+          await expectCalls(mocks.closeMcpManager);
+          expect(exit).not.toHaveBeenCalled();
+          mcpClose.resolve(undefined);
+          if (reason !== "signal") {
+            await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(undefined, 1));
+          }
+          readiness.resolve(mocks.readiness(false));
+          await expect(running).resolves.toBeUndefined();
+          expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
+          expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
+          expect(client.stopAndWait).toHaveBeenCalledOnce();
+          expect(process.exitCode).toBe(reason === "signal" ? 143 : 1);
+        },
+        {},
+        () => {
+          mcpClose.resolve(undefined);
+          readiness.resolve(mocks.readiness(false));
+        },
+      );
+    },
+  );
 
   it("keeps pairing reconnect pauses visible without stopping the foreground host", async () => {
     await expectStartupTimeout();

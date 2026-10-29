@@ -8,10 +8,10 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
-  createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
   createTestChatPane,
   type TestChatPane,

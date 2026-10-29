@@ -1146,7 +1146,7 @@ describe("createManagedOutgoingImageBlocks", () => {
       {
         type: "attachment_error",
         attachment: {
-          code: "delivery-failed",
+          code: "unsupported-format",
           kind: "document",
           label: fixture.fileName,
           mimeType: fixture.mimeType,

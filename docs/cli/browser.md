@@ -273,6 +273,11 @@ openclaw browser close t1
 
 `tabs` returns `suggestedTargetId` first, then the stable `tabId` (such as `t1`), the optional label, and the raw `targetId`. Pass `suggestedTargetId` back into `focus`, `close`, snapshots, and actions. Assign a label with `open --label`, `tab new --label`, or `tab label`. Labels, tab ids, raw target ids, and unique target-id prefixes are all accepted. The request field is still named `targetId` for compatibility, but it accepts any of these tab references.
 
+For HTTP CDP profiles, `close` confirms that the tab disappears before reporting
+success. If a page prompt keeps it open, resolve the prompt and retry. If the tab
+list cannot be read after the close request, confirm the tab's state in the
+browser before retrying; the close may already have succeeded.
+
 Profiles configured with `driver: "extension"` can additionally return a numeric
 `webExtensionTabId`. It is scoped to the current browser runtime and is intended
 only for calls into Chrome's WebExtensions API. It can change after the browser

@@ -10,10 +10,6 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
-import {
-  markFrozenClawToolAllowPolicy,
-  resolveClawToolPolicyConsent,
-} from "../claws/tool-policy-runtime.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
@@ -25,6 +21,10 @@ import {
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
+import {
+  markFrozenTemplateToolAllowPolicy,
+  resolveTemplateToolPolicyConsent,
+} from "../templates/tool-policy-runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
 import {
@@ -409,15 +409,15 @@ export function resolveEffectiveToolPolicy(params: {
   );
   const explicitProfileAlsoAllow = agentTools?.alsoAllow ?? globalTools?.alsoAllow;
   const agentPolicy = pickSandboxToolPolicy(agentTools);
-  const clawToolPolicyConsent = resolveClawToolPolicyConsent({
+  const templateToolPolicyConsent = resolveTemplateToolPolicyConsent({
     agentTools,
     agentId,
     profile,
     ownsProfile: profileSource === "agent",
     hasAgentAllowlist: (agentPolicy?.allow?.length ?? 0) > 0,
   });
-  if (clawToolPolicyConsent.frozen) {
-    markFrozenClawToolAllowPolicy(agentPolicy);
+  if (templateToolPolicyConsent.frozen) {
+    markFrozenTemplateToolAllowPolicy(agentPolicy);
   }
 
   const effectivePolicy = {

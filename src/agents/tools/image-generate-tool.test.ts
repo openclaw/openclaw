@@ -102,7 +102,14 @@ function savedMedia(fileName: string, size: number, contentType = "image/png") {
   return { path: `/tmp/${fileName}`, id: fileName, size, contentType };
 }
 
-function mockReferenceImage(bytes: string, contentType = "image/png") {
+function mockReferenceImage(
+  bytes: string,
+  contentType = "image/png",
+  dimensions?: { width: number; height: number },
+) {
+  if (dimensions) {
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue(dimensions);
+  }
   return vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
     kind: "image",
     buffer: Buffer.from(bytes),
@@ -217,9 +224,7 @@ function createOpenAIImageProvider(): ImageGenerationProvider {
 
 function createOpenAIEditProvider(): ImageGenerationProvider {
   return {
-    id: "openai",
-    defaultModel: "gpt-image-1",
-    models: ["gpt-image-1"],
+    ...createOpenAIImageProvider(),
     capabilities: {
       generate: {
         maxCount: 4,
@@ -239,9 +244,6 @@ function createOpenAIEditProvider(): ImageGenerationProvider {
         sizes: ["1024x1024", "1024x1536", "1536x1024"],
       },
     },
-    generateImage: vi.fn(async () => {
-      throw new Error("not used");
-    }),
   };
 }
 
@@ -316,16 +318,20 @@ function createToolWithPrimaryImageModel(
     agentSessionKey?: string;
     requesterOrigin?: NonNullable<Parameters<typeof createImageGenerateTool>[0]>["requesterOrigin"];
     fallbacks?: string[];
+    mediaMaxMb?: number;
+    timeoutMs?: number;
   },
 ) {
   ensureDefaultImageGenerationProvidersStubbed();
-  const { fallbacks, ...toolOptions } = extra ?? {};
+  const { fallbacks, mediaMaxMb, timeoutMs, ...toolOptions } = extra ?? {};
   return requireImageGenerateTool(
     createImageGenerateTool({
       config: configWithDefaults({
+        ...(mediaMaxMb !== undefined ? { mediaMaxMb } : {}),
         mediaModels: {
           image: {
             primary,
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
             ...(fallbacks ? { fallbacks } : {}),
           },
         },
@@ -618,15 +624,10 @@ describe("createImageGenerateTool", () => {
     saveMediaBuffer.mockResolvedValueOnce(savedMedia(firstId, 5));
     saveMediaBuffer.mockResolvedValueOnce(savedMedia(secondId, 5));
 
-    const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaMaxMb: 8,
-          mediaModels: { image: { primary: "openai/gpt-image-1" } },
-        }),
-        agentDir: "/tmp/agent",
-      }),
-    );
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
+      mediaMaxMb: 8,
+      agentDir: "/tmp/agent",
+    });
 
     const result = await tool.execute("call-1", {
       prompt: "A cat wearing sunglasses",
@@ -701,15 +702,10 @@ describe("createImageGenerateTool", () => {
       .mockImplementation(async (buffer, contentType, _subdir, _maxBytes, fileName) =>
         savedMedia(`${fileName}---id.jpg`, buffer.byteLength, contentType),
       );
-    const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaMaxMb: 2,
-          mediaModels: { image: { primary: "openai/gpt-image-1" } },
-        }),
-        agentDir: "/tmp/agent",
-      }),
-    );
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
+      mediaMaxMb: 2,
+      agentDir: "/tmp/agent",
+    });
 
     const result = await tool.execute("call-over-cap", { prompt: "A detailed market" });
 
@@ -735,15 +731,10 @@ describe("createImageGenerateTool", () => {
     const png = noisePng(256, 256);
     mockGeneratedImage({ images: [{ buffer: png, mimeType: "image/png", fileName: "cat.png" }] });
     const saveMediaBuffer = vi.spyOn(mediaStore, "saveMediaBuffer");
-    const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaMaxMb: 1 / 1024,
-          mediaModels: { image: { primary: "openai/gpt-image-1" } },
-        }),
-        agentDir: "/tmp/agent",
-      }),
-    );
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
+      mediaMaxMb: 1 / 1024,
+      agentDir: "/tmp/agent",
+    });
 
     await expect(tool.execute("call-no-fit", { prompt: "A detailed market" })).rejects.toThrow(
       /^Generated image 1 \(image\/png, [\d.]+(KB|MB)\) exceeds the 1KB media limit; the smallest re-encoding is [\d.]+KB \(image\/jpeg, 64x64\)$/,
@@ -1322,18 +1313,7 @@ describe("createImageGenerateTool", () => {
     const generateImage = mockGeneratedImage();
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("generated.png", 7));
 
-    const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: {
-            image: {
-              primary: "openai/gpt-image-1",
-              timeoutMs: 180_000,
-            },
-          },
-        }),
-      }),
-    );
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", { timeoutMs: 180_000 });
 
     const defaultResult = await tool.execute("call-timeout-default", {
       prompt: "A cat wearing sunglasses",
@@ -1432,11 +1412,7 @@ describe("createImageGenerateTool", () => {
       model,
       images: [imageAsset("krea-style-out", "krea-style.png")],
     });
-    mockReferenceImage("style-ref");
-    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
-      width: 2048,
-      height: 2048,
-    });
+    mockReferenceImage("style-ref", "image/png", { width: 2048, height: 2048 });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("krea-style.png", 14));
 
     const tool = createToolWithPrimaryImageModel(`fal/${model}`, {
@@ -1484,8 +1460,7 @@ describe("createImageGenerateTool", () => {
       provider,
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
-    const loadWebMedia = mockReferenceImage("reference");
-    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+    const loadWebMedia = mockReferenceImage("reference", "image/png", {
       width: 1024,
       height: 1024,
     });
@@ -1559,11 +1534,7 @@ describe("createImageGenerateTool", () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       provider,
     ]);
-    mockReferenceImage("reference");
-    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
-      width: 1024,
-      height: 1024,
-    });
+    mockReferenceImage("reference", "image/png", { width: 1024, height: 1024 });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("edited.png", 6));
     const tool = createToolWithPrimaryImageModel(`fal/${primaryModel}`, {
       workspaceDir: process.cwd(),
@@ -1647,11 +1618,7 @@ describe("createImageGenerateTool", () => {
       model: "gemini-3-pro-image-preview",
       images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
     });
-    mockReferenceImage("reference");
-    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
-      width: 2048,
-      height: 2048,
-    });
+    mockReferenceImage("reference", "image/png", { width: 2048, height: 2048 });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("edited.png", 6));
 
     const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {
@@ -1767,17 +1734,7 @@ describe("createImageGenerateTool", () => {
       contentType: "image/jpeg",
     });
 
-    const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: {
-          agents: {
-            defaults: {
-              mediaModels: { image: { primary: "google/gemini-3.1-flash-image-preview" } },
-            },
-          },
-        },
-      }),
-    );
+    const tool = createToolWithPrimaryImageModel("google/gemini-3.1-flash-image-preview");
 
     const result = await tool.execute("call-regression", { prompt: "kodo sawaki zazen" });
     const text = resultText(result);
@@ -1792,18 +1749,10 @@ describe("createImageGenerateTool", () => {
     ]);
   });
 
-  it("rejects counts outside the supported range", async () => {
+  it.each([5, 2.5, "2cats", null])("rejects invalid image count %s", async (count) => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       createGoogleImageProvider(),
     ]);
-    const tool = createToolWithPrimaryImageModel("google/gemini-3.1-flash-image-preview");
-
-    await expect(tool.execute("call-2", { prompt: "too many cats", count: 5 })).rejects.toThrow(
-      "count must be between 1 and 4",
-    );
-  });
-
-  it.each([2.5, "2cats", null])("rejects malformed image count %s", async (count) => {
     const generateImage = mockGeneratedImage({
       provider: "google",
       model: "gemini-3.1-flash-image-preview",
@@ -1913,15 +1862,10 @@ describe("createImageGenerateTool", () => {
   it("uses the canonical image cap when mediaMaxMb is non-finite", async () => {
     stubImageGenerationProviders();
     stubEditedImageFlow({ width: 3200, height: 1800 });
-    const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "google/gemini-3-pro-image-preview" } },
-          mediaMaxMb: Number.POSITIVE_INFINITY,
-        }),
-        workspaceDir: process.cwd(),
-      }),
-    );
+    const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {
+      mediaMaxMb: Number.POSITIVE_INFINITY,
+      workspaceDir: process.cwd(),
+    });
 
     await tool.execute("call-edit-infinity-cap", {
       prompt: "Add a dramatic stormy sky but keep everything else identical.",
@@ -1942,11 +1886,7 @@ describe("createImageGenerateTool", () => {
     const generateImage = mockGeneratedImage({
       images: [imageAsset("png-out", "edited.png")],
     });
-    mockReferenceImage("input-image", "image/jpeg");
-    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
-      width: 3200,
-      height: 1800,
-    });
+    mockReferenceImage("input-image", "image/jpeg", { width: 3200, height: 1800 });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("edited.png", 7));
 
     const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {

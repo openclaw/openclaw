@@ -11,6 +11,11 @@ export type PreparedToolSchemaNormalization = {
 
 let preparedSchemas: ReadonlyMap<object, PreparedToolSchemaNormalization> | undefined;
 
+/** Request preparation already detached and depth-bounded these schemas. */
+export function isPreparedToolSchemaNormalization(schema: unknown): boolean {
+  return schema !== null && typeof schema === "object" && preparedSchemas?.has(schema) === true;
+}
+
 const MAX_CACHE_ENTRIES_PER_SCHEMA = 8;
 
 /** Only synchronous conversion owns these fresh projections; no facts survive its return. */

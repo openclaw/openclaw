@@ -24,7 +24,6 @@ import {
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
 import { testing as viewTesting } from "../agents/mcp-ui-resource.test-support.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { QuestionManager } from "./question-manager.js";
 import * as sessionScopedRead from "./server-methods/session-scoped-read.js";
@@ -32,20 +31,9 @@ import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 const state = vi.hoisted(() => ({ root: "", current: true, uploads: true, apps: true }));
 
-function sessionFileFixture(params: { sessionKey: string; agentId?: string }, cfg: OpenClawConfig) {
+function sessionFileFixture() {
   const entry = { sessionId: "session-1", updatedAt: 0 };
-  return [
-    {
-      root: state.root,
-      canonicalKey: params.sessionKey,
-      agentId: params.agentId ?? "main",
-      storePath: state.root,
-      cfg,
-      entry,
-    },
-    () => {},
-    () => entry,
-  ] as const;
+  return [{ root: state.root }, () => {}, () => entry] as const;
 }
 
 vi.mock("./operator-role-policy.js", async (importOriginal) => ({
@@ -77,10 +65,10 @@ vi.mock("./question-session-access.js", () => ({
 vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server-methods/sessions-files.js")>()),
   withSessionFileRoot: async (
-    params: Parameters<typeof sessionFileFixture>[0],
-    cfg: OpenClawConfig,
+    _params: unknown,
+    _cfg: unknown,
     consume: (...args: ReturnType<typeof sessionFileFixture>) => Promise<unknown>,
-  ) => consume(...sessionFileFixture(params, cfg)),
+  ) => consume(...sessionFileFixture()),
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: () => undefined,
@@ -212,6 +200,13 @@ async function fixture(
     params.target === "mcp_app_tool"
       ? { type: "mcp_app_tool", name: "inspect", arguments: { id: "declared" } }
       : { type: "resource_link", uri: "parts://declared", name: "Part" };
+  const input = {
+    type: "resource",
+    options: [
+      { uri: "parts://choice", name: "Part", _meta: { "openai/preview": { target: preview } } },
+    ],
+    ...(params.kind ? { userOptions: { kind: params.kind, accept: [".stl"] } } : {}),
+  };
   const snapshot = {
     mode: "openai/form",
     message: "Pick resources",
@@ -221,17 +216,7 @@ async function fixture(
         files: {
           type: "array",
           items: { type: "string", format: "uri" },
-          "x-openai-input": {
-            type: "resource",
-            options: [
-              {
-                uri: "parts://choice",
-                name: "Part",
-                _meta: { "openai/preview": { target: preview } },
-              },
-            ],
-            ...(params.kind ? { userOptions: { kind: params.kind, accept: [".stl"] } } : {}),
-          },
+          "x-openai-input": input,
         },
       },
     },

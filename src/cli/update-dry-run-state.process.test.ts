@@ -5,14 +5,17 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import type { LegacyStateMigrationPlan } from "../infra/state-migrations.types.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../infra/update-control-plane-sentinel.js";
 import { getUpdateRun } from "../infra/update-run-ledger.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -71,28 +74,20 @@ function runPreview(root: string, command = "update") {
 
 async function snapshotTree(root: string): Promise<string[]> {
   const snapshot: string[] = [];
-  const walk = async (directory: string, relativeDirectory: string): Promise<void> => {
-    const entries = await fs.readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
-      const relativePath = path.posix.join(relativeDirectory, entry.name);
-      const absolutePath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        snapshot.push(`d ${relativePath}`);
-        await walk(absolutePath, relativePath);
-        continue;
-      }
-      if (entry.isSymbolicLink()) {
-        snapshot.push(`l ${relativePath} ${await fs.readlink(absolutePath)}`);
-        continue;
-      }
-      const hash = createHash("sha256")
-        .update(await fs.readFile(absolutePath))
-        .digest("hex");
-      snapshot.push(`f ${relativePath} ${hash}`);
+  for (const { relativePath, dirent } of await listDirectoryTreeStrict(root)) {
+    const absolutePath = path.join(root, relativePath);
+    if (dirent.isDirectory()) {
+      snapshot.push(`d ${relativePath}`);
+    } else if (dirent.isSymbolicLink()) {
+      snapshot.push(`l ${relativePath} ${await fs.readlink(absolutePath)}`);
+    } else {
+      snapshot.push(
+        `f ${relativePath} ${createHash("sha256")
+          .update(await fs.readFile(absolutePath))
+          .digest("hex")}`,
+      );
     }
-  };
-  await walk(root, "");
+  }
   return snapshot;
 }
 
@@ -102,11 +97,8 @@ function runUpdateProcess(
   env: NodeJS.ProcessEnv = {},
   preload?: string,
 ) {
-  const configPath = path.join(root, "config", "openclaw.json");
-  const stateDir = path.join(root, "state");
-  const entryPath = path.resolve("openclaw.mjs");
   return runCliProcessChild({
-    nodeArgs: [...(preload ? ["--import", preload] : []), entryPath, ...args],
+    nodeArgs: [...(preload ? ["--import", preload] : []), path.resolve("openclaw.mjs"), ...args],
     env: {
       ...process.env,
       ...clearedChildEnv,
@@ -115,11 +107,11 @@ function runUpdateProcess(
       NODE_DISABLE_COMPILE_CACHE: "1",
       BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
       NO_COLOR: "1",
-      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_CONFIG_PATH: path.join(root, "config", "openclaw.json"),
       OPENCLAW_HIDE_BANNER: "1",
       OPENCLAW_HOME: root,
       OPENCLAW_NO_RESPAWN: "1",
-      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
       ...env,
     },
     maxBuffer: 4 * 1024 * 1024,
@@ -132,9 +124,8 @@ async function expectUnrecordedPreview(root: string, before: string[]): Promise<
 
   const status = await runUpdateProcess(root, ["update", "status", "--timeout", "1", "--json"]);
   expect(status.code, status.stderr).toBe(0);
-  const report = JSON.parse(status.stdout);
-  expect(report.activeRun).toBeUndefined();
-  expect(report.lastRun).toBeUndefined();
+  const { activeRun, lastRun } = JSON.parse(status.stdout);
+  expect([activeRun, lastRun]).toEqual([undefined, undefined]);
   expect(await snapshotTree(root)).toEqual(before);
 }
 
@@ -249,19 +240,22 @@ setLoggerOverride({ file: ${JSON.stringify(path.join(logs, "openclaw.log"))} });
   ])("keeps $name config and state immutable during preview", async ({ name, command, config }) => {
     const { root, stateDir } = await createStateFixture(`openclaw-update-${name}-`, config);
     if (command === "--update") {
-      await writeFixture(
-        path.join(stateDir, "tasks", "runs.sqlite.migrated"),
-        "legacy migration marker\n",
-      );
-      await writeFixture(path.join(stateDir, "tasks", "runs.sqlite-wal"), "legacy WAL marker\n");
+      const legacyStore = path.join(stateDir, "tasks", "runs.sqlite");
+      await writeFixture(`${legacyStore}.migrated`, "legacy migration marker\n");
+      await writeFixture(`${legacyStore}-wal`, "legacy WAL marker\n");
+    } else {
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
+      await closeOpenClawStateDatabaseAsync();
     }
     const treeBefore = await snapshotTree(root);
     const result = await runPreview(root, command);
     expect(result.code, result.stderr).toBe(0);
-    const preview = JSON.parse(result.stdout);
-    expect(preview).toMatchObject({
+    expect(JSON.parse(result.stdout)).toMatchObject({
       runId: expect.any(String),
       dryRun: true,
+      ...(name === "malformed" && {
+        notes: expect.arrayContaining([expect.stringContaining("Would refuse update:")]),
+      }),
       ...(command === "update" ? { actions: expect.arrayContaining([expect.any(String)]) } : {}),
     });
     await expectUnrecordedPreview(root, treeBefore);
@@ -560,13 +554,10 @@ it.each([
     const pluginDir = path.join(root, "worker-plugin");
     if (scenario.plugin) {
       await fs.mkdir(pluginDir);
-      await fs.writeFile(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "worker-exit-fixture",
-          configSchema: { type: "object", properties: {} },
-        }),
-      );
+      await writeFixtureJson(path.join(pluginDir, "openclaw.plugin.json"), {
+        id: "worker-exit-fixture",
+        configSchema: { type: "object", properties: {} },
+      });
       await fs.writeFile(
         path.join(pluginDir, "index.cjs"),
         [
@@ -585,21 +576,18 @@ it.each([
         ].join("\n"),
       );
     }
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        nodeHost: { skills: { enabled: false } },
-        ...(scenario.plugin
-          ? {
-              plugins: {
-                allow: ["worker-exit-fixture"],
-                load: { paths: [path.join(pluginDir, "index.cjs")] },
-                slots: { memory: "none" },
-              },
-            }
-          : {}),
-      }),
-    );
+    await writeFixtureJson(configPath, {
+      nodeHost: { skills: { enabled: false } },
+      ...(scenario.plugin
+        ? {
+            plugins: {
+              allow: ["worker-exit-fixture"],
+              load: { paths: [path.join(pluginDir, "index.cjs")] },
+              slots: { memory: "none" },
+            },
+          }
+        : {}),
+    });
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: root,

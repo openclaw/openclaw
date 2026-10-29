@@ -10,7 +10,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   combineNonStreamingReplyParts,
   trimTextPreservingCode,
-} from "../../shared/text/text-projection.js";
+} from "../../shared/text/trim-code-text.js";
 import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,

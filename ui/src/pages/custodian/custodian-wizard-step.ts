@@ -1,5 +1,5 @@
 import type { WizardAnswer } from "@openclaw/gateway-protocol";
-import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
+import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.ts";
 import type { WizardStep } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";

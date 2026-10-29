@@ -4,7 +4,7 @@ import {
   type SessionsPatchManyResult,
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   readSessionMethodAccess,
@@ -40,6 +40,8 @@ export type SessionActionRow = Pick<
   pinnable?: boolean;
   sidebarRoot?: boolean;
   hasArchiveDescendants?: boolean;
+  /** An enabled automation is bound to this conversation; archive and delete pause it. */
+  hasAutomation?: boolean;
   archiveGuard?: Pick<
     SessionsPatchManyParams["targets"][number],
     "expectedSidebarRoot" | "expectedCategory" | "expectedArchived" | "expectedSidebarAncestors"
@@ -279,6 +281,7 @@ export async function setSessionInvolvement(
     !requireSessionMutationAccess(deps, scope, {
       method: "sessions.setInvolvement",
       requiredScope: "operator.read",
+      sessionScope: true,
     })
   ) {
     return;

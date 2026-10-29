@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { prepareMemoryRuntimeReload } from "../plugins/memory-runtime.js";
+import { prepareMemoryRuntimeReload } from "../plugins/memory-runtime.js";
 import { withPluginRegistryPreparationScope } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
@@ -9,7 +9,12 @@ import type { createPluginReloadCleanup } from "./server-plugin-reload-cleanup.j
 export function createPluginReloadServices(
   runtime: Pick<
     Awaited<ReturnType<typeof prepareGatewayLifecycle>>,
-    "scheduler" | "kernel" | "pluginRuntime" | "pluginWorkspaceDir" | "broadcastPluginEvent"
+    | "scheduler"
+    | "kernel"
+    | "pluginRuntime"
+    | "pluginWorkspaceDir"
+    | "broadcastPluginEvent"
+    | "pluginMetadataSnapshot"
   >,
   stopServices: ReturnType<typeof createPluginReloadCleanup>["stopPreviousServices"],
 ) {
@@ -36,6 +41,9 @@ export function createPluginReloadServices(
     );
   return {
     start,
+    // The still-published metadata cache retires at publication with its lazily loaded registries.
+    prepareMemory: (previous: PluginRegistry, next: PluginRegistry) =>
+      prepareMemoryRuntimeReload(previous, next, runtime.pluginMetadataSnapshot),
     async resumeMemory(
       memory: ReturnType<typeof prepareMemoryRuntimeReload> | undefined,
       config: OpenClawConfig,
@@ -44,7 +52,7 @@ export function createPluginReloadServices(
       if (!memory) {
         return;
       }
-      const restartPluginIds = rollback ? memory.rollback() : memory.retainedPluginIds;
+      const restartPluginIds = rollback ? memory.rollback() : memory.restartPluginIds;
       if (!rollback) {
         memory.commit(runtime.pluginRuntime.registry);
       }

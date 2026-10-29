@@ -18,15 +18,12 @@ describe.skipIf(process.platform === "win32")("registered completion --shell bas
     const program = new Command().name("openclaw");
     setProgramContext(program, createProgramContext());
     registerCompletionCli(program);
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      await withEnvAsync({ OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS: "1" }, () =>
-        program.parseAsync(["completion", "--shell", "bash"], { from: "user" }),
-      );
-      script = stdout.mock.calls.map(([chunk]) => chunk.toString()).join("");
-    } finally {
-      stdout.mockRestore();
-    }
+    using stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    await withEnvAsync({ OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS: "1" }, () =>
+      program.parseAsync(["completion", "--shell", "bash"], { from: "user" }),
+    );
+    script = stdout.mock.calls.map(([chunk]) => chunk.toString()).join("");
   });
 
   describe.each(process.platform === "darwin" ? ["/bin/bash", "bash"] : ["bash"])(

@@ -1,7 +1,8 @@
 import { ErrorCodes, isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as failure, ok, type Result } from "@openclaw/normalization-core/result";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";

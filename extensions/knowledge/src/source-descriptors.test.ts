@@ -1,11 +1,6 @@
 import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
-import {
-  describeSource,
-  compactEvidence,
-  expandEvidence,
-  sourceDescriptorPath,
-} from "./source-descriptors.js";
+import { describeSource, compactEvidence, expandEvidence } from "./source-descriptors.js";
 
 const origin = {
   path: "artifacts/meeting/transcript.txt",
@@ -73,7 +68,9 @@ it("reject malformed ranges, IDs, corrupt or missing descriptors", () => {
     expect(() => compactEvidence({ ...origin, ...range })).toThrow();
     expect(() => expandEvidence({ source: retained.id, ...range }, read)).toThrow();
   }
-  expect(() => sourceDescriptorPath("../private/foo")).toThrow();
+  expect(() => expandEvidence({ source: "../private/foo" }, read)).toThrow(
+    /Invalid compact source citation/,
+  );
   expect(() => expandEvidence({ source: retained.id }, () => retained.raw + " ")).toThrow();
   expect(() =>
     expandEvidence({ source: retained.id }, () => {

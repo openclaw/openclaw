@@ -693,6 +693,11 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: liquid-ai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/liquid-ai/**"
+          - "docs/providers/liquid-ai.md"
 "extensions: bifrost":
   - changed-files:
       - any-glob-to-any-file:

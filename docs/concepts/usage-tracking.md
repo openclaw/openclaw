@@ -91,6 +91,10 @@ inventory can take longer. Transcripts
 remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
 order of floating-point cost additions.
 
+Background refresh budgets use elapsed time, so wall-clock corrections do not
+extend the quiet period or retry delays. Report dates and recorded timestamps
+still follow the wall clock.
+
 ## Usage date ranges
 
 The Gateway methods `usage.cost` and `sessions.usage` interpret date ranges in

@@ -3,13 +3,11 @@ import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-sup
 import {
   createControlUiMockSameOriginGatewayScript,
   installMockGateway,
-  startControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import { configSnapshot, makeBoard, makeCard } from "./workboard.e2e.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Workboard selection focus",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 suite.define(() => {
   it("returns keyboard focus to the selected card after clearing selection", async () => {

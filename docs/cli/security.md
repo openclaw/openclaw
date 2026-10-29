@@ -20,6 +20,8 @@ openclaw security audit --fix
 openclaw security audit --json
 ```
 
+The `runtime.node_security_patch` warning reports when the **Node running the audit** is below the recommended 24.22.1/26.12.1 security patch levels. It appears in normal and JSON reports without a deep probe, does not block compatible Node from running or updating OpenClaw, and does not apply to Bun. If your Gateway runs under another executable, upgrade and refresh that service separately; this local finding is not a remote Gateway runtime inventory.
+
 ## Audit modes
 
 Plain `security audit` stays on the cold config/filesystem/read-only path: it does not discover plugin runtime security collectors, so routine audits do not load every installed plugin runtime. `--deep` adds best-effort live Gateway checks and plugin-owned security audit collectors (explicit internal callers may also opt into those collectors when they already have an appropriate runtime scope).

@@ -1,12 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { collect } from "../../../../test/helpers/async-iterable.js";
 import { createResponsesAssistantOutput } from "../providers/openai-responses-shared.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
-import type { AssistantMessageEvent } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import {
   expectReplaceAppendText,
+  completedResponse,
   outputItem,
+  wireMessage,
   type TextOrDelta,
 } from "./openai-stream-cases.test-support.js";
 
@@ -44,16 +47,7 @@ function reasoningThenMessageEvents(firstDelta: string, secondDelta: string): un
     textEvent("delta", firstDelta),
     textEvent("delta", secondDelta),
     textEvent("done", `${firstDelta}${secondDelta}`),
-    outputItem(
-      "done",
-      {
-        type: "message",
-        id: "msg_1",
-        status: "completed",
-        content: [{ type: "output_text", text: `${firstDelta}${secondDelta}` }],
-      },
-      1,
-    ),
+    outputItem("done", wireMessage("msg_1", `${firstDelta}${secondDelta}`), 1),
     { type: "response.completed", response: { id: "resp_1", status: "completed" } },
   ];
 }
@@ -62,43 +56,77 @@ async function* sourceOf(events: readonly unknown[]) {
   yield* events;
 }
 
-describe("Responses stream partial snapshots", () => {
-  it("consumer replace/append state stays byte-exact with the wire text", async () => {
-    for (const firstDelta of [WIRE_TEXT.slice(0, 9), WIRE_TEXT.slice(0, 2)]) {
-      const output = { ...createResponsesAssistantOutput(model), timestamp: 0 };
-      const stream = new AssistantMessageEventStream();
-      const emitted: AssistantMessageEvent[] = [];
-      const collect = (async () => {
-        for await (const event of stream) {
-          emitted.push(event);
-        }
-      })();
-      await processResponsesStream(
-        sourceOf(reasoningThenMessageEvents(firstDelta, WIRE_TEXT.slice(firstDelta.length))),
-        output,
-        stream,
-        model,
-      );
-      stream.end();
-      await collect;
-      expectReplaceAppendText(emitted, WIRE_TEXT);
-      const transportText = output.content
-        .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
-        .map((block) => block.text)
-        .join("");
-      expect(transportText).toBe(WIRE_TEXT);
-      // Text detaches; thinking retains WeakMap append facts (#123120).
-      const liveBlocks = new Set(output.content);
-      const partialBlocks = emitted.flatMap(
-        (event) => (event as TextOrDelta).partial?.content ?? [],
-      );
-      for (const type of ["text", "thinking"]) {
-        const blocks = partialBlocks.filter((block) => block.type === type);
-        expect(blocks.length).toBeGreaterThan(0);
-        for (const block of blocks) {
-          expect(liveBlocks.has(block)).toBe(type === "thinking");
-        }
+async function runResponses(
+  events: readonly unknown[],
+  options?: Parameters<typeof processResponsesStream>[4],
+) {
+  const output = { ...createResponsesAssistantOutput(model), timestamp: 0 };
+  const stream = new AssistantMessageEventStream();
+  const collected = collect(stream);
+  await processResponsesStream(sourceOf(events), output, stream, model, options);
+  stream.end();
+  return { output, emitted: await collected };
+}
+
+it("consumer replace/append state stays byte-exact with the wire text", async () => {
+  for (const firstDelta of [WIRE_TEXT.slice(0, 9), WIRE_TEXT.slice(0, 2)]) {
+    const { output, emitted } = await runResponses(
+      reasoningThenMessageEvents(firstDelta, WIRE_TEXT.slice(firstDelta.length)),
+    );
+    expectReplaceAppendText(emitted, WIRE_TEXT);
+    const transportText = output.content
+      .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+    expect(transportText).toBe(WIRE_TEXT);
+    // Text detaches; thinking retains WeakMap append facts (#123120).
+    const liveBlocks = new Set(output.content);
+    const partialBlocks = emitted.flatMap((event) => (event as TextOrDelta).partial?.content ?? []);
+    for (const type of ["text", "thinking"]) {
+      const blocks = partialBlocks.filter((block) => block.type === type);
+      expect(blocks.length).toBeGreaterThan(0);
+      for (const block of blocks) {
+        expect(liveBlocks.has(block)).toBe(type === "thinking");
       }
     }
-  });
+  }
+});
+
+it("distinguishes physical activity from output advancement and repeated snapshots", async () => {
+  const controller = new AbortController();
+  const onActivity = vi.fn();
+  const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
+  try {
+    const snapshot = outputItem("done", {
+      id: "reasoning_activity",
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: "Synthetic snapshot" }],
+    });
+    const hosted = { id: "hosted_activity", type: "web_search_call", status: "completed" };
+    const events = [
+      { type: "response.created", response: { id: "resp_activity" } },
+      { type: "response.in_progress", response: { id: "resp_activity" } },
+      outputItem("added", { id: "reasoning_activity", type: "reasoning", summary: [] }),
+      {
+        type: "response.reasoning_text.delta",
+        output_index: 0,
+        delta: "Synthetic hidden progress",
+      },
+      { type: "response.reasoning_text.delta", output_index: 0, delta: "" },
+      structuredClone(snapshot),
+      structuredClone(snapshot),
+      // Hosted lifecycle echoes are physical activity, not new model output.
+      ...(["added", "done", "done"] as const).map((phase) => outputItem(phase, { ...hosted }, 1)),
+      completedResponse("resp_activity", []),
+    ];
+    await runResponses(events, { signal: controller.signal });
+    expect(onActivity.mock.calls).toEqual(
+      [false, false, true, true, false, true, false, false, false, false, true].map((progress) => [
+        progress,
+        900_000,
+      ]),
+    );
+  } finally {
+    unsubscribe();
+  }
 });

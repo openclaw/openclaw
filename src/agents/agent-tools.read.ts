@@ -70,7 +70,7 @@ import {
   type ToolResultBudget,
 } from "./tool-result-limits.js";
 import { toCanonicalRelativeWorkspacePath, writeHostWorkspaceFile } from "./workspace-file-ops.js";
-import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
+import { resolveHostWorkspaceRoot, resolveHostRootAsync } from "./workspace-write-scope.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to sanitize oversized images before they hit providers.
@@ -1271,7 +1271,7 @@ function createHostMutationOperations(
     {
       mkdir: async (dir: string) => {
         const assertCurrent = captureAgentToolSourceExecutionGuard(options?.abortSignal);
-        const selectedRoot = resolveHostWorkspaceRoot(root, dir);
+        const selectedRoot = await resolveHostRootAsync(root, dir);
         const relative = toRelativeWorkspacePath(selectedRoot, dir, { allowRoot: true });
         // mkdir receives the file's parent, including directory links to the root itself.
         const resolved = await resolveRootPath({
@@ -1314,18 +1314,18 @@ function createHostMutationOperations(
         writeHostWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
       readFile: async (absolutePath: string) => {
         // Reads retain the workspace contract of following only symlink parents.
-        const selectedRoot = resolveHostWorkspaceRoot(root, absolutePath);
+        const selectedRoot = await resolveHostRootAsync(root, absolutePath);
         const relative = await toCanonicalRelativeWorkspacePath(selectedRoot, absolutePath);
         const rootHandle = await getRoot(selectedRoot);
         return (await rootHandle.read(path.resolve(rootHandle.rootReal, relative))).buffer;
       },
       statFile: async (absolutePath: string) => {
-        const selectedRoot = resolveHostWorkspaceRoot(root, absolutePath);
+        const selectedRoot = await resolveHostRootAsync(root, absolutePath);
         const relative = toRelativeWorkspacePath(selectedRoot, absolutePath);
         return statHostFile(path.resolve(selectedRoot, relative));
       },
       access: async (absolutePath: string) => {
-        const selectedRoot = resolveHostWorkspaceRoot(root, absolutePath);
+        const selectedRoot = await resolveHostRootAsync(root, absolutePath);
         let relative: string;
         try {
           // Canonicalized like readFile so in-workspace symlink parents pass.

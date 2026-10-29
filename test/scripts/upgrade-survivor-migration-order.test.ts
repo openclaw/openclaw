@@ -345,10 +345,7 @@ function simulateWorkshopRetirement(
   exportedIds: readonly string[] = seeded.after.exports,
 ) {
   const proposals = join(fixture.state, "skill-workshop", "proposals");
-  const exportRoot = join(
-    fixture.state,
-    "agents/main/agent/workshop-skills/.archive/.retired-proposals",
-  );
+  const exportRoot = join(fixture.state, "agents/main/agent/workshop-skills/.drafts");
   for (const id of exportedIds) {
     const draft = listDirectoryTreeStrictSync(join(proposals, id))
       .map((walkEntry) => walkEntry.relativePath)

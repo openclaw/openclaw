@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -11,6 +12,7 @@ import {
   createPluginNpmRuntimeBuildOptions,
   resolvePluginNpmRuntimeBuildPlan,
 } from "../../scripts/lib/plugin-npm-runtime-build.mts";
+import { writeJsonFile } from "../helpers/temp-repo.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -30,6 +32,34 @@ function fixture() {
 }
 
 describe("standalone original-source entries", () => {
+  it("assigns package-owned worker wrappers to their isolated plugin build", () => {
+    const loader = pathToFileURL(path.resolve("scripts/lib/bun-standalone-source-entries.mjs"));
+    const env = { ...process.env };
+    delete env.OPENCLAW_TSDOWN_CACHE_PENDING;
+    delete env.OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS;
+    delete env.OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS;
+    const result = execFileSync(
+      "node",
+      [
+        "--import",
+        path.resolve("scripts/tsx.mjs"),
+        "--input-type=module",
+        "--eval",
+        `const { loadStandaloneSourceEntries } = await import(${JSON.stringify(loader.href)});
+const entries = await loadStandaloneSourceEntries({ sourceRoot: process.cwd() });
+console.log(JSON.stringify(["catalog-page", "session-history"].map((name) => {
+  const entry = entries.resolve("dist/extensions/codex/" + name + "-worker-entrypoint.js");
+  return { source: entry?.relativeSource, plugin: entry?.pluginEntry?.id };
+})));`,
+      ],
+      { cwd: process.cwd(), env, encoding: "utf8", timeout: 30_000 },
+    );
+    expect(JSON.parse(result)).toEqual([
+      { source: "extensions/codex/catalog-page-worker-entrypoint.ts", plugin: "codex" },
+      { source: "extensions/codex/session-history-worker-entrypoint.ts", plugin: "codex" },
+    ]);
+  });
+
   it("loads original JavaScript workers through the public manifest projection", () => {
     const { root } = fixture();
     const write = (name: string, contents: string) => {
@@ -176,23 +206,18 @@ console.log(JSON.stringify(entries.unmappedWorkers(["openclaw.mjs", "node-compil
   it("uses isolated plugin plan outputs without imposing a root-bundle format", () => {
     const { root } = fixture();
     const packageDir = path.join(root, "extensions/plugin");
-    fs.mkdirSync(packageDir, { recursive: true });
+    writeJsonFile(path.join(packageDir, "package.json"), {
+      name: "@openclaw/plugin",
+      version: "1.0.0",
+      type: "module",
+      dependencies: { dependency: "1.0.0" },
+      openclaw: { extensions: ["./index.ts"], build: { runtimeFormat: "cjs" } },
+    });
     fs.writeFileSync(path.join(packageDir, "index.ts"), "export const value: number = 42;\n");
-    fs.writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/plugin",
-        version: "1.0.0",
-        type: "module",
-        dependencies: { dependency: "1.0.0" },
-        openclaw: { extensions: ["./index.ts"], build: { runtimeFormat: "cjs" } },
-      }),
-    );
     const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot: root, packageDir });
-    if (!plan) {
-      throw new Error("Missing fixture runtime plan");
-    }
-    const config = createPluginNpmRuntimeBuildOptions(plan);
+    assert(plan, "Missing fixture runtime plan");
+    const [config] = createPluginNpmRuntimeBuildOptions(plan);
+    assert(config, "Missing fixture runtime build");
     const index = createStandaloneSourceEntries({
       sourceRoot: root,
       configs: [],
@@ -203,7 +228,7 @@ console.log(JSON.stringify(entries.unmappedWorkers(["openclaw.mjs", "node-compil
           sourceEntries: plan.sourceEntries,
           runtimeExtension: ".cjs",
           runtimeBuildPlan: plan,
-          runtimeBuildConfig: config,
+          runtimeBuildConfigs: [config],
         },
       ],
     });

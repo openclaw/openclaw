@@ -386,12 +386,30 @@ it("reports legacy session repairs without rewriting stored claims at startup", 
     const beforeWorktree = loadSessionEntry(worktree);
     const log = { info: vi.fn(), warn: vi.fn() };
     const handoffDatabase = vi.fn(async () => {});
+    const captureReader = vi.spyOn(retirement, "captureSessionRetirementReader");
     await runSessionStartupMigration({ cfg, env, log, handoffDatabase });
     expect.soft(loadSessionEntry(legacy)).toEqual(beforeLegacy);
     expect.soft(loadSessionEntry(canonical)).toBeUndefined();
     expect.soft(loadSessionEntry(worktree)).toEqual(beforeWorktree);
     expect(handoffDatabase).toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+    expect(captureReader).toHaveBeenCalled();
+
+    // Deferred preparation owns one agent; the boot pass already reported legacy history.
+    captureReader.mockClear();
+    handoffDatabase.mockClear();
+    await runSessionStartupMigration({
+      cfg,
+      env,
+      log,
+      handoffDatabase,
+      agentIds: new Set(["ops"]),
+    });
+    expect(handoffDatabase).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ agentId: "ops" }),
+    );
+    expect(captureReader).not.toHaveBeenCalled();
+    expect(loadSessionEntry(legacy)).toEqual(beforeLegacy);
   });
 });
 

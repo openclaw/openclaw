@@ -32,12 +32,12 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 When unset, all inbound channel surfaces use:
 
 - `mode: "steer"`
-- `allowCollaborativeSteering: false`
+- `allowCollaborativeSteering: true`
 - a built-in 500ms debounce for steer, followup, and collect batching
 - `cap: 20`
 - `drop: "summarize"`
 
-Same-requester steering is the default. A compatible prompt from the active turn’s requester is injected into the runtime when it can accept steering, so no second session run is started. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
+Same-conversation collaborative steering is enabled by default. A compatible prompt can be injected into the active runtime, so no second session run is started. The active execution keeps its original authority; steering does not give each message its own tool policy. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
 
 ## Queue modes
 
@@ -52,20 +52,18 @@ Messages from channels using durable ingress admission, including Discord and Te
 
 For runtime-specific timing and dependency behavior, see [Steering queue](/concepts/queue-steering). For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
-A restart-recovery resend is an ordinary input in the same session mailbox. When
-an interrupted turn is still owed, its resend runs before an ordinary message that
-arrives on that session during startup; later messages queue behind it in arrival
-order. An `interrupt` message wins instead: it cancels a resend that has not
-started and runs, and it ends a running recovered turn like any active run.
-Steering a recovered turn follows the same requester and collaboration rules as
-other active turns. If its backend cannot accept steering, the input waits and
-runs as its own turn. Stopping or interrupting a resend
-before it starts ends that recovery without sending it again. See
-[Restart recovery](/gateway/restart-recovery#automatic-resume).
+After a graceful restart, a marked running root session receives one ordinary
+resume input. Accepted user messages whose IDs were captured in that shutdown
+marker follow it in FIFO order, under their recorded senders' current authority.
+Queued rows left by an earlier crash remain inert. A sender that
+cannot be admitted gets a failed-send outcome. New messages use the normal
+steering and queue rules while the resumed run works; there is no special
+recovery-predecessor admission wait. Explicit Stop and `interrupt` remain terminal.
+See [Restart recovery](/gateway/restart-recovery#automatic-resume).
 
 Queued Gateway input retains its authenticated requester. Each new execution resolves current applicable policy. Collecting messages requires compatible operator sources and tool permissions.
 
-By default, another person’s steering attempt is refused without queueing it. The runtime explains how to resend it with `/followup <message>` for a new turn under that person’s identity and current policy. Set `messages.queue.allowCollaborativeSteering: true` to let admitted human input in the same conversation steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Same-requester steering still requires compatible permissions. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
+When `messages.queue.allowCollaborativeSteering: false` is explicitly set, another person’s input queues quietly for a new turn under that person’s identity and current policy. It does not interrupt the current turn, and no resend or status notice is needed. Set `messages.queue.collaborativeSteeringFallback: "reject"` to require an explicit `/followup <message>` instead. Set `messages.queue.allowCollaborativeSteering: true` to let admitted human input in the same conversation steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Ordinary guidance from the same authenticated requester in the same conversation retains the active execution’s prepared permissions without substituting incoming caller capabilities or tool bindings. Current access and the original execution’s live authority still apply. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
 
 An accepted turn can continue after its request returns or its client disconnects.
 That does not extend revoked device authority or permissions removed by a current
@@ -151,7 +149,9 @@ from collect batches, and bypasses pending-question answering. If the session ha
 no active or queued work, it starts through normal admission. The turn retains
 its submitter and resolves current policy when admitted.
 
-The queued notice appears only after enqueue succeeds. If the message starts
+Queue acceptance appears only after enqueue succeeds. The Control UI shows it in
+the input queue, without adding an agent reply. Other clients and channels retain
+a textual acknowledgment. If the message starts
 immediately, its start notice appears when execution starts, before the answer.
 Rejected outcomes are reported separately. Queue capacity, overflow, and cancellation
 rules still apply. Gateway-backed chat and the local embedded TUI support this
@@ -234,11 +234,11 @@ The chat displays recorded non-Web client sources separately from the sender, fo
 Reported app names describe the submitting client; they do not establish a human identity or grant permissions.
 Collected messages retain their contributing client sources, and older messages without recorded sources keep their existing attribution.
 
-This preserves input, not execution permissions. If the Gateway stops before a
-queued input reaches the transcript, it appears as interrupted input after
-restart. A matching Control UI outbox can resubmit it after reconnecting through
-normal authentication and session admission. Without a matching outbox or
-resumable custody, it requires an explicit resend. The in-memory queue is not replayed.
+This preserves input, not execution permissions. Graceful shutdown captures the
+accepted queued input IDs in the root session's resume marker; startup admits
+those inputs under each sender's current authority after the resume input.
+Queued rows left by a crash remain inert without interrupted-input notices or
+automatic resubmission. The user can send a new message. The in-memory queue is not replayed.
 Host sleep that preserves the process can continue the existing queue normally.
 
 Channel messages retained by durable ingress remain retryable when a queued
@@ -259,8 +259,6 @@ Transient session admission conflicts follow the same ingress retry policy as
 other retryable failures: by default, a message becomes eligible for dead-lettering
 only after both eight failed attempts and 24 hours, with capped retry backoff. The
 oldest pending message keeps its place ahead of later messages in the same lane.
-A terminal restart-recovery tombstone still fails immediately so an authorized
-reset can proceed.
 
 ## Lanes and scope
 

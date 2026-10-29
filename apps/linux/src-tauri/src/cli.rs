@@ -34,6 +34,7 @@ pub struct OpenClawCli {
     openclaw_home: PathBuf,
     available: Arc<AtomicBool>,
     allow_runtime_management: bool,
+    bundled: Option<(crate::runtime_action::BundledRuntime, PathBuf)>,
 }
 
 #[derive(Debug)]
@@ -72,6 +73,9 @@ impl OpenClawCli {
     /// Resolve the executable for an owner that supplies cancellable process supervision.
     pub(crate) fn locate() -> Result<Self, CliError> {
         let home = openclaw_home()?;
+        if crate::test_profile::enabled() {
+            return crate::test_profile::cli().map_err(CliError::Environment);
+        }
         if let Some(override_path) = env::var_os("OPENCLAW_DESKTOP_CLI") {
             let mut cli = Self::new(PathBuf::from(override_path), home);
             cli.allow_runtime_management = false;
@@ -92,7 +96,33 @@ impl OpenClawCli {
             openclaw_home,
             available: Arc::new(AtomicBool::new(true)),
             allow_runtime_management: true,
+            bundled: None,
         }
+    }
+
+    pub(crate) fn from_bundled(
+        runtime: &crate::runtime_action::BundledRuntime,
+        entry: PathBuf,
+        home: PathBuf,
+    ) -> Self {
+        Self::new(runtime.executable.clone(), home).with_bundled_runtime(runtime, entry)
+    }
+
+    pub(crate) fn executable_path(&self) -> &Path {
+        self.bundled
+            .as_ref()
+            .map(|(runtime, _)| runtime.executable.as_path())
+            .unwrap_or(&self.executable)
+    }
+
+    pub(crate) fn with_bundled_runtime(
+        &self,
+        runtime: &crate::runtime_action::BundledRuntime,
+        entry: PathBuf,
+    ) -> Self {
+        let mut cli = self.clone();
+        cli.bundled = Some((runtime.clone(), entry));
+        cli
     }
 
     pub(crate) fn browser_runtime(prefix: PathBuf) -> Result<Self, CliError> {
@@ -131,12 +161,18 @@ impl OpenClawCli {
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
-        #[cfg(target_os = "windows")]
-        let mut command = crate::runtime_action::managed_command(self)
-            .map_err(CliError::Environment)?
-            .unwrap_or_else(|| host_command(&self.executable));
-        #[cfg(not(target_os = "windows"))]
-        let mut command = host_command(&self.executable);
+        let mut command = if let Some((runtime, entry)) = &self.bundled {
+            runtime.command(entry)
+        } else {
+            #[cfg(target_os = "windows")]
+            let command = crate::runtime_action::managed_command(self)
+                .map_err(CliError::Environment)?
+                .unwrap_or_else(|| host_command(&self.executable));
+            #[cfg(not(target_os = "windows"))]
+            let command = host_command(&self.executable);
+            command
+        };
+        crate::test_profile::configure_command(&mut command).map_err(CliError::Environment)?;
         command.args(args);
         command.env("PATH", self.command_path()?);
         command.stdin(Stdio::null());
@@ -326,6 +362,9 @@ pub(crate) fn output_tail(output: &[u8]) -> Option<String> {
 }
 
 pub fn openclaw_home() -> Result<PathBuf, CliError> {
+    if crate::test_profile::enabled() {
+        return crate::test_profile::state_root().map_err(CliError::Environment);
+    }
     #[cfg(target_os = "windows")]
     let home = env::var_os("HOME")
         .filter(|value| !value.is_empty())

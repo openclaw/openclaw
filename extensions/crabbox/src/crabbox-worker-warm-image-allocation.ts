@@ -10,11 +10,10 @@ import {
   parseForkedCheckpoint,
 } from "./crabbox-worker-warm-image-checkpoint.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
+import type { WarmAllocationRecord, WarmStartStatus } from "./crabbox-worker-warm-image-records.js";
 import {
   isCrabboxCaptureRefusalRetained,
   withCrabboxWarmImageGeneration,
-  type WarmAllocationRecord,
-  type WarmStartStatus,
   type openCrabboxWarmImageStore,
 } from "./crabbox-worker-warm-image-store.js";
 

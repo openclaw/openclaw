@@ -68,6 +68,7 @@ import {
 import { hydratePromptMediaMessages } from "./images.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { checkMidTurnPrecheck } from "./preemptive-compaction.js";
+import { promptImageSessionKey } from "./prompt-image-decisions.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
@@ -356,6 +357,7 @@ export function installEmbeddedAttemptContextGuards(input: {
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
           : undefined,
       onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
+      imageSessionKey: promptImageSessionKey(attempt),
     });
     const modelContext = previousContextTransform
       ? await previousContextTransform.call(activeSession.agent, hydrated, signal)

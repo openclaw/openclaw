@@ -14,6 +14,7 @@ import { SettingsRow } from "./solid/settings-ui.tsx";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
 import "../styles/settings.css";
+import "../styles/model-providers.css";
 
 afterEach(async () => {
   cleanupSolid();
@@ -56,7 +57,7 @@ function labelsFit(picker: SelectPicker) {
 
 type ModelExtras = Partial<
   Pick<ModelPickerParams, "placement" | "custom" | "label" | "value" | "id">
->;
+> & { windowed?: boolean };
 async function mountModel(options: ModelPickerOption[], style: string, extra: ModelExtras = {}) {
   const onChange = vi.fn();
   const params = { label: "Model", value: options[0]!.value, options, ...extra };
@@ -78,46 +79,77 @@ async function mountPickers(content: () => JSX.Element, style = "", direction = 
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
-  it("keeps the scroll position when the pointer highlights a clipped edge row", async () => {
-    const { userEvent, role } = await browser(1280);
-    const { picker } = await mountModel(numberedModels(60), "width:240px;margin:24px");
+  it("retains virtual rows when a search edit leaves the choices unchanged", async () => {
+    const { page, role } = await browser(390);
+    const { picker } = await mountModel(numberedModels(1000), "width:320px;margin:24px", {
+      windowed: true,
+    });
     await role("button", "Model: Model 0").click();
-    const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
-    const rows = [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
-    await expect.poll(() => list.scrollHeight).toBeGreaterThan(list.clientHeight);
-    const rowHeight = rows[1]!.offsetTop - rows[0]!.offsetTop;
-    const settle = () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      });
-    for (const edge of ["bottom", "top"] as const) {
-      // Leave half a row clipped at each edge, as a wheel or trackpad scroll does.
-      list.scrollTop = rowHeight * 10 + Math.round(rowHeight / 2);
-      list.dispatchEvent(new Event("scroll"));
-      await settle();
-      const top = list.scrollTop;
-      const bounds = list.getBoundingClientRect();
-      const clipped = rows.find((row) => {
-        const rect = row.getBoundingClientRect();
-        return edge === "bottom"
-          ? rect.top < bounds.bottom - 2 && rect.bottom > bounds.bottom + 2
-          : rect.top < bounds.top - 2 && rect.bottom > bounds.top + 2;
-      })!;
-      expect(clipped, edge).toBeDefined();
-      const rect = clipped.getBoundingClientRect();
-      // Hover the list at the clipped row's visible sliver; hovering the row
-      // itself would let Playwright scroll it into view before moving.
-      const sliver = (Math.max(rect.top, bounds.top) + Math.min(rect.bottom, bounds.bottom)) / 2;
-      await userEvent.hover(list, { position: { x: 24, y: Math.round(sliver - bounds.top) } });
-      await expect.poll(() => clipped.hasAttribute("data-active")).toBe(true);
-      await settle();
-      expect(list.scrollTop, edge).toBe(top);
-    }
-    // Keyboard navigation after a pointer highlight still reveals the next row.
-    const top = list.scrollTop;
-    await userEvent.keyboard("{ArrowUp}");
-    await expect.poll(() => list.scrollTop).toBeLessThan(top);
+    const first = () => picker.querySelector('[role="option"][data-value="fixture/model-0"]');
+    await expect.poll(first).not.toBeNull();
+    const original = first();
+    const search = picker.querySelector<HTMLInputElement>(".picker-select__search")!;
+    await page.elementLocator(search).fill("Model");
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    expect(first()).toBe(original);
+    await page.elementLocator(search).fill("Model 999");
+    await expect.poll(() => picker.querySelectorAll('[role="option"]').length).toBe(1);
+    expect(picker.querySelector('[role="option"]')?.getAttribute("data-value")).toBe(
+      "fixture/model-999",
+    );
   });
+
+  it.each([false, true])(
+    "keeps the scroll position on clipped edge hover (windowed=%s)",
+    async (windowed) => {
+      const { userEvent, role } = await browser(1280);
+      const { picker } = await mountModel(
+        numberedModels(windowed ? 1000 : 60),
+        "width:240px;margin:24px",
+        { windowed },
+      );
+      await role("button", "Model: Model 0").click();
+      const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+      const rows = () => [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
+      await expect.poll(() => list.scrollHeight).toBeGreaterThan(list.clientHeight);
+      await expect.poll(() => rows()[0]?.getBoundingClientRect().height ?? 0).toBeGreaterThan(0);
+      const rowHeight = rows()[0]!.getBoundingClientRect().height;
+      const settle = () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+      for (const edge of ["bottom", "top"] as const) {
+        // Leave half a row clipped at each edge, as a wheel or trackpad scroll does.
+        const middle = rowHeight * 10 + Math.round(rowHeight / 2);
+        list.scrollTop = edge === "bottom" ? middle - list.clientHeight : middle;
+        list.dispatchEvent(new Event("scroll"));
+        await settle();
+        const top = list.scrollTop;
+        const bounds = list.getBoundingClientRect();
+        const clipped = rows().find((row) => {
+          const rect = row.getBoundingClientRect();
+          return edge === "bottom"
+            ? rect.top < bounds.bottom - 2 && rect.bottom > bounds.bottom + 2
+            : rect.top < bounds.top - 2 && rect.bottom > bounds.top + 2;
+        })!;
+        expect(clipped, edge).toBeDefined();
+        const rect = clipped.getBoundingClientRect();
+        // Hover the list at the clipped row's visible sliver; hovering the row
+        // itself would let Playwright scroll it into view before moving.
+        const sliver = (Math.max(rect.top, bounds.top) + Math.min(rect.bottom, bounds.bottom)) / 2;
+        await userEvent.hover(list, { position: { x: 24, y: Math.round(sliver - bounds.top) } });
+        await expect.poll(() => clipped.hasAttribute("data-active")).toBe(true);
+        await settle();
+        expect(list.scrollTop, edge).toBe(top);
+      }
+      // Keyboard navigation after a pointer highlight still reveals the next row.
+      const top = list.scrollTop;
+      await userEvent.keyboard("{ArrowUp}");
+      await expect.poll(() => list.scrollTop).toBeLessThan(top);
+    },
+  );
 
   it("reveals keyboard highlights without untracked reactive reads", async () => {
     const warning = vi.spyOn(console, "warn");
@@ -319,6 +351,80 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         )) {
           expect(getComputedStyle(label).whiteSpace).toBe("normal");
         }
+      }
+    },
+  );
+
+  it.each([390, 1280])(
+    "preserves intrinsic width for long provider labels and details at %i pixels",
+    async (width) => {
+      const { page, userEvent } = await browser(width);
+      const options = numberedModels(1000).map((entry, index) => ({
+        value: entry.value,
+        label: entry.label,
+        provider: index % 2 ? "openai" : undefined,
+        description: index % 3 ? "API" : "Account",
+      }));
+      options[998] = {
+        value: "fixture/long",
+        label: "A long provider model with   extra whitespace and a\nwide context window",
+        provider: "openai",
+        description: "Team account with an extended capability description",
+      };
+      const measured: { open: number; filtered: number; empty: number }[] = [];
+      for (const windowed of [false, true]) {
+        const { host, picker } = await mountPickers(
+          () => (
+            <div class="model-providers__defaults">
+              <SettingsRow
+                title="Primary"
+                control={
+                  <ModelPicker
+                    label="Primary"
+                    value={options[0]!.value}
+                    options={options}
+                    onChange={() => {}}
+                    windowed={windowed}
+                  />
+                }
+              />
+            </div>
+          ),
+          "position:fixed;right:12px;top:32px;width:min(720px,calc(100vw - 24px))",
+        );
+        const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
+        const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
+        const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+        await page.elementLocator(trigger).click();
+        const count = () => picker.querySelectorAll('[role="option"]').length;
+        await expect.poll(count).toBeGreaterThan(0);
+        if (windowed) {
+          expect(count()).toBeLessThan(50);
+          expect(
+            picker.querySelectorAll(".picker-select__sizer .picker-select__option").length,
+          ).toBeLessThanOrEqual(32);
+        } else {
+          expect(count()).toBe(1000);
+        }
+        const open = menu.getBoundingClientRect().width;
+        if (width === 1280) {
+          expect(open).toBeGreaterThan(trigger.getBoundingClientRect().width + 20);
+        }
+        const search = picker.querySelector<HTMLInputElement>(".picker-select__search")!;
+        await page.elementLocator(search).fill("long provider");
+        await expect.poll(count).toBe(1);
+        const filtered = menu.getBoundingClientRect().width;
+        await page.elementLocator(search).fill("no-match-here");
+        await expect.poll(count).toBe(0);
+        const empty = menu.getBoundingClientRect().width;
+        measured.push({ open, filtered, empty });
+        expect(list.scrollWidth).toBeLessThanOrEqual(list.clientWidth + 1);
+        await userEvent.keyboard("{Escape}");
+        cleanupSolid();
+        host.remove();
+      }
+      for (const state of ["open", "filtered", "empty"] as const) {
+        expect(measured[1]![state]).toBeCloseTo(measured[0]![state], 0);
       }
     },
   );

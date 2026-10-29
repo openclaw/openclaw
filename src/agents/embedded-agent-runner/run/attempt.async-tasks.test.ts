@@ -74,18 +74,22 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     ).toBe(!yieldDetected);
   });
 
-  it("waits for active cron tasks discovered from native media operations", async () => {
+  it("waits for active cron tasks without rereading deadlines for unrelated activity", async () => {
     const task = startTask();
-    const result = wait({});
+    const getDeadlineAtMs = vi.fn(() => undefined);
+    const result = wait({ getDeadlineAtMs });
     const settled = vi.fn();
     void result.then(settled);
+    completeTask(startTask("music", "agent:main:other").taskId, Date.now());
     await vi.advanceTimersByTimeAsync(499);
     expect(settled).not.toHaveBeenCalled();
+    expect(getDeadlineAtMs).toHaveBeenCalledOnce();
     completeTask(task.taskId, Date.now());
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toHaveBeenCalledOnce();
     expect(await result).toEqual(emptyResult);
     expect(findMediaGenerationOperation(task.taskId)?.status).toBe("succeeded");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["image", "music", "video"])("releases durably queued %s completion", async (kind) => {
@@ -109,20 +113,6 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     startTask("image", "agent:main:parent");
     expect(requiresCompletionRequiredAsyncTaskWait({ sessionKey, toolMetas: [] })).toBe(false);
     expect(await wait({ getDeadlineAtMs: () => 0 })).toEqual(emptyResult);
-  });
-
-  it("does not repeatedly read an unchanged task's deadline", async () => {
-    const task = startTask();
-    const getDeadlineAtMs = vi.fn(() => undefined);
-    const result = wait({ getDeadlineAtMs });
-    const unrelated = startTask("music", "agent:main:other");
-    completeTask(unrelated.taskId, Date.now());
-    await vi.advanceTimersByTimeAsync(1_250);
-    expect(getDeadlineAtMs).toHaveBeenCalledOnce();
-    completeTask(task.taskId, Date.now());
-    await vi.advanceTimersByTimeAsync(0);
-    expect(await result).toEqual(emptyResult);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("observes registration of a task whose metadata arrived first", async () => {

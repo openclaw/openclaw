@@ -1,129 +1,108 @@
-// Real-TCP regression from Pick-cat's handshake proof, through the public adapter.
 import { once } from "node:events";
 import http from "node:http";
-import type { Socket } from "node:net";
+import type { Duplex } from "node:stream";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
+import { afterEach, expect, it, vi } from "vitest";
+import { WebSocket, WebSocketServer } from "ws";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
-const ACCOUNT = "+15550001111";
-const BUDGET_MS = 250;
-
-type Peer = Awaited<ReturnType<typeof createPeer>>;
-
-async function createPeer(
-  upgradeAfterMs: (attempt: number) => number | undefined,
-  connected: (socket: WebSocket, attempt: number) => void,
-) {
-  const sockets = new Set<Socket>();
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-  const server = http.createServer((_request, response) => response.end("ok"));
-  const wsServer = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-  let attempts = 0;
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.on("error", () => {});
-    socket.once("close", () => sockets.delete(socket));
-  });
-  server.on("upgrade", (request, socket, head) => {
-    const attempt = ++attempts;
-    // Drain pending raw upgrade sockets so the peer observes the client's FIN.
-    // HTTP hands ownership of these half-open sockets to the upgrade listener.
-    const endPendingUpgrade = () => socket.destroy();
-    socket.once("end", endPendingUpgrade);
-    socket.resume();
-    const waitMs = upgradeAfterMs(attempt);
-    if (waitMs === undefined) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      timers.delete(timer);
-      if (socket.destroyed) {
-        return;
-      }
-      socket.off("end", endPendingUpgrade);
-      wsServer.handleUpgrade(request, socket, head, (ws) => {
-        ws.on("error", () => {});
-        connected(ws, attempt);
-      });
-    }, waitMs);
-    timers.add(timer);
-  });
-  const port = await listenOnLoopback(server);
-  return {
-    baseUrl: `http://127.0.0.1:${port}`,
-    get attempts() {
-      return attempts;
-    },
-    async close() {
-      timers.forEach(clearTimeout);
-      const socketClosed = [...sockets].map((socket) => once(socket, "close"));
-      wsServer.clients.forEach((ws) => ws.terminate());
-      sockets.forEach((socket) => socket.destroy());
-      await Promise.all([
-        ...socketClosed,
-        promisify(wsServer.close.bind(wsServer))(),
-        promisify(server.close.bind(server))(),
-      ]);
-      expect(sockets.size).toBe(0);
-    },
-  };
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+async function roundTrip(socket: WebSocket) {
+  const pong = once(socket, "pong");
+  socket.ping();
+  await pong;
 }
 
-describe("container adapter opening budgets with real peers", () => {
-  let peer: Peer | undefined;
-  let abort: AbortController | undefined;
-  let stream: Promise<void> | undefined;
-
-  afterEach(async () => {
-    abort?.abort();
-    try {
-      await stream;
-    } finally {
-      await peer?.close();
-      peer = undefined;
-      abort = undefined;
-      stream = undefined;
+it("recovers opening, closed and half-open receivers without timing out healthy or paused reads", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
+  const ping = vi.spyOn(WebSocket.prototype, "ping");
+  const server = http.createServer((_request, response) => response.end("ok"));
+  const peer = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, autoPong: false });
+  let pending: Duplex | undefined;
+  const sockets: WebSocket[] = [];
+  let attempts = 0;
+  server.on("upgrade", (request, socket, head) => {
+    const attempt = ++attempts;
+    if (attempt === 1) {
+      pending = socket;
+      socket.once("end", () => socket.destroy());
+      socket.resume();
+      return;
     }
-  });
-
-  it("reconnects after opening timeout and closure and receives subsequent events", async () => {
-    peer = await createPeer(
-      (attempt) => (attempt === 1 ? undefined : 0),
-      (ws, attempt) => {
-        ws.send(JSON.stringify({ envelope: { timestamp: attempt } }));
-        if (attempt === 2) {
-          ws.close();
-        }
-      },
-    );
-    abort = new AbortController();
-    const events: number[] = [];
-    const statusSink = vi.fn();
-    stream = runSignalSseLoop({
-      baseUrl: peer.baseUrl,
-      account: ACCOUNT,
-      transportKind: "container",
-      timeoutMs: BUDGET_MS,
-      abortSignal: abort.signal,
-      runtime: createRuntimeSpies(),
-      policy: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-      statusSink,
-      onEvent: (event) => {
-        const message = JSON.parse(event.data ?? "{}") as { envelope: { timestamp: number } };
-        events.push(message.envelope.timestamp);
-        if (events.length === 2) {
-          abort?.abort();
-        }
-      },
+    peer.handleUpgrade(request, socket, head, (ws) => {
+      sockets.push(ws);
+      ws.on("error", () => {});
+      if (attempt === 2) {
+        ws.send("private-inbound-message");
+      }
+      if (attempt >= 4) {
+        ws.on("ping", (data) => ws.pong(data));
+      }
+      ws.send(JSON.stringify({ envelope: { timestamp: attempt } }));
+      if (attempt === 2) {
+        ws.close();
+      }
     });
-    void stream.catch(() => {});
-    await vi.waitFor(() => expect(events).toEqual([2, 3]), { timeout: 3_000 });
-    await stream;
-    expect(peer.attempts).toBe(3);
-    expect(statusSink).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "recovering" }));
   });
+  const port = await listenOnLoopback(server);
+  const abort = new AbortController();
+  const runtime = createRuntimeSpies();
+  const statusSink = vi.fn();
+  const events: number[] = [];
+  const stream = runSignalSseLoop({
+    baseUrl: `http://127.0.0.1:${port}`,
+    account: "+15550001111",
+    transportKind: "container",
+    timeoutMs: 250,
+    abortSignal: abort.signal,
+    runtime,
+    statusSink,
+    policy: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+    onEvent: (event) => {
+      events.push(JSON.parse(event.data ?? "{}").envelope.timestamp);
+    },
+  });
+  const count = (line: string) =>
+    runtime.error.mock.calls.filter(([message]) => message === line).length;
+  const heartbeat = "[signal-ws] heartbeat timed out; reconnecting";
+  try {
+    await vi.waitFor(() => expect(events).toEqual([2, 3]), { timeout: 3_000 });
+    expect(pending?.destroyed).toBe(true);
+    await vi.advanceTimersByTimeAsync(25_000);
+    await roundTrip(sockets[1]!);
+    await vi.advanceTimersByTimeAsync(25_000);
+    await vi.waitFor(() => expect(events).toEqual([2, 3, 4]), { timeout: 3_000 });
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: "recovering", connected: false }),
+    );
+    expect(count("[signal-ws] parse error: invalid JSON frame")).toBe(1);
+    expect(runtime.error.mock.calls.flat().join("\n")).not.toContain("private-inbound-message");
+    await vi.advanceTimersByTimeAsync(25_000);
+    await roundTrip(sockets[2]!);
+    const receiver = ping.mock.contexts.find(
+      (socket): socket is WebSocket =>
+        socket instanceof WebSocket && Boolean(socket.url) && socket.readyState === WebSocket.OPEN,
+    )!;
+    receiver.pause();
+    await vi.advanceTimersByTimeAsync(75_000);
+    expect(count(heartbeat)).toBe(1);
+    receiver.resume();
+    await roundTrip(sockets[2]!);
+    await vi.advanceTimersByTimeAsync(25_000);
+    await roundTrip(sockets[2]!);
+    expect(attempts).toBe(4);
+    expect(count(heartbeat)).toBe(1);
+  } finally {
+    abort.abort();
+    await stream;
+    pending?.destroy();
+    peer.clients.forEach((socket) => socket.terminate());
+    await Promise.all([promisify(peer.close.bind(peer))(), promisify(server.close.bind(server))()]);
+    expect(vi.getTimerCount()).toBe(0);
+  }
 });

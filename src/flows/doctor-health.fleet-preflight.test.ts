@@ -6,6 +6,7 @@ import path from "node:path";
 import { expectDefined as required } from "@openclaw/normalization-core";
 import * as processIdentity from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { migrationStepInput } from "../infra/state-migrations.step.test-support.js";
 const { mocks, createDoctorRuntime, stubDoctorEnv } =
   await import("./doctor-health.test-support.js");
 // Start with a cold migration owner; fixture hooks only reset mocks before the first case.
@@ -388,14 +389,7 @@ it.each(["hardlink", "relocated-copy"] as const)(
           ...result,
           stateMigrationStepReceipts: [
             createLegacyStateMigrationStepReceipt(
-              {
-                id: "media-persistence",
-                phase: "shared",
-                source: [],
-                target: [],
-                requiredness: "conditional",
-                reversibility: "checkpoint-required",
-              },
+              migrationStepInput("media-persistence", "conditional", "checkpoint-required"),
               repaired,
             ),
           ],

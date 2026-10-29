@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  coerceErrorMessage,
+  materializeErrorStack,
+  toStringifiedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import {
@@ -667,6 +671,7 @@ export class CodexAppServerClient {
     }
     this.closed = true;
     closeCodexCatalogClientSource(this);
+    materializeErrorStack(error);
     this.closeError = error;
     this.closeMessageReader();
     this.catalogWorkerClosed = this.catalogWorker.close(error);

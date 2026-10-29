@@ -800,8 +800,13 @@ export function createStandaloneNativeAdapter({
 
   return {
     bootstrap,
-    discover(moduleEntries) {
-      const pending = new Set([...moduleEntries, ...additionalModuleEntries]);
+    /**
+     * Discover emitted companions before selecting original-source roots.
+     * @param {string[]} moduleEntries
+     * @param {{selectRuntimeEntries?: (entries: string[]) => string[], scanOnlyEntries?: string[]}} options
+     */
+    discover(moduleEntries, { selectRuntimeEntries, scanOnlyEntries = [] } = {}) {
+      const pending = new Set([...moduleEntries, ...scanOnlyEntries, ...additionalModuleEntries]);
       for (const entry of pending) {
         const filename = path.join(runtimeRoot, entry);
         const contents = fs.readFileSync(filename, "utf8");
@@ -819,6 +824,12 @@ export function createStandaloneNativeAdapter({
           pending.add(additional);
         }
       }
+      return [
+        ...new Set([
+          ...(selectRuntimeEntries ? selectRuntimeEntries(moduleEntries) : moduleEntries),
+          ...additionalModuleEntries.toSorted((left, right) => left.localeCompare(right)),
+        ]),
+      ];
     },
     get builtinModules() {
       return [...builtinModules].toSorted((left, right) => left.localeCompare(right));

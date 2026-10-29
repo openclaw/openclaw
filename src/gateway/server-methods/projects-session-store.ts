@@ -122,6 +122,17 @@ function createProjectSessionStore(
   }
   return Object.freeze({
     store: Object.freeze(store),
+    readMembership(key: string) {
+      const target = targets.get(key);
+      return (
+        target &&
+        projection.readMembership({
+          key: target.key,
+          agentId: target.agentId,
+          storePath: target.storeTarget.storePath,
+        })
+      );
+    },
     assertCurrent(keys: Iterable<string>) {
       for (const key of keys) {
         // The memory snapshot retains its own final disclosure guard.

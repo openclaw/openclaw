@@ -120,9 +120,9 @@ describe("scheduled command timeouts", () => {
       vi.useFakeTimers();
       const preflightStarted = createDeferred();
       const releasePreflight = createDeferred();
-      const originalRead = proactiveReceipts.readDefaultProactiveJobReceiptsAsync;
+      const originalRead = proactiveReceipts.readDefaultProactiveJobReceiptsByKeyAsync;
       const readReceipt = vi
-        .spyOn(proactiveReceipts, "readDefaultProactiveJobReceiptsAsync")
+        .spyOn(proactiveReceipts, "readDefaultProactiveJobReceiptsByKeyAsync")
         .mockImplementationOnce(async (...args) => {
           preflightStarted.resolve();
           await releasePreflight.promise;

@@ -39,7 +39,10 @@ import {
   invalidateOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
-import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import {
+  getOpenClawDatabaseMaintenanceResourceScope,
+  getOpenClawDatabaseMaintenanceScope,
+} from "./openclaw-state-db-async-lifecycle.js";
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -224,6 +227,10 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
       cache.idleTimers.delete(database.db);
       return;
     }
+    // Maintenance closes its handles with schema custody; this detached timer has none.
+    if (getOpenClawDatabaseMaintenanceResourceScope(database.db)) {
+      return;
+    }
     // Awaiting operations own the exact connection; final release rearms eviction.
     if (database.db.isOpen && cache.borrowers.get(database.db)?.size) {
       return;
@@ -355,14 +362,16 @@ export function readOpenClawAgentDatabaseWorkerLeaseReceipt(
  * turning an already committed worker result into an operation failure.
  * Callers own a bounded retry policy and must surface an unsettled result.
  */
-export function settleOpenClawAgentDatabaseWorkerClose(
+export async function settleOpenClawAgentDatabaseWorkerClose(
   pathname: string,
-): OpenClawAgentDatabaseWorkerCloseResult {
+): Promise<OpenClawAgentDatabaseWorkerCloseResult> {
   const resolvedPath = path.resolve(pathname);
   const errors: Error[] = [];
   const database = cache.databases.get(resolvedPath);
   if (database) {
     try {
+      // Join sidecar inspection before native close; a guarded close is not a failed owner.
+      await database.walMaintenance.stop();
       closeCachedOpenClawAgentDatabase(database);
     } catch (error) {
       errors.push(error instanceof Error ? error : new Error(String(error)));

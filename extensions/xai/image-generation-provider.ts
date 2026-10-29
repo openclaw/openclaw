@@ -16,7 +16,7 @@ import {
   XAI_IMAGE_DEFAULT_TIMEOUT_MS,
   XAI_SUPPORTED_IMAGE_ASPECT_RATIOS,
   createXaiImageGenerationProviderMetadata,
-} from "./capability-provider-metadata.js";
+} from "./capability-provider-metadata-factory.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
 
 function resolveImageForEdit(

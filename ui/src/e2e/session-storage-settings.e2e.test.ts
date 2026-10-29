@@ -107,7 +107,7 @@ suite.define(() => {
         expect(submittedConfig(firstSave)).toMatchObject({
           session: { maintenance: { coldStorage: { afterDays: 14 } } },
         });
-        await expectText(page.locator("openclaw-settings-save-indicator"), "Saved");
+        await expectText(page.locator("openclaw-settings-save-indicator"), "Apply changes");
         await row(page, "Archive older transcripts").getByRole("switch").click();
         await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(2);
         const saves = await gateway.getRequests("config.set");

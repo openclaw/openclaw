@@ -12,6 +12,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import { assertOperatorCloudProfileDispatchAllowed } from "../operator-role-policy.js";
 import {
   loadWorkerPlacementSessionRuntimeModule,
   resolveWorkerPlacementSessionTarget,
@@ -23,7 +24,7 @@ import { resolveDevicePlacementEligibility } from "../worker-environments/device
 import { selectDevicePlacementCandidates } from "../worker-environments/device-placement-selector.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "../worker-environments/device-provider-identity.js";
 import { deviceUnavailableText } from "../worker-environments/device-provider.js";
-import type { WorkerPlacementAuthorization } from "../worker-environments/placement-authorization.js";
+import { composePlacementAuthorization } from "../worker-environments/placement-authorization.js";
 import {
   resolveProjectProfileDestination,
   resolveWorkerPlacementDestination,
@@ -47,13 +48,9 @@ import { readSessionWorkerPlacementAsync } from "../worker-environments/session-
 import type { WorkerSessionWorkspace } from "../worker-environments/session-workspace.js";
 import { listGatewayEnvironments } from "./environments.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { withWorkerPlacementAuthorization } from "./session-placement-authorization.js";
 import { isWorkerDispatchInputError, requireSessionKey } from "./sessions-shared.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-  RespondFn,
-  SessionMutationAuthorization,
-} from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function respondInvalidWorkerSession(respond: RespondFn, message: string): void {
@@ -61,26 +58,6 @@ function respondInvalidWorkerSession(respond: RespondFn, message: string): void 
 }
 
 const MAX_AUTO_DEVICE_PLACEMENT_ATTEMPTS = 3;
-
-async function withWorkerPlacementAuthorization<T>(
-  authorization: SessionMutationAuthorization | undefined,
-  operation: (authorize: WorkerPlacementAuthorization | undefined) => Promise<T>,
-): Promise<T> {
-  const assertCurrent = authorization?.assertCurrent;
-  const prepared = await authorization?.prepareWorkerGrant?.();
-  try {
-    return await operation(
-      prepared
-        ? Object.assign(() => prepared.assertCurrent(), {
-            assertWorkerGrant: prepared.assertCurrent,
-            assertWorkerLifetime: prepared.assertLifetimeCurrent,
-          })
-        : assertCurrent,
-    );
-  } finally {
-    await prepared?.release();
-  }
-}
 
 async function withWorkerSessionTarget(
   method: "dispatch" | "move" | "reclaim",
@@ -256,6 +233,16 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     return withWorkerSessionTarget("dispatch", params, context, respond, async (resolved) => {
       const { cfg, entry, session, service: dispatchService } = resolved;
       const { sessionId, sessionKey, agentId } = session;
+      const runSetupScript = client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
+      const assertCloudProfileAllowed = () =>
+        assertOperatorCloudProfileDispatchAllowed({
+          config: context.getRuntimeConfig(),
+          client,
+          target: params,
+          createdActor: entry.createdActor,
+          runSetupScript,
+        });
+      assertCloudProfileAllowed();
       let { dispatchTarget } = resolved;
       if (
         entry.deviceFolder &&
@@ -439,6 +426,10 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         const result = await withWorkerPlacementAuthorization<
           { placement: WorkerSessionPlacementRecord } | { invalid: string }
         >(sessionMutationAuthorization, async (authorize) => {
+          const authorizeDispatch = composePlacementAuthorization(
+            authorize,
+            assertCloudProfileAllowed,
+          );
           let candidateTarget = initialDispatchTarget;
           let lastEligibilityError: string | undefined;
           const candidates = autoDevice ? automaticDeviceIds : [candidateTarget.deviceId];
@@ -492,7 +483,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
               const request: WorkerPlacementDispatchRequest = {
                 ...session,
                 executionMode,
-                runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
+                runSetupScript,
                 ...candidateTarget,
                 ...(devicePlacement ? { devicePlacement } : {}),
               };
@@ -505,7 +496,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
                     sessionKey,
                   });
                 },
-                authorize,
+                authorizeDispatch,
                 signal,
               );
               return { placement };

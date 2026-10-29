@@ -3,6 +3,7 @@ import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -329,15 +330,32 @@ async function captureRichPanel(page: Page, name: string, directory = proofDir) 
   await page.screenshot({ path: path.join(directory, `${name}.png`), clip });
 }
 
-async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
-  const gateway = await startChat(page, themeMode);
+async function forEachPanelTheme(page: Page, run: (themeMode: "light" | "dark") => Promise<void>) {
+  // Finish in light mode so persistence runs once, independent of presentation.
+  for (const themeMode of ["dark", "light"] as const) {
+    await page.emulateMedia({ colorScheme: themeMode });
+    await evaluateControlUiContext(page, (context, mode) => context.theme.setMode(mode), themeMode);
+    await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(themeMode);
+    await waitForPanelGeometry(page);
+    await run(themeMode);
+  }
+}
+
+async function capturePanelThemes(page: Page, name: string) {
+  if (proofDir) {
+    await forEachPanelTheme(page, (themeMode) => captureRichPanel(page, `${name}-${themeMode}`));
+  }
+}
+
+async function exerciseTabbedPanel(page: Page) {
+  const gateway = await startChat(page, "light");
   const rail = sidePanel(page);
   const header = sideHeader(page);
 
   await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
   await rail.locator(".side-panel-launcher").waitFor();
   expect(await rail.locator(".tabstrip-tab").count()).toBe(0);
-  await captureRichPanel(page, `rails-tabs-empty-${themeMode}`);
+  await capturePanelThemes(page, "rails-tabs-empty");
 
   await rail
     .locator(".side-panel-launcher")
@@ -356,7 +374,7 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   await changedFile.click();
   await expect.poll(() => changedFile.getAttribute("aria-expanded")).toBe("true");
   await expect.poll(() => rail.textContent()).toContain("single side panel");
-  await captureRichPanel(page, `rails-tabs-review-${themeMode}`);
+  await capturePanelThemes(page, "rails-tabs-review");
 
   await openFromPlus(page, "Terminal");
   const terminalOpen = await gateway.waitForRequest("terminal.open");
@@ -364,7 +382,7 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   await waitForSlot(page, "terminal");
   await openFromPlus(page, "Browser");
   await waitForSlot(page, "browser");
-  await captureRichPanel(page, `rails-tabs-browser-${themeMode}`);
+  await capturePanelThemes(page, "rails-tabs-browser");
   await openFromPlus(page, "Side chat");
   await waitForSlot(page, "companion");
   await openFromPlus(page, "Desktop");
@@ -372,96 +390,99 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   const desktopObserve = await gateway.waitForRequest("desktop.observe");
   expect(desktopObserve.params).toEqual({ source: { kind: "host" }, control: false });
   await rail.getByLabel("VNC password", { exact: true }).waitFor();
-  await captureRichPanel(page, `rails-tabs-desktop-${themeMode}`);
-  await expect
-    .poll(() => tabLabels(page))
-    .toEqual(["Files", "Review", "zsh", "Browser", "Side chat", "Desktop"]);
-  await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
-  await expect
-    .poll(() =>
-      header.locator(".tabstrip-tab__icon").evaluateAll((icons) => {
-        const center = (rect?: DOMRect) => (rect?.y ?? 0) + (rect?.height ?? 0) / 2;
-        const firstCenter = center(icons[0]?.getBoundingClientRect());
-        return icons.map((icon) => {
-          const box = icon.getBoundingClientRect();
-          const glyph = icon.querySelector("svg")?.getBoundingClientRect();
-          const base = icon.closest(".tabstrip-tab")?.getBoundingClientRect();
-          return [
-            box.width,
-            box.height,
-            glyph?.width,
-            glyph?.height,
-            Math.abs(center(box) - center(base)),
-            center(box) - firstCenter,
-          ];
-        });
-      }),
-    )
-    .toEqual(Array.from({ length: 6 }, () => [16, 16, 15, 15, 0, 0]));
-  const filesTab = rail.locator(".tabstrip-tab").filter({ hasText: "Files" });
-  const filesClose = rail.getByRole("button", { name: "Close Files", exact: true });
-  const desktopClose = rail.getByRole("button", { name: "Close Desktop", exact: true });
-  await expect.poll(() => computedStyle(filesClose, "opacity")).toBe("0");
-  await expect.poll(() => computedStyle(desktopClose, "opacity")).toBe("1");
-  const filesGeometry = await tabGeometry(filesTab);
-  await filesTab.hover();
-  await expect.poll(() => computedStyle(filesClose, "opacity")).toBe("1");
-  await expect.poll(() => tabCloseHasTransparentBackground(filesTab)).toBe(true);
-  await filesClose.hover();
-  await expect.poll(() => tabCloseHasTransparentBackground(filesTab)).toBe(true);
-  expect(await tabGeometry(filesTab)).toEqual(filesGeometry);
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-    const directory = proofDir ?? createControlUiE2eArtifactDir(`chat-rail-hover-${themeMode}`);
-    await captureRichPanel(page, `rails-tab-close-hover-${themeMode}`, directory);
-  }
-  const railLabels = rail.locator(sidePanelTabLabelSelector);
-  let overflowingLabelIndex = -1;
-  await expect
-    .poll(async () => {
-      overflowingLabelIndex = await railLabels.evaluateAll((labels) =>
-        labels.findIndex((label) => label.hasAttribute("data-tooltip-overflow")),
-      );
-      return overflowingLabelIndex;
-    })
-    .toBeGreaterThanOrEqual(0);
-  const overflowingLabel = railLabels.nth(overflowingLabelIndex);
-  const fullLabel = (await overflowingLabel.textContent())?.trim();
-  const tooltipTrigger = overflowingLabel.locator("..");
-  const labelTooltip = tooltipTrigger.locator("..");
-  expect(await labelTooltip.evaluate((element) => element.localName)).toBe("openclaw-tooltip");
-  expect(
-    await overflowingLabel.locator("xpath=ancestor::button[@role='tab']").getAttribute("title"),
-  ).toBeNull();
-  await tooltipTrigger.hover();
-  await expect
-    .poll(() =>
-      labelTooltip
-        .locator(".tooltip-surface[popover]")
-        .evaluate((tooltip) => tooltip.matches(":popover-open")),
-    )
-    .toBe(true);
-  expect(await labelTooltip.locator(".tooltip-content").textContent()).toContain(fullLabel);
-  await expect
-    .poll(() =>
-      rail.locator('[data-region-header="side"] .tabstrip').evaluate((group) => {
-        const tabsRect = group.getBoundingClientRect();
-        const rightmostItem = Math.max(
-          ...[
-            ...group.querySelectorAll<HTMLElement>(
-              ".tabstrip-tab, .tabstrip-tab__close, .tabstrip-separator",
-            ),
-          ].map((item) => Math.min(item.getBoundingClientRect().right, tabsRect.right)),
+  await capturePanelThemes(page, "rails-tabs-desktop");
+  await forEachPanelTheme(page, async (themeMode) => {
+    await page.mouse.move(80, 80);
+    await expect
+      .poll(() => tabLabels(page))
+      .toEqual(["Files", "Review", "zsh", "Browser", "Side chat", "Desktop"]);
+    await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
+    await expect
+      .poll(() =>
+        header.locator(".tabstrip-tab__icon").evaluateAll((icons) => {
+          const center = (rect?: DOMRect) => (rect?.y ?? 0) + (rect?.height ?? 0) / 2;
+          const firstCenter = center(icons[0]?.getBoundingClientRect());
+          return icons.map((icon) => {
+            const box = icon.getBoundingClientRect();
+            const glyph = icon.querySelector("svg")?.getBoundingClientRect();
+            const base = icon.closest(".tabstrip-tab")?.getBoundingClientRect();
+            return [
+              box.width,
+              box.height,
+              glyph?.width,
+              glyph?.height,
+              Math.abs(center(box) - center(base)),
+              center(box) - firstCenter,
+            ];
+          });
+        }),
+      )
+      .toEqual(Array.from({ length: 6 }, () => [16, 16, 15, 15, 0, 0]));
+    const filesTab = rail.locator(".tabstrip-tab").filter({ hasText: "Files" });
+    const filesClose = rail.getByRole("button", { name: "Close Files", exact: true });
+    const desktopClose = rail.getByRole("button", { name: "Close Desktop", exact: true });
+    await expect.poll(() => computedStyle(filesClose, "opacity")).toBe("0");
+    await expect.poll(() => computedStyle(desktopClose, "opacity")).toBe("1");
+    const filesGeometry = await tabGeometry(filesTab);
+    await filesTab.hover();
+    await expect.poll(() => computedStyle(filesClose, "opacity")).toBe("1");
+    await expect.poll(() => tabCloseHasTransparentBackground(filesTab)).toBe(true);
+    await filesClose.hover();
+    await expect.poll(() => tabCloseHasTransparentBackground(filesTab)).toBe(true);
+    expect(await tabGeometry(filesTab)).toEqual(filesGeometry);
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const directory = proofDir ?? createControlUiE2eArtifactDir(`chat-rail-hover-${themeMode}`);
+      await captureRichPanel(page, `rails-tab-close-hover-${themeMode}`, directory);
+    }
+    const railLabels = rail.locator(sidePanelTabLabelSelector);
+    let overflowingLabelIndex = -1;
+    await expect
+      .poll(async () => {
+        overflowingLabelIndex = await railLabels.evaluateAll((labels) =>
+          labels.findIndex((label) => label.hasAttribute("data-tooltip-overflow")),
         );
-        const clipped = [...group.querySelectorAll<HTMLElement>(".tabstrip-tab__label")].some(
-          (label) => label.hasAttribute("data-tooltip-overflow"),
-        );
-        return { clipped, unused: Math.max(0, tabsRect.right - rightmostItem) };
-      }),
-    )
-    .toEqual({ clipped: true, unused: 0 });
+        return overflowingLabelIndex;
+      })
+      .toBeGreaterThanOrEqual(0);
+    const overflowingLabel = railLabels.nth(overflowingLabelIndex);
+    const fullLabel = (await overflowingLabel.textContent())?.trim();
+    const tooltipTrigger = overflowingLabel.locator("..");
+    const labelTooltip = tooltipTrigger.locator("..");
+    expect(await labelTooltip.evaluate((element) => element.localName)).toBe("openclaw-tooltip");
+    expect(
+      await overflowingLabel.locator("xpath=ancestor::button[@role='tab']").getAttribute("title"),
+    ).toBeNull();
+    await tooltipTrigger.hover();
+    await expect
+      .poll(() =>
+        labelTooltip
+          .locator(".tooltip-surface[popover]")
+          .evaluate((tooltip) => tooltip.matches(":popover-open")),
+      )
+      .toBe(true);
+    expect(await labelTooltip.locator(".tooltip-content").textContent()).toContain(fullLabel);
+    await expect
+      .poll(() =>
+        rail.locator('[data-region-header="side"] .tabstrip').evaluate((group) => {
+          const tabsRect = group.getBoundingClientRect();
+          const rightmostItem = Math.max(
+            ...[
+              ...group.querySelectorAll<HTMLElement>(
+                ".tabstrip-tab, .tabstrip-tab__close, .tabstrip-separator",
+              ),
+            ].map((item) => Math.min(item.getBoundingClientRect().right, tabsRect.right)),
+          );
+          const clipped = [...group.querySelectorAll<HTMLElement>(".tabstrip-tab__label")].some(
+            (label) => label.hasAttribute("data-tooltip-overflow"),
+          );
+          return { clipped, unused: Math.max(0, tabsRect.right - rightmostItem) };
+        }),
+      )
+      .toEqual({ clipped: true, unused: 0 });
+  });
 
   await rail.locator(".tabstrip-tab").filter({ hasText: "Files" }).click();
-  await captureRichPanel(page, `rails-tabs-rich-${themeMode}`);
+  await capturePanelThemes(page, "rails-tabs-rich");
 
   const panelWidth = await panelSize(page, "width");
   const divider = page.locator(".sidebar-column__divider");
@@ -472,10 +493,10 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   await dockChatSidePanel(page, "bottom");
   await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
   await expect.poll(async () => (await dockLayout(page)).spansRegion).toBe(true);
+  await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
   await expect
     .poll(() => divider.evaluate((element) => (element as { orientation?: string }).orientation))
     .toBe("horizontal");
-  await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
   const bottomHeight = await panelSize(page, "height");
   await dragDivider(page, divider, "y", -70);
   await expect.poll(() => panelSize(page, "height")).toBeGreaterThan(bottomHeight + 50);
@@ -484,7 +505,11 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   await page.mouse.click(300, 100);
   // Blur the dragged divider before evidence capture.
   await divider.evaluate((element) => element.blur());
-  await captureRichPanel(page, `rails-tabs-bottom-${themeMode}`);
+  await forEachPanelTheme(page, async (themeMode) => {
+    await expect.poll(async () => (await dockLayout(page)).spansRegion).toBe(true);
+    await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
+    await captureRichPanel(page, `rails-tabs-bottom-${themeMode}`);
+  });
 
   await selectChatLayoutAction(page, "Minimize side panel");
   await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
@@ -515,8 +540,10 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   expect(await primary.getAttribute("hidden")).not.toBeNull();
   expect(await primary.getAttribute("inert")).not.toBeNull();
   expect(await retainedPrimary!.evaluate((element) => element.isConnected)).toBe(true);
-  await expectExpandedSidePanelFillsRegion(page, "side");
-  await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
+  await forEachPanelTheme(page, async (themeMode) => {
+    await expectExpandedSidePanelFillsRegion(page, "side");
+    await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
+  });
   await selectChatLayoutAction(page, "Restore split");
   await waitForPanelGeometry(page);
   await expect.poll(() => primary.isVisible()).toBe(true);
@@ -562,7 +589,7 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   await expect.poll(() => panelSize(page, "width")).toBeLessThan(resizedWidth - 50);
   const emptyResizedWidth = await panelSize(page, "width");
   await divider.evaluate((element) => element.blur());
-  await captureRichPanel(page, `rails-tabs-empty-resized-${themeMode}`);
+  await capturePanelThemes(page, "rails-tabs-empty-resized");
 
   await reloadChat(page);
   await rail.locator(".side-panel-launcher").waitFor();
@@ -580,58 +607,62 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   await expect.poll(() => terminalLabel.textContent()).toBe("shell 1");
   expect(await restoredTerminal.getAttribute("class")).toContain("is-exited");
   expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
-  await expect
-    .poll(() =>
-      terminalLabel.evaluate((label) => {
-        const element = label as HTMLElement;
-        return {
-          fits: element.scrollWidth <= element.clientWidth + 1,
-          mask: getComputedStyle(element.parentElement!).maskImage,
-        };
-      }),
-    )
-    .toEqual({ fits: true, mask: "none" });
-  const terminalTabGeometry = await terminalLabel.evaluate((label) => {
-    const tab = label.closest<HTMLElement>(".tabstrip-tab");
-    const viewport = tab?.closest<HTMLElement>(".side-panel__header-tabs");
-    if (!tab || !viewport) {
-      throw new Error("The terminal tab must belong to the panel's allocated tabs region");
-    }
-    const newTab = viewport.querySelector<HTMLElement>(":scope > .tabstrip-new");
-    return {
-      availableWidth: viewport.clientWidth - (newTab?.getBoundingClientRect().width ?? 0),
-      tabWidth: tab.getBoundingClientRect().width,
-    };
+  await forEachPanelTheme(page, async (themeMode) => {
+    await expect
+      .poll(() =>
+        terminalLabel.evaluate((label) => {
+          const element = label as HTMLElement;
+          return {
+            fits: element.scrollWidth <= element.clientWidth + 1,
+            mask: getComputedStyle(element.parentElement!).maskImage,
+          };
+        }),
+      )
+      .toEqual({ fits: true, mask: "none" });
+    const terminalTabGeometry = await terminalLabel.evaluate((label) => {
+      const tab = label.closest<HTMLElement>(".tabstrip-tab");
+      const viewport = tab?.closest<HTMLElement>(".side-panel__header-tabs");
+      if (!tab || !viewport) {
+        throw new Error("The terminal tab must belong to the panel's allocated tabs region");
+      }
+      const newTab = viewport.querySelector<HTMLElement>(":scope > .tabstrip-new");
+      return {
+        availableWidth: viewport.clientWidth - (newTab?.getBoundingClientRect().width ?? 0),
+        tabWidth: tab.getBoundingClientRect().width,
+      };
+    });
+    expect(terminalTabGeometry.tabWidth).toBeLessThan(terminalTabGeometry.availableWidth - 12);
+    await captureRichPanel(page, `rails-tabs-single-${themeMode}`);
+    const terminalTooltip = terminalLabel.locator("xpath=ancestor::openclaw-tooltip[1]");
+    await terminalLabel.locator("..").hover();
+    expect(await terminalLabel.getAttribute("data-tooltip-overflow")).toBeNull();
+    expect(await terminalTooltip.locator(".tooltip-surface[popover]:popover-open").count()).toBe(0);
   });
-  expect(terminalTabGeometry.tabWidth).toBeLessThan(terminalTabGeometry.availableWidth - 12);
-  await captureRichPanel(page, `rails-tabs-single-${themeMode}`);
-  const terminalTooltip = terminalLabel.locator("xpath=ancestor::openclaw-tooltip[1]");
-  await terminalLabel.locator("..").hover();
-  expect(await terminalLabel.getAttribute("data-tooltip-overflow")).toBeNull();
-  expect(await terminalTooltip.locator(".tooltip-surface[popover]:popover-open").count()).toBe(0);
   await openFromPlus(page, "Review");
   await rail.getByRole("button", { name: "Close tab: shell 1", exact: true }).click();
   // Closing the last terminal tab removes the Terminal slot; Review stays.
   await expect.poll(() => tabLabels(page)).toEqual(["Review"]);
-  // A fitting strip must release its overflow classes and fade mask.
-  await expect
-    .poll(() =>
-      rail.locator(sidePanelTabLabelSelector).evaluateAll((labels) =>
-        labels.every((label) => {
-          const element = label as HTMLElement;
-          const trigger = element.parentElement;
-          const mask = trigger ? getComputedStyle(trigger).maskImage : "none";
-          return (
-            element.scrollWidth <= element.clientWidth + 1 &&
-            !element.classList.contains("is-overflowing") &&
-            trigger?.classList.contains("has-label-overflow") === false &&
-            mask === "none"
-          );
-        }),
-      ),
-    )
-    .toBe(true);
-  await captureRichPanel(page, `rails-tabs-reflow-${themeMode}`);
+  await forEachPanelTheme(page, async (themeMode) => {
+    // A fitting strip must release its overflow classes and fade mask.
+    await expect
+      .poll(() =>
+        rail.locator(sidePanelTabLabelSelector).evaluateAll((labels) =>
+          labels.every((label) => {
+            const element = label as HTMLElement;
+            const trigger = element.parentElement;
+            const mask = trigger ? getComputedStyle(trigger).maskImage : "none";
+            return (
+              element.scrollWidth <= element.clientWidth + 1 &&
+              !element.classList.contains("is-overflowing") &&
+              trigger?.classList.contains("has-label-overflow") === false &&
+              mask === "none"
+            );
+          }),
+        ),
+      )
+      .toBe(true);
+    await captureRichPanel(page, `rails-tabs-reflow-${themeMode}`);
+  });
 }
 
 suite.define(() => {
@@ -661,17 +692,12 @@ suite.define(() => {
     },
   );
 
-  it.each(["light", "dark"] as const)(
-    "navigates and persists one tabbed side panel in %s theme",
-    async (themeMode) => {
-      await withPage((page) => exerciseTabbedPanel(page, themeMode), {
-        colorScheme: themeMode,
-        ...(videoDir && themeMode === "light"
-          ? { recordVideo: { dir: videoDir, size: { height: 900, width: 1600 } } }
-          : {}),
-      });
-    },
-  );
+  it("navigates and persists one tabbed side panel with light and dark presentations", async () => {
+    await withPage(
+      exerciseTabbedPanel,
+      videoDir ? { recordVideo: { dir: videoDir, size: { height: 900, width: 1600 } } } : {},
+    );
+  });
 
   it("keeps navigation usable on a mobile viewport", async () => {
     await withPage(

@@ -110,6 +110,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
     },
   );
   const projectsReady = createMemo(() => props.params.place.browser.projectsReady);
+  const projectCatalogError = createMemo(() => props.params.place.browser.projectCatalogError);
   const projects = createDeferred<readonly ProjectRecord[]>((previous) => {
     const source = projectSource();
     // A picker mounted during a shared refresh starts with the accepted rows.
@@ -347,6 +348,23 @@ export function ProjectPickerContent(props: ProjectChipProps) {
               })}
             />
           </label>
+          <Show when={projectCatalogError()}>
+            <div class="new-session-page__project-error" role="alert">
+              {formatUiError(projectCatalogError())}
+              <button
+                type="button"
+                class="btn btn--sm"
+                disabled={
+                  props.params.submitting ||
+                  props.params.pendingPlacement ||
+                  props.params.place.browser.projectsLoading
+                }
+                onClick={() => void props.params.place.browser.refreshProjects()}
+              >
+                {t("common.retry")}
+              </button>
+            </div>
+          </Show>
           <Loading on={projectsReady()}>
             <For each={localProjects()} keyed={(project) => project.id}>
               {(project) => {

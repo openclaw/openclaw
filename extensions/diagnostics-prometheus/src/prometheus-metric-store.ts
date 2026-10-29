@@ -339,7 +339,12 @@ export function createPrometheusMetricStore(
       return output;
     };
     const emitted = new Set<string>();
+    let previousName: string | undefined;
     const header = (name: string, type: string, help: string) => {
+      if (previousName === name) {
+        return;
+      }
+      previousName = name;
       if (!emitted.has(name)) {
         emitted.add(name);
         let cached = headers.get(name);

@@ -38,7 +38,12 @@ import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import "./chat-page.tsx";
-import { settleChatPage, setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";
+import {
+  settleChatPage,
+  setNavigationContext,
+  stubMatchMedia,
+  showSession,
+} from "./chat-page.test-support.ts";
 import { registerChatPane } from "./chat-pane-elements.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
@@ -120,15 +125,6 @@ function expectPresentation(
     active: pane?.active,
     hidden: pane?.getAttribute("aria-hidden"),
   }).toMatchObject(expected);
-}
-
-async function showSession(
-  page: HTMLElementTagNameMap["openclaw-chat-page"],
-  sessionKey: string,
-): Promise<void> {
-  page.data = { sessionKey };
-  await settleChatPage(page);
-  await settleChatPage(page);
 }
 
 async function mountRetainedPage(sessionKey: string, ...warmSessionKeys: string[]) {

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
@@ -5,6 +6,8 @@ import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.types.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -101,6 +104,46 @@ describe("resolveConversationCapabilityProfile", () => {
       } as never,
     });
     expect(project(profile, ["coding_only", "messaging_only", "shared"])).toEqual(["shared"]);
+  });
+
+  it("includes every declared Knowledge tool in coding without opening other plugins", () => {
+    const manifest = JSON.parse(
+      readFileSync(
+        new URL("../../extensions/knowledge/openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    ) as {
+      contracts: { tools: string[] };
+      toolMetadata?: PluginManifestRecord["toolMetadata"];
+    };
+    const otherTool = "unrelated_plugin_tool";
+    const pluginMetadataSnapshot = {
+      plugins: [
+        createPluginManifestRecordFixture({
+          id: "knowledge",
+          contracts: manifest.contracts,
+          toolMetadata: manifest.toolMetadata,
+        }),
+        createPluginManifestRecordFixture({ id: "unrelated", contracts: { tools: [otherTool] } }),
+      ],
+    };
+    const names = [...manifest.contracts.tools, otherTool];
+    const coding = resolveProfile({
+      config: { tools: { profile: "coding" } },
+      pluginMetadataSnapshot,
+    });
+    expect(project(coding, names)).toEqual(manifest.contracts.tools);
+
+    const denied = resolveProfile({
+      config: { tools: { profile: "coding", deny: ["knowledge_withdraw"] } },
+      pluginMetadataSnapshot,
+    });
+    expect(project(denied, names)).not.toContain("knowledge_withdraw");
+    const messaging = resolveProfile({
+      config: { tools: { profile: "messaging" } },
+      pluginMetadataSnapshot,
+    });
+    expect(project(messaging, names)).toEqual([]);
   });
 
   it("intersects a prepared direct policy with existing tool policy", () => {

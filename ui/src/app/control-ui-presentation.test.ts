@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
-import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
+import { initializeControlUiDocumentHead } from "./control-ui-document-head.ts";
 import { applyControlUiPresentation } from "./control-ui-environment-presentation.runtime.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
@@ -11,7 +11,7 @@ import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
 afterEach(() => {
   applyControlUiAccent();
   applyControlUiPresentation({ environment: null });
-  bindControlUiDocumentHead({ themeColors: [], favicons: [] });
+  initializeControlUiDocumentHead();
   document.documentElement.removeAttribute("style");
   document.body.replaceChildren();
 });
@@ -25,7 +25,7 @@ describe("Control UI accent presentation", () => {
     const shell = document.body.appendChild(document.createElement("div"));
     const metas = ["light", "dark"].map((mode) => {
       const meta = document.createElement("meta");
-      meta.name = "theme-color";
+      Object.assign(meta, { id: `openclaw-theme-color-${mode}`, name: "theme-color" });
       meta.media = `(prefers-color-scheme: ${mode})`;
       return meta;
     });
@@ -33,7 +33,7 @@ describe("Control UI accent presentation", () => {
     unrelatedMeta.name = "theme-color";
     unrelatedMeta.content = "#123456";
     document.head.append(...metas, unrelatedMeta);
-    bindControlUiDocumentHead({ themeColors: metas, favicons: [] });
+    initializeControlUiDocumentHead();
     const palette = document.createElement("style");
     palette.textContent = ":root { --bg-content: #203040; }";
     document.head.append(palette);

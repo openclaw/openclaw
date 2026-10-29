@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { sendDurableMessageBatch } from "../../plugin-sdk/channel-outbound.js";
 import { drainPendingDeliveries } from "../../plugin-sdk/delivery-queue-runtime.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -220,7 +221,23 @@ describe("delivery queue entry state", () => {
 
       vi.stubEnv("OPENCLAW_HOME", originalDirectory);
       const context = claimRoot(originalRoot);
-      await enqueue(originalRoot);
+      const generation = {
+        agentId: "main",
+        storePath: path.join(originalRoot, "agent-sessions.json"),
+        sessionKey: "agent:main:dashboard:queued",
+        sessionId: "queued-session",
+        lifecycleRevision: "queued-lifecycle",
+      };
+      await replaceSessionEntry(generation, {
+        sessionId: generation.sessionId,
+        lifecycleRevision: generation.lifecycleRevision,
+        updatedAt: 1,
+      });
+      await enqueueDeliveryOnce(
+        { ...payload, sessionGeneration: generation },
+        queueId,
+        originalRoot,
+      );
       const duringSend = (input: object) => {
         expectPublicInput(input);
         ambient(otherState());

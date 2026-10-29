@@ -1,8 +1,13 @@
 import { readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { teamsQuotedRawTable } from "./format.test-fixtures.js";
 import {
   editMessageMSTeams,
@@ -10,6 +15,7 @@ import {
   sendMessageMSTeams,
   sendPollMSTeams,
 } from "./send.js";
+import { createMSTeamsTestConfig } from "./setup.test-support.js";
 
 const serviceUrl = "https://smba.trafficmanager.net/amer";
 const conversationId = "19:channel@thread.tacv2";
@@ -20,7 +26,6 @@ const mockState = vi.hoisted(() => ({
   requiresFileConsent: vi.fn(() => false),
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
-  buildTeamsFileInfoCard: vi.fn(),
   sendMSTeamsMessages: vi.fn<(typeof import("./messenger.js"))["sendMSTeamsMessages"]>(async () => [
     "text-message-1",
   ]),
@@ -29,20 +34,6 @@ const mockState = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
-
-vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/markdown-table-runtime")>();
-  return { ...actual, resolveMarkdownTableMode: vi.fn(() => "off") };
-});
-
-vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
-  return {
-    ...actual,
-    convertMarkdownTables: (text: string) => text,
-  };
-});
 
 vi.mock("./send-context.js", () => ({
   resolveMSTeamsSendContext: mockState.resolveMSTeamsSendContext,
@@ -62,9 +53,6 @@ vi.mock("./graph-upload.js", async (importOriginal) => {
     getDriveItemProperties: mockState.getDriveItemProperties,
   };
 });
-
-// mock-isolation: fixture file cards must not call the Graph transport.
-vi.mock("./graph-chat.js", () => ({ buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard }));
 
 vi.mock("./messenger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./messenger.js")>()),
@@ -178,10 +166,6 @@ function mockSharePointFileUpload(): void {
   mockState.getDriveItemProperties.mockResolvedValue({
     eTag: '"file-guid,1"',
     webDavUrl: "https://sharepoint.example.com/dav/report.pdf",
-    name: "report.pdf",
-  });
-  mockState.buildTeamsFileInfoCard.mockReturnValue({
-    contentType: "application/vnd.microsoft.teams.card.file.info",
     name: "report.pdf",
   });
 }
@@ -376,6 +360,19 @@ describe("Microsoft Teams attachments", () => {
 });
 
 describe("Teams text preparation at the SDK HTTP boundary", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: { id: "msteams", meta: { id: "msteams" } },
+        },
+      ]),
+    );
+  });
+  afterEach(resetPluginRuntimeStateForTest);
+
   const sourceName = String.raw`Alice \[Ops\]`;
   const displayName = "Alice [Ops]";
   const source = `# Deployment status\n\n${teamsQuotedRawTable}\n\n@[${sourceName}](11111111-2222-3333-4444-555555555555)`;
@@ -403,6 +400,7 @@ describe("Teams text preparation at the SDK HTTP boundary", () => {
   it.each(["edit", "file-caption"] as const)(
     "preserves normal-send text and mention semantics for %s",
     async (surface) => {
+      const cfg = createMSTeamsTestConfig({ markdown: { tables: "off" } });
       const actualMessenger =
         await vi.importActual<typeof import("./messenger.js")>("./messenger.js");
       mockState.sendMSTeamsMessages.mockImplementation(actualMessenger.sendMSTeamsMessages);
@@ -413,19 +411,19 @@ describe("Teams text preparation at the SDK HTTP boundary", () => {
           sharePointSiteId: "sharepoint-site-1",
           getAccessToken: vi.fn(),
         });
-        await sendMessageMSTeams({ cfg: {}, to: conversationId, text: source });
+        await sendMessageMSTeams({ cfg, to: conversationId, text: source });
         expectPrepared(requests[0]?.body);
 
         if (surface === "edit") {
           await editMessageMSTeams({
-            cfg: {},
+            cfg,
             to: conversationId,
             text: source,
             activityId: "sdk-http-message-1",
           });
         } else {
           await sendMessageMSTeams({
-            cfg: {},
+            cfg,
             to: conversationId,
             text: source,
             mediaUrl: "https://media.example.com/report.pdf",

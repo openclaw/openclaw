@@ -111,6 +111,17 @@ describe("setOcPath", () => {
   });
 
   it.each([
+    { value: "0", expected: 0 },
+    { value: "1e2", expected: 100 },
+    { value: "0x10", expected: 16 },
+    { value: "1.", expected: 1 },
+    { value: " 2 ", expected: 2 },
+  ])("coerces nonblank numeric input $value", ({ value, expected }) => {
+    const ast = parseJsonc('{"k":3}');
+    expect(JSON.parse(edit(ast, "oc://config/k", value).raw)).toEqual({ k: expected });
+  });
+
+  it.each([
     [parseJsonc('{"k":1}'), "oc://config/k", "not-a-number", "parse-error"],
     [parseJsonc('{"k":true}'), "oc://config/k", "maybe", "parse-error"],
     [parseJsonl('{"event":"start"}\n'), "oc://log/L1", "not json", "parse-error"],

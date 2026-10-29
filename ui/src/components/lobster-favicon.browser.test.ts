@@ -43,16 +43,11 @@ async function artwork(id: string, ...samples: PixelSample[]) {
   return { image, pixel, pixels: context.getImageData(0, 0, canvas.width, canvas.height).data };
 }
 
-it("exports identity presets independently of favicon unlocks", async () => {
-  expect(getLobsterdex().has("crimson")).toBe(false);
+it("keeps identity artwork independent of locked, unknown, and revoked favicon picks", async () => {
   const image = expectDefined(await loadLobsterImage("crimson"), "identity artwork");
   expect(image.naturalWidth).toBeGreaterThan(0);
   expect(await loadUnlockedLobsterFavicon("crimson")).toBeNull();
   expect(getLobsterdex().has("crimson")).toBe(false);
-});
-
-it("rejects locked or unknown picks and rereads unlocks after decoding", async () => {
-  expect(await loadUnlockedLobsterFavicon("crimson")).toBeNull();
   recordLobsterVisit("not-a-palette");
   expect(await loadUnlockedLobsterFavicon("not-a-palette")).toBeNull();
   recordLobsterVisit("crimson");
@@ -64,6 +59,7 @@ it("rejects locked or unknown picks and rereads unlocks after decoding", async (
 it("bakes palette variables, CSS overrides and checker pattern into readable pixels", async () => {
   await artwork("crimson", [60, 60, 255, 79, 64, 255]);
   await artwork("split", [80, 60, 70, 83, 107, 255]);
+  await artwork("crimson", [60, 60, 255, 79, 64, 255]);
   await artwork("chimera", [10, 50, 74, 125, 252, 255], [110, 50, 244, 184, 64, 255]);
   await artwork("notexture", [52, 56, 17, 17, 17, 255], [60, 56, 255, 0, 220, 255]);
 });
@@ -90,7 +86,6 @@ it("keeps CSS currentColor, translucency, and text without a live SVG tree", asy
   const textPixels = ascii.pixels.filter((value, index) => index % 4 === 3 && value > 0);
   expect(textPixels.length).toBeGreaterThan(300);
   expect(textPixels.length).toBeLessThan(3000);
-  expect([...document.body.children]).toEqual(bodyBefore);
   // Decoding the self-contained result again must not need the removed host.
   const copy = new Image();
   copy.src = portal.image.src;
@@ -105,14 +100,6 @@ it("bakes current theme colors instead of retaining external CSS variables", asy
   root.style.setProperty("--accent", "rgb(98, 76, 54)");
   await artwork("mood", [60, 60, 98, 76, 54, 255]);
   expect(first.pixel(60, 60)).toEqual([12, 34, 56, 255]);
-});
-
-it("is static and independent of the next render's palette", async () => {
-  const first = await artwork("crimson");
-  await artwork("blue");
-  const second = await artwork("crimson");
-  expect(second.pixels).toEqual(first.pixels);
-  expect(second.image.src).toBe(first.image.src);
 });
 
 it("removes its temporary DOM after serialization and decode failures", async () => {

@@ -234,6 +234,20 @@ it("selects the visible highlight when a catalog refresh shortens the open list"
   await pressKey(element, "Enter");
   expect(props.onChange).toHaveBeenCalledExactlyOnceWith([sonnet, opus]);
 });
+it("finds and selects a model by its displayed description", async () => {
+  const { element, props } = await createMultiSelect({
+    options: [{ value: "fixture/backup", label: "Backup", description: "Regional endpoint" }],
+    value: [],
+    allowCustom: false,
+  });
+  await typeText(element, "endpoint");
+  expect(values(element, "option")).toEqual(["fixture/backup"]);
+  expect(element.querySelector(".picker-select__description")?.textContent).toBe(
+    "Regional endpoint",
+  );
+  await pressKey(element, "Enter");
+  expect(props.onChange).toHaveBeenCalledExactlyOnceWith(["fixture/backup"]);
+});
 it("leaves composing input untouched until the operator confirms the completed value", async () => {
   const { element, props } = await createMultiSelect();
   await typeText(element, "local/模型");

@@ -32,6 +32,8 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
     "preparedRunAdmission" in params ||
     "compactionCountOwner" in params ||
     "onCompactionAccounting" in params ||
+    "beforeRecoveryCompaction" in params ||
+    "disableCompactionRecovery" in params ||
     "onContextAccountingEvent" in params ||
     "onDeferredLifecycleOwner" in params ||
     "onDeferredLifecycleAbort" in params ||

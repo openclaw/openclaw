@@ -86,7 +86,10 @@ const RUNTIME_TOOL_SCHEMA_CHECK_ID = "core/doctor/runtime-tool-schemas";
 const PROJECT_CLONE_SHAPE_CHECK_ID = "core/doctor/project-clone-shape";
 const SKILLS_READINESS_CHECK_ID = "core/doctor/skills-readiness";
 const AUTH_PROFILE_CHECK_ID = "core/doctor/auth-profiles";
-const HEARTBEAT_CADENCE_CHECK_ID = "core/doctor/heartbeat-cadence-migration";
+const HEARTBEAT_SOURCE_CHECK_IDS = new Set([
+  "core/doctor/heartbeat-cadence-migration",
+  "core/doctor/heartbeat-scratch-migration",
+]);
 
 /** Only the rehearsal worker reports before disposal and inherits its CLI's budget anchor. */
 export async function runDoctorLintCliInProcess(
@@ -454,7 +457,7 @@ async function executeDoctorLint(
     stateSchemaHealthCheck,
     ...coreChecks.map((check): HealthCheck => {
       const checkCtx =
-        legacyHeartbeatConfig && check.id === HEARTBEAT_CADENCE_CHECK_ID
+        legacyHeartbeatConfig && HEARTBEAT_SOURCE_CHECK_IDS.has(check.id)
           ? { ...coreCtx, cfg: legacyHeartbeatConfig }
           : coreCtx;
       return {
@@ -488,7 +491,7 @@ async function executeDoctorLint(
             return inspectPrivate(detect);
           }
           // Source-bound loaders must keep the launch selectors of their retained read owner.
-          return check.id === AUTH_PROFILE_CHECK_ID || check.id === HEARTBEAT_CADENCE_CHECK_ID
+          return check.id === AUTH_PROFILE_CHECK_ID || HEARTBEAT_SOURCE_CHECK_IDS.has(check.id)
             ? checkCtx.runWithSourceState(detect)
             : detect();
         },

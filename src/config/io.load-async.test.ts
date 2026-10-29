@@ -20,7 +20,7 @@ import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-rea
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { withoutMainThreadSql as withoutMainSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as configContext from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import * as configHealth from "./io.health-state.js";
@@ -109,17 +109,6 @@ async function pendingFixture() {
     pending,
     databasePath: resolveOpenClawStateSqlitePath(options.env),
   };
-}
-
-async function withoutMainSql<T>(run: () => Promise<T>) {
-  const sql = observeMainThreadSql();
-  try {
-    const result = await run();
-    sql.expectIdle();
-    return result;
-  } finally {
-    sql.restore();
-  }
 }
 
 function barrier<T = void>() {

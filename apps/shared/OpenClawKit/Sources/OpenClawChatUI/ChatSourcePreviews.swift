@@ -271,7 +271,7 @@ struct ChatSourcePreviewProjector {
             candidates: candidates)
     }
 
-    private static func citations(in message: OpenClawChatMessage) -> [URL] {
+    static func citations(in message: OpenClawChatMessage) -> [URL] {
         let text = ChatMessageVisibleText.visibleText(in: message)
         guard !text.isEmpty, text.utf16.count <= 30000 else { return [] }
         return chatPreviewURLs(in: text).compactMap { Self.url($0.absoluteString) }

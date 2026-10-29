@@ -54,38 +54,47 @@ export function AsyncQuestionSummary(props: {
     };
   });
   return (
-    <div class="chat-question-summary" role="status" aria-live="polite">
-      <Show
-        when={state().unparsedText}
-        fallback={
-          <For each={props.questions.questions}>
-            {(question, index) => (
-              <div>
-                <strong>{question.title}</strong>
+    <div class="chat-question-summary">
+      {/* The announcement region holds text only: focusable controls inside a live region
+          get re-announced and interrupt the reader, so the action buttons stay outside it. */}
+      <div class="chat-question-summary__announcement" role="status" aria-live="polite">
+        <Show
+          when={state().unparsedText}
+          fallback={
+            <For each={props.questions.questions}>
+              {(question, index) => (
                 <div>
-                  {state().answers
-                    ? questionDraftValues(state().answers?.get(String(index())), {}).join(", ")
-                    : t(
-                        state().reopening
-                          ? "chat.asyncQuestions.reopening"
-                          : state().dismissed
-                            ? "chat.asyncQuestions.dismissed"
-                            : state().archived
-                              ? "chat.asyncQuestions.archived"
-                              : "chat.asyncQuestions.inComposer",
-                      )}
+                  <strong>{question.title}</strong>
+                  <div>
+                    {state().answers
+                      ? questionDraftValues(state().answers?.get(String(index())), {}).join(", ")
+                      : t(
+                          state().reopening
+                            ? "chat.asyncQuestions.reopening"
+                            : state().dismissed
+                              ? "chat.asyncQuestions.dismissed"
+                              : state().archived
+                                ? "chat.asyncQuestions.archived"
+                                : "chat.asyncQuestions.inComposer",
+                        )}
+                  </div>
                 </div>
-              </div>
-            )}
-          </For>
-        }
-      >
-        {(text) => <div class="chat-question-summary__prompt">{text()}</div>}
-      </Show>
+              )}
+            </For>
+          }
+        >
+          {(text) => <div class="chat-question-summary__prompt">{text()}</div>}
+        </Show>
+      </div>
       <Show when={state().deliveryLabel}>
         {(label) => (
           <div class="chat-question-summary__delivery">
-            <span>{label()}</span>
+            {/* Each delivery text keeps its own live region so the label and the error stay
+                announced, while the Retry control between them stays outside every region and
+                keeps the inline placement it has always had. */}
+            <span role="status" aria-live="polite">
+              {label()}
+            </span>
             <Show when={state().queued?.sendState === "failed" && props.presentation.retry}>
               <button
                 type="button"
@@ -100,7 +109,13 @@ export function AsyncQuestionSummary(props: {
                 {t("chat.asyncQuestions.retry")}
               </button>
             </Show>
-            <Show when={state().queued?.sendError}>{(error) => <div>{error()}</div>}</Show>
+            <Show when={state().queued?.sendError}>
+              {(error) => (
+                <div role="status" aria-live="polite">
+                  {error()}
+                </div>
+              )}
+            </Show>
           </div>
         )}
       </Show>

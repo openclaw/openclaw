@@ -46,10 +46,11 @@ type RepositoryIdentity = {
 
 const AUTHENTICATED_GIT_JS = String.raw`const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
-const { origin, token } = JSON.parse(fs.readFileSync(0, "utf8"));
+const { origin, token, disableLazyFetch } = JSON.parse(fs.readFileSync(0, "utf8"));
 const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" });
+if (disableLazyFetch) env.GIT_NO_LAZY_FETCH = "1";
 Object.assign(env, token ? ${gitMaintenanceEnvironmentExpression([
   [
     '"http." + origin + ".extraheader"',
@@ -147,7 +148,11 @@ export function createNodeWorkerRepositoryPreparation(
   ) =>
     exec({
       argv: ["node", "-e", AUTHENTICATED_GIT_JS, "--", ...WORKER_REPOSITORY_GIT_ARGS, ...args],
-      input: JSON.stringify({ origin: identity?.origin, token: identity?.gitToken }),
+      input: JSON.stringify({
+        origin: identity?.origin,
+        token: identity?.gitToken,
+        disableLazyFetch: args[0] === "fetch",
+      }),
       ...(resetWorkspace ? { resetWorkspace: true } : {}),
       timeoutMs: GIT_TIMEOUT_MS,
       transportRetry: "never",

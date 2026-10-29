@@ -283,27 +283,27 @@ test.each([
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         const transcriptScope = { agentId: "main", sessionKey: key, sessionId, storePath };
         const pending = await listSessionPendingInputs(transcriptScope);
+        const committed = loadTranscriptEventsSync(transcriptScope)
+          .map(asNullableRecord)
+          .filter((event) => event?.type === "message");
         if (image) {
-          expect(
-            loadTranscriptEventsSync(transcriptScope).filter(
-              (event) => asNullableRecord(event)?.type === "message",
-            ),
-          ).toEqual([]);
-          expect(pending).toMatchObject({
-            total: 1,
-            items: [{ runId, state: "queued", message: { idempotencyKey: `${runId}:user` } }],
-          });
+          expect(committed).toMatchObject([
+            { message: { role: "user", idempotencyKey: `${runId}:user` } },
+          ]);
+          expect(pending).toEqual({ items: [], total: 0 });
           const startup = await request(
             "chat.startup",
             { sessionKey: key },
             { ...controlUiClient, context },
           );
           expect(startup).toMatchObject({
-            messages: [],
-            pendingInputs: { total: 1, items: [{ runId, state: "queued" }] },
+            messages: [{ role: "user" }],
+            pendingInputs: { total: 0, items: [] },
           });
-          expect(created).not.toHaveProperty("messageSeq");
-          const media = readPersistedMediaFacts(pending.items[0]!.message);
+          expect(created).toMatchObject({ messageSeq: 1 });
+          const media = readPersistedMediaFacts(
+            expectDefined(asNullableRecord(committed[0]?.message), "committed initial input"),
+          );
           expect(media).toMatchObject([{ contentType: "image/png" }]);
           expect(await fs.readFile(await resolveMediaReferenceLocalPath(media![0]!.url!))).toEqual(
             Buffer.from(attachments![0]!.content, "base64"),
@@ -325,13 +325,15 @@ test.each([
         expect(transcript.at(-1)).toMatchObject({ message: { idempotencyKey: `${runId}:user` } });
         expect(await listSessionPendingInputs(transcriptScope)).toEqual({ items: [], total: 0 });
         if (image) {
-          expect(transcript.at(-1)?.id).toBe(pending.items[0]?.id);
+          expect(transcript.at(-1)?.id).toBe(committed[0]?.id);
           const persistedMessage = expectDefined(
             asNullableRecord(transcript.at(-1)?.message),
             "persisted initial input",
           );
           expect(readPersistedMediaFacts(persistedMessage)).toEqual(
-            readPersistedMediaFacts(pending.items[0]!.message),
+            readPersistedMediaFacts(
+              expectDefined(asNullableRecord(committed[0]?.message), "committed initial input"),
+            ),
           );
         }
         const prepared = readEntry(storePath, key);

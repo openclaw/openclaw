@@ -137,15 +137,7 @@ export function createGatewayRestartRecovery(
   };
 }
 
-export function createGatewayStartupOperations(): {
-  run: GatewayStartupOperation;
-  close(): void;
-  cancelledWith(error: unknown): boolean;
-  failedWith(error: unknown): boolean;
-  getStopCompletion(): Promise<void> | undefined;
-  retainStopCompletion(completion: Promise<void>): void;
-  drain(): Promise<void>;
-} {
+export function createGatewayStartupOperations() {
   const scope = new AsyncWorkScope();
   let stopCompletion: Promise<void> | undefined;
   let failure: { error: unknown } | undefined;
@@ -172,8 +164,9 @@ export function createGatewayStartupOperations(): {
   };
   return {
     run,
+    signal: scope.signal,
     getStopCompletion: () => stopCompletion,
-    retainStopCompletion: (completion) => {
+    retainStopCompletion: (completion: Promise<void>) => {
       stopCompletion = completion;
     },
     close: () => scope.beginClose(),

@@ -2,19 +2,24 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { tempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { describe, expect, test } from "vitest";
-import { resolveMxcBinaryPath } from "../src/binary-resolver.js";
+import { describe, expect, onTestFinished, test } from "vitest";
 import { resolveConfig } from "../src/config.js";
 import { createMxcSandboxBackendHandle } from "../src/mxc-backend.js";
-import { assertMxcReadiness } from "../src/readiness.js";
+import { registerMxcPlugin } from "../src/plugin.js";
 
 // Validate raw ContainerConfig with the real executor, without creating a container.
 const describeOnWindows = describe.runIf(process.platform === "win32");
 
 describeOnWindows("MXC SDK wire contract", () => {
   test("readiness accepts the pinned wxc-exec host probe", () => {
-    expect(() => assertMxcReadiness({ executablePath: resolveMxcBinaryPath() })).not.toThrow();
+    const api = createTestPluginApi({
+      id: "mxc",
+      registerRuntimeLifecycle: (lifecycle) =>
+        onTestFinished(() => lifecycle.cleanup?.({ reason: "disable" })),
+    });
+    expect(() => registerMxcPlugin(api)).not.toThrow();
   });
 
   test.each([

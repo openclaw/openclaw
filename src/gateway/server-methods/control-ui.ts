@@ -27,6 +27,7 @@ import {
   type ControlUiGitHubSessionIdentity,
 } from "../github-public-api.js";
 import { prepareGitHubReaderIdentity } from "../github-reader-identity.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -221,8 +222,20 @@ async function withControlUiSessionPreview(
   const preview = previewOwner.ok
     ? projection.readPreview({ key: sessionKey, agentId: previewOwner.agentId })
     : null;
-  if (preview !== undefined) {
-    const entryFilter = createSessionListEntryFilter({ client, cfg: previewConfig });
+  if (
+    preview !== undefined &&
+    !(
+      operatorSessionCap(client, previewConfig) === "invited" &&
+      projection.needsMembershipPreparation()
+    )
+  ) {
+    const entryFilter = createSessionListEntryFilter({
+      client,
+      cfg: previewConfig,
+      membership: previewOwner.ok
+        ? projection.readMembership({ key: sessionKey, agentId: previewOwner.agentId })
+        : undefined,
+    });
     consume(
       preview && (!entryFilter || entryFilter(preview.sessionKey, preview.entry)) ? preview : null,
     );
@@ -241,7 +254,11 @@ async function withControlUiSessionPreview(
         ? read.describe({ key: sessionKey, agentId: owner.agentId })
         : undefined;
       // Hover previews follow list visibility, including after asynchronous preparation.
-      const entryFilter = createSessionListEntryFilter({ client, cfg });
+      const entryFilter = createSessionListEntryFilter({
+        client,
+        cfg,
+        membership: record?.membership,
+      });
       if (!record || (entryFilter && !entryFilter(record.key, record.entry))) {
         consume(null);
         return;
@@ -547,7 +564,7 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       preparedSession?.release();
     }
   },
-  "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
+  "controlUi.sessionPullRequests.subscribe": ({ params, client, context, respond }) => {
     const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
     if (!parsed) {
       respondError(
@@ -567,20 +584,19 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await new Promise<void>((resolve) => {
-      const replacement = subscriptions.replace(
+    // The owner records the replace-set now; preparation and guarded updates settle later.
+    void subscriptions
+      .replace(
         connId,
         parsed.sessionKeys,
         parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
-        resolve,
         parsed.passiveSessionKeys ? new Set(parsed.passiveSessionKeys) : undefined,
-      );
-      void replacement.catch((error: unknown) => {
+      )
+      .catch((error: unknown) => {
         context.logGateway.warn(
           `Failed to prepare Control UI pull request subscriptions; retry the subscription: ${String(error)}`,
         );
       });
-    });
     respond(
       true,
       { subscribed: parsed.sessionKeys.length > 0 || Boolean(parsed.passiveSessionKeys?.length) },

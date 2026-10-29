@@ -15,13 +15,13 @@ import {
   type SessionPanelToggleSlot,
 } from "../../components/session-panel-toggle-buffer.ts";
 import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+} from "./chat-application-context.test-support.ts";
+import {
   createChatPaneSessionPanelToggles,
   type PendingSessionPanelToggle,
 } from "./chat-pane-session-panel-toggle.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
-} from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {

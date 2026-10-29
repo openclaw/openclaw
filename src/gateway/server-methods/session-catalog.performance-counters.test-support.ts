@@ -70,7 +70,6 @@ const empty = () => ({
   fileOpenCalls: 0,
   ownershipFileOpenCalls: 0,
   nativeRpcCalls: 0,
-  nativeThreadListCalls: 0,
 });
 
 /** Call-through instrumentation records counts only, never SQLite or RPC result objects. */
@@ -159,12 +158,11 @@ export function createCatalogIoCounters() {
       ownershipFile = fsSync.statSync(pathname, { bigint: true });
     },
     catalogPersisted: catalogPersistence.promise,
-    nativeRequest(method: string) {
+    nativeRequest(_method: string) {
       if (!workerCounter.enabled) {
         return;
       }
       counts.nativeRpcCalls++;
-      counts.nativeThreadListCalls += Number(method === "thread/list");
     },
     begin() {
       counts = empty();

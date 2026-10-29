@@ -160,6 +160,14 @@ describe("sessions view", () => {
         renderView(result, { ...sharedProps, allAgentsScope });
         columnCount = 4 + Number(allAgentsScope) + Number(categoryGrouping);
         expect(queryAll("thead th")).toHaveLength(columnCount);
+        if (!categoryGrouping) {
+          expectTexts(
+            "thead th",
+            allAgentsScope
+              ? ["", "Session", "Agent", "Updated", "Actions"]
+              : ["", "Session", "Updated", "Actions"],
+          );
+        }
         expect(queryAll(".session-data-row .session-agent-col")).toHaveLength(
           allAgentsScope ? 1 : 0,
         );
@@ -431,9 +439,7 @@ describe("sessions view", () => {
 
     const keyCell = query(".session-key-cell");
     expect(text(".session-key-cell__primary", keyCell)).toBe("📊 Data Expert (dingtalk)");
-    expect((keyCell?.parentElement as (HTMLElement & { content: string }) | null)?.content).toBe(
-      "📊 Data Expert (dingtalk)",
-    );
+    expect(keyCell?.getAttribute("data-tooltip")).toBe("📊 Data Expert (dingtalk)");
   });
 
   it("opens session details from row activation", async () => {

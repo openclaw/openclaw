@@ -16,7 +16,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { renderControls } from "./chat-pane-session-controls.test-support.ts";
 import type { TestChatPane } from "./chat-pane.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -52,16 +52,10 @@ function globalSession(
 }
 
 function composerControls(state: ChatPageHost, agentDefaultModel?: string) {
-  return renderChatPaneComposerControls({
-    state,
+  return renderControls(state, {
     selectedSession: selectedChatSessionRow(state),
     agentDefaultModel,
-    modelAccess: { allowed: true, requiredScope: "operator.write" },
-    effortAccess: { allowed: true, requiredScope: "operator.write" },
     contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
-    permissionAccess: { allowed: true, requiredScope: "operator.write" },
-    canSelectFull: true,
-    onModelSetup: vi.fn(),
   });
 }
 
@@ -119,9 +113,9 @@ describe("mounted pane session event ownership", () => {
     });
     transcript.start();
     await flushDeferredRowPrune();
-    expect(view.container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "Worked for 3 minutes",
-    );
+    expect(layout.primary.chat.selectedSession?.lastRunId).toBe("work-run");
+    expect(layout.primary.chat.selectedSession?.runtimeMs).toBe(180_000);
+    expect(view.container.querySelector(".chat-activity-group__label")?.textContent).toBe("Worked");
   });
 
   it("retires Talk on a provider pause and prevents it from starting again", async () => {

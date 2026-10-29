@@ -21,6 +21,13 @@ worker children and managed workspaces. Use a dedicated node account per trust
 boundary. Workspace grants are not an operating-system sandbox: code running as
 that account has its normal filesystem and process access.
 
+For persistent agent workspace files on a paired node, see the
+[split-storage setup](/nodes/file-transfers#split-storage-setup). It configures
+Gateway access to workspace documents, Memory files, workspace Skills, and staged
+attachments. The file-node mapping and the worker profile below are separate:
+worker placement and managed-workspace reconciliation do not create a persistent
+storage mapping.
+
 ## Deployment and credential trust contract
 
 Keep the trusted OpenClaw Gateway outside the untrusted worker workload. The

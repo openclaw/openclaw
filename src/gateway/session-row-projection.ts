@@ -10,6 +10,7 @@ import * as profiles from "../state/user-profile-list.js";
 import { ensureSessionGroupCatalog } from "./session-group-catalog.js";
 import { createSessionMembershipProjection } from "./session-membership-projection.js";
 import { createSessionProjectionDrain, yieldSessionListWork } from "./session-projection-work.js";
+import { createSessionRowChildProjection } from "./session-row-child-activity.js";
 import * as rowMembership from "./session-row-membership-read.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type { readPreparedSessionRows } from "./session-row-prepared-read.js";
@@ -41,7 +42,6 @@ import {
 } from "./session-row-projection-topology.js";
 import { createSessionRowProjectionTranscriptUpdates } from "./session-row-projection-transcript.js";
 import * as rowScope from "./session-row-scope.js";
-import { replaceSessionRowFacts } from "./session-utils-row.js";
 
 /** Committed publications own invalidation; each admitted physical store is hydrated once. */
 export async function createSessionRowProjection(params: records.ProjectionOptions) {
@@ -52,6 +52,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   let cfg = params.getConfig?.() ?? params.cfg;
   const getPolicyConfig = () => params.getPolicyConfig?.() ?? params.getConfig?.() ?? cfg;
   const rows = new Map<string, records.Row>();
+  const childRows = createSessionRowChildProjection({
+    context: () => metadata.current,
+    matching: (...args) => matching(...args),
+    referenced: (ref) => referenced(ref),
+  });
   const creators = createSessionRowCreatorIndex();
   const membership = createSessionMembershipProjection();
   const { invalidateRowMembership, readSessionRowEntry, createStoreRead } =
@@ -62,6 +67,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const byParent = new Map<string, Set<string>>(),
     byKey = new Map<string, Set<string>>();
   const indexes = { byStore, byAgent, byParent, byKey };
+  const referenced = (ref: string) => records.firstReferenced(ref, rows, byKey, stores.keys());
   const dirty = new Set<string>();
   const recents = createSessionRowRecents({
     rows,
@@ -126,7 +132,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       void ensureMaterialized().catch(() => {});
     },
   });
-  const metadata = createSessionRowProjectionContext(subagents);
+  const metadata = createSessionRowProjectionContext(subagents, childRows.invalidate);
   const backfill = createSessionRowProjectionBackfill({
     ready: ensureMaterialized,
     read: (id) => rows.get(id),
@@ -159,6 +165,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     transcriptUpdates.remove(id);
     const row = rows.get(id);
     if (row) {
+      childRows.remove(row);
       recents.update(row, true);
       rowFacts.track(row, undefined);
       revisions.invalidate(true);
@@ -180,6 +187,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   }
   function put(row: records.Row) {
     const previous = rows.get(records.identity(row));
+    childRows.replace(row);
     creators.update(previous, row);
     if (previous) {
       if (previous.generation !== row.generation) {
@@ -225,9 +233,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     disposed
       ? undefined
       : rowReads.lookupSessionRow(query, cfg, rows, byKey, scope, stores, assertActive);
-  function referenced(ref: string) {
-    return records.firstReferenced(ref, rows, byKey, stores.keys());
-  }
   function enqueue(row: records.Row | undefined) {
     if (row) {
       dirty.add(records.identity(row));
@@ -310,10 +315,15 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     ) {
       cfg = inOwnerContext(() => params.getConfig?.() ?? cfg);
     }
+    childRows.mark(change);
     epoch++;
     const identityRevision = metadata.current.identityProjection?.revision;
-    const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
     const catalogOnly = "all" in change && change.scope === "catalog" && !change.factsInvalidated;
+    // Catalog adoption invalidates model facts only when its completed policy changes.
+    const presentationOnly =
+      !(catalogOnly && params.getModelCatalog) &&
+      metadata.invalidate(change) &&
+      !change.factsInvalidated;
     revisions.publishRuntimeChange(change);
     if (!presentationOnly || metadata.current.identityProjection?.revision !== identityRevision) {
       revisions.invalidate(!catalogOnly);
@@ -356,7 +366,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
           if (change.scope === "transcript" || change.factsInvalidated === true) {
             backfill.remove(records.identity(row));
           }
-          markStoredRow(row, change, prepared);
+          revisions.withChangeScope(change.scope, () => markStoredRow(row, change, prepared));
         },
       });
     }
@@ -528,12 +538,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     describeArchived: (row) => archive.describe(row),
     isCurrent,
     materializePrivate: (row, repository) => materialize(row, undefined, undefined, repository),
-    preparePresentation(row) {
-      if (row.materialized.source.cfg !== cfg) {
-        row.materialized = replaceSessionRowFacts(row.materialized, undefined, { cfg });
-      }
-      metadata.preparePresentation(row, readChildLinks);
-    },
+    preparePresentation: (row) => metadata.preparePresentation(row, readChildLinks, cfg),
   });
   function dispose() {
     disposed = true;
@@ -541,6 +546,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     registryRead.dispose();
     disposeRefresh();
     metadata.dispose();
+    childRows.clear();
     catalog.dispose();
     membership.dispose();
     placementFacts.dispose();
@@ -604,6 +610,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       prepareRowFacts: rowFacts.prepare,
     });
   const projection = {
+    ...childRows.readers,
     ...rowReads.createSessionRowLookup({
       assertCurrent: assertActive,
       state: () => ({
@@ -651,14 +658,14 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       projection: (): Parameters<typeof readPreparedSessionRows>[0] => projection,
     }),
     setArchivePageSize: archive.setPageSize,
-    modelFacts: rowReads.createSessionRowModelFactsReader({
+    ...rowReads.createSessionRowModelFactsReader({
+      rows: () => rows.values(),
+      onFactsChange: revisions.onFactsChange,
       lookup,
       dirty,
       readSourceEntry,
       state: () => ({ cfg, modelCatalog: catalog.current, rowContext: metadata.current }),
     }),
-    present: (record: records.MaterializedRow, options?: records.SnapshotOptions) =>
-      records.present(record, metadata.current, options),
     ensureMaterialized,
     prepareSelection,
     withSelectionPreparation,

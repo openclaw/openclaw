@@ -38,12 +38,9 @@ it("reuses host and continuation schemas across interleaved sessions", () => {
             host: { enum: sessionSandbox ? ["auto", "sandbox"] : ["auto", "gateway", "node"] },
           },
         });
-        if (hasProcess) {
-          expect(tool.parameters).toHaveProperty("properties.background");
-          expect(tool.parameters).toHaveProperty("properties.yieldMs");
-        } else {
-          expect(tool.parameters).not.toHaveProperty("properties.background");
-          expect(tool.parameters).not.toHaveProperty("properties.yieldMs");
+        for (const field of ["background", "yieldMs"]) {
+          const assertion = expect(tool.parameters);
+          (hasProcess ? assertion : assertion.not).toHaveProperty(`properties.${field}`);
         }
         return tool.parameters;
       }),
@@ -87,9 +84,8 @@ describe.each(["agent:main:main", "agent:main:subagent:child"])(
             hookContext: {},
             wrapBeforeToolCallHook: false,
           });
-          expect(direct!.parameters).toMatchObject({
-            properties: { host: { enum: hosts } },
-          });
+          const expectedSchema = { properties: { host: { enum: hosts } } };
+          expect(direct!.parameters).toMatchObject(expectedSchema);
           const catalogRef = createToolSearchCatalogRef();
           const ctx = { catalogRef, sessionKey, config: { tools: { codeMode: true } } };
           applyCodeModeCatalog({
@@ -98,13 +94,9 @@ describe.each(["agent:main:main", "agent:main:subagent:child"])(
           });
           const signature = `host?: ${hosts.map((host) => JSON.stringify(host)).join(" | ")}`;
           expect(buildCodeModeCatalogPrompt(ctx, catalogRef.current!.entries)).toContain(signature);
-          const described = await new ToolSearchRuntime(
-            ctx,
-            resolveToolSearchConfig(ctx.config),
-          ).describe("exec");
-          expect(described.parameters).toMatchObject({
-            properties: { host: { enum: hosts } },
-          });
+          const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig(ctx.config));
+          const described = await runtime.describe("exec");
+          expect(described.parameters).toMatchObject(expectedSchema);
           expect(described.input).toContain(signature);
         }
       },

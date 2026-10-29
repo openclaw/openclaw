@@ -1,47 +1,39 @@
-// Sms test support shares webhook fixtures between the unit and raw-wire suites.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { Readable } from "node:stream";
 import { vi } from "vitest";
 import type { SmsDeliveryRecorder } from "./delivery-observations.js";
-import type { ResolvedSmsAccount } from "./types.js";
+import type { ResolvedSmsAccount as Account } from "./types.js";
+
+type Form = Record<string, string>;
 
 let testAccountSequence = 0;
-let activeAccountId = "test-0";
 const SMS_TEST_WEBHOOK = "https://gateway.example.com/webhooks/sms";
 const SMS_TEST_FROM = "+15557654321";
 const SMS_TEST_TO = "+15551234567";
 
-// Each test gets its own account id so the handler's per-account rate-limiter
-// buckets never carry a previous test's counters into the next one.
-export function advanceSmsTestAccountId(): string {
-  activeAccountId = `test-${++testAccountSequence}`;
-  return activeAccountId;
-}
+// Separate account IDs keep rate-limiter buckets isolated between tests.
+export const advanceSmsTestAccountId = (): string => `test-${++testAccountSequence}`;
 
-export function createSmsTestAccount(
-  overrides: Partial<ResolvedSmsAccount> = {},
-): ResolvedSmsAccount {
-  return {
-    accountId: activeAccountId,
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: SMS_TEST_FROM,
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: SMS_TEST_WEBHOOK,
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
-  };
-}
+export const createSmsTestAccount = (overrides: Partial<Account> = {}): Account => ({
+  accountId: `test-${testAccountSequence}`,
+  enabled: true,
+  accountSid: "AC123",
+  authToken: "secret",
+  fromNumber: SMS_TEST_FROM,
+  messagingServiceSid: "",
+  defaultTo: "",
+  webhookPath: "/webhooks/sms",
+  publicWebhookUrl: SMS_TEST_WEBHOOK,
+  dangerouslyDisableSignatureValidation: false,
+  dmPolicy: "pairing",
+  allowFrom: [],
+  textChunkLimit: 1500,
+  ...overrides,
+});
 
-export function createSmsTestDeliveryRecorder(
+export const createSmsTestDeliveryRecorder = (
   record = vi.fn<SmsDeliveryRecorder["record"]>(async ({ account, form }) => ({
     duplicate: false,
     record: {
@@ -54,32 +46,22 @@ export function createSmsTestDeliveryRecorder(
       observations: [],
     },
   })),
-): SmsDeliveryRecorder & { record: typeof record } {
-  return { record };
-}
+): SmsDeliveryRecorder & { record: typeof record } => ({ record });
 
 // Raw provider input shared by webhook and transport tests, never normalized by production code.
-export function createSmsTestForm(
-  overrides: Record<string, string> = {},
-  account = createSmsTestAccount(),
-): Record<string, string> {
-  return {
-    AccountSid: account.accountSid,
-    From: "+15551234567",
-    To: account.fromNumber,
-    Body: "hello",
-    MessageSid: "SM123",
-    ...overrides,
-  };
-}
+export const createSmsTestForm = (fields: Form = {}, account = createSmsTestAccount()): Form => ({
+  AccountSid: account.accountSid,
+  From: "+15551234567",
+  To: account.fromNumber,
+  Body: "hello",
+  MessageSid: "SM123",
+  ...fields,
+});
 
-export function signSmsTestForm(form: Record<string, string>, account = createSmsTestAccount()) {
-  const signed =
-    account.publicWebhookUrl +
-    Object.keys(form)
-      .toSorted()
-      .map((key) => `${key}${form[key] ?? ""}`)
-      .join("");
+export function signSmsTestForm(form: Form, account = createSmsTestAccount()) {
+  const signed = Object.keys(form)
+    .toSorted()
+    .reduce((text, key) => text + key + (form[key] ?? ""), account.publicWebhookUrl);
   return {
     body: new URLSearchParams(form).toString(),
     signature: createHmac("sha1", account.authToken).update(signed).digest("base64"),
@@ -88,7 +70,7 @@ export function signSmsTestForm(form: Record<string, string>, account = createSm
 
 export function createSmsTestRequest(
   { body, signature }: { body: string; signature: string },
-  options: { headers?: Record<string, string>; remoteAddress?: string } = {},
+  options: { headers?: Form; remoteAddress?: string } = {},
 ): IncomingMessage {
   const req = Readable.from([body]) as IncomingMessage;
   req.method = "POST";
@@ -115,22 +97,18 @@ export function createSmsTestResponse() {
   } as unknown as ServerResponse & { setHeaderMock: typeof setHeader; endMock: typeof end };
 }
 
-export function createSmsTestPhoneNumber(overrides: Record<string, unknown> = {}) {
-  return {
-    phone_number: SMS_TEST_FROM,
-    sms_url: SMS_TEST_WEBHOOK,
-    sms_method: "POST",
-    ...overrides,
-  };
-}
+export const createSmsTestPhoneNumber = (overrides: Record<string, unknown> = {}) => ({
+  phone_number: SMS_TEST_FROM,
+  sms_url: SMS_TEST_WEBHOOK,
+  sms_method: "POST",
+  ...overrides,
+});
 
-export function createSmsTestMessage(overrides: Record<string, unknown> = {}) {
-  return {
-    sid: "SM123",
-    direction: "inbound",
-    status: "received",
-    to: SMS_TEST_FROM,
-    from: SMS_TEST_TO,
-    ...overrides,
-  };
-}
+export const createSmsTestMessage = (overrides: Record<string, unknown> = {}) => ({
+  sid: "SM123",
+  direction: "inbound",
+  status: "received",
+  to: SMS_TEST_FROM,
+  from: SMS_TEST_TO,
+  ...overrides,
+});

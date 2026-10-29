@@ -34,3 +34,14 @@ it("rejects unknown profiles and malformed overrides before launching a browser"
     );
   }
 });
+
+it("caps live-like transfer without changing the delivery floors", () => {
+  const input = { methodLatencyMs: [], sidebarQueryLatencyMs: [] };
+  const fast = resolveColdLoadLatency({ ...input, profile: "live-fast" });
+  expect(resolveColdLoadLatency({ ...input, profile: "live-capped" })).toEqual({
+    ...fast,
+    latencyProfile: "live-capped",
+    downloadKbps: 20_000,
+  });
+  expect(fast.downloadKbps).toBe(0);
+});

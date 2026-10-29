@@ -63,13 +63,16 @@ export function cacheTsdownRuntimeConfigs(configs: UserConfig[]): UserConfig[] {
   );
   const environment = [
     "OUTPUT_SOURCE_MAPS",
-    "OPENCLAW_BUILD_PRIVATE_QA",
     ...BUNDLED_PLUGIN_BUILD_ENV_NAMES,
     ...Object.keys(process.env).filter((name) => name.startsWith("TSDOWN_")),
   ];
   const compiler = resolveTsdownCompilerIdentity();
   const omitted = new Set<UserConfig>();
   for (const [output, members] of groups) {
+    // Copy outputs are absent from tsdown's chunk inventory; keep their compiler ownership.
+    if (members.some((config) => config.copy)) {
+      continue;
+    }
     const packageRoot = path.dirname(output);
     const staticInputs = [
       ...common,

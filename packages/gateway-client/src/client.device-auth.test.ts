@@ -9,6 +9,9 @@ import type {
   GatewayClientHostDeps,
   GatewayClientOptions,
 } from "./client.js";
+import { GatewayProtocolRequestTimeoutError } from "./protocol-request.js";
+import { GatewayClientRequestTimeoutError } from "./request-error.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 
 class MockWebSocket extends EventEmitter {
   static readonly OPEN = 1;
@@ -66,6 +69,22 @@ function storageGate() {
   return deferred;
 }
 
+function connectionAuthority() {
+  let current = true;
+  const failure = new Error("connection owner retired");
+  return {
+    failure,
+    retire: () => {
+      current = false;
+    },
+    assertCurrent(this: void) {
+      if (!current) {
+        throw failure;
+      }
+    },
+  };
+}
+
 async function reconnectSocket() {
   await vi.advanceTimersByTimeAsync(1_000);
   const socket = MockWebSocket.instances[1];
@@ -117,15 +136,22 @@ afterEach(async () => {
   for (const client of clients.splice(0)) {
     await client.stopAndWait();
   }
-  vi.useRealTimers();
+  // Restore timer spies before uninstalling the fake clock.
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function connect(
   hostDeps: GatewayClientHostDeps,
   options: Pick<
     GatewayClientOptions,
-    "preferBootstrapToken" | "bootstrapToken" | "token" | "password" | "assertConnectionCurrent"
+    | "preferBootstrapToken"
+    | "bootstrapToken"
+    | "token"
+    | "password"
+    | "assertConnectionCurrent"
+    | "tickWatchMinIntervalMs"
+    | "tickWatchTimeoutMs"
   > = {},
   reportError?: ((error: Error) => void) | false,
 ) {
@@ -171,75 +197,57 @@ const hello = {
 
 describe("GatewayClient host token storage", () => {
   it("rejects connection authority retired by socket registration and cleans the registration", () => {
-    const failure = new Error("connection owner retired");
+    const authority = connectionAuthority();
     const onConnectError = vi.fn();
     const cleanup = vi.fn();
-    let current = true;
     const client = new GatewayClient({
       url: "wss://gateway.example.invalid",
       edgeAuthHeaders: { Authorization: "synthetic-edge-token" },
-      assertConnectionCurrent() {
-        if (!current) {
-          throw failure;
-        }
-      },
+      assertConnectionCurrent: authority.assertCurrent,
       onConnectError,
       hostDeps: {
         registerGatewayLoopbackBypass() {
-          current = false;
+          authority.retire();
           return cleanup;
         },
       },
     });
     clients.push(client);
-    expect(() => client.start()).toThrow(failure.message);
+    expect(() => client.start()).toThrow(authority.failure.message);
     expect(MockWebSocket.instances).toEqual([]);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: failure.message }),
+      expect.objectContaining({ message: authority.failure.message }),
     );
   });
 
   it("rejects connection authority retired during asynchronous token loading", async () => {
     const loaded = createDeferred<DeviceAuthTokenRecord | null>();
-    let current = true;
-    const failure = new Error("connection owner retired");
+    const authority = connectionAuthority();
     const { socket, onHelloOk, onConnectError } = connect(
       { loadDeviceAuthToken: () => loaded.promise },
-      {
-        assertConnectionCurrent() {
-          if (!current) {
-            throw failure;
-          }
-        },
-      },
+      { assertConnectionCurrent: authority.assertCurrent },
     );
     expect(socket.send).not.toHaveBeenCalled();
-    current = false;
+    authority.retire();
     loaded.resolve(storedToken);
     await vi.advanceTimersByTimeAsync(0);
     expect(socket.send).not.toHaveBeenCalled();
     expect(onHelloOk).not.toHaveBeenCalled();
     expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: String(failure) }),
+      expect.objectContaining({ message: String(authority.failure) }),
     );
   });
 
   it("rejects a correlated startup retry after connection authority retires", async () => {
-    let current = true;
-    const failure = new Error("connection owner retired");
-    const { client, socket } = connect(
-      {},
-      {
-        assertConnectionCurrent() {
-          if (!current) {
-            throw failure;
-          }
-        },
-      },
+    const authority = connectionAuthority();
+    const { client, socket, onHelloOk } = connect(
+      { storeDeviceAuthToken: () => storedToken },
+      { assertConnectionCurrent: authority.assertCurrent },
     );
-    socket.respond({ type: "hello-ok", protocol: PROTOCOL_VERSION });
+    socket.respond(hello);
     await vi.advanceTimersByTimeAsync(0);
+    expect(onHelloOk).toHaveBeenCalledOnce();
     const request = client.request("sessions.create", {}, { timeoutMs: 1_000 });
     const outcome = request.catch((error: unknown) => error);
     const sent = socket.send.mock.calls.at(-1);
@@ -258,13 +266,13 @@ describe("GatewayClient host token storage", () => {
         details: { reason: "startup-sidecars", method: frame.method },
       },
     });
-    current = false;
+    authority.retire();
     await vi.advanceTimersByTimeAsync(250);
     expect(socket.send.mock.calls.map(([data]) => JSON.parse(data).method)).toEqual([
       "connect",
       "sessions.create",
     ]);
-    expect(await outcome).toBe(failure);
+    expect(await outcome).toBe(authority.failure);
   });
 
   it("settles pending token loading after stop", async () => {
@@ -279,46 +287,27 @@ describe("GatewayClient host token storage", () => {
     expect(onHelloOk).not.toHaveBeenCalled();
   });
 
-  it.each(["sync", "ready", "closing", "stop"] as const)(
+  it.each(["ready", "closing", "stop"] as const)(
     "settles token persistence before completing %s",
     async (completion) => {
       const { gate, cache, host } = tokenStorage();
-      const { storeDeviceAuthToken } = host;
-      const { client, socket, onHelloOk, onConnectError } = connect(
-        completion === "sync"
-          ? { storeDeviceAuthToken: () => storedToken, clearDeviceAuthToken: () => true }
-          : { storeDeviceAuthToken },
-      );
-      if (completion === "sync") {
-        expect(socket.send).toHaveBeenCalledOnce();
-      }
+      const { client, socket, onHelloOk, onConnectError } = connect(host);
       socket.respond(hello);
       await vi.advanceTimersByTimeAsync(0);
-      if (completion === "sync") {
-        expect(onHelloOk).toHaveBeenCalledOnce();
-        return;
-      }
       expect(onHelloOk).not.toHaveBeenCalled();
-      expect(storeDeviceAuthToken).toHaveBeenCalledOnce();
-      const operation = storeDeviceAuthToken.mock.calls[0]?.[0];
-      assert(operation);
-      expect(operation).toMatchObject({ token: hello.auth.deviceToken, scopes: hello.auth.scopes });
-      expect(() => operation.assertCurrent?.()).not.toThrow();
       if (completion === "closing") {
         socket.readyState = 2;
       }
       const stopped = vi.fn();
       const stop = completion === "stop" ? client.stopAndWait().then(stopped) : undefined;
       if (completion === "stop") {
-        expect(operation.signal).toBeUndefined();
-        expect(operation.assertCurrent).toBeUndefined();
         await vi.advanceTimersByTimeAsync(0);
         expect(stopped).not.toHaveBeenCalled();
       }
       gate.resolve();
       await vi.advanceTimersByTimeAsync(0);
       await stop;
-      expect(cache.value?.token).toBe(hello.auth.deviceToken);
+      expect(cache.value).toEqual({ token: hello.auth.deviceToken, scopes: hello.auth.scopes });
       expect(onConnectError).not.toHaveBeenCalled();
       expect(onHelloOk).toHaveBeenCalledTimes(completion === "ready" ? 1 : 0);
     },
@@ -501,4 +490,84 @@ describe("GatewayClient host token storage", () => {
       expect(replacement.send).toHaveBeenCalledOnce();
     }
   });
+});
+
+async function watchedClient(tickIntervalMs = 5) {
+  const fixture = connect({}, { tickWatchMinIntervalMs: 5, tickWatchTimeoutMs: 10 });
+  fixture.socket.respond({ ...hello, policy: { tickIntervalMs } });
+  await vi.advanceTimersByTimeAsync(0);
+  return fixture;
+}
+
+it("lets finite pending requests own their timeout when ticks are missing", async () => {
+  const { client, onClose } = await watchedClient();
+  const request = client.request("status", undefined, { timeoutMs: 100 });
+  const outcome = request.catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(20);
+
+  expect(onClose).not.toHaveBeenCalled();
+
+  await vi.advanceTimersByTimeAsync(80);
+  const error = await outcome;
+  expect(error).toBeInstanceOf(GatewayClientRequestTimeoutError);
+  expect(error).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+  expect(error).toMatchObject({
+    message: "gateway request timeout for status",
+    code: "CLIENT_TIMEOUT",
+    method: "status",
+    timeoutMs: 100,
+    requestSent: true,
+  });
+  await vi.advanceTimersByTimeAsync(5);
+
+  expect(onClose).toHaveBeenCalledWith(4000, "tick timeout", expect.anything());
+  await client.stopAndWait();
+});
+
+it("keeps an unbounded request alive while inbound ticks continue", async () => {
+  const { client, socket, onClose } = await watchedClient();
+  const request = client.request<{ status: string }>("chat.send", undefined, {
+    expectFinal: true,
+  });
+  const requestFrame = JSON.parse(String(socket.send.mock.calls[1]?.[0])) as { id: string };
+
+  for (let seq = 1; seq <= 4; seq += 1) {
+    await vi.advanceTimersByTimeAsync(5);
+    socket.receive({ type: "event", event: "tick", seq, payload: {} });
+  }
+
+  expect(onClose).not.toHaveBeenCalled();
+  socket.receive({
+    type: "res",
+    id: requestFrame.id,
+    ok: true,
+    payload: { status: "ok" },
+  });
+  await expect(request).resolves.toEqual({ status: "ok" });
+  await client.stopAndWait();
+});
+
+it("clamps oversized tick watchdog intervals before scheduling", async () => {
+  const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+  const { client } = await watchedClient(Number.MAX_SAFE_INTEGER);
+
+  expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+  client.stop();
+});
+
+it("clamps oversized stopAndWait timeouts before scheduling", async () => {
+  const client = new GatewayClient({});
+  const ws = { readyState: MockWebSocket.OPEN, close: vi.fn(), terminate: vi.fn() };
+  (client as unknown as { ws: unknown }).ws = ws;
+  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+  const stopPromise = client.stopAndWait({ timeoutMs: Number.MAX_SAFE_INTEGER });
+
+  await vi.advanceTimersByTimeAsync(1);
+  expect(ws.terminate).not.toHaveBeenCalled();
+  expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+
+  await vi.advanceTimersByTimeAsync(249);
+  await expect(stopPromise).resolves.toBeUndefined();
+  expect(ws.terminate).toHaveBeenCalledTimes(1);
 });

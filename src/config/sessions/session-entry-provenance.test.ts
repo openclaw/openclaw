@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   attributeDelegatedSessionCreator,
   inheritSessionCreationPolicy,
@@ -28,6 +28,8 @@ const channelCreator: SessionCreatedActor = {
   source: "channel",
   label: "profile-owner",
 };
+const isolationActor: SessionCreatedActor = { ...creator, id: "isolation-owner" };
+const requestingActor: SessionCreatedActor = { ...creator, id: "requester" };
 
 it("resolves personal profiles from assigned humans or authenticated creators only", () => {
   const cases: Array<[Source, string | undefined]> = [
@@ -127,50 +129,39 @@ it("preserves authorized collaborative task and nested-delegation credit", () =>
   ).toBeUndefined();
 });
 
-describe("delegated human creators", () => {
-  const actor: SessionCreatedActor = { type: "human", source: "profile", id: "isolation-owner" };
+it("keeps the legacy isolation actor while projecting the captured human creator", () => {
+  const attributed = attributeDelegatedSessionCreator(isolationActor, "requester");
+  expect(attributed).toEqual({ ...isolationActor, delegatedBy: requestingActor });
+  expect(resolveSessionCreatorActor(attributed)).toEqual(requestingActor);
+  expect(sessionCreatorProfileId(attributed)).toBe("requester");
+  expect(sessionIsolationProfileId(attributed)).toBe("isolation-owner");
+  expect(isolationActor).not.toHaveProperty("delegatedBy");
+});
 
-  it("keeps the legacy isolation actor while projecting the captured human creator", () => {
-    const attributed = attributeDelegatedSessionCreator(actor, "requester");
-    expect(attributed).toEqual({
-      ...actor,
-      delegatedBy: { type: "human", source: "profile", id: "requester" },
-    });
-    expect(resolveSessionCreatorActor(attributed)).toEqual({
-      type: "human",
-      source: "profile",
-      id: "requester",
-    });
-    expect(sessionCreatorProfileId(attributed)).toBe("requester");
-    expect(sessionIsolationProfileId(attributed)).toBe("isolation-owner");
-    expect(actor).not.toHaveProperty("delegatedBy");
+it("requires a captured human, not an assignee or execution agent", () => {
+  expect(attributeDelegatedSessionCreator(spawningAgent, "requester")).toEqual({
+    ...spawningAgent,
+    delegatedBy: requestingActor,
   });
+  expect(attributeDelegatedSessionCreator(spawningAgent)).toEqual(spawningAgent);
+  expect(attributeDelegatedSessionCreator(undefined, "requester")).toBeUndefined();
+});
 
-  it("requires a captured human, not an assignee or execution agent", () => {
-    expect(attributeDelegatedSessionCreator(spawningAgent, "requester")).toEqual({
-      ...spawningAgent,
-      delegatedBy: { type: "human", source: "profile", id: "requester" },
-    });
-    expect(attributeDelegatedSessionCreator(spawningAgent)).toEqual(spawningAgent);
-    expect(attributeDelegatedSessionCreator(undefined, "requester")).toBeUndefined();
+it("does not rewrite stored attribution when assignment or proposed creator changes", () => {
+  const attributed = attributeDelegatedSessionCreator(isolationActor, "requester");
+  const stored = {
+    createdActor: attributed,
+    createdVia: "spawn" as const,
+    createdAt: 1,
+    sandbox: "required" as const,
+  };
+  expect(preserveCreationStamp({ ...stored, createdActor: creator }, stored)).toEqual(stored);
+  expect(inheritSessionCreationPolicy(stored, spawningAgent)).toEqual({
+    actor: attributed,
+    sandbox: "required",
   });
-
-  it("does not rewrite stored attribution when assignment or proposed creator changes", () => {
-    const attributed = attributeDelegatedSessionCreator(actor, "requester");
-    const stored = {
-      createdActor: attributed,
-      createdVia: "spawn" as const,
-      createdAt: 1,
-      sandbox: "required" as const,
-    };
-    expect(preserveCreationStamp({ ...stored, createdActor: creator }, stored)).toEqual(stored);
-    expect(inheritSessionCreationPolicy(stored, spawningAgent)).toEqual({
-      actor: attributed,
-      sandbox: "required",
-    });
-    expect(sessionPersonalProfileId({ createdActor: attributed })).toBe("requester");
-    expect(
-      sessionPersonalProfileId({ createdActor: attributed, owner: { actor: human("assignee") } }),
-    ).toBe("assignee");
-  });
+  expect(sessionPersonalProfileId({ createdActor: attributed })).toBe("requester");
+  expect(
+    sessionPersonalProfileId({ createdActor: attributed, owner: { actor: human("assignee") } }),
+  ).toBe("assignee");
 });

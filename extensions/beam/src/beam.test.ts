@@ -259,6 +259,48 @@ it("retries a rejected terminal upload through the real loopback receiver", asyn
 });
 
 describe("Beam session catalog", () => {
+  it.each([
+    { language: "German", titles: ["München", "Mu\u0308nchen"] },
+    { language: "Korean", titles: ["한국어", "\u1112\u1161\u11ab\u1100\u116e\u11a8\u110b\u1165"] },
+  ])(
+    "finds canonically equivalent $language titles without rewriting snapshots",
+    async ({ titles }) => {
+      const { keyedStore, store, close } = persistentBeamTestStore();
+      const endpoint = await serve(store);
+      const catalog = createBeamSessionCatalog(store);
+      const uploads = titles.map((title, index) =>
+        sampleUpload({ beamId: index === 0 ? catalogParams.threadId : otherBeamId, title }),
+      );
+
+      try {
+        for (const upload of uploads) {
+          expect((await postUpload(endpoint, upload)).status).toBe(200);
+        }
+        const expected = uploads.map(({ beamId, title }) => ({ threadId: beamId, name: title }));
+        for (const query of [...titles, " ClAuDe "]) {
+          const [host] = await catalog.list({ agentId: "main", search: query });
+          expect(host?.sessions).toHaveLength(2);
+          expect(host?.sessions).toEqual(
+            expect.arrayContaining(expected.map((session) => expect.objectContaining(session))),
+          );
+        }
+        const [absent] = await catalog.list({ agentId: "main", search: "missing title" });
+        expect(absent?.sessions).toEqual([]);
+
+        const entries = await keyedStore.entries();
+        expect(entries).toHaveLength(2);
+        for (const upload of uploads) {
+          expect(entries.find(({ key }) => key === upload.beamId)?.value).toMatchObject(upload);
+          await expect(
+            catalog.read({ ...catalogParams, threadId: upload.beamId }),
+          ).resolves.toMatchObject({ threadId: upload.beamId, label: upload.title });
+        }
+      } finally {
+        await close();
+      }
+    },
+  );
+
   it("permanently deletes only known gateway sessions and allows re-upload", async () => {
     const { store, close } = persistentBeamTestStore();
     const endpoint = await serve(store);

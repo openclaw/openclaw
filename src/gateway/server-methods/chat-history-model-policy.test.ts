@@ -117,6 +117,49 @@ function onlyRecord(value: unknown) {
 }
 
 describe("historical model disclosure", () => {
+  it("keeps unrestricted startup history encoded between restricted viewers", async () => {
+    await withHistoryState(async () => {
+      const f = fixture();
+      f.setPolicy(f.cfg, ["example/allowed"]);
+      const staff = ensureProfileForEmail("history-staff@example.test");
+      setUserProfileRole(staff.id, "staff");
+      const staffClient = identifiedClient(staff.id);
+      const message = assistant("historical", "Synthetic transcript");
+      const messages = new SerializedJsonArray(Buffer.from(JSON.stringify([message])));
+      const materialize = vi.spyOn(messages, "materialize");
+      const input = {
+        messages,
+        metadata: {
+          swarmEnabled: false,
+          models: [
+            {
+              id: "allowed",
+              provider: "example",
+              name: "Allowed",
+              availableAccessPrograms: { cyber: ["standard", "daybreak_blue"] },
+            },
+          ],
+        },
+      } satisfies Parameters<typeof projectOperatorModelRead>[1];
+      const context = { getRuntimeConfig: () => f.cfg, getCommittedRuntimeConfig: () => f.cfg };
+      for (const client of [staffClient, f.client, staffClient, f.client, staffClient]) {
+        materialize.mockClear();
+        const result = projectOperatorModelRead({ context, client, agentId: "main" }, input);
+        expect(result.metadata?.models?.[0]?.availableAccessPrograms?.cyber).toEqual(["standard"]);
+        if (client === staffClient) {
+          expect(result.messages).toBe(messages);
+          expect(materialize).not.toHaveBeenCalled();
+        } else {
+          expect(onlyRecord(result.messages)).toMatchObject({ content: message.content });
+          expectModelHidden(onlyRecord(result.messages), "provider");
+          expect(materialize).toHaveBeenCalledOnce();
+        }
+      }
+      expect(JSON.parse(Buffer.from(messages.bytes).toString())).toEqual([message]);
+      materialize.mockRestore();
+    });
+  });
+
   it("skips worker deflation when model projection replaces the serialized history", async () => {
     await withHistoryState(async (state) => {
       const f = fixture();

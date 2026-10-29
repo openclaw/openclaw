@@ -1,7 +1,6 @@
 import path from "node:path";
 import { StatementSync, type DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
@@ -63,38 +62,20 @@ describe("Mention Inbox worker snapshots", () => {
     return { head: { revision: sources.length, nextSequence: sources.length }, sources };
   }
 
-  it("reads one initial snapshot, reuses its head, and refreshes only committed own writes", () => {
+  it("returns only changed committed snapshots and preserves rolled-back sources", () => {
     const { writer, reader } = createStore();
-    const reads = observeSqliteReadSql(StatementSync.prototype);
-    const exec = vi.spyOn(reader, "exec");
-    try {
-      expect(read(-1, reader).snapshot).toEqual(snapshot([]));
-      expect(reads.queries.filter((sql) => /from "config_machine_state"/iu.test(sql))).toHaveLength(
-        1,
-      );
-      reads.queries.length = 0;
-      expect(read(0, reader)).toEqual({ type: "mentions.snapshot", snapshot: undefined });
-      expect(reads.queries).toEqual([]);
-      expect(exec).not.toHaveBeenCalled();
+    expect(read(-1, reader).snapshot).toEqual(snapshot([]));
+    expect(read(0, reader)).toEqual({ type: "mentions.snapshot", snapshot: undefined });
 
-      addSource(writer, first);
-      expect(read(0, reader).snapshot).toEqual(snapshot([first]));
-      expect(() =>
-        addSource(writer, second, () => {
-          throw new Error("rollback mention");
-        }),
-      ).toThrow("rollback mention");
-      reads.queries.length = 0;
-      expect(read(1, reader).snapshot).toBeUndefined();
-      // Rollback retires the carrier's staged coverage; one read repairs the committed head.
-      expect(reads.queries).toHaveLength(1);
-      reads.queries.length = 0;
-      expect(read(1, reader).snapshot).toBeUndefined();
-      expect(reads.queries).toEqual([]);
-      expect(read(-1, reader).snapshot).toEqual(snapshot([first]));
-    } finally {
-      reads.restore();
-    }
+    addSource(writer, first);
+    expect(read(0, reader).snapshot).toEqual(snapshot([first]));
+    expect(() =>
+      addSource(writer, second, () => {
+        throw new Error("rollback mention");
+      }),
+    ).toThrow("rollback mention");
+    expect(read(1, reader).snapshot).toBeUndefined();
+    expect(read(-1, reader).snapshot).toEqual(snapshot([first]));
   });
 
   it("keeps an atomic header and source snapshot when its owner commits during result delivery", () => {

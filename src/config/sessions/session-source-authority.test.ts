@@ -5,9 +5,28 @@ import {
   prepareSessionSourceAuthority,
   runWithSessionSourceScope,
   type SessionSourceAssertion,
+  type PreparedSessionSourceAuthority,
 } from "./session-source-authority.js";
 
 const sourceWith = (methods: Partial<SessionSourceAssertion>) => Object.assign(() => {}, methods);
+
+it("prepares empty predicates without allocating intermediate mapped arrays", async () => {
+  const live = revocable("source revoked after preparation");
+  const checks: PreparedSessionSourceAuthority["checks"] = [];
+  const map = vi.spyOn(checks, "map");
+  const assertion = composeSessionSourceAssertion([
+    sourceWith({ prepareSessionSource: async () => ({ checks, ...live }) }),
+  ]);
+  const prepared = await assertion.prepareSessionSource();
+  expect(prepared.checks).toEqual([]);
+  expect(map).not.toHaveBeenCalled();
+  prepared.assertCurrent();
+  prepared.assertPreparedCurrent?.();
+  live.revoke();
+  expect(prepared.assertCurrent).toThrow("source revoked after preparation");
+  expect(prepared.assertPreparedCurrent).toThrow("source revoked after preparation");
+});
+
 function revocable(message: string) {
   const controller = new AbortController();
   return {

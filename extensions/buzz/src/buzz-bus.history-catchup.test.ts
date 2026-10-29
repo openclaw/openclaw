@@ -55,13 +55,14 @@ vi.mock("nostr-tools", async (importOriginal) => {
 
 import { useBuzzBusLifecycleFixture } from "./buzz-bus.lifecycle.test-harness.js";
 import { relayMocks } from "./buzz-bus.test-helpers.js";
-import { catchUpBuzzRoomHistory } from "./history-catchup.js";
 import {
   BUZZ_REPLAY_DISPATCH_MAX_PENDING,
   createBuzzReplayDispatchQueue,
 } from "./replay-dispatch.js";
+import { createBuzzRoomMembershipTracker } from "./room-membership-tracker.js";
 
-const { CHANNEL_ID, startTestBus, senderMessage } = useBuzzBusLifecycleFixture();
+const fixture = useBuzzBusLifecycleFixture();
+const { CHANNEL_ID, startTestBus, senderMessage } = fixture;
 const HISTORY_LIMIT = 100;
 const BASE_TIMESTAMP = 1_700_000_000;
 
@@ -160,29 +161,44 @@ describe("Buzz reconnect history catch-up", () => {
     const abort = new AbortController();
     const queue = createBuzzReplayDispatchQueue({ onTaskError: vi.fn() });
     const capacity = createDeferred<Awaited<ReturnType<typeof queue.reserveCapacity>>>();
+    const reserving = createDeferred<void>();
     const onEvent = vi.fn();
+    let tracker: Awaited<ReturnType<typeof createBuzzRoomMembershipTracker>> | undefined;
     try {
-      const reservation = await queue.reserveCapacity(HISTORY_LIMIT);
-      expect(reservation).toBeDefined();
-      const recovery = catchUpBuzzRoomHistory({
+      seedOfflineBacklog(HISTORY_LIMIT + 1, (index) => BASE_TIMESTAMP + index);
+      tracker = await createBuzzRoomMembershipTracker({
         relay: new Relay("wss://buzz.example.com"),
-        channelId: CHANNEL_ID,
+        relayPublicKey: fixture.RELAY_PUBLIC_KEY,
+        channelIds: [CHANNEL_ID],
+        botPublicKey: fixture.BOT_PUBLIC_KEY,
         since: BASE_TIMESTAMP - 60,
-        until: BASE_TIMESTAMP,
-        limit: HISTORY_LIMIT,
-        reserveCapacity: () => capacity.promise,
-        onEvent,
+        messageSince: () => BASE_TIMESTAMP - 60,
+        messageLimit: HISTORY_LIMIT,
+        reserveDispatchCapacity: () => {
+          reserving.resolve();
+          return capacity.promise;
+        },
+        onMessageEvent: onEvent,
         signal: abort.signal,
       });
+      history.historyRequests.length = 0;
+      onEvent.mockClear();
+      const reservation = await queue.reserveCapacity(HISTORY_LIMIT);
+      expect(reservation).toBeDefined();
+      const recovery = tracker.catchUpHistory();
+      await reserving.promise;
       capacity.resolve(reservation);
       abort.abort();
-      await expect(recovery).resolves.toBe("aborted");
+      await expect(recovery).resolves.toBeUndefined();
       expect(history.historyRequests).toEqual([]);
       expect(onEvent).not.toHaveBeenCalled();
       const recoveredCapacity = await queue.reserveCapacity(BUZZ_REPLAY_DISPATCH_MAX_PENDING);
       expect(recoveredCapacity).toBeDefined();
       recoveredCapacity?.release();
     } finally {
+      abort.abort();
+      capacity.resolve(undefined);
+      await tracker?.close();
       await queue.close();
     }
   });

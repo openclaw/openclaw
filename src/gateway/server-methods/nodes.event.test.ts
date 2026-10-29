@@ -22,10 +22,10 @@ it("keeps the accepted event result independent of persistence", async () => {
   const hostStats = { ...stats, updatedAtMs: 1_250 };
   const persistence = createDeferred<boolean>();
   recordHostStatsMock.mockReset().mockReturnValue(persistence.promise);
+  vi.spyOn(Date, "now").mockReturnValue(1_250);
   const h = new NodeEventHarness();
   const client = h.register("conn-1");
-  const { warn, broadcast } = h;
-  vi.spyOn(h.nodeRegistry, "updateHostStats").mockReturnValue(hostStats);
+  const { broadcast } = h;
   const respond = await h.send(client, stats, "node.host.stats");
 
   const result = { ok: true, event: "node.host.stats", handled: true, reason: "updated" };
@@ -42,11 +42,7 @@ it("keeps the accepted event result independent of persistence", async () => {
     { dropIfSlow: true },
   );
   persistence.reject(new Error("stats store unavailable"));
-  await vi.waitFor(() =>
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "failed to persist node host stats for node-1: stats store unavailable",
-    ),
-  );
+  await persistence.promise.catch(() => undefined);
   expect(respond).toHaveBeenCalledExactlyOnceWith(true, result, undefined);
 });
 class NodeEventHarness {

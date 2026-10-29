@@ -128,6 +128,7 @@ it(
       // A source host and packaged plugin would have separate workspace registries.
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
+        initializeCurrentRuntimeState: true,
         command: {
           executablePath: process.execPath,
           argsPrefix: [path.resolve("openclaw.mjs")],

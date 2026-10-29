@@ -1,10 +1,10 @@
 import { Type } from "typebox";
 import { expect, it } from "vitest";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
+} from "../../../packages/agent-core/src/internal-hooks.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { gateBoundTool } from "./host-bound-tool.js";
 

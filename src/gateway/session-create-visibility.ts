@@ -6,12 +6,27 @@ import { invalidSessionRequest } from "./session-request-error.js";
 import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing-policy.js";
 
 export function resolveSessionCreateVisibility(
-  params: Pick<CreateGatewaySessionParams, "cfg" | "visibility" | "defaultVisibility">,
+  params: Pick<
+    CreateGatewaySessionParams,
+    "cfg" | "getCurrentConfig" | "visibility" | "defaultVisibility" | "fork" | "creation"
+  >,
   existingEntry: SessionEntry | undefined,
+  parentEntry?: SessionEntry,
 ): Result<SessionVisibility | undefined, ErrorShape> {
-  const visibility = params.visibility ?? (existingEntry ? undefined : params.defaultVisibility);
-  if (visibility && !existingEntry && !isSessionVisibilityAllowed(params.cfg, visibility)) {
-    return invalidSessionRequest(`session visibility is disabled: ${visibility}`, {
+  const inheritedDraft =
+    parentEntry?.visibility === "draft" &&
+    (params.creation?.via === "spawn" ||
+      (params.fork === true && params.creation?.via === "operator"));
+  const visibility =
+    params.visibility ??
+    (existingEntry ? undefined : inheritedDraft ? "draft" : params.defaultVisibility);
+  const cfg = params.getCurrentConfig?.() ?? params.cfg;
+  if (visibility && !existingEntry && !isSessionVisibilityAllowed(cfg, visibility)) {
+    const guidance =
+      visibility === "draft"
+        ? ". Continue in the existing Draft or ask an administrator to enable Draft creation."
+        : "";
+    return invalidSessionRequest(`session visibility is disabled: ${visibility}${guidance}`, {
       details: { code: "SESSION_VISIBILITY_DISABLED", visibility },
     });
   }
