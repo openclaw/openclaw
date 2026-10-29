@@ -3,12 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { getFleetCell } from "../fleet/registry.js";
-import { reserveFleetCellInDatabase } from "../fleet/registry.kernel.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withArtifactPreservingStateReads } from "./openclaw-state-db-readonly.js";
+import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -24,15 +26,21 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
   await withOpenClawTestState({ label: "owned-native-token" }, async (state) => {
     vi.stubEnv("XDG_CACHE_HOME", state.path("cache"));
     const database = openOpenClawStateDatabase({ env: state.env });
-    const record = runOpenClawStateWriteTransaction(
+    const record = {
+      id: "owned-native-token",
+      createdAt: 1,
+      archivePath: state.path("backup.tar.gz"),
+      status: "ok",
+      kind: "archive",
+    } as const;
+    runOpenClawStateWriteTransaction(
       ({ db }) =>
-        reserveFleetCellInDatabase(db, {
-          tenantId: "owned-native-token",
-          createdAtMs: 1,
-          image: "synthetic:owned-native-token",
-          runtime: "docker",
-          containerName: "synthetic-owned-native-token",
-          dataDir: state.path("data"),
+        recordBackupRunInDatabase(db, {
+          id: record.id,
+          created_at: record.createdAt,
+          archive_path: record.archivePath,
+          status: record.status,
+          manifest_json: JSON.stringify({ kind: record.kind }),
         }),
       { database, env: state.env },
     );
@@ -49,7 +57,7 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
     const tokenSql: string[] = [];
     // oxlint-disable-next-line typescript/unbound-method -- Forwarded with its original native receiver.
     const execute = sqlite.DatabaseSync.prototype.exec;
-    const observer = vi.spyOn(sqlite.DatabaseSync.prototype, "exec").mockImplementation(function (
+    vi.spyOn(sqlite.DatabaseSync.prototype, "exec").mockImplementation(function (
       this: DatabaseSync,
       sql: string,
     ) {
@@ -58,13 +66,12 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
       }
       return execute.call(this, sql);
     });
-    let beforeBackup: ReturnType<typeof family> | undefined;
-    let afterBackup: ReturnType<typeof family> | undefined;
+    const backupFamilies: ReturnType<typeof family>[] = [];
     const nativeBackup = sqlite.backup.bind(sqlite);
     const backup = vi.spyOn(sqlite, "backup").mockImplementation(async (...args) => {
-      beforeBackup = family();
+      backupFamilies.push(family());
       const result = await nativeBackup(...args);
-      afterBackup = family();
+      backupFamilies.push(family());
       return result;
     });
     try {
@@ -78,39 +85,26 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
       tokenSql.length = 0;
 
       expect(
-        await withArtifactPreservingStateReads(() => getFleetCell(state.env, record.tenantId)),
-      ).toEqual(record);
+        await withArtifactPreservingStateReads(() =>
+          executeExistingOpenClawStateRead({ env: state.env }, { type: "backup.runs" }),
+        ),
+      ).toEqual({ ok: true, type: "backup.runs", sourceAdmitted: true, runs: [record] });
       expect(backup).toHaveBeenCalledOnce();
       expect(backup.mock.calls[0]?.[0]).toBe(database.db);
       expect(database.db.isOpen).toBe(true);
       const after = family();
       const shmAfter = fs.readFileSync(`${database.path}-shm`);
-      const changedOffsets = [...shmBefore.keys()].filter(
-        (offset) => shmBefore[offset] !== shmAfter[offset],
-      );
-      const observation = {
-        tokenSql,
-        before,
-        beforeBackup,
-        afterBackup,
-        after,
-        changedOffsets,
-        readMarksBefore: shmBefore.subarray(100, 120).toString("hex"),
-        readMarksAfter: shmAfter.subarray(100, 120).toString("hex"),
-      };
-      console.info("owned-native-token observation", JSON.stringify(observation));
-      expect(beforeBackup).toEqual(before);
-      expect(after).toEqual(afterBackup);
+      expect(backupFamilies).toEqual([before, after]);
       expect(after.filter((entry) => entry.suffix !== "-shm")).toEqual(
         before.filter((entry) => entry.suffix !== "-shm"),
       );
       // The retained native backup may update only SQLite's documented WAL read marks.
       expect(shmAfter.length).toBe(shmBefore.length);
-      expect(changedOffsets.every((offset) => offset >= 100 && offset < 120)).toBe(true);
+      expect(shmAfter.subarray(0, 100)).toEqual(shmBefore.subarray(0, 100));
+      expect(shmAfter.subarray(120)).toEqual(shmBefore.subarray(120));
       expect(tokenSql).toEqual([]);
     } finally {
-      observer.mockRestore();
-      backup.mockRestore();
+      vi.restoreAllMocks();
       await closeOpenClawStateDatabaseAsync();
       await cleanupSnapshotOperations();
     }

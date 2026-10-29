@@ -1,171 +1,274 @@
+import path from "node:path";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import type { SessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import {
-  createExistingAgentSessionStoreTargetResolver,
+  captureSessionStoreReadCandidate,
+  type SessionStoreReadCandidate,
+} from "../config/sessions/session-store-read-candidates.js";
+import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import { shouldSkipDiscoveryError } from "../config/sessions/targets-path-validation.js";
+import {
   listConfiguredSessionStoreAgentIds,
   resolveSessionStoreCompatibilityAgentId,
 } from "../config/sessions/targets.js";
+import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
-  listOpenClawRegisteredAgentDatabases,
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
 } from "../state/openclaw-agent-db-registry-listing.js";
-import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db-registry.js";
-import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-lookup.js";
-import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
+import {
+  openClawStateDatabaseCache,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../state/openclaw-state-db-cache.js";
+import { sessionStoreRoutingConfig } from "./session-utils-store-candidates.js";
+import type { GatewaySessionStoreSourceRequest } from "./session-utils-store.types.js";
 
-/** Bind candidate addresses once; registry metadata uses its existing invalidation owner. */
-export function prepareGatewaySessionStoreReadSources(params: {
+type SessionStoreRouting = GatewaySessionStoreSourceRequest["routing"];
+
+function captureSessionStoreRouting(cfg: OpenClawConfig): SessionStoreRouting {
+  return withAgentRosterFactsBatch(cfg, () => ({
+    agentIds: listConfiguredSessionStoreAgentIds(cfg),
+    store: cfg.session?.store,
+    compatibilityAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
+  }));
+}
+
+function storeChanged(): Error {
+  return new Error("Session store changed while preparing its metadata. Retry the request.");
+}
+
+type SourcePreparationParams = {
   cfg: OpenClawConfig;
   currentSource: SessionEntryReadSource;
   env: NodeJS.ProcessEnv;
   registryPath: string;
-  /** Only synchronous consumers may defer binding filesystem addresses. */
-  deferSources?: boolean;
-}): { sources: GatewaySessionStoreReadSources; assertCurrent: () => void } {
-  const registryOptions = {
-    env: cloneEnvWithPlatformSemantics(params.env),
-    path: params.registryPath,
-    includeIncompatibleSchemaVersions: true,
-  };
-  const currentSource = params.currentSource;
-  const currentSourceAgentId = currentSource.agentId;
-  const currentSourcePath = currentSource.path;
-  let discoveryIsCurrent: (() => boolean) | undefined;
-  let registryToken = readOpenClawAgentDatabaseRegistryToken(registryOptions);
-  const assertCurrent = () => {
-    const currentToken = readOpenClawAgentDatabaseRegistryToken(registryOptions);
-    if (currentToken === registryToken) {
+};
+
+type SourceMemo = {
+  registry: symbol;
+  registryIdentity: string | undefined;
+  current: boolean;
+  observations: Map<string, { close(): void }>;
+  dirty?: boolean;
+  refreshing?: boolean;
+  pathsCurrent?: () => boolean;
+  observedThisTurn?: boolean;
+  prepared: Promise<GatewaySessionStoreSourceRequest | undefined>;
+};
+const sourcePreparations = new Map<string, SourceMemo>();
+registerOpenClawStateDatabaseAsyncResource({
+  close: async (identity) => {
+    for (const [key, memo] of sourcePreparations) {
+      if (!identity || !memo.registryIdentity || memo.registryIdentity === identity.key) {
+        retireSourcePreparation(key, memo);
+      }
+    }
+  },
+});
+
+function retireSourcePreparation(key: string, memo: SourceMemo): void {
+  memo.current = false;
+  for (const observation of memo.observations.values()) {
+    observation.close();
+  }
+  memo.observations.clear();
+  if (sourcePreparations.get(key) === memo) {
+    sourcePreparations.delete(key);
+  }
+}
+
+function observeSourcePath(memo: SourceMemo, pathname: string, used: Set<string>): void {
+  if (!memo.current) {
+    return;
+  }
+  let child = path.resolve(pathname);
+  for (;;) {
+    const directory = path.dirname(child);
+    if (directory === child) {
       return;
     }
-    // Registration admission and metadata refreshes also rotate the memo. Keep
-    // the prepared addresses only when their original discovery facts still hold.
-    try {
-      if (discoveryIsCurrent?.()) {
-        registryToken = currentToken;
-        return;
-      }
-    } catch {
-      // An unavailable registry or locator cannot establish the captured topology.
-    }
-    throw new Error("Session store changed while preparing its metadata. Retry the request.");
-  };
-  const bindSources = () =>
-    withAgentRosterFactsBatch(params.cfg, () => {
-      let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
-      try {
-        registered = listOpenClawRegisteredAgentDatabases(registryOptions);
-      } catch {
-        return {};
-      }
-      const registryFacts = registered;
-      registered = registered.filter(
-        (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
-      );
-      const agentIds = new Set([
-        ...listConfiguredSessionStoreAgentIds(params.cfg),
-        ...registered.map((entry) => entry.agentId),
-      ]);
-      const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
-      const resolveExistingTargets = createExistingAgentSessionStoreTargetResolver(params.cfg, {
-        env: params.env,
-        registeredDatabases: registered,
-        isSameDatabasePath,
-      });
-      const sources = new Map<string, readonly SessionEntryReadSource[]>();
-      const bindCurrentSource = (source: SessionEntryReadSource): SessionEntryReadSource => {
-        isSameDatabasePath(source.path, source.path);
-        return source.agentId === currentSourceAgentId &&
-          isSameDatabasePath(source.path, currentSourcePath)
-          ? currentSource
-          : source;
-      };
-      for (const agentId of agentIds) {
-        try {
-          const { candidates, readSources } = resolveGatewaySessionStoreLookupCandidates({
-            ...params,
-            agentId,
-            registeredDatabases: registered,
-            resolveExistingTargets,
-          });
-          const resolved: SessionEntryReadSource[] = [];
-          if (readSources) {
-            for (const readSource of readSources) {
-              const source = bindCurrentSource(readSource);
-              if (
-                !resolved.some(
-                  (candidate) =>
-                    candidate.agentId === source.agentId &&
-                    isSameDatabasePath(candidate.path, source.path),
-                )
-              ) {
-                resolved.push(source);
+    const name = path.basename(child);
+    const observationKey = JSON.stringify([directory, name]);
+    used.add(observationKey);
+    if (!memo.observations.has(observationKey)) {
+      memo.observations.set(
+        observationKey,
+        observeOwnedDirectory(directory, (filename, event) => {
+          // Content writes do not replace the prepared source identities.
+          if (event === "change" && filename !== undefined) {
+            return;
+          }
+          if (!memo.current || memo.observedThisTurn) {
+            return;
+          }
+          if (
+            filename === undefined ||
+            (process.platform === "win32"
+              ? filename.toLowerCase() === name.toLowerCase()
+              : filename === name)
+          ) {
+            // One fallback sweep can notify every ancestor of the same source.
+            memo.observedThisTurn = true;
+            queueMicrotask(() => {
+              memo.observedThisTurn = false;
+            });
+            // The next read refreshes facts without retiring shared watches.
+            try {
+              if (memo.pathsCurrent && !memo.pathsCurrent()) {
+                memo.dirty = true;
               }
-            }
-            sources.set(agentId, resolved);
-            continue;
-          }
-          for (const candidate of candidates) {
-            const target = resolveSqliteTargetFromSessionStorePath(candidate.storePath, {
-              agentId: candidate.agentId,
-              defaultAgentId: resolveSessionStoreCompatibilityAgentId(params.cfg),
-              env: params.env,
-              registeredDatabases: registered,
-              isSameDatabasePath,
-            });
-            if (target.ownerSource === "ambiguous-registry") {
-              resolved.length = 0;
-              break;
-            }
-            const source = bindCurrentSource({
-              agentId: target.agentId ?? candidate.agentId,
-              path: target.path,
-            });
-            if (
-              !resolved.some((resolvedSource) =>
-                isSameDatabasePath(resolvedSource.path, source.path),
-              )
-            ) {
-              resolved.push(source);
+            } catch {
+              memo.dirty = true;
             }
           }
-          sources.set(agentId, resolved);
-        } catch {
-          // Auxiliary lineage follows the existing unavailable-store-as-no-rows contract.
-          sources.set(agentId, []);
-        }
+        }),
+      );
+    }
+    child = directory;
+  }
+}
+
+/** Retain discovery facts and watches; ordinary reads refresh invalidated facts in place. */
+export async function prepareGatewaySessionStoreReadSourcesAsync(
+  params: SourcePreparationParams,
+): Promise<{ request: GatewaySessionStoreSourceRequest | undefined }> {
+  const routing = captureSessionStoreRouting(params.cfg);
+  const env = captureSessionTranscriptStorageEnvironment(params.env);
+  const registryOptions = { env, path: path.resolve(params.registryPath) };
+  const registry = readOpenClawAgentDatabaseRegistryToken(registryOptions);
+  const key = JSON.stringify([routing, env, params.currentSource, registryOptions.path]);
+  let memo = sourcePreparations.get(key);
+  if (!memo) {
+    memo = {
+      registry,
+      registryIdentity: openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(
+        registryOptions.path,
+      )?.key,
+      current: true,
+      observations: new Map(),
+      dirty: true,
+      prepared: Promise.resolve(undefined),
+    };
+    sourcePreparations.set(key, memo);
+  }
+  // One refresh owns the used-watch set; publications during it share its outcome.
+  if (!memo.refreshing && (memo.dirty || memo.registry !== registry)) {
+    const selected = memo;
+    const used = new Set<string>();
+    selected.refreshing = true;
+    selected.dirty = false;
+    selected.registry = registry;
+    selected.prepared = prepareSourceRequest(
+      { ...params, registryPath: registryOptions.path },
+      routing,
+      env,
+      selected,
+      (pathname) => observeSourcePath(selected, pathname, used),
+    )
+      .then(
+        (request) => {
+          // Reuse common watches before dropping paths absent from the refreshed roster.
+          for (const [observationKey, observation] of selected.observations) {
+            if (!used.has(observationKey)) {
+              observation.close();
+              selected.observations.delete(observationKey);
+            }
+          }
+          return request;
+        },
+        (error: unknown) => {
+          retireSourcePreparation(key, selected);
+          throw error;
+        },
+      )
+      .finally(() => {
+        selected.refreshing = false;
+      });
+    while (sourcePreparations.size > 128) {
+      const [oldestKey, oldest] = sourcePreparations.entries().next().value!;
+      retireSourcePreparation(oldestKey, oldest);
+    }
+  }
+  const request = await memo.prepared;
+  if (!memo.current) {
+    throw storeChanged();
+  }
+  return { request };
+}
+
+async function prepareSourceRequest(
+  params: SourcePreparationParams,
+  routing: SessionStoreRouting,
+  env: NodeJS.ProcessEnv,
+  memo: SourceMemo,
+  observe: (pathname: string) => void,
+): Promise<GatewaySessionStoreSourceRequest | undefined> {
+  const paths = createOpenClawAgentDatabasePathMatcher();
+  memo.pathsCurrent = () => paths.isCurrent();
+  const inventory = prepareSessionStoreTargetInventory(
+    sessionStoreRoutingConfig(routing),
+    routing.agentIds,
+    env,
+  );
+  const { currentSource } = params;
+  paths(currentSource.path, currentSource.path);
+  observe(currentSource.path);
+  const candidates = new Map<string, SessionStoreReadCandidate>();
+  const capture = (candidate: SessionStoreReadCandidate) => {
+    try {
+      paths(candidate.path, candidate.path);
+    } catch (error) {
+      if (!shouldSkipDiscoveryError(error)) {
+        throw error;
       }
-      discoveryIsCurrent = () => {
-        const current = listOpenClawRegisteredAgentDatabases(registryOptions);
-        return (
-          currentSource.agentId === currentSourceAgentId &&
-          currentSource.path === currentSourcePath &&
-          current.length === registryFacts.length &&
-          current.every((entry, index) => {
-            const previous = registryFacts[index]!;
-            return (
-              entry.agentId === previous.agentId &&
-              entry.path === previous.path &&
-              entry.schemaVersion === previous.schemaVersion
-            );
-          }) &&
-          isSameDatabasePath.isCurrent()
-        );
-      };
-      return Object.fromEntries(sources);
-    });
-  let sources = params.deferSources ? undefined : bindSources();
-  return {
-    get sources() {
-      if (!sources) {
-        assertCurrent();
-        sources = bindSources();
-      }
-      return sources;
-    },
-    assertCurrent,
+      return;
+    }
+    observe(candidate.path);
+    observe(candidate.physicalPath);
+    candidates.set(JSON.stringify(candidate), candidate);
   };
+  inventory.candidates.forEach(capture);
+  capture(captureSessionStoreReadCandidate(currentSource.path));
+  const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+    env,
+    path: params.registryPath,
+    includeIncompatibleSchemaVersions: true,
+  });
+  const registry = await registryRead.read();
+  if (!memo.current) {
+    throw storeChanged();
+  }
+  const original = registry.result;
+  const registeredDatabases =
+    original.status === "available"
+      ? original.entries.map(({ agentId, path: databasePath, schemaVersion }) => ({
+          agentId,
+          path: databasePath,
+          schemaVersion,
+        }))
+      : undefined;
+  for (const registered of registeredDatabases ?? []) {
+    if (registered.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+      capture(captureSessionStoreReadCandidate(registered.path));
+    }
+  }
+  // Observation was installed after capture; close that admission window before publication.
+  if (!paths.isCurrent()) {
+    throw storeChanged();
+  }
+  registry.assertCurrent();
+  memo.registry = readOpenClawAgentDatabaseRegistryToken({ env, path: params.registryPath });
+  return registeredDatabases
+    ? {
+        routing,
+        currentSource,
+        env,
+        registeredDatabases,
+        candidates: [...candidates.values()],
+      }
+    : undefined;
 }

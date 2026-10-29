@@ -1,9 +1,4 @@
-// Matrix type declarations define plugin contracts.
-import type {
-  ChannelBotLoopProtectionConfig,
-  ContextVisibilityMode,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { z } from "zod";
 import type {
   matrixRoomSchema,
@@ -34,24 +29,14 @@ export type MatrixConfig = MatrixAccountConfig & {
   accounts?: Record<string, MatrixAccountConfig>;
 };
 
-export type CoreConfig = {
+export type CoreConfig = Pick<OpenClawConfig, "commands" | "messages" | "tools" | "secrets"> & {
   channels?: {
     matrix?: MatrixConfig;
-    defaults?: {
-      groupPolicy?: "open" | "allowlist" | "disabled";
-      contextVisibility?: ContextVisibilityMode;
-      botLoopProtection?: ChannelBotLoopProtectionConfig;
-    };
+    defaults?: Pick<
+      NonNullable<NonNullable<OpenClawConfig["channels"]>["defaults"]>,
+      "groupPolicy" | "contextVisibility" | "botLoopProtection"
+    >;
   };
-  commands?: OpenClawConfig["commands"];
-  session?: {
-    store?: string;
-    dmScope?: NonNullable<OpenClawConfig["session"]>["dmScope"];
-  };
-  messages?: {
-    ackReaction?: string;
-    ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "none" | "off";
-  };
-  secrets?: OpenClawConfig["secrets"];
+  session?: Pick<NonNullable<OpenClawConfig["session"]>, "store" | "dmScope">;
   [key: string]: unknown;
 };

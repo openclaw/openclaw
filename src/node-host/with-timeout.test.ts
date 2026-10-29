@@ -67,4 +67,52 @@ describe("runAbortableTimeout", () => {
     await expect(pending).resolves.toBe("ok");
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("times out at once, without a negative-timer warning, when the deadline has passed", async () => {
+    const warnings: string[] = [];
+    const onWarning = (warning: Error) => warnings.push(warning.name);
+    process.on("warning", onWarning);
+    try {
+      await expect(
+        runAbortableTimeout(() => new Promise<never>(() => {}), 30, "Compaction", -1_000),
+      ).rejects.toThrow("Compaction timed out");
+    } finally {
+      process.off("warning", onWarning);
+    }
+    expect(warnings).not.toContain("TimeoutNegativeWarning");
+  });
+
+  it.each([
+    { direction: "backward", jumpMs: -300_000 },
+    { direction: "forward", jumpMs: 8 },
+  ])(
+    "keeps the max-total ceiling on the monotonic clock across a $direction wall-clock jump",
+    async ({ jumpMs }) => {
+      vi.useFakeTimers();
+      let signal: AbortSignal | undefined;
+      let rearm!: () => void;
+      const pending = runAbortableTimeout(
+        (timeoutSignal, resetTimeout) => {
+          signal = timeoutSignal;
+          rearm = resetTimeout;
+          return new Promise<never>(() => {});
+        },
+        30,
+        "Compaction",
+        20,
+      );
+      const settled = pending.catch(() => {});
+      await vi.advanceTimersByTimeAsync(10);
+      vi.setSystemTime(Date.now() + jumpMs);
+      rearm();
+      // The 20ms ceiling fires on schedule. A wall-clock remaining would inflate the
+      // backward window to 30ms, and shrink the forward one to 2ms.
+      await vi.advanceTimersByTimeAsync(9);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal?.aborted).toBe(true);
+      await settled;
+      vi.clearAllTimers();
+    },
+  );
 });

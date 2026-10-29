@@ -1,402 +1,147 @@
-/** Tests ACP translator replay ledger recording and load-session replay behavior. */
-import type {
-  LoadSessionRequest,
-  NewSessionRequest,
-  PromptRequest,
-} from "@agentclientprotocol/sdk";
-import { createInMemorySessionStore } from "@openclaw/acp-core/session";
-import { describe, expect, it, vi } from "vitest";
-import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
-import type { GatewayClient } from "../gateway/client.js";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { AcpEventLedger } from "./event-ledger.js";
 import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
 import {
-  createAcpConnection,
-  createAcpGateway,
-  createAcpGatewayAgent,
-} from "./translator.test-helpers.js";
+  createLoadSessionRequest,
+  createNewSessionRequest,
+} from "./translator.bridge-test-helpers.js";
+import { createPromptScenario } from "./translator.scenario.test-support.js";
 
-vi.mock("./commands.js", () => ({
-  getAvailableCommands: () => [],
-}));
-
-function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
+async function createHarness(
+  eventLedger: AcpEventLedger,
+  options: { load?: string; rejectSend?: boolean } = {},
+) {
+  const h = createPromptScenario({
+    eventLedger,
+    sessions: [],
+    send: () => {
+      if (options.rejectSend) {
+        throw new Error("send failed before acceptance");
+      }
+      return { ok: true };
+    },
+  });
+  const { agent, sessionStore } = h;
+  const sessionId = options.load ?? (await agent.newSession(createNewSessionRequest())).sessionId;
+  if (options.load) {
+    await agent.loadSession(createLoadSessionRequest(sessionId));
+  }
+  const session = sessionStore.getSession(sessionId);
+  if (!session) {
+    throw new Error("missing ACP session");
+  }
+  const ref = { sessionId, sessionKey: session.sessionKey };
+  const event = (name: string, payload: Record<string, unknown>) =>
+    h.event(name, { sessionKey: ref.sessionKey, ...payload });
   return {
-    cwd,
-    mcpServers: [],
-    _meta: {},
-  } as unknown as NewSessionRequest;
+    ref,
+    request: h.request,
+    event,
+    updates: () => h.sessionUpdate.mock.calls.map(([n]) => n.update),
+    start: (text: string) => h.start(sessionId, text),
+    chat: (runId: string, state: "delta" | "final", text: string) =>
+      event("chat", { runId, state, message: { content: [{ type: "text", text }] } }),
+  };
 }
 
-function createLoadSessionRequest(sessionId: string, cwd = "/tmp"): LoadSessionRequest {
-  return {
-    sessionId,
-    cwd,
-    mcpServers: [],
-    _meta: {},
-  } as unknown as LoadSessionRequest;
+async function userPrompts(ledger: AcpEventLedger, ref: { sessionId: string; sessionKey: string }) {
+  return (await ledger.readReplay(ref)).events.filter(
+    ({ update }) => update.sessionUpdate === "user_message_chunk",
+  );
 }
 
-function createPromptRequest(sessionId: string, text: string): PromptRequest {
-  return {
-    sessionId,
-    prompt: [{ type: "text", text }],
-    _meta: {},
-  } as unknown as PromptRequest;
+function expectReplay(harness: Awaited<ReturnType<typeof createHarness>>) {
+  expect(harness.request.mock.calls.map(([method]) => method)).not.toContain("sessions.get");
+  expect(harness.updates()).toMatchObject([
+    { sessionUpdate: "session_info_update" },
+    { sessionUpdate: "available_commands_update" },
+    { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Question" } },
+    { sessionUpdate: "tool_call", toolCallId: "tool-1" },
+    { sessionUpdate: "tool_call_update", toolCallId: "tool-1" },
+    { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Answer" } },
+    { sessionUpdate: "session_info_update" },
+    { sessionUpdate: "session_info_update" },
+    { sessionUpdate: "available_commands_update" },
+  ]);
 }
 
-function createToolEvent(params: {
-  sessionKey: string;
-  runId: string;
-  phase: "start" | "result";
-  toolCallId: string;
-}): EventFrame {
-  return {
-    event: "agent",
-    payload: {
-      sessionKey: params.sessionKey,
-      runId: params.runId,
+it("replays complete sessions by ACP ID and Gateway key into one canonical ledger", async () => {
+  const ledger = createTestAcpEventLedger();
+  let recorded = createDeferred();
+  const recordPrompt = ledger.recordUserPrompt.bind(ledger);
+  vi.spyOn(ledger, "recordUserPrompt").mockImplementation(async (params) => {
+    await recordPrompt(params);
+    recorded.resolve();
+  });
+  const first = await createHarness(ledger);
+  const ref = first.ref;
+  const { result: prompt, sent } = first.start("Question");
+  const runId = await sent;
+  await recorded.promise;
+  for (const phase of ["start", "result"]) {
+    await first.event("agent", {
+      runId,
       stream: "tool",
       data: {
-        phase: params.phase,
-        toolCallId: params.toolCallId,
+        phase,
+        toolCallId: "tool-1",
         name: "read",
         args: { path: "src/app.ts" },
         result: { content: [{ type: "text", text: "FILE:src/app.ts" }] },
       },
-    },
-  } as unknown as EventFrame;
-}
+    });
+  }
+  await first.chat(runId, "delta", "Answer");
+  await first.chat(runId, "final", "Answer");
+  await expect(prompt).resolves.toEqual({ stopReason: "end_turn" });
 
-function createChatEvent(params: {
-  sessionKey: string;
-  runId: string;
-  state: "delta" | "final";
-  text: string;
-}): EventFrame {
-  return {
-    event: "chat",
-    payload: {
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      state: params.state,
-      message: {
-        content: [{ type: "text", text: params.text }],
-      },
-    },
-  } as unknown as EventFrame;
-}
+  const second = await createHarness(ledger, { load: ref.sessionId });
+  expectReplay(second);
+  expect(await userPrompts(ledger, ref)).toHaveLength(1);
 
-async function waitForChatSend(requestMock: { mock: { calls: Array<readonly unknown[]> } }) {
-  await vi.waitFor(() =>
-    expect(requestMock.mock.calls.some((call) => call[0] === "chat.send")).toBe(true),
+  const listed = await createHarness(ledger, { load: ref.sessionKey });
+  expectReplay(listed);
+  recorded = createDeferred();
+  const { result: followUp, sent: followUpSent } = listed.start("Follow-up");
+  const followUpRun = await followUpSent;
+  await recorded.promise;
+  await listed.chat(followUpRun, "final", "Follow-up answer");
+  await expect(followUp).resolves.toEqual({ stopReason: "end_turn" });
+  expect(await userPrompts(ledger, ref)).toHaveLength(2);
+  await expect(ledger.readReplayBySessionId({ sessionId: ref.sessionKey })).resolves.toEqual({
+    complete: false,
+    events: [],
+  });
+});
+
+it("does not replay prompts rejected before Gateway acceptance", async () => {
+  const ledger = createTestAcpEventLedger();
+  const first = await createHarness(ledger, { rejectSend: true });
+  await expect(first.start("Never accepted").result).rejects.toThrow(
+    "send failed before acceptance",
   );
-}
+  expect(await userPrompts(ledger, first.ref)).toHaveLength(0);
+  const loaded = await createHarness(ledger, { load: first.ref.sessionId });
+  expect(loaded.updates().map((update) => update.sessionUpdate)).not.toContain(
+    "user_message_chunk",
+  );
+});
 
-describe("ACP translator event ledger replay", () => {
-  it("loads complete ledger-backed sessions without the lossy Gateway transcript fallback", async () => {
-    const eventLedger = createTestAcpEventLedger();
-    const firstSessionStore = createInMemorySessionStore();
-    const firstConnection = createAcpConnection();
-    const firstRequestMock = vi.fn(async (method: string) => {
-      if (method === "chat.send") {
-        return { ok: true };
-      }
-      return { ok: true };
-    });
-    const firstRequest = firstRequestMock as GatewayClient["request"];
-    const firstAgent = createAcpGatewayAgent(firstConnection, createAcpGateway(firstRequest), {
-      eventLedger,
-      sessionStore: firstSessionStore,
-    });
-
-    const created = await firstAgent.newSession(createNewSessionRequest());
-    const firstSession = firstSessionStore.getSession(created.sessionId);
-    if (!firstSession) {
-      throw new Error("Expected new ACP session to be stored");
-    }
-    firstConnection["__sessionUpdateMock"].mockClear();
-
-    const promptPromise = firstAgent.prompt(createPromptRequest(created.sessionId, "Question"));
-    await waitForChatSend(firstRequestMock);
-    await vi.waitFor(async () => {
-      const replay = await eventLedger.readReplay({
-        sessionId: created.sessionId,
-        sessionKey: firstSession.sessionKey,
-      });
-      expect(
-        replay.events.some((event) => event.update.sessionUpdate === "user_message_chunk"),
-      ).toBe(true);
-    });
-    const runId = firstSessionStore.getSession(created.sessionId)?.activeRunId;
-    if (!runId) {
-      throw new Error("Expected active ACP run");
-    }
-
-    await firstAgent.handleGatewayEvent(
-      createToolEvent({
-        sessionKey: firstSession.sessionKey,
-        runId,
-        phase: "start",
-        toolCallId: "tool-1",
-      }),
-    );
-    await firstAgent.handleGatewayEvent(
-      createToolEvent({
-        sessionKey: firstSession.sessionKey,
-        runId,
-        phase: "result",
-        toolCallId: "tool-1",
-      }),
-    );
-    await firstAgent.handleGatewayEvent(
-      createChatEvent({
-        sessionKey: firstSession.sessionKey,
-        runId,
-        state: "delta",
-        text: "Answer",
-      }),
-    );
-    await firstAgent.handleGatewayEvent(
-      createChatEvent({
-        sessionKey: firstSession.sessionKey,
-        runId,
-        state: "final",
-        text: "Answer",
-      }),
-    );
-    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-
-    const secondConnection = createAcpConnection();
-    const secondRequestMock = vi.fn(async (method: string) => {
-      if (method === "sessions.get") {
-        throw new Error("ledger replay should not call sessions.get");
-      }
-      return { ok: true };
-    });
-    const secondRequest = secondRequestMock as GatewayClient["request"];
-    const secondAgent = createAcpGatewayAgent(secondConnection, createAcpGateway(secondRequest), {
-      eventLedger,
-      sessionStore: createInMemorySessionStore(),
-    });
-
-    await secondAgent.loadSession(createLoadSessionRequest(created.sessionId));
-
-    expect(secondRequestMock.mock.calls.map((call) => call[0])).not.toContain("sessions.get");
-    const replayedUpdates = secondConnection["__sessionUpdateMock"].mock.calls.map(
-      (call) => call[0]?.update,
-    );
-    const replayedUpdateTypes = replayedUpdates.map((update) => update?.sessionUpdate);
-    expect(replayedUpdateTypes).toEqual([
-      "session_info_update",
-      "available_commands_update",
-      "user_message_chunk",
-      "tool_call",
-      "tool_call_update",
-      "agent_message_chunk",
-      "session_info_update",
-      "session_info_update",
-      "available_commands_update",
-    ]);
-    expect(replayedUpdates[2]).toEqual({
-      sessionUpdate: "user_message_chunk",
-      content: { type: "text", text: "Question" },
-    });
-    expect(replayedUpdates[5]).toEqual({
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "Answer" },
-    });
-    expect(replayedUpdateTypes.indexOf("user_message_chunk")).toBeLessThan(
-      replayedUpdateTypes.indexOf("agent_message_chunk"),
-    );
-
-    const ledgerReplay = await eventLedger.readReplay({
-      sessionId: created.sessionId,
-      sessionKey: firstSession.sessionKey,
-    });
-    expect(
-      ledgerReplay.events.filter((event) => event.update.sessionUpdate === "user_message_chunk"),
-    ).toHaveLength(1);
-
-    const listedSessionStore = createInMemorySessionStore();
-    const listedConnection = createAcpConnection();
-    const listedRequestMock = vi.fn(async (method: string) => {
-      if (method === "sessions.get") {
-        throw new Error("listed session ledger replay should not call sessions.get");
-      }
-      return { ok: true };
-    });
-    const listedAgent = createAcpGatewayAgent(
-      listedConnection,
-      createAcpGateway(listedRequestMock as GatewayClient["request"]),
-      {
-        eventLedger,
-        sessionStore: listedSessionStore,
-      },
-    );
-
-    await listedAgent.loadSession(createLoadSessionRequest(firstSession.sessionKey));
-
-    expect(listedRequestMock.mock.calls.map((call) => call[0])).not.toContain("sessions.get");
-    const listedReplayTypes = listedConnection["__sessionUpdateMock"].mock.calls.map(
-      (call) => call[0]?.update?.sessionUpdate,
-    );
-    expect(listedReplayTypes).toEqual([
-      "session_info_update",
-      "available_commands_update",
-      "user_message_chunk",
-      "tool_call",
-      "tool_call_update",
-      "agent_message_chunk",
-      "session_info_update",
-      "session_info_update",
-      "available_commands_update",
-    ]);
-
-    const listedPrompt = listedAgent.prompt(
-      createPromptRequest(firstSession.sessionKey, "Follow-up"),
-    );
-    await waitForChatSend(listedRequestMock);
-    const listedRunId = listedSessionStore.getSession(firstSession.sessionKey)?.activeRunId;
-    if (!listedRunId) {
-      throw new Error("Expected listed ACP session to have an active run");
-    }
-    await listedAgent.handleGatewayEvent(
-      createChatEvent({
-        sessionKey: firstSession.sessionKey,
-        runId: listedRunId,
-        state: "final",
-        text: "Follow-up answer",
-      }),
-    );
-    await expect(listedPrompt).resolves.toEqual({ stopReason: "end_turn" });
-
-    const canonicalReplay = await eventLedger.readReplay({
-      sessionId: created.sessionId,
-      sessionKey: firstSession.sessionKey,
-    });
-    expect(
-      canonicalReplay.events.filter((event) => event.update.sessionUpdate === "user_message_chunk"),
-    ).toHaveLength(2);
-    await expect(
-      eventLedger.readReplayBySessionId({ sessionId: firstSession.sessionKey }),
-    ).resolves.toEqual({ complete: false, events: [] });
+it("marks replay incomplete when an accepted prompt cannot be recorded", async () => {
+  const ledger = createTestAcpEventLedger();
+  const incomplete = createDeferred();
+  vi.spyOn(ledger, "recordUserPrompt").mockRejectedValue(new Error("ledger write failed"));
+  const markIncomplete = ledger.markIncomplete.bind(ledger);
+  vi.spyOn(ledger, "markIncomplete").mockImplementation(async (params) => {
+    await markIncomplete(params);
+    incomplete.resolve();
   });
-
-  it("does not replay prompts that Gateway rejected before accepting the send", async () => {
-    const eventLedger = createTestAcpEventLedger();
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const requestMock = vi.fn(async (method: string) => {
-      if (method === "chat.send") {
-        throw new Error("send failed before acceptance");
-      }
-      return { ok: true };
-    });
-    const agent = createAcpGatewayAgent(
-      connection,
-      createAcpGateway(requestMock as GatewayClient["request"]),
-      {
-        eventLedger,
-        sessionStore,
-      },
-    );
-
-    const created = await agent.newSession(createNewSessionRequest());
-    const session = sessionStore.getSession(created.sessionId);
-    if (!session) {
-      throw new Error("Expected new ACP session to be stored");
-    }
-
-    await expect(
-      agent.prompt(createPromptRequest(created.sessionId, "Never accepted")),
-    ).rejects.toThrow("send failed before acceptance");
-
-    const replay = await eventLedger.readReplay({
-      sessionId: created.sessionId,
-      sessionKey: session.sessionKey,
-    });
-    expect(replay.events.map((event) => event.update.sessionUpdate)).not.toContain(
-      "user_message_chunk",
-    );
-
-    const loadConnection = createAcpConnection();
-    const loadRequestMock = vi.fn(async (method: string) => {
-      if (method === "sessions.get") {
-        throw new Error("ledger replay should not call sessions.get");
-      }
-      return { ok: true };
-    });
-    const loadAgent = createAcpGatewayAgent(
-      loadConnection,
-      createAcpGateway(loadRequestMock as GatewayClient["request"]),
-      {
-        eventLedger,
-        sessionStore: createInMemorySessionStore(),
-      },
-    );
-
-    await loadAgent.loadSession(createLoadSessionRequest(created.sessionId));
-
-    const replayedUpdates = loadConnection["__sessionUpdateMock"].mock.calls.map(
-      (call) => call[0]?.update?.sessionUpdate,
-    );
-    expect(replayedUpdates).not.toContain("user_message_chunk");
-  });
-
-  it("marks replay incomplete when an accepted prompt cannot be recorded", async () => {
-    const innerLedger = createTestAcpEventLedger();
-    let markIncompleteResolve: ((value: unknown) => void) | undefined;
-    const markIncompletePromise = new Promise((resolve) => {
-      markIncompleteResolve = resolve;
-    });
-    const eventLedger: AcpEventLedger = {
-      ...innerLedger,
-      recordUserPrompt: async () => {
-        throw new Error("ledger write failed");
-      },
-      markIncomplete: async (params) => {
-        await innerLedger.markIncomplete(params);
-        markIncompleteResolve?.(params);
-      },
-    };
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const requestMock = vi.fn(async (_method: string) => ({ ok: true }));
-    const agent = createAcpGatewayAgent(
-      connection,
-      createAcpGateway(requestMock as GatewayClient["request"]),
-      {
-        eventLedger,
-        sessionStore,
-      },
-    );
-
-    const created = await agent.newSession(createNewSessionRequest());
-    const session = sessionStore.getSession(created.sessionId);
-    if (!session) {
-      throw new Error("Expected new ACP session to be stored");
-    }
-
-    const prompt = agent.prompt(createPromptRequest(created.sessionId, "Question"));
-    await waitForChatSend(requestMock);
-    await markIncompletePromise;
-    const runId = sessionStore.getSession(created.sessionId)?.activeRunId;
-    if (!runId) {
-      throw new Error("Expected active ACP run");
-    }
-    await agent.handleGatewayEvent(
-      createChatEvent({
-        sessionKey: session.sessionKey,
-        runId,
-        state: "final",
-        text: "Answer",
-      }),
-    );
-    await expect(prompt).resolves.toEqual({ stopReason: "end_turn" });
-
-    await expect(
-      innerLedger.readReplay({ sessionId: created.sessionId, sessionKey: session.sessionKey }),
-    ).resolves.toEqual({ complete: false, events: [] });
-  });
+  const harness = await createHarness(ledger);
+  const { result: prompt, sent } = harness.start("Question");
+  const runId = await sent;
+  await incomplete.promise;
+  await harness.chat(runId, "final", "Answer");
+  await expect(prompt).resolves.toEqual({ stopReason: "end_turn" });
+  await expect(ledger.readReplay(harness.ref)).resolves.toEqual({ complete: false, events: [] });
 });

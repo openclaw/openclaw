@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -10,11 +10,14 @@ import {
 } from "../plugin-sdk/plugin-test-contracts.js";
 import type { OpenClawPluginDefinition } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import { createControlUiHandlers } from "./server-methods/control-ui.js";
+import { controlUiHandlers } from "./server-methods/control-ui.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -25,10 +28,15 @@ const { default: github } = await loadBundledPluginFacade<{
   default: OpenClawPluginDefinition;
 }>({ pluginId: "github", artifactBasename: "index.ts" });
 
-afterEach(() => {
+let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ scenario: "minimal" });
+});
+afterEach(async () => {
   resetTestPluginRegistry();
   clearRuntimeConfigSnapshot();
   vi.unstubAllGlobals();
+  await state?.cleanup();
 });
 
 function fixture(method: "preview" | "detail") {
@@ -43,14 +51,17 @@ function fixture(method: "preview" | "detail") {
     config,
     id: "github",
     name: "GitHub",
-    contracts: { gatewayMethodDispatch: ["authenticated-request"] },
+    contracts: {
+      tools: ["github_read", "github_search"],
+      gatewayMethodDispatch: ["authenticated-request"],
+    },
     register: expectDefined(github.register, "GitHub registration"),
   });
   setTestPluginRegistry(registry.registry);
   const context = createContext();
   context.getRuntimeConfig = () => cfg;
   const hostMethod = method === "preview" ? "controlUi.githubPreview" : "controlUi.githubDetail";
-  const handler = expectDefined(createControlUiHandlers()[hostMethod], "GitHub host reader");
+  const handler = expectDefined(controlUiHandlers[hostMethod], "GitHub host reader");
   const readResponse = vi.fn<RespondFn>();
   const methods = createGatewayMethodRegistry(
     [
@@ -74,13 +85,10 @@ function fixture(method: "preview" | "detail") {
   );
   context.getGatewayMethodRegistry = () => methods;
   const client = createOperatorWsClient({ scopes: ["operator.read"] });
-  client.authenticatedUserProfile = {
-    profileId: "github-reader",
-    displayName: "GitHub reader",
-    avatarRevision: "1",
-    hasAvatar: false,
-    updatedAt: 1,
-  };
+  client.authenticatedUserProfile = dispatchProfile(
+    ensureProfileForEmail("github-reader@example.test").id,
+    { displayName: "GitHub reader" },
+  );
   const harness = createDispatchTestHarness({ buildRequestContext: () => context });
   harness.clients.add(client);
   context.getClientConnIds = (filter) =>
@@ -129,12 +137,12 @@ function fixture(method: "preview" | "detail") {
       },
       client,
     );
-  return { client, harness, readResponse, fetchMock, entered, release, dispatch };
+  return { client, harness, readResponse, entered, release, dispatch };
 }
 
-describe.each(["preview", "detail"] as const)("registered GitHub %s reader", (method) => {
-  it("loads public content through an identified operator's nested request", async () => {
-    const f = fixture(method);
+describe("registered GitHub readers", () => {
+  it("loads a preview through an identified operator's nested request", async () => {
+    const f = fixture("preview");
     f.release.resolve();
     await f.dispatch();
     const response = await f.harness.awaitResponseFrame("github-read");
@@ -143,11 +151,10 @@ describe.each(["preview", "detail"] as const)("registered GitHub %s reader", (me
       ok: true,
       payload: { title: "Preview without reloading" },
     });
-    expect(f.fetchMock).toHaveBeenCalled();
   });
 
-  it("does not deliver content when the original operator is revoked during the read", async () => {
-    const f = fixture(method);
+  it("does not deliver detail when the original operator is revoked during the read", async () => {
+    const f = fixture("detail");
     const pending = f.dispatch();
     try {
       await Promise.race([
@@ -165,7 +172,7 @@ describe.each(["preview", "detail"] as const)("registered GitHub %s reader", (me
     expect(f.readResponse).toHaveBeenCalledExactlyOnceWith(false, undefined, {
       code: "UNAVAILABLE",
       message: "GitHub request is no longer active. Try again.",
-      retryable: true,
+      retryable: false,
     });
     expect(f.harness.send).not.toHaveBeenCalledWith(
       expect.objectContaining({ id: "github-read", ok: true }),

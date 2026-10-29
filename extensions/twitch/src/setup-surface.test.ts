@@ -1,600 +1,288 @@
-/**
- * Tests for setup-surface.ts helpers.
- *
- * Tests cover:
- * - promptToken helper
- * - promptUsername helper
- * - promptClientId helper
- * - promptChannelName helper
- * - promptRefreshTokenSetup helper
- * - configureWithEnvToken helper
- * - setTwitchAccount config updates
- */
-
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../api.js";
+import { getAccountConfig } from "./config.js";
+import { checkTwitchMessageThroughMonitor } from "./monitor-access.test-support.js";
 import {
-  configureWithEnvToken,
-  promptChannelName,
-  promptClientId,
-  promptRefreshTokenSetup,
-  promptToken,
-  promptUsername,
   setTwitchAccount,
   twitchSetupPlugin,
-  twitchSetupWizard,
+  twitchSetupWizard as wizard,
 } from "./setup-surface.js";
-import type { TwitchAccountConfig } from "./types.js";
+import { makeTwitchChannelTestConfig as config } from "./test-fixtures.js";
+import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
-// Mock the helpers we're testing
-const mockPromptText = vi.fn();
-const mockPromptConfirm = vi.fn();
-const mockPromptNote = vi.fn();
-const mockPrompter: WizardPrompter = {
-  text: mockPromptText,
-  confirm: mockPromptConfirm,
-  note: mockPromptNote,
-} as unknown as WizardPrompter;
-const originalEnvToken = process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
-
-const mockAccount: TwitchAccountConfig = {
+const text = vi.fn<WizardPrompter["text"]>();
+const confirm = vi.fn<WizardPrompter["confirm"]>();
+const prompter = { text, confirm, note: vi.fn() } as unknown as WizardPrompter;
+const account: TwitchAccountConfig = {
   username: "testbot",
   accessToken: "oauth:test123",
   clientId: "test-client-id",
   channel: "#testchannel",
 };
-const mockRefreshAccount: TwitchAccountConfig = {
-  ...mockAccount,
+const refreshAccount = {
+  ...account,
   clientSecret: "existing-secret",
   refreshToken: "existing-refresh",
 };
+type Config = Parameters<typeof setTwitchAccount>[0];
+type TwitchConfig = NonNullable<NonNullable<Config["channels"]>["twitch"]>;
+const accounts = (values: TwitchConfig["accounts"], extra: TwitchConfig = {}) =>
+  config({ ...extra, accounts: values });
+const configured = (id: string) => ({
+  username: `${id}-bot`,
+  accessToken: `oauth:${id}`,
+  clientId: `${id}-client`,
+  channel: `#${id}`,
+});
+const group = expectDefined(wizard.groupAccess, "group access setup");
+type Finalize = Parameters<NonNullable<typeof wizard.finalize>>[0];
 
-function requireFirstTextPromptArgs(): {
-  message?: string;
-  initialValue?: string;
-  sensitive?: boolean;
-  validate?: (value: string) => string | undefined;
-} {
-  const [call] = mockPromptText.mock.calls;
-  if (!call || typeof call[0] !== "object" || call[0] === null || Array.isArray(call[0])) {
-    throw new Error("expected Twitch text prompt args");
+function answers(values: string[], confirmations: boolean[] = [], fallback?: boolean) {
+  text.mockReset();
+  confirm.mockReset();
+  if (fallback !== undefined) {
+    confirm.mockResolvedValue(fallback);
   }
-  return call[0] as {
-    message?: string;
-    initialValue?: string;
-    sensitive?: boolean;
-    validate?: (value: string) => string | undefined;
-  };
+  for (const value of values) {
+    text.mockResolvedValueOnce(value);
+  }
+  for (const value of confirmations) {
+    confirm.mockResolvedValueOnce(value);
+  }
 }
-
-describe("setup surface helpers", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+async function finalize(cfg: Config, accountId = "default") {
+  const result = await wizard.finalize?.({
+    cfg,
+    accountId,
+    credentialValues: {},
+    runtime: {} as Finalize["runtime"],
+    prompter,
+    options: {},
+    forceAllowFrom: false,
   });
-
-  afterEach(() => {
-    if (originalEnvToken === undefined) {
-      delete process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
-    } else {
-      process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = originalEnvToken;
-    }
-    // Don't restoreAllMocks as it breaks module-level mocks
+  return result?.cfg?.channels?.twitch?.accounts;
+}
+function sensitive(index: number) {
+  const prompt = expectDefined(text.mock.calls[index]?.[0], "sensitive prompt");
+  expect(prompt).toMatchObject({ sensitive: true });
+  expect(prompt).not.toHaveProperty("initialValue");
+  return expectDefined(prompt.validate, "credential validator");
+}
+async function checkAccess(
+  overrides: Partial<TwitchAccountConfig>,
+  message: Partial<TwitchChatMessage> = {},
+  accountId = "secondary",
+) {
+  const result = await checkTwitchMessageThroughMonitor({
+    account: { ...account, ...overrides },
+    accountId,
+    message: {
+      id: "message-1",
+      username: "testuser",
+      userId: "123456",
+      message: "@testbot hello",
+      channel: account.channel,
+      ...message,
+    },
   });
+  return result.allowed;
+}
+beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.unstubAllEnvs());
 
-  describe("promptToken", () => {
-    it("should return existing token when user confirms to keep it", async () => {
-      mockPromptConfirm.mockResolvedValue(true);
-
-      const result = await promptToken(mockPrompter, mockAccount);
-
-      expect(result).toBe("oauth:test123");
-      expect(mockPromptConfirm).toHaveBeenCalledWith({
-        message: "Access token already configured. Keep it?",
-        initialValue: true,
-      });
-      expect(mockPromptText).not.toHaveBeenCalled();
+describe("Twitch setup", () => {
+  it.each([false, true])(
+    "keeps credentials without masked prompts (refresh: %s)",
+    async (refresh) => {
+      answers(["testbot", "test-client-id", "#testchannel"], refresh ? [] : [true, false], refresh);
+      const saved = refresh ? refreshAccount : account;
+      expect((await finalize(accounts({ default: saved })))?.default).toMatchObject(saved);
+      expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: true }));
+      expect(text).toHaveBeenCalledTimes(3);
+      expect(text.mock.calls.some(([prompt]) => prompt.sensitive)).toBe(false);
+    },
+  );
+  it("replaces tokens through a sensitive validated prompt", async () => {
+    answers(["testbot", "oauth:test123", "test-client-id", "#testchannel"], [], false);
+    expect((await finalize(accounts({ default: account })))?.default?.accessToken).toBe(
+      "oauth:test123",
+    );
+    const validate = sensitive(1);
+    expect(["", "notoauth", "oauth:goodtoken"].map(validate)).toEqual([
+      "Required",
+      "Token should start with 'oauth:'",
+      undefined,
+    ]);
+  });
+  it("replaces refresh credentials through sensitive prompts", async () => {
+    answers(
+      ["testbot", "test-client-id", "#testchannel", "secret123", "refresh123"],
+      [true, true, false, false],
+    );
+    expect((await finalize(accounts({ default: refreshAccount })))?.default).toMatchObject({
+      clientSecret: "secret123",
+      refreshToken: "refresh123",
     });
-
-    it("should use a sensitive prompt when replacing a configured token", async () => {
-      mockPromptConfirm.mockResolvedValueOnce(false);
-
-      // Track how many times promptText is called
-      let promptTextCallCount = 0;
-      let capturedValidate: ((value: string) => string | undefined) | undefined;
-
-      mockPromptText.mockImplementationOnce((_args) => {
-        promptTextCallCount++;
-        // Capture the validate function from the first argument
-        if (_args?.validate) {
-          capturedValidate = _args.validate;
-        }
-        return Promise.resolve("oauth:test123");
-      });
-
-      // Call promptToken
-      const result = await promptToken(mockPrompter, mockAccount);
-
-      // Verify promptText was called
-      expect(promptTextCallCount).toBe(1);
-      expect(result).toBe("oauth:test123");
-      expect(requireFirstTextPromptArgs()).toMatchObject({
-        sensitive: true,
-      });
-      expect(requireFirstTextPromptArgs()).not.toHaveProperty("initialValue");
-
-      // Test the validate function
-      if (!capturedValidate) {
-        throw new Error("promptToken validate callback was not captured");
+    sensitive(3);
+    sensitive(4);
+  });
+  it.each([
+    ["secondary", true, "Twitch (secondary): configured"],
+    ["Alerts\r\n\u001b[31m", false, "Twitch (alerts-31m): needs username, token, and clientId"],
+  ] as const)("renders normalized status for %s", (accountId, isConfigured, expected) => {
+    expect(
+      wizard.status?.resolveStatusLines?.({
+        cfg: isConfigured ? accounts({ [accountId]: account }) : {},
+        accountId,
+        configured: isConfigured,
+      } as never),
+    ).toEqual([expected]);
+  });
+  it("recognizes an environment-only default token without exposing it in prompts", async () => {
+    const token = "oauth:environment-only";
+    vi.stubEnv("OPENCLAW_TWITCH_ACCESS_TOKEN", token);
+    const cfg = accounts({ default: { ...account, accessToken: "" } });
+    expect(wizard.status?.resolveConfigured({ cfg })).toBe(true);
+    const resolved = twitchSetupPlugin.config.resolveAccount(cfg, "default");
+    expect(await twitchSetupPlugin.config.isConfigured?.(resolved, cfg)).toBe(true);
+    answers(["env-bot", "env-client"], [true]);
+    expect((await finalize(cfg))?.default).toMatchObject({
+      username: "env-bot",
+      accessToken: token,
+      clientId: "env-client",
+    });
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: true }));
+    expect(text).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify([confirm.mock.calls, text.mock.calls])).not.toContain(token);
+  });
+  it("rejects reserved config keys", () => {
+    expect(() => setTwitchAccount({}, configured("reserved"), "__proto__")).toThrow(
+      "Invalid Twitch account id",
+    );
+    expect(Object.prototype).not.toHaveProperty("username");
+  });
+  it.each([
+    [{ channels: { twitch: { defaultAccount: "secondary" } } }, undefined, "secondary"],
+    [{}, "alerts", "alerts"],
+  ] as const)("selects DM policy keys for %j / %s", (cfg, requested, id) => {
+    expect(wizard.dmPolicy?.resolveConfigKeys?.(cfg, requested)).toEqual({
+      policyKey: `channels.twitch.accounts.${id}.allowedRoles`,
+      allowFromKey: `channels.twitch.accounts.${id}.allowFrom`,
+    });
+  });
+  it("persists a new selected account instead of borrowing the default environment token", async () => {
+    vi.stubEnv("OPENCLAW_TWITCH_ACCESS_TOKEN", "oauth:fromenv");
+    answers(["secondary-bot", "oauth:persisted", "secondary-client", "#secondary"], [], false);
+    const result = await finalize(
+      accounts({ default: configured("default") }, { defaultAccount: "secondary" }),
+      "secondary",
+    );
+    expect(result).toMatchObject({
+      secondary: { username: "secondary-bot", accessToken: "oauth:persisted" },
+      default: { username: "default-bot" },
+    });
+    const validate = expectDefined(text.mock.calls[3]?.[0].validate, "channel validator");
+    expect(["", "   ", "#chan"].map(validate)).toEqual(["Required", "Required", undefined]);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
+  });
+  it("updates the whitespace-username base account without mutating other accounts", () => {
+    const base = { ...account, enabled: false, allowFrom: ["123456"] };
+    const cfg = config({
+      ...base,
+      username: " ",
+      accounts: { default: base, secondary: base, untouched: refreshAccount },
+    });
+    const before = structuredClone(cfg);
+    const patch = { allowFrom: [], allowedRoles: [], requireMention: true };
+    const result = group.setPolicy({ cfg, accountId: "default", policy: "disabled" });
+    expect(result).toEqual({
+      channels: { twitch: { ...cfg.channels.twitch, enabled: true, ...patch } },
+    });
+    expect(getAccountConfig(result, "default")).toMatchObject(patch);
+    expect(cfg).toEqual(before);
+  });
+  it("does not create a missing account", () => {
+    const cfg = {};
+    expect(group.setPolicy({ cfg, accountId: "missing", policy: "disabled" })).toBe(cfg);
+  });
+  it.each([
+    ["base open", "default", [], ["open"], false, undefined, true],
+    ["disable IDs", "secondary", ["123456"], ["disabled"], false, [], false],
+    ["IDs before roles", "secondary", ["other"], ["allowlist"], true, ["other"], false],
+    [
+      "no ID restoration",
+      "secondary",
+      ["123456"],
+      ["disabled", "allowlist"],
+      false,
+      undefined,
+      false,
+    ],
+  ] as const)(
+    "applies %s through ingress",
+    async (_name, accountId, ids, policies, isMod, expectedIds, allowed) => {
+      const initial: TwitchAccountConfig = {
+        ...account,
+        enabled: true,
+        allowFrom: [...ids],
+        allowedRoles: ["all"],
+      };
+      let cfg: Config = config(
+        accountId === "default" ? initial : { accounts: { secondary: initial } },
+      );
+      for (const policy of policies) {
+        cfg = group.setPolicy({ cfg, accountId, policy });
       }
-      expect(capturedValidate("")).toBe("Required");
-      expect(capturedValidate("notoauth")).toBe("Token should start with 'oauth:'");
-      expect(capturedValidate("oauth:goodtoken")).toBeUndefined();
-    });
+      const saved = expectDefined(getAccountConfig(cfg, accountId), "configured account");
+      expect(saved.allowFrom).toEqual(expectedIds);
+      expect(group.currentPolicy({ cfg, accountId })).toBe(policies.at(-1));
+      expect(group.updatePrompt?.({ cfg, accountId })).toBe(true);
+      expect(await checkAccess(saved, { isMod }, accountId)).toBe(allowed);
+    },
+  );
+  it("reports empty roles as open without prompting for an update", () => {
+    const cfg = accounts({ secondary: { ...account, allowedRoles: [] } });
+    expect(group.currentPolicy({ cfg, accountId: "secondary" })).toBe("open");
+    expect(group.updatePrompt?.({ cfg, accountId: "secondary" })).toBe(false);
   });
+});
 
-  describe("promptUsername", () => {
-    it("should prompt for username with validation", async () => {
-      mockPromptText.mockResolvedValue("mybot");
-
-      const result = await promptUsername(mockPrompter, null);
-
-      expect(result).toBe("mybot");
-      const promptArgs = requireFirstTextPromptArgs();
-      expect(promptArgs.message).toBe("Twitch bot username");
-      expect(promptArgs.initialValue).toBe("");
-      expect(promptArgs.validate?.("")).toBe("Required");
-      expect(promptArgs.validate?.("mybot")).toBeUndefined();
-    });
+describe("Twitch monitor access", () => {
+  it.each<[string, Partial<TwitchAccountConfig>, Partial<TwitchChatMessage>, boolean]>([
+    ["mention required", {}, { message: "hello bot" }, false],
+    ["missing allowlisted ID", { allowFrom: ["123456"] }, { userId: undefined }, false],
+    ["wildcard without ID", { allowedRoles: ["all"] }, { userId: undefined }, true],
+    ["IDs are not roles", { allowedRoles: ["moderator"] }, { userId: "moderator" }, false],
+    ["empty roles", { allowedRoles: [] }, { userId: undefined }, true],
+    [
+      "mention before auth",
+      { requireMention: true, allowedRoles: ["moderator"] },
+      { message: "ordinary chat", isMod: false },
+      false,
+    ],
+    [
+      "allowlist before roles",
+      { allowFrom: ["123456"], allowedRoles: ["owner"] },
+      { isOwner: false },
+      true,
+    ],
+  ])("%s", async (_name, overrides, message, allowed) => {
+    expect(await checkAccess(overrides, message)).toBe(allowed);
   });
-
-  describe("promptClientId", () => {
-    it("should prompt for client ID with validation", async () => {
-      mockPromptText.mockResolvedValue("abc123xyz");
-
-      const result = await promptClientId(mockPrompter, null);
-
-      expect(result).toBe("abc123xyz");
-      const promptArgs = requireFirstTextPromptArgs();
-      expect(promptArgs.message).toBe("Twitch Client ID");
-      expect(promptArgs.initialValue).toBe("");
-      expect(promptArgs.validate?.("")).toBe("Required");
-      expect(promptArgs.validate?.("abc123xyz")).toBeUndefined();
-    });
-  });
-
-  describe("promptChannelName", () => {
-    it("should require a non-empty channel name", async () => {
-      mockPromptText.mockResolvedValue("");
-
-      await promptChannelName(mockPrompter, null);
-
-      const { validate } = requireFirstTextPromptArgs();
-      expect(validate?.("")).toBe("Required");
-      expect(validate?.("   ")).toBe("Required");
-      expect(validate?.("#chan")).toBeUndefined();
-    });
-  });
-
-  describe("promptRefreshTokenSetup", () => {
-    it("should return empty object when user declines", async () => {
-      mockPromptConfirm.mockResolvedValue(false);
-
-      const result = await promptRefreshTokenSetup(mockPrompter, mockAccount);
-
-      expect(result).toStrictEqual({});
-      expect(mockPromptConfirm).toHaveBeenCalledWith({
-        message: "Enable automatic token refresh (requires client secret and refresh token)?",
-        initialValue: false,
-      });
-    });
-
-    it("should prompt for credentials when user accepts", async () => {
-      mockPromptConfirm
-        .mockResolvedValueOnce(true)
-        .mockResolvedValueOnce(false)
-        .mockResolvedValueOnce(false);
-
-      mockPromptText.mockResolvedValueOnce("secret123").mockResolvedValueOnce("refresh123");
-
-      const result = await promptRefreshTokenSetup(mockPrompter, mockRefreshAccount);
-
-      expect(result).toEqual({
-        clientSecret: "secret123",
-        refreshToken: "refresh123",
-      });
-      expect(mockPromptText).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          sensitive: true,
-        }),
-      );
-      expect(mockPromptText.mock.calls[0]?.[0]).not.toHaveProperty("initialValue");
-      expect(mockPromptText).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          sensitive: true,
-        }),
-      );
-      expect(mockPromptText.mock.calls[1]?.[0]).not.toHaveProperty("initialValue");
-    });
-
-    it("should keep existing credentials without opening masked replacement prompts", async () => {
-      mockPromptConfirm.mockResolvedValue(true);
-
-      await expect(promptRefreshTokenSetup(mockPrompter, mockRefreshAccount)).resolves.toEqual({
-        clientSecret: "existing-secret",
-        refreshToken: "existing-refresh",
-      });
-      expect(mockPromptText).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("configureWithEnvToken", () => {
-    it("should prompt for username and clientId when using env token", async () => {
-      // Reset and set up mocks - user accepts env token
-      mockPromptConfirm.mockReset().mockResolvedValue(true as never);
-
-      // Set up mocks for username and clientId prompts
-      mockPromptText
-        .mockReset()
-        .mockResolvedValueOnce("testbot" as never)
-        .mockResolvedValueOnce("test-client-id" as never);
-
-      const result = await configureWithEnvToken(
-        {} as Parameters<typeof configureWithEnvToken>[0],
-        mockPrompter,
-        null,
-        "oauth:fromenv",
-        false,
-        {} as Parameters<typeof configureWithEnvToken>[5],
-      );
-
-      // Should return config with username and clientId
-      if (!result) {
-        throw new Error("expected Twitch env-token setup result");
+  it.each([
+    ["moderator", "isMod"],
+    ["owner", "isOwner"],
+    ["vip", "isVip"],
+    ["subscriber", "isSub"],
+  ] as const)("admits only matching %s roles with or without native IDs", async (role, flag) => {
+    for (const userId of ["123456", undefined]) {
+      for (const matching of [false, true]) {
+        expect(await checkAccess({ allowedRoles: [role] }, { userId, [flag]: matching })).toBe(
+          matching,
+        );
       }
-      const defaultAccount = result.cfg.channels?.twitch?.accounts?.default as
-        | { username?: string; clientId?: string }
-        | undefined;
-      expect(defaultAccount?.username).toBe("testbot");
-      expect(defaultAccount?.clientId).toBe("test-client-id");
-    });
-
-    it("skips env-token shortcut for non-default accounts", async () => {
-      mockPromptConfirm.mockReset().mockResolvedValue(true as never);
-      mockPromptText
-        .mockReset()
-        .mockResolvedValueOnce("secondary-bot" as never)
-        .mockResolvedValueOnce("secondary-client" as never);
-
-      const result = await configureWithEnvToken(
-        {
-          channels: {
-            twitch: {
-              defaultAccount: "secondary",
-            },
-          },
-        } as Parameters<typeof configureWithEnvToken>[0],
-        mockPrompter,
-        null,
-        "oauth:fromenv",
-        false,
-        {} as Parameters<typeof configureWithEnvToken>[5],
-      );
-
-      expect(result).toBeNull();
-      expect(mockPromptConfirm).not.toHaveBeenCalled();
-      expect(mockPromptText).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("defaultAccount setup resolution", () => {
-    it("reports status for the configured default account", () => {
-      const lines = twitchSetupWizard.status?.resolveStatusLines?.({
-        cfg: {
-          channels: {
-            twitch: {
-              defaultAccount: "secondary",
-              accounts: {
-                secondary: {
-                  username: "secondary-bot",
-                  accessToken: "oauth:secondary",
-                  clientId: "secondary-client",
-                  channel: "#secondary",
-                },
-              },
-            },
-          },
-        },
-      } as never);
-
-      expect(lines).toEqual(["Twitch (secondary): configured"]);
-    });
-
-    it("reports status for the requested account override", () => {
-      const lines = twitchSetupWizard.status?.resolveStatusLines?.({
-        cfg: {
-          channels: {
-            twitch: {
-              accounts: {
-                default: {
-                  username: "default-bot",
-                  accessToken: "oauth:default",
-                  clientId: "default-client",
-                  channel: "#default",
-                },
-                secondary: {
-                  username: "secondary-bot",
-                  accessToken: "oauth:secondary",
-                  clientId: "secondary-client",
-                  channel: "#secondary",
-                },
-              },
-            },
-          },
-        },
-        accountId: "secondary",
-        configured: true,
-      } as never);
-
-      expect(lines).toEqual(["Twitch (secondary): configured"]);
-    });
-
-    it("reports env-token default account setup as configured", async () => {
-      process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = "oauth:fromenv";
-
-      const cfg = {
-        channels: {
-          twitch: {
-            accounts: {
-              default: {
-                username: "env-bot",
-                accessToken: "",
-                clientId: "env-client",
-                channel: "#env",
-              },
-            },
-          },
-        },
-      } as Parameters<NonNullable<typeof twitchSetupWizard.status>["resolveConfigured"]>[0]["cfg"];
-
-      expect(twitchSetupWizard.status?.resolveConfigured({ cfg })).toBe(true);
-      const account = twitchSetupPlugin.config.resolveAccount(cfg, "default");
-      expect(await twitchSetupPlugin.config.isConfigured?.(account, cfg)).toBe(true);
-    });
-  });
-
-  describe("setup wizard account routing", () => {
-    type FinalizeArgs = Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0];
-
-    async function finalizeDefaultTwitchSetup(cfg: FinalizeArgs["cfg"]) {
-      return await twitchSetupWizard.finalize?.({
-        cfg,
-        accountId: "default",
-        credentialValues: {},
-        runtime: {} as FinalizeArgs["runtime"],
-        prompter: mockPrompter,
-        options: {},
-        forceAllowFrom: false,
-      });
     }
-
-    async function finalizeTwitchSetupForAccount(cfg: FinalizeArgs["cfg"]) {
-      return await twitchSetupWizard.finalize?.({
-        cfg,
-        accountId: "secondary",
-        credentialValues: {},
-        runtime: {} as FinalizeArgs["runtime"],
-        prompter: mockPrompter,
-        options: {},
-        forceAllowFrom: false,
-      });
-    }
-
-    it("uses an environment-only token without sending it to wizard prompts", async () => {
-      const envToken = "oauth:environment-only";
-      process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = envToken;
-      mockPromptConfirm.mockReset().mockResolvedValueOnce(true as never);
-      mockPromptText
-        .mockReset()
-        .mockResolvedValueOnce("env-bot" as never)
-        .mockResolvedValueOnce("env-client" as never);
-
-      const result = await finalizeDefaultTwitchSetup({});
-
-      expect(result?.cfg?.channels?.twitch?.accounts?.default).toMatchObject({
-        username: "env-bot",
-        accessToken: envToken,
-        clientId: "env-client",
-      });
-      expect(mockPromptConfirm).toHaveBeenCalledWith({
-        message: "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
-        initialValue: true,
-      });
-      expect(mockPromptText).toHaveBeenCalledTimes(2);
-      expect(JSON.stringify(mockPromptConfirm.mock.calls)).not.toContain(envToken);
-      expect(JSON.stringify(mockPromptText.mock.calls)).not.toContain(envToken);
-    });
-
-    it("rejects reserved account ids before using them as config keys", () => {
-      expect(() =>
-        setTwitchAccount(
-          {} as Parameters<typeof setTwitchAccount>[0],
-          {
-            username: "reserved-bot",
-            accessToken: "oauth:reserved",
-            clientId: "reserved-client",
-            channel: "#reserved",
-          },
-          "__proto__",
-        ),
-      ).toThrow("Invalid Twitch account id");
-
-      expect(Object.prototype).not.toHaveProperty("username");
-    });
-
-    it("rejects reserved account ids before env-token writes", async () => {
-      await expect(
-        configureWithEnvToken(
-          {} as Parameters<typeof configureWithEnvToken>[0],
-          mockPrompter,
-          null,
-          "oauth:fromenv",
-          false,
-          {} as Parameters<typeof configureWithEnvToken>[5],
-          "__proto__",
-        ),
-      ).rejects.toThrow("Invalid Twitch account id");
-
-      expect(mockPromptConfirm).not.toHaveBeenCalled();
-    });
-
-    it("normalizes account ids before rendering status lines", () => {
-      expect(
-        twitchSetupWizard.status?.resolveStatusLines?.({
-          cfg: {},
-          accountId: "Alerts\r\n\u001b[31m",
-          configured: false,
-        } as never),
-      ).toEqual(["Twitch (alerts-31m): needs username, token, and clientId"]);
-    });
-
-    it("reports account-scoped DM policy config keys", () => {
-      expect(
-        twitchSetupWizard.dmPolicy?.resolveConfigKeys?.(
-          {
-            channels: {
-              twitch: {
-                defaultAccount: "secondary",
-              },
-            },
-          } as Parameters<
-            NonNullable<NonNullable<typeof twitchSetupWizard.dmPolicy>["resolveConfigKeys"]>
-          >[0],
-          undefined,
-        ),
-      ).toEqual({
-        policyKey: "channels.twitch.accounts.secondary.allowedRoles",
-        allowFromKey: "channels.twitch.accounts.secondary.allowFrom",
-      });
-
-      expect(twitchSetupWizard.dmPolicy?.resolveConfigKeys?.({} as never, "alerts")).toEqual({
-        policyKey: "channels.twitch.accounts.alerts.allowedRoles",
-        allowFromKey: "channels.twitch.accounts.alerts.allowFrom",
-      });
-    });
-
-    it("writes to the requested account when defaultAccount is not created yet", async () => {
-      mockPromptText
-        .mockReset()
-        .mockResolvedValueOnce("secondary-bot" as never)
-        .mockResolvedValueOnce("oauth:secondary" as never)
-        .mockResolvedValueOnce("secondary-client" as never)
-        .mockResolvedValueOnce("#secondary" as never);
-      mockPromptConfirm.mockReset().mockResolvedValue(false as never);
-
-      const result = await finalizeTwitchSetupForAccount({
-        channels: {
-          twitch: {
-            defaultAccount: "secondary",
-            accounts: {
-              default: {
-                username: "default-bot",
-                accessToken: "oauth:default",
-                clientId: "default-client",
-                channel: "#default",
-              },
-            },
-          },
-        },
-      } as FinalizeArgs["cfg"]);
-
-      const twitch = result?.cfg?.channels?.twitch;
-      expect(twitch?.accounts?.secondary?.username).toBe("secondary-bot");
-      expect(twitch?.accounts?.secondary?.accessToken).toBe("oauth:secondary");
-      expect(twitch?.accounts?.default?.username).toBe("default-bot");
-    });
-
-    it("persists a token instead of using env-token shortcut for non-default finalize", async () => {
-      process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = "oauth:fromenv";
-      mockPromptText
-        .mockReset()
-        .mockResolvedValueOnce("secondary-bot" as never)
-        .mockResolvedValueOnce("oauth:persisted" as never)
-        .mockResolvedValueOnce("secondary-client" as never)
-        .mockResolvedValueOnce("#secondary" as never);
-      mockPromptConfirm.mockReset().mockResolvedValue(false as never);
-
-      const result = await finalizeTwitchSetupForAccount({
-        channels: {
-          twitch: {
-            accounts: {},
-          },
-        },
-      } as FinalizeArgs["cfg"]);
-
-      const twitch = result?.cfg?.channels?.twitch;
-      expect(twitch?.accounts?.secondary?.accessToken).toBe("oauth:persisted");
-      expect(mockPromptConfirm).toHaveBeenCalledTimes(1);
-      expect(mockPromptConfirm).toHaveBeenCalledWith({
-        message: "Enable automatic token refresh (requires client secret and refresh token)?",
-        initialValue: false,
-      });
-    });
-  });
-
-  describe("setup-only plugin config", () => {
-    it("lists all configured Twitch accounts", () => {
-      const cfg = {
-        channels: {
-          twitch: {
-            defaultAccount: "secondary",
-            accounts: {
-              default: {
-                username: "default-bot",
-                accessToken: "oauth:default",
-                clientId: "default-client",
-                channel: "#default",
-              },
-              secondary: {
-                username: "secondary-bot",
-                accessToken: "oauth:secondary",
-                clientId: "secondary-client",
-                channel: "#secondary",
-              },
-            },
-          },
-        },
-      } as Parameters<typeof twitchSetupPlugin.config.listAccountIds>[0];
-
-      expect(twitchSetupPlugin.config.listAccountIds(cfg)).toEqual(["default", "secondary"]);
-      expect(twitchSetupPlugin.config.defaultAccountId?.(cfg)).toBe("secondary");
-    });
-
-    it("normalizes exposed account ids", () => {
-      const cfg = {
-        channels: {
-          twitch: {
-            accounts: {
-              Secondary: {
-                username: "secondary-bot",
-                accessToken: "oauth:secondary",
-                clientId: "secondary-client",
-                channel: "#secondary",
-              },
-            },
-          },
-        },
-      } as Parameters<typeof twitchSetupPlugin.config.listAccountIds>[0];
-
-      expect(twitchSetupPlugin.config.listAccountIds(cfg)).toEqual(["secondary"]);
-      expect(twitchSetupPlugin.config.defaultAccountId?.(cfg)).toBe("secondary");
-      expect(twitchSetupPlugin.config.resolveAccount(cfg, "SECONDARY\r\n").accountId).toBe(
-        "secondary",
-      );
-      expect(twitchSetupPlugin.config.resolveAccount(cfg, "SECONDARY\r\n").username).toBe(
-        "secondary-bot",
-      );
-    });
   });
 });

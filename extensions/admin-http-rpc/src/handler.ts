@@ -1,219 +1,104 @@
-/**
- * HTTP handler for the Admin RPC endpoint. It validates JSON requests, enforces
- * the method allowlist, dispatches gateway methods, and maps errors to HTTP.
- */
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+import {
+  dispatchGatewayMethod,
+  type GatewayMethodDispatchError,
+} from "openclaw/plugin-sdk/gateway-method-runtime";
+import { sendJsonNoStore as sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readJsonBodyWithLimit,
   sendHttpRequestRejection,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-request-guards";
-import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
 
-const ErrorCodes = {
-  AGENT_TIMEOUT: "AGENT_TIMEOUT",
-  APPROVAL_NOT_FOUND: "APPROVAL_NOT_FOUND",
-  INVALID_REQUEST: "INVALID_REQUEST",
-  NOT_LINKED: "NOT_LINKED",
-  NOT_PAIRED: "NOT_PAIRED",
-  UNAVAILABLE: "UNAVAILABLE",
-} as const;
+/** Only these methods can cross the trusted operator HTTP surface. */
+const ADMIN_HTTP_RPC_ALLOWED_METHOD_GROUPS = {
+  gateway: [
+    "health",
+    "status",
+    "logs.tail",
+    "usage.status",
+    "usage.cost",
+    "gateway.restart.request",
+    "gateway.suspend.prepare",
+    "gateway.suspend.status",
+    "gateway.suspend.resume",
+  ],
+  discovery: ["commands.list"],
+  config: [
+    "config.get",
+    "config.schema",
+    "config.schema.lookup",
+    "config.set",
+    "config.patch",
+    "config.apply",
+  ],
+  channels: ["channels.status", "channels.start", "channels.stop", "channels.logout"],
+  web: ["web.login.start", "web.login.wait"],
+  models: ["models.list", "models.authStatus"],
+  agents: ["agents.list", "agents.create", "agents.update", "agents.delete"],
+  approvals: [
+    "exec.approvals.get",
+    "exec.approvals.set",
+    "exec.approvals.node.get",
+    "exec.approvals.node.set",
+  ],
+  cron: [
+    "cron.status",
+    "cron.list",
+    "cron.get",
+    "cron.runs",
+    "cron.add",
+    "cron.update",
+    "cron.remove",
+    "cron.run",
+  ],
+  devices: ["device.pair.list", "device.pair.approve", "device.pair.reject", "device.pair.remove"],
+  nodes: [
+    "node.list",
+    "node.describe",
+    "node.pair.list",
+    "node.pair.approve",
+    "node.pair.reject",
+    "node.pair.remove",
+    "node.rename",
+  ],
+  diagnostics: ["doctor.memory.status", "update.status"],
+} as const satisfies Record<string, readonly string[]>;
 
-type RpcBody = {
-  id?: unknown;
-  method?: unknown;
-  params?: unknown;
-};
-
-type RpcError = {
-  code: string;
-  message: string;
-  details?: unknown;
-  retryable?: boolean;
-  retryAfterMs?: number;
-};
+const ADMIN_HTTP_RPC_ALLOWED_METHODS: ReadonlySet<string> = new Set(
+  Object.values(ADMIN_HTTP_RPC_ALLOWED_METHOD_GROUPS).flat(),
+);
 
 type RpcResponse =
   | { id: string; ok: true; payload: unknown; meta?: Record<string, unknown> }
-  | { id: string; ok: false; error: RpcError; meta?: Record<string, unknown> };
-
-type ParsedRequest = {
-  id: string;
-  method: string;
-  params?: unknown;
-};
-
-type RequestBodyLimitFailureCode =
-  | "PAYLOAD_TOO_LARGE"
-  | "REQUEST_BODY_TIMEOUT"
-  | "CONNECTION_CLOSED";
-
-type ReadJsonBodyResult =
-  | { ok: true; value: unknown }
-  | {
-      ok: false;
-      status: number;
-      message: string;
-      closeAfterResponse?: boolean;
-    };
-
-function createError(code: string, message: string): RpcError {
-  return { code, message };
-}
+  | { id: string; ok: false; error: GatewayMethodDispatchError; meta?: Record<string, unknown> };
 
 function rpcHttpStatus(response: RpcResponse): number {
   if (response.ok) {
     return 200;
   }
   switch (response.error.code) {
-    case ErrorCodes.INVALID_REQUEST:
+    case "INVALID_REQUEST":
       return 400;
-    case ErrorCodes.APPROVAL_NOT_FOUND:
+    case "APPROVAL_NOT_FOUND":
       return 404;
-    case ErrorCodes.UNAVAILABLE:
+    case "UNAVAILABLE":
       return 503;
-    case ErrorCodes.AGENT_TIMEOUT:
+    case "AGENT_TIMEOUT":
       return 504;
-    case ErrorCodes.NOT_LINKED:
-    case ErrorCodes.NOT_PAIRED:
+    case "NOT_LINKED":
+    case "NOT_PAIRED":
       return 409;
     default:
       return 500;
   }
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.statusCode = status;
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
-}
-
 function sendError(res: ServerResponse, status: number, error: { type: string; message: string }) {
   sendJson(res, status, { ok: false, error });
-}
-
-function statusForBodyErrorCode(code: RequestBodyLimitFailureCode): number {
-  switch (code) {
-    case "PAYLOAD_TOO_LARGE":
-      return 413;
-    case "REQUEST_BODY_TIMEOUT":
-      return 408;
-    case "CONNECTION_CLOSED":
-      return 400;
-  }
-  return 400;
-}
-
-async function readAdminJsonBody(req: IncomingMessage): Promise<ReadJsonBodyResult> {
-  const body = await readJsonBodyWithLimit(req, {
-    // Admin responses are part of the client contract. The response-first profile
-    // defers destruction so the transport owner can flush the JSON error.
-    ...WEBHOOK_BODY_READ_DEFAULTS.postAuthResponseFirst,
-    emptyObjectOnEmpty: false,
-  });
-  if (body.ok) {
-    return body;
-  }
-  if (body.code === "INVALID_JSON") {
-    return {
-      ok: false,
-      status: 400,
-      message:
-        body.error === "empty payload"
-          ? "request body must be JSON"
-          : "request body must be valid JSON",
-    };
-  }
-  return {
-    ok: false,
-    status: statusForBodyErrorCode(body.code),
-    message: body.error,
-    closeAfterResponse: body.code !== "CONNECTION_CLOSED",
-  };
-}
-
-function readRpcRequestBody(body: unknown):
-  | { ok: true; request: ParsedRequest }
-  | {
-      ok: false;
-      message: string;
-    } {
-  if (!isRecord(body)) {
-    return { ok: false, message: "request body must be an object" };
-  }
-  const rpcBody = body as RpcBody;
-  if (typeof rpcBody.method !== "string" || rpcBody.method.trim().length === 0) {
-    return { ok: false, message: "method must be a non-empty string" };
-  }
-  const id =
-    typeof rpcBody.id === "string" && rpcBody.id.trim().length > 0
-      ? rpcBody.id.trim()
-      : randomUUID();
-  return {
-    ok: true,
-    request: {
-      id,
-      method: rpcBody.method.trim(),
-      ...(Object.hasOwn(rpcBody, "params") ? { params: rpcBody.params } : {}),
-    },
-  };
-}
-
-function methodNotAllowed(id: string, method: string): RpcResponse {
-  return {
-    id,
-    ok: false,
-    error: createError(
-      ErrorCodes.INVALID_REQUEST,
-      `admin HTTP RPC method is not supported: ${method}`,
-    ),
-  };
-}
-
-function commandsList(id: string): RpcResponse {
-  return {
-    id,
-    ok: true,
-    payload: {
-      methods: listAdminHttpRpcAllowedMethods(),
-    },
-  };
-}
-
-async function dispatchAdminRpc(request: ParsedRequest): Promise<RpcResponse> {
-  try {
-    const response = await dispatchGatewayMethod(request.method, request.params);
-    if (response.ok) {
-      return {
-        id: request.id,
-        ok: true,
-        payload: response.payload,
-        ...(response.meta ? { meta: response.meta } : {}),
-      };
-    }
-    return {
-      id: request.id,
-      ok: false,
-      error:
-        response.error ??
-        createError(ErrorCodes.UNAVAILABLE, "gateway method failed before returning a response"),
-      ...(response.meta ? { meta: response.meta } : {}),
-    };
-  } catch {
-    return {
-      id: request.id,
-      ok: false,
-      error: createError(
-        ErrorCodes.UNAVAILABLE,
-        "gateway method failed before returning a response",
-      ),
-    };
-  }
 }
 
 /** Handle one gateway-authenticated Admin HTTP RPC request. */
@@ -230,51 +115,95 @@ export async function handleAdminHttpRpcRequest(
     return true;
   }
 
-  const body = await readAdminJsonBody(req);
+  const body = await readJsonBodyWithLimit(req, {
+    // Admin responses are part of the client contract. The response-first profile
+    // defers destruction so the transport owner can flush the JSON error.
+    ...WEBHOOK_BODY_READ_DEFAULTS.postAuthResponseFirst,
+    emptyObjectOnEmpty: false,
+  });
   if (!body.ok) {
-    if (body.closeAfterResponse) {
+    const status =
+      body.code === "PAYLOAD_TOO_LARGE" ? 413 : body.code === "REQUEST_BODY_TIMEOUT" ? 408 : 400;
+    const message =
+      body.code === "INVALID_JSON"
+        ? body.error === "empty payload"
+          ? "request body must be JSON"
+          : "request body must be valid JSON"
+        : body.error;
+    if (body.code !== "INVALID_JSON" && body.code !== "CONNECTION_CLOSED") {
       if (!res.headersSent) {
         res.setHeader("Cache-Control", "no-store");
       }
       await sendHttpRequestRejection(
         req,
         res,
-        body.status,
-        JSON.stringify({ ok: false, error: { type: "invalid_request", message: body.message } }),
+        status,
+        JSON.stringify({ ok: false, error: { type: "invalid_request", message } }),
         "application/json; charset=utf-8",
       );
     } else {
-      sendError(res, body.status, {
+      sendError(res, status, {
         type: "invalid_request",
-        message: body.message,
+        message,
       });
     }
     return true;
   }
 
-  const parsed = readRpcRequestBody(body.value);
-  if (!parsed.ok) {
+  if (!isRecord(body.value)) {
     sendError(res, 400, {
       type: "invalid_request",
-      message: parsed.message,
+      message: "request body must be an object",
     });
     return true;
   }
 
-  if (!isAdminHttpRpcAllowedMethod(parsed.request.method)) {
-    const response = methodNotAllowed(parsed.request.id, parsed.request.method);
-    sendJson(res, rpcHttpStatus(response), response);
+  const method = normalizeOptionalString(body.value.method);
+  if (!method) {
+    sendError(res, 400, { type: "invalid_request", message: "method must be a non-empty string" });
+    return true;
+  }
+  const id = normalizeOptionalString(body.value.id) ?? randomUUID();
+  const params = Object.hasOwn(body.value, "params") ? body.value.params : undefined;
+  if (!ADMIN_HTTP_RPC_ALLOWED_METHODS.has(method)) {
+    sendJson(res, 400, {
+      id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `admin HTTP RPC method is not supported: ${method}`,
+      },
+    });
     return true;
   }
 
-  if (parsed.request.method === "commands.list") {
-    const response = commandsList(parsed.request.id);
-    sendJson(res, 200, response);
+  if (method === "commands.list") {
+    sendJson(res, 200, {
+      id,
+      ok: true,
+      payload: { methods: Array.from(ADMIN_HTTP_RPC_ALLOWED_METHODS) },
+    });
     return true;
   }
 
   await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
-  const response = await dispatchAdminRpc(parsed.request);
+  const unavailable: GatewayMethodDispatchError = {
+    code: "UNAVAILABLE",
+    message: "gateway method failed before returning a response",
+  };
+  let response: RpcResponse;
+  try {
+    const result = await dispatchGatewayMethod(method, params);
+    response = {
+      id,
+      ...(result.ok
+        ? { ok: true as const, payload: result.payload }
+        : { ok: false as const, error: result.error ?? unavailable }),
+      ...(result.meta ? { meta: result.meta } : {}),
+    };
+  } catch {
+    response = { id, ok: false, error: unavailable };
+  }
   sendJson(res, rpcHttpStatus(response), response);
   return true;
 }

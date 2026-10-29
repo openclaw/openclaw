@@ -1,14 +1,11 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Discord plugin module implements setup adapter behavior.
 import {
   createEnvPatchedAccountSetupAdapter,
   type ChannelSetupAdapter,
 } from "openclaw/plugin-sdk/setup-runtime";
 
-const channel = "discord" as const;
-
 const discordSetupAdapter: ChannelSetupAdapter = createEnvPatchedAccountSetupAdapter({
-  channelKey: channel,
+  channelKey: "discord",
   defaultAccountOnlyEnvError: "DISCORD_BOT_TOKEN can only be used for the default account.",
   missingCredentialError: "Discord requires token (or --use-env).",
   hasCredentials: (input) => Boolean(input.token),

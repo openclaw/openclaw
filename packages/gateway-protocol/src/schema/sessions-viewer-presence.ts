@@ -1,10 +1,10 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../session-limits.js";
 import { closedObject } from "./closed-object.js";
 import { ChatSendSessionKeyString, NonEmptyString } from "./primitives.js";
 
-/** Maximum sessions one connection may declare as concurrently visible. */
-export const SESSION_VIEWER_PRESENCE_MAX_KEYS = 32;
+export { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../session-limits.js";
 
 /** Replaces the sessions this connection is currently rendering. */
 export const SessionsViewerPresenceSetParamsSchema = closedObject({

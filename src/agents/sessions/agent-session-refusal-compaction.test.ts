@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { streamAnthropic } from "../../../packages/ai/src/providers/anthropic.js";
 import {
   appendHistory,
+  collectCompactionEnds,
   createAssistant,
   createAutoCompactionSettings,
   createTestSession,
@@ -16,63 +17,29 @@ import {
   streamMocks,
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
-import {
-  createCompactionHandlers,
-  createResourceLoader,
-} from "./agent-session-loop-resource-loader.test-support.js";
-import type { AgentSessionEvent } from "./agent-session-types.js";
+import { compactionHandler } from "./agent-session-loop-resource-loader.test-support.js";
+import type { ExtensionFactory } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 
+type RefusalCase = {
+  overflow?: boolean;
+  overlap?: boolean;
+  threshold?: boolean;
+  queued?: boolean;
+  later?: boolean;
+};
+
 describe("AgentSession refusal compaction", () => {
-  it.each([
-    {
-      name: "refusal explanation resembles overflow",
-      overflow: false,
-      overlap: true,
-      threshold: false,
-      queued: false,
-      later: false,
-      expectedRequests: 1,
-    },
-    {
-      name: "threshold maintenance after refusal",
-      overflow: false,
-      overlap: false,
-      threshold: true,
-      queued: false,
-      later: false,
-      expectedRequests: 1,
-    },
-    {
-      name: "threshold maintenance preserves explicit queued user",
-      overflow: false,
-      overlap: false,
-      threshold: true,
-      queued: true,
-      later: false,
-      expectedRequests: 2,
-    },
-    {
-      name: "actual overflow still retries",
-      overflow: true,
-      overlap: false,
-      threshold: false,
-      queued: false,
-      later: false,
-      expectedRequests: 2,
-    },
-    {
-      name: "explicit later user turn after refusal",
-      overflow: false,
-      overlap: false,
-      threshold: false,
-      queued: false,
-      later: true,
-      expectedRequests: 1,
-    },
-  ])("$name", async ({ overflow, overlap, threshold, queued, later, expectedRequests }) => {
+  it.each<[string, RefusalCase, number]>([
+    ["refusal explanation resembles overflow", { overlap: true }, 1],
+    ["threshold maintenance after refusal", { threshold: true }, 1],
+    ["threshold maintenance preserves explicit queued user", { threshold: true, queued: true }, 2],
+    ["actual overflow still retries", { overflow: true }, 2],
+    ["explicit later user turn after refusal", { later: true }, 1],
+  ])("%s", async (_name, scenario, expectedRequests) => {
+    const { overflow, overlap, threshold, queued, later } = scenario;
     const requests: Array<{ url: string | undefined; body: unknown }> = [];
     const explanation = overlap
       ? "This request is refused; prompt is too long."
@@ -162,11 +129,11 @@ describe("AgentSession refusal compaction", () => {
         maxTokens: 16,
       } satisfies Model<"anthropic-messages">;
       const sessionManager = SessionManager.inMemory();
-      appendHistory(
+      await appendHistory(
         sessionManager,
         createAssistant(
           model,
-          [{ type: "text", text: "Earlier answer." }],
+          "Earlier answer.",
           "stop",
           threshold ? model.contextWindow - 15 : 10,
         ),
@@ -175,33 +142,25 @@ describe("AgentSession refusal compaction", () => {
         (_activeModel: Model, context: Context, options?: SimpleStreamOptions) =>
           streamAnthropic(model, context, { ...options, apiKey: "redacted-fixture-token" }),
       );
-      const handlers = createCompactionHandlers();
-      const handler = handlers.get("session_before_compact")?.[0];
-      if (!handler) {
-        throw new Error("Expected compaction fixture handler");
-      }
       let queuedUser = false;
-      handlers.set("session_before_compact", [
-        async (...args: unknown[]) => {
+      const handlers: ExtensionFactory = (api) => {
+        api.on("session_before_compact", async (event) => {
           if (queued && !queuedUser) {
             queuedUser = true;
             await session.followUp("explicit queued user turn");
           }
-          return handler(...args);
-        },
-      ]);
+          return compactionHandler(event);
+        });
+      };
       const { session } = await createTestSession({
         model,
         sessionManager,
         settingsManager: createAutoCompactionSettings(),
-        resourceLoader: createResourceLoader(handlers),
+        extension: handlers,
       });
-      const compactions: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
+      const compactions = collectCompactionEnds(session);
       const assistants: AssistantMessage[] = [];
       session.subscribe((event) => {
-        if (event.type === "compaction_end") {
-          compactions.push(event);
-        }
         if (event.type === "message_end" && event.message.role === "assistant") {
           assistants.push(event.message);
         }
@@ -219,22 +178,15 @@ describe("AgentSession refusal compaction", () => {
       }
       expect(firstTurnRequests).toBe(expectedRequests);
       expect(requests.every(({ url }) => url === "/v1/messages")).toBe(true);
-      if (threshold) {
+      if (threshold || overflow) {
         expect(compactions).toContainEqual(
           expect.objectContaining({
-            reason: "threshold",
-            outcome: expect.objectContaining({ status: "completed", willRetry: false }),
+            reason: overflow ? "overflow" : "threshold",
+            outcome: expect.objectContaining({ status: "completed", willRetry: Boolean(overflow) }),
           }),
         );
       }
-      if (overflow) {
-        expect(compactions).toContainEqual(
-          expect.objectContaining({
-            reason: "overflow",
-            outcome: expect.objectContaining({ status: "completed", willRetry: true }),
-          }),
-        );
-      } else {
+      if (!overflow) {
         expect(
           compactions.some(({ outcome }) => outcome.status === "completed" && outcome.willRetry),
         ).toBe(false);

@@ -133,7 +133,7 @@ openclaw-debug-overlay-content {
 }
 
 .debug-overlay--minimized {
-  width: min(210px, calc(100vw - 32px));
+  width: min(240px, calc(100vw - 32px));
   height: auto;
   max-height: min(92px, calc(100dvh - 32px));
 
@@ -202,7 +202,7 @@ openclaw-debug-overlay-content {
 
 .debug-overlay__widget {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr));
   gap: 4px;
 }
 

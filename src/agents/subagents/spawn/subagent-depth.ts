@@ -1,8 +1,3 @@
-/**
- * Subagent spawn-depth lookup helpers.
- *
- * Reads persisted session store state to recover spawn depth and parent lineage across restarts.
- */
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
@@ -15,6 +10,7 @@ import {
 import {
   asSessionCapabilityLookup,
   createSubagentSessionStore,
+  withPreparedSessionCapabilityRead,
   type SessionCapabilityLookup,
   type SessionCapabilityStore,
 } from "./subagent-session-store.js";
@@ -24,13 +20,7 @@ function buildKeyCandidates(
   cfg?: OpenClawConfig,
   explicitAgentId?: string,
 ): string[] {
-  if (!cfg) {
-    return [rawKey];
-  }
-  if (rawKey === "unknown") {
-    return [rawKey];
-  }
-  if (parseAgentSessionKey(rawKey)) {
+  if (!cfg || rawKey === "unknown" || parseAgentSessionKey(rawKey)) {
     return [rawKey];
   }
   const agentId = resolveSessionAgentId({
@@ -38,8 +28,7 @@ function buildKeyCandidates(
     config: cfg,
     agentId: explicitAgentId,
   });
-  const prefixed = `agent:${agentId}:${rawKey}`;
-  return prefixed === rawKey ? [rawKey] : [rawKey, prefixed];
+  return [rawKey, `agent:${agentId}:${rawKey}`];
 }
 
 function resolveEntryForSessionKey(params: {
@@ -59,7 +48,7 @@ function resolveEntryForSessionKey(params: {
       }
     }
     const entry = params.store.getById(params.sessionKey);
-    if (entry || !params.cfg) {
+    if (entry || !params.cfg || params.store.authoritative) {
       return entry;
     }
   }
@@ -117,4 +106,10 @@ export function getSubagentDepthFromSessionStore(
       agentId: opts?.agentId,
     }),
   );
+}
+
+export function getSubagentDepthFromSessionStoreInWorker(
+  ...args: Parameters<typeof getSubagentDepthFromSessionStore>
+): Promise<number> {
+  return withPreparedSessionCapabilityRead(() => getSubagentDepthFromSessionStore(...args));
 }

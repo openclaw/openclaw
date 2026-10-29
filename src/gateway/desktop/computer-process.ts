@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { resolveNodeRuntimeExecutable } from "../../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -10,7 +9,7 @@ import {
   type ComputerUseCapabilityDescriptor,
 } from "../../plugins/computer-use-contract.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
-import type { ManagedRun, ProcessSupervisor, RunExit } from "../../process/supervisor/types.js";
+import type { ManagedRun, RunExit } from "../../process/supervisor/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createPendingRequestRegistry } from "../../shared/pending-request-registry.js";
 import {
@@ -25,28 +24,15 @@ const STARTUP_TIMEOUT_MS = 60_000;
 const SHUTDOWN_TIMEOUT_MS = 30_000;
 const MAX_MESSAGE_CHARS = 32 * 1024 * 1024;
 
-export type ComputerHostProcess = {
-  ready: Promise<ComputerUseCapabilityDescriptor>;
-  isCurrent(): boolean;
-  invoke(params: {
-    command: ComputerHostCommand;
-    params: Record<string, unknown>;
-    signal?: AbortSignal;
-    assertCurrent(): void;
-    timeoutMs?: number;
-    sessionKey?: string;
-  }): Promise<unknown>;
-  close(execution?: ComputerHostExecutionClose): Promise<void>;
-};
+export type ComputerHostProcess = ReturnType<typeof startComputerHostProcess>;
 
 /** The native driver inherits one desktop environment for its entire process lifetime. */
 export function startComputerHostProcess(params: {
   env: NodeJS.ProcessEnv;
   pluginIds: string[];
   assertCurrent(): void;
-  supervisor?: ProcessSupervisor;
-}): ComputerHostProcess {
-  const supervisor = params.supervisor ?? getProcessSupervisor();
+}) {
+  const supervisor = getProcessSupervisor();
   const scopeKey = `gateway-computer:${randomUUID()}`;
   const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "owned-only" });
   const ready = createDeferredCore<ComputerUseCapabilityDescriptor>();
@@ -97,8 +83,7 @@ export function startComputerHostProcess(params: {
             run.cancel("manual-cancel");
           }
         }
-        const timer = setTimeout(() => run?.cancel("manual-cancel"), SHUTDOWN_TIMEOUT_MS);
-        timer.unref?.();
+        const timer = setTimeout(() => run?.cancel("manual-cancel"), SHUTDOWN_TIMEOUT_MS).unref();
         try {
           exit = await run.wait();
         } catch (error) {
@@ -129,10 +114,12 @@ export function startComputerHostProcess(params: {
   };
   const fail = (error: Error) => {
     failure ??= error;
-    active = false;
-    ready.reject(error);
-    pending.rejectAll(error);
     void close().catch(() => {});
+  };
+  const failWhileOpen = (error: unknown) => {
+    if (!closing) {
+      fail(error instanceof Error ? error : new Error(String(error)));
+    }
   };
   const receive = (chunk: string) => {
     buffer += chunk;
@@ -165,8 +152,7 @@ export function startComputerHostProcess(params: {
   const startupTimer = setTimeout(
     () => fail(new Error("Gateway computer provider startup timed out")),
     STARTUP_TIMEOUT_MS,
-  );
-  startupTimer.unref?.();
+  ).unref();
   void ready.promise.then(
     () => clearTimeout(startupTimer),
     () => clearTimeout(startupTimer),
@@ -177,16 +163,13 @@ export function startComputerHostProcess(params: {
       return;
     }
     try {
-      const node = resolveNodeRuntimeExecutable({ env: params.env });
-      if (!node) {
-        throw new Error("Gateway computer control requires Node.js in PATH");
-      }
       const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.computerHost);
       assertActive();
       run = await supervisor.spawn({
         scopeKey,
         mode: "child",
-        argv: [node, ...resolveRuntimeWorkerArgv(worker, node)],
+        // The desktop PATH never selects the runtime: Bun hosts run the worker on Bun.
+        argv: [process.execPath, ...resolveRuntimeWorkerArgv(worker)],
         env: params.env,
         exactEnv: true,
         stdinMode: "pipe-open",
@@ -194,34 +177,27 @@ export function startComputerHostProcess(params: {
         onStdout: receive,
         assertCurrent: assertActive,
       });
-      void run.wait().then(
-        () => {
-          if (!closing) {
-            fail(new Error("Gateway computer process exited"));
-          }
-        },
-        (error: unknown) => {
-          if (!closing) {
-            fail(error instanceof Error ? error : new Error(String(error)));
-          }
-        },
-      );
+      void run
+        .wait()
+        .then(() => failWhileOpen(new Error("Gateway computer process exited")), failWhileOpen);
       assertActive();
       send({ type: "start", pluginIds: params.pluginIds });
     } catch (error) {
-      if (!closing) {
-        fail(error instanceof Error ? error : new Error(String(error)));
-      }
+      failWhileOpen(error);
     }
   });
   return {
     ready: ready.promise,
     isCurrent: () => active,
-    async invoke(request) {
+    async invoke(request: {
+      command: ComputerHostCommand;
+      params: Record<string, unknown>;
+      signal?: AbortSignal;
+      assertCurrent(): void;
+      timeoutMs?: number;
+      sessionKey?: string;
+    }) {
       await ready.promise;
-      assertActive();
-      request.assertCurrent();
-      request.signal?.throwIfAborted();
       const id = randomUUID();
       let timedOut = false;
       const cancel = () => {

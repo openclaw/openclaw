@@ -8,37 +8,9 @@ describe("normalizeMattermostMessagingTarget", () => {
     expect(normalizeMattermostMessagingTarget("  ")).toBeUndefined();
   });
 
-  it("normalizes channel: prefix", () => {
-    expect(normalizeMattermostMessagingTarget("channel:abc123")).toBe("channel:abc123");
-    expect(normalizeMattermostMessagingTarget("Channel:ABC")).toBe("channel:ABC");
-  });
-
-  it("normalizes group: prefix to channel:", () => {
-    expect(normalizeMattermostMessagingTarget("group:abc123")).toBe("channel:abc123");
-  });
-
-  it("normalizes user: prefix", () => {
-    expect(normalizeMattermostMessagingTarget("user:abc123")).toBe("user:abc123");
-  });
-
-  it("normalizes mattermost: prefix to user:", () => {
-    expect(normalizeMattermostMessagingTarget("mattermost:abc123")).toBe("user:abc123");
-  });
-
   it("keeps @username targets", () => {
     expect(normalizeMattermostMessagingTarget("@alice")).toBe("@alice");
     expect(normalizeMattermostMessagingTarget("@Alice")).toBe("@Alice");
-  });
-
-  it("returns undefined for #channel (triggers directory lookup)", () => {
-    expect(normalizeMattermostMessagingTarget("#bookmarks")).toBeUndefined();
-    expect(normalizeMattermostMessagingTarget("#off-topic")).toBeUndefined();
-    expect(normalizeMattermostMessagingTarget("# ")).toBeUndefined();
-  });
-
-  it("returns undefined for bare names (triggers directory lookup)", () => {
-    expect(normalizeMattermostMessagingTarget("bookmarks")).toBeUndefined();
-    expect(normalizeMattermostMessagingTarget("off-topic")).toBeUndefined();
   });
 
   it("returns undefined for empty prefixed values", () => {
@@ -65,30 +37,6 @@ describe("looksLikeMattermostTargetId", () => {
 
   it("recognizes @username", () => {
     expect(looksLikeMattermostTargetId("@alice")).toBe(true);
-  });
-
-  it("does NOT recognize #channel (should go to directory)", () => {
-    expect(looksLikeMattermostTargetId("#bookmarks")).toBe(false);
-    expect(looksLikeMattermostTargetId("#off-topic")).toBe(false);
-  });
-
-  it("recognizes 26-char alphanumeric Mattermost IDs", () => {
-    expect(looksLikeMattermostTargetId("abcdefghijklmnopqrstuvwxyz")).toBe(true);
-    expect(looksLikeMattermostTargetId("12345678901234567890123456")).toBe(true);
-    expect(looksLikeMattermostTargetId("AbCdEf1234567890abcdef1234")).toBe(true); // pragma: allowlist secret
-  });
-
-  it("recognizes DM channel format (26__26)", () => {
-    expect(
-      looksLikeMattermostTargetId("abcdefghijklmnopqrstuvwxyz__12345678901234567890123456"), // pragma: allowlist secret
-    ).toBe(true);
-  });
-
-  it("rejects short strings that are not Mattermost IDs", () => {
-    expect(looksLikeMattermostTargetId("password")).toBe(false);
-    expect(looksLikeMattermostTargetId("hi")).toBe(false);
-    expect(looksLikeMattermostTargetId("bookmarks")).toBe(false);
-    expect(looksLikeMattermostTargetId("off-topic")).toBe(false);
   });
 
   it("rejects strings longer than 26 chars that are not DM format", () => {

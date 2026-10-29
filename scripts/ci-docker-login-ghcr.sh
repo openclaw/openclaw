@@ -17,7 +17,7 @@ for attempt in 1 2 3 4; do
     break
   fi
   sleep_seconds=$((attempt * 5))
-  echo "GHCR login failed on attempt ${attempt}; retrying in ${sleep_seconds}s." >&2
+  echo "::warning::GHCR login failed on attempt ${attempt}; retrying in ${sleep_seconds}s." >&2
   sleep "$sleep_seconds"
 done
 

@@ -1,77 +1,63 @@
 import { ChannelType } from "discord-api-types/v10";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  createTestRegistry,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import * as plugins from "openclaw/plugin-sdk/plugin-test-runtime";
+import * as snapshots from "openclaw/plugin-sdk/runtime-config-snapshot";
+import * as sessions from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { discordPlugin } from "../channel.js";
-import type { CommandInteraction } from "../internal/discord.js";
 import { setDiscordRuntime } from "../runtime.js";
+import { nativeCommandContext } from "./native-command.dispatch.test-support.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { createMockCommandInteraction } from "./native-command.test-helpers.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 let state: OpenClawTestState;
 const userId = "100000000000000003";
 const channelId = "100000000000000001";
 const guildId = "100000000000000002";
-const otherChannelId = "100000000000000005";
 const sessionId = "existing-channel-session";
+const acpBinding: NonNullable<OpenClawConfig["bindings"]>[number] = {
+  type: "acp",
+  agentId: "main",
+  match: { channel: "discord", accountId: "default", peer: { kind: "channel", id: channelId } },
+  acp: { backend: "acpx" },
+};
 
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "discord-native-reset" });
+  setDiscordRuntime(createPluginRuntimeMock());
+  plugins.setActivePluginRegistry(
+    plugins.createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
+  );
+});
 afterEach(async () => {
-  clearRuntimeConfigSnapshot();
-  setActivePluginRegistry(createTestRegistry());
+  snapshots.clearRuntimeConfigSnapshot();
+  plugins.setActivePluginRegistry(plugins.createTestRegistry());
   await state.cleanup();
 });
 
 async function runNativeCommand(params: {
-  commandName: string;
-  guildChannels: Record<string, { enabled?: boolean }>;
+  commandName: "new" | "reset";
+  guildChannels?: Record<string, { enabled?: boolean }>;
   configuredBinding?: boolean;
-  label: string;
+  allowFrom?: string[];
 }) {
-  const storePath = state.path("sessions.json");
-  const sessionKey = `agent:main:discord:channel:${channelId}`;
-  const scope = { agentId: "main", storePath, sessionKey };
+  const scope = {
+    agentId: "main",
+    storePath: state.path("sessions.json"),
+    sessionKey: `agent:main:discord:channel:${channelId}`,
+  };
+  const channels = params.guildChannels ?? { [channelId]: { enabled: true } };
+  const guilds = { [guildId]: { channels } };
   const cfg: OpenClawConfig = {
     agents: { defaults: { workspace: state.workspaceDir } },
-    session: { store: storePath },
-    commands: { allowFrom: { discord: [`user:${userId}`] } },
-    ...(params.configuredBinding
-      ? {
-          bindings: [
-            {
-              type: "acp",
-              agentId: "main",
-              match: {
-                channel: "discord",
-                accountId: "default",
-                peer: { kind: "channel", id: channelId },
-              },
-              acp: { backend: "acpx" },
-            },
-          ],
-        }
-      : {}),
-    channels: {
-      discord: {
-        commands: { native: true },
-        guilds: { [guildId]: { channels: params.guildChannels } },
-      },
-    },
-  } as OpenClawConfig;
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
-  );
-  await upsertSessionEntry({
+    session: { store: scope.storePath },
+    commands: { allowFrom: { discord: params.allowFrom ?? [`user:${userId}`] } },
+    bindings: params.configuredBinding ? [acpBinding] : undefined,
+    channels: { discord: { commands: { native: true }, guilds } },
+  };
+  await sessions.upsertSessionEntry({
     ...scope,
     entry: {
       sessionId,
@@ -80,100 +66,63 @@ async function runNativeCommand(params: {
       totalTokens: 100,
     },
   });
-  setRuntimeConfigSnapshot(cfg);
+  snapshots.setRuntimeConfigSnapshot(cfg);
   const interaction = createMockCommandInteraction({
     channelType: ChannelType.GuildText,
     channelId,
     guildId,
     userId,
-    interactionId: params.label,
   });
-  const command = createDiscordNativeCommand({
-    command: { name: params.commandName, description: "Guild guard probe.", acceptsArgs: true },
-    cfg,
-    discordConfig: cfg.channels!.discord!,
-    accountId: "default",
-    sessionPrefix: "discord:slash",
+  await createDiscordNativeCommand({
+    command: { name: params.commandName, description: "Reset the session.", acceptsArgs: true },
+    ...nativeCommandContext(cfg),
     ephemeralDefault: true,
-    threadBindings: createNoopThreadBindingManager("default"),
-  });
-  await command.run(interaction as unknown as CommandInteraction);
+  }).run(interaction);
   return {
-    entry: getSessionEntry(scope),
+    entry: sessions.getSessionEntry(scope),
+    events: sessions.loadTranscriptEventsSync({ ...scope, sessionId }),
     replies: [...interaction.reply.mock.calls, ...interaction.followUp.mock.calls].map(
       ([payload]) => payload?.content,
     ),
   };
 }
 
-describe("discord native command guild guards", () => {
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "discord-guild-guards" });
-    setDiscordRuntime(createPluginRuntimeMock());
-  });
-
-  it.each(["reset", "new"] as const)(
-    "refuses /%s in a disabled guild channel with no configured binding",
-    async (commandName) => {
-      const result = await runNativeCommand({
-        commandName,
-        guildChannels: { [channelId]: { enabled: false } },
-        label: `disabled-${commandName}`,
-      });
-      expect(result.replies).toEqual(["This channel is disabled."]);
-      expect(result.entry?.lifecycleRevision).toBe("before-reset");
-    },
+it("persists and acknowledges /new", async () => {
+  const result = await runNativeCommand({ commandName: "new" });
+  expect(result.entry?.sessionId).toBe(sessionId);
+  expect(result.entry?.lifecycleRevision).toBeTruthy();
+  expect(result.entry?.lifecycleRevision).not.toBe("before-reset");
+  expect(result.events).toEqual(
+    expect.arrayContaining([expect.objectContaining({ type: "reset", reason: "new" })]),
   );
-
-  it.each(["reset", "new"] as const)(
-    "refuses /%s in a not-allowed guild channel with no configured binding",
-    async (commandName) => {
-      const result = await runNativeCommand({
-        commandName,
-        guildChannels: { [otherChannelId]: { enabled: true } },
-        label: `notallowed-${commandName}`,
-      });
-      expect(result.replies).toEqual(["This channel is not allowed."]);
-      expect(result.entry?.lifecycleRevision).toBe("before-reset");
-    },
-  );
-
-  it("refuses /status in a disabled guild channel", async () => {
-    const result = await runNativeCommand({
-      commandName: "status",
-      guildChannels: { [channelId]: { enabled: false } },
-      label: "disabled-status",
-    });
-    expect(result.replies).toEqual(["This channel is disabled."]);
-  });
-
-  it.each(["reset", "new"] as const)(
-    "still bypasses the guards for /%s when a configured binding owns the channel",
-    async (commandName) => {
-      const result = await runNativeCommand({
-        commandName,
-        guildChannels: { [channelId]: { enabled: false } },
-        configuredBinding: true,
-        label: `bound-${commandName}`,
-      });
-      expect(result.replies).not.toContain("This channel is disabled.");
-      expect(result.replies).not.toContain("This channel is not allowed.");
-      expect(result.replies.length).toBeGreaterThan(0);
-    },
-  );
-
-  it.each(["reset", "new"] as const)(
-    "still runs /%s in an enabled guild channel with no configured binding",
-    async (commandName) => {
-      const result = await runNativeCommand({
-        commandName,
-        guildChannels: { [channelId]: { enabled: true } },
-        label: `enabled-${commandName}`,
-      });
-      expect(result.replies).toEqual([
-        commandName === "new" ? "✅ New session started." : "✅ Session reset.",
-      ]);
-      expect(result.entry?.lifecycleRevision).not.toBe("before-reset");
-    },
-  );
+  expect(result.replies).toEqual(["✅ New session started."]);
 });
+
+const emptyAllowFrom: string[] = [];
+it.each([
+  ["reset", { guildChannels: { [channelId]: { enabled: false } } }, "This channel is disabled."],
+  ["new", { guildChannels: { other: { enabled: true } } }, "This channel is not allowed."],
+  ["reset", { allowFrom: emptyAllowFrom }, undefined],
+] as const)("preserves the session on denied /%s (%s)", async (commandName, params, reply) => {
+  const result = await runNativeCommand({ commandName, ...params });
+  expect(result.entry?.lifecycleRevision).toBe("before-reset");
+  if (reply) {
+    expect(result.replies).toEqual([reply]);
+  } else {
+    expect(result.events).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "reset" })]),
+    );
+  }
+});
+
+it("lets the configured binding own reset admission", async () => {
+  const result = await runNativeCommand({
+    commandName: "reset",
+    guildChannels: { [channelId]: { enabled: false } },
+    configuredBinding: true,
+  });
+  expect(result.replies).not.toContain("This channel is disabled.");
+  expect(result.replies).not.toContain("This channel is not allowed.");
+  expect(result.replies.length).toBeGreaterThan(0);
+});
+plugins.useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);

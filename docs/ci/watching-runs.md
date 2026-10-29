@@ -3,7 +3,7 @@ summary: "Wait on a pull request head, recover a stuck run, and clear the eviden
 title: "Watch a CI run"
 read_when:
   - You are debugging a failing GitHub Actions check
-  - You need to rerun or recover a pull request run
+  - You need to diagnose failures or recover a pull request run
 ---
 
 ## Watching pull request CI
@@ -176,10 +176,32 @@ admission.
 only reconciles that outcome, even if the original body file was removed; it
 never dispatches another request or changes an accepted message.
 
+### Fix failed tests locally
+
+PR CI runs the broad suites to completion and publishes a failure table comparing
+failed jobs with scheduled `main` CI. After a run fails:
+
+1. Run `pnpm test:ci-failed <pr>` to read the failed jobs, their
+   pre-existing/new/unknown classification, failed test files, and one local
+   rerun command.
+2. Fix new failures and investigate unknown ones. Use
+   `pnpm test:ci-failed <pr> --run` until the selected tests pass locally.
+3. Push the repair once. Let the new head's PR CI provide broad proof.
+
+Do not run the full local suite or use `gh run rerun` to chase green. Pre-existing
+failures follow the
+[failure-table landing rule](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures):
+matching signatures provide attribution; a job-name-only match still requires
+comparing the failed tests with the main run. The table does not waive a gate.
+See [failed CI test selection](/reference/scripts/pr-tooling#rerun-failed-ci-tests)
+for run targets, non-Vitest jobs, and options.
+
 ### Recover an existing PR run first
 
 For an existing terminal PR run with a diagnosed infrastructure failure or
-cancellation, prefer one failed-job retry over a new full-CI dispatch:
+cancellation that requires infrastructure recovery, prefer one failed-job retry
+over a new full-CI dispatch. This is infrastructure recovery after identifying
+the cause, not a retry of failed tests to obtain green:
 
 ```bash
 gh run rerun <original-run-id> --failed --repo openclaw/openclaw

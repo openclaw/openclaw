@@ -1,12 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { registerWebPushSubscription } from "../../infra/push-web.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
-import { resolveUserProfileId } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "../server-methods.js";
 import { dispatchGatewayMethodInProcessRaw } from "../server-plugin-in-process-dispatch.js";
@@ -31,10 +33,9 @@ vi.mock("../../infra/push-web.js", () => ({
   resolveVapidKeys: vi.fn(),
   setWebPushSubscriptionPreferences: vi.fn(),
 }));
-vi.mock("../../state/user-profiles.js", () => ({ resolveUserProfileId: vi.fn() }));
 vi.mock("../../state/user-preferences.js", () => ({
-  getUserPreferences: vi.fn(),
-  setUserPreferences: vi.fn(),
+  getCanonicalUserPreferences: vi.fn(),
+  setCanonicalUserPreferences: vi.fn(),
 }));
 vi.mock("../session-sharing.js", async () => ({
   // The real Web Push handler has no session target; leave its request guards intact.
@@ -44,38 +45,42 @@ vi.mock("../session-sharing.js", async () => ({
   ).SessionMutationAuthorizationChangedError,
 }));
 
-beforeEach(() => {
+let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ scenario: "minimal" });
+  setRuntimeConfigSnapshot({});
   vi.clearAllMocks();
   resetGatewayWorkAdmission();
-  vi.mocked(resolveUserProfileId).mockImplementation((profileId) => profileId);
 });
+afterEach(async () => await state?.cleanup());
 
 describe("Web Push opaque in-process authority", () => {
-  it.each(["unchanged", "resolver retired", "caller revoked", "transport retirement"] as const)(
-    "retains the full native commit guard for %s",
+  it.each(["resolver retired", "caller revoked", "transport retirement"] as const)(
+    "retains the full opaque commit guard at the worker grant for %s",
     async (scenario) => {
+      const profileId = ensureProfileForEmail("push-owner@example.test").id;
       const entered = createDeferred();
       const release = createDeferred();
       const persisted = vi.fn();
       const resolverCommitChecks = vi.fn();
       const callerCommitChecks = vi.fn();
       const work = new AsyncWorkScope();
-      let inNativeCommit = false;
+      let inWorkerGrant = false;
       let observedFamily: string | undefined;
       vi.mocked(registerWebPushSubscription).mockImplementation(async (params) => {
         const guard = expectDefined(params.guard, "retained Web Push mutation guard");
         observedFamily = guard.family;
         entered.resolve();
         await release.promise;
-        inNativeCommit = true;
+        inWorkerGrant = true;
         try {
           if (guard.family === "worker") {
-            guard.assertProfiles({ profileId: "profile-owner", bindingCurrent: true });
+            guard.assertProfiles({ profileId, bindingCurrent: true });
           }
           guard.assertCurrent();
           persisted();
         } finally {
-          inNativeCommit = false;
+          inWorkerGrant = false;
         }
         return {
           subscriptionId: "in-process-subscription",
@@ -106,7 +111,7 @@ describe("Web Push opaque in-process authority", () => {
           },
         },
         authenticatedUserProfile: {
-          profileId: "profile-owner",
+          profileId,
           displayName: null,
           hasAvatar: false,
           updatedAt: 1,
@@ -124,13 +129,13 @@ describe("Web Push opaque in-process authority", () => {
       let liveContext: GatewayRequestContext | undefined = context;
       let callerAllowed = true;
       const resolveGatewayContext = () => {
-        if (inNativeCommit) {
+        if (inWorkerGrant) {
           resolverCommitChecks();
         }
         return liveContext;
       };
       const assertCallerCurrent = () => {
-        if (inNativeCommit) {
+        if (inWorkerGrant) {
           callerCommitChecks();
         }
         if (!callerAllowed) {
@@ -188,7 +193,7 @@ describe("Web Push opaque in-process authority", () => {
           payload: { subscriptionId: "in-process-subscription" },
         });
       }
-      expect(observedFamily).toBe("native-compatibility");
+      expect(observedFamily).toBe("worker");
       expect(resolverCommitChecks).toHaveBeenCalled();
       if (scenario !== "resolver retired") {
         expect(callerCommitChecks).toHaveBeenCalled();

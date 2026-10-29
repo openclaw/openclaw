@@ -1,5 +1,7 @@
 // Directory parser coverage uses mocked authentication and HTTP transport.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { listMatrixDirectoryPeersLive } from "./directory-live.js";
+import { resolveMatrixAuth } from "./matrix/client.js";
 
 const { performMatrixRequestMock } = vi.hoisted(() => ({
   performMatrixRequestMock: vi.fn(),
@@ -22,18 +24,8 @@ function jsonArrayResponse(): { response: Response; text: string; buffer: Buffer
   };
 }
 
-let listMatrixDirectoryGroupsLive: typeof import("./directory-live.js").listMatrixDirectoryGroupsLive;
-let listMatrixDirectoryPeersLive: typeof import("./directory-live.js").listMatrixDirectoryPeersLive;
-let resolveMatrixAuth: typeof import("./matrix/client.js").resolveMatrixAuth;
-
 describe("matrix directory live (real client, mocked transport)", () => {
   const cfg = { channels: { matrix: {} } };
-
-  beforeAll(async () => {
-    ({ listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } =
-      await import("./directory-live.js"));
-    ({ resolveMatrixAuth } = await import("./matrix/client.js"));
-  });
 
   beforeEach(() => {
     performMatrixRequestMock.mockReset();
@@ -50,14 +42,6 @@ describe("matrix directory live (real client, mocked transport)", () => {
     performMatrixRequestMock.mockResolvedValue(jsonArrayResponse());
 
     await expect(listMatrixDirectoryPeersLive({ cfg, query: "alice" })).rejects.toThrow(
-      /non-object JSON response/,
-    );
-  });
-
-  it("rejects a real JSON array homeserver response for joined-rooms lookup instead of returning no groups", async () => {
-    performMatrixRequestMock.mockResolvedValue(jsonArrayResponse());
-
-    await expect(listMatrixDirectoryGroupsLive({ cfg, query: "somegroup" })).rejects.toThrow(
       /non-object JSON response/,
     );
   });

@@ -3,25 +3,9 @@ import https from "node:https";
 import type { AddressInfo, Server } from "node:net";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
-
-// Matches the identically-named symbol in src/agents/provider-request-config.ts
-// (and the sibling local copy in openai-completions.test-support.ts) via the
-// global symbol registry, without a packages/ai -> src/agents import.
-const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
-  "openclaw.modelProviderRequestTransport",
-);
-
-function attachModelProviderRequestTransport<TModel extends object>(
-  model: TModel,
-  request: { allowPrivateNetwork?: boolean },
-): TModel {
-  return {
-    ...model,
-    [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]: request,
-  };
-}
 
 // Live coverage for HTTP continuation against the *real* OpenAI Responses API.
 // A unit/mocked test can only prove openclaw's own selection logic; it cannot
@@ -119,27 +103,19 @@ describeLive("OpenAI Responses HTTP continuation (real api.openai.com)", () => {
       const proxy = new CapturingOpenAIForwardProxy();
       const baseUrl = await proxy.listen();
       try {
-        const model: Model<"openai-responses"> = attachModelProviderRequestTransport(
-          {
-            id: LIVE_MODEL_ID,
-            name: LIVE_MODEL_ID,
-            api: "openai-responses",
-            provider: "openai",
+        const model: Model<"openai-responses"> = {
+          ...makeProviderModel("openai-responses", "openai", LIVE_MODEL_ID, {
             baseUrl,
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 200_000,
-            maxTokens: 8192,
             // The forward proxy's baseUrl is a loopback address, not the
             // official api.openai.com host, so it carries no native trust
             // signal on its own -- this test exercises the same explicit
             // opt-in path a real OmniRoute deployment needs, just fronting
             // the real API instead of a scripted one.
             compat: { supportsResponsesContinuation: true },
-          } satisfies Model<"openai-responses">,
-          { allowPrivateNetwork: true },
-        );
+          }),
+          [Symbol.for("openclaw.modelProviderRequestTransport")]: { allowPrivateNetwork: true },
+        };
         const sessionId = "live-http-continuation";
         // A structurally correct wire request (previous_response_id set,
         // input trimmed) is not proof the server actually used the omitted

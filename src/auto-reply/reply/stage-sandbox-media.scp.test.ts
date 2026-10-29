@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   detectAndLoadPromptImages,
   materializeProviderContext,
@@ -11,6 +12,7 @@ import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbo
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import * as globals from "../../globals.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as mediaRoots from "../../media/channel-inbound-roots.js";
 import * as mediaReference from "../../media/media-reference.js";
 import { getMediaDir } from "../../media/store.js";
@@ -23,30 +25,53 @@ import * as processExec from "../../process/exec.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import {
-  killPidIfAlive,
-  readPidFile,
-  waitForPidFile,
-  waitForPidToExit,
-} from "../../test-utils/process-tree.js";
+import { killPidIfAlive, readPidFile } from "../../test-utils/process-tree.js";
 import { pinConfigDir } from "../../utils.js";
 import type { RuntimeMsgContext, TemplateContext } from "../templating.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 
 const SCP_STDERR_TAIL_CHARS = 16_384;
 const REMOTE_PATH = "/synthetic/attachments/report with spaces.txt";
-const SUCCESS = {
-  code: 0,
-  stdout: "",
-  stderr: "",
-  signal: null,
-  killed: false,
-  termination: "exit",
-} satisfies Awaited<ReturnType<typeof processExec.runCommandWithTimeout>>;
+const SUCCESS = createCommandResult();
+
+function sandboxConfig(state: OpenClawTestState): OpenClawConfig {
+  return {
+    agents: {
+      ownership: "explicit",
+      entries: { main: {} },
+      defaults: {
+        skipBootstrap: true,
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          workspaceRoot: state.path("sandbox"),
+          workspaceAccess: "none",
+        },
+      },
+    },
+  };
+}
+
+function expectScpCommand(run: ReturnType<typeof mockSuccessfulScp>, source: string) {
+  const [argv, options] = run.mock.calls[0]!;
+  const download = argv.at(-1)!;
+  expect([argv, options]).toEqual([
+    ["scp", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "--", source, download],
+    expect.objectContaining({ maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 } }),
+  ]);
+}
+
+function mockSuccessfulScp(body: string) {
+  return vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
+    await fs.writeFile(argv.at(-1)!, body);
+    return SUCCESS;
+  });
+}
 
 const hasUnpairedUtf16Surrogate = (text: string): boolean =>
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
@@ -64,21 +89,7 @@ function remoteStageParams(state: OpenClawTestState, abortSignal?: AbortSignal) 
   return {
     ctx,
     sessionCtx,
-    cfg: {
-      agents: {
-        ownership: "explicit" as const,
-        entries: { main: {} },
-        defaults: {
-          skipBootstrap: true,
-          sandbox: {
-            mode: "all" as const,
-            scope: "agent" as const,
-            workspaceRoot: state.path("sandbox"),
-            workspaceAccess: "none" as const,
-          },
-        },
-      },
-    },
+    cfg: sandboxConfig(state),
     agentId: "main",
     sessionKey: "agent:main:scp-fixture",
     workspaceDir: state.workspaceDir,
@@ -107,21 +118,9 @@ async function installedOwnerStageParams(params: {
       'module.exports.resolveRemoteInboundAttachmentRoots = () => ["/installed/attachments"];\n',
   );
   const cfg: OpenClawConfig = {
+    ...sandboxConfig(params.state),
     channels: { imessage: { enabled: true } },
     ...(params.plugins ? { plugins: params.plugins } : {}),
-    agents: {
-      ownership: "explicit",
-      entries: { main: {} },
-      defaults: {
-        skipBootstrap: true,
-        sandbox: {
-          mode: "all",
-          scope: "agent",
-          workspaceRoot: params.state.path("sandbox"),
-          workspaceAccess: "none",
-        },
-      },
-    },
   };
   const ctx: RuntimeMsgContext = {
     Body: "synthetic attachment",
@@ -227,25 +226,30 @@ describe("stageSandboxMedia SCP", () => {
           if (mode === "stopped-document-only") {
             release();
           }
-          vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
-            const target = argv.at(-1)!;
-            const source = argv.at(-2)!;
-            await fs.writeFile(
-              target,
-              source.endsWith(".png") ? image : source.endsWith(".mp4") ? video : "cached input",
-            );
-            return SUCCESS;
-          });
+          const runScp = vi
+            .spyOn(processExec, "runCommandWithTimeout")
+            .mockImplementation(async (argv) => {
+              const target = argv.at(-1)!;
+              const source = argv.at(-2)!;
+              await fs.writeFile(
+                target,
+                source.endsWith(".png") ? image : source.endsWith(".mp4") ? video : "cached input",
+              );
+              return SUCCESS;
+            });
           try {
             const result = await stageSandboxMedia(params);
+            expect(runScp).toHaveBeenCalledTimes(3);
+            expectScpCommand(runScp, `user@gateway-host:${REMOTE_PATH}`);
             const cached = result.staged.get(0)!;
+            const fact = params.ctx.media![0]!;
+            expect(fact).toMatchObject({ staged: true, contentType: "text/plain", url: cached });
             if (canTransfer) {
               expect(cached.startsWith(path.join(getMediaDir(), "remote-cache") + path.sep)).toBe(
                 true,
               );
               expect(await fs.readFile(cached, "utf8")).toBe("cached input");
             } else {
-              const fact = params.ctx.media![0]!;
               expect(fact.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
               expect(await fs.readFile(path.join(fact.workspaceDir!, cached), "utf8")).toBe(
                 "cached input",
@@ -253,6 +257,11 @@ describe("stageSandboxMedia SCP", () => {
             }
             expect(params.ctx.media?.[0]?.path).toBe(cached);
             expect(params.sessionCtx.media).toEqual(params.ctx.media);
+            for (const [argv] of runScp.mock.calls) {
+              await expect(fs.stat(path.dirname(argv.at(-1)!))).rejects.toMatchObject({
+                code: "ENOENT",
+              });
+            }
             expect(existsSync(state.path("sandbox"))).toBe(!canTransfer);
             const root = params.ctx.media![0]!.workspaceDir!;
             const sandbox = canTransfer
@@ -296,168 +305,62 @@ describe("stageSandboxMedia SCP", () => {
     },
   );
 
-  it("stages bytes and both contexts through the strict bounded SCP command", async () => {
-    await withOpenClawTestState({ label: "scp-stage" }, async (state) => {
-      const params = remoteStageParams(state);
-      let download = "";
-      const runScp = vi
-        .spyOn(processExec, "runCommandWithTimeout")
-        .mockImplementation(async (argv) => {
-          download = argv.at(-1)!;
-          await fs.writeFile(download, "synthetic attachment bytes");
-          return SUCCESS;
+  it.each([false, true])(
+    "blocks an installed owner before loading its artifact (warm: %s)",
+    async (warm) => {
+      await withOpenClawTestState({ label: "scp-installed-owner-policy" }, async (state) => {
+        await withEmptyBundledPlugins(state, async () => {
+          const runScp = warm
+            ? mockSuccessfulScp("first transfer")
+            : vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
+                ...SUCCESS,
+                code: 1,
+                stderr: "unexpected transfer",
+              });
+          try {
+            if (warm) {
+              const enabled = await installedOwnerStageParams({ state });
+              publishInstalledOwnerSnapshot(enabled.cfg, enabled.pluginDir);
+              expect((await stageSandboxMedia(enabled)).staged.size).toBe(1);
+              expect(runScp).toHaveBeenCalledOnce();
+              expectScpCommand(runScp, `user@gateway-host:${INSTALLED_REMOTE_PATH}`);
+              const fact = enabled.ctx.media?.[0];
+              expect(fact).toMatchObject({ staged: true, contentType: "text/plain" });
+              expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
+                "first transfer",
+              );
+              releaseInstalledOwnerSnapshot();
+            }
+            const canary = state.path(
+              "installed-plugins",
+              INSTALLED_OWNER_PLUGIN_ID,
+              "artifact-executed-canary",
+            );
+            const denied = await installedOwnerStageParams({
+              state,
+              plugins: { deny: [INSTALLED_OWNER_PLUGIN_ID] },
+              artifactBody: [
+                `require("node:fs").writeFileSync(${JSON.stringify(canary)}, "executed");`,
+                'module.exports.resolveRemoteInboundAttachmentRoots = () => ["/installed/attachments"];',
+                "",
+              ].join("\n"),
+            });
+            publishInstalledOwnerSnapshot(denied.cfg, denied.pluginDir);
+            const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+            expect((await stageSandboxMedia(denied)).staged.size).toBe(0);
+            expect(runScp).toHaveBeenCalledTimes(warm ? 1 : 0);
+            expect(existsSync(canary)).toBe(false);
+            expect(log).toHaveBeenCalledWith(
+              `Blocking remote media staging from disallowed attachment path: ${INSTALLED_REMOTE_PATH}`,
+            );
+            expect(denied.ctx.media?.[0]).not.toMatchObject({ staged: true });
+          } finally {
+            releaseInstalledOwnerSnapshot();
+          }
         });
-
-      const result = await stageSandboxMedia(params);
-
-      expect(runScp).toHaveBeenCalledExactlyOnceWith(
-        [
-          "scp",
-          "-o",
-          "BatchMode=yes",
-          "-o",
-          "StrictHostKeyChecking=yes",
-          "--",
-          `user@gateway-host:${REMOTE_PATH}`,
-          download,
-        ],
-        expect.objectContaining({
-          maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
-        }),
-      );
-      const fact = params.ctx.media?.[0];
-      expect(fact).toMatchObject({ staged: true, contentType: "text/plain" });
-      expect(fact?.path).toBe(result.staged.get(0));
-      expect(fact?.url).toBe(fact?.path);
-      expect(fact?.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
-      expect(params.sessionCtx.media).toEqual(params.ctx.media);
-      expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
-        "synthetic attachment bytes",
-      );
-      await expect(fs.stat(path.dirname(download))).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
-  it("stages a remote attachment whose roots resolve from a trusted installed channel plugin", async () => {
-    await withOpenClawTestState({ label: "scp-installed-owner" }, async (state) => {
-      const params = await installedOwnerStageParams({ state });
-      await withEmptyBundledPlugins(state, async () => {
-        publishInstalledOwnerSnapshot(params.cfg, params.pluginDir);
-        try {
-          let download = "";
-          const runScp = vi
-            .spyOn(processExec, "runCommandWithTimeout")
-            .mockImplementation(async (argv) => {
-              download = argv.at(-1)!;
-              await fs.writeFile(download, "installed channel bytes");
-              return SUCCESS;
-            });
-
-          const result = await stageSandboxMedia(params);
-
-          expect(runScp).toHaveBeenCalledExactlyOnceWith(
-            [
-              "scp",
-              "-o",
-              "BatchMode=yes",
-              "-o",
-              "StrictHostKeyChecking=yes",
-              "--",
-              `user@gateway-host:${INSTALLED_REMOTE_PATH}`,
-              download,
-            ],
-            expect.objectContaining({
-              maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
-            }),
-          );
-          expect(result.staged.size).toBe(1);
-          const fact = params.ctx.media?.[0];
-          expect(fact).toMatchObject({ staged: true, contentType: "text/plain" });
-          expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
-            "installed channel bytes",
-          );
-        } finally {
-          releaseInstalledOwnerSnapshot();
-        }
       });
-    });
-  });
-
-  it("skips a denied installed owner before its media contract executes", async () => {
-    await withOpenClawTestState({ label: "scp-installed-owner-denied" }, async (state) => {
-      const canary = path.join(
-        state.path("installed-plugins", INSTALLED_OWNER_PLUGIN_ID),
-        "artifact-executed-canary",
-      );
-      const params = await installedOwnerStageParams({
-        state,
-        plugins: { deny: [INSTALLED_OWNER_PLUGIN_ID] },
-        artifactBody: [
-          `require("node:fs").writeFileSync(${JSON.stringify(canary)}, "executed");`,
-          'module.exports.resolveRemoteInboundAttachmentRoots = () => ["/installed/attachments"];',
-          "",
-        ].join("\n"),
-      });
-      await withEmptyBundledPlugins(state, async () => {
-        publishInstalledOwnerSnapshot(params.cfg, params.pluginDir);
-        try {
-          const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
-          const runScp = vi
-            .spyOn(processExec, "runCommandWithTimeout")
-            .mockResolvedValue({ ...SUCCESS, code: 1, stderr: "unexpected transfer" });
-
-          const result = await stageSandboxMedia(params);
-
-          expect(result.staged.size).toBe(0);
-          expect(runScp).not.toHaveBeenCalled();
-          expect(existsSync(canary)).toBe(false);
-          expect(log).toHaveBeenCalledWith(
-            `Blocking remote media staging from disallowed attachment path: ${INSTALLED_REMOTE_PATH}`,
-          );
-          expect(params.ctx.media?.[0]).not.toMatchObject({ staged: true });
-        } finally {
-          releaseInstalledOwnerSnapshot();
-        }
-      });
-    });
-  });
-
-  it("stops staging after an earlier transfer once the installed owner is denied", async () => {
-    await withOpenClawTestState({ label: "scp-installed-owner-reload" }, async (state) => {
-      const enabled = await installedOwnerStageParams({ state });
-      await withEmptyBundledPlugins(state, async () => {
-        publishInstalledOwnerSnapshot(enabled.cfg, enabled.pluginDir);
-        try {
-          const runScp = vi
-            .spyOn(processExec, "runCommandWithTimeout")
-            .mockImplementation(async (argv) => {
-              await fs.writeFile(argv.at(-1)!, "first transfer");
-              return SUCCESS;
-            });
-
-          expect((await stageSandboxMedia(enabled)).staged.size).toBe(1);
-          expect(runScp).toHaveBeenCalledTimes(1);
-
-          releaseInstalledOwnerSnapshot();
-          const denied = await installedOwnerStageParams({
-            state,
-            plugins: { deny: [INSTALLED_OWNER_PLUGIN_ID] },
-          });
-          publishInstalledOwnerSnapshot(denied.cfg, denied.pluginDir);
-          const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
-
-          expect((await stageSandboxMedia(denied)).staged.size).toBe(0);
-          expect(runScp).toHaveBeenCalledTimes(1);
-          expect(log).toHaveBeenCalledWith(
-            `Blocking remote media staging from disallowed attachment path: ${INSTALLED_REMOTE_PATH}`,
-          );
-          expect(denied.ctx.media?.[0]).not.toMatchObject({ staged: true });
-        } finally {
-          releaseInstalledOwnerSnapshot();
-        }
-      });
-    });
-  });
+    },
+  );
 
   it("logs a bounded UTF-16-safe diagnostic without publishing failed media", async () => {
     await withOpenClawTestState({ label: "scp-stderr" }, async (state) => {
@@ -468,7 +371,7 @@ describe("stageSandboxMedia SCP", () => {
       const runScp = vi
         .spyOn(processExec, "runCommandWithTimeout")
         .mockResolvedValue({ ...SUCCESS, code: 1, stderr });
-      const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+      const log = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       expect((await stageSandboxMedia(params)).staged.size).toBe(0);
 
@@ -514,7 +417,7 @@ describe("stageSandboxMedia SCP", () => {
               stderr: "synthetic transfer failure",
             };
           });
-        const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+        const log = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         if (cancel) {
           await expect.soft(stageSandboxMedia(params)).rejects.toBe(reason);
@@ -573,7 +476,11 @@ describe("stageSandboxMedia SCP", () => {
       expect(log).toHaveBeenCalledWith(
         `Blocking attempt to stage media from outside media directory: ${sourcePath}`,
       );
-      expect(await fs.readdir(state.workspaceDir, { recursive: true })).toEqual([]);
+      expect(
+        (await listDirectoryTreeStrict(state.workspaceDir)).map(
+          (walkEntry) => walkEntry.relativePath,
+        ),
+      ).toEqual([]);
       expect([ctx, sessionCtx]).toEqual(before);
     });
   });
@@ -583,12 +490,7 @@ describe("stageSandboxMedia SCP", () => {
       const controller = new AbortController();
       const params = remoteStageParams(state, controller.signal);
       const before = structuredClone([params.ctx, params.sessionCtx]);
-      const runScp = vi
-        .spyOn(processExec, "runCommandWithTimeout")
-        .mockImplementation(async (argv) => {
-          await fs.writeFile(argv.at(-1)!, "unexpected transfer");
-          return SUCCESS;
-        });
+      const runScp = mockSuccessfulScp("unexpected transfer");
       const reason = "synthetic cancellation before staging";
       controller.abort(reason);
 
@@ -669,7 +571,9 @@ describe("stageSandboxMedia SCP", () => {
 
       expect(resolver).toHaveBeenCalledWith(alias);
       // Disk staging may already be complete; cancellation forbids publishing its facts.
-      const stagedFiles = await fs.readdir(state.workspaceDir, { recursive: true });
+      const stagedFiles = (await listDirectoryTreeStrict(state.workspaceDir)).map(
+        (walkEntry) => walkEntry.relativePath,
+      );
       const copied = stagedFiles.find((file) => file.endsWith("input-alias-source.txt"));
       expect(copied).toBeDefined();
       expect(await fs.readFile(path.join(state.workspaceDir, copied!), "utf8")).toBe(
@@ -685,7 +589,7 @@ describe("stageSandboxMedia SCP", () => {
 
   it.runIf(process.platform !== "win32")(
     "owns the real SCP tree through cancellation and cleanup",
-    async () => {
+    async ({ signal }) => {
       await withOpenClawTestState({ label: "scp-process-tree" }, async (state) => {
         const params = remoteStageParams(state);
         const before = structuredClone([params.ctx, params.sessionCtx]);
@@ -718,7 +622,7 @@ describe("stageSandboxMedia SCP", () => {
             "process.on('SIGTERM', () => {});",
             `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
             `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid));`,
-            `child.once('message', () => fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid)));`,
+            `child.once('message', () => { fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid)); process.stdout.write('R'); });`,
             "setInterval(() => {}, 1000);",
           ].join("\n"),
           { mode: 0o700 },
@@ -729,8 +633,24 @@ describe("stageSandboxMedia SCP", () => {
           async () => {
             const controller = new AbortController();
             const reason = "synthetic operator cancellation";
-            params.abortSignal = controller.signal;
-            const spawn = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
+            params.abortSignal = AbortSignal.any([controller.signal, signal]);
+            const ready = createDeferred<string>();
+            const cancelled = createDeferred<never>();
+            const onTestAbort = () => cancelled.reject(signal.reason);
+            signal.throwIfAborted();
+            signal.addEventListener("abort", onTestAbort, { once: true });
+            const realSpawn = execSpawn.spawnCommandWithInvocation;
+            const spawn = vi
+              .spyOn(execSpawn, "spawnCommandWithInvocation")
+              .mockImplementation((...args) => {
+                const result = realSpawn(...args);
+                if (args[0][0] === "scp") {
+                  result.child.nodeChildProcess.stdout?.once("data", (chunk: Buffer) => {
+                    ready.resolve(chunk.toString("utf8"));
+                  });
+                }
+                return result;
+              });
             let parentPid: number | undefined;
             let descendantPid: number | undefined;
             const alive = () =>
@@ -742,17 +662,26 @@ describe("stageSandboxMedia SCP", () => {
             let exitedBeforeCleanup: boolean[] = [];
             let temporaryDirectoryRemoved = false;
             try {
-              parentPid = await waitForPidFile(parentPidPath);
-              descendantPid = await waitForPidFile(descendantPidPath);
-              expect(await waitForPidFile(readyPath)).toBe(parentPid);
+              // Readiness follows the descendant's signal handlers, not a wall-clock startup budget.
+              expect(
+                await Promise.race([
+                  ready.promise,
+                  cancelled.promise,
+                  settled.then(() => {
+                    throw new Error("SCP settled before the fixture became ready");
+                  }),
+                ]),
+              ).toBe("R");
+              parentPid = await readPidFile(parentPidPath);
+              descendantPid = await readPidFile(descendantPidPath);
+              expect(await readPidFile(readyPath)).toBe(parentPid);
               expect(isPidAlive(parentPid)).toBe(true);
               expect(isPidAlive(descendantPid)).toBe(true);
               controller.abort(reason);
-              exitedBeforeCleanup = await Promise.all([
-                waitForPidToExit(parentPid),
-                waitForPidToExit(descendantPid),
-              ]);
+              await Promise.race([settled, cancelled.promise]);
+              exitedBeforeCleanup = [parentPid, descendantPid].map((pid) => !isPidAlive(pid));
             } finally {
+              signal.removeEventListener("abort", onTestAbort);
               // Stop any late attempt, then drain the owner before removing its fixture.
               await fs.writeFile(cleanupPath, "cleanup");
               for (const [index, result] of spawn.mock.results.entries()) {

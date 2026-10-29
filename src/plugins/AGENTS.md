@@ -1,7 +1,6 @@
 # Plugins Boundary
 
-This directory owns plugin discovery, manifest validation, loading, registry
-assembly, and contract enforcement.
+Own plugin discovery, manifest validation, loading, registry assembly, contract enforcement.
 
 ## Public Contracts
 
@@ -21,77 +20,27 @@ assembly, and contract enforcement.
 
 ## Boundary Rules
 
-- Keep control-plane and runtime-plane concerns separate:
-  discovery, manifest parsing, config validation, setup/onboarding hints, and
-  activation planning belong to the control plane; actual plugin execution
-  belongs to runtime resolution.
-- Preserve manifest-first behavior: discovery, config validation, and setup
-  should work from metadata before plugin runtime executes.
-- Keep loader behavior aligned with the documented Plugin SDK and manifest
-  contracts. Do not create private backdoors that bundled plugins can use but
-  external plugins cannot.
-- Preserve laziness in discovery and activation flows. Loader, registry, and
-  public-artifact changes must not eagerly import bundled plugin runtime barrels
-  when metadata, light exports, or typed contracts are sufficient.
-- If a plugin exposes separate light and heavy runtime surfaces, keep discovery,
-  inventory, and setup-state checks on the light path until actual execution
-  needs the heavy module.
-- If a loader or registry change affects plugin authors, update the public SDK,
-  docs, and contract tests instead of relying on incidental internals.
-- Prefer explicit activation planning from manifest/descriptor ownership over
-  “load everything in this scope” behavior. Broad registry materialization
-  should be the exception, not the design center.
-- Do not normalize "plugin-owned" into "core-owned" by scattering direct reads
-  of `plugins.entries.<id>.config` through unrelated core paths. Prefer generic
-  helpers, plugin runtime hooks, manifest metadata, and explicit auto-enable
-  wiring.
-- When plugin-owned tools or provider fallbacks need core participation, keep
-  the contract generic and honor plugin disablement plus SecretRef semantics.
-- Keep contract loading and contract tests on the dedicated bundled registry
-  path. Do not make contract validation depend on activating providers through
-  unrelated production resolution flows.
-- Prefer shared provider-family helpers over ad hoc policy in plugin registry
-  hooks. If multiple providers need the same replay policy, tool compat, stream
-  wrapper composition, or payload patch behavior, centralize that helper before
-  adding another plugin-local lambda.
-- Keep provider policy layers separated:
-  auth/catalog/onboarding stay plugin-owned,
-  transport/replay/tool compat families belong in shared helpers,
-  registry/runtime code should compose those layers rather than re-encoding
-  policy inline.
-- When a provider hook grows a nested chain of wrapper composition or repeated
-  compat flags, treat that as a regression signal. Extract the shared helper or
-  composer instead of letting one more plugin carry a near-copy.
-- Treat mutable global runtime registry state as compatibility scaffolding, not
-  the desired source of truth for request-time execution. Prefer immutable or
-  request-scoped handles when adding new runtime flows.
-- If setup, discovery, or doctor flows need plugin runtime, make that need
-  explicit and narrow. Do not let cold control-plane paths quietly import broad
-  runtime surfaces.
-- Resolver and public-surface loader tests must use generated tiny plugin
-  fixtures for broad `api.js` / `runtime-api.js` fallback behavior. Do not point
-  those tests at real bundled plugin source APIs just to prove path resolution.
+- Separate control-plane/runtime-plane concerns: discovery, manifest parsing, config validation, setup/onboarding hints, activation planning → control plane; actual plugin execution → runtime resolution.
+- Preserve manifest-first behavior: discovery, config validation, setup work from metadata before plugin runtime executes.
+- Align loader behavior with documented Plugin SDK/manifest contracts. No private backdoors for bundled plugins unavailable to external plugins.
+- Plugin values: admit once at load/registration through existing manifest, provenance, load-policy owners, then pass by reference. Plugins must not mutate values after handing them to host. Managed callables scoped; bind each stream's scope, abort propagation, lease once for its lifetime. See [plugin value boundary](../../docs/plugins/sdk-runtime.md#plugin-value-boundary).
+- Control-plane paths (discovery, inventory, setup, doctor) stay on metadata, light exports, typed contracts. Import plugin runtime only for execution, through an explicit narrow surface; loader/registry/public-artifact changes never eagerly import bundled runtime barrels.
+- Prefer explicit manifest/descriptor-owned activation planning over “load everything in this scope”. Broad registry materialization = exception, not design center.
+- Never normalize "plugin-owned" into "core-owned" via scattered direct `plugins.entries.<id>.config` reads in unrelated core paths. Prefer generic helpers, plugin runtime hooks, manifest metadata, explicit auto-enable wiring.
+- Plugin-owned tools/provider fallbacks needing core participation: generic contract; honor plugin disablement + SecretRef semantics.
+- Contract loading/tests: dedicated bundled registry path. Never depend on provider activation through unrelated production resolution flows.
+- Separate provider policy layers: auth/catalog/onboarding → plugin-owned; transport/replay/tool compat families → shared helpers; registry/runtime code composes layers, never re-encoding policy inline.
+- Mutable global runtime registry state = compatibility scaffolding, not desired request-time execution source of truth. New runtime flows: prefer immutable/request-scoped handles.
+- Resolver/public-surface loader tests: generated tiny plugin fixtures for broad `api.js` / `runtime-api.js` fallback behavior. Never real bundled plugin source APIs merely for path resolution proof.
 
 ## Availability And Selection
 
-- Gateway plugin metadata is stable while the Gateway runs. Reuse current
-  snapshots, install records, discovery, lookup tables, and bounded process
-  caches; avoid per-call stat/read/hash freshness. Metadata changes require
-  restart or the plugin owner's explicit reload/install/doctor flow. Keep caches
-  lifecycle-owned and test-clearable, not broad persistent stores.
-- Repeated availability checks and catalog selection consume prepared local
-  facts. Remote catalog discovery and provider probes belong to initialization
-  or the owner's refresh operation, not each request or UI render. A second
-  request-time cache or polling loop is not the fix for repeated discovery.
-- Keep configured/eligible state distinct from live health. A present credential
-  or cached descriptor does not prove a service is reachable. Explicit health
-  probes, credential refresh, and actual provider/tool execution retain their
-  network contracts.
+- Gateway plugin metadata stable while Gateway runs. Metadata changes: restart or plugin owner's explicit reload/install/doctor flow. Caches: lifecycle-owned, test-clearable, not broad persistent stores.
+- Repeated availability checks/catalog selection: prepared local facts. Remote catalog discovery/provider probes → initialization or owner's refresh, never each request/UI render.
+- Keep configured/eligible state distinct from live health. Present credential/cached descriptor ≠ reachable service. Explicit health probes, credential refresh, actual provider/tool execution retain network contracts.
 
 ## Verification
 
-- If you touch loader, registry, activation, or public-artifact code that can
-  change bundled plugin import fanout, run `pnpm build`.
-- If the change can alter bundled plugin startup cost, re-profile the affected
-  plugin entrypoint with:
-  `OPENCLAW_LOCAL_CHECK=0 node --import tsx scripts/profile-extension-memory.mts --extension <id> --skip-combined --concurrency 1`
+- Loader/registry/activation/public-artifact changes that can change bundled plugin import fanout: `pnpm build`.
+- Changes that can alter bundled plugin startup cost: re-profile affected plugin entrypoint:
+  `pnpm test:extensions:memory -- --extension <id> --skip-combined --concurrency 1`

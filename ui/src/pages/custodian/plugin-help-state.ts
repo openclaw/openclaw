@@ -10,8 +10,6 @@ export type Publication = {
   owner: object;
   reference: SystemAgentPluginReference;
   pathname: string;
-  overview: boolean;
-  installed: boolean;
 };
 type HelpState = {
   identity: CustodianSessionOwner;
@@ -20,7 +18,6 @@ type HelpState = {
   pendingDraft: string;
   focusRequest: number;
   selectionEpoch: number;
-  seenGateways: Set<string>;
   listeners: Set<() => void>;
 };
 const states = new WeakMap<PluginHelpContext, HelpState>();
@@ -35,15 +32,16 @@ export function pluginHelpState(context: PluginHelpContext): HelpState {
       pendingDraft: "",
       focusRequest: 0,
       selectionEpoch: 0,
-      seenGateways: new Set(),
       listeners: new Set(),
     };
     states.set(context, state);
     const owned = state;
+    // Gateway receipts retire scoped publications and drafts before pending help requests can complete.
     context.gateway.subscribe(() => {
       synchronize(context, owned);
       notifyPluginHelp(owned);
     });
+    // Navigation immediately retires the publication epoch used by pending help requests.
     context.router.subscribe(() => {
       if (owned.publication && owned.publication.pathname !== pluginHelpPathname(context)) {
         owned.publication = undefined;
@@ -72,28 +70,11 @@ function synchronize(context: PluginHelpContext, state: HelpState): void {
 }
 
 export function notifyPluginHelp(state: HelpState): void {
-  for (const listener of state.listeners) {
-    listener();
-  }
+  state.listeners.forEach((listener) => listener());
 }
 
 export function subscribePluginHelp(context: PluginHelpContext, listener: () => void): () => void {
   const state = pluginHelpState(context);
   state.listeners.add(listener);
   return () => state.listeners.delete(listener);
-}
-
-/** The dock owns availability/width and calls this only when it can actually open. */
-export function consumePluginHelpAutoOpen(context: PluginHelpContext): boolean {
-  const state = pluginHelpState(context);
-  const url = context.gateway.connection.gatewayUrl;
-  if (!state.publication?.overview || !state.publication.installed || state.seenGateways.has(url)) {
-    return false;
-  }
-  state.seenGateways.add(url);
-  return true;
-}
-
-export function dismissPluginHelpAutoOpen(context: PluginHelpContext): void {
-  pluginHelpState(context).seenGateways.add(context.gateway.connection.gatewayUrl);
 }

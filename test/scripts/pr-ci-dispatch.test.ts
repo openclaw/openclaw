@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
@@ -12,18 +12,33 @@ const baseSha = "1111111111111111111111111111111111111111";
 const workflowSha = "2222222222222222222222222222222222222222";
 const changedSha = "fedcba9876543210fedcba9876543210fedcba98";
 const runUrl = "https://github.com/openclaw/openclaw/actions/runs/99";
-const summary = formatCrabboxGateCheckSummary({
-  baseSha,
-  headSha,
-  leaseId: "cbx_def456",
-  planDigest: "a".repeat(64),
-  runId: "run_abc123",
-  targetCount: 7,
-  workflowSha,
-});
+const summary = (proofBase = baseSha) =>
+  formatCrabboxGateCheckSummary({
+    baseSha: proofBase,
+    headSha,
+    leaseId: "cbx_def456",
+    planDigest: "a".repeat(64),
+    runId: "run_abc123",
+    targetCount: 7,
+    workflowSha,
+  });
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
-function createFakeGh() {
+type RunOptions = {
+  backend?: "ci" | "crabbox";
+  checkOnLaterPage?: boolean;
+  mode?: "head-change";
+  runTitle?: string;
+  wrongCheck?: boolean;
+  pending?: boolean;
+  resume?: string;
+  run?: Record<string, unknown>;
+  finalRun?: Record<string, unknown>;
+  proofBase?: string;
+  dispatchFails?: boolean;
+};
+
+function createFiles() {
   const tempDir = tempDirs.make("openclaw-pr-ci-dispatch-");
   const binDir = join(tempDir, "bin");
   const pathGh = join(binDir, "gh");
@@ -32,6 +47,7 @@ function createFakeGh() {
   const dispatched = join(tempDir, "dispatched");
   const pollingPreload = join(tempDir, "immediate-poll.mjs");
   mkdirSync(binDir);
+  mkdirSync(join(tempDir, ".local"));
   const fakeGhScript = `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\t%s\\n' "$(basename "$0")" "$*" >> "$OPENCLAW_TEST_GH_CALLS"
@@ -47,6 +63,7 @@ case "$1 $2" in
   "workflow run")
     test "\${GH_TOKEN-}" = "forwarded-test-token"
     : > "$OPENCLAW_TEST_GH_DISPATCHED"
+    if [ "\${OPENCLAW_TEST_DISPATCH_FAIL:-}" = true ]; then exit 1; fi
     ;;
   "api --method")
     case "$4" in
@@ -57,18 +74,23 @@ case "$1 $2" in
           printf '{"workflow_runs":[]}\\n'
         fi
         ;;
-      *"/actions/runs/99") printf '%s\\n' "$OPENCLAW_TEST_RUN" ;;
+      *"/actions/runs/99")
+        if [ -e "$OPENCLAW_TEST_GH_DISPATCHED.checked" ]; then
+          printf '%s\\n' "$OPENCLAW_TEST_FINAL_RUN"
+        else
+          printf '%s\\n' "$OPENCLAW_TEST_RUN"
+        fi
+        ;;
       *) echo "unexpected API: $*" >&2; exit 2 ;;
     esac
     ;;
-  "api --paginate") printf '%s\\n' "$OPENCLAW_TEST_CHECK_PAGES" ;;
+  "api --paginate") : > "$OPENCLAW_TEST_GH_DISPATCHED.checked"; printf '%s\\n' "$OPENCLAW_TEST_CHECK_PAGES" ;;
   *) echo "unexpected gh invocation: $*" >&2; exit 2 ;;
 esac
 `;
-  writeFileSync(pathGh, fakeGhScript);
-  writeFileSync(realGh, fakeGhScript);
-  chmodSync(pathGh, 0o755);
-  chmodSync(realGh, 0o755);
+  for (const path of [pathGh, realGh]) {
+    writeFileSync(path, fakeGhScript, { mode: 0o755 });
+  }
   // The GitHub fixture is synchronous; keep poll scheduling without real backoff waits.
   writeFileSync(
     pollingPreload,
@@ -76,19 +98,10 @@ esac
 globalThis.setTimeout = (callback, _delay, ...args) => realSetTimeout(callback, 0, ...args);
 `,
   );
-  return { binDir, calls, dispatched, pollingPreload, realGh };
+  return { binDir, calls, dispatched, pollingPreload, realGh, tempDir };
 }
 
-function runDispatch(
-  fakeGh: ReturnType<typeof createFakeGh>,
-  options: {
-    backend?: "ci" | "crabbox";
-    checkOnLaterPage?: boolean;
-    mode?: "head-change";
-    runTitle?: string;
-    wrongCheck?: boolean;
-  } = {},
-) {
+function runDispatch(fakeGh: ReturnType<typeof createFiles>, options: RunOptions = {}) {
   const crabbox = options.backend === "crabbox";
   const runList = {
     workflow_runs: [
@@ -108,8 +121,21 @@ function runDispatch(
     head_sha: headSha,
     id: 88,
     name: "openclaw/crabbox-gate",
-    output: { summary },
+    output: { summary: summary(options.proofBase) },
     status: "completed",
+  };
+  const run = {
+    conclusion: "success",
+    display_title: `PR Crabbox gate #12345 / ${headSha}`,
+    event: "workflow_dispatch",
+    head_branch: "main",
+    head_sha: workflowSha,
+    html_url: runUrl,
+    id: 99,
+    run_attempt: 1,
+    path: ".github/workflows/pr-crabbox-gate-publisher.yml",
+    status: "completed",
+    ...options.run,
   };
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -127,16 +153,9 @@ function runDispatch(
     OPENCLAW_TEST_GH_DISPATCHED: fakeGh.dispatched,
     OPENCLAW_TEST_GH_MODE: options.mode ?? "",
     OPENCLAW_TEST_HEAD_SHA: headSha,
-    OPENCLAW_TEST_RUN: JSON.stringify({
-      conclusion: "success",
-      event: "workflow_dispatch",
-      head_branch: "main",
-      head_sha: workflowSha,
-      html_url: runUrl,
-      id: 99,
-      path: ".github/workflows/pr-crabbox-gate-publisher.yml",
-      status: "completed",
-    }),
+    OPENCLAW_TEST_RUN: JSON.stringify(run),
+    OPENCLAW_TEST_FINAL_RUN: JSON.stringify({ ...run, ...options.finalRun }),
+    OPENCLAW_TEST_DISPATCH_FAIL: String(options.dispatchFails ?? false),
     OPENCLAW_TEST_RUN_LIST: JSON.stringify(runList),
     PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
   };
@@ -160,18 +179,84 @@ function runDispatch(
       baseSha,
       "false",
       ...(crabbox ? ["--backend", "crabbox"] : []),
+      ...(options.pending ? ["--pending-gates"] : []),
+      ...(options.resume ? ["--resume-crabbox-run", options.resume] : []),
     ],
-    { encoding: "utf8", env },
+    { cwd: fakeGh.tempDir, encoding: "utf8", env },
   );
+}
+
+function writePending(fakeGh: ReturnType<typeof createFiles>, extra = "") {
+  writeFileSync(
+    join(fakeGh.tempDir, ".local/gates.env"),
+    `PR_NUMBER=12345\nGATES_MODE=remote_crabbox_aws_pending\nLAST_VERIFIED_HEAD_SHA=${headSha}\nFULL_GATES_HEAD_SHA=''\n${extra}`,
+  );
+}
+
+function pendingText(fakeGh: ReturnType<typeof createFiles>) {
+  return readFileSync(join(fakeGh.tempDir, ".local/gates.env"), "utf8");
+}
+
+function writeCompleted(fakeGh: ReturnType<typeof createFiles>, provenance = "") {
+  // Literal receipt shape from the pre-resume gate writer, including its empty
+  // hosted stamp. New provenance is optional only as one complete group.
+  writeFileSync(
+    join(fakeGh.tempDir, ".local/gates.env"),
+    `PR_NUMBER=12345
+DOCS_ONLY=false
+CHANGELOG_REQUIRED=false
+GATES_MODE=remote_crabbox_aws
+HOSTED_GATES_TARGET_HEAD_SHA=''
+LAST_VERIFIED_HEAD_SHA=${headSha}
+FULL_GATES_HEAD_SHA=${headSha}
+REMOTE_GATES_PROVIDER=aws
+REMOTE_GATES_RUN_ID=run_abc123
+REMOTE_GATES_LEASE_ID=cbx_def456
+REMOTE_GATES_RUN_URL=${runUrl}
+GATES_PASSED_AT=2026-09-26T00:00:00Z
+${provenance}
+`,
+  );
+}
+
+function createFakeGh(
+  mode: "ci" | "crabbox" | "pending" | "resume" | "completed" = "ci",
+  extra = "",
+) {
+  const files = createFiles();
+  const defaults: RunOptions = {
+    backend: mode === "ci" ? "ci" : "crabbox",
+    pending: ["pending", "resume", "completed"].includes(mode),
+    resume: mode === "resume" ? "99" : undefined,
+  };
+  if (mode === "pending" || mode === "resume") {
+    writePending(files, extra);
+  }
+  const run = (options: RunOptions = {}) => runDispatch(files, { ...defaults, ...options });
+  const receipt = () => pendingText(files);
+  return {
+    ...files,
+    ok(options: RunOptions = {}) {
+      const result = run(options);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      return result;
+    },
+    refuse(options: RunOptions = {}) {
+      const result = run(options);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      return result;
+    },
+    receipt,
+    callsText: () => readFileSync(files.calls, "utf8"),
+  };
 }
 
 describePosix("scripts/pr ci-dispatch", () => {
   it("dispatches ordinary CI for the exact remote head", () => {
     const fakeGh = createFakeGh();
-    const result = runDispatch(fakeGh);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const result = fakeGh.ok();
     expect(result.stdout).toContain(`observed_run_url=${runUrl}`);
-    const calls = readFileSync(fakeGh.calls, "utf8");
+    const calls = fakeGh.callsText();
     expect(calls).toContain("gh\tapi repos/openclaw/openclaw/pulls/12345 --jq .head.sha");
     expect(calls).not.toContain("pr view");
     expect(calls).toContain(
@@ -181,11 +266,11 @@ describePosix("scripts/pr ci-dispatch", () => {
 
   it("finds the publisher-owned Crabbox proof on a later check-run page", () => {
     const fakeGh = createFakeGh();
-    const result = runDispatch(fakeGh, { backend: "crabbox", checkOnLaterPage: true });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const result = fakeGh.ok({ backend: "crabbox", checkOnLaterPage: true });
     expect(result.stdout).toContain(
       JSON.stringify({
         actionsRunId: 99,
+        actionsRunAttempt: 1,
         actionsRunUrl: runUrl,
         backend: "crabbox",
         checkId: 88,
@@ -200,7 +285,7 @@ describePosix("scripts/pr ci-dispatch", () => {
         workflowSha,
       }),
     );
-    const calls = readFileSync(fakeGh.calls, "utf8");
+    const calls = fakeGh.callsText();
     expect(calls).toContain(
       `real-gh\tworkflow run pr-crabbox-gate-publisher.yml --ref main -f pr_number=12345 -f head_sha=${headSha} -f base_sha=${baseSha}`,
     );
@@ -210,24 +295,16 @@ describePosix("scripts/pr ci-dispatch", () => {
     );
   });
 
-  it.each(["PR Crabbox gate", "PR Crabbox gate #12345"])(
-    "does not accept a generic or truncated Crabbox run title: %s",
-    (runTitle) => {
-      const result = runDispatch(createFakeGh(), { backend: "crabbox", runTitle });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stdout).toContain("run_url=pending");
-      expect(result.stdout).not.toContain('"backend":"crabbox"');
-    },
-    40_000,
-  );
+  it("does not accept a truncated Crabbox run title", () => {
+    const result = createFakeGh().ok({ backend: "crabbox", runTitle: "PR Crabbox gate #12345" });
+    expect(result.stdout).toContain("run_url=pending");
+    expect(result.stdout).not.toContain('"backend":"crabbox"');
+  }, 40_000);
 
-  it("rejects caller-supplied proof handles", () => {
-    const fakeGh = createFakeGh();
-    const result = spawnSync(
-      process.execPath,
+  it.each([
+    [
+      "caller-supplied proof",
       [
-        dispatchScript,
-        "12345",
         "contributor/fix-hosted-gates",
         headSha,
         baseSha,
@@ -237,50 +314,221 @@ describePosix("scripts/pr ci-dispatch", () => {
         "--run-id",
         "run_attacker",
       ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_GH_BIN: fakeGh.realGh,
-          OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
-          PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
-        },
+    ],
+    ["fork PR", ["fix", headSha, baseSha, "true"]],
+  ])("rejects %s before invoking GitHub", (_name, args) => {
+    const fakeGh = createFakeGh();
+    const result = spawnSync(process.execPath, [dispatchScript, "12345", ...args], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_GH_BIN: fakeGh.realGh,
+        OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
+        PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
       },
-    );
+    });
     expect(result.status).not.toBe(0);
     expect(existsSync(fakeGh.dispatched)).toBe(false);
-  });
-
-  it("fails closed for a check from the wrong app", () => {
-    const result = runDispatch(createFakeGh(), { backend: "crabbox", wrongCheck: true });
-    expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(
-      /without the exact-head GitHub Actions check/u,
-    );
-  });
-
-  it("rechecks the remote head after dispatch", () => {
-    const result = runDispatch(createFakeGh(), { mode: "head-change" });
-    expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/head changed/u);
-  });
-
-  it("rejects fork PRs before invoking GitHub", () => {
-    const fakeGh = createFakeGh();
-    const result = spawnSync(
-      process.execPath,
-      [dispatchScript, "12345", "fix", headSha, baseSha, "true"],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_GH_BIN: fakeGh.realGh,
-          OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
-          PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
-        },
-      },
-    );
-    expect(result.status).not.toBe(0);
     expect(existsSync(fakeGh.calls)).toBe(false);
   });
+
+  it.each([
+    [{ backend: "crabbox", wrongCheck: true }, /without the exact-head GitHub Actions check/u],
+    [{ mode: "head-change" }, /head changed/u],
+  ] as const)("rejects dispatch observation drift: %j", (options, error) => {
+    const result = createFakeGh().refuse(options);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(error);
+  });
+
+  it("resumes a legacy pending run without dispatch or discovery and retains only pending provenance", () => {
+    const fakeGh = createFakeGh("resume");
+    const result = fakeGh.ok();
+    expect(result.stdout).toContain('"actionsRunId":99');
+    const calls = fakeGh.callsText();
+    expect(calls).not.toContain("workflow run");
+    expect(calls).not.toContain("actions/workflows/");
+    expect(fakeGh.receipt()).toContain("PENDING_CRABBOX_ACTIONS_RUN_ID=99");
+    expect(fakeGh.receipt()).toContain("PENDING_CRABBOX_ATTEMPT=1");
+    expect(fakeGh.receipt()).toContain("FULL_GATES_HEAD_SHA=''");
+    expect(fakeGh.receipt()).toContain("GATES_MODE=remote_crabbox_aws_pending");
+  });
+
+  it("retains dispatch uncertainty and refuses an automatic second allocation", () => {
+    const fakeGh = createFakeGh("pending");
+    fakeGh.refuse({ dispatchFails: true });
+    expect(fakeGh.receipt()).toContain("PENDING_CRABBOX_STATE=dispatching");
+    const second = fakeGh.refuse();
+    expect(second.stderr).toContain("No new proof dispatched");
+    expect(fakeGh.callsText().match(/workflow run/gu)).toHaveLength(1);
+    fakeGh.ok({ resume: "99" });
+    expect(fakeGh.callsText().match(/workflow run/gu)).toHaveLength(1);
+  });
+
+  it.each([
+    ["writeFileSync", false],
+    ["fsyncSync", false],
+    ["closeSync", false],
+    ["renameSync", false],
+    ["fsyncSync", true],
+  ] as const)("does not dispatch after %s fails, cleanup failure=%s", (operation, cleanupFails) => {
+    const fakeGh = createFakeGh("pending");
+    const before = fakeGh.receipt();
+    writeFileSync(
+      fakeGh.pollingPreload,
+      readFileSync(fakeGh.pollingPreload, "utf8") +
+        `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const open = fs.openSync;
+let owned;
+fs.openSync = (path, ...args) => {
+  const fd = open(path, ...args);
+  if (String(path).endsWith(".tmp")) owned = fd;
+  return fd;
+};
+const operation = ${JSON.stringify(operation)};
+const original = fs[operation];
+fs[operation] = (...args) => {
+  if (operation === "renameSync" ? String(args[0]).endsWith(".tmp") : args[0] === owned) {
+    if (operation === "closeSync") original(...args);
+    throw new Error("injected-" + operation);
+  }
+  return original(...args);
+};
+if (${cleanupFails}) fs.unlinkSync = () => { throw new Error("injected-cleanup"); };
+syncBuiltinESMExports();
+`,
+    );
+    const result = fakeGh.refuse();
+    expect(result.stderr).toContain(`injected-${operation}`);
+    if (cleanupFails) {
+      expect(result.stderr).toContain("injected-cleanup");
+    }
+    expect(fakeGh.receipt()).toBe(before);
+    expect(existsSync(fakeGh.dispatched)).toBe(false);
+    expect(
+      readdirSync(join(fakeGh.tempDir, ".local")).filter((name) => name.endsWith(".tmp")),
+    ).toHaveLength(cleanupFails ? 1 : 0);
+  });
+
+  it("records selection before terminal observation and resumes the same attempt", () => {
+    const fakeGh = createFakeGh("pending");
+    fakeGh.refuse({ run: { conclusion: "failure" } });
+    expect(fakeGh.receipt()).toContain("PENDING_CRABBOX_STATE=selected");
+    fakeGh.refuse({ resume: "99", run: { run_attempt: 2 } });
+    fakeGh.ok({ resume: "99" });
+    expect(fakeGh.callsText().match(/workflow run/gu)).toHaveLength(1);
+  });
+
+  it.each([
+    ...[
+      { id: 100 },
+      { html_url: "https://example.invalid/run/99" },
+      { display_title: "PR Crabbox gate #999 / " + headSha },
+      { event: "pull_request" },
+      { head_branch: "topic" },
+      { path: ".github/workflows/ci.yml" },
+      { run_attempt: 0 },
+      { head_sha: "bad" },
+      { conclusion: "failure" },
+    ].map((run) => ({ options: { run }, error: undefined })),
+    { options: { finalRun: { run_attempt: 2 } }, error: "run identity changed" },
+    { options: { proofBase: changedSha }, error: "does not bind the dispatched PR base" },
+  ])("rejects mismatched or racing resume proof %j without dispatch", ({ options, error }) => {
+    const fakeGh = createFakeGh("pending");
+    const result = fakeGh.refuse({ resume: "99", ...options });
+    expect(existsSync(fakeGh.dispatched)).toBe(false);
+    expect(fakeGh.receipt()).toContain("FULL_GATES_HEAD_SHA=''");
+    if (error) {
+      expect(result.stderr).toContain(error);
+    }
+  });
+
+  it.each(["01", "9007199254740992"])(
+    "rejects invalid numeric resume selector %s before GitHub",
+    (resume) => {
+      const fakeGh = createFakeGh("pending");
+      fakeGh.refuse({ resume });
+      expect(existsSync(fakeGh.calls)).toBe(false);
+    },
+  );
+
+  it.each([
+    "PENDING_CRABBOX_STATE=selected\n",
+    "PENDING_CRABBOX_STATE=dispatching\nPENDING_CRABBOX_STATE=dispatching\n",
+    "PENDING_CRABBOX_STATE=$(false)\n",
+    "PENDING_CRABBOX_UNKNOWN=1\n",
+  ])("rejects malformed retained provenance before GitHub: %s", (extra) => {
+    const fakeGh = createFakeGh("pending", extra);
+    const before = fakeGh.receipt();
+    fakeGh.refuse({ resume: "99" });
+    expect(existsSync(fakeGh.calls)).toBe(false);
+    expect(fakeGh.receipt()).toBe(before);
+  });
+  it.each([false, true])("reverifies completed gates without redispatch (legacy=%s)", (legacy) => {
+    const fakeGh = createFakeGh("completed");
+    writeCompleted(
+      fakeGh,
+      legacy
+        ? ""
+        : [
+            `REMOTE_GATES_BASE_SHA=${baseSha}`,
+            `REMOTE_GATES_WORKFLOW_SHA=${workflowSha}`,
+            "REMOTE_GATES_ACTIONS_RUN_ATTEMPT=1",
+          ].join("\n"),
+    );
+    const before = fakeGh.receipt();
+    const result = fakeGh.ok({
+      resume: "99",
+      run: { run_attempt: legacy ? 3 : 1 },
+    });
+    expect(result.stdout).toContain(`"actionsRunAttempt":${legacy ? 3 : 1}`);
+    expect(fakeGh.receipt()).toBe(before);
+    expect(existsSync(fakeGh.dispatched)).toBe(false);
+    const calls = fakeGh.callsText();
+    expect(calls).not.toContain("workflow run");
+    expect(calls).not.toContain("actions/workflows/");
+    if (!legacy) {
+      fakeGh.refuse({ resume: "99", run: { run_attempt: 2 } });
+      expect(fakeGh.receipt()).toBe(before);
+      expect(existsSync(fakeGh.dispatched)).toBe(false);
+      const wrongRun = fakeGh.refuse({ resume: "100" });
+      expect(wrongRun.stderr).toContain("does not match the selected pending publisher");
+    }
+  });
+
+  it.each(["run", "lease", "base", "selector", "partial", "failed", "attempt-race"])(
+    "refuses old completed stamp %s mismatch without changing it or dispatching",
+    (mode) => {
+      const fakeGh = createFakeGh("completed");
+      writeCompleted(fakeGh, mode === "partial" ? `REMOTE_GATES_BASE_SHA=${baseSha}` : "");
+      const path = join(fakeGh.tempDir, ".local/gates.env");
+      if (mode === "run" || mode === "lease") {
+        writeFileSync(
+          path,
+          fakeGh
+            .receipt()
+            .replace(
+              mode === "run" ? "run_abc123" : "cbx_def456",
+              mode === "run" ? "run_other" : "cbx_other",
+            ),
+        );
+      }
+      const before = fakeGh.receipt();
+      const result = fakeGh.refuse({
+        resume: mode === "selector" ? "100" : "99",
+        proofBase: mode === "base" ? changedSha : undefined,
+        run: mode === "failed" ? { conclusion: "failure" } : undefined,
+        finalRun: mode === "attempt-race" ? { run_attempt: 2 } : undefined,
+      });
+      expect(result.stdout).not.toContain('"backend":"crabbox"');
+      expect(fakeGh.receipt()).toBe(before);
+      expect(existsSync(fakeGh.dispatched)).toBe(false);
+      if (mode === "run" || mode === "lease") {
+        expect(result.stderr).toContain("retained completed broker run and lease");
+      }
+      if (mode === "base") {
+        expect(result.stderr).toContain("does not bind the dispatched PR base");
+      }
+    },
+  );
 });

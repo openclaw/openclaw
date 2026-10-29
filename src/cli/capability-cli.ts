@@ -1,13 +1,10 @@
-// Capability CLI command registration. Domain implementations live in ./capability-cli/.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import { FLAG_TERMINATOR, getCommandArgsWithRootOptions } from "../infra/cli-root-options.js";
-import { defaultRuntime } from "../runtime.js";
 import { getCommandPathWithRootOptions, normalizeRootLogLevelArgv } from "./argv.js";
-import { CAPABILITY_METADATA, findCapabilityMetadata } from "./capability-cli/metadata.js";
-import { emitJsonOrText, providerSummaryText } from "./capability-cli/output.js";
-import { runCommandWithRuntime } from "./cli-utils.js";
+import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
+import { providerSummaryText } from "./capability-cli/output.js";
+import { runCapabilityCommand } from "./capability-cli/providers-command.js";
+import { formatDocsHelp } from "./help-format.js";
 import { removeCommandByName } from "./program/command-tree.js";
 
 const capabilityCommandGroups = [
@@ -35,44 +32,49 @@ const capabilityCommandGroups = [
   ],
 ] as const;
 
-function registerCapabilityListAndInspect(capability: Command): void {
+export async function registerCapabilityCli(
+  program: Command,
+  argv: string[] = process.argv,
+): Promise<void> {
+  removeCommandByName(program, "infer");
+  removeCommandByName(program, "capability");
+
+  const capability = program
+    .command("infer")
+    .alias("capability")
+    .description("Run provider-backed inference commands through a stable CLI surface")
+    .addHelpText("after", () => formatDocsHelp("/cli/infer"));
+
   capability
     .command("list")
-    .description("List canonical capability ids and supported transports")
+    .description("List capability IDs and supported transports")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = CAPABILITY_METADATA.map((entry) => ({
+    .action((opts) =>
+      runCapabilityCommand(opts.json, providerSummaryText, () =>
+        CAPABILITY_METADATA.map((entry) => ({
           id: entry.id,
           transports: entry.transports,
           description: entry.description,
-        }));
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
-      });
-    });
+        })),
+      ),
+    );
 
   capability
     .command("inspect")
-    .description("Inspect one canonical capability id")
+    .description("Inspect one capability ID")
     .requiredOption("--name <capability>", "Capability id")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const entry = findCapabilityMetadata(String(opts.name));
+    .action((opts) =>
+      runCapabilityCommand(opts.json, undefined, () => {
+        const id = String(opts.name);
+        const entry = CAPABILITY_METADATA.find((candidate) => candidate.id === id);
         if (!entry) {
           throw new Error(`Unknown capability: ${String(opts.name)}`);
         }
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), entry, (value) =>
-          JSON.stringify(value, null, 2),
-        );
-      });
-    });
-}
+        return entry;
+      }),
+    );
 
-async function registerCapabilityDomainCommands(
-  capability: Command,
-  argv: string[],
-): Promise<void> {
   // Root log levels are normalized after registration. Reuse that view for selection,
   // leaving help and unknown options ahead of a domain on the complete-tree path.
   const selectionArgv = normalizeRootLogLevelArgv(argv);
@@ -101,25 +103,4 @@ async function registerCapabilityDomainCommands(
   for (const register of registrars) {
     register(capability);
   }
-}
-
-export async function registerCapabilityCli(
-  program: Command,
-  argv: string[] = process.argv,
-): Promise<void> {
-  removeCommandByName(program, "infer");
-  removeCommandByName(program, "capability");
-
-  const capability = program
-    .command("infer")
-    .alias("capability")
-    .description("Run provider-backed inference commands through a stable CLI surface")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/infer", "docs.openclaw.ai/cli/infer")}\n`,
-    );
-
-  registerCapabilityListAndInspect(capability);
-  await registerCapabilityDomainCommands(capability, argv);
 }

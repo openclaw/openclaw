@@ -1,18 +1,29 @@
 import type { AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
 import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatch.types.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayClient } from "../server-methods/client-types.js";
 
 export type InternalAgentTurnPrincipalOptions = {
   // Authorization can await; the lifecycle owner must still be current before dispatch.
+  // Agent dispatch carries this into accepted execution as its Gateway lifetime, so it must
+  // not carry caller authority; check that in `assertAdmissionCurrent`.
   assertContextCurrent?: () => void;
   client: GatewayClient;
   isWebchatConnect?: (params: ConnectParams | null | undefined) => boolean;
 };
 
 export type AgentTurnStartOwner = {
-  observe: () => { executionStarted: boolean; expiresAtMs: number } | undefined;
+  observe: () =>
+    | {
+        executionStarted: boolean;
+        /** Exact controller budget; null means a live owner wait has no deadline. */
+        startDeadlineAtMs?: number | null;
+      }
+    | undefined;
   abort: () => boolean;
 };
 
@@ -23,11 +34,21 @@ export type RequesterSettleWakeReplay = {
 };
 
 export type InternalAgentTurnDispatchOptions = {
+  /** Exact in-process mailbox source reserved by the input owner. */
+  controllerInput?: SessionControllerInput;
   /** Internal completion delivery owns its hidden input and durable processing receipt. */
   privateCompletion?: true;
+  /** Trusted input-owner policy; not accepted from the wire request. */
+  replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
+  /** Refresh the source before dispatch; accepted turns own their later execution. */
+  prepareDispatchCurrent?: () => Promise<void>;
   // The source owns admission only; accepted children execute under their own lifetime.
   assertAdmissionCurrent?: () => void;
+  /** Validates cancellation publication independently of the canceled execution lifetime. */
+  assertCancellationCurrent?: () => void;
+  /** Accepted execution retains this permission check through tool and delivery effects. */
+  executionSource?: SessionSourceAssertion;
   cancelOnDeadline?: boolean;
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
@@ -52,6 +73,7 @@ export type InternalAgentTurnFacade = {
     timeoutMs?: number,
     signal?: AbortSignal,
     onSignalAbort?: () => Promise<void> | void,
+    prepareDispatchCurrent?: () => Promise<void>,
   ) => Promise<T>;
 };
 

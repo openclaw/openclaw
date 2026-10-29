@@ -1,175 +1,66 @@
 // NEVER convert to top-level imports - breaks browser/Vite builds
-let existsSync: typeof import("node:fs").existsSync | null = null;
-let homedir: typeof import("node:os").homedir | null = null;
-let join: typeof import("node:path").join | null = null;
+type NodeHelpers = {
+  existsSync: typeof import("node:fs").existsSync;
+  homedir: typeof import("node:os").homedir;
+  join: typeof import("node:path").join;
+};
+let nodeHelpers: NodeHelpers | undefined;
 
-type DynamicImport = (specifier: string) => Promise<unknown>;
-type NodeBuiltinModule =
-  | typeof import("node:fs")
-  | typeof import("node:os")
-  | typeof import("node:path");
-
-const dynamicImport: DynamicImport = (specifier) => import(specifier);
-const NODE_FS_SPECIFIER = "node:fs";
-const NODE_OS_SPECIFIER = "node:os";
-const NODE_PATH_SPECIFIER = "node:path";
-
-function loadNodeBuiltinModule(specifier: string): NodeBuiltinModule | null {
-  const getBuiltinModule = (typeof process !== "undefined" ? process : undefined) as
-    | (NodeJS.Process & { getBuiltinModule?: (id: string) => unknown })
-    | undefined;
-  if (typeof getBuiltinModule?.getBuiltinModule === "function") {
-    return getBuiltinModule.getBuiltinModule(specifier) as NodeBuiltinModule;
-  }
-  if (typeof require === "function") {
-    return require(specifier) as NodeBuiltinModule;
-  }
-  return null;
-}
-
-function loadNodeHelpersSync(): boolean {
+function loadNodeHelpersSync(): NodeHelpers | undefined {
   try {
-    const fsModule = loadNodeBuiltinModule(NODE_FS_SPECIFIER) as typeof import("node:fs") | null;
-    const osModule = loadNodeBuiltinModule(NODE_OS_SPECIFIER) as typeof import("node:os") | null;
-    const pathModule = loadNodeBuiltinModule(NODE_PATH_SPECIFIER) as
-      | typeof import("node:path")
-      | null;
-    existsSync ??= fsModule?.existsSync ?? null;
-    homedir ??= osModule?.homedir ?? null;
-    join ??= pathModule?.join ?? null;
-    if (!existsSync || !homedir || !join) {
-      return false;
-    }
-    return true;
+    const { existsSync } = process.getBuiltinModule("node:fs");
+    const { homedir } = process.getBuiltinModule("node:os");
+    const { join } = process.getBuiltinModule("node:path");
+    nodeHelpers = { existsSync, homedir, join };
   } catch {
-    return false;
+    // Browser environments may expose process without Node builtins.
   }
+  return nodeHelpers;
 }
 
 // Eagerly load in Node.js/Bun environment only
 if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-  if (!loadNodeHelpersSync()) {
-    void dynamicImport(NODE_FS_SPECIFIER).then((m) => {
-      existsSync = (m as typeof import("node:fs")).existsSync;
-    });
-    void dynamicImport(NODE_OS_SPECIFIER).then((m) => {
-      homedir = (m as typeof import("node:os")).homedir;
-    });
-    void dynamicImport(NODE_PATH_SPECIFIER).then((m) => {
-      join = (m as typeof import("node:path")).join;
-    });
-  }
-}
-
-let procEnvCache: Map<string, string> | null = null;
-
-function getProcessEnv(): NodeJS.ProcessEnv | undefined {
-  return typeof process === "undefined" ? undefined : process.env;
-}
-
-/**
- * Fallback for https://github.com/oven-sh/bun/issues/27802
- * Bun compiled binaries have an empty `process.env` inside sandbox
- * environments on Linux. We can recover the env from `/proc/self/environ`.
- */
-function getProcEnv(key: string): string | undefined {
-  if (typeof process === "undefined" || !process.versions?.bun) {
-    return undefined;
-  }
-  const env = getProcessEnv();
-  if (!env) {
-    return undefined;
-  }
-
-  // If process.env already has entries, the bug is not triggered.
-  if (Object.keys(env).length > 0) {
-    return undefined;
-  }
-
-  if (procEnvCache === null) {
-    procEnvCache = new Map();
-    try {
-      const fsModule = loadNodeBuiltinModule(NODE_FS_SPECIFIER) as typeof import("node:fs") | null;
-      if (!fsModule) {
-        return undefined;
-      }
-      const data = fsModule.readFileSync("/proc/self/environ", "utf-8");
-      for (const entry of data.split("\0")) {
-        const idx = entry.indexOf("=");
-        if (idx > 0) {
-          procEnvCache.set(entry.slice(0, idx), entry.slice(idx + 1));
-        }
-      }
-    } catch {
-      // /proc/self/environ may not be readable.
-    }
-  }
-
-  return procEnvCache.get(key);
+  loadNodeHelpersSync();
 }
 
 function getEnvValue(key: string): string | undefined {
-  return (getProcessEnv()?.[key] || getProcEnv(key))?.trim() || undefined;
+  return (typeof process === "undefined" ? undefined : process.env)?.[key]?.trim() || undefined;
 }
 
 let cachedVertexAdcCredentialsExists: true | null = null;
 
 function hasVertexAdcCredentials(): boolean {
   if (cachedVertexAdcCredentialsExists === null) {
-    if (!existsSync || !homedir || !join) {
-      const isNode =
-        typeof process !== "undefined" && (process.versions?.node || process.versions?.bun);
-      if (!isNode || !loadNodeHelpersSync()) {
-        return false;
-      }
-    }
-    const nodeExistsSync = existsSync;
-    const nodeHomedir = homedir;
-    const nodeJoin = join;
-    if (!nodeExistsSync || !nodeHomedir || !nodeJoin) {
+    const helpers =
+      nodeHelpers ??
+      (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)
+        ? loadNodeHelpersSync()
+        : undefined);
+    if (!helpers) {
       return false;
     }
-
-    // Check GOOGLE_APPLICATION_CREDENTIALS env var first (standard way)
-    const gacPath = getEnvValue("GOOGLE_APPLICATION_CREDENTIALS");
-    if (gacPath) {
-      cachedVertexAdcCredentialsExists = nodeExistsSync(gacPath) ? true : null;
-    } else {
-      // Fall back to default ADC path (lazy evaluation)
-      cachedVertexAdcCredentialsExists = nodeExistsSync(
-        nodeJoin(nodeHomedir(), ".config", "gcloud", "application_default_credentials.json"),
-      )
-        ? true
-        : null;
-    }
+    const { existsSync, homedir, join } = helpers;
+    const path =
+      getEnvValue("GOOGLE_APPLICATION_CREDENTIALS") ??
+      join(homedir(), ".config", "gcloud", "application_default_credentials.json");
+    cachedVertexAdcCredentialsExists = existsSync(path) ? true : null;
   }
   return cachedVertexAdcCredentialsExists === true;
 }
 
 function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
-  if (provider === "github-copilot") {
-    return ["COPILOT_GITHUB_TOKEN"];
-  }
-
-  // ANTHROPIC_OAUTH_TOKEN takes precedence over ANTHROPIC_API_KEY
-  if (provider === "anthropic") {
-    return ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
-  }
-
-  if (provider === "moonshot") {
-    return ["MOONSHOT_API_KEY", "KIMI_API_KEY"];
-  }
-
-  if (provider === "kimi" || provider === "kimi-coding") {
-    return ["KIMI_API_KEY", "KIMICODE_API_KEY"];
-  }
-
-  const envMap: Record<string, string> = {
+  const envMap: Record<string, string | string[]> = {
+    "github-copilot": "COPILOT_GITHUB_TOKEN",
+    anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    moonshot: ["MOONSHOT_API_KEY", "KIMI_API_KEY"],
+    kimi: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
+    "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
     openai: "OPENAI_API_KEY",
     meta: "MODEL_API_KEY",
     "azure-openai-responses": "AZURE_OPENAI_API_KEY",
     deepseek: "DEEPSEEK_API_KEY",
     google: "GEMINI_API_KEY",
+    "google-interactions": "GEMINI_API_KEY",
     "google-vertex": "GOOGLE_CLOUD_API_KEY",
     groq: "GROQ_API_KEY",
     cerebras: "CEREBRAS_API_KEY",
@@ -196,7 +87,7 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
   };
 
   const envVar = envMap[provider];
-  return envVar ? [envVar] : undefined;
+  return Array.isArray(envVar) ? envVar : envVar ? [envVar] : undefined;
 }
 
 /**

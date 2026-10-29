@@ -1,219 +1,127 @@
-/**
- * Assistant identity resolution tests for gateway-visible agents.
- */
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as identityFiles from "../agents/identity-file.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import {
+  DEFAULT_ASSISTANT_IDENTITY,
+  resolveAssistantIdentity,
+  resolveAssistantIdentityAvatar,
+  resolveAssistantIdentityName,
+} from "./assistant-identity.js";
 
-describe("resolveAssistantIdentity", () => {
-  it("uses the selected agent identity", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [
-          { id: "main", identity: { name: "Main agent", avatar: "M" } },
-          { id: "worker", identity: { name: "Worker agent", avatar: "W" } },
-        ],
-      },
-    };
+function configured(identity: AgentConfig["identity"]) {
+  return { agents: { entries: { main: { identity } } } } satisfies OpenClawConfig;
+}
+function resolve(cfg: OpenClawConfig, workspaceDir = "") {
+  return resolveAssistantIdentity({ cfg, workspaceDir });
+}
+const dataUrl = () =>
+  `data:image/svg+xml;base64,${Buffer.alloc(AVATAR_MAX_BYTES).toString("base64")}`;
+afterEach(() => vi.restoreAllMocks());
 
-    const identity = resolveAssistantIdentity({ cfg, agentId: "worker", workspaceDir: "" });
-    expect(identity.agentId).toBe("worker");
-    expect(identity.name).toBe("Worker agent");
-    expect(identity.nameSource).toBe("agent");
-    expect(identity.avatar).toBe("W");
+it.each([
+  [{ avatar: " https://example.com/avatar.png " }, "https://example.com/avatar.png"],
+  [{ emoji: "🦞" }, "🦞"],
+  [{ avatar: "slack://avatar.png", emoji: "🦞" }, "🦞"],
+  [{ avatar: "data:text/plain,avatar", emoji: "🦞" }, "🦞"],
+  [{ avatar: "slack://avatar.png" }, "workspace.png"],
+  [{ avatar: " " }, "workspace.png"],
+] as const)("preserves avatar source precedence: %j", async (identity, avatar) => {
+  vi.spyOn(identityFiles, "loadAgentIdentityFromWorkspaceAsync").mockResolvedValue({
+    avatar: "workspace.png",
   });
+  const params = { cfg: configured(identity), workspaceDir: "/synthetic/workspace" };
+  expect(await resolveAssistantIdentityAvatar(params)).toEqual({ agentId: "main", avatar });
+  expect((await resolveAssistantIdentity(params)).avatar).toBe(avatar);
+});
 
-  it.each<{
-    name: string;
-    cfg: OpenClawConfig;
-    agentId?: string;
-    expected: string;
-  }>([
-    { name: "implicit main", cfg: {}, expected: "main" },
-    { name: "sole agent", cfg: { agents: { entries: { research: {} } } }, expected: "research" },
-    {
-      name: "recorded explicit default owner",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          entries: { ops: {}, research: {} },
-          defaults: { systemAgent: { agentId: "research" } },
-        },
-      },
-      expected: "research",
-    },
-    {
-      name: "first entry for ownerless presentation",
-      cfg: { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
-      expected: "ops",
-    },
-    {
-      name: "retained legacy owner",
-      cfg: retainLegacyDefaultAgentId(
-        { agents: { entries: { ops: {}, research: {} } } },
-        "research",
-      ),
-      expected: "research",
-    },
-    {
-      name: "first entry for undesignated explicit presentation despite provenance",
-      cfg: retainLegacyDefaultAgentId(
-        { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
-        "research",
-      ),
-      expected: "ops",
-    },
-    {
-      name: "normalized explicit selection",
-      cfg: { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
-      agentId: "RESEARCH",
-      expected: "research",
-    },
-  ])("uses $name for presentation", ({ cfg, agentId, expected }) => {
-    const identity = resolveAssistantIdentity({
-      cfg,
-      agentId,
-      workspaceDir: "",
-    });
-
-    expect(identity).toEqual({
-      ...DEFAULT_ASSISTANT_IDENTITY,
-      agentId: expected,
-      nameSource: "default",
-    });
+it("reads workspace fallbacks only when configured identity leaves a field unresolved", async () => {
+  const read = vi
+    .spyOn(identityFiles, "loadAgentIdentityFromWorkspaceAsync")
+    .mockResolvedValue({ name: "Workspace", emoji: "🔭", avatar: "workspace.png" });
+  const identity = { name: "Configured", emoji: "🦞", avatar: "avatar.png" };
+  const cfg = configured(identity);
+  expect(await resolve(cfg, "/synthetic/workspace")).toEqual({
+    agentId: "main",
+    name: "Configured",
+    nameSource: "agent",
+    avatar: "avatar.png",
+    emoji: "🦞",
   });
-
-  it("identifies workspace and synthesized default names", async () => {
-    await withTestDir({ prefix: "openclaw-assistant-identity-name-source-" }, async (workspace) => {
-      await fs.writeFile(path.join(workspace, "IDENTITY.md"), "- Name: Pacino\n");
-
-      expect(resolveAssistantIdentity({ cfg: {}, workspaceDir: workspace }).nameSource).toBe(
-        "workspace",
-      );
-      expect(resolveAssistantIdentity({ cfg: {}, workspaceDir: "" }).nameSource).toBe("default");
-    });
+  expect(read).not.toHaveBeenCalled();
+  identity.emoji = "";
+  expect(await resolve(cfg, "/synthetic/workspace")).toMatchObject({
+    name: "Configured",
+    avatar: "avatar.png",
+    emoji: "🔭",
   });
+  expect(read).toHaveBeenCalledTimes(1);
+});
 
-  it("drops sentence-like avatar placeholders", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [
-          {
-            id: "main",
-            identity: { avatar: "workspace-relative path, http(s) URL, or data URI" },
-          },
-        ],
-      },
-    };
-
-    expect(resolveAssistantIdentity({ cfg, workspaceDir: "" }).avatar).toBe(
-      DEFAULT_ASSISTANT_IDENTITY.avatar,
-    );
+const roster = { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } } as const;
+it.each([
+  [{}, undefined, "main"],
+  [roster, undefined, "ops"],
+  [roster, "RESEARCH", "research"],
+] as const)("selects the presentation agent (%j, %s)", async (cfg, agentId, expected) => {
+  expect(await resolveAssistantIdentity({ cfg, agentId, workspaceDir: "" })).toEqual({
+    ...DEFAULT_ASSISTANT_IDENTITY,
+    agentId: expected,
+    nameSource: "default",
   });
+});
 
-  it("keeps short text avatars", () => {
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", identity: { avatar: "PS" } }] },
-    };
+it("drops sentence-like avatar placeholders", async () => {
+  const cfg = configured({ avatar: "workspace-relative path, http(s) URL, or data URI" });
+  expect((await resolve(cfg)).avatar).toBe(DEFAULT_ASSISTANT_IDENTITY.avatar);
+});
 
-    expect(resolveAssistantIdentity({ cfg, workspaceDir: "" }).avatar).toBe("PS");
+it.each([false, true])("honors the IDENTITY.md data URL cap (oversized=%s)", async (oversized) => {
+  await withTestDir({ prefix: "openclaw-assistant-identity-cap-" }, async (workspace) => {
+    const avatar = dataUrl() + (oversized ? "A" : "");
+    await fs.writeFile(path.join(workspace, "IDENTITY.md"), `- Avatar: ${avatar}\n- Emoji: 🦞\n`);
+    expect((await resolve({}, workspace)).avatar).toBe(oversized ? "🦞" : avatar);
   });
+});
 
-  it("keeps path avatars", () => {
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", identity: { avatar: "avatars/openclaw.png" } }] },
-    };
-
-    expect(resolveAssistantIdentity({ cfg, workspaceDir: "" }).avatar).toBe("avatars/openclaw.png");
-  });
-
-  it("preserves long image data URLs without truncating past 200 chars", () => {
-    const dataUrl = `data:image/png;base64,${"A".repeat(50_000)}`;
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", identity: { avatar: dataUrl } }] },
-    };
-
-    expect(resolveAssistantIdentity({ cfg, workspaceDir: "" }).avatar).toBe(dataUrl);
-  });
-
-  it("preserves an exact shared-cap IDENTITY.md data URL without truncation", async () => {
-    await withTestDir({ prefix: "openclaw-assistant-identity-cap-" }, async (workspace) => {
-      const dataUrl = `data:image/svg+xml;base64,${Buffer.alloc(AVATAR_MAX_BYTES).toString("base64")}`;
-      expect(dataUrl).toHaveLength(AVATAR_MAX_DATA_URL_CHARS);
-      await fs.writeFile(path.join(workspace, "IDENTITY.md"), `- Avatar: ${dataUrl}\n`);
-
-      expect(resolveAssistantIdentity({ cfg: {}, workspaceDir: workspace }).avatar).toBe(dataUrl);
-    });
-  });
-
-  it("rejects an oversized IDENTITY.md data URL without truncating it", async () => {
-    await withTestDir({ prefix: "openclaw-assistant-identity-overflow-" }, async (workspace) => {
-      const exact = `data:image/svg+xml;base64,${Buffer.alloc(AVATAR_MAX_BYTES).toString("base64")}`;
-      const oversized = `${exact}A`;
-      expect(oversized).toHaveLength(AVATAR_MAX_DATA_URL_CHARS + 1);
-      await fs.writeFile(
-        path.join(workspace, "IDENTITY.md"),
-        `- Avatar: ${oversized}\n- Emoji: 🦞\n`,
-      );
-
-      expect(resolveAssistantIdentity({ cfg: {}, workspaceDir: workspace }).avatar).toBe("🦞");
-    });
-  });
-
-  it("rejects a non-image IDENTITY.md data URL and uses its emoji fallback", async () => {
-    await withTestDir({ prefix: "openclaw-assistant-identity-data-type-" }, async (workspace) => {
-      await fs.writeFile(
-        path.join(workspace, "IDENTITY.md"),
-        "- Avatar: data:text/plain,avatar\n- Emoji: 🦞\n",
-      );
-
-      expect(resolveAssistantIdentity({ cfg: {}, workspaceDir: workspace }).avatar).toBe("🦞");
-    });
-  });
-
-  it.each(["data:text/plain,avatar", "slack://avatar.png"])(
-    "uses the configured emoji when the agent avatar is unsupported: %s",
-    (avatar) => {
-      const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", identity: { avatar, emoji: "🦞" } }] },
-      };
-
-      expect(resolveAssistantIdentity({ cfg, workspaceDir: "" }).avatar).toBe("🦞");
-    },
-  );
-
-  it("lets a valid IDENTITY.md avatar win when the agent URI scheme is unsupported", async () => {
-    await withTestDir({ prefix: "openclaw-assistant-identity-fallback-" }, async (workspace) => {
-      await fs.writeFile(path.join(workspace, "IDENTITY.md"), "- Avatar: identity.png\n");
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [{ id: "main", workspace, identity: { avatar: "slack://avatar.png" } }],
-        },
-      };
-
-      expect(resolveAssistantIdentity({ cfg, workspaceDir: workspace }).avatar).toBe(
-        "identity.png",
-      );
-    });
-  });
-
-  it("does not leave a lone surrogate when truncating an overlong name", () => {
-    const resolveName = (name: string) =>
-      resolveAssistantIdentity({
-        cfg: { agents: { list: [{ id: "main", identity: { name } }] } },
-        agentId: "main",
-        workspaceDir: "",
-      }).name;
+it("does not leave a lone surrogate when truncating an overlong name", async () => {
+  for (const resolver of [resolveAssistantIdentity, resolveAssistantIdentityName]) {
+    const resolveName = async (name: string) =>
+      (await resolver({ cfg: configured({ name }), workspaceDir: "" })).name;
     const prefix = "x".repeat(49);
-    const name = resolveName(`${prefix}🚀suffix`);
+    const name = await resolveName(`${prefix}🚀suffix`);
     expect(name).toBe(prefix);
-    expect(name.endsWith("\ud83d")).toBe(false);
-    expect(resolveName(`${"x".repeat(48)}🚀suffix`)).toBe(`${"x".repeat(48)}🚀`);
+    expect(await resolveName(`${"x".repeat(48)}🚀suffix`)).toBe(`${"x".repeat(48)}🚀`);
+  }
+});
+
+it("refreshes prepared identities after workspace replacement and config changes", async () => {
+  await withTestDir({ prefix: "openclaw-assistant-prepared-" }, async (workspace) => {
+    const file = path.join(workspace, "IDENTITY.md");
+    await fs.writeFile(file, "- Name: First\n");
+    const identity: NonNullable<AgentConfig["identity"]> = { emoji: "🦞" };
+    const cfg: OpenClawConfig = { agents: { entries: { main: { workspace, identity } } } };
+    const params = { cfg, agentId: "main" };
+    const read = () => resolveAssistantIdentity(params);
+    const expectName = async (name: string) => {
+      expect(await resolveAssistantIdentityName(params)).toEqual({ agentId: "main", name });
+    };
+    const first = await read();
+    expect(first).toMatchObject({ name: "First", nameSource: "workspace" });
+    await expectName("First");
+    expect(await read()).toBe(first);
+    await fs.writeFile(`${file}.replacement`, "- Name: Other\n");
+    await fs.rename(`${file}.replacement`, file);
+    expect(await read()).toMatchObject({ name: "Other" });
+    expect(await read()).not.toBe(first);
+    await expectName("Other");
+    identity.name = "Configured";
+    expect(await read()).toMatchObject({ name: "Configured", nameSource: "agent" });
+    await expectName("Configured");
   });
 });

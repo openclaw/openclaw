@@ -7,8 +7,13 @@ export function createNodeWorkspaceMemory(options: NodeWorkspaceWorkerOptions) {
     workspaceDir: options.workspaceDir,
     remoteWorkspaceDir: options.remoteRoot,
     signal: options.signal,
-    request: (request, signal) =>
-      runNodeWorkspaceWorker(options, "workspace.memory", { request, watch: false }, signal),
+    request: (request, signal, assertCurrent) =>
+      runNodeWorkspaceWorker(
+        { ...options, assertCurrent },
+        "workspace.memory",
+        { request, watch: false },
+        signal,
+      ),
     subscribe: async (request, onLine, signal) => {
       await runNodeWorkspaceWorker(
         options,

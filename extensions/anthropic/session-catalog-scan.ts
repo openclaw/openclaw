@@ -2,6 +2,7 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   createDirtyDirectoryWatch,
   type DirtyDirectoryWatch,
@@ -9,6 +10,7 @@ import {
 
 export const CLAUDE_PARTIAL_SCAN_TTL_MS = 15_000;
 export const CLAUDE_SESSION_SCAN_HARD_TTL_MS = 5 * 60_000;
+const log = createSubsystemLogger("anthropic-session-catalog");
 const MAX_CATALOG_JSON_CACHE_ENTRIES = 4_000;
 const CLAUDE_METADATA_WINDOW_BYTES = 1024 * 1024;
 const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
@@ -74,14 +76,13 @@ export async function readClaudeCatalogMetadata(
   return { scannedBytes, complete: fileOffset >= fileSize };
 }
 
-type CatalogJsonCacheEntry = {
+type CatalogJsonCacheEntry<T> = {
   mtimeMs: number;
   size: number;
-  ino?: number;
-  value: unknown;
+  value: T;
 };
 
-type FileSignature = { mtimeMs: number; size: number; ino: number };
+type FileSignature = { mtimeMs: number; size: number };
 type SafeSessionFile = ({ filePath: string } & FileSignature) | undefined;
 
 type ClaudeProjectDirectorySnapshot = {
@@ -115,10 +116,6 @@ export type ClaudeSessionScanContext = ClaudeProjectsTreeSnapshot & {
   complete: boolean;
   safeFiles: Map<string, Promise<SafeSessionFile>>;
 };
-
-// Parsed index/Desktop JSON stays valid for one path+mtime+size and is LRU-bounded; read failures are
-// never cached, so transient metadata I/O cannot hide a later successful read.
-const catalogJsonCache = new Map<string, CatalogJsonCacheEntry>();
 
 export function setBoundedCache<K, V>(
   cache: Map<K, V>,
@@ -155,7 +152,7 @@ async function safeSessionFile(
     }
     const stat = await fs.stat(resolvedCandidate);
     return stat.isFile()
-      ? { filePath: resolvedCandidate, mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino }
+      ? { filePath: resolvedCandidate, mtimeMs: stat.mtimeMs, size: stat.size }
       : undefined;
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
@@ -202,56 +199,57 @@ export function safeSessionFileForScan(
   return pending;
 }
 
-export async function readJsonFile(
-  filePath: string,
-  options: {
-    onIoFailure?: () => void;
-    signature?: { mtimeMs: number; size: number; ino?: number };
-  } = {},
-): Promise<unknown> {
-  const stat =
-    options.signature ??
-    (await fs.stat(filePath).then(
-      (value) => (value.isFile() ? value : undefined),
-      () => {
-        options.onIoFailure?.();
-        return undefined;
-      },
-    ));
-  if (!stat) {
-    catalogJsonCache.delete(filePath);
-    return undefined;
-  }
-  const cached = catalogJsonCache.get(filePath);
-  if (
-    cached &&
-    cached.mtimeMs === stat.mtimeMs &&
-    cached.size === stat.size &&
-    cached.ino === stat.ino
-  ) {
-    setBoundedCache(catalogJsonCache, filePath, cached, MAX_CATALOG_JSON_CACHE_ENTRIES);
-    return cached.value;
-  }
-  let content: string;
-  try {
-    content = await fs.readFile(filePath, "utf8");
-  } catch {
-    options.onIoFailure?.();
-    return undefined;
-  }
-  try {
-    const value = JSON.parse(content) as unknown;
-    setBoundedCache(
-      catalogJsonCache,
-      filePath,
-      { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino, value },
-      MAX_CATALOG_JSON_CACHE_ENTRIES,
-    );
-    return value;
-  } catch {
-    return undefined;
-  }
+export function createCatalogJsonReader<T>(project: (value: unknown) => T) {
+  // Each format retains only its projection, valid for the same file identity.
+  const cache = new Map<string, CatalogJsonCacheEntry<T>>();
+  return async (
+    filePath: string,
+    options: {
+      onIoFailure?: () => void;
+      signature?: FileSignature;
+    } = {},
+  ): Promise<T | undefined> => {
+    const stat =
+      options.signature ??
+      (await fs.stat(filePath).then(
+        (value) => (value.isFile() ? value : undefined),
+        () => {
+          options.onIoFailure?.();
+          return undefined;
+        },
+      ));
+    if (!stat) {
+      cache.delete(filePath);
+      return undefined;
+    }
+    const cached = cache.get(filePath);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      setBoundedCache(cache, filePath, cached, MAX_CATALOG_JSON_CACHE_ENTRIES);
+      return cached.value;
+    }
+    let content: string;
+    try {
+      content = await fs.readFile(filePath, "utf8");
+    } catch {
+      options.onIoFailure?.();
+      return undefined;
+    }
+    try {
+      const value = project(JSON.parse(content));
+      setBoundedCache(
+        cache,
+        filePath,
+        { mtimeMs: stat.mtimeMs, size: stat.size, value },
+        MAX_CATALOG_JSON_CACHE_ENTRIES,
+      );
+      return value;
+    } catch {
+      return undefined;
+    }
+  };
 }
+
+export const readJsonFile = createCatalogJsonReader((value) => value);
 
 export async function childDirectories(root: string): Promise<string[]> {
   try {
@@ -293,7 +291,11 @@ export async function readProjectsTreeSnapshot(
     options.forceRefresh ||
     current.hardExpiresAt <= Date.now() ||
     dirty === "all";
-  setBoundedCache(projectTreeSlots, root, current, 8, (evicted) => evicted.watch.close());
+  setBoundedCache(projectTreeSlots, root, current, 8, (evicted) => {
+    void evicted.watch.close().catch((error: unknown) => {
+      log.warn(`Claude project catalog watcher cleanup failed: ${String(error)}`);
+    });
+  });
   if (!full && dirty.size === 0 && previous) {
     return previous;
   }
@@ -311,7 +313,7 @@ export async function readProjectsTreeSnapshot(
       ? await fs.realpath(root).catch(() => undefined)
       : previous?.resolvedRoot;
     if (!resolvedRoot || (full && !entries)) {
-      current.watch.close();
+      await current.watch.close();
       if (projectTreeSlots.get(root) === current) {
         projectTreeSlots.delete(root);
       }
@@ -325,7 +327,6 @@ export async function readProjectsTreeSnapshot(
       : dirty === "all"
         ? []
         : [...dirty];
-    current.watch.observeChildDirectories(new Set([...directories.keys(), ...names]));
     const { results } = await runTasksWithConcurrency({
       tasks: names.map((name) => async () => {
         const directory = path.join(root, name);
@@ -353,7 +354,7 @@ export async function readProjectsTreeSnapshot(
           ? dir.childNames.map((name) => async () => {
               const stat = await fs.lstat(path.join(dir.directory, name)).catch(onReadFailure);
               if (stat?.isFile()) {
-                dir.files.set(name, { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino });
+                dir.files.set(name, { mtimeMs: stat.mtimeMs, size: stat.size });
               }
             })
           : [],
@@ -363,7 +364,6 @@ export async function readProjectsTreeSnapshot(
     });
     for (const dir of results) {
       if (dir) {
-        // Include inode so atomic replacements invalidate even with identical size and mtime.
         const files = dir.childNames.map((name) => [name, dir.files.get(name)]);
         directories.set(dir.name, {
           ...dir,
@@ -374,7 +374,6 @@ export async function readProjectsTreeSnapshot(
     const projectDirectories = [...directories.values()].toSorted((a, b) =>
       a.name.localeCompare(b.name),
     );
-    current.watch.observeChildDirectories(directories.keys());
     if (full) {
       current.hardExpiresAt = Date.now() + CLAUDE_SESSION_SCAN_HARD_TTL_MS;
     }

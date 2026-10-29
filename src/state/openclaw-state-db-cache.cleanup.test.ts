@@ -1,8 +1,12 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as kyselyCache from "../infra/kysely-sync-cache-state.js";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   openClawStateDatabaseCache as cache,
   readOpenClawStateWalHealth,
@@ -20,12 +24,82 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 describe("shared-state disposal ownership", () => {
+  it("disposes a revoked owner's exact handle without changing a successor SQLite family", async () => {
+    await using cleanup = new AsyncDisposableStack();
+    const root = tempDirs.make("openclaw-state-revoked-disposal-");
+    const databasePath = path.join(root, "state", "openclaw.sqlite");
+    const retiredPath = path.join(root, "retired.sqlite");
+    const physical = acquireGatewayStateOwner({ databasePath });
+    cleanup.defer(() => physical.release());
+    let live = true;
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertDatabaseAccess: physical.assertDatabaseAccess,
+      assertOwnerCurrent() {
+        physical.assertCurrent();
+        if (!live) {
+          throw new Error("Fixture maintenance authority retired");
+        }
+      },
+    });
+    const suffixes = ["", "-wal", "-shm"] as const;
+    const snapshot = () =>
+      suffixes.map((suffix) => {
+        const pathname = databasePath + suffix;
+        const bytes = fs.readFileSync(pathname);
+        const { dev, ino, mode, size, mtimeNs, ctimeNs } = fs.statSync(pathname, {
+          bigint: true,
+        });
+        return { bytes, dev, ino, mode, size, mtimeNs, ctimeNs };
+      });
+    const replacement: { db?: ReturnType<typeof openNodeSqliteDatabase> } = {};
+    cleanup.defer(() => replacement.db?.close());
+    cleanup.defer(async () => {
+      live = true;
+      await scope.close();
+    });
+    const owner = scope.run(() => {
+      const database = openOpenClawStateDatabase({ path: databasePath });
+      retainOpenClawStateDatabase(database);
+      database.db.exec("CREATE TABLE original(value TEXT); INSERT INTO original VALUES ('kept')");
+      return database;
+    });
+    live = false;
+    if (process.platform === "win32") {
+      const before = snapshot();
+      expect(() => fs.renameSync(databasePath, retiredPath)).toThrow(
+        expect.objectContaining({ code: expect.stringMatching(/^(?:EACCES|EBUSY|EPERM)$/u) }),
+      );
+      expect(snapshot()).toEqual(before);
+      await expect(scope.close()).resolves.toBeUndefined();
+      expect(owner.db.isOpen).toBe(false);
+    }
+    for (const suffix of suffixes) {
+      if (fs.existsSync(databasePath + suffix)) {
+        fs.renameSync(databasePath + suffix, retiredPath + suffix);
+      }
+    }
+    replacement.db = openNodeSqliteDatabase(databasePath);
+    replacement.db.exec(
+      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE successor(value TEXT); INSERT INTO successor VALUES ('preserved')",
+    );
+    const before = snapshot();
+    await expect(scope.close()).resolves.toBeUndefined();
+    expect(owner.db.isOpen).toBe(false);
+    physical.assertCurrent();
+    expect(snapshot()).toEqual(before);
+    expect(replacement.db.prepare("SELECT value FROM successor").all()).toEqual([
+      { value: "preserved" },
+    ]);
+  });
+
   it.each(["canonical", "borrow"] as const)(
     "retries released-borrow cleanup through the %s owner without closing its replacement",
     (retry) => {
       const root = tempDirs.make("openclaw-state-borrow-cleanup-");
       const owner = openOpenClawStateDatabase({ path: path.join(root, "state.sqlite") });
       const borrow = retainOpenClawStateDatabase(owner);
+      using _ = { [Symbol.dispose]: () => borrow.release() };
       const failure = new Error("maintenance cleanup callback failed");
       const closeMaintenance = owner.walMaintenance.close;
       vi.spyOn(owner.walMaintenance, "close").mockImplementationOnce((options) => {
@@ -33,20 +107,16 @@ describe("shared-state disposal ownership", () => {
         throw failure;
       });
 
-      try {
-        expect(() => borrow.release()).toThrow(failure);
-        expect(owner.db.isOpen).toBe(false);
-        if (retry === "canonical") {
-          expect(cache.closeOpenClawStateDatabaseByPath(owner.path)).toBe(true);
-        } else {
-          expect(() => borrow.release()).not.toThrow();
-        }
-        const replacement = openOpenClawStateDatabase({ path: owner.path });
-        borrow.release();
-        expect(replacement.db.isOpen).toBe(true);
-      } finally {
-        borrow.release();
+      expect(() => borrow.release()).toThrow(failure);
+      expect(owner.db.isOpen).toBe(false);
+      if (retry === "canonical") {
+        expect(cache.closeOpenClawStateDatabaseByPath(owner.path)).toBe(true);
+      } else {
+        expect(() => borrow.release()).not.toThrow();
       }
+      const replacement = openOpenClawStateDatabase({ path: owner.path });
+      borrow.release();
+      expect(replacement.db.isOpen).toBe(true);
     },
   );
 
@@ -89,19 +159,11 @@ describe("shared-state disposal ownership", () => {
       }
       expect(owner.db.isOpen).toBe(true);
       expect(cache.getOpenClawStateDatabaseIfOpenAtPath(owner.path)).toBeUndefined();
-      expect(kyselyCache.kyselyByDatabase.has(owner.db)).toBe(false);
-      expect(() =>
-        acquireStateDatabaseHandleExclusion({ databasePath: owner.path, busyTimeoutMs: 0 }),
-      ).toThrow(/state-handles/);
+      expect(kyselyCache.kyselyByDatabase.has(requireNativeSqliteDatabase(owner.db))).toBe(false);
       expect(healthy.db.isOpen).toBe(scope !== "all");
       close.mockRestore();
       expect(cache.closeOpenClawStateDatabaseByPath(owner.path)).toBe(true);
       expect(owner.db.isOpen).toBe(false);
-      const exclusion = acquireStateDatabaseHandleExclusion({
-        databasePath: owner.path,
-        busyTimeoutMs: 0,
-      });
-      exclusion.release();
       const reopened = openOpenClawStateDatabase({ path: owner.path });
       expect(reopened.db.prepare("SELECT value FROM retained").all()).toEqual([
         { value: "original" },
@@ -123,23 +185,14 @@ describe("shared-state disposal ownership", () => {
     vi.spyOn(kyselyCache, "clearNodeSqliteKyselyCacheForDatabase").mockImplementationOnce(() => {
       throw cacheFailure;
     });
-    let caught: unknown;
-    try {
-      cache.closeOpenClawStateDatabase();
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toMatchObject({
-      cause: maintenanceFailure,
-      errors: [maintenanceFailure, cacheFailure],
-    });
+    expect(() => cache.closeOpenClawStateDatabase()).toThrow(
+      expect.objectContaining({
+        cause: maintenanceFailure,
+        errors: [maintenanceFailure, cacheFailure],
+      }),
+    );
     expect(owner.db.isOpen).toBe(false);
     expect(healthy.db.isOpen).toBe(false);
     expect(cache.getOpenClawStateDatabaseIfOpenAtPath(owner.path)).toBeUndefined();
-    const exclusion = acquireStateDatabaseHandleExclusion({
-      databasePath: owner.path,
-      busyTimeoutMs: 0,
-    });
-    exclusion.release();
   });
 });

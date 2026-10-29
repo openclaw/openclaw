@@ -1,19 +1,49 @@
-import { describe, expect, it, vi } from "vitest";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { resolveSessionResetPolicy } from "../../config/sessions/reset-policy.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { AgentSessionPatchBuild } from "../server-methods/agent-session-patch.js";
+import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
 
-describe("persistAgentSessionPhase", () => {
-  it("sandboxes a new synthetic run using its host-minted operator identity", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const profile = ensureProfileForEmail("synthetic-sandbox-creator@example.com");
-      const sessionKey = "agent:main:synthetic-sandbox";
-      const runId = "synthetic-sandbox-run";
-      const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
-      const patchBuild: AgentSessionPatchBuild = {
+type PersistParams = Parameters<typeof persistAgentSessionPhase>[0];
+const withPersistFixture = (
+  role: GatewayOperatorRoleDefinition,
+  body: (params: PersistParams, profileId: string) => Promise<void>,
+) =>
+  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
+    const profile = ensureProfileForEmail("session-creator@example.com");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+    const runId = "session-run";
+    const params: PersistParams = {
+      runId,
+      storePath,
+      canonicalSessionKey: "agent:main:test",
+      operatorRoleActor: { kind: "operator", profileId: profile.id },
+      cfg: { gateway: { roles: { default: "test", definitions: { test: role } } } },
+      request: { message: "sandboxed", idempotencyKey: runId },
+      sessionAgentId: "main",
+      mainSessionKey: "agent:main:main",
+      creation: { via: "run" },
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      agentId: "main",
+      suppressVisibleSessionEffects: false,
+      initialPatchBuild: {
         patch: { sessionId: runId, updatedAt: 1 },
         spawnedBy: undefined,
         groupId: undefined,
@@ -24,141 +54,177 @@ describe("persistAgentSessionPhase", () => {
         rotatedSessionId: false,
         usableRequestedSessionId: undefined,
         freshness: undefined,
-      };
-
-      const committed = vi.fn((entry: { sessionId: string }) => {
-        expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.sessionId).toBe(
-          entry.sessionId,
-        );
-      });
-      const result = await persistAgentSessionPhase({
-        onSessionCommitted: committed,
-        request: { message: "sandboxed", idempotencyKey: runId },
-        cfg: {
-          gateway: {
-            roles: {
-              default: "guest",
-              definitions: {
-                guest: {
-                  sessions: { others: "view" },
-                  agents: ["main"],
-                  scopes: ["operator.write"],
-                  sandbox: "required",
-                },
-              },
-            },
-          },
-        },
-        storePath,
-        canonicalSessionKey: sessionKey,
-        sessionAgentId: "main",
-        mainSessionKey: "agent:main:main",
-        creation: { via: "run" },
-        operatorRoleActor: { kind: "operator", profileId: profile.id },
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        isRestartRecoveryResumeRun: false,
-        runId,
-        agentId: "main",
-        suppressVisibleSessionEffects: false,
-        initialPatchBuild: patchBuild,
-        buildSessionPatch: () => patchBuild,
-        initialSessionPersistedBeforeGatewayAdmission: false,
-        touchInteraction: false,
+      },
+      buildSessionPatch: async () => params.initialPatchBuild,
+      state: {
+        sessionPersistedBeforeGatewayAdmission: false,
+        admittedSessionId: runId,
+        skipAgentInitialSessionTouch: false,
+        isNewSession: true,
         bestEffortDeliver: false,
-        expectedSession: undefined,
-        maintenanceConfig: undefined,
-        abortForLifecycleRotation: () => false,
-        assertGatewayWorkAdmissionAllowed: vi.fn(),
-        respondToGatewayAdmissionOutcome: () => false,
-        updateAdmissionState: vi.fn(),
-        getAdmittedSessionId: () => runId,
-        setCronContinuationClaim: vi.fn(),
-        setMainRestartRecoveryOwnerLease: vi.fn(),
-        respond: vi.fn(),
-      });
+      },
+      touchInteraction: false,
+      expectedSession: undefined,
+      maintenanceConfig: undefined,
+      assertGatewayWorkAdmissionAllowed: vi.fn(),
+      respondToGatewayAdmissionOutcome: () => false,
+      setCronContinuationClaim: vi.fn(),
+      respond: vi.fn(),
+    };
+    await body(params, profile.id);
+  });
 
+it("sandboxes a synthetic run using current creation authority", () =>
+  withPersistFixture(
+    {
+      sessions: { others: "view" },
+      agents: ["main"],
+      scopes: ["operator.write"],
+      sandbox: "required",
+    },
+    async (params, profileId) => {
+      const target = {
+        agentId: "main",
+        sessionKey: params.canonicalSessionKey,
+        storePath: params.storePath,
+      };
+      const sql = observeHostDataSql();
+      const committed = vi.fn((entry: { sessionId: string }) => {
+        sql.restore();
+        expect(loadSessionEntry(target)?.sessionId).toBe(entry.sessionId);
+      });
+      params.onSessionCommitted = committed;
+      const result = await persistAgentSessionPhase(params).finally(sql.restore);
+
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
       expect(result?.sessionEntry).toMatchObject({
         createdVia: "run",
-        createdActor: { type: "human", id: profile.id },
+        createdActor: { type: "human", id: profileId },
         sandbox: "required",
       });
       expect(committed).toHaveBeenCalledOnce();
-      expect(committed.mock.calls[0]?.[0].sessionId).toBe(result?.sessionEntry?.sessionId);
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-        sandbox: "required",
-      });
-    });
-  });
+      expect(loadSessionEntry(target)).toMatchObject({ sandbox: "required" });
+    },
+  ));
 
-  it("surfaces session creation authorization failures before concurrent lifecycle rotation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const sessionKey = "agent:main:role-denied";
-      const runId = "role-denied-run";
-      const respond = vi.fn<Parameters<typeof persistAgentSessionPhase>[0]["respond"]>();
-      const abortForLifecycleRotation = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
-      const patchBuild: AgentSessionPatchBuild = {
-        patch: { sessionId: runId, updatedAt: 1 },
-        spawnedBy: undefined,
-        groupId: undefined,
-        groupChannel: undefined,
-        groupSpace: undefined,
-        freshSessionRotatedSinceLoad: false,
-        isNewSession: true,
-        rotatedSessionId: false,
-        usableRequestedSessionId: undefined,
-        freshness: undefined,
+it.each([false, true])(
+  "surfaces creation denial when role authority forbids the agent (revoked during preparation: %s)",
+  async (revokeDuringPreparation) => {
+    const allowedAgents = revokeDuringPreparation ? ["main"] : [];
+    await withPersistFixture(
+      { sessions: { others: "none" }, agents: allowedAgents, scopes: [] },
+      async (params) => {
+        const respond = vi.fn<PersistParams["respond"]>();
+        params.respond = respond;
+        params.buildSessionPatch = async () => {
+          await Promise.resolve();
+          allowedAgents.length = 0;
+          return params.initialPatchBuild;
+        };
+        await expect(persistAgentSessionPhase(params)).resolves.toBeUndefined();
+
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "FORBIDDEN",
+            message: expect.stringContaining('agent "main"'),
+          }),
+        );
+      },
+    );
+  },
+);
+
+it.each([
+  { mode: "idle", rejection: undefined },
+  { mode: "daily", rejection: undefined },
+  { mode: "idle", rejection: "superseded" },
+  { mode: "idle", rejection: "denied" },
+] as const)("handles a $mode Gateway reset (rejection: $rejection)", ({ mode, rejection }) =>
+  withPersistFixture(
+    { sessions: { others: "view" }, agents: ["main"], scopes: [] },
+    async (params) => {
+      const now = new Date(2026, 9, 20, 12).getTime();
+      const expiredAt = new Date(2026, 9, 19, 12).getTime();
+      const target = {
+        agentId: "main",
+        sessionKey: params.canonicalSessionKey,
+        sessionId: "durable-transcript",
+        storePath: params.storePath,
       };
-
-      await expect(
-        persistAgentSessionPhase({
-          request: { message: "denied", idempotencyKey: runId },
-          cfg: {
-            gateway: {
-              roles: {
-                default: "restricted",
-                definitions: {
-                  restricted: { sessions: { others: "none" }, agents: [], scopes: [] },
-                },
-              },
-            },
-          },
-          storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-          canonicalSessionKey: sessionKey,
-          sessionAgentId: "main",
-          mainSessionKey: "agent:main:main",
-          creation: { via: "run" },
-          lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          isRestartRecoveryResumeRun: false,
-          runId,
-          agentId: "main",
-          suppressVisibleSessionEffects: false,
-          initialPatchBuild: patchBuild,
-          buildSessionPatch: () => patchBuild,
-          initialSessionPersistedBeforeGatewayAdmission: false,
-          touchInteraction: false,
-          bestEffortDeliver: false,
-          expectedSession: undefined,
-          maintenanceConfig: undefined,
-          abortForLifecycleRotation,
-          assertGatewayWorkAdmissionAllowed: vi.fn(),
-          respondToGatewayAdmissionOutcome: () => false,
-          updateAdmissionState: vi.fn(),
-          getAdmittedSessionId: () => runId,
-          setCronContinuationClaim: vi.fn(),
-          setMainRestartRecoveryOwnerLease: vi.fn(),
-          respond,
-        }),
-      ).resolves.toBeUndefined();
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
+      const entry = {
+        sessionId: target.sessionId,
+        lifecycleRevision: "before-expiry",
+        updatedAt: expiredAt,
+        sessionStartedAt: expiredAt,
+        lastInteractionAt: expiredAt,
+      };
+      await replaceSessionEntry(target, entry);
+      await appendTranscriptMessage(target, {
+        message: makeUserMessage("Before: AMBER731", expiredAt),
+      });
+      await replaceSessionEntry(target, entry);
+      params.entry = entry;
+      params.buildSessionPatch = (freshEntry) =>
+        buildAgentSessionPatch({
+          ...params,
+          freshEntry,
+          initialEntry: entry,
+          normalizedSpawned: {},
+          requestDeliveryHint: undefined,
+          hasRestoredCronContinuation: false,
+          resetPolicy: resolveSessionResetPolicy({
+            sessionCfg: { reset: mode === "idle" ? { mode, idleMinutes: 1 } : { mode, atHour: 4 } },
+            resetType: "direct",
+          }),
+          now,
+          isSystemGatewayRun: false,
+          visibleRequest: true,
+          touchInteraction: true,
+        });
+      params.initialPatchBuild = await params.buildSessionPatch(entry);
+      if (rejection === "superseded") {
+        await replaceSessionEntry(target, { ...entry, lifecycleRevision: "newer-reset" });
+      } else if (rejection === "denied") {
+        params.request.deliver = true;
+        params.cfg.session = { sendPolicy: { default: "deny" } };
+      }
+      const result = await persistAgentSessionPhase(params);
+      if (rejection) {
+        expect(result).toBeUndefined();
+        expect(params.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: rejection === "superseded" ? "UNAVAILABLE" : "INVALID_REQUEST",
+          }),
+        );
+        expect(
+          (await loadTranscriptEvents(target)).filter(
+            (event) => isRecord(event) && event.type === "reset",
+          ),
+        ).toEqual([]);
+        return;
+      }
+      expect(result?.sessionEntry).toMatchObject({
+        sessionId: target.sessionId,
+        sessionStartedAt: now,
+      });
+      expect(result?.sessionEntry?.lifecycleRevision).not.toBe(entry.lifecycleRevision);
+      await appendTranscriptMessage(target, { message: makeUserMessage("After: COBALT942", now) });
+      const events = await loadTranscriptEvents(target);
+      expect(events.filter((event) => isRecord(event) && event.type === "reset")).toEqual([
+        expect.objectContaining({ reason: mode }),
+      ]);
+      expect(events.filter((event) => isRecord(event) && event.type === "message")).toEqual([
         expect.objectContaining({
-          code: "FORBIDDEN",
-          message: expect.stringContaining('agent "main"'),
+          message: expect.objectContaining({ content: "Before: AMBER731" }),
         }),
-      );
-      expect(abortForLifecycleRotation).toHaveBeenCalledTimes(1);
-    });
-  });
-});
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "After: COBALT942" }),
+        }),
+      ]);
+    },
+  ),
+);

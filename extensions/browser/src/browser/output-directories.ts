@@ -6,7 +6,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathScope, root } from "../sdk-security-runtime.js";
+import { pathScope, root } from "openclaw/plugin-sdk/security-runtime";
 
 async function resolveSystemDirectoryAlias(dirPath: string): Promise<string> {
   // macOS exposes /tmp and /var as fixed system symlinks into /private.

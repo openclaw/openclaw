@@ -2,8 +2,11 @@ import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-ca
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { buildConfiguredFallbackModel } from "./embedded-agent-runner/model.configured-fallback.js";
-import { resolveExplicitModelWithRegistry } from "./embedded-agent-runner/model.registry-resolution.js";
+import { indexFirstByKey } from "../shared/dedupe-by-key.js";
+import {
+  normalizeConfiguredProviderModel,
+  resolveExplicitModelWithRegistry,
+} from "./embedded-agent-runner/model.registry-resolution.js";
 import { resolveManifestModelCatalogProviderAliasMetadata } from "./embedded-agent-runner/model.static-catalog.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { modelKey } from "./model-ref-shared.js";
@@ -21,7 +24,10 @@ import type {
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 export function completeConfiguredRuntimeModels(
-  agentFacts: PreparedModelRuntimeAgentFacts,
+  agentFacts: Pick<
+    PreparedModelRuntimeAgentFacts,
+    "input" | "env" | "configuredModelRefs" | "configuredRuntimeModels"
+  >,
   pluginGeneration: PreparedModelRuntimePluginGeneration,
   modelRegistry: ModelRegistry,
 ): readonly PreparedConfiguredRuntimeModel[] {
@@ -45,14 +51,10 @@ export function completeConfiguredRuntimeModels(
         ]),
       );
       const completed: PreparedConfiguredRuntimeModel[] = [];
-      const seen = new Set<string>();
-      for (const ref of configuredModelRefs) {
+      for (const [key, ref] of indexFirstByKey(configuredModelRefs, ({ provider, modelId }) =>
+        buildModelCatalogMergeKey(provider, modelId),
+      )) {
         const { provider, modelId } = ref;
-        const key = buildModelCatalogMergeKey(provider, modelId);
-        if (seen.has(key)) {
-          continue;
-        }
-        seen.add(key);
         const model =
           existing.get(key)?.model ??
           resolveLoadedProviderRuntimePlugin({
@@ -143,7 +145,7 @@ export function prepareConfiguredModelAliases(
         });
         const supported = resolved
           ? resolved.kind === "resolved"
-          : buildConfiguredFallbackModel({
+          : normalizeConfiguredProviderModel({
               provider: ref.provider,
               modelId: ref.model,
               cfg: config,

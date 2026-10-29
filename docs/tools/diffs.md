@@ -21,16 +21,15 @@ The [Control UI](/web/control-ui) already highlights inline tool diffs and sessi
 <Steps>
   <Step title="Install the plugin">
     ```bash
-    openclaw plugins install clawhub:@openclaw/diffs
+    openclaw plugins install @openclaw/diffs
     ```
 
     Installation applies to a running Gateway automatically; otherwise it takes effect
     on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
     `diffs` and its language pack ship as separate packages rather than with
-    OpenClaw, so the install needs a scoped locator. The `clawhub:` prefix
-    selects the ClawHub copy of `@openclaw/diffs`. Use
-    `npm:@openclaw/diffs` to install from npm instead.
+    OpenClaw. The package name selects ClawHub by default. Use
+    `npm:@openclaw/diffs` to install directly from npm.
 
   </Step>
   <Step title="Enable the plugin">
@@ -165,7 +164,7 @@ Common aliases (`js`, `ts`, `bash`, `md`, `yml`, `c++`, `dockerfile`, `rb`, `kt`
 Install the Diffs Language Pack plugin for more languages (Astro, Vue, Svelte, MDX, GraphQL, Terraform/HCL, Nix, Clojure, Elixir, Haskell, OCaml, Scala, Zig, Solidity, Verilog/VHDL, Fortran, MATLAB, LaTeX, Mermaid, Sass/Less/SCSS, Nginx, Apache, CSV, dotenv, INI, diff, and more):
 
 ```bash
-openclaw plugins install clawhub:@openclaw/diffs-language-pack
+openclaw plugins install @openclaw/diffs-language-pack
 ```
 
 Without the pack, unsupported languages still render as readable plain text. See [Diffs Language Pack plugin](/plugins/reference/diffs-language-pack) and [Shiki languages](https://shiki.style/languages) for the upstream catalog.
@@ -197,7 +196,7 @@ All successful results include `changed`: identical before/after input returns `
     - `fileBytes`
     - `fileFormat`
     - `fileQuality`
-    - `fileScale`
+    - `fileScale` (actual device scale used for PNG, including pixel-budget downscaling; configured scale for PDF)
     - `fileMaxWidth`
 
   </Accordion>
@@ -388,7 +387,7 @@ Common failure text: `Diff PNG/PDF rendering requires a Chromium-compatible brow
   <Accordion title="Viewer accessibility">
     - Viewer URL resolves to `127.0.0.1` by default.
     - For remote access, set `gateway.publicOrigin`, set plugin `viewerBaseUrl`, or pass `baseUrl` per call.
-    - `gateway.trustedProxies` can include loopback for a same-host proxy such as Tailscale Serve. Raw loopback viewer requests without forwarded client-IP headers then fail closed by design.
+    - `gateway.trustedProxies` can include loopback for a same-host proxy such as Tailscale Serve. Raw loopback viewer requests without forwarded client-IP headers are then rejected by design.
     - For that proxy topology, prefer `mode: "file"`/`"both"` for an attachment. For a shareable viewer link, intentionally enable `security.allowRemoteViewer` plus plugin `viewerBaseUrl`/a proxy `baseUrl`.
     - Enable `security.allowRemoteViewer` only when external viewer access is intended.
 

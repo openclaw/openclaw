@@ -1,0 +1,282 @@
+import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { JSX } from "@solidjs/web";
+import { createMemo, For, Show } from "solid-js";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatMessageMetadataEnglish);
+
+const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
+
+// Shared relative-time copy is lowercase for mid-sentence use ("Updated just now");
+// the chat footer shows it alone, so it starts with a capital ("Just now").
+function capitalizeStandaloneLabel(value: string): string {
+  return value.charAt(0).toLocaleUpperCase(getLocale()) + value.slice(1);
+}
+
+function prepareTimestamp(timestamp: number) {
+  const date = new Date(timestamp);
+  const valid = Number.isFinite(date.getTime());
+  const label = valid
+    ? date.toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short",
+      })
+    : t("chat.messages.unknownDate");
+  return { dateTime: valid ? date.toISOString() : "", label };
+}
+
+function relativeTimestampLabel(timestamp: number, label: string) {
+  const date = new Date(timestamp);
+  const valid = Number.isFinite(date.getTime());
+  const nowMs = Date.now();
+  const ageMs = nowMs - date.getTime();
+  // Slightly-future messages clamp to "Just now"; older or distant-future ones use a date.
+  return !valid
+    ? label
+    : ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS && ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
+      ? capitalizeStandaloneLabel(formatTimeAgo(Math.max(0, ageMs)))
+      : date.toLocaleDateString([], {
+          month: "short",
+          day: "numeric",
+          ...(date.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
+        });
+}
+
+function TimestampTime(props: { view: { dateTime: string; relativeLabel: string } }) {
+  // Usage-only refreshes must leave the native timestamp attributes untouched.
+  const dateTime = createMemo(() => props.view.dateTime);
+  return (
+    <time class="chat-group-timestamp" datetime={dateTime()} aria-live="off">
+      {props.view.relativeLabel}
+    </time>
+  );
+}
+
+export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element[] }) {
+  const timestamp = createMemo(() => props.timestamp);
+  const calendar = createMemo(() => prepareTimestamp(timestamp()));
+  const view = createMemo(() => ({
+    ...calendar(),
+    // Parent clock refreshes still advance relative copy without reformatting calendar labels.
+    relativeLabel: relativeTimestampLabel(props.timestamp, calendar().label),
+  }));
+  const contextLabel = createMemo(
+    () => {
+      const date = new Date(timestamp());
+      const title = Number.isFinite(date.getTime())
+        ? date.toLocaleString([], {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+            year: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            second: "2-digit",
+            timeZoneName: "short",
+          })
+        : calendar().label;
+      return t("chat.messages.contextFor", { timestamp: title });
+    },
+    { lazy: true },
+  );
+  const hasMetadata = () => Boolean(props.metadata?.length);
+  return (
+    <openclaw-tooltip
+      class="msg-meta"
+      prop:openOnClick={hasMetadata()}
+      prop:content={hasMetadata() ? "" : view().label}
+    >
+      <Show when={hasMetadata()} fallback={<TimestampTime view={view()} />}>
+        <button type="button" class="msg-meta__summary" aria-label={contextLabel()}>
+          <TimestampTime view={view()} />
+        </button>
+      </Show>
+      <Show when={hasMetadata()}>
+        <span slot="content" class="msg-meta__details">
+          <span class="msg-meta__time">{view().label}</span>
+          {props.metadata}
+        </span>
+      </Show>
+    </openclaw-tooltip>
+  );
+}
+
+type GroupMeta = {
+  usageUnavailable?: true;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  model: string | null;
+  contextPercent: number | null;
+};
+
+export function extractGroupMeta(
+  group: MessageGroup,
+  contextWindow: number | null,
+): GroupMeta | null {
+  let input = 0;
+  let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let cost = 0;
+  let model: string | null = null;
+  let hasUsage = false;
+  let maxPromptTokens = 0;
+  let maxLegacyPromptTokens = 0;
+  let hasContextUsage = false;
+  let usageUnavailable = false;
+
+  for (const { message } of group.messages) {
+    // SAFETY: Grouped transcript entries are admitted message objects; the role is checked below.
+    const m = message as Record<string, unknown>;
+    if (m.role !== "assistant") {
+      continue;
+    }
+    if (typeof m.model === "string" && m.model !== "gateway-injected") {
+      model = m.model;
+    }
+    if (asNullableRecord(asNullableRecord(m.usage)?.usageReport)?.state === "unavailable") {
+      usageUnavailable = true;
+      continue;
+    }
+    // SAFETY: The message producer supplies numeric token counts under these usage field names.
+    const usage = m.usage as Record<string, number> | undefined;
+    if (usage) {
+      hasUsage = true;
+      const callInput = usage.input ?? usage.inputTokens ?? 0;
+      const callOutput = usage.output ?? usage.outputTokens ?? 0;
+      const callCacheRead = usage.cacheRead ?? usage.cache_read_input_tokens ?? 0;
+      const callCacheWrite = usage.cacheWrite ?? usage.cache_creation_input_tokens ?? 0;
+      input += callInput;
+      output += callOutput;
+      cacheRead += callCacheRead;
+      cacheWrite += callCacheWrite;
+      // A context marker holds the latest call; the counters may cover a whole multi-call turn.
+      const context = asOptionalRecord(asOptionalRecord(m.usage)?.contextUsage);
+      if (context?.state === "available" && typeof context.promptTokens === "number") {
+        hasContextUsage = true;
+        maxPromptTokens = Math.max(maxPromptTokens, context.promptTokens);
+      } else if (context?.state === "unavailable") {
+        hasContextUsage = true;
+      } else {
+        maxLegacyPromptTokens = Math.max(
+          maxLegacyPromptTokens,
+          callInput + callCacheRead + callCacheWrite,
+        );
+      }
+    }
+    // Producers write cost nested under usage.cost (the AssistantMessage
+    // shape); a bare message.cost never exists, so reading only it left the
+    // popover's $ line permanently dead.
+    const c =
+      // SAFETY: Assistant usage stores a structured cost separately from its numeric token fields.
+      (usage as { cost?: { total?: number } } | undefined)?.cost ??
+      // SAFETY: The fallback reads the same total-only cost shape as the usage metadata above.
+      (m.cost as Record<string, number> | undefined);
+    if (c?.total) {
+      cost += c.total;
+    }
+  }
+
+  if (usageUnavailable) {
+    return {
+      usageUnavailable: true,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      model,
+      contextPercent: null,
+    };
+  }
+  if (!hasUsage && !model) {
+    return null;
+  }
+
+  // Legacy counters are an estimate only when the group has no explicit context snapshots.
+  const promptTokens = hasContextUsage ? maxPromptTokens : maxLegacyPromptTokens;
+  const contextPercent =
+    contextWindow && promptTokens > 0
+      ? Math.min(Math.round((promptTokens / contextWindow) * 100), 100)
+      : null;
+
+  return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
+}
+
+const TOKEN_FIELDS = [
+  ["input", "↑", "msg-meta__tokens"],
+  ["output", "↓", "msg-meta__tokens"],
+  ["cacheRead", "R", "msg-meta__cache"],
+  ["cacheWrite", "W", "msg-meta__cache"],
+] as const;
+
+function MessageMetadata(props: { meta: GroupMeta | null }) {
+  return (
+    <>
+      <Show when={props.meta?.usageUnavailable}>
+        <span class="msg-meta__tokens">{t("chat.messages.usageUnavailable")}</span>
+      </Show>
+      <For each={TOKEN_FIELDS} keyed={(entry) => entry[0]}>
+        {(entry) => (
+          <Show when={props.meta?.[entry()[0]]}>
+            <span class={entry()[2]}>
+              {entry()[1]}
+              {formatCompactTokenCount(props.meta?.[entry()[0]] ?? 0)}
+            </span>
+          </Show>
+        )}
+      </For>
+      <Show when={props.meta && props.meta.cost > 0}>
+        <span class="msg-meta__cost">{formatCost(props.meta?.cost ?? 0)}</span>
+      </Show>
+      <Show when={props.meta && props.meta.contextPercent !== null}>
+        <span
+          class={[
+            "msg-meta__ctx",
+            {
+              "msg-meta__ctx--danger": (props.meta?.contextPercent ?? 0) >= 90,
+              "msg-meta__ctx--warn":
+                (props.meta?.contextPercent ?? 0) >= 75 && (props.meta?.contextPercent ?? 0) < 90,
+            },
+          ]}
+        >
+          {props.meta?.contextPercent}
+          {"% ctx"}
+        </span>
+      </Show>
+      <Show when={props.meta?.model}>
+        <span class="msg-meta__model">{props.meta?.model?.split("/").pop()}</span>
+      </Show>
+    </>
+  );
+}
+
+export function MessageMeta(props: { timestamp: number; meta: GroupMeta | null }) {
+  const metadata = [<MessageMetadata meta={props.meta} />];
+  const hasMetadata = () =>
+    props.meta &&
+    Boolean(
+      props.meta.usageUnavailable ||
+      props.meta.input ||
+      props.meta.output ||
+      props.meta.cacheRead ||
+      props.meta.cacheWrite ||
+      props.meta.cost > 0 ||
+      props.meta.contextPercent !== null ||
+      props.meta.model,
+    );
+  return (
+    <ChatTimestamp timestamp={props.timestamp} metadata={hasMetadata() ? metadata : undefined} />
+  );
+}

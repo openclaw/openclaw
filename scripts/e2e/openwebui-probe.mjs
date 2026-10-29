@@ -1,4 +1,3 @@
-// Probe script for OpenWebUI E2E connectivity.
 import { Agent, setGlobalDispatcher } from "undici";
 import {
   createBoundedResponseTooLargeError,
@@ -59,30 +58,23 @@ function readNonNegativeInt(name, fallback) {
   return parsed;
 }
 
-function clampOpenWebUiTimerTimeoutMs(valueMs, minMs = 1) {
-  const min = Math.max(0, Math.floor(minMs));
-  const value = Number.isFinite(valueMs) ? valueMs : min;
-  return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
-}
-
 function readPositiveTimerMs(name, fallback) {
-  return clampOpenWebUiTimerTimeoutMs(readPositiveIntEnvWithEmptyFallback(name, fallback));
+  return Math.min(readPositiveIntEnvWithEmptyFallback(name, fallback), MAX_TIMER_TIMEOUT_MS);
 }
 
 function readNonNegativeTimerMs(name, fallback) {
-  return clampOpenWebUiTimerTimeoutMs(readNonNegativeInt(name, fallback), 0);
+  return Math.min(readNonNegativeInt(name, fallback), MAX_TIMER_TIMEOUT_MS);
 }
 
 async function withRequestTimeout(label, timeoutMs, run) {
-  const resolvedTimeoutMs = clampOpenWebUiTimerTimeoutMs(timeoutMs);
   const controller = new AbortController();
-  const timeoutError = createTimeoutError(label, resolvedTimeoutMs);
+  const timeoutError = createTimeoutError(label, timeoutMs);
   let timer;
   const timeoutPromise = new Promise((_, reject) => {
     timer = setTimeout(() => {
       controller.abort(timeoutError);
       reject(timeoutError);
-    }, resolvedTimeoutMs);
+    }, timeoutMs);
     timer.unref?.();
   });
   try {
@@ -139,7 +131,7 @@ function buildAuthHeaders(token, cookie) {
 
 function sleep(ms) {
   return new Promise((resolve) => {
-    setTimeout(resolve, clampOpenWebUiTimerTimeoutMs(ms, 0));
+    setTimeout(resolve, ms);
   });
 }
 

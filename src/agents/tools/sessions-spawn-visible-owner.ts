@@ -1,25 +1,29 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionCreatorActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectSessionActor } from "../../gateway/session-identity-projection.js";
-
-type AgentOwnerFallback = { type: "agent"; id: string; label?: string };
 
 /** Resolve stored owner identity through current presentation without losing the agent fallback. */
 export function resolveVisibleSessionOwner(
   entry: Pick<SessionEntry, "createdActor" | "owner"> | undefined,
-  fallback: AgentOwnerFallback,
+  requesterAgentId: string,
+  requesterLabel: string | undefined,
   cfg: OpenClawConfig,
 ) {
-  const actor = entry?.owner?.actor ?? entry?.createdActor;
+  const actor = entry?.owner?.actor ?? resolveSessionCreatorActor(entry?.createdActor);
   if (!actor?.id) {
-    return fallback;
+    return {
+      type: "agent" as const,
+      id: requesterAgentId,
+      ...(requesterLabel ? { label: requesterLabel } : {}),
+    };
   }
   const projectedLabel = normalizeOptionalString(projectSessionActor(actor, new Map(), cfg)?.label);
   const storedLabel = normalizeOptionalString(actor.label);
   const fallbackLabel =
-    actor.type === fallback.type && actor.id === fallback.id
-      ? normalizeOptionalString(fallback.label)
+    actor.type === "agent" && actor.id === requesterAgentId
+      ? normalizeOptionalString(requesterLabel)
       : undefined;
   const label = projectedLabel ?? storedLabel ?? fallbackLabel;
   return {

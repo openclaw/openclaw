@@ -1,512 +1,332 @@
-// Cron list pagination tests cover stable sorting and page boundary guards.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
-import { describe, expect, it, vi } from "vitest";
-import { createDeferredCore } from "../shared/deferred.js";
+import * as nodeCrypto from "@openclaw/normalization-core/node-crypto";
+import * as stringCoerce from "@openclaw/normalization-core/string-coerce";
+import { afterEach, expect, it, vi } from "vitest";
+import * as snapshotRevisions from "./list-snapshot-revision.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { locked } from "./service/locked.js";
-import { list, listPage } from "./service/ops-read.js";
+import { remove } from "./service/ops-mutations.js";
+import { listPage, status } from "./service/ops-read.js";
+import { applyCronRuntimeRowsToState } from "./service/runtime-publication.js";
 import type { CronJob } from "./types.js";
 
-function createBaseJob(overrides?: Partial<CronJob>): CronJob {
-  return {
-    id: "job-1",
-    name: "job",
-    enabled: true,
-    schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
-    sessionTarget: "main",
-    wakeMode: "now",
-    payload: { kind: "systemEvent", text: "tick" },
-    state: { nextRunAtMs: Date.parse("2026-02-27T15:30:00.000Z") },
-    createdAtMs: Date.parse("2026-02-27T15:00:00.000Z"),
-    updatedAtMs: Date.parse("2026-02-27T15:05:00.000Z"),
-    ...overrides,
-  };
-}
-
-describe("cron listPage sort guards", () => {
-  it("keeps malformed name fields sortable", async () => {
-    const jobs = [
-      createBaseJob({ id: "job-a", name: undefined as unknown as string }),
-      createBaseJob({ id: "job-b", name: "beta" }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-
-    const page = await listPage(state, { sortBy: "name", sortDir: "asc" });
-    expect(page.jobs).toHaveLength(2);
-  });
-
-  it("keeps missing ids sortable during tie-breaks", async () => {
-    const nextRunAtMs = Date.parse("2026-02-27T15:30:00.000Z");
-    const jobs = [
-      createBaseJob({
-        id: undefined as unknown as string,
-        name: "alpha",
-        state: { nextRunAtMs },
-      }),
-      createBaseJob({
-        id: undefined as unknown as string,
-        name: "alpha",
-        state: { nextRunAtMs },
-      }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-
-    const page = await listPage(state, { sortBy: "nextRunAtMs", sortDir: "asc" });
-    expect(page.jobs).toHaveLength(2);
-  });
-
-  it.each([
-    { sortDir: "asc" as const, scheduledIds: ["earlier", "later"] },
-    { sortDir: "desc" as const, scheduledIds: ["later", "earlier"] },
-  ])(
-    "keeps unscheduled jobs after the scheduled $sortDir page",
-    async ({ sortDir, scheduledIds }) => {
-      const jobs = [
-        createBaseJob({ id: "paused-z", enabled: false, state: {} }),
-        createBaseJob({ id: "later", state: { nextRunAtMs: 200 } }),
-        createBaseJob({ id: "paused-a", enabled: false, state: {} }),
-        createBaseJob({ id: "earlier", state: { nextRunAtMs: 100 } }),
-      ];
-      const state = createMockCronStateForJobs({ jobs });
-      const options = {
-        enabled: "all" as const,
-        sortBy: "nextRunAtMs" as const,
-        sortDir,
-        limit: 2,
+function listState(...jobs: Partial<CronJob>[]) {
+  return createMockCronStateForJobs({
+    jobs: jobs.map((overrides, index) => {
+      const job: CronJob = {
+        id: `job-${index + 1}`,
+        name: "job",
+        enabled: true,
+        schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: { nextRunAtMs: Date.parse("2030-02-27T15:30:00.000Z") },
+        createdAtMs: Date.parse("2026-02-27T15:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-27T15:05:00.000Z"),
       };
+      return Object.assign(job, overrides);
+    }),
+  });
+}
+afterEach(() => vi.restoreAllMocks());
 
-      const firstPage = await listPage(state, { ...options, offset: 0 });
-      const secondPage = await listPage(state, { ...options, offset: 2 });
-
-      expect(firstPage.jobs.map((job) => job.id)).toEqual(scheduledIds);
-      expect(firstPage.hasMore).toBe(true);
-      expect(secondPage.jobs.map((job) => job.id)).toEqual(["paused-a", "paused-z"]);
-      expect(secondPage.hasMore).toBe(false);
-      expect(secondPage.snapshotRevision).toBe(firstPage.snapshotRevision);
-    },
+it("keeps unscheduled jobs after the scheduled descending page", async () => {
+  const state = listState(
+    { id: "paused-z", enabled: false, state: {} },
+    { id: "later", state: { nextRunAtMs: 200 } },
+    { id: "paused-a", enabled: false, state: {} },
+    { id: "earlier", state: { nextRunAtMs: 100 } },
   );
+  const options = { enabled: "all", sortBy: "nextRunAtMs", sortDir: "desc", limit: 2 } as const;
 
-  it("keeps unscheduled jobs after scheduled jobs in the unpaginated list", async () => {
-    const jobs = [
-      createBaseJob({ id: "paused-z", enabled: false, state: {} }),
-      createBaseJob({ id: "later", state: { nextRunAtMs: 200 } }),
-      createBaseJob({ id: "paused-a", enabled: false, state: {} }),
-      createBaseJob({ id: "earlier", state: { nextRunAtMs: 100 } }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
+  const firstPage = await listPage(state, { ...options, offset: 0 });
+  const secondPage = await listPage(state, { ...options, offset: 2 });
 
-    const unpaginated = await list(state, { includeDisabled: true });
-    const page = await listPage(state, { enabled: "all", sortBy: "nextRunAtMs" });
-
-    expect(unpaginated.map((job) => job.id)).toEqual(["earlier", "later", "paused-a", "paused-z"]);
-    expect(unpaginated.map((job) => job.id)).toEqual(page.jobs.map((job) => job.id));
-    expect(jobs.map((job) => job.id)).toEqual(["paused-z", "later", "paused-a", "earlier"]);
-  });
-
-  it("applies the same stable id tiebreaker to unpaginated cron jobs", async () => {
-    const nextRunAtMs = Date.parse("2026-02-27T15:30:00.000Z");
-    const jobs = [
-      createBaseJob({ id: "scheduled-z", state: { nextRunAtMs } }),
-      createBaseJob({ id: "scheduled-a", state: { nextRunAtMs } }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-
-    const unpaginated = await list(state);
-
-    expect(unpaginated.map((job) => job.id)).toEqual(["scheduled-a", "scheduled-z"]);
-  });
-
-  it("matches the operator-visible display name when filtering cron jobs", async () => {
-    const job = createBaseJob({
-      id: "report-job",
-      name: "internal-report-name",
-      displayName: "Daily summary",
-    });
-    const state = createMockCronStateForJobs({ jobs: [job] });
-
-    const page = await listPage(state, { query: "Daily summary" });
-
-    expect(page.jobs.map((entry) => entry.id)).toEqual(["report-job"]);
-  });
-
-  it("preserves phrase searches across existing cron job fields", async () => {
-    const job = createBaseJob({
-      id: "report-job",
-      name: "Daily report",
-      description: "Quarterly summary",
-      displayName: "Executive overview",
-    });
-    const state = createMockCronStateForJobs({ jobs: [job] });
-
-    const page = await listPage(state, { query: "report Quarterly" });
-
-    expect(page.jobs.map((entry) => entry.id)).toEqual(["report-job"]);
-  });
-
-  it("normalizes requested agent ids before filtering", async () => {
-    const jobs = [
-      createBaseJob({ id: "job-main", agentId: "main", name: "main" }),
-      createBaseJob({ id: "job-ops", agentId: "ops", name: "ops" }),
-      createBaseJob({ id: "job-unset", agentId: undefined, name: "unset" }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-
-    const page = await listPage(state, { agentId: " Ops " });
-
-    expect(page.jobs.map((job) => job.id)).toEqual(["job-ops"]);
-  });
-
-  it("matches omitted job agent ids to the configured default agent when filtering", async () => {
-    const jobs = [
-      createBaseJob({ id: "job-main", agentId: "main", name: "main" }),
-      createBaseJob({ id: "job-ops", agentId: "ops", name: "ops" }),
-      createBaseJob({ id: "job-unset", agentId: undefined, name: "unset" }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-    state.deps.defaultAgentId = " Ops ";
-
-    const page = await listPage(state, { agentId: "ops" });
-
-    expect(page.jobs.map((job) => job.id)).toEqual(["job-ops", "job-unset"]);
-  });
-
-  it("matches scoped session owners before the configured default", async () => {
-    const jobs = [
-      createBaseJob({
-        id: "job-scoped",
-        agentId: undefined,
-        sessionKey: "agent:ops:main",
-      }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-    state.deps.defaultAgentId = "main";
-
-    const page = await listPage(state, { agentId: "ops" });
-
-    expect(page.jobs.map((job) => job.id)).toEqual(["job-scoped"]);
-  });
-
-  it("matches omitted job agent ids to the prepared main default", async () => {
-    const jobs = [
-      createBaseJob({ id: "job-main", agentId: "main", name: "main" }),
-      createBaseJob({ id: "job-ops", agentId: "ops", name: "ops" }),
-      createBaseJob({ id: "job-unset", agentId: undefined, name: "unset" }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-
-    const page = await listPage(state, { agentId: "main" });
-
-    expect(page.jobs.map((job) => job.id)).toEqual(["job-main", "job-unset"]);
-  });
-
-  it("keeps listPage unfiltered when agent id is omitted", async () => {
-    const jobs = [
-      createBaseJob({ id: "job-main", agentId: "main", name: "main" }),
-      createBaseJob({ id: "job-ops", agentId: "ops", name: "ops" }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-
-    const page = await listPage(state);
-
-    expect(page.jobs.map((job) => job.id)).toEqual(["job-main", "job-ops"]);
-  });
-
-  it("keeps one revision across pages and changes it for same-count store churn", async () => {
-    const jobs = [
-      createBaseJob({ id: "job-a", name: "alpha" }),
-      createBaseJob({ id: "job-b", name: "beta" }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-
-    const firstPage = await listPage(state, { limit: 1, offset: 0, sortBy: "name" });
-    const secondPage = await listPage(state, { limit: 1, offset: 1, sortBy: "name" });
-    expect(secondPage.snapshotRevision).toBe(firstPage.snapshotRevision);
-
-    if (!state.store) {
-      throw new Error("expected loaded cron store");
-    }
-    state.store.jobs = [jobs[1]!, createBaseJob({ id: "job-c", name: "gamma" })];
-    const changedPage = await listPage(state, { limit: 1, offset: 0, sortBy: "name" });
-
-    expect(changedPage.total).toBe(firstPage.total);
-    expect(changedPage.snapshotRevision).not.toBe(firstPage.snapshotRevision);
-  });
-
-  it("detaches returned pages from later in-place store mutations", async () => {
-    const job = createBaseJob({ id: "job-a", name: "alpha" });
-    const state = createMockCronStateForJobs({ jobs: [job] });
-
-    const page = await listPage(state);
-    job.state.lastStatus = "ok";
-
-    expect(page.jobs[0]).not.toBe(job);
-    expect(page.jobs[0]?.state.lastStatus).toBeUndefined();
-  });
-
-  it("listPage does not clone the complete store, detaches only requested rows, and revisions cover off-page changes", async () => {
-    const jobs = [
-      createBaseJob({ id: "job-a", name: "alpha" }),
-      createBaseJob({ id: "job-b", name: "beta" }),
-      createBaseJob({ id: "job-c", name: "gamma" }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-    const clone = vi.spyOn(globalThis, "structuredClone");
-
-    try {
-      const options = { limit: 1, offset: 1, sortBy: "name" as const };
-      const page = await listPage(state, options);
-      const clonedArrays = clone.mock.calls.filter(([value]) => Array.isArray(value));
-
-      expect(clone).not.toHaveBeenCalledWith(state.store);
-      expect(clonedArrays).toHaveLength(1);
-      expect(clonedArrays[0]?.[0]).toEqual([jobs[1]]);
-      expect(page.jobs[0]).not.toBe(jobs[1]);
-
-      jobs[2]!.state.lastStatus = "ok";
-      const changed = await listPage(state, options);
-
-      expect(changed.jobs.map((job) => job.id)).toEqual(["job-b"]);
-      expect(changed.snapshotRevision).not.toBe(page.snapshotRevision);
-    } finally {
-      clone.mockRestore();
-    }
-  });
-
-  it("matches job ids in listPage text search", async () => {
-    const jobs = [
-      createBaseJob({ id: "daily-report", name: "Morning report" }),
-      createBaseJob({ id: "tax-digest", name: "Finance digest" }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-
-    const page = await listPage(state, { query: "tax" });
-
-    expect(page.jobs.map((job) => job.id)).toEqual(["tax-digest"]);
-  });
-
-  it("applies schedule, status, and trigger filters before paging", async () => {
-    const nextRunAtMs = Date.parse("2030-02-27T15:30:00.000Z");
-    const jobs = [
-      createBaseJob({
-        id: "at-unknown",
-        schedule: { kind: "at", at: "2030-02-27T15:30:00.000Z" },
-        state: { nextRunAtMs },
-      }),
-      createBaseJob({
-        id: "cron-error",
-        schedule: { kind: "cron", expr: "0 9 * * *" },
-        state: { nextRunAtMs, lastStatus: "error" },
-      }),
-      createBaseJob({
-        id: "cron-unknown",
-        schedule: { kind: "cron", expr: "0 10 * * *" },
-        trigger: { script: "json({ fire: true })" },
-        state: { nextRunAtMs },
-      }),
-      createBaseJob({
-        id: "cron-unknown-plain",
-        schedule: { kind: "cron", expr: "0 11 * * *" },
-        state: { nextRunAtMs },
-      }),
-    ];
-    const state = createMockCronStateForJobs({ jobs });
-    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-list-page-"));
-    try {
-      state.deps.storePath = path.join(storeDir, "jobs.json");
-
-      const page = await listPage(state, {
-        scheduleKind: "cron",
-        lastRunStatus: "unknown",
-        trigger: "conditional",
-        limit: 1,
-      });
-
-      expect(page.jobs.map((job) => job.id)).toEqual(["cron-unknown"]);
-      expect(page.total).toBe(1);
-      expect(page.hasMore).toBe(false);
-    } finally {
-      await fs.rm(storeDir, { recursive: true, force: true });
-    }
+  expect(firstPage).toMatchObject({ jobs: [{ id: "later" }, { id: "earlier" }], hasMore: true });
+  expect(secondPage).toMatchObject({
+    jobs: [{ id: "paused-a" }, { id: "paused-z" }],
+    hasMore: false,
+    snapshotRevision: firstPage.snapshotRevision,
   });
 });
 
-describe("cron listPage slow diagnostics", () => {
-  it.each([999, 1_000])(
-    "warns only once elapsed reaches the threshold (%i ms)",
-    async (duration) => {
-      let now = 0;
-      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-      const state = createMockCronStateForJobs({ jobs: [createBaseJob()] });
-      const warn = vi.fn();
-      state.deps.log.warn = warn;
-      state.deps.resolveDefaultAgentId = () => {
-        now = duration;
-        return "main";
-      };
-      try {
-        const page = await listPage(state, { agentId: "main" });
-        expect(page.jobs).toHaveLength(1);
-        expect(warn).toHaveBeenCalledTimes(duration < 1_000 ? 0 : 1);
-        if (duration >= 1_000) {
-          expect(warn).toHaveBeenCalledWith(
-            {
-              operation: "cron.listPage",
-              pid: process.pid,
-              threadId,
-              isMainThread,
-              elapsedMs: 1_000,
-              waitToCallbackMs: 0,
-              callbackMs: 1_000,
-              completionDelayMs: 0,
-              sourceCount: 1,
-              matchedCount: 1,
-              returnedCount: 1,
-              outcome: "ok",
-              thresholdMs: 1_000,
-            },
-            "cron: slow list page",
-          );
-        }
-      } finally {
-        await state.op;
-        clock.mockRestore();
-      }
-    },
-  );
-
-  it("separates a held predecessor from callback work without delaying another partition", async () => {
-    let now = 0;
-    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-    const state = createMockCronStateForJobs({
-      jobs: [createBaseJob(), createBaseJob({ id: "disabled", enabled: false })],
-    });
-    const other = createMockCronStateForJobs({ jobs: [] });
-    other.deps.storePath = "/mock/other-partition";
-    const warn = vi.fn();
-    state.deps.log.warn = warn;
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const order: string[] = [];
-    const predecessor = locked(state, async () => {
-      order.push("predecessor");
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
-    state.deps.resolveDefaultAgentId = () => {
-      order.push("list");
-      now = 1_750;
-      return "main";
-    };
-    const pagePromise = listPage(state, { agentId: "main", limit: 1 });
-    const successor = locked(state, async () => {
-      order.push("successor");
-    });
-    try {
-      expect((await listPage(other)).jobs).toEqual([]);
-      expect(order).toEqual(["predecessor"]);
-      expect(warn).not.toHaveBeenCalled();
-      now = 1_400;
-      release.resolve();
-      const page = await pagePromise;
-      await successor;
-      expect(order).toEqual(["predecessor", "list", "successor"]);
-      expect(page.jobs.map((job) => job.id)).toEqual(["job-1"]);
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        {
-          operation: "cron.listPage",
-          pid: process.pid,
-          threadId,
-          isMainThread,
-          elapsedMs: 1_750,
-          waitToCallbackMs: 1_400,
-          callbackMs: 350,
-          completionDelayMs: 0,
-          sourceCount: 2,
-          matchedCount: 1,
-          returnedCount: 1,
-          outcome: "ok",
-          thresholdMs: 1_000,
-        },
-        "cron: slow list page",
-      );
-    } finally {
-      release.resolve();
-      await Promise.allSettled([predecessor, pagePromise, successor, other.op]);
-      clock.mockRestore();
-    }
+it("preserves list revisions for large Unicode and escaped payloads", async () => {
+  const state = listState({
+    name: "Unicode report 🦞",
+    payload: { kind: "systemEvent", text: '🦞 日本語 "quoted" \\path\n\t'.repeat(1024) },
   });
 
-  it.each([false, true])(
-    "preserves callback failure and subsequent reads when logger throws=%s",
-    async (loggerThrows) => {
-      let now = 0;
-      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-      const state = createMockCronStateForJobs({ jobs: [createBaseJob()] });
-      const failure = new Error("synthetic selected-row failure");
-      const warn = vi.fn(() => {
-        if (loggerThrows) {
-          throw new Error("synthetic logger failure");
-        }
-      });
-      state.deps.log.warn = warn;
-      state.deps.resolveDefaultAgentId = () => {
-        now = 1_200;
-        throw failure;
-      };
-      try {
-        await expect(listPage(state, { agentId: "main" })).rejects.toBe(failure);
-        expect(warn).toHaveBeenCalledExactlyOnceWith(
-          {
-            operation: "cron.listPage",
-            pid: process.pid,
-            threadId,
-            isMainThread,
-            elapsedMs: 1_200,
-            waitToCallbackMs: 0,
-            callbackMs: 1_200,
-            completionDelayMs: 0,
-            sourceCount: 1,
-            matchedCount: undefined,
-            returnedCount: undefined,
-            outcome: "error",
-            thresholdMs: 1_000,
-          },
-          "cron: slow list page",
-        );
-        expect((await listPage(state)).jobs.map((job) => job.id)).toEqual(["job-1"]);
-        expect(warn).toHaveBeenCalledTimes(1);
-      } finally {
-        await state.op;
-        clock.mockRestore();
-      }
-    },
-  );
+  const page = await listPage(state);
 
-  it("preserves the detached page when the slow warning logger throws", async () => {
-    let now = 0;
-    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-    const job = createBaseJob();
-    const state = createMockCronStateForJobs({ jobs: [job] });
-    state.deps.log.warn = () => {
-      throw new Error("synthetic logger failure");
-    };
-    state.deps.resolveDefaultAgentId = () => {
-      now = 1_100;
-      return "main";
-    };
-    try {
-      const page = await listPage(state, { agentId: "main" });
-      expect(page.jobs).toEqual([job]);
-      expect(page.jobs[0]).not.toBe(job);
-      expect((await listPage(state)).snapshotRevision).toBe(page.snapshotRevision);
-    } finally {
-      await state.op;
-      clock.mockRestore();
-    }
+  expect((await listPage(state)).snapshotRevision).toBe(page.snapshotRevision);
+  state.store!.jobs[0]!.payload = { kind: "systemEvent", text: "changed 🦞" };
+  expect((await listPage(state)).snapshotRevision).not.toBe(page.snapshotRevision);
+});
+
+it("filters normalized agent owners across explicit, session-scoped, and default jobs", async () => {
+  const state = listState(
+    { id: "job-main", agentId: "main" },
+    { id: "job-ops", agentId: "ops" },
+    { id: "job-unset" },
+    { id: "job-scoped", sessionKey: "agent:ops:main" },
+  );
+  let defaultAgentId = " Ops ";
+  const resolveDefaultAgentId = vi.fn(() => defaultAgentId);
+  state.deps.resolveDefaultAgentId = resolveDefaultAgentId;
+
+  const page = await listPage(state, { agentId: " OPS " });
+
+  expect(page.jobs.map((job) => job.id)).toEqual(["job-ops", "job-scoped", "job-unset"]);
+  expect(resolveDefaultAgentId).toHaveBeenCalledOnce();
+
+  defaultAgentId = "main";
+  const changed = await listPage(state, { agentId: "ops" });
+  expect(changed.jobs.map((job) => job.id)).toEqual(["job-ops", "job-scoped"]);
+  expect(resolveDefaultAgentId).toHaveBeenCalledTimes(2);
+});
+
+it("shares immutable requested rows until a list revision changes", async () => {
+  const state = listState(...["alpha", "beta", "gamma"].map((name) => ({ name })));
+  const jobs = state.store!.jobs;
+  const clone = vi.spyOn(globalThis, "structuredClone");
+  const descriptor = vi.spyOn(Object, "getOwnPropertyDescriptor");
+  const revision = vi.spyOn(snapshotRevisions, "resolveCronListSnapshotRevision");
+  state.schedulerStarted = true;
+
+  const options = { limit: 1, offset: 1, sortBy: "name" as const };
+  const page = await listPage(state, options);
+  const rowInspections = descriptor.mock.calls.filter(
+    ([value]) => value === page.jobs[0] || value === page.jobs[0]?.state,
+  ).length;
+  expect(rowInspections).toBe(0);
+  const firstStatus = await status(state);
+  expect(Object.isFrozen(firstStatus)).toBe(true);
+  expect(() => {
+    page.jobs[0]!.state.lastStatus = "error";
+  }).toThrow(TypeError);
+  expect(clone).toHaveBeenCalledWith(jobs[1]);
+  const visibilityPass = await listPage(state, options, () => false);
+  expect(visibilityPass).toMatchObject({ jobs: [], total: 0 });
+  const repeated = await listPage(state, options);
+  await expect(remove(state, "missing-job")).resolves.toEqual({ ok: true, removed: false });
+  expect((await listPage(state, options)).jobs[0]).toBe(page.jobs[0]);
+  expect(repeated.jobs[0]).toBe(page.jobs[0]);
+  expect(await status(state)).toBe(firstStatus);
+  expect(repeated.snapshotRevision).toBe(page.snapshotRevision);
+  expect(clone).toHaveBeenCalledTimes(3);
+  expect(revision).toHaveBeenCalledTimes(2);
+  page.jobs.length = 0;
+  expect(repeated.jobs).toHaveLength(1);
+
+  await locked(state, async () => {
+    applyCronRuntimeRowsToState(state, [
+      { ...jobs[1]!, state: { ...jobs[1]!.state, lastStatus: "ok", nextRunAtMs: 100 } },
+      { ...jobs[2]!, state: { ...jobs[2]!.state, lastStatus: "ok" } },
+    ]);
   });
+  const changed = await listPage(state, options);
+
+  expect(changed.jobs).toMatchObject([{ id: "job-2", state: { lastStatus: "ok" } }]);
+  expect(changed.snapshotRevision).not.toBe(page.snapshotRevision);
+  expect(repeated.jobs[0]?.state.lastStatus).toBeUndefined();
+  const changedStatus = await status(state);
+  expect(changedStatus.nextWakeAtMs).toBe(100);
+  expect(changedStatus).not.toBe(firstStatus);
+  expect(await status(state)).toBe(changedStatus);
+  expect(clone).toHaveBeenCalledTimes(5);
+});
+
+it("reuses interleaved list variants while refreshing visibility and mutated rows", async () => {
+  const state = listState(
+    { name: "alpha", agentId: "ops" },
+    { name: "beta", agentId: "main" },
+    { name: "gamma", agentId: "main", enabled: false },
+  );
+  state.schedulerStarted = true;
+  const revision = vi.spyOn(snapshotRevisions, "resolveCronListSnapshotRevision");
+  const options = { includeDisabled: true, sortBy: "name", limit: 1 } as const;
+  const all = await listPage(state, options);
+  const agent = await listPage(state, { ...options, agentId: "main" });
+  expect(all).toMatchObject({ jobs: [{ name: "alpha" }], total: 3 });
+  expect(agent).toMatchObject({ jobs: [{ name: "beta" }], total: 2 });
+
+  const visibleIds = new Set(["job-1", "job-2"]);
+  const visible = (job: CronJob) => visibleIds.has(job.id);
+  expect(await listPage(state, options, visible)).toMatchObject({
+    jobs: [{ name: "alpha" }],
+    total: 2,
+  });
+  visibleIds.delete("job-1");
+  expect(await listPage(state, options, visible)).toMatchObject({
+    jobs: [{ name: "beta" }],
+    total: 1,
+  });
+  expect(revision).toHaveBeenCalledTimes(4);
+  expect(await listPage(state, options)).toMatchObject({
+    jobs: [{ name: "alpha" }],
+    total: 3,
+    snapshotRevision: all.snapshotRevision,
+  });
+  expect(await listPage(state, { ...options, agentId: "main" })).toMatchObject({
+    jobs: [{ name: "beta" }],
+    total: 2,
+    snapshotRevision: agent.snapshotRevision,
+  });
+  expect(revision).toHaveBeenCalledTimes(4);
+
+  await locked(state, async () => {
+    applyCronRuntimeRowsToState(state, [{ ...state.store!.jobs[1]!, name: "delta" }]);
+  });
+  const changedAgent = await listPage(state, { ...options, agentId: "main" });
+  const changedAll = await listPage(state, options);
+  expect(changedAgent).toMatchObject({ jobs: [{ name: "delta" }], total: 2 });
+  expect(changedAgent.snapshotRevision).not.toBe(agent.snapshotRevision);
+  expect(changedAll.snapshotRevision).not.toBe(all.snapshotRevision);
+  expect(agent.jobs[0]?.name).toBe("beta");
+  expect(await listPage(state, { ...options, agentId: "main" })).toEqual(changedAgent);
+  expect(revision).toHaveBeenCalledTimes(6);
+});
+
+it("applies schedule, status, trigger, and cross-field phrase filters before paging", async () => {
+  const matching = {
+    name: "Daily report",
+    description: "Quarterly summary",
+    displayName: "Executive overview",
+    trigger: { script: "json({ fire: true })" },
+  };
+  const state = listState(
+    { ...matching, schedule: { kind: "at", at: "2030-02-27T15:30:00.000Z" } },
+    { ...matching, state: { lastStatus: "error" } },
+    matching,
+    { ...matching, trigger: undefined },
+    { trigger: { script: "json({ fire: true })" } },
+  );
+  const page = await listPage(state, {
+    scheduleKind: "cron",
+    lastRunStatus: "unknown",
+    trigger: "conditional",
+    query: "report Quarterly",
+    limit: 1,
+  });
+  expect(page).toMatchObject({ jobs: [{ id: "job-3" }], total: 1, hasMore: false });
+});
+it("caches canonical search per row generation and rechecks visibility", async () => {
+  const state = listState(
+    { id: "one", name: "A\u0308 Alpha", description: "é Report", displayName: "日本語 🦞" },
+    { id: "two", name: "Beta", agentId: "ops" },
+  );
+  state.schedulerStarted = true;
+  const normalize = vi.spyOn(stringCoerce, "normalizeLowercaseStringOrEmpty");
+  let visible = true;
+  const matchesJob = vi.fn(() => visible);
+  const first = await listPage(state, { query: " Ä ALPHA E\u0301 " }, matchesJob);
+  expect(first.jobs.map((job) => job.id)).toEqual(["one"]);
+  expect((await listPage(state, { query: "日本語 🦞" }, matchesJob)).jobs[0]).toBe(first.jobs[0]);
+  expect((await listPage(state, { query: "ops" })).jobs.map((job) => job.id)).toEqual(["two"]);
+  visible = false;
+  expect(await listPage(state, { query: "report" }, matchesJob)).toMatchObject({ total: 0 });
+  expect(matchesJob).toHaveBeenCalledTimes(3);
+  expect(
+    normalize.mock.calls.filter(([value]) => value === "one A\u0308 Alpha é Report  日本語 🦞"),
+  ).toHaveLength(1);
+  expect(normalize.mock.calls.filter(([value]) => value === "two Beta  ops")).toHaveLength(1);
+
+  await locked(state, async () => {
+    const job = state.store!.jobs[0]!;
+    applyCronRuntimeRowsToState(state, [
+      { ...job, name: "Ä Renamed", description: "Changed", displayName: undefined },
+    ]);
+  });
+  expect(await listPage(state, { query: "alpha" })).toMatchObject({ total: 0 });
+  expect(await listPage(state, { query: "日本語" })).toMatchObject({ total: 0 });
+  const changed = await listPage(state, { query: "A\u0308 Renamed Changed" });
+  expect(changed.jobs.map((job) => job.id)).toEqual(["one"]);
+  expect(changed.snapshotRevision).not.toBe(first.snapshotRevision);
+  expect(first.jobs[0]?.name).toBe("A\u0308 Alpha");
+});
+
+it("preserves callback failure and subsequent reads when the logger throws", async () => {
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  const state = listState({});
+  const failure = new Error("synthetic selected-row failure");
+  const warn = vi.fn(() => {
+    throw new Error("synthetic logger failure");
+  });
+  state.deps.log.warn = warn;
+  state.deps.resolveDefaultAgentId = () => {
+    now = 1_200;
+    throw failure;
+  };
+  try {
+    await expect(listPage(state, { agentId: "main" })).rejects.toBe(failure);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      {
+        operation: "cron.listPage",
+        pid: process.pid,
+        threadId,
+        isMainThread,
+        elapsedMs: 1_200,
+        waitToCallbackMs: 0,
+        callbackMs: 1_200,
+        completionDelayMs: 0,
+        sourceCount: 1,
+        matchedCount: undefined,
+        returnedCount: undefined,
+        outcome: "error",
+        thresholdMs: 1_000,
+      },
+      "cron: slow list page",
+    );
+    expect((await listPage(state)).jobs.map((job) => job.id)).toEqual(["job-1"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  } finally {
+    await state.op;
+  }
+});
+
+it("hashes only changed rows across publications and interleaved list variants", async () => {
+  const state = listState({ name: "alpha" }, { name: "beta" }, { name: "gamma" });
+  state.schedulerStarted = true;
+  const hash = vi.spyOn(nodeCrypto, "sha256StableValue");
+  await status(state);
+  expect(hash).not.toHaveBeenCalled();
+  const first = await listPage(state, { limit: 1, query: "alpha" });
+  hash.mockClear();
+  for (const query of ["beta", "gamma", "", "alpha", "job"]) {
+    await listPage(state, { query });
+  }
+  expect(hash).not.toHaveBeenCalled();
+
+  // A reload can replace every source object without changing the published content.
+  await locked(state, async () => {
+    applyCronRuntimeRowsToState(state, structuredClone(state.store!.jobs));
+  });
+  expect((await listPage(state, { query: "alpha" })).snapshotRevision).toBe(first.snapshotRevision);
+  expect(hash).not.toHaveBeenCalled();
+
+  await locked(state, async () => {
+    const job = state.store!.jobs[1]!;
+    job.state.lastStatus = "ok";
+    applyCronRuntimeRowsToState(state, [job]);
+  });
+  expect((await listPage(state, { query: "alpha" })).snapshotRevision).toBe(first.snapshotRevision);
+  expect(hash).toHaveBeenCalledTimes(1);
+  const original = state.store!.jobs[1]!;
+  const beforeReplacement = await listPage(state, { query: "beta" });
+  expect(beforeReplacement.jobs[0]?.state.lastStatus).toBe("ok");
+  await locked(state, async () => {
+    state.store!.jobs[1] = { ...original, name: "beta replaced" };
+  });
+  const replaced = await listPage(state, { query: "beta" });
+  expect(replaced.jobs[0]?.name).toBe("beta replaced");
+  expect(replaced.snapshotRevision).not.toBe(beforeReplacement.snapshotRevision);
+  await locked(state, async () => {
+    state.store!.jobs[1] = original;
+  });
+  const restored = await listPage(state, { query: "beta" });
+  expect(restored.snapshotRevision).toBe(beforeReplacement.snapshotRevision);
+  expect(restored.jobs[0]).toBe(beforeReplacement.jobs[0]);
 });

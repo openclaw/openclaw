@@ -6,19 +6,17 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { decodeUpdateRecovery, type UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
 
-/** Fixture construction only: writes synthetic retained bytes into a disposable test database.
- * No capture, claim, replay, native operation, or runtime publication implementation. */
+/** Synthetic stored bytes, not capture, claim, replay, or runtime publication. */
 export function storeRetainedUpdateRecovery(
   record: UpdateRecoveryRecord,
   options: OpenClawStateDatabaseOptions,
 ) {
   const parsed = decodeUpdateRecovery(JSON.stringify(record), record.runId);
-  const raw = JSON.stringify(parsed);
   openOpenClawStateDatabase(options)
     .db.prepare(
       "INSERT INTO config_machine_state (state_key,value_json,updated_at_ms) VALUES (?,?,?) ON CONFLICT(state_key) DO UPDATE SET value_json=excluded.value_json,updated_at_ms=excluded.updated_at_ms",
     )
-    .run("update.recovery." + record.runId, raw, record.updatedAtMs);
+    .run("update.recovery." + record.runId, JSON.stringify(parsed), record.updatedAtMs);
   return parsed;
 }
 
@@ -60,30 +58,28 @@ export function retainedReadinessRecord(
 ): UpdateRecoveryRecord {
   const effectId = randomUUID();
   const identity = runtime === "candidate" ? record.to : record.from;
+  const binding = { effectId, runtime };
   return {
     ...record,
     revision: 3,
     effects: [
       {
-        effectId,
+        ...binding,
         kind: "service-restart",
         resourceId: "gateway",
-        runtime,
         state: "observed",
         observedIdentity: "retained-boot",
       },
     ],
     verification: {
-      runtime,
-      effectId,
+      ...binding,
       receipt: {
         kind: "readiness",
         runId: record.runId,
         transactionId: record.transactionId,
         claimId: record.claimId,
         revision: 2,
-        effectId,
-        runtime,
+        ...binding,
         gateway: { bootId: "retained-boot", version: identity.version, buildId: identity.buildId },
         checks: {
           serviceRunning: true,
@@ -145,8 +141,5 @@ export function retainedTerminalRecord(
     receipt: next.verification!.receipt,
     pairId,
   };
-  if (pairId) {
-    next.retainedPair = { pairId, state: "selected" };
-  }
-  return next;
+  return pairId ? { ...next, retainedPair: { pairId, state: "selected" } } : next;
 }

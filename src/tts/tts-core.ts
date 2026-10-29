@@ -1,5 +1,4 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-// TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
@@ -89,7 +88,6 @@ function resolveSummaryModelSelection(
   };
 }
 
-/** Summarize long text before synthesis using the configured summary model. */
 export async function summarizeText(
   params: {
     text: string;
@@ -97,10 +95,11 @@ export async function summarizeText(
     cfg: OpenClawConfig;
     config: ResolvedTtsConfig;
     timeoutMs: number;
+    agentId?: string;
   },
   deps?: SummarizeTextDeps,
 ): Promise<SummarizeResult> {
-  const { text, targetLength, cfg, config, timeoutMs } = params;
+  const { text, targetLength, cfg, config, timeoutMs, agentId } = params;
   if (targetLength < 100 || targetLength > 10_000) {
     throw new Error(`Invalid targetLength: ${targetLength}`);
   }
@@ -201,7 +200,7 @@ export async function summarizeText(
   return await runWithAsyncWorkResources(async (onAcquired) => {
     // Preparation precedes the request timer; the completion and its cleanup own the model.
     const prepared = await resolvedDeps.acquireSimpleCompletionModelWithSelection(
-      { cfg, allowBundledStaticCatalogFallback: true },
+      { cfg, allowBundledStaticCatalogFallback: true, ...(agentId ? { agentId } : {}) },
       (manifestPlugins) => resolveSummaryModelSelection(cfg, config, manifestPlugins),
     );
     if (!("error" in prepared)) {

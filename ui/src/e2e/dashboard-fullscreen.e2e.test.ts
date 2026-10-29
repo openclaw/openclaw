@@ -1,14 +1,17 @@
 import type { Server as HttpServer } from "node:http";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { createDeferred } from "../../../test/helpers/promise.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
+  type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -28,6 +31,25 @@ const sessionRow = {
   displayName: "Deploy monitor",
   updatedAt: 1,
 };
+const resolvedSession = {
+  ok: true,
+  key: sessionKey,
+  agentId: "main",
+  displayName: sessionRow.displayName,
+  boardFace: sessionRow.boardFace,
+};
+const makeWidget = (name: string, title: string, position: number) => ({
+  name,
+  title,
+  position,
+  tabId: "main",
+  contentKind: "html",
+  sizeW: 6,
+  sizeH: 4,
+  grantState: "pending",
+  revision: 1,
+  frameUrl: `about:blank#${name}`,
+});
 const boardSnapshot = {
   sessionKey,
   revision: 1,
@@ -36,33 +58,39 @@ const boardSnapshot = {
     { tabId: "research", title: "Research", position: 1, chatDock: "right" },
   ],
   widgets: [
+    makeWidget("status", "Status", 0),
     {
-      name: "status",
-      tabId: "main",
-      title: "Status",
-      contentKind: "html",
-      sizeW: 6,
-      sizeH: 4,
-      position: 0,
-      grantState: "pending",
-      revision: 1,
-      frameUrl: "about:blank#status",
-    },
-    {
-      name: "permissions",
-      tabId: "main",
-      title: "Permissions",
-      contentKind: "html",
-      sizeW: 6,
-      sizeH: 4,
-      position: 1,
-      grantState: "pending",
-      revision: 1,
-      frameUrl: "about:blank#permissions",
+      ...makeWidget("permissions", "Permissions", 1),
       declared: { tools: ["openclaw.data.read"], netOrigins: [] },
     },
   ],
 };
+
+function installBoard(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
+  return installMockGateway(page, {
+    sessionKey,
+    featureMethods: ["board.get"],
+    ...scenario,
+    methodResponses: {
+      "sessions.resolve": resolvedSession,
+      "sessions.describe": { session: sessionRow },
+      "board.get": boardSnapshot,
+      ...scenario.methodResponses,
+    },
+  });
+}
+const resetScroll = (page: Locator) =>
+  page.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+const scrollTop = (page: Locator) => page.evaluate((element) => element.scrollTop);
+const scrollRemaining = (board: Locator) =>
+  board.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
+async function expectWidgetReady(board: Locator, frame: Locator) {
+  await expect.poll(() => frame.getAttribute("inert")).toBeNull();
+  expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+  expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(0);
+}
 
 async function rememberMainTab(page: Page): Promise<void> {
   const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
@@ -152,13 +180,7 @@ suite.define(() => {
       expect(await gateway.getRequests("board.get")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
       const initialSessionListCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.resolveDeferred("sessions.resolve", {
-        ok: true,
-        key: sessionKey,
-        agentId: "main",
-        displayName: sessionRow.displayName,
-        boardFace: sessionRow.boardFace,
-      });
+      await gateway.resolveDeferred("sessions.resolve", resolvedSession);
       const document = page.locator("openclaw-board-document");
       await document.locator("openclaw-board-view").waitFor();
 
@@ -220,21 +242,7 @@ suite.define(() => {
             configurable: true,
           });
         });
-        await installMockGateway(page, {
-          sessionKey,
-          featureMethods: ["board.get"],
-          methodResponses: {
-            "sessions.resolve": {
-              ok: true,
-              key: sessionKey,
-              agentId: "main",
-              displayName: sessionRow.displayName,
-              boardFace: sessionRow.boardFace,
-            },
-            "sessions.describe": { session: sessionRow },
-            "board.get": boardSnapshot,
-          },
-        });
+        await installBoard(page);
 
         await page.goto(`${suite.server.baseUrl}${initialFocusPath}`);
         const dashboardDocument = page.locator("openclaw-board-document");
@@ -310,10 +318,7 @@ suite.define(() => {
               },
             ],
           };
-          let releaseDocument!: () => void;
-          const documentGate = new Promise<void>((resolve) => {
-            releaseDocument = resolve;
-          });
+          const { promise: documentGate, resolve: releaseDocument } = createDeferred();
           await page.route(widgetUrl, async (route) => {
             await documentGate;
             await route.fulfill({
@@ -322,20 +327,8 @@ suite.define(() => {
               status: 200,
             });
           });
-          const gateway = await installMockGateway(page, {
-            sessionKey,
-            featureMethods: ["board.get"],
-            methodResponses: {
-              "sessions.resolve": {
-                ok: true,
-                key: sessionKey,
-                agentId: "main",
-                displayName: sessionRow.displayName,
-                boardFace: sessionRow.boardFace,
-              },
-              "sessions.describe": { session: sessionRow },
-              "board.get": widgetSnapshot,
-            },
+          const gateway = await installBoard(page, {
+            methodResponses: { "board.get": widgetSnapshot },
           });
 
           await page.goto(`${suite.server.baseUrl}${initialFocusPath}`);
@@ -353,19 +346,13 @@ suite.define(() => {
               )
               .toBe(true);
             await page.screenshot({ path: `${suite.artifactDir}/dashboard-loading.png` });
-            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
             expect(await frame.getAttribute("inert")).toBe("");
             await board.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           } finally {
             releaseDocument();
           }
-          await expect
-            .poll(() => frame.evaluate((element) => getComputedStyle(element).opacity))
-            .toBe("1");
-          expect(await frame.getAttribute("inert")).toBeNull();
-          expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(
-            0,
-          );
+          await expectWidgetReady(board, frame);
           await page.screenshot({ path: `${suite.artifactDir}/dashboard-ready.png` });
           await expect
             .poll(() => board.evaluate((element) => element.scrollHeight > element.clientHeight))
@@ -384,43 +371,35 @@ suite.define(() => {
             throw new Error("Dashboard scroll owner or widget frame is not visible");
           }
 
-          await board.evaluate((element) => {
-            element.scrollTop = 0;
-          });
+          await resetScroll(board);
           await page.mouse.move(
             localScrollerBox.x + localScrollerBox.width / 2,
             localScrollerBox.y + localScrollerBox.height / 2,
           );
           await page.mouse.wheel(0, 80);
-          await expect
-            .poll(() => localScroller.evaluate((element) => element.scrollTop))
-            .toBeGreaterThan(0);
-          expect(await board.evaluate((element) => element.scrollTop)).toBe(0);
+          await expect.poll(() => scrollTop(localScroller)).toBeGreaterThan(0);
+          expect(await scrollTop(board)).toBe(0);
 
           await embeddedFrame.evaluate(() => {
             document.body.dispatchEvent(
               new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 500 }),
             );
           });
-          expect(await board.evaluate((element) => element.scrollTop)).toBe(0);
+          expect(await scrollTop(board)).toBe(0);
 
           await page.mouse.move(
             frameBox.x + frameBox.width / 2,
             Math.min(frameBox.y + frameBox.height / 2, boardBox.y + boardBox.height / 2),
           );
           await page.mouse.wheel(0, 500);
-          await expect
-            .poll(() => board.evaluate((element) => element.scrollTop))
-            .toBeGreaterThan(0);
+          await expect.poll(() => scrollTop(board)).toBeGreaterThan(0);
 
           await embeddedFrame.evaluate(() => {
             if (document.scrollingElement) {
               document.scrollingElement.scrollTop = 0;
             }
           });
-          await board.evaluate((element) => {
-            element.scrollTop = 0;
-          });
+          await resetScroll(board);
           const cdp = await context.newCDPSession(page);
           for (let attempt = 0; attempt < 4; attempt += 1) {
             const currentBoardBox = await board.boundingBox();
@@ -447,20 +426,12 @@ suite.define(() => {
               touchPoints: [{ x: touchX, y: touchEndY }],
             });
             await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-            const remaining = await board.evaluate(
-              (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
-            );
+            const remaining = await scrollRemaining(board);
             if (remaining <= 1) {
               break;
             }
           }
-          await expect
-            .poll(() =>
-              board.evaluate(
-                (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
-              ),
-            )
-            .toBeLessThanOrEqual(1);
+          await expect.poll(() => scrollRemaining(board)).toBeLessThanOrEqual(1);
           const finalRowBox = await embeddedFrame.locator("#dashboard-final-row").boundingBox();
           const finalBoardBox = await board.boundingBox();
           if (!finalRowBox || !finalBoardBox) {
@@ -496,13 +467,8 @@ suite.define(() => {
               );
             }),
           ).toBe(0);
-          await expect
-            .poll(() => frame.evaluate((element) => getComputedStyle(element).opacity))
-            .toBe("1");
-          expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(
-            0,
-          );
-          await cleanup.click();
+          await expectWidgetReady(board, frame);
+          await cleanup.tap();
           await replacement
             .getByRole("button", { name: "Cleanup requested", exact: true })
             .waitFor();
@@ -514,7 +480,7 @@ suite.define(() => {
     }
   });
 
-  it("makes dashboard main and restores chat after focus", async () => {
+  it("expands dashboard and restores split without replacing its iframe", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const widgetUrl = `${suite.server.baseUrl}__widget/seamless-dashboard`;
       await page.route(widgetUrl, (route) =>
@@ -552,11 +518,10 @@ suite.define(() => {
       const note = page.frameLocator('[data-widget-name="status"] iframe').getByRole("textbox");
       await note.fill("Keep this draft");
       const frameHandle = await frame.elementHandle();
-      await focusChatSidePanel(page);
-      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-      await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
-      await page.mouse.move(0, 0);
-      await page.screenshot({ path: `${suite.artifactDir}/single-widget-focused.png` });
+      // Side dashboards keep their card chrome; a main dashboard remains a page.
+      expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
+        "1px",
+      );
       const frameInsets = () =>
         frame.evaluate((element) => {
           const board = element.closest("openclaw-board-view")!;
@@ -569,17 +534,24 @@ suite.define(() => {
             bottom: outer.bottom - inner.bottom,
           };
         });
-      await expect.poll(frameInsets).toEqual({ left: 0, right: 0, top: 0, bottom: 0 });
+      await focusChatSidePanel(page);
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+      await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
+      await page.mouse.move(0, 0);
+      await page.screenshot({ path: `${suite.artifactDir}/single-widget-focused.png` });
+      await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
         "0px",
       );
       expect(await widget.evaluate((element) => getComputedStyle(element).borderRadius)).toBe(
         "0px",
       );
-      await page.getByRole("button", { name: "Restore split", exact: true }).click();
+      await selectChatLayoutAction(page, "Restore split");
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
-      await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
-      await page.locator('[data-panel-slot="dashboard"][data-region="main"]').waitFor();
+      await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
+      await page.locator('[data-panel-slot="dashboard"][data-region="side"]').waitFor();
+      // Side cards scroll as the widget reports new content height.
+      await expect.poll(frameInsets).toMatchObject({ left: 29, right: 29, top: 25 });
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
         "1px",
       );
@@ -587,9 +559,9 @@ suite.define(() => {
         true,
       );
       expect(await note.inputValue()).toBe("Keep this draft");
-      await page.getByRole("button", { name: "Focus", exact: true }).click();
+      await selectChatLayoutAction(page, "Focus");
       await frame.waitFor({ state: "visible" });
-      await expect.poll(frameInsets).toEqual({ left: 0, right: 0, top: 0, bottom: 0 });
+      await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
       await gateway.setMethodResponse("board.get", {
         ...singleWidget,
         revision: 2,
@@ -684,18 +656,8 @@ suite.define(() => {
 
   it("shows an actionable error when the initial board load fails", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        sessionKey,
-        featureMethods: ["board.get"],
+      const gateway = await installBoard(page, {
         methodResponses: {
-          "sessions.resolve": {
-            ok: true,
-            key: sessionKey,
-            agentId: "main",
-            displayName: sessionRow.displayName,
-            boardFace: sessionRow.boardFace,
-          },
-          "sessions.describe": { session: sessionRow },
           "board.get": {
             __mockError: { code: "UNAVAILABLE", message: "dashboard storage is unavailable" },
           },

@@ -2,15 +2,15 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 
-it.each(["invalid-json", "hash-mismatch", "read-error"] as const)(
-  "removes private restore staging after a table %s",
+it.each(["invalid-json", "hash-mismatch", "read-error", "staging-open"] as const)(
+  "removes private restore staging after %s failure",
   async (failure) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-failure-"));
     const sourcePath = path.join(root, "source.sqlite");
@@ -27,7 +27,15 @@ it.each(["invalid-json", "hash-mismatch", "read-error"] as const)(
         identity: { role: "global" },
       });
       const tablePath = path.join(outputPath, "tables", "content.jsonl");
-      if (failure === "read-error") {
+      if (failure === "staging-open") {
+        const open = fs.open.bind(fs);
+        vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+          if (String(args[0]).includes(".git-backup-restore-")) {
+            throw Object.assign(new Error("too many open files"), { code: "EMFILE" });
+          }
+          return await open(...args);
+        });
+      } else if (failure === "read-error") {
         await fs.rm(tablePath);
         await fs.mkdir(tablePath);
       } else {
@@ -49,6 +57,7 @@ it.each(["invalid-json", "hash-mismatch", "read-error"] as const)(
         (await fs.readdir(root)).filter((name) => name.startsWith(".git-backup-restore-")),
       ).toEqual([]);
     } finally {
+      vi.restoreAllMocks();
       closeOpenClawStateDatabaseForTest();
       await fs.rm(root, { recursive: true, force: true });
     }

@@ -45,12 +45,24 @@
           - "extensions/typesafe/**"
           - "docs/plugins/typesafe.md"
           - "docs/plugins/reference/typesafe.md"
+"plugin: subq":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/subq/**"
+          - "docs/plugins/subq.md"
+          - "docs/plugins/reference/subq.md"
 "plugin: onnx":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/onnx/**"
           - "docs/plugins/onnx.md"
           - "docs/plugins/reference/onnx.md"
+"plugin: levanto":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/levanto/**"
+          - "docs/providers/levanto.md"
+          - "docs/plugins/reference/levanto.md"
 "channel: a2a":
   - changed-files:
       - any-glob-to-any-file:
@@ -89,6 +101,13 @@
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
           - "docs/plugins/reference/logbook.md"
+"plugin: knowledge":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/knowledge/**"
+          - "docs/plugins/knowledge.md"
+          - "docs/plugins/knowledge/**"
+          - "docs/plugins/reference/knowledge.md"
 "plugin: imap":
   - changed-files:
       - any-glob-to-any-file:
@@ -114,6 +133,12 @@
           - "extensions/teams-meetings/**"
           - "docs/plugins/teams-meetings.md"
           - "docs/plugins/reference/teams-meetings.md"
+"plugin: slack-huddles":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/slack-huddles/**"
+          - "docs/plugins/slack-huddles.md"
+          - "docs/plugins/reference/slack-huddles.md"
 "plugin: zoom":
   - changed-files:
       - any-glob-to-any-file:
@@ -155,6 +180,23 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mcp-events":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mcp-events/**"
+          - "docs/automation/mcp-events.md"
+"plugin: mcp-relay":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mcp-relay/**"
+          - "docs/plugins/mcp-relay.md"
+          - "docs/plugins/reference/mcp-relay.md"
+"plugin: muse":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/muse/**"
+          - "docs/plugins/muse.md"
+          - "docs/plugins/reference/muse.md"
 "plugin: mxc":
   - changed-files:
       - any-glob-to-any-file:
@@ -281,6 +323,12 @@
       - any-glob-to-any-file:
           - "extensions/whatsapp/**"
           - "docs/channels/whatsapp.md"
+"channel: x":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/x/**"
+          - "docs/channels/x.md"
+          - "docs/plugins/reference/x.md"
 "channel: zalo":
   - changed-files:
       - any-glob-to-any-file:
@@ -343,14 +391,6 @@
           - "packages/gateway-protocol/src/**"
           - "src/daemon/**"
           - "docs/gateway/**"
-
-"fleet":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "src/fleet/**"
-          - "src/cli/fleet-cli/**"
-          - "docs/gateway/multi-tenant-hosting.md"
-          - "docs/cli/fleet.md"
 
 "docs":
   - changed-files:
@@ -447,6 +487,18 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llama-cpp/**"
+"extensions: advisor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/advisor/**"
+"extensions: agent-guidance":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/agent-guidance/**"
+"extensions: autoreview":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/autoreview/**"
 "extensions: active-memory":
   - changed-files:
       - any-glob-to-any-file:
@@ -488,10 +540,6 @@
           - "extensions/onepassword/**"
           - "docs/plugins/onepassword.md"
           - "docs/plugins/reference/onepassword.md"
-"extensions: webhooks":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/webhooks/**"
 "extensions: web-readability":
   - changed-files:
       - any-glob-to-any-file:
@@ -514,6 +562,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: abliteration":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/abliteration/**"
+          - "docs/providers/abliteration.md"
 "extensions: arcee":
   - changed-files:
       - any-glob-to-any-file:
@@ -586,6 +639,11 @@
           - "extensions/anthropic/**"
           - "docs/providers/anthropic.md"
           - "docs/plugins/reference/anthropic.md"
+"extensions: cloudflare":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cloudflare/**"
+          - "docs/plugins/cloudflare.md"
 "extensions: cloudflare-ai-gateway":
   - changed-files:
       - any-glob-to-any-file:
@@ -635,6 +693,16 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: liquid-ai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/liquid-ai/**"
+          - "docs/providers/liquid-ai.md"
+"extensions: bifrost":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bifrost/**"
+          - "docs/providers/bifrost.md"
 "extensions: agentsapi":
   - changed-files:
       - any-glob-to-any-file:
@@ -643,6 +711,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
+          - "docs/providers/openai/authentication.md"
 "extensions: codex":
   - changed-files:
       - any-glob-to-any-file:
@@ -660,6 +729,12 @@
           - "extensions/copilot/**"
           - "docs/plugins/copilot.md"
           - "docs/plugins/reference/copilot.md"
+"extensions: kie":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/kie/**"
+          - "docs/providers/kie.md"
+          - "docs/plugins/reference/kie.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:
@@ -707,6 +782,12 @@
           - "extensions/radius/**"
           - "docs/providers/radius.md"
           - "docs/plugins/reference/radius.md"
+"extensions: requesty":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/requesty/**"
+          - "docs/providers/requesty.md"
+          - "docs/plugins/reference/requesty.md"
 "extensions: runway":
   - changed-files:
       - any-glob-to-any-file:
@@ -883,6 +964,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/ollama/**"
+"extensions: omlx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/omlx/**"
 "extensions: opencode":
   - changed-files:
       - any-glob-to-any-file:

@@ -4,21 +4,27 @@ import { findActiveUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update
 
 const RETIREMENT_STEP = "finalize:doctor:model-retirement";
 
-function resolveDoctorUpdateRun(env: NodeJS.ProcessEnv) {
-  const runId = env[UPDATE_RUN_ID_ENV]?.trim();
+function resolveDoctorUpdateRun(
+  env: NodeJS.ProcessEnv,
+  runId = env[UPDATE_RUN_ID_ENV]?.trim() || undefined,
+) {
   // Published CLI parents omit the run ID but give actual package Doctor this
   // result channel. Candidate rehearsal strips both selectors.
-  const run = runId
-    ? getUpdateRun(runId, { env })
-    : env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim()
-      ? findActiveUpdateRun({ env })
-      : undefined;
+  const run =
+    runId !== undefined
+      ? getUpdateRun(runId, { env })
+      : env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim()
+        ? findActiveUpdateRun({ env })
+        : undefined;
   return run?.status === "running" ? run : undefined;
 }
 
-export function hasDeferredUpdateModelRetirement(env: NodeJS.ProcessEnv = process.env): boolean {
+export function hasDeferredUpdateModelRetirement(
+  env: NodeJS.ProcessEnv = process.env,
+  runId?: string,
+): boolean {
   return (
-    resolveDoctorUpdateRun(env)?.steps.some(
+    resolveDoctorUpdateRun(env, runId)?.steps.some(
       (step) => step.step === RETIREMENT_STEP && step.status === "skipped",
     ) ?? false
   );
@@ -39,7 +45,7 @@ export function recordUpdateModelRetirement(
   }
   const detail =
     status === "deferred"
-      ? "Model retirement repair deferred until plugin convergence."
+      ? "Model retirement repair deferred until plugin package convergence: the updating parent still owns plugin installation. Run openclaw update repair after the package update finishes."
       : "Deferred model retirement repair completed after plugin convergence.";
   recordUpdateRunStep(
     run.runId,
@@ -51,6 +57,17 @@ export function recordUpdateModelRetirement(
     },
     { env },
   );
+  if (status === "completed") {
+    recordUpdateRunStep(
+      run.runId,
+      {
+        step: `warning:${RETIREMENT_STEP}:deferred`,
+        status: "skipped",
+        detail,
+      },
+      { env },
+    );
+  }
   // Completion must follow the package warnings in the bounded status history.
   recordUpdateRunStep(
     run.runId,

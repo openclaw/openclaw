@@ -5,25 +5,15 @@ enum ToolResultTextFormatter {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
 
-        guard self.looksLikeJSON(trimmed),
-              let data = trimmed.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data)
+        guard trimmed.first == "{" || trimmed.first == "[",
+              let json = try? JSONSerialization.jsonObject(with: Data(trimmed.utf8))
         else {
             return trimmed
         }
 
         let normalizedTool = toolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return self.renderJSON(json, toolName: normalizedTool)
-    }
-
-    private static func looksLikeJSON(_ value: String) -> Bool {
-        guard let first = value.first else { return false }
-        return first == "{" || first == "["
-    }
-
-    private static func renderJSON(_ json: Any, toolName: String?) -> String {
         if let dict = json as? [String: Any] {
-            return self.renderDictionary(dict, toolName: toolName)
+            return self.renderDictionary(dict, toolName: normalizedTool)
         }
         if let array = json as? [Any] {
             if array.isEmpty { return "No items." }
@@ -38,11 +28,8 @@ enum ToolResultTextFormatter {
         let messageText = self.firstString(in: dict, keys: ["message", "result", "detail"])
 
         if status?.lowercased() == "error" || errorText != nil {
-            if let errorText {
-                return "Error: \(self.sanitizeError(errorText))"
-            }
-            if let messageText {
-                return "Error: \(self.sanitizeError(messageText))"
+            if let error = errorText ?? messageText {
+                return "Error: \(self.sanitizeError(error))"
             }
             return "Error"
         }
@@ -65,25 +52,16 @@ enum ToolResultTextFormatter {
     private static func renderNodesSummary(_ dict: [String: Any]) -> String? {
         if let nodes = dict["nodes"] as? [[String: Any]] {
             if nodes.isEmpty { return "No nodes found." }
-            var lines: [String] = []
-            lines.append("\(nodes.count) node\(nodes.count == 1 ? "" : "s") found.")
+            var lines = ["\(nodes.count) node\(nodes.count == 1 ? "" : "s") found."]
 
             for node in nodes.prefix(3) {
                 let label = self.firstString(in: node, keys: ["displayName", "name", "nodeId"]) ?? "Node"
-                var details: [String] = []
-
-                if let connected = node["connected"] as? Bool {
-                    details.append(connected ? "connected" : "offline")
-                }
-                if let platform = self.firstString(in: node, keys: ["platform"]) {
-                    details.append(platform)
-                }
-                if let version = self.firstString(in: node, keys: ["osVersion", "appVersion", "version"]) {
-                    details.append(version)
-                }
-                if let pairing = self.pairingDetail(node) {
-                    details.append(pairing)
-                }
+                let details = [
+                    (node["connected"] as? Bool).map { $0 ? "connected" : "offline" },
+                    self.firstString(in: node, keys: ["platform"]),
+                    self.firstString(in: node, keys: ["osVersion", "appVersion", "version"]),
+                    self.pairingDetail(node),
+                ].compactMap(\.self)
 
                 if details.isEmpty {
                     lines.append("• \(label)")
@@ -125,13 +103,7 @@ enum ToolResultTextFormatter {
     }
 
     private static func firstString(in dict: [String: Any], keys: [String]) -> String? {
-        for key in keys {
-            if let value = dict[key] as? String {
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { return trimmed }
-            }
-        }
-        return nil
+        keys.lazy.compactMap { ChatPayloadDecoding.trimmedNonEmptyString(dict[$0] as? String) }.first
     }
 
     private static func sanitizeError(_ raw: String) -> String {

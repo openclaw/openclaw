@@ -17,6 +17,7 @@ export function resolveNativeWebSearchRoute(
   params: WebSearchToolPolicyParams & {
     modelApi?: string;
     modelBaseUrl?: string;
+    modelParams?: Record<string, unknown>;
     agentDir?: string;
     authStore?: AuthProfileStore;
     pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
@@ -41,6 +42,7 @@ export function resolveNativeWebSearchRoute(
       modelId: params.modelId,
       api: params.modelApi,
       baseUrl: params.modelBaseUrl ?? params.config?.models?.providers?.[provider]?.baseUrl,
+      modelParams: params.modelParams,
     })
   ) {
     return { kind: "native", provider, transport: params.modelApi };

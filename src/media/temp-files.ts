@@ -1,4 +1,3 @@
-// Media temp file helpers create and clean up temporary media files.
 import fs from "node:fs/promises";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 

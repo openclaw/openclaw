@@ -1,4 +1,3 @@
-/** One quota window reported by a provider usage endpoint. */
 export type UsageWindow = {
   label: string;
   groupLabel?: string;
@@ -44,31 +43,8 @@ export type ProviderUsageCostDaily = {
   totalTokens: number;
 };
 
-/** Aggregate model activity for the provider history window. */
-export type ProviderUsageModelBreakdown = {
+export type ProviderUsageModelBreakdown = Omit<ProviderUsageCostDaily, "date" | "amount"> & {
   name: string;
-  requests?: number;
-  inputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-};
-
-/** Aggregate provider billing category for the history window. */
-export type ProviderUsageCostBreakdown = {
-  name: string;
-  amount: number;
-};
-
-/** Provider-reported cost history and attribution for one bounded UTC window. */
-export type ProviderUsageCostHistory = {
-  unit: string;
-  periodDays: number;
-  scope?: string;
-  daily: ProviderUsageCostDaily[];
-  models: ProviderUsageModelBreakdown[];
-  categories: ProviderUsageCostBreakdown[];
 };
 
 export type ProviderUsageSnapshot = {
@@ -76,7 +52,18 @@ export type ProviderUsageSnapshot = {
   displayName: string;
   windows: UsageWindow[];
   billing?: ProviderUsageBilling[];
-  costHistory?: ProviderUsageCostHistory;
+  /** Provider-reported cost history and attribution for one bounded UTC window. */
+  costHistory?: {
+    unit: string;
+    periodDays: number;
+    scope?: string;
+    daily: ProviderUsageCostDaily[];
+    models: ProviderUsageModelBreakdown[];
+    categories: {
+      name: string;
+      amount: number;
+    }[];
+  };
   summary?: string;
   plan?: string;
   /** Account identity (email) the usage was fetched under, when known. */

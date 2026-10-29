@@ -5,4 +5,6 @@ await runTsxCliShim(import.meta.url, {
   implementation: "./crabbox-wrapper.mts",
   detached: process.platform !== "win32",
   terminationOwner: "implementation",
+  toolingDependencies: "crabbox",
+  failureTool: "crabbox",
 });

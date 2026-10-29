@@ -3,10 +3,13 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
+import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
+import type {
+  SessionEntryCacheDatabase,
+  SessionEntryCacheSnapshot,
+} from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   hasSqliteSessionOwnerColumns,
   readSqliteSessionOwner,
@@ -17,24 +20,21 @@ import {
 } from "./session-accessor.sqlite-participant-projection.js";
 import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { ValidatedSessionMetadata } from "./session-canonical-key.js";
+import type { SessionEntrySnapshot } from "./session-entry-snapshots.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
-
-export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
 export function loadSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
   projection: "full" | "list" = "list",
   prepared?: ValidatedSessionMetadata,
-  fullEntryKeys?: ReadonlySet<string>,
-  retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean,
   deferParticipants = false,
 ): SessionEntryCacheSnapshot {
-  // Validation lends complete parsed facts only within this read. A concurrent external commit
-  // requires the ordinary fresh SELECT, never a stale snapshot stamped with its newer version.
+  // Only the same settled writer receipt can certify the parsed validation rows.
   const metadata =
-    !fullEntryKeys && prepared && prepared.dataVersion === readSqliteDataVersion(database.db)
+    prepared?.writeRevision !== undefined &&
+    prepared.writeRevision === readSqliteDatabaseWriteRevision(database.db)
       ? prepared
       : undefined;
   const parsedEntries = metadata?.entries ?? new Map<string, SessionEntry>();
@@ -43,20 +43,13 @@ export function loadSessionEntrySnapshot(
   if (!metadata) {
     for (const row of iterateSqliteQuerySync(
       database.db,
-      selectSessionEntryRows(database, projection, fullEntryKeys ? [...fullEntryKeys] : [])
-        .select("updated_at")
+      selectSessionEntryRows(database, projection)
+        .select(["current_session_id", "updated_at"])
         .orderBy("session_key"),
     )) {
       keys.push(row.session_key);
-      const entry = parseSessionEntryJson(
-        row,
-        fullEntryKeys?.has(row.session_key) ? "full" : projection,
-      );
+      const entry = parseSessionEntryJson(row, projection);
       if (entry) {
-        if (retainFullEntry && !retainFullEntry(row.session_key, entry)) {
-          delete entry.skillsSnapshot;
-          delete entry.systemPromptReport;
-        }
         parsedEntries.set(row.session_key, entry);
       }
     }
@@ -78,6 +71,7 @@ export type SessionEntrySideMetadata = Pick<
 export function readSessionEntrySideMetadata(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
+  participants?: Pick<SessionEntry, "participants" | "participantCount">,
 ): SessionEntrySideMetadata {
   const ownerRow = hasSqliteSessionOwnerColumns(database.db)
     ? executeSqliteQuerySync(
@@ -98,16 +92,50 @@ export function readSessionEntrySideMetadata(
   const owner = ownerRow ? readSqliteSessionOwner(ownerRow) : undefined;
   return {
     ...(owner ? { owner } : {}),
-    ...readSqliteSessionParticipantProjection(database.db, sessionKey),
+    ...(participants ?? readSqliteSessionParticipantProjection(database.db, sessionKey)),
   };
 }
 
+export function projectSessionEntryCacheMetadata(
+  entry: SessionEntry,
+  sideMetadata: SessionEntrySideMetadata,
+): SessionEntry {
+  const projected = { ...entry, ...sideMetadata };
+  for (const field of ["owner", "participants", "participantCount"] as const) {
+    if (sideMetadata[field] === undefined) {
+      delete projected[field];
+    }
+  }
+  return freezeJsonSnapshot(projected);
+}
+
 export function projectSessionEntryCacheUpdate(
-  sourceEntry: SessionEntry,
-  sideMetadata: SessionEntrySideMetadata | undefined,
+  entryJson: string,
+  sideMetadata: SessionEntrySideMetadata,
+  snapshotEntry?: SessionEntry,
+  snapshots?: readonly SessionEntrySnapshot[],
 ): SessionEntry | undefined {
-  // Saved prompts are caller-owned and must never be serialized into the listing cache.
-  const { skillsSnapshot: _skills, systemPromptReport: _report, ...metadata } = sourceEntry;
-  const parsedEntry = parseSessionEntryJson({ entry_json: JSON.stringify(metadata) });
-  return parsedEntry ? { ...parsedEntry, ...sideMetadata } : undefined;
+  // The writer supplies its persisted bytes; the cache owns the decoded metadata graph.
+  const parsedEntry = parseSessionEntryJson({ entry_json: entryJson }, "list");
+  if (parsedEntry && snapshotEntry) {
+    // Changed snapshots reuse persisted bytes; unchanged snapshots are already decoded.
+    const cold =
+      snapshots !== undefined
+        ? Object.fromEntries(
+            snapshots.map(({ field, valueJson }) => [field, JSON.parse(valueJson)]),
+          )
+        : structuredClone({
+            ...(snapshotEntry.sessionDiffBaseline !== undefined
+              ? { sessionDiffBaseline: snapshotEntry.sessionDiffBaseline }
+              : {}),
+            ...(snapshotEntry.skillsSnapshot !== undefined
+              ? { skillsSnapshot: snapshotEntry.skillsSnapshot }
+              : {}),
+            ...(snapshotEntry.systemPromptReport !== undefined
+              ? { systemPromptReport: snapshotEntry.systemPromptReport }
+              : {}),
+          });
+    Object.assign(parsedEntry, cold);
+  }
+  return parsedEntry ? projectSessionEntryCacheMetadata(parsedEntry, sideMetadata) : undefined;
 }

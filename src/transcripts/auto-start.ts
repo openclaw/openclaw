@@ -1,14 +1,15 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwCollectedErrors, throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import { normalizeCapabilityProviderId } from "../plugins/provider-registry-shared.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { createTranscriptAutoStartRetry } from "./auto-start-retry.js";
 import { createTranscriptsStore, stopTranscriptCapture } from "./capture-operations.js";
-import { retainTranscriptStartRetry, TranscriptStartError } from "./capture-startup.js";
+import { activeSessions, TranscriptStartError } from "./capture-startup.js";
 import {
-  activeSessions,
   createTranscriptSessionId,
   isTranscriptSessionStarting,
   resolveSourceProvider,
@@ -78,7 +79,7 @@ export function createTranscriptsAutoStartService(
       if (stopped) {
         return { settled: Promise.resolve() };
       }
-      diagnostics = beginConfiguredTranscriptStarts(config?.transcripts);
+      diagnostics = beginConfiguredTranscriptStarts();
       const resolved = resolveTranscriptsConfig(config?.transcripts);
       if (!resolved.enabled) {
         return { settled: Promise.resolve() };
@@ -191,12 +192,7 @@ export function createTranscriptsAutoStartService(
         return;
       }
       // Only startup is deadline-bound; already acquired cleanup/finalization still joins fully.
-      const errors = (await stopping).flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Transcript auto-start cleanup failed");
-      }
+      throwSettledAggregate(await stopping, "Transcript auto-start cleanup failed");
     },
   };
 }
@@ -219,11 +215,14 @@ function startTranscriptsAutoStartEntry(
   const controllers = new Set<AbortController>();
   const pendingStarts = new Set<Promise<void>>();
   let stopping: Promise<void> | undefined;
-  let startRetry: ReturnType<typeof retainTranscriptStartRetry> | undefined;
-  const clearRetry = () => {
-    startRetry?.release();
-    startRetry = undefined;
-  };
+  const retries = createTranscriptAutoStartRetry({
+    stateDir: ctx.stateDir,
+    store,
+    warn: (error) =>
+      ctx.logger.warn(
+        `transcripts autoStart empty candidate cleanup failed: ${formatAutoStopDiagnostic(error)}`,
+      ),
+  });
   const futureTitle = () => {
     const latest = getConfig();
     const config = hasSameTranscriptCaptureIntent(
@@ -330,7 +329,6 @@ function startTranscriptsAutoStartEntry(
     capture: OwnedCapture,
     params: Pick<
       Parameters<typeof startTranscripts>[0],
-      | "store"
       | "rawParams"
       | "abortSignal"
       | "existingSession"
@@ -340,31 +338,26 @@ function startTranscriptsAutoStartEntry(
     >,
   ) => {
     recordDiagnostic(capture.lifecycleToken, "starting");
+    const retry = retries.current;
     try {
-      const retry = startRetry;
       const result = await startTranscripts({
         ...params,
-        existingSession: retry?.session ?? params.existingSession,
-        existingSessionCondition: retry
-          ? { expectedInputRevision: retry.revision, assertCurrent: retry.assertCurrent }
-          : params.existingSessionCondition,
+        retry,
         ctx,
+        store,
         startupWaitMs: AUTO_START_PROVIDER_READY_TIMEOUT_MS,
         configuredLifecycle: true,
         lifecycleToken: capture.lifecycleToken,
         rawParams: { ...params.rawParams, sessionId: capture.sessionId },
       });
-      clearRetry();
+      retries.clear();
       if (!stopped) {
         recordDiagnostic(capture.lifecycleToken, result.status === "ended" ? "ended" : undefined);
       }
       return result;
     } catch (error) {
       if (error instanceof TranscriptStartError) {
-        clearRetry();
-        if (!stopped && error.retry) {
-          startRetry = retainTranscriptStartRetry(ctx.stateDir, error.retry);
-        }
+        await retries.retainFailure(error, retry, params.existingSession);
       }
       throw error;
     } finally {
@@ -382,7 +375,8 @@ function startTranscriptsAutoStartEntry(
       return;
     }
     const capture: OwnedCapture = {
-      sessionId: startRetry?.session.sessionId ?? entry.sessionId ?? createTranscriptSessionId(),
+      sessionId:
+        retries.current?.session.sessionId ?? entry.sessionId ?? createTranscriptSessionId(),
       lifecycleToken: Symbol(entry.sessionId),
     };
     void runPending(async (controller) => {
@@ -396,7 +390,6 @@ function startTranscriptsAutoStartEntry(
           );
         }
         await startCapture(capture, {
-          store,
           sessionIdOrigin: entry.sessionId ? "supplied" : "generated",
           abortSignal: controller.signal,
           rawParams: { ...entry, title: futureTitle() },
@@ -409,7 +402,10 @@ function startTranscriptsAutoStartEntry(
         const terminal = terminalDiagnostic(error);
         const cleanupPending = ownsCapture(capture);
         if (terminal || cleanupPending || attempt >= AUTO_START_RETRY_ATTEMPTS) {
-          clearRetry();
+          await retries.discard();
+          if (stopped) {
+            return;
+          }
           const diagnostic = terminal ?? "start-failed";
           recordDiagnostic(capture.lifecycleToken, diagnostic);
           ctx.logger.warn(
@@ -434,7 +430,7 @@ function startTranscriptsAutoStartEntry(
     let source: TranscriptSourceLocator;
     let diagnosticToken = Symbol(`transcripts occupancy ${entryOwner.index}`);
     const label = () => `transcripts autoStart[${entryOwner.index}] provider=${entry.providerId}`;
-    const retry = (
+    const retry = async (
       run: () => void,
       attempt: number,
       error: unknown,
@@ -445,7 +441,10 @@ function startTranscriptsAutoStartEntry(
       }
       const terminal = terminalDiagnostic(error);
       if (terminal || attempt >= AUTO_START_RETRY_ATTEMPTS) {
-        clearRetry();
+        await retries.discard();
+        if (stopped) {
+          return;
+        }
         recordDiagnostic(diagnosticToken, terminal ?? "start-failed");
         ctx.logger.warn(
           `${label()} failed: ${formatAutoStopDiagnostic(error)}; check the entry and provider connection. ${phase === "watch" ? "Reload the provider plugin to retry occupancy watching." : "Waiting for the next occupancy transition."}`,
@@ -482,7 +481,7 @@ function startTranscriptsAutoStartEntry(
             return;
           }
           const now = Date.now();
-          const retained = startRetry;
+          const retained = retries.current;
           const recent = retained
             ? { session: retained.session, inputRevision: retained.revision }
             : await store.readRecentStoppedSession(
@@ -510,7 +509,6 @@ function startTranscriptsAutoStartEntry(
           diagnosticToken = owned.lifecycleToken;
           capture = owned;
           const result = await startCapture(owned, {
-            store,
             sessionIdOrigin: "generated",
             abortSignal: controller.signal,
             existingSession: candidate?.session,
@@ -549,7 +547,7 @@ function startTranscriptsAutoStartEntry(
             capture = undefined;
           }
           if (occupied && !controller.signal.aborted) {
-            retry(() => begin(attempt + 1), attempt, error, "capture");
+            await retry(() => begin(attempt + 1), attempt, error, "capture");
           }
         } finally {
           startController = undefined;
@@ -565,9 +563,9 @@ function startTranscriptsAutoStartEntry(
       stopping = (async () => {
         startController?.abort();
         await starting;
-        // Failed startup may restore its candidate while settling. A new
-        // occupancy episode must consult the durable reopen window again.
-        clearRetry();
+        // Failed startup may restore its candidate while settling. Abandon only
+        // a new, unaccepted row; reopened history still belongs to the library.
+        await retries.discard();
         if (capture) {
           await stopCapture(capture);
           if (!ownsCapture(capture)) {
@@ -604,7 +602,7 @@ function startTranscriptsAutoStartEntry(
             );
             return;
           }
-          clearRetry();
+          retries.clear();
           source = resolveTranscriptSourceOwnership({
             ctx,
             operation: "start",
@@ -638,7 +636,6 @@ function startTranscriptsAutoStartEntry(
               occupied = true;
               cancel(emptyTimer);
               cancel(retryTimer);
-              clearRetry();
               begin(1);
             },
             onEmpty: () => {
@@ -668,7 +665,7 @@ function startTranscriptsAutoStartEntry(
           controller.abort();
           occupied = false;
           cancel(emptyTimer);
-          retry(() => arm(attempt + 1), attempt, error, "watch");
+          await retry(() => arm(attempt + 1), attempt, error, "watch");
         }
       });
     };
@@ -686,7 +683,6 @@ function startTranscriptsAutoStartEntry(
   }
   const stop = async (strict: boolean) => {
     stopped = true;
-    clearRetry();
     for (const timer of timers) {
       clearTimeout(timer);
     }
@@ -708,6 +704,8 @@ function startTranscriptsAutoStartEntry(
     }
     await Promise.allSettled(pendingStarts);
     await Promise.allSettled(stopping ? [stopping] : []);
+    // A failed late startup can restore its row after the caller's stop deadline.
+    await retries.discard();
     for (const [sessionId, lifecycleToken] of startedSessions) {
       try {
         await stopCapture({ sessionId, lifecycleToken }, strict);
@@ -715,12 +713,7 @@ function startTranscriptsAutoStartEntry(
         failures.push(error);
       }
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Transcript entry cleanup failed");
-    }
+    throwCollectedErrors(failures, "Transcript entry cleanup failed");
     return startedSessions.size === 0;
   };
   return { stop, pendingStarts };

@@ -1,130 +1,99 @@
 import { expect, it } from "vitest";
-import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { activePlacement, cloudSession, cloudSessionList } from "./cloud-session.test-support.ts";
 import {
-  controlUiSessionUrl,
-  installMockGateway,
-  startControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { captureUiProof, pollLocatorText } from "./new-session-page.test-support.ts";
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
+import { pollLocatorText } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cloud-session placement identity",
-  startServer: startControlUiE2eServer,
 });
+const contextOptions = createControlUiE2eContextOptions();
 
 suite.define(() => {
   it("shows provisioning in the conversation when opening a session without local startup state", async () => {
     const now = Date.now();
-    const session = {
-      key: "agent:main:provisioning",
-      kind: "direct",
-      label: "Prepare the cloud workspace",
-      updatedAt: now,
-      placement: {
-        state: "provisioning",
-        generation: 1,
-        createdAtMs: now,
-        updatedAtMs: now,
-        stateChangedAtMs: now,
-        environmentId: "worker:provisioning",
-        providerId: "crabbox",
-        profileId: "cloud",
-      },
-    } satisfies GatewaySessionRow;
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          sessionKey: session.key,
-          sessions: [session],
-          historyMessages: [],
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-        await gateway.waitForRequest("sessions.list");
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-        await captureUiProof(suite, page, "reopened-provisioning.png");
-        await pollLocatorText(
-          page.locator('.chat-thread .chat-working-indicator[role="status"]'),
-        ).toContain("Provisioning environment…");
-        expect(await page.locator(".agent-chat__composer-status-band").count()).toBe(0);
-        await captureUiProof(suite, page, "reopened-provisioning-settled.png");
-      },
-    );
+    const session = cloudSession("agent:main:provisioning", "Prepare the cloud workspace", now, {
+      state: "provisioning",
+      generation: 1,
+      createdAtMs: now,
+      updatedAtMs: now,
+      stateChangedAtMs: now,
+      environmentId: "worker:provisioning",
+      providerId: "crabbox",
+      profileId: "cloud",
+    });
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        sessionKey: session.key,
+        sessions: [session],
+        historyMessages: [],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+      await gateway.waitForRequest("sessions.list");
+      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await pollLocatorText(
+        page.locator('.chat-thread .chat-working-indicator[role="status"]'),
+      ).toContain("Provisioning environment…");
+      expect(await page.locator(".agent-chat__composer-status-band").count()).toBe(0);
+    });
   });
 
   it("shows the cloud service, profile, and machine in the placement menu", async () => {
     const now = Date.now();
-    const session: GatewaySessionRow = {
-      key: "agent:main:cloud-identity",
-      kind: "direct",
-      label: "Cloud identity",
-      updatedAt: now,
-      placement: {
-        state: "active",
-        generation: 1,
-        createdAtMs: now - 60_000,
-        updatedAtMs: now,
-        stateChangedAtMs: now - 30_000,
+    const session = cloudSession(
+      "agent:main:cloud-identity",
+      "Cloud identity",
+      now,
+      activePlacement(now, {
         environmentId: "worker:9f2c4e7a81d24b06a5c3f8e1b7d94c1a",
         providerId: "machine0",
         profileId: "team",
         machine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
-        activeOwnerEpoch: 1,
-        workerBundleHash: "a".repeat(64),
-        workspaceBaseManifestRef: "sha256:cloud-identity-base",
-        remoteWorkspaceDir: "/workspace/cloud-identity",
-      },
-    };
-    const sessions: SessionsListResult = {
-      count: 1,
-      defaults: { contextTokens: null, model: "gpt-5.6-luna", modelProvider: "openai" },
-      path: "",
-      sessions: [session],
-      ts: now,
-    };
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          sessionKey: session.key,
-          methodResponses: { "sessions.list": sessions },
-        });
-        const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-        expect(response?.status()).toBe(200);
-        await gateway.waitForRequest("sessions.list");
-        const chip = page.locator(".chat-pane__placement-chip");
-        await expect.poll(() => chip.textContent()).toBe("machine0 · team");
-        await chip.click();
-        const facts = page.locator(".chat-pane__placement-facts");
-        await facts.waitFor({ state: "visible" });
-        for (const [label, value] of [
-          ["Service", "machine0"],
-          ["Profile", "team"],
-          ["Machine", "…d94c1a"],
-        ]) {
-          const term = facts.locator("dt", { hasText: label });
-          expect(await term.locator("+ dd").textContent()).toBe(value);
-        }
-        await page.keyboard.press("Escape");
-        const sidebarRow = page.locator(
-          `.sidebar-recent-session[data-session-key="${session.key}"]`,
-        );
-        expect(
-          await sidebarRow.locator(".session-row-badge--cloud").getAttribute("aria-label"),
-        ).toBe("machine0 · team · Linux · medium · 4 vCPU · 16 GB · active");
-        await sidebarRow.hover();
-        const context = page.locator(
-          '.session-hovercard__context-row[aria-label="Runs on machine0 · team"]',
-        );
-        await context.waitFor({ state: "visible" });
-        expect(await context.textContent()).toContain("machine0 · team");
-        const machine = page.locator(".session-hovercard__machine");
-        expect(await machine.getAttribute("aria-label")).toBe(
-          "Machine: Linux · medium · 4 vCPU · 16 GB",
-        );
-        expect(await machine.textContent()).toMatch(/^\s*Linux\s*medium\s*4 vCPU\s*16 GB\s*$/u);
-      },
+      }),
     );
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        sessionKey: session.key,
+        methodResponses: { "sessions.list": cloudSessionList(session) },
+      });
+      const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+      expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("sessions.list");
+      const details = await openChatDetails(page);
+      await details.locator(".chat-environment__machine-trigger").click();
+      const facts = page.locator(".chat-pane__placement-facts");
+      await facts.waitFor({ state: "visible" });
+      for (const [label, value] of [
+        ["Service", "machine0"],
+        ["Profile", "team"],
+      ]) {
+        const term = facts.locator("dt", { hasText: label });
+        expect(await term.locator("+ dd").textContent()).toBe(value);
+      }
+      expect(await page.locator(".chat-pane__placement-heading > span").textContent()).toBe(
+        "…d94c1a",
+      );
+      await page.keyboard.press("Escape");
+      await closeChatDetails(page);
+      const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${session.key}"]`);
+      expect(await sidebarRow.locator(".session-row-badge--cloud").getAttribute("aria-label")).toBe(
+        "machine0 · team · Linux · medium · 4 vCPU · 16 GB · active",
+      );
+      await sidebarRow.hover();
+      const context = page.locator(
+        '.session-hovercard__context-row[aria-label="Runs on machine0 · team"]',
+      );
+      await context.waitFor({ state: "visible" });
+      expect(await context.textContent()).toContain("machine0 · team");
+      const machine = page.locator(".session-hovercard__machine");
+      expect(await machine.getAttribute("aria-label")).toBe(
+        "Machine: Linux · medium · 4 vCPU · 16 GB",
+      );
+      expect(await machine.textContent()).toMatch(/^\s*Linux\s*medium\s*4 vCPU\s*16 GB\s*$/u);
+    });
   });
 });

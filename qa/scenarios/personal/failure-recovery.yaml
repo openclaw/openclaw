@@ -23,7 +23,6 @@ scenario:
     - Final reply keeps the retry boundary clear instead of pretending a retry succeeded.
   docsRefs:
     - docs/concepts/personal-agent-benchmark-pack.md
-    - docs/automation/tasks.md
   codeRefs:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
     - extensions/qa-lab/src/suite-runtime-agent-process.ts

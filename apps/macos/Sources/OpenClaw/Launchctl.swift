@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-struct LaunchAgentPlistSnapshot: Equatable {
+struct LaunchAgentPlistSnapshot: Equatable, Sendable {
     let programArguments: [String]
     let environment: [String: String]
     let stdoutPath: String?
@@ -36,17 +36,10 @@ enum LaunchAgentPlist {
         generatedEnvironmentFileURL: URL? = nil,
         generatedEnvironmentWrapperURL: URL? = nil) -> LaunchAgentPlistSnapshot?
     {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        let rootAny: Any
-        do {
-            rootAny = try PropertyListSerialization.propertyList(
-                from: data,
-                options: [],
-                format: nil)
-        } catch {
-            return nil
-        }
-        guard let root = rootAny as? [String: Any] else { return nil }
+        guard let data = try? Data(contentsOf: url),
+              let root = try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil) as? [String: Any]
+        else { return nil }
         let programArguments = root["ProgramArguments"] as? [String] ?? []
         let inlineEnvironment = root["EnvironmentVariables"] as? [String: String] ?? [:]
         let generatedEnvironment = self.readGeneratedEnvironment(
@@ -54,14 +47,12 @@ enum LaunchAgentPlist {
             fileURL: generatedEnvironmentFileURL,
             wrapperURL: generatedEnvironmentWrapperURL)
         let env = inlineEnvironment.merging(generatedEnvironment) { _, generated in generated }
-        let stdoutPath = (root["StandardOutPath"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        let stderrPath = (root["StandardErrorPath"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        let port = Self.extractFlagInt(programArguments, flag: "--port")
+        let stdoutPath = (root["StandardOutPath"] as? String)?.nonEmpty
+        let stderrPath = (root["StandardErrorPath"] as? String)?.nonEmpty
+        let port = Self.extractFlagString(programArguments, flag: "--port").flatMap(Int.init)
         let bind = Self.extractFlagString(programArguments, flag: "--bind")?.lowercased()
-        let token = env["OPENCLAW_GATEWAY_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        let password = env["OPENCLAW_GATEWAY_PASSWORD"]?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        let token = env["OPENCLAW_GATEWAY_TOKEN"]?.nonEmpty
+        let password = env["OPENCLAW_GATEWAY_PASSWORD"]?.nonEmpty
         return LaunchAgentPlistSnapshot(
             programArguments: programArguments,
             environment: env,
@@ -73,7 +64,7 @@ enum LaunchAgentPlist {
             password: password)
     }
 
-    private static func readGeneratedEnvironment(
+    static func readGeneratedEnvironment(
         programArguments: [String],
         fileURL: URL?,
         wrapperURL: URL?) -> [String: String]
@@ -95,34 +86,42 @@ enum LaunchAgentPlist {
               let content = try? String(contentsOf: fileURL, encoding: .utf8)
         else { return [:] }
 
-        var environment: [String: String] = [:]
-        for rawLine in content.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard line.hasPrefix("export ") else { continue }
-            let assignment = line.dropFirst("export ".count)
-            guard let separator = assignment.firstIndex(of: "=") else { continue }
-            let key = String(assignment[..<separator])
-            guard key.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else {
-                continue
-            }
-            let rawValue = String(assignment[assignment.index(after: separator)...])
-            guard rawValue.hasPrefix("'"), rawValue.hasSuffix("'") else { continue }
-            environment[key] = String(rawValue.dropFirst().dropLast())
-                .replacingOccurrences(of: #"'\''"#, with: "'")
-        }
-        return environment
+        return (try? self.parseGeneratedEnvironment(content)) ?? [:]
     }
 
-    private static func extractFlagInt(_ args: [String], flag: String) -> Int? {
-        guard let raw = self.extractFlagString(args, flag: flag) else { return nil }
-        return Int(raw)
+    static func parseGeneratedEnvironment(_ content: String) throws -> [String: String] {
+        // Core emits literal single-quoted exports; values can span lines and use '\'' for apostrophes.
+        let pattern = #"(?m)^[\t ]*export ([A-Za-z_][A-Za-z0-9_]*)='((?:[^']|'\\'')*)'[\t ]*(?:\r?\n|$)"#
+        let regex = try NSRegularExpression(pattern: pattern)
+        let source = content as NSString
+        let matches = regex.matches(in: content, range: NSRange(location: 0, length: source.length))
+        var environment: [String: String] = [:]
+        var offset = 0
+        func isCommentOrWhitespace(_ range: NSRange) -> Bool {
+            source.substring(with: range).components(separatedBy: .newlines).allSatisfy {
+                let line = $0.trimmingCharacters(in: .whitespaces)
+                return line.isEmpty || line.hasPrefix("#")
+            }
+        }
+        for match in matches {
+            guard isCommentOrWhitespace(NSRange(location: offset, length: match.range.location - offset)) else {
+                throw GatewayHostingError(message: "The retained Gateway environment has unsupported syntax.")
+            }
+            let key = source.substring(with: match.range(at: 1))
+            environment[key] = source.substring(with: match.range(at: 2))
+                .replacingOccurrences(of: #"'\''"#, with: "'")
+            offset = NSMaxRange(match.range)
+        }
+        guard isCommentOrWhitespace(NSRange(location: offset, length: source.length - offset)) else {
+            throw GatewayHostingError(message: "The retained Gateway environment has unsupported syntax.")
+        }
+        return environment
     }
 
     private static func extractFlagString(_ args: [String], flag: String) -> String? {
         guard let idx = args.firstIndex(of: flag) else { return nil }
         let valueIdx = args.index(after: idx)
         guard valueIdx < args.endIndex else { return nil }
-        let token = args[valueIdx].trimmingCharacters(in: .whitespacesAndNewlines)
-        return token.isEmpty ? nil : token
+        return args[valueIdx].nonEmpty
     }
 }

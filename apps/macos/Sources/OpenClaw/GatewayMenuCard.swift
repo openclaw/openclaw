@@ -17,7 +17,7 @@ struct GatewayMenuCardModel: Equatable, Sendable {
     let lastSeen: Date?
     let isProbing: Bool
 
-    func secondaryLine(now _: Date) -> String {
+    func secondaryLine() -> String {
         [self.version, self.buildId.flatMap(Self.shortBuild), self.endpointLabel, self.transportLabel]
             .compactMap { $0?.nonEmpty }
             .joined(separator: " · ")
@@ -114,7 +114,7 @@ struct GatewayMenuCard: View {
                 }
             }
 
-            Text(self.model.secondaryLine(now: self.now))
+            Text(self.model.secondaryLine())
                 .font(.caption)
                 .foregroundStyle(self.palette.secondary)
                 .lineLimit(1, reservesSpace: true)
@@ -159,7 +159,7 @@ struct GatewayMenuCard: View {
         var parts = [self.model.name, health]
         if self.model.isPrimary { parts.append(String(localized: "Primary")) }
         if self.model.isFrontmost { parts.append(String(localized: "frontmost Gateway")) }
-        parts.append(self.model.secondaryLine(now: self.now))
+        parts.append(self.model.secondaryLine())
         parts.append(self.model.tertiaryLine(now: self.now))
         return parts.filter { !$0.isEmpty }.joined(separator: ", ")
     }

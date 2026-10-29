@@ -1,37 +1,38 @@
-import type { ApplicationContext } from "../../app/context.ts";
-import {
-  SESSIONS_PAGE_DEFAULT_LIMIT,
-  type SessionArchivedFilter,
-  type SessionListOptions,
-} from "../../lib/sessions/index.ts";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import type { SessionArchivedFilter, SessionListOptions } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-
-type SessionsPageListFilters = {
-  activeMinutes?: number;
-  limit?: number;
-  includeGlobal: boolean;
-  includeUnknown: boolean;
-  statusFilter: SessionArchivedFilter;
-  deepLinkSessionKey?: string | null;
-  search?: string;
-};
+import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
 export function buildSessionsListQuery(
-  context: Pick<ApplicationContext, "agentSelection">,
-  filters: SessionsPageListFilters,
+  scopeId: string | null,
+  filters: {
+    activeMinutes?: string;
+    limit?: string;
+    includeGlobal: boolean;
+    includeUnknown: boolean;
+    statusFilter: SessionArchivedFilter;
+    searchQuery?: string;
+  },
+  linkedSessionKey?: string | null,
+  search = filters.searchQuery,
 ): SessionListOptions {
-  const deepLinkSessionKey = filters.deepLinkSessionKey?.trim() || null;
-  const scopeAgentId =
-    parseAgentSessionKey(deepLinkSessionKey)?.agentId ??
-    context.agentSelection.state.scopeId?.trim();
+  const deepLinkSessionKey = linkedSessionKey?.trim() || null;
+  const scopeAgentId = parseAgentSessionKey(deepLinkSessionKey)?.agentId ?? scopeId?.trim();
+  const querySearch = deepLinkSessionKey ?? search?.trim();
   const activeMinutes =
-    !deepLinkSessionKey && filters.statusFilter === "active" ? filters.activeMinutes : undefined;
+    !deepLinkSessionKey && filters.statusFilter === "active"
+      ? parseStrictPositiveInteger(filters.activeMinutes)
+      : undefined;
   return {
-    limit: deepLinkSessionKey ? SESSIONS_PAGE_DEFAULT_LIMIT : filters.limit,
+    source: "sessions-page",
+    excludeDock: !deepLinkSessionKey,
+    rowMode: "compact",
+    // Invalid form input uses the page default, not the shared roster's page size.
+    limit: deepLinkSessionKey
+      ? SESSIONS_PAGE_DEFAULT_LIMIT
+      : (parseStrictPositiveInteger(filters.limit) ?? SESSIONS_PAGE_DEFAULT_LIMIT),
     ...(activeMinutes ? { activeMinutes } : {}),
-    ...(deepLinkSessionKey || filters.search?.trim()
-      ? { search: deepLinkSessionKey ?? filters.search!.trim() }
-      : {}),
+    ...(querySearch ? { search: querySearch } : {}),
     includeGlobal: deepLinkSessionKey ? true : filters.includeGlobal,
     includeUnknown: deepLinkSessionKey ? true : filters.includeUnknown,
     includeDerivedTitles: false,

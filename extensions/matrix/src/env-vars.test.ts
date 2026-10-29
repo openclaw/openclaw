@@ -21,6 +21,14 @@ describe("listMatrixEnvAccountIds", () => {
     expect(listMatrixEnvAccountIds(env)).toEqual([]);
   });
 
+  it.each(["a_x2d_b", "a_x5f_b"])("decodes escape-shaped account %s only once", (accountId) => {
+    const token = resolveMatrixEnvAccountToken(accountId);
+
+    expect(listMatrixEnvAccountIds({ [`MATRIX_${token}_USER_ID`]: "@bot:example.org" })).toEqual([
+      accountId,
+    ]);
+  });
+
   it("ignores hex escapes above the Unicode range instead of throwing", () => {
     // String.fromCodePoint throws a RangeError for code points above 0x10FFFF;
     // a malformed MATRIX_* env var must not crash account discovery.

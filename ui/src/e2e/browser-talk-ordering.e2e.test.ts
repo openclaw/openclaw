@@ -1,68 +1,56 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  createTalkRegressionSuite,
+  installTalkGateway,
+} from "./browser-talk-regression.test-support.ts";
 import {
   dispatchOpenAiTalkEvent,
   installOpenAiTalkFixture,
-  videoTalkCatalog,
+  waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { composer } from "./chat-flow-fixtures.test-support.ts";
+const suite = createTalkRegressionSuite("Control UI browser Talk transcript ordering");
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI browser Talk transcript ordering",
-  browserLaunchOptions: {
-    args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
-  },
-});
+async function startTalk(page: Page, voiceSessionId: string) {
+  const gateway = await installTalkGateway(page, voiceSessionId);
+  await installOpenAiTalkFixture(page);
+  await page.goto(`${suite.server.baseUrl}chat`);
+  await waitForTalkReady(page);
+  await page.getByRole("button", { name: "Start voice input" }).click();
+  await gateway.waitForRequest("talk.client.create");
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Boolean(
+          (
+            window as Window & {
+              openclawVideoTalkE2e?: { peer: { remoteDescription: unknown } };
+            }
+          ).openclawVideoTalkE2e?.peer.remoteDescription,
+        ),
+      ),
+    )
+    .toBe(true);
+  await page.evaluate(() => {
+    (
+      window as Window & {
+        openclawVideoTalkE2e?: { peer: { channel: EventTarget } };
+      }
+    ).openclawVideoTalkE2e?.peer.channel.dispatchEvent(new Event("open"));
+  });
+  return gateway;
+}
 
 suite.define(() => {
   it("renders and saves overlapping replies beside their delayed user transcripts", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("transcript-ordering");
     await suite.withPage(
       {
         permissions: ["microphone"],
         viewport: { width: 1366, height: 900 },
-        recordVideo: { dir: artifactDir, size: { width: 1366, height: 900 } },
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "talk.catalog": videoTalkCatalog("openai"),
-            "talk.client.create": {
-              provider: "openai",
-              transport: "webrtc",
-              voiceSessionId: "voice-ordering-e2e",
-              clientSecret: "test-client-secret",
-            },
-          },
-        });
-        await installOpenAiTalkFixture(page);
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await page.getByRole("button", { name: "Start voice input" }).click();
-        await gateway.waitForRequest("talk.client.create");
-        await expect
-          .poll(() =>
-            page.evaluate(() =>
-              Boolean(
-                (
-                  window as Window & {
-                    openclawVideoTalkE2e?: { peer: { remoteDescription: unknown } };
-                  }
-                ).openclawVideoTalkE2e?.peer.remoteDescription,
-              ),
-            ),
-          )
-          .toBe(true);
-        await page.evaluate(() => {
-          (
-            window as Window & {
-              openclawVideoTalkE2e?: { peer: { channel: EventTarget } };
-            }
-          ).openclawVideoTalkE2e?.peer.channel.dispatchEvent(new Event("open"));
-        });
+        const gateway = await startTalk(page, "voice-ordering-e2e");
         const rows = page.locator(".agent-chat__voice-turn-text");
         const emit = async (event: unknown) => await dispatchOpenAiTalkEvent(page, event);
         const item = async (id: string, role: "user" | "assistant", previous: string | null) =>
@@ -92,10 +80,6 @@ suite.define(() => {
           delta: "Lantern.",
         });
         await expect.poll(() => rows.allTextContents()).toEqual(["Lantern."]);
-        await writeFile(
-          path.join(artifactDir, "unresolved-order.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [rows.first()]),
-        );
         await final("answer-2", "assistant", "Lantern.");
         await emit({
           type: "input_audio_buffer.committed",
@@ -110,10 +94,6 @@ suite.define(() => {
           delta: "Glacier.",
         });
         await expect.poll(() => rows.allTextContents()).toEqual(["Glacier.", "Lantern."]);
-        await writeFile(
-          path.join(artifactDir, "streaming.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [rows.first()]),
-        );
         await item("question-2", "user", "answer-1");
         await final("question-2", "user", "Please say lantern.");
         await final("answer-1", "assistant", "Glacier.");
@@ -125,25 +105,78 @@ suite.define(() => {
               .getRequests("talk.client.transcript")
               .then((requests) => requests.map(({ params }) => params)),
           )
-          .toEqual([
-            expect.objectContaining({ role: "user", text: "Please say glacier." }),
-            expect.objectContaining({ role: "assistant", text: "Glacier." }),
-            expect.objectContaining({ role: "user", text: "Please say lantern." }),
-            expect.objectContaining({ role: "assistant", text: "Lantern." }),
+          .toMatchObject([
+            { role: "user", text: "Please say glacier." },
+            { role: "assistant", text: "Glacier." },
+            { role: "user", text: "Please say lantern." },
+            { role: "assistant", text: "Lantern." },
           ]);
-        try {
-          await expect
-            .poll(() => rows.allTextContents())
-            .toEqual(["Please say glacier.", "Glacier.", "Please say lantern.", "Lantern."]);
-        } finally {
-          await writeFile(
-            path.join(artifactDir, "final-order.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [rows.first()]),
-          );
-        }
+        await expect
+          .poll(() => rows.allTextContents())
+          .toEqual(["Please say glacier.", "Glacier.", "Please say lantern.", "Lantern."]);
         await page.getByRole("button", { name: "Stop voice input" }).click();
         await gateway.waitForRequest("talk.client.close");
         expect(await gateway.getRequests("talk.client.close")).toHaveLength(1);
+      },
+    );
+  });
+
+  it("keeps unsaved spoken turns above a message typed after them", async () => {
+    await suite.withPage(
+      { permissions: ["microphone"], viewport: { width: 1366, height: 900 } },
+      async ({ page }) => {
+        await startTalk(page, "voice-chronology-e2e");
+        const emit = async (event: unknown) => await dispatchOpenAiTalkEvent(page, event);
+        await emit({
+          type: "input_audio_buffer.committed",
+          item_id: "question",
+          previous_item_id: null,
+        });
+        await emit({
+          type: "conversation.item.added",
+          previous_item_id: null,
+          item: {
+            id: "question",
+            type: "message",
+            role: "user",
+            content: [{ type: "input_audio" }],
+          },
+        });
+        await emit({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "question",
+          transcript: "Spoken question.",
+        });
+        await emit({
+          type: "conversation.item.added",
+          previous_item_id: "question",
+          item: { id: "answer", type: "message", role: "assistant", content: [] },
+        });
+        await emit({
+          type: "response.output_audio_transcript.delta",
+          item_id: "answer",
+          delta: "Spoken answer.",
+        });
+        await emit({
+          type: "response.output_audio_transcript.done",
+          item_id: "answer",
+          transcript: "Spoken answer.",
+        });
+        await page.getByText("Spoken answer.", { exact: true }).waitFor();
+        await composer(page).fill("Typed follow-up.");
+        await composer(page).press("Enter");
+        const order = () =>
+          page
+            .locator(".chat-text, .agent-chat__voice-turn-text")
+            .allTextContents()
+            .then((texts) => texts.map((text) => text.trim()));
+        await expect.poll(order).toContain("Typed follow-up.");
+        expect(await order()).toEqual([
+          "Talk history is ready.",
+          "Spoken question.",
+          "Spoken answer.",
+          "Typed follow-up.",
+        ]);
       },
     );
   });

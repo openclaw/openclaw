@@ -4,7 +4,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { CommandLaneSnapshot } from "../../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
-import { isMainSessionRestartRecoveryInputProvenance } from "../../../sessions/input-provenance.js";
 import { DEFAULT_AGENT_TIMEOUT_MS } from "../../timeout.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
@@ -31,16 +30,6 @@ export function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number {
   );
 }
 
-export function withEmbeddedRunLaneTimeout(
-  opts: CommandQueueEnqueueOptions | undefined,
-  laneTaskTimeoutMs: number,
-): CommandQueueEnqueueOptions | undefined {
-  if (opts?.taskTimeoutMs !== undefined) {
-    return opts;
-  }
-  return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
-}
-
 export function resolveEmbeddedRunSessionLanePolicy(
   trigger: RunEmbeddedAgentParams["trigger"],
   inputProvenance?: RunEmbeddedAgentParams["inputProvenance"],
@@ -48,29 +37,16 @@ export function resolveEmbeddedRunSessionLanePolicy(
   priority: CommandQueueEnqueueOptions["priority"];
   canResumeAcrossRotation: boolean;
 } {
-  let triggerPriority: CommandQueueEnqueueOptions["priority"];
-  switch (trigger) {
-    case "user":
-    case "manual":
-      triggerPriority = "foreground";
-      break;
-    case "cron":
-    case "heartbeat":
-    case "memory":
-    case "overflow":
-      triggerPriority = "background";
-      break;
-    default:
-      triggerPriority = "normal";
-  }
-  const isRestartRecovery = isMainSessionRestartRecoveryInputProvenance(inputProvenance);
+  const triggerPriority =
+    trigger === "user" || trigger === "manual"
+      ? "foreground"
+      : ["cron", "memory", "overflow"].includes(trigger ?? "")
+        ? "background"
+        : "normal";
   // Inter-session work must yield to humans without losing already-admitted
   // user work when the Gateway lifecycle rotates while it waits.
   return {
-    priority:
-      isRestartRecovery || inputProvenance?.kind === "inter_session"
-        ? "background"
-        : triggerPriority,
-    canResumeAcrossRotation: !isRestartRecovery && triggerPriority === "foreground",
+    priority: inputProvenance?.kind === "inter_session" ? "background" : triggerPriority,
+    canResumeAcrossRotation: triggerPriority === "foreground",
   };
 }

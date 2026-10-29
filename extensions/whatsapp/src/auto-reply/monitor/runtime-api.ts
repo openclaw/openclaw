@@ -1,7 +1,6 @@
-// Whatsapp API module exposes the plugin public contract.
 export { resolveIdentityNamePrefix } from "openclaw/plugin-sdk/agent-runtime";
 export { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
-export { resolveInboundSessionEnvelopeContext } from "openclaw/plugin-sdk/channel-inbound";
+export { resolveInboundSessionEnvelopeContextAsync } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export {
   isControlCommandMessage,
@@ -10,10 +9,7 @@ export {
 export { resolveChannelContextVisibilityMode } from "../config.runtime.js";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 export type LoadConfigFn = typeof import("../config.runtime.js").getRuntimeConfig;
-export {
-  buildHistoryContextFromEntries,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+export { buildHistoryContextFromEntries } from "openclaw/plugin-sdk/reply-history";
 export { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 export {
   resolveChunkMode,
@@ -28,4 +24,5 @@ export {
 export { logVerbose, shouldLogVerbose, type getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 export { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 export { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-export { jidToE164, normalizeE164 } from "../../text-runtime.js";
+export { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+export { jidToE164 } from "../../targets-runtime.js";

@@ -1,9 +1,9 @@
 // Tsdown config tests protect package artifact build contracts.
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,17 +14,26 @@ import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
 } from "../../scripts/lib/package-dist-imports.mjs";
+import { collectRuntimeDependencySpecs } from "../../scripts/lib/plugin-package-dependencies.mts";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
+import { pruneDockerPluginDist } from "../../scripts/prune-docker-plugin-dist.mjs";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
+import {
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS,
+  WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
+} from "../../src/shared/worker-bundle-hash.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import buildConfigs from "../../tsdown.config.ts";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
@@ -35,6 +44,14 @@ afterEach(() => vi.unstubAllEnvs());
 type TsdownConfig = (typeof configs)[number];
 type OutExtensions = NonNullable<TsdownConfig["outExtensions"]>;
 
+function runNodeFixture(args: string[], options: ExecFileOptionsWithStringEncoding) {
+  return new Promise<{ error: Error | null; stdout: string; stderr: string }>((resolve) => {
+    execFile(testNodeExecPath, args, options, (error, stdout, stderr) => {
+      resolve({ error, stdout, stderr });
+    });
+  });
+}
+
 function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boolean {
   const entry = config.entry;
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
@@ -43,47 +60,153 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
   return (entry as Record<string, unknown>)[name] === source;
 }
 
-const isWorkerDeployConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(config, "worker/worker", "src/worker/worker-deploy-entry.ts");
-const isWorkerImageProcessorConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(
-    config,
+it("keeps the standalone launcher bootstrap within its measured metadata-only boundary", async () => {
+  const selected = configs.find((config) =>
+    hasWorkerEntry(config, "node-host-launcher-bootstrap", "src/node-host/launcher-bootstrap.ts"),
+  );
+  if (!selected) {
+    throw new Error("Missing standalone launcher build config");
+  }
+  const root = createTempDir("openclaw-launcher-boundary-");
+  const modules: string[] = [];
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    outDir: root,
+    dts: false,
+    logLevel: "silent",
+    plugins: [
+      selected.plugins,
+      {
+        name: "launcher-boundary-proof",
+        generateBundle(_options, bundle) {
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type === "chunk") {
+              modules.push(
+                ...Object.keys(chunk.modules).map((id) =>
+                  path.relative(process.cwd(), id).split(path.sep).join("/"),
+                ),
+              );
+              expect(chunk.dynamicImports).toEqual([]);
+            }
+          }
+        },
+      },
+    ],
+  });
+  try {
+    expect(
+      modules.filter(
+        (id) =>
+          /^src\/(?:agents|gateway|tui|cron)\//u.test(id) ||
+          id === "src/cli/program/subcli-descriptors.ts",
+      ),
+    ).toEqual([]);
+    expect(modules).toContain("src/cli/program/subcli-command-metadata.ts");
+    // Corrected canonical output measured 60,979 bytes; allow a small metadata margin.
+    expect(
+      fs.statSync(path.join(root, "node-host-launcher-bootstrap.js")).size,
+    ).toBeLessThanOrEqual(64 * 1024);
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
+
+it("keeps catalog projections independent of discovery I/O", async () => {
+  const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+  if (!selected) {
+    throw new Error("Missing unified build config");
+  }
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    entry: { "catalog-projections": "src/plugins/catalog-discovery.ts" },
+    outDir: createTempDir("openclaw-catalog-projections-"),
+    dts: false,
+    logLevel: "silent",
+  });
+  try {
+    const chunks = bundles.flatMap((bundle) =>
+      bundle.chunks.filter((chunk) => chunk.type === "chunk"),
+    );
+    const modules = chunks.flatMap((chunk) =>
+      Object.entries(chunk.modules)
+        .filter(([, module]) => module.renderedLength > 0)
+        .map(([id]) => id.replaceAll("\\", "/")),
+    );
+    expect(
+      modules.filter((id) =>
+        /\/src\/(?:plugins\/(?:management-service|catalog-discovery-runtime)|skills\/discovery\/status)\.ts$/u.test(
+          id,
+        ),
+      ),
+    ).toEqual([]);
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
+
+const workerBuildTargets = [
+  ["worker", "worker/worker", "src/worker/worker-deploy-entry.ts"],
+  [
+    "client-credentials",
+    "worker/client-credential.worker",
+    "src/worker/worker-deploy-client-credentials.ts",
+  ],
+  ["code-mode-node", "worker/code-mode-node.worker", "src/agents/code-mode-node.worker.ts"],
+  [
+    "file-tool-planning",
+    "worker/file-tool-planning.worker",
+    "src/worker/worker-deploy-file-tool-planning.ts",
+  ],
+  ["file-tool-read", "worker/file-tool-read.worker", "src/worker/worker-deploy-file-tool-read.ts"],
+  [
+    "gateway-state-owner-heartbeat",
+    "worker/gateway-state-owner-heartbeat.worker",
+    "src/infra/gateway-state-owner-heartbeat.worker.ts",
+  ],
+  [
+    "image-processor",
     "worker/image-processor.worker",
     "src/worker/worker-deploy-image-processor.ts",
-  );
-const isWorkerSqliteStoreConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(config, "worker/sqlite-store.worker", "src/worker/worker-deploy-sqlite-store.ts");
-const isWorkerRsyncReceiverConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(
-    config,
-    "worker/workspace-rsync-receiver",
-    "src/worker/workspace-rsync-receiver.ts",
-  );
-const isWorkerGitHubExecLauncherConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(config, "worker/github-exec-launcher", "src/agents/github-exec-launcher.ts");
-const isWorkerServiceChildRelayConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(
-    config,
-    "worker/service-child-relay",
-    "src/process/supervisor/service-child-relay.ts",
-  );
-const isWorkerServiceChildGroupAnchorConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(
-    config,
+  ],
+  ["sqlite-store", "worker/sqlite-store.worker", "src/worker/worker-deploy-sqlite-store.ts"],
+  [
+    "sqlite-source-revision",
+    "worker/sqlite-source-revision.worker",
+    "src/worker/worker-deploy-sqlite-source-revision.ts",
+  ],
+  ["state-read", "worker/openclaw-state-read.worker", "src/worker/worker-deploy-state-read.ts"],
+  [
+    "worker-native-lifecycle",
+    "worker/worker-native-lifecycle.worker",
+    "src/infra/worker-native-lifecycle.worker.ts",
+  ],
+  ["receiver", "worker/workspace-rsync-receiver", "src/worker/workspace-rsync-receiver.ts"],
+  ["github-launcher", "worker/github-exec-launcher", "src/agents/github-exec-launcher.ts"],
+  ["service-relay", "worker/service-child-relay", "src/process/supervisor/service-child-relay.ts"],
+  [
+    "service-group-anchor",
     "worker/service-child-group-anchor",
     "src/process/supervisor/service-child-group-anchor.ts",
-  );
-const workerBuildTargets = [
-  ["worker", isWorkerDeployConfig],
-  ["image-processor", isWorkerImageProcessorConfig],
-  ["sqlite-store", isWorkerSqliteStoreConfig],
-  ["receiver", isWorkerRsyncReceiverConfig],
-  ["github-launcher", isWorkerGitHubExecLauncherConfig],
-  ["service-relay", isWorkerServiceChildRelayConfig],
-  ["service-group-anchor", isWorkerServiceChildGroupAnchorConfig],
+  ],
 ] as const;
 const isWorkerBuildConfig = (config: TsdownConfig) =>
-  workerBuildTargets.some(([, matches]) => matches(config));
+  workerBuildTargets.some(([, entry, source]) => hasWorkerEntry(config, entry, source)) ||
+  (typeof config.entry === "object" &&
+    config.entry !== null &&
+    !Array.isArray(config.entry) &&
+    Object.keys(config.entry).length > 0 &&
+    Object.keys(config.entry).every((name) => name.startsWith("worker/")));
+
+function findWorkerBuildConfig(target: string) {
+  const selected = workerBuildTargets.find(([name]) => name === target);
+  return selected && configs.find((config) => hasWorkerEntry(config, selected[1], selected[2]));
+}
 
 const FS_SAFE_CALLER_PROBE = `
 import assert from "node:assert/strict";
@@ -91,12 +214,22 @@ import fs from "node:fs";
 import { createRequire, isBuiltin, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-const [entry, observer, rootDir, mode, outcome, sealed] = process.argv.slice(1);
+const [entry, observer, rootDir, mode, outcome, sealed, bundledNativeAsset, emittedChunksPath] = process.argv.slice(1);
+const sealedImports = new Set([
+  pathToFileURL(entry).href,
+  ...JSON.parse(fs.readFileSync(emittedChunksPath, "utf8")),
+  ...(bundledNativeAsset ? [bundledNativeAsset, pathToFileURL(bundledNativeAsset).href] : []),
+]);
 if (sealed) registerHooks({ resolve(specifier, context, next) {
-  if (!isBuiltin(specifier) && specifier !== pathToFileURL(entry).href)
+  const target = specifier.startsWith(".") ? new URL(specifier, context.parentURL).href : specifier;
+  if (!isBuiltin(specifier) && !sealedImports.has(target))
     throw new Error("sealed dependency escaped: " + specifier);
   return next(specifier, context);
 }});
+if (sealed) {
+  await assert.rejects(import("p-map"), /sealed dependency escaped: p-map/);
+  await assert.rejects(import(new URL("./not-emitted.mjs", pathToFileURL(entry)).href), /sealed dependency escaped:/);
+}
 const { root, parseJsonWithJson5Fallback, resolvePreferredOpenClawTmpDir, resolveRuntimeProcessEntrypointUrl } = await import(pathToFileURL(entry).href);
 if (sealed) {
   assert.deepEqual(parseJsonWithJson5Fallback("{value:'bundled',}"), {value:"bundled"});
@@ -122,31 +255,13 @@ if (outcome === "missing") {
   assert.equal(fs.readFileSync(path.join(rootDir, "proof.txt"), "utf8"), "native proof");
   assert.equal(fs.readFileSync(path.join(rootDir, "created.txt"), "utf8"), "create proof");
 }
-const loaded = Object.keys(createRequire(import.meta.url).cache).filter((file) => file.endsWith("fs-safe-native.node"));
+const loaded = Object.keys(createRequire(import.meta.url).cache).filter((file) =>
+  file.endsWith("fs-safe-native.node") || file === bundledNativeAsset);
 assert.equal(loaded.length, outcome === "native" ? 1 : 0);
 if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep));
 `;
 
 describe("tsdown config", () => {
-  it("emits every private Telegram QA harness entry only in private QA builds", async () => {
-    const expectedEntries = {
-      "plugin-sdk/qa-channel-protocol": "src/plugin-sdk/qa-channel-protocol.ts",
-      "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
-      "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
-    };
-    const defaultUnified = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
-    expect(defaultUnified?.entry).not.toMatchObject(expectedEntries);
-
-    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
-    const { default: privateQaBuildConfigs } = await importFreshModule<
-      typeof import("../../tsdown.config.ts")
-    >(import.meta.url, "../../tsdown.config.ts?private-qa-entries");
-    const privateQaUnified = privateQaBuildConfigs.find(
-      (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
-    );
-    expect(privateQaUnified?.entry).toMatchObject(expectedEntries);
-  });
-
   it.each([
     "extensions/openai/setup-api",
     "extensions/openai/capability-catalog",
@@ -228,13 +343,9 @@ describe("tsdown config", () => {
         assert.equal(lazy, identity);
         assert.equal(value, "bundled plugin dependency");
       `;
-        const result = await new Promise<{ error: Error | null; stderr: string }>((resolve) => {
-          execFile(
-            testNodeExecPath,
-            ["--input-type=module", "-e", script],
-            { cwd: root, timeout: 30_000 },
-            (error, _stdout, stderr) => resolve({ error, stderr }),
-          );
+        const result = await runNodeFixture(["--input-type=module", "-e", script], {
+          cwd: root,
+          timeout: 30_000,
         });
         expect(result.error, result.stderr).toBeNull();
       } finally {
@@ -250,6 +361,7 @@ describe("tsdown config", () => {
     async (verbose) => {
       vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
       const entryName = "extensions/memory-lancedb/lancedb-store";
+      const runtimeEntryName = "extensions/memory-lancedb/lancedb-runtime";
       const defaultConfig = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
       expect(defaultConfig?.entry).not.toHaveProperty(entryName);
       vi.stubEnv(DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV, "memory-lancedb");
@@ -261,20 +373,25 @@ describe("tsdown config", () => {
         (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
       );
       const source = (selected?.entry as Record<string, string> | undefined)?.[entryName];
+      const runtimeSource = (selected?.entry as Record<string, string> | undefined)?.[
+        runtimeEntryName
+      ];
       expect(source).toBeDefined();
+      expect(runtimeSource).toBeDefined();
       const root = fs.realpathSync(createTempDir("openclaw-tsdown-memory-"));
+      const rootManifest = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+        dependencies: Record<string, string>;
+        optionalDependencies?: Record<string, string>;
+      };
       const manifest = JSON.parse(
         fs.readFileSync("extensions/memory-lancedb/package.json", "utf8"),
       ) as {
         dependencies: Record<string, string>;
         optionalDependencies: Record<string, string>;
       };
-      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-      for (const name of Object.keys({
-        ...manifest.dependencies,
-        ...manifest.optionalDependencies,
-      })) {
-        const installed = path.resolve("extensions/memory-lancedb/node_modules", name);
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(rootManifest));
+      for (const name of collectRuntimeDependencySpecs(rootManifest).keys()) {
+        const installed = path.resolve("node_modules", name);
         if (!fs.existsSync(installed)) {
           continue;
         }
@@ -282,21 +399,39 @@ describe("tsdown config", () => {
         fs.mkdirSync(path.dirname(destination), { recursive: true });
         fs.symlinkSync(fs.realpathSync(installed), destination, "dir");
       }
+      const pluginInstallRoot = path.join(root, "extensions", "memory-lancedb");
+      fs.mkdirSync(pluginInstallRoot, { recursive: true });
+      fs.writeFileSync(path.join(pluginInstallRoot, "package.json"), JSON.stringify(manifest));
+      const pluginDependencies = collectRuntimeDependencySpecs(manifest);
+      for (const name of pluginDependencies.keys()) {
+        const installed = path.resolve("extensions/memory-lancedb/node_modules", name);
+        if (!fs.existsSync(installed)) {
+          continue;
+        }
+        const destination = path.join(pluginInstallRoot, "node_modules", name);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.symlinkSync(fs.realpathSync(installed), destination, "dir");
+      }
       const { bundles } = await build({
         ...selected,
         config: false,
-        entry: { [entryName]: source! },
+        entry: { [entryName]: source!, [runtimeEntryName]: runtimeSource! },
         outDir: path.join(root, "dist"),
         dts: false,
         logLevel: "silent",
       });
       try {
+        fs.mkdirSync(path.join(root, "dist-runtime"));
+        pruneDockerPluginDist({
+          repoRoot: root,
+          env: { OPENCLAW_EXTENSIONS: "memory-lancedb" },
+        });
         const script = `
           import assert from "node:assert/strict";
           import { registerHooks } from "node:module";
           import path from "node:path";
           import { pathToFileURL } from "node:url";
-          const [root, entry, bindingsJson] = process.argv.slice(1);
+          const [root, entry, runtimeEntry, bindingsJson] = process.argv.slice(1);
           const bindings = new Set(JSON.parse(bindingsJson));
           const loadedBindings = new Set();
           registerHooks({ resolve(specifier, context, nextResolve) {
@@ -317,29 +452,33 @@ describe("tsdown config", () => {
             db.close();
             db = new MemoryDB(dbPath, 2);
             assert.equal((await db.search("alpha", [1, 0], 1, 0))[0].entry.id, stored.id);
-            assert.equal(await db.count("alpha"), 1);
+            const { loadLanceDbModule } = await import(pathToFileURL(runtimeEntry).href);
+            const connection = await (await loadLanceDbModule()).connect(dbPath);
+            const table = await connection.openTable("memories");
+            try {
+              assert.equal(await table.countRows("agentId = 'alpha'"), 1);
+              assert.equal(await table.countRows("agentId = 'beta'"), 0);
+            } finally {
+              table.close();
+              connection.close();
+            }
             assert(loadedBindings.size > 0, "Expected a declared native binding");
           } finally {
             db.close();
           }
           console.log("bundled memory store persists and recalls without image dependencies");
         `;
-        const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-          (resolve) => {
-            execFile(
-              testNodeExecPath,
-              [
-                "--input-type=module",
-                "-e",
-                script,
-                root,
-                path.join(root, "dist", `${entryName}.js`),
-                JSON.stringify(Object.keys(manifest.optionalDependencies)),
-              ],
-              { cwd: root, timeout: 30_000 },
-              (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-            );
-          },
+        const result = await runNodeFixture(
+          [
+            "--input-type=module",
+            "-e",
+            script,
+            root,
+            path.join(root, "dist", `${entryName}.js`),
+            path.join(root, "dist", `${runtimeEntryName}.js`),
+            JSON.stringify(Object.keys(manifest.optionalDependencies)),
+          ],
+          { cwd: root, timeout: 30_000 },
         );
         expect(result.error, result.stderr).toBeNull();
         expect(result.stdout.trim()).toBe(
@@ -370,27 +509,19 @@ describe("tsdown config", () => {
       entry: {
         [entryName]: "extensions/imap/index.ts",
         "plugin-sdk/plugin-state-store-runtime": "src/plugin-sdk/plugin-state-store-runtime.ts",
+        "plugin-sdk/plugin-test-api": "src/plugin-sdk/plugin-test-api.ts",
       },
       outDir: path.join(root, "dist"),
       dts: false,
       logLevel: "silent",
     });
     try {
-      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-        (resolve) => {
-          execFile(
-            testNodeExecPath,
-            [
-              fileURLToPath(new URL("./imap-packaged-service.test-support.mjs", import.meta.url)),
-              root,
-            ],
-            {
-              cwd: root,
-              env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
-              timeout: 30_000,
-            },
-            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-          );
+      const result = await runNodeFixture(
+        [fileURLToPath(new URL("./imap-packaged-service.test-support.mjs", import.meta.url)), root],
+        {
+          cwd: root,
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+          timeout: 30_000,
         },
       );
       expect(result.error, result.stderr || result.stdout).toBeNull();
@@ -401,22 +532,40 @@ describe("tsdown config", () => {
     }
   });
 
-  it("keeps writable database and session lifecycle outside the archive worker bootstrap", async () => {
-    const workerEntry = "config/sessions/session-accessor.sqlite-archive.worker";
-    const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+  it.each([
+    {
+      label: "writable database and session lifecycle outside the archive worker",
+      workerEntry: "config/sessions/session-accessor.sqlite-archive.worker",
+      siblingEntries: ["plugin-sdk/session-store-runtime"],
+      forbidden:
+        /\/src\/(?:state\/openclaw-agent-db|.*session-accessor\.sqlite-(?:reclamation|lifecycle-state|entry-store|archive))\.ts$/u,
+    },
+    {
+      label: "gateway state and config outside the plugin preparation worker",
+      workerEntry: "plugins/plugin-generation-preparation.worker",
+      siblingEntries: [],
+      forbidden:
+        /\/src\/(?:state\/openclaw-state-(?:context|cache)|config\/(?:config|io)|plugins\/plugin-source-admission-store)\.ts$/u,
+    },
+  ])("keeps $label bootstrap", async ({ workerEntry, siblingEntries, forbidden }) => {
+    const selected = configs.find((config) =>
+      siblingEntries.length > 0
+        ? config.name === TSDOWN_UNIFIED_CONFIG_GROUP
+        : hasWorkerEntry(config, workerEntry, path.resolve("src", workerEntry + ".ts")),
+    );
     if (!selected) {
-      throw new Error("Missing session archive worker build config");
+      throw new Error(`Missing worker build config: ${workerEntry}`);
     }
     const entries = selected.entry as Record<string, string>;
-    // Include the parent store: shared chunks must not pull its lifecycle writes
-    // into the one-shot materialize/publish worker's static closure.
+    // Include sibling entrypoints where sharing is intentional; otherwise use
+    // the standalone graph. Both must keep host lifecycle outside bootstrap.
     const { bundles } = await build({
       ...selected,
       config: false,
       entry: Object.fromEntries(
-        [workerEntry, "plugin-sdk/session-store-runtime"].map((name) => [name, entries[name]!]),
+        [workerEntry, ...siblingEntries].map((name) => [name, entries[name]!]),
       ),
-      outDir: fs.realpathSync(createTempDir("openclaw-archive-worker-imports-")),
+      outDir: fs.realpathSync(createTempDir("openclaw-worker-imports-")),
       dts: false,
       logLevel: "silent",
     });
@@ -438,7 +587,7 @@ describe("tsdown config", () => {
         visited.add(name);
         const chunk = chunks.get(name);
         if (!chunk) {
-          throw new Error(`Missing archive worker chunk: ${name}`);
+          throw new Error(`Missing worker chunk: ${name}`);
         }
         for (const [id, module] of Object.entries(chunk.modules)) {
           if (module.renderedLength > 0) {
@@ -454,15 +603,21 @@ describe("tsdown config", () => {
           }
         }
       }
-      expect(
-        [...modules].filter(
-          (id) =>
-            id.endsWith("/src/state/openclaw-agent-db.ts") ||
-            /\/session-accessor\.sqlite-(?:reclamation|lifecycle-state|entry-store|archive)\.ts$/u.test(
-              id,
-            ),
-        ),
-      ).toEqual([]);
+      expect([...modules].filter((id) => forbidden.test(id))).toEqual([]);
+      if (workerEntry === "plugins/plugin-generation-preparation.worker") {
+        const diagnostics = [...chunks.values()].filter((chunk) =>
+          Object.entries(chunk.modules).some(
+            ([id, module]) =>
+              module.renderedLength > 0 &&
+              id.replaceAll("\\", "/").endsWith("/src/logging/diagnostic-worker-gc-profile.ts"),
+          ),
+        );
+        expect(diagnostics).toHaveLength(1);
+        for (const chunk of diagnostics) {
+          expect(chunk.fileName).toMatch(/^plugins\/plugin-preparation-.*\.mjs$/u);
+          expect(visited.has(chunk.fileName)).toBe(false);
+        }
+      }
     } finally {
       for (const bundle of bundles) {
         await bundle[Symbol.asyncDispose]();
@@ -520,6 +675,7 @@ describe("tsdown config", () => {
             .split("/")
             .slice(0, specifier.startsWith("@") ? 2 : 1)
             .join("/");
+          expect(packageName, specifier).not.toBe("@openclaw/ai");
           expect(Object.hasOwn(dependencies, packageName), specifier).toBe(true);
           const destination = path.join(root, "node_modules", packageName);
           if (!fs.existsSync(destination)) {
@@ -539,6 +695,11 @@ describe("tsdown config", () => {
           .map(([module]) => module.replaceAll("\\", "/"));
         expect(
           renderedModules.filter((module) =>
+            /\/(?:packages\/ai|node_modules\/@openclaw\/ai)\//u.test(module),
+          ),
+        ).toEqual([]);
+        expect(
+          renderedModules.filter((module) =>
             /\/extensions\/[^/]+\/(?:doctor-contract-api|runtime|index|channel-entry|setup-entry)\.[cm]?[jt]s$/u.test(
               module,
             ),
@@ -551,11 +712,23 @@ describe("tsdown config", () => {
         import { pathToFileURL } from "node:url";
         const [root, entriesJson] = process.argv.slice(1);
         const modules = {};
+        const historicalListeners = {
+          feishu: { port: 3000, host: "127.0.0.1" },
+          msteams: { port: 3978, preserveAuthoredActivation: true },
+          "nextcloud-talk": { port: 8788, host: "0.0.0.0" },
+          telegram: { port: 8787, host: "127.0.0.1" },
+        };
         for (const name of JSON.parse(entriesJson)) {
           const mod = await import(pathToFileURL(path.join(root, name + ".js")).href);
+          const listener = historicalListeners[name];
           assert.deepEqual(Object.keys(mod).sort(), name === "clickclack"
             ? ["normalizeCompatibilityConfig"]
-            : ["legacyConfigRules", "normalizeCompatibilityConfig"]);
+            : [...(listener ? ["historicalWebhookListener"] : []), "legacyConfigRules", "normalizeCompatibilityConfig", ...(listener ? ["normalizeHistoricalWebhookConfig"] : [])]);
+          if (listener) {
+            assert.deepEqual(mod.historicalWebhookListener, {
+              channelId: name, preserveAuthoredActivation: undefined, ...listener,
+            });
+          }
           modules[name] = mod;
         }
         const cfg = { channels: { discord: { dm: { enabled: true, policy: "allowlist", allowFrom: ["123"] }, accounts: { work: { dm: { policy: "disabled", allowFrom: ["456"] } } } } }, plugins: { allow: [] } };
@@ -575,15 +748,9 @@ describe("tsdown config", () => {
         }
         console.log("retained config APIs migrate without plugin installation or capability grants");
       `;
-      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-        (resolve) => {
-          execFile(
-            testNodeExecPath,
-            ["--input-type=module", "-e", script, root, JSON.stringify(Object.keys(entries))],
-            { cwd: root, timeout: 30_000 },
-            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-          );
-        },
+      const result = await runNodeFixture(
+        ["--input-type=module", "-e", script, root, JSON.stringify(Object.keys(entries))],
+        { cwd: root, timeout: 30_000 },
       );
       expect(result.error, result.stderr).toBeNull();
       expect(result.stdout.trim()).toBe(
@@ -603,9 +770,9 @@ describe("tsdown config", () => {
   ])("loads the Bash grammar from the relocated $target package", async ({ target, entry }) => {
     const root = fs.realpathSync(createTempDir("openclaw-bash-parser-"));
     const worker = target === "worker";
-    const selected = configs.find(
-      worker ? isWorkerDeployConfig : (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
-    );
+    const selected = worker
+      ? findWorkerBuildConfig("worker")
+      : configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
     expect(selected).toBeDefined();
     const outDir = path.join(root, "build");
     const { bundles } = await build({
@@ -623,9 +790,22 @@ describe("tsdown config", () => {
       fs.renameSync(outDir, path.join(installed, "dist"));
       const require = createRequire(import.meta.url);
       if (worker) {
-        expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toEqual([
-          `${entry}.mjs`,
-        ]);
+        const files = bundles
+          .flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))
+          .filter((file) => !file.startsWith(".source-module-urls/"));
+        expect(files).toContain(`${entry}.mjs`);
+        expect(files.length).toBeGreaterThan(1);
+        expect(
+          files.every(
+            (file) =>
+              file === `${entry}.mjs` ||
+              file === `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}` ||
+              Object.values(WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS).some(
+                (asset) => file === `worker/${asset}`,
+              ) ||
+              (file.startsWith("worker/") && WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(file.slice(7))),
+          ),
+        ).toBe(true);
       } else {
         // Install only the engine package. The grammar must come from emitted assets,
         // even when the entrypoint is nested and the whole package has moved.
@@ -643,21 +823,29 @@ describe("tsdown config", () => {
           );
         }
       }
-      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-        (resolve) => {
-          execFile(
-            testNodeExecPath,
-            [
-              "--input-type=module",
-              "--eval",
-              `
+      const result = await runNodeFixture(
+        [
+          "--input-type=module",
+          "--eval",
+          `
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
+import { createRequire, registerHooks } from "node:module";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 const entry = pathToFileURL(process.argv[1]);
+// A nested fixture must not inherit dependencies from the parent checkout.
+const packageRoot = pathToFileURL(process.cwd() + path.sep).href;
+registerHooks({ resolve(specifier, context, nextResolve) {
+  const resolved = nextResolve(specifier, context);
+  if (resolved.url.startsWith("file:") && !resolved.url.startsWith(packageRoot)) {
+    throw Object.assign(new Error("Dependency escaped relocated package: " + specifier), { code: "MODULE_NOT_FOUND" });
+  }
+  return resolved;
+} });
 assert.throws(() => createRequire(entry).resolve("tree-sitter-bash"), { code: "MODULE_NOT_FOUND" });
-const { parseBashForCommandExplanation } = await import(entry.href);
-const tree = await parseBashForCommandExplanation('printf "%s" "$(whoami)" | cat');
+const { getBashParserForCommandExplanation } = await import(entry.href);
+const parse = await getBashParserForCommandExplanation();
+const tree = parse('printf "%s" "$(whoami)" | cat');
 try {
   assert.equal(tree.rootNode.hasError, false);
   assert.deepEqual(tree.rootNode.descendantsOfType("command").map(node => node.childForFieldName("name").text), ["printf", "whoami", "cat"]);
@@ -666,17 +854,73 @@ try {
 }
 console.log("relocated Bash parser works without native grammar package");
 `,
-              path.join(installed, "dist", `${entry}.${worker ? "mjs" : "js"}`),
-            ],
-            { cwd: installed, timeout: 30_000 },
-            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-          );
-        },
+          path.join(installed, "dist", `${entry}.${worker ? "mjs" : "js"}`),
+        ],
+        { cwd: installed, timeout: 30_000 },
       );
       expect(result.error, result.stderr).toBeNull();
       expect(result.stdout.trim()).toBe(
         "relocated Bash parser works without native grammar package",
       );
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
+  it("renders session cards with fonts from a relocated package", async () => {
+    const root = fs.realpathSync(createTempDir("openclaw-session-card-package-"));
+    const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    expect(selected).toBeDefined();
+    const outDir = path.join(root, "build");
+    const entry = "gateway/session-card";
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      entry: { [entry]: path.resolve("src/gateway/control-ui-public-session-card-render.ts") },
+      outDir,
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      const installed = path.join(root, "installed package");
+      fs.mkdirSync(installed);
+      fs.writeFileSync(path.join(installed, "package.json"), JSON.stringify({ type: "module" }));
+      fs.renameSync(outDir, path.join(installed, "dist"));
+      fs.symlinkSync(path.resolve("node_modules"), path.join(installed, "node_modules"), "dir");
+      for (const notice of ["Lato-OFL.txt", "InstrumentSerif-OFL.txt", "IBMPlexMono-OFL.txt"]) {
+        expect(
+          fs.readFileSync(path.join(installed, "dist/assets/session-card", notice), "utf8"),
+        ).toContain("SIL OPEN FONT LICENSE");
+      }
+      const result = await runNodeFixture(
+        [
+          "--input-type=module",
+          "--eval",
+          `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const { renderPublicSessionCardPng } = await import(pathToFileURL(process.argv[1]).href);
+const png = renderPublicSessionCardPng({
+  title: "A packaged public session",
+  quote: "Render a card after relocating the installed package.",
+  agentName: "Claw",
+  host: "example.test",
+  messageCount: 3,
+  status: "Done",
+});
+assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+assert.equal(png.readUInt32BE(16), 1200);
+assert.equal(png.readUInt32BE(20), 630);
+console.log("relocated session card renders with bundled fonts");
+`,
+          path.join(installed, "dist", `${entry}.js`),
+        ],
+        { cwd: installed, timeout: 30_000 },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      expect(result.stdout.trim()).toBe("relocated session card renders with bundled fonts");
     } finally {
       for (const bundle of bundles) {
         await bundle[Symbol.asyncDispose]();
@@ -694,19 +938,12 @@ console.log("relocated Bash parser works without native grammar package");
       const relay = `${prefix}/service-child-relay`;
       const anchor = `${prefix}/service-child-group-anchor`;
       const selectedConfigs = worker
-        ? [
-            configs.find(isWorkerServiceChildRelayConfig),
-            configs.find(isWorkerServiceChildGroupAnchorConfig),
-          ]
-        : [
+        ? [findWorkerBuildConfig("service-relay"), findWorkerBuildConfig("service-group-anchor")]
+        : [relay, anchor].map((entry) =>
             configs.find((config) =>
-              hasWorkerEntry(
-                config,
-                relay,
-                path.resolve("src/process/supervisor/service-child-relay.ts"),
-              ),
+              hasWorkerEntry(config, entry, path.resolve(`src/${entry}.ts`)),
             ),
-          ];
+          );
       const files: string[] = [];
       for (const selected of selectedConfigs) {
         if (!selected) {
@@ -727,7 +964,11 @@ console.log("relocated Bash parser works without native grammar package");
         });
         try {
           files.push(
-            ...bundles.flatMap((bundle) => bundle.chunks.map((chunk) => `dist/${chunk.fileName}`)),
+            ...bundles.flatMap((bundle) =>
+              bundle.chunks
+                .filter((chunk) => !chunk.fileName.startsWith(".source-module-urls/"))
+                .map((chunk) => `dist/${chunk.fileName}`),
+            ),
           );
         } finally {
           for (const bundle of bundles) {
@@ -743,14 +984,34 @@ console.log("relocated Bash parser works without native grammar package");
         readText: (file) => fs.readFileSync(path.join(root, file), "utf8"),
       });
       expect(collectPackageDistImportErrors({ files, imports })).toEqual([]);
-      const sealedAnchorEdge = {
-        importerPath: `dist/${relay}.${extension}`,
-        importedPath: `dist/${anchor}.mjs`,
-      };
       if (worker) {
-        expect(imports).toContainEqual(sealedAnchorEdge);
+        if (process.platform !== "win32") {
+          const result = await runNodeFixture(
+            [
+              path.resolve("test/scripts/service-relay-artifact.test-support.mjs"),
+              path.join(root, "dist", `${relay}.${extension}`),
+            ],
+            { timeout: 15_000 },
+          );
+          expect(result.error, result.stderr).toBeNull();
+          expect(result.stdout.trim()).toBe("emitted relay and anchor completed and retired");
+        }
       } else {
-        expect(imports).not.toContainEqual(sealedAnchorEdge);
+        // Each launch boots both helpers; shared chunks pull unrelated runtime
+        // exports into startup before the durable worker gate can open.
+        // The anchor's lineage writer retains the shared lazy schema catalogs.
+        expect(files.toSorted()).toEqual(
+          [
+            `dist/${relay}.${extension}`,
+            `dist/${anchor}.${extension}`,
+            "dist/assets/sqlite-schema/sqlite-agent-catalogs.json",
+            "dist/assets/sqlite-schema/sqlite-client-catalogs.json",
+            "dist/assets/sqlite-schema/sqlite-daemon-catalogs.json",
+            "dist/assets/sqlite-schema/sqlite-memory-catalogs.json",
+            "dist/assets/sqlite-schema/sqlite-state-catalogs.json",
+          ].toSorted(),
+        );
+        expect(imports).toEqual([]);
       }
     },
   );
@@ -789,9 +1050,9 @@ console.log("relocated Bash parser works without native grammar package");
           `export { FsSafeError } from ${JSON.stringify(worker ? require.resolve("@openclaw/fs-safe/errors") : "@openclaw/fs-safe/errors")};`,
         ].join("\n"),
       );
-      const selected = configs.find(
-        worker ? isWorkerDeployConfig : (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
-      );
+      const selected = worker
+        ? findWorkerBuildConfig("worker")
+        : configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
       expect(selected).toBeDefined();
       const { bundles } = await build({
         ...selected,
@@ -804,12 +1065,63 @@ console.log("relocated Bash parser works without native grammar package");
         logLevel: "silent",
       });
       try {
+        const chunks = bundles.flatMap((bundle) =>
+          bundle.chunks.filter((chunk) => chunk.type === "chunk"),
+        );
+        if (!worker) {
+          const dependencies = JSON.parse(fs.readFileSync("package.json", "utf8")).dependencies;
+          const emittedFiles = new Set(chunks.map((chunk) => chunk.fileName));
+          // Preserve the copied fs-safe/native owner while providing the other
+          // production dependencies imported by the real SDK entrypoint.
+          for (const specifier of new Set(
+            chunks.flatMap((chunk) => [...chunk.imports, ...chunk.dynamicImports]),
+          )) {
+            if (isBuiltin(specifier) || specifier.startsWith(".") || emittedFiles.has(specifier)) {
+              continue;
+            }
+            const packageName = specifier
+              .split("/")
+              .slice(0, specifier.startsWith("@") ? 2 : 1)
+              .join("/");
+            expect(Object.hasOwn(dependencies, packageName), specifier).toBe(true);
+            const destination = path.join(sourceRoot, "node_modules", packageName);
+            if (!fs.existsSync(destination)) {
+              fs.mkdirSync(path.dirname(destination), { recursive: true });
+              fs.symlinkSync(
+                fs.realpathSync(path.join("node_modules", packageName)),
+                destination,
+                "dir",
+              );
+            }
+          }
+        }
         fs.renameSync(sourceRoot, relocatedRoot);
+        const emittedChunks = worker
+          ? chunks.map((chunk) => {
+              expect(chunk.fileName).toMatch(/^worker\//u);
+              expect(
+                chunk.fileName === "worker/worker.mjs" ||
+                  WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(chunk.fileName.slice(7)),
+              ).toBe(true);
+              return pathToFileURL(path.join(relocatedRoot, "output", chunk.fileName)).href;
+            })
+          : [];
+        const emittedChunksPath = path.join(relocatedRoot, "emitted-chunks.json");
+        fs.writeFileSync(emittedChunksPath, JSON.stringify(emittedChunks));
         const entry = path.join(
           relocatedRoot,
           worker ? "output/worker/worker.mjs" : "output/plugin-sdk/memory-core-host-engine-fs.js",
         );
         const observer = worker ? entry : path.join(relocatedRoot, "output/observer.js");
+        const bundledNativeAsset =
+          worker && process.platform === "darwin"
+            ? path.join(
+                path.dirname(entry),
+                WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS[
+                  process.arch === "arm64" ? "darwin-arm64" : "darwin-x64"
+                ],
+              )
+            : "";
         const probe = async (
           name: string,
           mode: string,
@@ -818,39 +1130,35 @@ console.log("relocated Bash parser works without native grammar package");
         ) => {
           const rootDir = path.join(relocatedRoot, name);
           fs.mkdirSync(rootDir);
-          const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-            (resolve) => {
-              execFile(
-                testNodeExecPath,
-                [
-                  "--input-type=module",
-                  "--eval",
-                  FS_SAFE_CALLER_PROBE,
-                  entry,
-                  observer,
-                  rootDir,
-                  mode,
-                  outcome,
-                  worker ? "sealed" : "",
-                ],
-                {
-                  cwd: relocatedRoot,
-                  encoding: "utf8",
-                  timeout: 30_000,
-                  env: {
-                    PATH: process.env.PATH,
-                    SystemRoot: process.env.SystemRoot,
-                    WINDIR: process.env.WINDIR,
-                    HOME: temporaryRoot,
-                    USERPROFILE: temporaryRoot,
-                    TMPDIR: temporaryRoot,
-                    TMP: temporaryRoot,
-                    TEMP: temporaryRoot,
-                    ...override,
-                  },
-                },
-                (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-              );
+          const result = await runNodeFixture(
+            [
+              "--input-type=module",
+              "--eval",
+              FS_SAFE_CALLER_PROBE,
+              entry,
+              observer,
+              rootDir,
+              mode,
+              outcome,
+              worker ? "sealed" : "",
+              bundledNativeAsset,
+              emittedChunksPath,
+            ],
+            {
+              cwd: relocatedRoot,
+              encoding: "utf8",
+              timeout: 30_000,
+              env: {
+                PATH: process.env.PATH,
+                SystemRoot: process.env.SystemRoot,
+                WINDIR: process.env.WINDIR,
+                HOME: temporaryRoot,
+                USERPROFILE: temporaryRoot,
+                TMPDIR: temporaryRoot,
+                TMP: temporaryRoot,
+                TEMP: temporaryRoot,
+                ...override,
+              },
             },
           );
           expect(result.error, `${name}\n${result.stdout}\n${result.stderr}`).toBeNull();
@@ -866,10 +1174,13 @@ console.log("relocated Bash parser works without native grammar package");
           }
         };
         if (worker) {
+          // Darwin workers require their bundled addon; other hosts retain the fallback.
+          const mode = bundledNativeAsset ? "require" : "off";
+          const outcome = bundledNativeAsset ? "native" : "fallback";
           await join([
-            probe("default", "off", "fallback"),
+            probe("default", mode, outcome),
             ...["FS_SAFE_NATIVE_MODE", "OPENCLAW_FS_SAFE_NATIVE_MODE"].map((key) =>
-              probe(key, "off", "fallback", { [key]: "require" }),
+              probe(key, mode, outcome, { [key]: "require" }),
             ),
           ]);
         } else {
@@ -910,14 +1221,14 @@ console.log("relocated Bash parser works without native grammar package");
       vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
       const root = fs.realpathSync(createTempDir("openclaw-tsdown-dependencies-"));
       const declarations = target === "declarations";
-      const workerConfigMatcher = workerBuildTargets.find(([name]) => name === target)?.[1];
-      const bundleAll = workerConfigMatcher !== undefined;
-      const selected = configs.find(
-        workerConfigMatcher ??
-          ((entry) =>
-            entry.name ===
-            (declarations ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0] : TSDOWN_UNIFIED_CONFIG_GROUP)),
-      );
+      const bundleAll = workerBuildTargets.some(([name]) => name === target);
+      const selected = bundleAll
+        ? findWorkerBuildConfig(target)
+        : configs.find(
+            (entry) =>
+              entry.name ===
+              (declarations ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0] : TSDOWN_UNIFIED_CONFIG_GROUP),
+          );
       expect(selected).toBeDefined();
       const packages = [
         "@anthropic-ai/vertex-sdk",
@@ -994,13 +1305,29 @@ console.log("relocated Bash parser works without native grammar package");
           )
           .join("\n"),
       );
+      if (declarations) {
+        materializeNativeCompiler(root);
+        fs.writeFileSync(
+          path.join(root, "tsconfig.json"),
+          JSON.stringify({
+            compilerOptions: {
+              module: "NodeNext",
+              target: "ES2023",
+              types: [],
+              // The fixture checks bundling of authored declarations, not their type surface.
+              skipLibCheck: true,
+            },
+            files: ["entry.d.ts"],
+          }),
+        );
+      }
       const { bundles } = await build({
         ...selected,
         config: false,
         cwd: root,
-        entry: [entry],
+        entry: bundleAll ? { "worker/entry": entry } : [entry],
         outDir: path.join(root, "dist"),
-        tsconfig: false,
+        tsconfig: declarations ? path.join(root, "tsconfig.json") : false,
         dts: declarations ? { emitDtsOnly: true } : false,
         logLevel: "silent",
       });
@@ -1008,7 +1335,9 @@ console.log("relocated Bash parser works without native grammar package");
         const imports = bundles.flatMap((bundle) =>
           bundle.chunks.flatMap((chunk) => (chunk.type === "chunk" ? chunk.imports : [])),
         );
-        expect(imports.toSorted()).toEqual(expectedImports.toSorted());
+        expect(imports.filter((specifier) => !isBuiltin(specifier)).toSorted()).toEqual(
+          expectedImports.toSorted(),
+        );
       } finally {
         for (const bundle of bundles) {
           await bundle[Symbol.asyncDispose]();
@@ -1025,7 +1354,38 @@ console.log("relocated Bash parser works without native grammar package");
     },
   );
 
-  it("isolates runtime output from bounded declaration-only graphs", () => {
+  it("gives every standalone declaration caller one canonical package config", () => {
+    for (const packageName of [
+      "gateway-client",
+      "gateway-protocol",
+      "sdk",
+      "retry",
+      "normalization-core",
+      "net-policy",
+      "media-understanding-common",
+      "media-generation-core",
+      "media-core",
+      "acp-core",
+    ]) {
+      const manifest = JSON.parse(
+        fs.readFileSync(`packages/${packageName}/package.json`, "utf8"),
+      ) as { scripts: { build: string }; exports: Record<string, { import: string }> };
+      expect(manifest.scripts.build).toContain(`build-workspace-package.mts ${packageName}`);
+      const selected = configs.filter((config) => config.outDir === `packages/${packageName}/dist`);
+      expect(selected, packageName).toHaveLength(1);
+      const sources = Object.values(selected[0]!.entry ?? {});
+      for (const entry of Object.values(manifest.exports)) {
+        expect(sources).toContain(
+          entry.import.replace("./dist/", `packages/${packageName}/src/`).replace(/\.mjs$/u, ".ts"),
+        );
+      }
+      if (packageName === "acp-core") {
+        expect(sources).toContain("packages/acp-core/src/error-format.ts");
+      }
+    }
+  });
+
+  it("isolates runtime output from one shared declaration program", () => {
     const packageConfigs = configs.filter((entry) => entry.name === TSDOWN_PACKAGE_CONFIG_GROUP);
     const unifiedRuntimeConfig = configs.find(
       (entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -1045,9 +1405,12 @@ console.log("relocated Bash parser works without native grammar package");
     );
 
     expect(packageConfigs).not.toHaveLength(0);
-    expect(packageConfigs.map((entry) => entry.dts)).toEqual(packageConfigs.map(() => true));
+    expect(packageConfigs.map((entry) => entry.dts)).toEqual(
+      packageConfigs.map(() => ({ tsconfig: "tsconfig.packages.json" })),
+    );
     expect(unifiedRuntimeConfig?.dts).toBe(false);
     expect(standaloneRuntimeConfig?.dts).toBe(false);
+    expect(unifiedDeclarationConfigs).toHaveLength(1);
     expect(unifiedDeclarationConfigs.every(Boolean)).toBe(true);
     const runtimeEntries = configs
       .filter(
@@ -1104,14 +1467,13 @@ console.log("relocated Bash parser works without native grammar package");
     );
   });
 
-  it("emits bounded public declarations without private runtime roots", () => {
+  it("emits every public declaration without private runtime roots", () => {
     const declarationSources = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.flatMap((name) => {
       const declarationConfig = configs.find((entry) => entry.name === name);
       const dts = declarationConfig?.dts;
       if (!dts || typeof dts !== "object" || !Array.isArray(dts.entry)) {
         return [];
       }
-      expect(dts.entry.length).toBeLessThanOrEqual(200);
       return dts.entry;
     });
 
@@ -1138,16 +1500,12 @@ console.log("relocated Bash parser works without native grammar package");
   });
 
   it("keeps public SDK types canonical without emitting private runtime declarations", () => {
-    const [publicDeclarationSources = [], privateDeclarationSources = []] =
-      TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.filter((name) =>
-        name.startsWith("openclaw-dts-plugin-sdk-"),
-      ).map((name) => {
-        const dts = configs.find((entry) => entry.name === name)?.dts;
-        return dts && typeof dts === "object" && Array.isArray(dts.entry) ? dts.entry : [];
-      });
+    const declarationSources = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.flatMap((name) => {
+      const dts = configs.find((entry) => entry.name === name)?.dts;
+      return dts && typeof dts === "object" && Array.isArray(dts.entry) ? dts.entry : [];
+    });
     const publicSources = publicPluginSdkEntrypoints.map((entry) => `src/plugin-sdk/${entry}.ts`);
-    expect(publicDeclarationSources.toSorted()).toEqual(publicSources.toSorted());
-    expect(privateDeclarationSources).toEqual([]);
+    expect(declarationSources.toSorted()).toEqual(publicSources.toSorted());
     const runtime = configs.find((entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP);
     expect(runtime?.entry).toHaveProperty(
       "plugin-sdk/tts-runtime",
@@ -1156,34 +1514,28 @@ console.log("relocated Bash parser works without native grammar package");
   });
 
   it("builds self-contained worker deploy executables with every dependency bundled", () => {
-    const workerConfig = configs.find(isWorkerDeployConfig);
-    const imageProcessorConfig = configs.find(isWorkerImageProcessorConfig);
-    const sqliteStoreConfig = configs.find(isWorkerSqliteStoreConfig);
-    const receiverConfig = configs.find(isWorkerRsyncReceiverConfig);
-    const launcherConfig = configs.find(isWorkerGitHubExecLauncherConfig);
-    const relayConfig = configs.find(isWorkerServiceChildRelayConfig);
-    const anchorConfig = configs.find(isWorkerServiceChildGroupAnchorConfig);
-    expect(workerConfig?.entry).toEqual({
-      "worker/worker": "src/worker/worker-deploy-entry.ts",
-    });
-    expect(imageProcessorConfig?.entry).toEqual({
-      "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
-    });
-    expect(sqliteStoreConfig?.entry).toEqual({
-      "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
-    });
-    expect(receiverConfig?.entry).toEqual({
-      "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
-    });
-    expect(launcherConfig?.entry).toEqual({
-      "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts",
-    });
-    expect(relayConfig?.entry).toEqual({
-      "worker/service-child-relay": "src/process/supervisor/service-child-relay.ts",
-    });
-    expect(anchorConfig?.entry).toEqual({
-      "worker/service-child-group-anchor": "src/process/supervisor/service-child-group-anchor.ts",
-    });
+    const workerConfigs = Object.fromEntries(
+      workerBuildTargets.map(([target, entry, source]) => {
+        const config = findWorkerBuildConfig(target);
+        expect(config?.entry).toEqual({
+          [entry]: source,
+          ...(target === "worker"
+            ? {
+                "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
+                "worker/worker-chunk-fs-safe-watch-io":
+                  "node_modules/@openclaw/fs-safe/dist/watch-io-worker.js",
+              }
+            : {}),
+        });
+        return [target, config] as const;
+      }),
+    );
+    const {
+      worker: workerConfig,
+      receiver: receiverConfig,
+      "service-relay": relayConfig,
+      "service-group-anchor": anchorConfig,
+    } = workerConfigs;
     const packageVersion = (
       JSON.parse(fs.readFileSync("package.json", "utf8")) as {
         version: string;
@@ -1209,21 +1561,22 @@ console.log("relocated Bash parser works without native grammar package");
       expect.arrayContaining([expect.objectContaining({ name: "openclaw:worker-deploy" })]),
     );
     expect(workerConfig?.outputOptions).toMatchObject({
-      codeSplitting: false,
+      codeSplitting: true,
+      chunkFileNames: "worker/worker-chunk-[hash].mjs",
       assetFileNames: "worker/[name][extname]",
     });
-    for (const config of [receiverConfig, launcherConfig]) {
-      expect(config?.define).toBeUndefined();
-    }
+    expect(receiverConfig?.define).toBeUndefined();
     for (const config of [relayConfig, anchorConfig]) {
       expect(config?.define).toEqual({
         WORKER_DEPLOY_BUILD: "true",
         SEALED_RUNTIME_BUILD: "true",
       });
     }
-    for (const config of [receiverConfig, launcherConfig, relayConfig, anchorConfig]) {
+    for (const config of [receiverConfig, relayConfig, anchorConfig]) {
       expect(config?.alias).toBeUndefined();
-      expect(config?.plugins).toBeUndefined();
+      expect(config?.plugins).toEqual([
+        expect.objectContaining({ name: "openclaw:standalone-source-module-urls" }),
+      ]);
       expect(config?.outputOptions).toEqual({ codeSplitting: false });
     }
 
@@ -1232,15 +1585,7 @@ console.log("relocated Bash parser works without native grammar package");
       options: {},
       pkgType: "module",
     } as Parameters<OutExtensions>[0];
-    for (const config of [
-      workerConfig,
-      imageProcessorConfig,
-      sqliteStoreConfig,
-      receiverConfig,
-      launcherConfig,
-      relayConfig,
-      anchorConfig,
-    ]) {
+    for (const config of Object.values(workerConfigs)) {
       expect(config?.dts).toBe(false);
       expect(config?.outDir).toBe("dist");
       expect(config?.shims).toBe(true);
@@ -1251,7 +1596,7 @@ console.log("relocated Bash parser works without native grammar package");
         throw new Error("worker deploy config must define dependency bundling");
       }
       expect(alwaysBundle("json5", undefined)).toBe(true);
-      expect(alwaysBundle("node:fs", undefined)).toBe(false);
+      expect(config?.platform).toBe("node");
       expect(config?.outExtensions?.(context)).toEqual({ js: ".mjs", dts: ".d.ts" });
     }
   });

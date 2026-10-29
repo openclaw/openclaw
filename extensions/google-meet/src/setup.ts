@@ -1,20 +1,14 @@
-// Google Meet setup module handles plugin onboarding behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  addMeetingSetupCheck,
   createMeetingSetupStatus,
   MeetingPlatformAdapter,
   type MeetingSetupCheck,
-  type MeetingSetupStatus,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
-
-type SetupCheck = MeetingSetupCheck;
-type GoogleMeetSetupStatus = MeetingSetupStatus;
 
 function resolveUserPath(input: string): string {
   if (input === "~") {
@@ -27,19 +21,17 @@ function resolveUserPath(input: string): string {
 }
 
 function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
-  try {
-    const parsed = new URL(webhookUrl);
-    return isBlockedHostnameOrIp(parsed.hostname);
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(webhookUrl);
+  return parsed ? isBlockedHostnameOrIp(parsed.hostname) : false;
 }
 
 function resolveVoiceCallSetupValue(configured: unknown, fallback: unknown): string | undefined {
   return normalizeOptionalString(configured) ?? normalizeOptionalString(fallback);
 }
 
-function getVoiceCallWebhookExposureCheck(voiceCallConfig: Record<string, unknown>): SetupCheck {
+function getVoiceCallWebhookExposureCheck(
+  voiceCallConfig: Record<string, unknown>,
+): MeetingSetupCheck {
   const publicUrl = normalizeOptionalString(voiceCallConfig.publicUrl);
   const tunnel = asRecord(voiceCallConfig.tunnel);
   const tailscale = asRecord(voiceCallConfig.tailscale);
@@ -81,35 +73,16 @@ function getVoiceCallWebhookExposureCheck(voiceCallConfig: Record<string, unknow
   };
 }
 
-export function getGoogleMeetSetupStatus(config: GoogleMeetConfig): {
-  ok: boolean;
-  checks: SetupCheck[];
-};
 export function getGoogleMeetSetupStatus(
   config: GoogleMeetConfig,
   options?: {
-    env?: NodeJS.ProcessEnv;
-    fullConfig?: unknown;
-    mode?: GoogleMeetMode;
-    transport?: GoogleMeetTransport;
-    twilioDialInNumber?: string;
-  },
-): {
-  ok: boolean;
-  checks: SetupCheck[];
-};
-export function getGoogleMeetSetupStatus(
-  config: GoogleMeetConfig,
-  options?: {
-    env?: NodeJS.ProcessEnv;
     fullConfig?: unknown;
     mode?: GoogleMeetMode;
     transport?: GoogleMeetTransport;
     twilioDialInNumber?: string;
   },
 ) {
-  const checks: SetupCheck[] = [];
-  const env = options?.env ?? process.env;
+  const checks: MeetingSetupCheck[] = [];
   const fullConfig = asRecord(options?.fullConfig);
   const mode = options?.mode ?? config.defaultMode;
   const transport = options?.transport ?? config.defaultTransport;
@@ -124,10 +97,11 @@ export function getGoogleMeetSetupStatus(
 
   if (config.auth.tokenPath) {
     const tokenPath = resolveUserPath(config.auth.tokenPath);
+    const tokenExists = fs.existsSync(tokenPath);
     checks.push({
       id: "google-oauth-token",
-      ok: fs.existsSync(tokenPath),
-      message: fs.existsSync(tokenPath)
+      ok: tokenExists,
+      message: tokenExists
         ? "Google OAuth token file found"
         : `Google OAuth token file missing at ${config.auth.tokenPath}`,
     });
@@ -245,15 +219,15 @@ export function getGoogleMeetSetupStatus(
     if (provider === "twilio") {
       const accountSid = resolveVoiceCallSetupValue(
         voiceCallTwilioConfig.accountSid,
-        env.TWILIO_ACCOUNT_SID,
+        process.env.TWILIO_ACCOUNT_SID,
       );
       const authToken = resolveVoiceCallSetupValue(
         voiceCallTwilioConfig.authToken,
-        env.TWILIO_AUTH_TOKEN,
+        process.env.TWILIO_AUTH_TOKEN,
       );
       const fromNumber = resolveVoiceCallSetupValue(
         voiceCallConfig.fromNumber,
-        env.TWILIO_FROM_NUMBER,
+        process.env.TWILIO_FROM_NUMBER,
       );
       const twilioReady = Boolean(accountSid && authToken && fromNumber);
       checks.push({
@@ -268,11 +242,4 @@ export function getGoogleMeetSetupStatus(
   }
 
   return createMeetingSetupStatus(checks);
-}
-
-export function addGoogleMeetSetupCheck(
-  status: GoogleMeetSetupStatus,
-  check: SetupCheck,
-): GoogleMeetSetupStatus {
-  return addMeetingSetupCheck(status, check);
 }

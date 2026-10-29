@@ -1,26 +1,34 @@
 import type { CodeModeJsonSource, CodeModeOutputSource } from "./code-mode-json.js";
-import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
+import type {
+  CodeModeApiVirtualFile,
+  CodeModeNamespaceDescriptor,
+} from "./code-mode-namespaces.js";
+
+export type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
 
 // Also bounds queued ordinary guest requests independently of configured in-flight slots.
 export const MAX_CODE_MODE_PENDING_TOOL_CALLS = 128;
 export const CODE_MODE_WORKER_WATCHDOG_GRACE_MS = 2_000;
 
-type CodeModeBridgeMethod =
-  | "search"
-  | "describe"
-  | "callValue"
-  | "resultSave"
-  | "resultLoad"
-  | "resultDelete"
-  | "nodes"
-  | "yield"
-  | "namespace"
-  | "agentSpawn"
-  | "agentWait"
-  | "skillsList"
-  | "skillsRead"
-  | "sleep"
-  | "swarmNote";
+export const CODE_MODE_BRIDGE_METHODS = [
+  "search",
+  "describe",
+  "callValue",
+  "resultSave",
+  "resultLoad",
+  "resultDelete",
+  "nodes",
+  "yield",
+  "namespace",
+  "agentSpawn",
+  "agentWait",
+  "skillsList",
+  "skillsSearch",
+  "skillsRead",
+  "sleep",
+  "swarmNote",
+] as const;
+type CodeModeBridgeMethod = (typeof CODE_MODE_BRIDGE_METHODS)[number];
 
 export type CodeModeConfig = {
   timeoutMs: number;
@@ -37,19 +45,6 @@ export type PendingBridgeRequest = {
 };
 
 export type SettledBridgeRequest = { id: string; ok: boolean; json: string };
-
-type SerializedCodeModeNamespaceValue =
-  | { kind: "array"; items: SerializedCodeModeNamespaceValue[] }
-  | { kind: "function"; path: string[] }
-  | { kind: "object"; entries: Array<[string, SerializedCodeModeNamespaceValue]> }
-  | { kind: "value"; value: unknown };
-
-export type CodeModeNamespaceDescriptor = {
-  id: string;
-  globalName: string;
-  description?: string;
-  scope: SerializedCodeModeNamespaceValue;
-};
 
 type CodeModeWorkerInput<State> =
   | {
@@ -74,6 +69,18 @@ type CodeModeWorkerInput<State> =
 export type CodeModeWorkerPayload<State> = CodeModeWorkerInput<State> & {
   /** Only interactive, non-replay cells can hand full final JSON to the run store. */
   retainFinalValue?: boolean;
+};
+
+export type CodeModeNodeInput = (
+  | (Omit<
+      Extract<CodeModeWorkerPayload<never>, { kind: "exec" }>,
+      "catalog" | "namespaces" | "apiFiles" | "swarmEnabled"
+    > & { initialization: SharedArrayBuffer })
+  | Omit<Extract<CodeModeWorkerPayload<never>, { kind: "resume" }>, "continuation">
+) & {
+  progress: SharedArrayBuffer;
+  inlineHost: boolean;
+  gcAttribution?: { workerId: string; runId?: string; sessionKeyHash?: string };
 };
 
 export type CodeModeSettlementMode =
@@ -126,7 +133,7 @@ type CodeModeWorkerOutcome<Output, Value, State> = { networkContentObserved?: tr
         | "timeout"
         | "snapshot_limit_exceeded"
         | "internal_error";
-      failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;
+      failurePhase: CodeModeFailurePhase;
       bridgeDispatchStarted: false;
       output: Output;
     }

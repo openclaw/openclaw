@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -10,6 +11,7 @@ const suite = createControlUiE2eSuite({
   name: "Queued reorder conflict recovery",
   trackBrowserContexts: true,
 });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it("retires a peer-edit conflict after the same reorder succeeds", async () => {
@@ -18,7 +20,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
     try {
       await page.goto(`${suite.server.baseUrl}chat?session=main`);
-      await page.getByRole("button", { name: "Open split view", exact: true }).click();
+      await selectChatLayoutAction(page, "Open split view");
       const cells = page.locator(".chat-split-view__cell");
       await expect.poll(() => cells.count()).toBe(2);
       const left = cells.first();
@@ -47,7 +49,9 @@ suite.define(() => {
       });
       await conflict.waitFor({ state: "visible" });
       await expect.poll(order).toEqual(initialOrder);
-      await page.screenshot({ path: `${suite.artifactDir}/reorder-blocked.png`, fullPage: true });
+      if (captureUiProof) {
+        await page.screenshot({ path: `${suite.artifactDir}/reorder-blocked.png`, fullPage: true });
+      }
 
       await left
         .getByRole("button", { name: "Cancel editing and keep the queued message", exact: true })
@@ -67,7 +71,9 @@ suite.define(() => {
         `${suite.artifactDir}/reorder-recovery.json`,
         JSON.stringify(receipt, null, 2),
       );
-      await page.screenshot({ path: `${suite.artifactDir}/reorder-retried.png`, fullPage: true });
+      if (captureUiProof) {
+        await page.screenshot({ path: `${suite.artifactDir}/reorder-retried.png`, fullPage: true });
+      }
       console.log(JSON.stringify({ artifactDir: suite.artifactDir, ...receipt }));
       expect(receipt.sendRequests).toHaveLength(0);
       expect(receipt.openEdits).toBe(0);

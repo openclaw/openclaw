@@ -5,34 +5,48 @@ import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { applyAgentCompactionSettingsFromConfig } from "../agent-settings.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { textStream } from "./agent-session-boundary.test-support.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
   createAssistant,
   createAssistantResultStream,
+  collectCompactionEnds,
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import type { AgentSessionEvent } from "./agent-session-types.js";
+import { extractTextContent } from "./agent-session-utils.js";
 import { createCompactionRequestBudget } from "./compaction/request-budget.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 
+function smallSettings() {
+  return SettingsManager.inMemory({
+    compaction: { reserveTokens: 1_024, keepRecentTokens: 1 },
+    retry: { enabled: false },
+  });
+}
+
+function configuredSettings(model: Model) {
+  const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });
+  applyAgentCompactionSettingsFromConfig({
+    settingsManager,
+    contextTokenBudget: model.contextWindow,
+  });
+  return settingsManager;
+}
+
 describe("AgentSession small-context compaction", () => {
   it("defers a one-archive retention no-op until the foreground request budget is prepared", async () => {
     const model = { ...testModel, contextWindow: 32_768, maxTokens: 8_192 };
-    const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });
-    applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      contextTokenBudget: model.contextWindow,
-    });
+    const settingsManager = configuredSettings(model);
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage({ role: "user", content: "a".repeat(46_191), timestamp: 1 });
-    const assistant = createAssistant(model, [{ type: "text", text: "ACK" }]);
+    const assistant = createAssistant(model, "ACK");
     sessionManager.appendMessage({
       ...assistant,
       usage: { ...assistant.usage, input: 19_140, output: 2, totalTokens: 19_142 },
@@ -50,10 +64,7 @@ describe("AgentSession small-context compaction", () => {
       model,
       settingsManager,
       sessionManager,
-      resourceLoader: {
-        ...createResourceLoader(),
-        getSystemPrompt: () => "Required instructions. ".repeat(1_000),
-      },
+      systemPrompt: "Required instructions. ".repeat(1_000),
     });
     const before = structuredClone(sessionManager.getBranch());
     await expect(
@@ -69,21 +80,14 @@ describe("AgentSession small-context compaction", () => {
     let foregroundCalls = 0;
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
       const currentUser = context.messages.findLast((message) => message.role === "user");
-      const text =
-        typeof currentUser?.content === "string"
-          ? currentUser.content
-          : currentUser?.content.map((block) => (block.type === "text" ? block.text : "")).join("");
+      const text = currentUser && extractTextContent(currentUser.content);
       const foreground = text === pending;
       if (foreground) {
         foregroundCalls += 1;
       }
-      return createAssistantResultStream(
-        createAssistant(activeModel, [
-          {
-            type: "text",
-            text: foreground ? "FOREGROUND_DONE" : "The earlier archive was processed.",
-          },
-        ]),
+      return textStream(
+        activeModel,
+        foreground ? "FOREGROUND_DONE" : "The earlier archive was processed.",
       );
     });
     const requestBudget = createCompactionRequestBudget({
@@ -126,15 +130,10 @@ describe("AgentSession small-context compaction", () => {
     },
   ])("does not undercount $name with a keyed carrier", async ({ rows, extra }) => {
     const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { reserveTokens: 1_024, keepRecentTokens: 1 },
-      retry: { enabled: false },
-    });
+    const settingsManager = smallSettings();
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage({ role: "user", content: "Earlier request", timestamp: 1 });
-    sessionManager.appendMessage(
-      createAssistant(model, [{ type: "text", text: "Earlier answer" }]),
-    );
+    sessionManager.appendMessage(createAssistant(model, "Earlier answer"));
     const canonicalUser = {
       role: "user" as const,
       content: "Protected recorded request. ".repeat(rows),
@@ -156,25 +155,16 @@ describe("AgentSession small-context compaction", () => {
       model,
       settingsManager,
       sessionManager,
-      resourceLoader: {
-        ...createResourceLoader(
-          new Map([
-            [
-              "session_before_compact",
-              [
-                async () => ({
-                  compaction: {
-                    summary: "Earlier work completed.",
-                    firstKeptEntryId: userId,
-                    tokensBefore: 0,
-                  },
-                }),
-              ],
-            ],
-          ]),
-        ),
-        getSystemPrompt: () => "Preserve project requirements.",
-      },
+      resourceLoader: await createResourceLoader((api) => {
+        api.on("session_before_compact", async () => ({
+          compaction: {
+            summary: "Earlier work completed.",
+            firstKeptEntryId: userId,
+            tokensBefore: 0,
+          },
+        }));
+      }),
+      systemPrompt: "Preserve project requirements.",
     });
     const before = structuredClone(sessionManager.getBranch());
     const budget = createCompactionRequestBudget({
@@ -200,10 +190,7 @@ describe("AgentSession small-context compaction", () => {
     "preserves file metadata while fitting a non-Latin %s summary",
     async (mode) => {
       const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
-      const settingsManager = SettingsManager.inMemory({
-        compaction: { reserveTokens: 1_024, keepRecentTokens: 1 },
-        retry: { enabled: false },
-      });
+      const settingsManager = smallSettings();
       const sessionManager = SessionManager.inMemory();
       const file = "/workspace/archive.md";
       sessionManager.appendMessage(
@@ -220,23 +207,16 @@ describe("AgentSession small-context compaction", () => {
         makeTextToolResult("archive-read", "read", "The project uses blue buttons.", false, 3),
       );
       sessionManager.appendMessage(makeUserMessage("Continue the project.", 4));
-      sessionManager.appendMessage(
-        createAssistant(model, [{ type: "text", text: "Ready to continue." }]),
-      );
+      sessionManager.appendMessage(createAssistant(model, "Ready to continue."));
       const { session } = await createTestSession({
         model,
         settingsManager,
         sessionManager,
-        resourceLoader: {
-          ...createResourceLoader(),
-          getSystemPrompt: () => "Preserve project decisions.",
-        },
+        systemPrompt: "Preserve project decisions.",
       });
       const generatedSummary = "保留项目的蓝色按钮和归档决策。".repeat(300);
       streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-        createAssistantResultStream(
-          createAssistant(activeModel, [{ type: "text", text: generatedSummary }]),
-        ),
+        textStream(activeModel, generatedSummary),
       );
       const budget = createCompactionRequestBudget({
         contextWindow: model.contextWindow,
@@ -272,10 +252,7 @@ describe("AgentSession small-context compaction", () => {
 
   it("leaves history intact when a complete tool-call/result tail cannot fit", async () => {
     const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { reserveTokens: 1_024, keepRecentTokens: 1 },
-      retry: { enabled: false },
-    });
+    const settingsManager = smallSettings();
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage(makeUserMessage("Read the large archive.", 1));
     sessionManager.appendMessage(
@@ -292,14 +269,9 @@ describe("AgentSession small-context compaction", () => {
         "toolUse",
       ),
     );
-    sessionManager.appendMessage({
-      role: "toolResult",
-      toolCallId: "large-read",
-      toolName: "read",
-      content: [{ type: "text", text: "Large archive output. ".repeat(1_000) }],
-      isError: false,
-      timestamp: 3,
-    });
+    sessionManager.appendMessage(
+      makeTextToolResult("large-read", "read", "Large archive output. ".repeat(1_000), false, 3),
+    );
     const { session } = await createTestSession({ model, settingsManager, sessionManager });
     const before = structuredClone(sessionManager.getBranch());
     const budget = createCompactionRequestBudget({
@@ -324,9 +296,7 @@ describe("AgentSession small-context compaction", () => {
     async (mode) => {
       const sessionManager = SessionManager.inMemory();
       sessionManager.appendMessage({ role: "user", content: "Earlier request", timestamp: 1 });
-      sessionManager.appendMessage(
-        createAssistant(testModel, [{ type: "text", text: "Earlier answer" }], "stop"),
-      );
+      sessionManager.appendMessage(createAssistant(testModel, "Earlier answer", "stop"));
       const pending = { role: "user" as const, content: "Approved current input", timestamp: 3 };
       const pendingId = sessionManager.appendMessage(pending);
       const carrierId = sessionManager.appendCustomMessageEntry(
@@ -339,22 +309,15 @@ describe("AgentSession small-context compaction", () => {
         settingsManager: SettingsManager.inMemory({
           compaction: { keepRecentTokens: 1, reserveTokens: 1_024 },
         }),
-        resourceLoader: createResourceLoader(
-          new Map([
-            [
-              "session_before_compact",
-              [
-                async () => ({
-                  compaction: {
-                    summary: "Earlier request answered.",
-                    firstKeptEntryId: mode === "drop" ? carrierId : pendingId,
-                    tokensBefore: 100,
-                  },
-                }),
-              ],
-            ],
-          ]),
-        ),
+        resourceLoader: await createResourceLoader((api) => {
+          api.on("session_before_compact", async () => ({
+            compaction: {
+              summary: "Earlier request answered.",
+              firstKeptEntryId: mode === "drop" ? carrierId : pendingId,
+              tokensBefore: 100,
+            },
+          }));
+        }),
       });
       const before = structuredClone(sessionManager.getBranch());
       const work = session[agentSessionAutomaticCompaction](undefined, undefined, undefined, {
@@ -404,10 +367,7 @@ describe("AgentSession small-context compaction", () => {
       model,
       settingsManager,
       sessionManager,
-      resourceLoader: {
-        ...createResourceLoader(),
-        getSystemPrompt: () => "Preserve project requirements.",
-      },
+      systemPrompt: "Preserve project requirements.",
     });
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
@@ -446,11 +406,7 @@ describe("AgentSession small-context compaction", () => {
   });
   it("keeps a fresh 32K conversation intact and compacts growing history within summary headroom", async () => {
     const model = { ...testModel, contextWindow: 32_768, maxTokens: 8_192 };
-    const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });
-    applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      contextTokenBudget: model.contextWindow,
-    });
+    const settingsManager = configuredSettings(model);
     const sessionManager = SessionManager.inMemory();
     const { session } = await createTestSession({ model, settingsManager, sessionManager });
     const summaryBudgets: number[] = [];
@@ -461,53 +417,29 @@ describe("AgentSession small-context compaction", () => {
     streamMocks.streamSimple.mockImplementation(
       (activeModel: Model, context: Context, options?: SimpleStreamOptions) => {
         const userMessage = context.messages.findLast((message) => message.role === "user");
-        const userText =
-          typeof userMessage?.content === "string"
-            ? userMessage.content
-            : userMessage?.content
-                .map((block) => (block.type === "text" ? block.text : ""))
-                .join("");
+        const userText = userMessage && extractTextContent(userMessage.content);
         if (userText !== firstPrompt && userText !== secondPrompt) {
           expect(options?.maxTokens).toBeTypeOf("number");
           summaryBudgets.push(options!.maxTokens!);
-          return createAssistantResultStream(
-            createAssistant(
-              activeModel,
-              [
-                {
-                  type: "text",
-                  text: userText?.includes("blue buttons")
-                    ? "The project uses blue buttons."
-                    : "Preserve button contrast in the accessibility review.",
-                },
-              ],
-              "stop",
-              100,
-            ),
+          return textStream(
+            activeModel,
+            userText?.includes("blue buttons")
+              ? "The project uses blue buttons."
+              : "Preserve button contrast in the accessibility review.",
+            "stop",
+            100,
           );
         }
         userTurns += 1;
-        return createAssistantResultStream(
-          createAssistant(
-            activeModel,
-            [
-              {
-                type: "text",
-                text: userTurns === 1 ? firstAnswer : "Completed the accessibility review.",
-              },
-            ],
-            "stop",
-            userTurns === 1 ? 12_824 : 24_577,
-          ),
+        return textStream(
+          activeModel,
+          userTurns === 1 ? firstAnswer : "Completed the accessibility review.",
+          "stop",
+          userTurns === 1 ? 12_824 : 24_577,
         );
       },
     );
-    const compactionEvents: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
-    session.subscribe((event) => {
-      if (event.type === "compaction_end") {
-        compactionEvents.push(event);
-      }
-    });
+    const compactionEvents = collectCompactionEnds(session);
 
     await session.prompt(firstPrompt);
     expect(compactionEvents).toHaveLength(0);
@@ -550,18 +482,14 @@ describe("AgentSession small-context compaction", () => {
     "fits the complete foreground request after automatic compaction at $contextWindow tokens",
     async ({ contextWindow, systemRows, toolRows, historyRows, growthRows, summaryRows }) => {
       const model = { ...testModel, contextWindow, maxTokens: Math.floor(contextWindow / 4) };
-      const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });
-      applyAgentCompactionSettingsFromConfig({
-        settingsManager,
-        contextTokenBudget: model.contextWindow,
-      });
+      const settingsManager = configuredSettings(model);
       const systemPrompt = "Follow the project conventions and preserve user requirements. ".repeat(
         systemRows,
       );
       const { session } = await createTestSession({
         model,
         settingsManager,
-        resourceLoader: { ...createResourceLoader(), getSystemPrompt: () => systemPrompt },
+        systemPrompt,
         customTools: [
           {
             name: "lookup_fixture",
@@ -584,18 +512,10 @@ describe("AgentSession small-context compaction", () => {
           summaryRows,
         );
       const requests: Array<{ prompt: string; tokens: number }> = [];
-      const compactions: AgentSessionEvent[] = [];
-      session.subscribe((event) => {
-        if (event.type === "compaction_end") {
-          compactions.push(event);
-        }
-      });
+      const compactions = collectCompactionEnds(session);
       streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
         const user = context.messages.findLast((message) => message.role === "user");
-        const prompt =
-          typeof user?.content === "string"
-            ? user.content
-            : user?.content.map((block) => (block.type === "text" ? block.text : "")).join("");
+        const prompt = user && extractTextContent(user.content);
         const foreground = prompt === first || prompt === growth || prompt === continuation;
         // This fake provider counts its complete wire representation, independently of the cut planner.
         const wire = JSON.stringify({
@@ -616,12 +536,7 @@ describe("AgentSession small-context compaction", () => {
           : prompt === first
             ? firstAnswer
             : "The button color is blue.";
-        const response = createAssistant(
-          activeModel,
-          [{ type: "text", text }],
-          "stop",
-          inputTokens,
-        );
+        const response = createAssistant(activeModel, text, "stop", inputTokens);
         response.usage.output = Math.ceil(text.length / 4);
         response.usage.totalTokens = inputTokens + response.usage.output;
         response.usage.contextUsage = {

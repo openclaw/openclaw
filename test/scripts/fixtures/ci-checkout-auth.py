@@ -299,18 +299,15 @@ elif phase == "redirect":
             with subprocess.Popen([sys.executable, "-I", "-S", owner, "--policy", str(selected_policy),
                                    remote, token, phase], cwd=workspace, env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as child:
+                # The managed fixture caller owns the lifetime deadline. Keep the
+                # server/root alive until this owner and its output pipes settle.
                 try:
-                    stdout, stderr = child.communicate(timeout=25)
+                    stdout, stderr = child.communicate()
                 except BaseException:
                     # The Git owner must drain its separately owned Git groups
                     # before this fixture closes the server or removes its root.
                     child.terminate()
-                    try:
-                        child.communicate(timeout=12)
-                    except subprocess.TimeoutExpired:
-                        child.kill()
-                        child.wait()
-                        raise RuntimeError("checkout owner did not finish cancellation cleanup")
+                    child.communicate()
                     raise
                 return subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
 

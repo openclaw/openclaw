@@ -101,11 +101,7 @@ final class DisabledUpdaterController: UpdaterProviding {
 @MainActor
 @Observable
 final class UpdateStatus {
-    var isUpdateReady: Bool
-
-    init(isUpdateReady: Bool = false) {
-        self.isUpdateReady = isUpdateReady
-    }
+    var isUpdateReady = false
 }
 
 #if canImport(Sparkle)
@@ -209,14 +205,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         forUpdate _: SUAppcastItem,
         state: SPUUserUpdateState)
     {
-        switch choice {
-        case .install, .skip:
-            self.updateStatus.isUpdateReady = false
-        case .dismiss:
-            self.updateStatus.isUpdateReady = (state.stage == .downloaded)
-        @unknown default:
-            self.updateStatus.isUpdateReady = false
-        }
+        self.updateStatus.isUpdateReady = choice == .dismiss && state.stage == .downloaded
     }
 }
 
@@ -287,14 +276,18 @@ private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
         return false
     }
 
-    if let summary = SecCertificateCopySubjectSummary(leaf) as String? {
-        return summary.hasPrefix("Developer ID Application:")
-    }
-    return false
+    return (SecCertificateCopySubjectSummary(leaf) as String?)?.hasPrefix("Developer ID Application:") == true
 }
 
 @MainActor
 func makeUpdaterController() -> UpdaterProviding {
+    guard AppLaunchRuntimePlan.current.allowsUpdater else {
+        if !AppLaunchRuntimePlan.current.allowsActivation {
+            Logger(subsystem: "ai.openclaw", category: "app").info(
+                "Update dialogs deferred by --no-activate; relaunch without the flag to check for updates.")
+        }
+        return DisabledUpdaterController()
+    }
     guard AppProfile.current.validationError == nil, !AppProfile.current.isActive else {
         return DisabledUpdaterController()
     }

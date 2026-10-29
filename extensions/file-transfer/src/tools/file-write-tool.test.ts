@@ -1,4 +1,3 @@
-// File Transfer tests cover file write tool plugin behavior.
 import crypto from "node:crypto";
 import {
   callGatewayTool,
@@ -17,89 +16,59 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   resolveNodeIdFromList: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/media-store", () => ({
-  readMediaBuffer: vi.fn(),
-}));
+// mock-isolation: File-write fixtures must not read the operator's media store.
+vi.mock("openclaw/plugin-sdk/media-store", () => ({ readMediaBuffer: vi.fn() }));
+// mock-isolation: Record audit calls without opening the durable audit database.
+vi.mock("../shared/audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
 
-vi.mock("../shared/audit.js", () => ({
-  appendFileTransferAudit: vi.fn(),
-}));
+function execute(input: { contentBase64?: string; sourceMediaId?: string }) {
+  return createFileWriteTool().execute("tool-call-1", {
+    node: "node-1",
+    path: "/tmp/out.bin",
+    ...input,
+  });
+}
+
+function prepareWrite(size: number, sha256 = "a".repeat(64)) {
+  vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node 1" }]);
+  vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
+  vi.mocked(callGatewayTool).mockResolvedValue({
+    payload: { ok: true, path: "/tmp/out.bin", size, sha256, overwritten: false },
+  });
+}
 
 describe("file_write tool", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
-  it("rejects malformed inline base64 before invoking the node", async () => {
-    const tool = createFileWriteTool();
-
-    await expect(
-      tool.execute("tool-call-1", {
-        node: "node-1",
-        path: "/tmp/out.txt",
-        contentBase64: "AAA@@@",
-      }),
-    ).rejects.toThrow("contentBase64 is not valid base64");
-
-    expect(callGatewayTool).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["inline", "AAA@@@"],
+    ["whitespace-heavy", " ".repeat(1024 * 1024)],
+  ])(
+    "rejects malformed %s base64 without decoding or dispatching",
+    async (_name, contentBase64) => {
+      const bufferFrom = vi.spyOn(Buffer, "from");
+      await expect(execute({ contentBase64 })).rejects.toThrow("contentBase64 is not valid base64");
+      expect(bufferFrom).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects oversized inline base64 before invoking the node", async () => {
-    const tool = createFileWriteTool();
     const encodedLength = Math.ceil(((FILE_WRITE_HARD_MAX_BYTES + 1) * 4) / 3);
-    const contentBase64 = "A".repeat(encodedLength);
-
-    await expect(
-      tool.execute("tool-call-1", {
-        node: "node-1",
-        path: "/tmp/out.bin",
-        contentBase64,
-      }),
-    ).rejects.toThrow(
+    await expect(execute({ contentBase64: "A".repeat(encodedLength) })).rejects.toThrow(
       `decoded content is ${FILE_WRITE_HARD_MAX_BYTES + 1} bytes; maximum is ${FILE_WRITE_HARD_MAX_BYTES} bytes (${humanSize(FILE_WRITE_HARD_MAX_BYTES)})`,
     );
 
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("rejects whitespace-heavy malformed input without decoding or dispatching", async () => {
-    const bufferFrom = vi.spyOn(Buffer, "from");
-    const tool = createFileWriteTool();
-
-    await expect(
-      tool.execute("tool-call-1", {
-        node: "node-1",
-        path: "/tmp/out.bin",
-        contentBase64: " ".repeat(1024 * 1024),
-      }),
-    ).rejects.toThrow("contentBase64 is not valid base64");
-
-    expect(bufferFrom).not.toHaveBeenCalled();
-    expect(callGatewayTool).not.toHaveBeenCalled();
-  });
-
   it("accepts exactly 16 MiB of inline data", async () => {
-    vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node 1" }]);
-    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
-    vi.mocked(callGatewayTool).mockResolvedValue({
-      payload: {
-        ok: true,
-        path: "/tmp/out.bin",
-        size: FILE_WRITE_HARD_MAX_BYTES,
-        sha256: "a".repeat(64),
-        overwritten: false,
-      },
-    });
-    const tool = createFileWriteTool();
+    prepareWrite(FILE_WRITE_HARD_MAX_BYTES);
     const contentBase64 = Buffer.alloc(FILE_WRITE_HARD_MAX_BYTES).toString("base64");
 
-    await expect(
-      tool.execute("tool-call-1", {
-        node: "node-1",
-        path: "/tmp/out.bin",
-        contentBase64,
-      }),
-    ).resolves.toMatchObject({ details: { size: FILE_WRITE_HARD_MAX_BYTES } });
+    await expect(execute({ contentBase64 })).resolves.toMatchObject({
+      details: { size: FILE_WRITE_HARD_MAX_BYTES },
+    });
 
     expect(callGatewayTool).toHaveBeenCalledOnce();
   });
@@ -112,23 +81,8 @@ describe("file_write tool", () => {
       path: "/gateway/media/tool-file-transfer/media-1.bin",
       size: buffer.byteLength,
     });
-    vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node 1" }]);
-    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
-    vi.mocked(callGatewayTool).mockResolvedValue({
-      payload: {
-        ok: true,
-        path: "/tmp/out.bin",
-        size: buffer.byteLength,
-        sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
-        overwritten: false,
-      },
-    });
-
-    const result = await createFileWriteTool().execute("tool-call-1", {
-      node: "node-1",
-      path: "/tmp/out.bin",
-      sourceMediaId: "media-1",
-    });
+    prepareWrite(buffer.byteLength, crypto.createHash("sha256").update(buffer).digest("hex"));
+    const result = await execute({ sourceMediaId: "media-1" });
 
     expect(readMediaBuffer).toHaveBeenCalledWith(
       "media-1",

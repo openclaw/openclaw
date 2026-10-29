@@ -1,4 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs/promises";
+import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
+import { clearRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/store.js";
 import { recordAgentCleanupFailure } from "../../agents/run-cleanup-timeout.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -8,9 +11,27 @@ import {
   getAsyncWorkSignal,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { redactStatusSecrets } from "../status-all/format.js";
 
 const log = createSubsystemLogger("models/probe");
+
+/** Keep private credential files until their database and registration have settled. */
+export async function disposeAuthProbeDirectory(
+  ownedDir: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<void> {
+  clearRuntimeAuthProfileStoreSnapshot(ownedDir);
+  try {
+    await disposeOpenClawAgentDatabaseByPath(resolveAuthProfileDatabasePath(ownedDir), { env });
+  } catch (cause) {
+    throw new Error(
+      `Auth probe database cleanup failed; retained ${ownedDir}: ${formatErrorMessage(cause)}`,
+      { cause },
+    );
+  }
+  await fs.rm(ownedDir, { recursive: true, force: true });
+}
 
 /** Probe-owned files and locks follow actual work without extending run admission. */
 export async function createAuthProbeWork(signal?: AbortSignal) {
@@ -67,7 +88,7 @@ export async function createAuthProbeWork(signal?: AbortSignal) {
       }
       // The reported probe can return while its caller still owns this physical cleanup.
       void finish().catch((error: unknown) => {
-        log.warn(`Auth probe cleanup failed: ${redactStatusSecrets(formatErrorMessage(error))}`);
+        log.warn(`Auth check cleanup failed: ${redactStatusSecrets(formatErrorMessage(error))}`);
       });
     },
   };

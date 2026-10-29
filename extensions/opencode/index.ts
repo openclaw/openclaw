@@ -1,4 +1,9 @@
-// Opencode plugin entrypoint registers its OpenClaw integration.
+import type { ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
+import {
+  describeImageWithModelPayloadTransform,
+  describeImagesWithModelPayloadTransform,
+  type MediaUnderstandingProvider,
+} from "openclaw/plugin-sdk/media-understanding";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
@@ -6,9 +11,10 @@ import {
   buildProviderReplayFamilyHooks,
   matchesExactOrPrefix,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { createOpenAICompatibleCompletionsThinkingOffWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyOpencodeZenProviderConfig, OPENCODE_ZEN_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -27,12 +33,39 @@ import { wrapOpencodeProviderStream } from "./stream.js";
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
 
+const stripDisabledResponsesReasoning: ProviderStreamOptions["onPayload"] = (payload) => {
+  if (!isRecord(payload)) {
+    return;
+  }
+  const reasoning = payload.reasoning;
+  if (reasoning === "none" || (isRecord(reasoning) && reasoning.effort === "none")) {
+    delete payload.reasoning;
+  }
+};
+
+const opencodeMediaUnderstandingProvider: MediaUnderstandingProvider = {
+  id: "opencode",
+  capabilities: ["image"],
+  defaultModels: {
+    image: "minimax-m3",
+  },
+  describeImage: (request) =>
+    describeImageWithModelPayloadTransform(request, stripDisabledResponsesReasoning),
+  describeImages: (request) =>
+    describeImagesWithModelPayloadTransform(request, stripDisabledResponsesReasoning),
+};
+
 function isModernOpencodeModel(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
   if (lower.endsWith("-free") || lower === "alpha-glm-4.7") {
     return false;
   }
   return !matchesExactOrPrefix(lower, MINIMAX_MODERN_MODEL_MATCHERS);
+}
+
+function normalizeZenBaseUrl<T extends { api?: string | null; baseUrl?: string }>(value: T) {
+  const baseUrl = normalizeOpencodeZenBaseUrl(value);
+  return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
 }
 
 export default defineSingleProviderPluginEntry({
@@ -65,33 +98,9 @@ export default defineSingleProviderPluginEntry({
       ].join("\n"),
       noteTitle: "OpenCode",
     },
-    normalizeConfig: ({ providerConfig }) => {
-      const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({
-        api: providerConfig.api,
-        baseUrl: providerConfig.baseUrl,
-      });
-      return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-        ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-        : undefined;
-    },
-    normalizeResolvedModel: ({ model }) => {
-      const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({
-        api: model.api,
-        baseUrl: model.baseUrl,
-      });
-      return normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl
-        ? { ...model, baseUrl: normalizedBaseUrl }
-        : undefined;
-    },
-    normalizeTransport: ({ api: apiLocal, baseUrl }) => {
-      const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({ api: apiLocal, baseUrl });
-      return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
-        ? {
-            api: apiLocal,
-            baseUrl: normalizedBaseUrl,
-          }
-        : undefined;
-    },
+    normalizeConfig: ({ providerConfig }) => normalizeZenBaseUrl(providerConfig),
+    normalizeResolvedModel: ({ model }) => normalizeZenBaseUrl(model),
+    normalizeTransport: ({ api, baseUrl }) => normalizeZenBaseUrl({ api, baseUrl }),
     resolveDynamicModel: ({ modelId }) => resolveOpencodeZenModel(modelId),
     prepareDynamicModel: async (ctx) => {
       const profileProvider = ctx.authProfileId
@@ -149,21 +158,16 @@ export default defineSingleProviderPluginEntry({
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
     resolveThinkingProfile: resolveOpencodeThinkingProfile,
-    wrapStreamFn: (ctx) => {
-      if (!ctx.streamFn) {
-        return undefined;
-      }
-      const baseStreamFn = ctx.streamFn;
-      const thinkingOff = createOpenAICompatibleCompletionsThinkingOffWrapper(
-        baseStreamFn,
-        ctx.thinkingLevel,
-      );
-      const thinkingStreamFn: typeof baseStreamFn = (model, context, options) =>
-        model.provider === PROVIDER_ID && model.id === "kimi-k3"
-          ? thinkingOff(model, context, options)
-          : baseStreamFn(model, context, options);
-      return wrapOpencodeProviderStream({ ...ctx, streamFn: thinkingStreamFn });
-    },
+    classifyFailoverReason: ({ status, errorType, code, errorMessage }) =>
+      status === 403 &&
+      (errorType === "FreeTierError" ||
+        code === "FreeTierError" ||
+        /\bFreeTierError\b|OpenCode's free tier can only be used from within OpenCode/.test(
+          errorMessage,
+        ))
+        ? "model_not_found"
+        : undefined,
+    wrapStreamFn: wrapOpencodeProviderStream,
   },
   register(api) {
     api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);

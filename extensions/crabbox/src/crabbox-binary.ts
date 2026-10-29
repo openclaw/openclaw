@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
+import { executableFileExistsSync } from "openclaw/plugin-sdk/path-existence-runtime";
 
 type CrabboxBinaryOptions = {
   cwd?: string;
@@ -9,18 +9,6 @@ type CrabboxBinaryOptions = {
   pathEnv?: string;
   platform?: NodeJS.Platform;
 };
-
-function isExecutableFile(candidate: string, platform: NodeJS.Platform): boolean {
-  try {
-    if (!fs.statSync(candidate).isFile()) {
-      return false;
-    }
-    fs.accessSync(candidate, platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function binaryCandidates(base: string, platform: NodeJS.Platform): string[] {
   return platform === "win32"
@@ -35,7 +23,7 @@ export function resolveCrabboxBinary(params: CrabboxBinaryOptions): string {
 export function findCrabboxBinary(params: CrabboxBinaryOptions): string | undefined {
   const platform = params.platform ?? process.platform;
   const isExecutable =
-    params.isExecutable ?? ((candidate) => isExecutableFile(candidate, platform));
+    params.isExecutable ?? ((candidate) => executableFileExistsSync(candidate, platform));
   if (params.explicit) {
     const candidate = params.cwd ? path.resolve(params.cwd, params.explicit) : params.explicit;
     return isExecutable(candidate) ? params.explicit : undefined;

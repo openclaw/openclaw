@@ -163,9 +163,7 @@ export class PendingSessionPlacementRecoveryState {
       sessionKey,
       messageId: generateUUID(),
       message: params.message,
-      ...(params.mentions?.length
-        ? { mentions: params.mentions.map((mention) => ({ ...mention })) }
-        : {}),
+      ...(params.mentions?.length ? { mentions: params.mentions } : {}),
       attachments: params.attachments,
       target: params.target,
       agentId: params.agentId,
@@ -214,18 +212,14 @@ export class PendingSessionPlacementRecoveryState {
       sessionKey,
       messageId: this.messageId,
       message: this.message,
-      ...(this.mentions?.length
-        ? { mentions: this.mentions.map((mention) => ({ ...mention })) }
-        : {}),
-      attachments: this.attachments ? [...this.attachments] : undefined,
-      target: { ...this.target },
+      ...(this.mentions?.length ? { mentions: this.mentions } : {}),
+      attachments: this.attachments,
+      target: this.target,
       agentId: this.agentId,
       gatewayUrl: this.gatewayUrl,
       recoveryScope: this.recoveryScope,
       phase,
-      ...(phase === "creating" && this.createParams
-        ? { createParams: { ...this.createParams } }
-        : {}),
+      ...(phase === "creating" && this.createParams ? { createParams: this.createParams } : {}),
     };
   }
 
@@ -242,7 +236,7 @@ export class PendingSessionPlacementRecoveryState {
     this.message = recovery.message;
     this.mentions = recovery.mentions;
     this.attachments = recovery.attachments;
-    this.target = { ...recovery.target };
+    this.target = recovery.target;
     this.agentId = recovery.agentId;
     this.gatewayUrl = recovery.gatewayUrl;
     this.recoveryScope = recovery.recoveryScope;

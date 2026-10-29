@@ -9,6 +9,8 @@ export type StartupInputBuffer = BoundedBuffer<string>;
 export function createTerminalStartupInput(
   connection: Pick<TerminalConnection, "input" | "resize">,
   getSessionId: () => string | undefined,
+  captureDeliveryError: () => (error: unknown) => void,
+  canSend: () => boolean,
 ) {
   // Preserve a valid startup prefix: after one drop, all later chunks stay dropped.
   const buffer = new BoundedBuffer<string>(
@@ -19,18 +21,23 @@ export function createTerminalStartupInput(
   return {
     buffer,
     onData: (bytes: Uint8Array) => {
+      if (!canSend()) {
+        return;
+      }
       const data = TERMINAL_INPUT_DECODER.decode(bytes);
       const sessionId = getSessionId();
       if (sessionId) {
-        void connection.input(sessionId, data);
+        const onError = captureDeliveryError();
+        void connection.input(sessionId, data).catch(onError);
       } else {
         buffer.push(data);
       }
     },
     onResize: ({ columns, rows }: { columns: number; rows: number }) => {
       const sessionId = getSessionId();
-      if (sessionId) {
-        void connection.resize(sessionId, columns, rows);
+      if (sessionId && canSend()) {
+        const onError = captureDeliveryError();
+        void connection.resize(sessionId, columns, rows).catch(onError);
       }
     },
   };

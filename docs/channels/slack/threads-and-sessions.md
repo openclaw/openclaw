@@ -22,8 +22,9 @@ How Slack conversations map to OpenClaw sessions, and where replies land.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable). Room thread seeding is also bounded by `historyLimit`.
 - `channels.slack.implicitMentions.replyToBot` controls whether a reply to the bot's own message bypasses mention gating (default `true`).
-- `channels.slack.implicitMentions.threadParticipation` controls whether follow-ups in a thread where the bot has replied bypass mention gating (default `true`). Set it to `false` to require a new explicit mention in those follow-ups. `openclaw doctor --fix` migrates the former `channels.slack.thread.requireExplicitMention` key to this positive canonical flag.
+- `channels.slack.implicitMentions.threadParticipation` controls whether follow-ups in a thread where the bot has replied bypass mention gating (default `true`). Set it to `false` to require a new explicit mention in those follow-ups. `openclaw doctor --fix` migrates the former `channels.slack.thread.requireExplicitMention` key to this positive flag.
 - Account overrides live at `channels.slack.accounts.<id>.implicitMentions`; shared defaults live at `channels.defaults.implicitMentions`.
+- `requireMentionInBotThreads` overrides mention gating in threads started by this bot: `false` allows unmentioned replies; `true` requires a mention regardless of implicit reply or participation signals. Configure it at the Slack root, account, or channel scope. Omit it to retain the implicit-mention behavior above. Threads started by other people keep their normal policy. See [bot-created thread setup](/channels/slack/access-control#bot-created-threads).
 
 Reply threading controls:
 
@@ -37,6 +38,8 @@ Manual reply tags are supported:
 - `[[reply_to_current]]`
 - `[[reply_to:<id>]]`
 
+When reply threading is enabled, streaming replies honor the final answer's explicit target. If that target differs from the preview's thread, OpenClaw sends the final answer separately rather than editing or appending it in the old thread.
+
 For explicit Slack thread replies from the `message` tool, set `replyBroadcast: true` with `action: "send"` and `threadId` or `replyTo` to ask Slack to also broadcast the thread reply to the parent channel. This maps to Slack's `chat.postMessage` `reply_broadcast` flag and is only supported for text or Block Kit sends, not media uploads.
 
 When a `message` tool call runs inside a Slack thread and targets the same channel, OpenClaw normally inherits the current Slack thread according to the effective account, chat-type, or per-channel `replyToMode`. Automatic replies and same-channel `send` or `upload-file` calls use the same per-channel override. Set `topLevel: true` on `action: "send"` or `action: "upload-file"` to force a new parent-channel message instead. `threadId: null` is accepted as the same top-level opt-out.
@@ -44,6 +47,8 @@ When a `message` tool call runs inside a Slack thread and targets the same chann
 <Note>
 `replyToMode="off"` disables optional outbound Slack reply threading, including explicit `[[reply_to_*]]` tags. Agent View and Assistant View are Slack-managed threaded experiences, so their replies and status remain on the visible root regardless of this setting. It does not flatten other inbound Slack thread sessions. This differs from Telegram, where explicit tags are still honored in `"off"` mode. Slack threads hide messages from the channel while Telegram replies stay visible inline.
 </Note>
+
+Delayed `sessions_send` completions retain the request's admitted destination. With `replyToMode: "off"`, a top-level request stays top-level; the triggering message timestamp is only a reply anchor, not a thread root. Requests made inside a genuine Slack thread retain that thread.
 
 ### Agent View DMs
 
@@ -86,6 +91,10 @@ debounced source messages, and later messages are excluded from the recent windo
 Initial thread history uses its existing rendering path once. With
 `thread.historyScope: "channel"`, the recent window uses the channel timeline
 while initial thread seeding remains separate.
+
+When the bounded session transcript confirms a completed answer, unchanged
+requests with matching message IDs are not quoted again. Edits, unseen discussion,
+unfinished requests, and attachments remain eligible; reply targets stay separate.
 
 Thread-scoped history reads only that thread. Slack returns thread replies oldest
 first, so automatic thread recovery stops after three pages. If that cannot reach

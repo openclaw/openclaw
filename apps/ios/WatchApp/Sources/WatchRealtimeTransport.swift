@@ -85,7 +85,6 @@ final class WatchRealtimeTransport: @unchecked Sendable {
     private var remoteDestinations: Set<NWEndpoint> = []
     private var failedRoutes: Set<Route> = []
     private var activeRoute: Route?
-    private var generation: UInt64 = 0
     private var pendingAnswer: CheckedContinuation<Void, Error>?
 
     init(onEvent: @escaping @Sendable (WatchRealtimeMediaEvent) -> Void) {
@@ -134,7 +133,6 @@ final class WatchRealtimeTransport: @unchecked Sendable {
                         }
                         let remotes = try self.remoteAddresses()
                         self.pendingAnswer = continuation
-                        let generation = self.generation
                         // getaddrinfo can block. Cancellation joins the RTC queue, never DNS.
                         DispatchQueue.global(qos: .utility).async { [weak self] in
                             var resolved: [RemoteAddress] = []
@@ -145,7 +143,7 @@ final class WatchRealtimeTransport: @unchecked Sendable {
                                     index: index, original: remote, addresses: Self.resolveAddress(remote)))
                             }
                             self?.queue.async { [weak self, resolved] in
-                                guard let self, self.generation == generation, self.pendingAnswer != nil else { return }
+                                guard let self, self.pendingAnswer != nil else { return }
                                 do {
                                     try self.discoverFlows(resolved)
                                     let completion = try self.cancellationLock.withLock {
@@ -200,7 +198,6 @@ final class WatchRealtimeTransport: @unchecked Sendable {
         try self.cancellationLock.withLock {
             guard !self.cancelled else { throw CancellationError() }
             self.started = true
-            self.generation &+= 1
             guard let rtc = openclaw_rtc_create() else {
                 throw WatchRealtimeMediaError.unavailable(String(localized: "Unable to initialize secure voice."))
             }
@@ -346,10 +343,9 @@ final class WatchRealtimeTransport: @unchecked Sendable {
             return
         }
         let timer = DispatchSource.makeTimerSource(queue: self.queue)
-        let generation = self.generation
         timer.schedule(deadline: .now() + .milliseconds(Int(max(1, milliseconds))))
         timer.setEventHandler { [weak self] in
-            guard let self, self.generation == generation else { return }
+            guard let self else { return }
             do {
                 try self.mutate { openclaw_rtc_timeout($0) }
             } catch { self.fail(error) }
@@ -567,10 +563,8 @@ final class WatchRealtimeTransport: @unchecked Sendable {
             }
             // Never mutate the engine recursively from its Transmit drain. A shared
             // local candidate retires only after its last exact ready owner disappears.
-            let generation = self.generation
             self.queue.async {
-                guard self.generation == generation,
-                      !self.flows.values.contains(where: { $0.route?.source == route.source }),
+                guard !self.flows.values.contains(where: { $0.route?.source == route.source }),
                       self.localCandidates.remove(route.source) != nil else { return }
                 do {
                     let native = try Self.nativeAddress(route.source)
@@ -596,7 +590,6 @@ final class WatchRealtimeTransport: @unchecked Sendable {
     private func tearDown(error: Error = CancellationError()) {
         let pendingAnswer = self.pendingAnswer
         self.pendingAnswer = nil
-        self.generation &+= 1
         self.timer?.cancel()
         self.timer = nil
         self.flows.values.forEach { $0.connection.cancel() }

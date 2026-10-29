@@ -1,0 +1,70 @@
+import { randomUUID } from "node:crypto";
+import type { Server, ServerResponse } from "node:http";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
+import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
+
+export async function listenProvider(server: Server): Promise<string> {
+  return `${await listenLoopback(server)}/v1`;
+}
+
+export async function closeProvider(server: Server): Promise<void> {
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
+export function writeToolCall(
+  response: ServerResponse,
+  name: string,
+  args: Record<string, unknown>,
+  inputTokens = 10,
+  outputTokens = 2,
+): void {
+  const id = randomUUID();
+  const item = {
+    type: "function_call",
+    id: `fc_${id}`,
+    call_id: `call_${id}`,
+    name,
+    arguments: JSON.stringify(args),
+    status: "completed",
+  };
+  writeToolCallResponse(response, item, `resp_${id}`, inputTokens, outputTokens);
+}
+
+export function writeToolCallResponse(
+  response: ServerResponse,
+  item: { id: string; arguments: string },
+  responseId: string,
+  inputTokens: number,
+  outputTokens: number,
+): void {
+  writeOpenAiResponsesSse(response, [
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...item, status: "in_progress", arguments: "" },
+    },
+    {
+      type: "response.function_call_arguments.done",
+      item_id: item.id,
+      output_index: 0,
+      arguments: item.arguments,
+    },
+    { type: "response.output_item.done", output_index: 0, item },
+    {
+      type: "response.completed",
+      response: {
+        id: responseId,
+        status: "completed",
+        output: [item],
+        usage: {
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          total_tokens: inputTokens + outputTokens,
+        },
+      },
+    },
+  ]);
+}

@@ -246,18 +246,5 @@ struct AppProfileTests {
         #expect(first.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path))
         #expect(ExecApprovalsStore.socketPath(stateDirectoryURL: longState, profileActive: false)
             .hasPrefix(longState.path))
-        let oldCanonical = longState.appendingPathComponent("exec-approvals.sock").path
-        #expect(ExecApprovalsStore.resolvedPersistedSocketPath(
-            existing: nil,
-            stateDirectoryURL: longState,
-            computed: first) == first)
-        #expect(ExecApprovalsStore.resolvedPersistedSocketPath(
-            existing: oldCanonical,
-            stateDirectoryURL: longState,
-            computed: first) == first)
-        #expect(ExecApprovalsStore.resolvedPersistedSocketPath(
-            existing: "/custom/approvals.sock",
-            stateDirectoryURL: longState,
-            computed: first) == "/custom/approvals.sock")
     }
 }

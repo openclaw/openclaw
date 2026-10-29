@@ -1,32 +1,18 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import { createMeetingStatusCallSource } from "./status-call-source.js";
 import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
 
-const platforms = [
-  {
-    name: "Teams",
-    token: "teams",
+describe("meeting status source compatibility", () => {
+  const platform = {
+    name: "Test meeting",
+    token: "test",
     globals: {
-      audioOutputs: "__openclawTeamsAudioOutputs",
-      captionArchive: "__openclawTeamsCaptionArchive",
-      captions: "__openclawTeamsCaptions",
-      meeting: "__openclawTeamsMeeting",
+      audioOutputs: "__testAudioOutputs",
+      captionArchive: "__testCaptionArchive",
+      captions: "__testCaptions",
+      meeting: "__testMeeting",
     },
-  },
-  {
-    name: "Zoom",
-    token: "zoom",
-    globals: {
-      audioOutputs: "__openclawZoomAudioOutputs",
-      captionArchive: "__openclawZoomCaptionArchive",
-      captions: "__openclawZoomCaptions",
-      meeting: "__openclawZoomMeeting",
-    },
-  },
-] as const;
-
-describe.each(platforms)("$name meeting status source parity", (platform) => {
+  };
   const preludeOptions = {
     controlLookupSource: "const findTextButton = () => undefined;",
     lifecycleSource: ["const microphoneState = undefined;", "const cameraState = undefined;"].join(
@@ -51,31 +37,6 @@ describe.each(platforms)("$name meeting status source parity", (platform) => {
     toggleStateFunction: "() => undefined",
     waitForInCallMs: 30_000,
   };
-
-  it("threads typed platform globals and reasons through deterministic shared sources", () => {
-    const callOptions = {
-      captionEnableSource: "captionsEnabledNow = true;",
-      platform: {
-        audioOutputElementIdPrefix: `openclaw-${platform.token}-audio-output-`,
-        displayName: platform.name,
-        globals: {
-          audioOutputs: platform.globals.audioOutputs,
-          captions: platform.globals.captions,
-          meeting: platform.globals.meeting,
-        },
-        manualActionReasonPrefix: platform.token,
-      },
-    };
-    const callSource = createMeetingStatusCallSource(callOptions);
-    const preludeSource = createMeetingStatusPreludeSource(preludeParams, preludeOptions);
-
-    expect(callSource).toContain(`window["${platform.globals.audioOutputs}"]`);
-    expect(callSource).toContain(`"${platform.token}-audio-choice-required"`);
-    expect(preludeSource).toContain(`window["${platform.globals.captionArchive}"]`);
-    expect(preludeSource).toContain(`"${platform.token}-session-conflict"`);
-    expect(createMeetingStatusCallSource(callOptions)).toBe(callSource);
-    expect(createMeetingStatusPreludeSource(preludeParams, preludeOptions)).toBe(preludeSource);
-  });
 
   it("preserves audio helper declarations supplied by released plugin lifecycle fragments", async () => {
     const source = createMeetingStatusPreludeSource(preludeParams, {

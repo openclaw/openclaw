@@ -1,0 +1,281 @@
+import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import * as completionStore from "../agents/subagents/completion/subagent-completion-admission.store.js";
+import * as completion from "../agents/subagents/completion/subagent-completion-delivery.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "../agents/subagents/registry/subagent-registry-persistence.js";
+import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
+import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
+import {
+  enqueueClaimedSessionDelivery,
+  loadPendingSessionDelivery,
+  markSessionDeliverySettlement,
+} from "../infra/session-delivery-queue-storage.js";
+import { SESSION_DELIVERY_QUEUE_NAME } from "../infra/session-delivery-queue.records.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as sentinel from "./server-restart-sentinel.js";
+import { activateGatewayScheduledServices } from "./server-runtime-services.js";
+
+vi.mock("../sessions/session-upstream-monitor.js", () => ({
+  startSessionUpstreamMonitor: () => ({ stop() {} }),
+}));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetGatewayWorkAdmission();
+});
+
+describe("registered correlated completion recovery custody", () => {
+  it.for([
+    { change: "none", outcome: "moved-to-failed" },
+    { change: "default", outcome: "recovered" },
+    { change: "file", outcome: "recovered" },
+    { change: "successor", outcome: "recovered" },
+    { change: "default after commit", outcome: "recovered" },
+    { change: "hydration pending", outcome: "recovered" },
+  ] as const)("settles $outcome with $change ownership change", async ({ change, outcome }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      resetGatewayWorkAdmission();
+      const cfg = {
+        agents: { defaults: { heartbeat: { every: "0m" } } },
+        skills: { workshop: { autonomous: { mode: "off" as const } } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const context = captureOpenClawStateWorkerContext();
+      const now = Date.now();
+      let child = createSubagentRunRecord({
+        runId: "retained-completion",
+        childSessionKey: "agent:main:subagent:retained-completion",
+        requesterSessionKey: "agent:main:retained-requester",
+        requesterAgentId: "main",
+        createdAt: now - 20,
+        endedAt: now - 10,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "Retained result", capturedAt: now - 10 },
+        delivery: {
+          status: "in_progress",
+          disposition: "session_queued",
+          generation: 1,
+          deadlineAt: now + 60_000,
+        },
+      });
+      // This is an existing producer's durable receipt, not a new creation path.
+      const { id: queueId } = await enqueueClaimedSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: child.requesterSessionKey,
+          message: "retained completion",
+          expectedMediaUrls: ["/tmp/retained-output.png"],
+          messageId: "retained-completion-message",
+          owner: {
+            kind: "subagent_completion",
+            runId: child.runId,
+            taskId: child.runId,
+            generation: 1,
+            deadlineAt: now + 60_000,
+          },
+        },
+        0,
+        context,
+      );
+      child.delivery!.queueId = queueId;
+      const queued = expectDefined(
+        await loadPendingSessionDelivery(queueId, context),
+        "Expected the retained queue owner",
+      );
+      await markSessionDeliverySettlement(queued, outcome, context);
+      const persist = (root: string) => {
+        const database = openOpenClawStateDatabase({
+          env: { ...state.env, OPENCLAW_STATE_DIR: root },
+        });
+        writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(child)], []);
+        return database;
+      };
+      const database = persist(state.stateDir);
+      const readChild = (source = database) => readSubagentRun(source, child.runId);
+      const queueStatus = () =>
+        getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir);
+      const restore = (mergeOnly = false) =>
+        restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly });
+      const expectPendingReceipt = async () =>
+        expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
+          settlementOutcome: outcome,
+        });
+      if (change === "hydration pending") {
+        const store = await import("../state/openclaw-state-db-readonly.js");
+        const unavailable = vi
+          .spyOn(store, "executeExistingOpenClawStateRead")
+          .mockImplementationOnce(async (_options, command) => {
+            expect(command).toEqual({ type: "subagents.restore" });
+            throw new Error("registry hydration read unavailable");
+          });
+        try {
+          await expect(restore(true)).rejects.toThrow("registry hydration read unavailable");
+        } finally {
+          unavailable.mockRestore();
+        }
+      }
+      if (change !== "hydration pending") {
+        await restore();
+        child = expectDefined(subagentRuns.get(child.runId), "restored completion owner");
+      }
+      const replacementRoot = state.path("replacement");
+      const replacingSource =
+        change === "default" || change === "file" || change === "default after commit";
+      const replacement = replacingSource ? persist(replacementRoot) : undefined;
+      const before = structuredClone(child);
+      const replacementBefore = replacement && readChild(replacement);
+      const deliver = vi.spyOn(sentinel, "deliverQueuedSessionDelivery");
+      const settle = completion.settleCorrelatedSubagentDelivery;
+      const settled = vi
+        .spyOn(completion, "settleCorrelatedSubagentDelivery")
+        .mockImplementation(async (...args) => {
+          if (change === "default") {
+            vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
+          } else if (change === "file") {
+            await closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+            await closeOpenClawStateDatabaseByPathAsync(replacement!.path);
+            await fs.rename(
+              context.admission.databasePath,
+              `${context.admission.databasePath}.retired`,
+            );
+            await fs.rename(replacement!.path, context.admission.databasePath);
+          }
+          return settle(...args);
+        });
+      let successor: typeof child | undefined;
+      if (change === "successor" || change === "default after commit") {
+        const write = completionStore.settleSubagentCompletionDelivery;
+        let changed = false;
+        vi.spyOn(completionStore, "settleSubagentCompletionDelivery").mockImplementation(
+          async (...args) => {
+            await write(...args);
+            if (changed) {
+              return;
+            }
+            changed = true;
+            if (change === "successor") {
+              await mutateSubagentRuns([child.runId], (rows) => ({
+                value: undefined,
+                postimages: new Map([
+                  [
+                    child.runId,
+                    {
+                      ...expectDefined(rows.get(child.runId), "committed delivery owner"),
+                      generation: 2,
+                    },
+                  ],
+                ]),
+              }));
+              successor = subagentRuns.get(child.runId);
+              return;
+            }
+            // Replace the source after the commit, before the callback releases custody.
+            vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
+          },
+        );
+      }
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const startServices = () =>
+        activateGatewayScheduledServices({
+          scheduler,
+          minimalTestGateway: false,
+          cfgAtStart: cfg,
+          deps: {},
+          sessionDeliveryRecoveryMaxEnqueuedAt: queued.enqueuedAt,
+          log: { ...log, child: () => log },
+        });
+      let services = startServices();
+      const replaySettlement = async () => {
+        await services.stopScheduledServices();
+        services = startServices();
+        await clock.advanceBy(1_250);
+        await services.stopDeliveryRecovery();
+        expect(settled).toHaveBeenCalledTimes(2);
+        expect(queueStatus()).toBe("completed");
+        expect(deliver).not.toHaveBeenCalled();
+      };
+      try {
+        await clock.advanceBy(1_250);
+        await services.stopDeliveryRecovery();
+        expect(settled).toHaveBeenCalledOnce();
+        expect(deliver).not.toHaveBeenCalled();
+        if (change === "hydration pending") {
+          expect(subagentRuns.has(child.runId)).toBe(false);
+          expect(readChild()?.delivery?.status).toBe("in_progress");
+          await expectPendingReceipt();
+          expect(await restore(true)).toBe(1);
+          await replaySettlement();
+          expect(readChild()?.delivery?.status).toBe("delivered");
+        } else if (change === "default after commit") {
+          const committed = readChild();
+          expect(committed?.delivery?.status).toBe("delivered");
+          await expectPendingReceipt();
+          if (replacement) {
+            expect(readChild(replacement)).toEqual(replacementBefore);
+          }
+          database.db.exec(
+            "CREATE TRIGGER reject_settlement_rewrite BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'must reconcile committed delivery without rewriting'); END",
+          );
+          vi.unstubAllEnvs();
+          // Reconstitute the live owner through canonical restoration, without a receipt closure.
+          expect(await restore()).toBe(1);
+          await replaySettlement();
+          expect(readChild()).toEqual(committed);
+        } else if (replacingSource) {
+          const target =
+            change === "file" ? openOpenClawStateDatabase({ path: database.path }) : replacement!;
+          expect(readChild(target)).toEqual(replacementBefore);
+          expect(subagentRuns.get(child.runId)).toBe(child);
+          expect(child).toEqual(before);
+          expect(log.error).toHaveBeenCalledWith(
+            expect.stringContaining("settled callback failed"),
+          );
+          if (change === "default") {
+            await expectPendingReceipt();
+            expect(readChild()?.delivery?.status).toBe("in_progress");
+          }
+        } else {
+          expect(readChild()?.delivery?.status).toBe(
+            outcome === "recovered" ? "delivered" : "suspended",
+          );
+          expect(queueStatus()).toBe(outcome === "recovered" ? "completed" : "failed");
+          if (change === "successor") {
+            expect(successor).toBeDefined();
+            expect(subagentRuns.get(child.runId)).toBe(successor);
+          }
+        }
+      } finally {
+        await services.stopDeliveryRecovery();
+        await services.stopScheduledServices();
+        await scheduler.stop();
+        subagentRuns.delete(child.runId);
+        vi.unstubAllEnvs();
+        if (replacement) {
+          await closeOpenClawStateDatabaseByPathAsync(replacement.path);
+        }
+      }
+    });
+  });
+});

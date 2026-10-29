@@ -1,0 +1,218 @@
+set -uo pipefail
+
+names=()
+pids=()
+logs=()
+declare -A results=(
+  ["channels"]="skipped"
+  ["core-support-boundary"]="skipped"
+  ["discord-component-attachments"]="skipped"
+  ["doctor-plugin-index"]="skipped"
+  ["gateway-watch"]="skipped"
+  ["plugin-singleton"]="skipped"
+  ["sqlite-session-lifecycle"]="skipped"
+  ["startup-memory"]="skipped"
+  ["tui-pty"]="skipped"
+)
+
+start_check() {
+  local name="$1"
+  shift
+  local log="${RUNNER_TEMP}/${name}.log"
+  names+=("$name")
+  logs+=("$log")
+  echo "starting ${name}: $*"
+  # Concurrent verifiers must not invalidate one shared Vitest module cache.
+  OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="${RUNNER_TEMP}/vitest-module-cache/${name}" \
+    "$@" >"$log" 2>&1 &
+  pids+=("$!")
+}
+
+wait_checks() {
+  local index name log pid result
+  for index in "${!pids[@]}"; do
+    name="${names[$index]}"
+    log="${logs[$index]}"
+    pid="${pids[$index]}"
+
+    if wait "$pid"; then
+      result="success"
+    else
+      result="failure"
+    fi
+
+    echo "::group::${name} log"
+    cat "$log"
+    echo "::endgroup::"
+    results["$name"]="$result"
+  done
+  names=()
+  pids=()
+  logs=()
+}
+
+run_doctor_plugin_index() {
+  if [[ -f test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts ]]; then
+    # Cold hosted runners can spend over five minutes in E2E setup before
+    # this proof's own bounded test can report a result.
+    env OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run \
+      --config test/vitest/vitest.e2e.config.ts \
+      test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts
+  else
+    echo "Selected target predates the built Doctor plugin index persistence proof."
+  fi
+}
+
+run_discord_component_attachments() {
+  local test_file="test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts"
+  if [[ "$FROZEN_TARGET" = "true" && ! -f "$test_file" ]]; then
+    echo "[skip] Frozen target predates the Discord component attachment Gateway proof."
+    return 0
+  fi
+  rm -f "${RUNNER_TEMP}/discord-component-attachments.json" || return
+  env OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_E2E_WORKERS=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 \
+    node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts \
+    "$test_file" \
+    --testNamePattern "preserves component attachment filenames through the public Gateway message action" \
+    --reporter=default --reporter=json \
+    --outputFile.json "${RUNNER_TEMP}/discord-component-attachments.json" || return
+  node --input-type=module <<'DISCORD_PROOF_REPORT'
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, "discord-component-attachments.json"), "utf8"));
+assert.equal(report.success, true);
+assert.equal(report.numFailedTestSuites, 0);
+assert.equal(report.numFailedTests, 0);
+assert.equal(report.testResults.length, 1);
+const file = report.testResults[0];
+assert.equal(file.name, path.resolve("test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts"));
+assert.equal(file.status, "passed");
+const fullName = "Discord show_widget contextual presenter process proof preserves component attachment filenames through the public Gateway message action";
+const matches = file.assertionResults.filter((entry) => entry.fullName === fullName);
+if (matches.length === 0 && process.env.FROZEN_TARGET === "true") {
+  assert.equal(report.numPassedTests, 0);
+  console.log("[skip] Frozen target predates the named Discord component attachment Gateway proof.");
+} else {
+  assert.equal(matches.length, 1, "The named Discord attachment proof must be present.");
+  assert.equal(matches[0].status, "passed");
+  assert.equal(report.numPassedTests, 1);
+  console.log(JSON.stringify({ proof: "discord-component-attachments", fullName, passed: 1, failed: 0 }));
+}
+DISCORD_PROOF_REPORT
+}
+
+# A missing startup asset rebuild must finish before any verifier forks
+# so concurrent readers never observe dist mid-write.
+startup_assets=success
+startup_builder=(node --import tsx scripts/ensure-cli-startup-build.mts)
+if [[ ! -f scripts/ensure-cli-startup-build.mts ]]; then
+  startup_builder=(node scripts/ensure-cli-startup-build.mjs)
+fi
+"${startup_builder[@]}" || startup_assets=failure
+
+# Hosted runners keep the remaining verifiers serial; Blacksmith
+# overlaps them with the selected checks below.
+run_verifier() {
+  local name="$1"
+  shift
+  start_check "$name" "$@"
+  [ "$PARALLEL_BUILT_VERIFIERS" = "true" ] || wait_checks
+}
+
+# Concurrent checks perturb RSS even on Blacksmith. Complete this
+# measurement before starting other verifiers without relaxing its ceiling.
+run_verifier "startup-memory" node scripts/check-cli-startup-memory.mjs
+wait_checks
+
+# This verifier creates a synthetic dist plugin and rebuilds the full
+# dist-runtime plugin overlay. Complete it before Gateway watch snapshots
+# that tree or any artifact reader starts.
+run_verifier "plugin-singleton" pnpm test:build:singleton
+wait_checks
+
+# The skip-build watch proof still refreshes dist build receipts.
+# On Blacksmith, settle those writes before the parallel reader wave.
+if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then
+  start_check "gateway-watch" \
+    pnpm test:gateway:watch-regression -- --skip-build
+  wait_checks
+fi
+
+if [ "$RUN_DOCTOR_PLUGIN_INDEX" = "true" ]; then
+  run_verifier "doctor-plugin-index" run_doctor_plugin_index
+fi
+
+if [ "$RUN_SQLITE_SESSION_LIFECYCLE" = "true" ]; then
+  run_verifier "sqlite-session-lifecycle" env \
+    OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 \
+    node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts \
+    test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts
+fi
+
+if [ "$RUN_CHANNELS" = "true" ]; then
+  start_check "channels" env \
+    NODE_OPTIONS="$CHANNEL_NODE_OPTIONS" \
+    OPENCLAW_VITEST_MAX_WORKERS="$CHANNEL_MAX_WORKERS" \
+    pnpm test:channels
+fi
+
+if [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ]; then
+  start_check "core-support-boundary" env \
+    NODE_OPTIONS=--max-old-space-size=8192 \
+    OPENCLAW_VITEST_MAX_WORKERS=2 \
+    node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
+fi
+
+if [ "$RUN_DISCORD_COMPONENT_PROOF" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" = "true" ]; then
+  start_check "discord-component-attachments" run_discord_component_attachments
+fi
+
+wait_checks
+
+# Preserve the low-core hosted path; concurrent Vitest can otherwise
+# starve the Gateway readiness deadline used by this regression gate.
+if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then
+  start_check "gateway-watch" \
+    pnpm test:gateway:watch-regression -- --skip-build
+  wait_checks
+fi
+
+# Preserve the low-core hosted path: its real Gateway send stays serial.
+if [ "$RUN_DISCORD_COMPONENT_PROOF" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" != "true" ]; then
+  start_check "discord-component-attachments" run_discord_component_attachments
+  wait_checks
+fi
+
+# These canaries verify the built CLI's local roundtrip and Gateway connection.
+# Full plans retain the PTY descriptor, but CI consumes it only as this selection flag.
+if [ "$RUN_TUI_PTY" = "true" ]; then
+  start_check "tui-pty" env \
+    NODE_OPTIONS=--max-old-space-size=8192 \
+    OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1 \
+    OPENCLAW_TUI_PTY_USE_BUILT_CLI=1 \
+    OPENCLAW_VITEST_MAX_WORKERS=2 \
+    node scripts/run-vitest.mjs run \
+      --config test/vitest/vitest.tui-pty.config.ts \
+      src/tui/tui-pty-local.e2e.test.ts \
+      --testNamePattern "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY"
+  wait_checks
+fi
+
+if [[ -f .artifacts/startup-memory/summary.md ]]; then
+  cat .artifacts/startup-memory/summary.md >> "$GITHUB_STEP_SUMMARY"
+fi
+
+failures=0
+if [ "$startup_assets" = "failure" ]; then
+  echo "::error title=startup assets failed::cli startup asset build failed"
+  failures=1
+fi
+for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do
+  if [ "${results[$name]}" = "failure" ]; then
+    echo "::error title=${name} failed::${name} failed"
+    failures=1
+  fi
+done
+exit "$failures"

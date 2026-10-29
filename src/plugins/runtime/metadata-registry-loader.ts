@@ -17,6 +17,7 @@ export function loadPluginMetadataRegistrySnapshot(options?: {
   workspaceDir?: string;
   onlyPluginIds?: string[];
   loadModules?: boolean;
+  throwOnLoadError?: boolean;
   manifestRegistry?: PluginManifestRegistry;
   runtimeContext?: PluginRuntimeLoadContext;
 }): PluginRegistry {
@@ -31,7 +32,7 @@ export function loadPluginMetadataRegistrySnapshot(options?: {
       ...(options?.workspaceDir !== undefined ? { workspaceDir: options.workspaceDir } : {}),
       ...(options?.env !== undefined ? { env: options.env } : {}),
       ...(options?.logger !== undefined ? { logger: options.logger } : {}),
-      throwOnLoadError: true,
+      throwOnLoadError: options?.throwOnLoadError ?? true,
       cache: false,
       mode: "validate",
       loadModules: options?.loadModules,

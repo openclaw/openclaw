@@ -2,16 +2,22 @@ import type {
   BrowserAnnotationDraft,
   BrowserAnnotationEvent,
 } from "../../components/browser/browser-annotation.ts";
+import { showToast } from "../../lib/toast.ts";
+import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";
-import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import {
+  chatAttachmentBatchBytes,
+  resolveChatAttachmentLimits,
+} from "./components/chat-attachment-admission.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 
-export function focusBrowserAnnotationComposerAfterUpdate(
-  host: ParentNode & { updateComplete: Promise<unknown> },
-): void {
+export function focusBrowserAnnotationComposerAfterUpdate(host: {
+  composer: () => HTMLTextAreaElement | null;
+  updateComplete: Promise<unknown>;
+}): void {
   void host.updateComplete.then(() => {
-    host.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
+    host.composer()?.focus({
       preventScroll: true,
     });
   });
@@ -22,8 +28,14 @@ export function receiveBrowserAnnotation(
   state: ChatPageHost | null | undefined,
   active: boolean,
   event: Event,
+  pendingReadBytes: number,
+  replaceAttachments: (attachments: ChatPageHost["chatAttachments"]) => void,
 ): boolean {
   if (!state || !active || event.defaultPrevented || !(event instanceof CustomEvent)) {
+    return false;
+  }
+  if (!uploadsEnabled(state.uploadConfig)) {
+    showToast({ message: uploadsDisabledMessage() });
     return false;
   }
   const detail = event.detail as BrowserAnnotationDraft | null;
@@ -43,13 +55,14 @@ export function receiveBrowserAnnotation(
   const attachment = chatAttachmentFromDataUrl(
     detail.dataUrl,
     detail.fileName || "annotation",
-    state.hello?.policy?.attachments,
+    resolveChatAttachmentLimits(state.hello?.policy),
+    chatAttachmentBatchBytes(state.chatAttachments) + pendingReadBytes,
   );
   if (!attachment) {
     return false;
   }
   event.preventDefault();
-  state.chatAttachments = [
+  replaceAttachments([
     ...state.chatAttachments,
     {
       ...attachment,
@@ -61,7 +74,6 @@ export function receiveBrowserAnnotation(
         inspectedElement: detail.card.inspectedElement,
       },
     },
-  ];
-  state.requestUpdate?.();
+  ]);
   return true;
 }

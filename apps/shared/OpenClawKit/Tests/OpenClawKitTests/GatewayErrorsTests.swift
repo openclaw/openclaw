@@ -53,6 +53,37 @@ struct GatewayErrorsTests {
         }
     }
 
+    @Test(arguments: [
+        (
+            GatewayConnectAuthDetailCode.authBootstrapTokenInvalid,
+            GatewayConnectionProblem.Kind.bootstrapTokenInvalid,
+            "Setup code no longer valid", "Scan QR again"),
+        (
+            GatewayConnectAuthDetailCode.authDeviceTokenMismatch,
+            GatewayConnectionProblem.Kind.deviceTokenMismatch,
+            "This device's saved device token is no longer valid", "Repair pairing"),
+    ])
+    func `invalid device credentials keep distinct actionable problems`(
+        detail: GatewayConnectAuthDetailCode,
+        kind: GatewayConnectionProblem.Kind,
+        title: String,
+        action: String) throws
+    {
+        let error = GatewayConnectAuthError(
+            message: "authentication failed",
+            detailCode: detail.rawValue,
+            canRetryWithDeviceToken: false)
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+
+        #expect(problem.kind == kind)
+        #expect(problem.titlePresentation == .localized(title))
+        #expect(problem.actionLabelPresentation == .localized(action))
+        #expect(problem.needsCredentialUpdate)
+        #expect(!problem.needsPairingApproval)
+        #expect(!problem.retryable)
+        #expect(problem.pauseReconnect)
+    }
+
     @Test func `connect auth error preserves structured metadata`() {
         let error = GatewayConnectAuthError(
             message: "pairing required",
@@ -447,6 +478,61 @@ struct GatewayErrorsTests {
 
         #expect(problem?.kind == .tlsPinMismatch)
         #expect(problem?.canTrustRotatedCertificate == false)
+    }
+
+    @Test(arguments: ["startup", "method", "details-method", "code", "reason", "missing-retryable", "retryable-false"])
+    @MainActor func `startup retry requires the complete admission contract`(variant: String) async {
+        let refusal = GatewayResponseError(
+            method: variant == "method" ? "sessions.patch" : "chat.send",
+            code: variant == "code" ? "FORBIDDEN" : "UNAVAILABLE",
+            message: "A localized message with no startup wording",
+            details: [
+                "reason": AnyCodable(variant == "reason" ? "provider-unavailable" : "startup-sidecars"),
+                "method": AnyCodable(variant == "details-method" ? "sessions.patch" : "chat.send"),
+                "retryable": AnyCodable(true),
+                "retryAfterMs": AnyCodable(1),
+            ],
+            retryable: variant == "missing-retryable" ? nil : variant != "retryable-false")
+        var attempts = 0
+        do {
+            let value = try await withGatewayStartupAdmission(method: "chat.send") {
+                attempts += 1
+                if attempts == 1 { throw refusal }
+                return "accepted"
+            }
+            #expect(variant == "startup")
+            #expect(value == "accepted")
+        } catch {
+            #expect(variant != "startup")
+            #expect(error is GatewayResponseError)
+        }
+        #expect(attempts == (variant == "startup" ? 2 : 1))
+    }
+
+    @Test @MainActor func `cancellation stops startup admission without another dispatch`() async {
+        let entered = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        defer { entered.continuation.finish() }
+        var attempts = 0
+        let retry = Task<Void, Error> {
+            try await withGatewayStartupAdmission(method: "chat.send") {
+                attempts += 1
+                entered.continuation.yield(())
+                throw GatewayResponseError(
+                    method: "chat.send",
+                    code: "UNAVAILABLE",
+                    message: "Preparing",
+                    details: [
+                        "reason": AnyCodable("startup-sidecars"), "method": AnyCodable("chat.send"),
+                        "retryAfterMs": AnyCodable(2000),
+                    ],
+                    retryable: true)
+            }
+        }
+        var iterator = entered.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        retry.cancel()
+        await #expect(throws: CancellationError.self) { try await retry.value }
+        #expect(attempts == 1)
     }
 
     private static let troubleshootingDocs = "https://docs.openclaw.ai/gateway/troubleshooting"

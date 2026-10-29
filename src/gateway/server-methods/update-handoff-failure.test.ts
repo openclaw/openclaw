@@ -1,5 +1,8 @@
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import {
   buildStatusUpdateRows,
@@ -7,32 +10,262 @@ import {
 } from "../../commands/status-update-restart.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   sentinelState,
-  detectRespawnSupervisorMock,
-  startManagedServiceUpdateHandoffMock,
-  transferManagedServiceUpdateHandoffMock,
-  cancelManagedServiceUpdateHandoffMock,
-  sendGatewayLifecycleNoticeMock,
-  scheduleGatewayRestartMock,
+  detectRespawnSupervisorMock as detectSupervisor,
+  startManagedServiceUpdateHandoffMock as startHandoff,
+  transferManagedServiceUpdateHandoffMock as transferHandoff,
+  cancelManagedServiceUpdateHandoffMock as cancelHandoff,
+  sendGatewayLifecycleNoticeMock as sendNotice,
+  scheduleGatewayRestartMock as scheduleRestart,
   captureUpdateRunPayload,
   mockGlobalInstallSurface,
 } from "./update.test-harness.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function readRun(payload: Awaited<ReturnType<typeof captureUpdateRunPayload>>) {
+  return expectDefined(getUpdateRun(expectDefined(payload, "update response").runId), "update run");
+}
+
+async function failureReport(run: ReturnType<typeof readRun>, reason?: string) {
+  return prepareUpdateFailureReport({
+    attemptId: run.runId,
+    recordedRun: run,
+    result: { status: "error", mode: "npm", reason, steps: [], durationMs: 0 },
+  });
+}
+
+function errorFact(message: string) {
+  return expect.objectContaining({
+    check: "managed-service",
+    code: "Error",
+    errorName: "Error",
+    message,
+  });
+}
+
+function expectServing() {
+  expect(scheduleRestart).not.toHaveBeenCalled();
+  expect(transferHandoff).not.toHaveBeenCalled();
+}
+
 describe("update.run handoff refusal diagnostics", () => {
+  beforeEach(() => {
+    detectSupervisor.mockReturnValueOnce("launchd");
+    mockGlobalInstallSurface();
+  });
+  it.each(["managed-service-handoff-failed", "update-recovery-pending"])(
+    "retains the helper's finalized refusal and handoff cause (%s)",
+    async (reason) => {
+      startHandoff.mockImplementationOnce(async (params) => {
+        finishUpdateRun(expectDefined(params.runId, "handoff run"), {
+          status: "failed",
+          reason,
+        });
+        throw Object.assign(new Error("spawn node EACCES"), { code: "EACCES" });
+      });
+      const payload = expectDefined(await captureUpdateRunPayload(), "update response");
+      const run = readRun(payload);
+      expect(payload.result).toMatchObject({ status: "error", reason });
+      expect(run).toMatchObject({ status: "failed", reason });
+      expect(run.steps.flatMap((step) => step.failureFacts ?? [])).toContainEqual(
+        expect.objectContaining({ code: "handoff-permission-denied" }),
+      );
+      const report = await failureReport(run);
+      expect(report.body).toContain("handoff-permission-denied");
+      expect(report.body).toContain("Recovery outcome: Gateway kept serving");
+      expect(report.body).not.toContain("exit unknown");
+    },
+  );
+
+  it("records a real detached helper refusal before launchd activation", async () => {
+    const root = tempDirs.make("openclaw-handoff-missing-runtime-");
+    const tmp = await import("../../infra/tmp-openclaw-dir.js");
+    const coordinator = vi.spyOn(tmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+    const handoff = await vi.importActual<
+      typeof import("../../infra/update-managed-service-handoff.js")
+    >("../../infra/update-managed-service-handoff.js");
+    startHandoff.mockImplementationOnce((params) =>
+      handoff.startManagedServiceUpdateHandoff({
+        ...params,
+        root,
+        env: { ...process.env },
+        execPath: process.execPath,
+        argv1: path.join(root, "missing-entry.cjs"),
+        supervisor: "launchd",
+      }),
+    );
+    try {
+      const payload = expectDefined(await captureUpdateRunPayload(), "update response");
+      const run = readRun(payload);
+      const report = await failureReport(run);
+      expect(payload.ok).toBe(false);
+      expect(report.body).toContain("handoff-helper-exited");
+      expect(report.body).toContain(
+        "Gateway kept serving; handoff failed before ownership transfer",
+      );
+      expect(report.body).not.toContain("exit unknown");
+      expectServing();
+    } finally {
+      coordinator.mockRestore();
+    }
+  });
+
+  it.each([
+    [
+      "engine incompatibility",
+      "Node 24.21.0 is unsupported; OpenClaw requires >=24.22.1 <25 || >=26.12.1.\nnpm can finish installing without its preinstall check.\nRe-run the installer.\nOn Windows, use the PowerShell installer.\nOr with nvm: nvm install 26 && nvm use 26.\nThen retry openclaw update.",
+      "Node 24.21.0 is unsupported",
+    ],
+    [
+      "oversized crash output",
+      `${"discarded startup noise".repeat(500)}\nError: helper startup failed: EACCES token=fixture-private-token\nRetry after correcting file permissions.`,
+      "helper startup failed: EACCES",
+    ],
+  ])(
+    "retains bounded, redacted diagnostics from a real helper's %s",
+    async (_kind, output, expected) => {
+      const root = tempDirs.make("openclaw-handoff-startup-failure-");
+      const tmp = await import("../../infra/tmp-openclaw-dir.js");
+      const runtime = await import("../../infra/update-managed-service-handoff-runtime.js");
+      const stage = runtime.stageManagedHandoffRuntime;
+      const coordinator = vi.spyOn(tmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+      const runtimeFixture = vi
+        .spyOn(runtime, "stageManagedHandoffRuntime")
+        .mockImplementation((directory) => {
+          const files = stage(directory);
+          writeFileSync(
+            expectDefined(files[0], "staged handoff runtime"),
+            `process.stderr.write(${JSON.stringify(output)}); process.exit(1);`,
+          );
+          return files;
+        });
+      const handoff = await vi.importActual<
+        typeof import("../../infra/update-managed-service-handoff.js")
+      >("../../infra/update-managed-service-handoff.js");
+      startHandoff.mockImplementationOnce((params) =>
+        handoff.startManagedServiceUpdateHandoff({
+          ...params,
+          root,
+          env: { ...process.env },
+          execPath: process.execPath,
+          argv1: path.join(root, "openclaw.cjs"),
+          supervisor: "launchd",
+        }),
+      );
+      try {
+        const payload = expectDefined(await captureUpdateRunPayload(), "update response");
+        const run = readRun(payload);
+        const localReport = renderUpdateRunReport(run).markdown;
+        expect(payload.ok).toBe(false);
+        expect(localReport).toContain(expected);
+        expect(localReport).not.toContain("fixture-private-token");
+        expect(localReport).not.toContain("discarded startup noise");
+        expect(JSON.stringify(run.steps)).not.toContain("fixture-private-token");
+        expect(
+          run.steps
+            .flatMap((step) => step.failureFacts ?? [])
+            .every((fact) => (fact.message?.length ?? 0) <= 200),
+        ).toBe(true);
+        const report = await failureReport(run);
+        expect(report.body).toContain("handoff-helper-exited");
+        expect(report.body).not.toContain("fixture-private-token");
+        expectServing();
+      } finally {
+        runtimeFixture.mockRestore();
+        coordinator.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    ["helper-start-failed", Object.assign(new Error("spawn node EAGAIN"), { code: "EAGAIN" })],
+    ["service-refused", new Error("launchctl bootstrap failed")],
+    ["ownership-refused", new Error("managed update handoff helper lease identity is unavailable")],
+    ["timeout", new Error("managed update handoff did not signal readiness within 1800 seconds")],
+  ])("persists and publishes the closed handoff kind %s", async (kind, error) => {
+    error.message +=
+      " token=fixture-private-token /Users/fixture-private-user/private-install https://fixture-private-host.invalid/path";
+    startHandoff.mockRejectedValueOnce(error);
+    const payload = expectDefined(await captureUpdateRunPayload(), "update response");
+    const run = readRun(payload);
+    const fact = run.steps
+      .flatMap((step) => step.failureFacts ?? [])
+      .find((item) => item.code === `handoff-${kind}`);
+    expect(fact).toMatchObject({ check: "managed-service", code: `handoff-${kind}` });
+    expect(fact?.message).toContain("openclaw");
+    expect(run.verification.rollbackOutcome).toMatchObject({ status: "not-needed" });
+    const report = await failureReport(run, run.reason ?? undefined);
+    expect(report.body).toContain(`Failing check managed-service (handoff-${kind})`);
+    expect(report.body).toContain(
+      "Recovery outcome: Gateway kept serving; handoff failed before ownership transfer",
+    );
+    expect(report.body).not.toContain("exit unknown");
+    for (const privateValue of [
+      "fixture-private-token",
+      "fixture-private-user",
+      "fixture-private-host",
+      "private-install",
+    ]) {
+      expect(JSON.stringify(run.steps)).not.toContain(privateValue);
+      expect(report.body).not.toContain(privateValue);
+    }
+    expectServing();
+  });
+
+  it("publishes a recovery action without restarting when the original Node is gone", async () => {
+    startHandoff.mockRejectedValueOnce(
+      new UpdatePreMutationError(
+        "managed-service-handoff-failed",
+        "The Gateway's Node executable was removed. Refresh its service definition with `openclaw gateway install --force`. The serving Gateway has not been stopped.",
+      ),
+    );
+
+    const payload = await captureUpdateRunPayload();
+    const run = getUpdateRun(expectDefined(payload, "update response").runId);
+    expect(payload).toMatchObject({
+      ok: false,
+      result: { status: "error", reason: "managed-service-handoff-failed" },
+    });
+    expect(scheduleRestart).not.toHaveBeenCalled();
+    expect(run?.origin.nextAction).toContain("openclaw gateway install --force");
+    expect(run?.steps.flatMap((step) => step.failureFacts ?? [])).toContainEqual(
+      expect.objectContaining({ code: "handoff-runtime-unavailable" }),
+    );
+    expect(renderUpdateRunReport(expectDefined(run, "update run")).markdown).toContain(
+      "The serving Gateway has not been stopped.",
+    );
+  });
+
+  it("preserves the Node engine refusal and serving observation for update.run", async () => {
+    const message =
+      "Node 26.10.0 at /fixture/node requires >=24.22.1 <25 || >=26.12.1. Install Node 24.22.1 and update the service definition selecting /fixture/node.";
+    startHandoff.mockRejectedValueOnce(
+      new UpdatePreMutationError("preflight-node-runtime-incompatible", message),
+    );
+
+    const payload = expectDefined(await captureUpdateRunPayload(), "update response");
+    const run = readRun(payload);
+    expect(payload).toMatchObject({
+      ok: false,
+      result: { status: "error", reason: "preflight-node-runtime-incompatible" },
+    });
+    expect(run.origin.nextAction).toBe(message);
+    expect(run.verification.serviceRunning).toBe(true);
+    expect(renderUpdateRunReport(run).lines.join("\n")).toContain(message);
+    expectServing();
+  });
+
   it.each(["helper-start", "sentinel-write"] as const)(
     "cancels its exact helper when admission ends during %s",
     async (boundary) => {
-      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-      mockGlobalInstallSurface();
       let current = true;
       if (boundary === "helper-start") {
-        const start = expectDefined(
-          startManagedServiceUpdateHandoffMock.getMockImplementation(),
-          "handoff fixture",
-        );
-        startManagedServiceUpdateHandoffMock.mockImplementationOnce(async (params) => {
+        const start = expectDefined(startHandoff.getMockImplementation(), "handoff fixture");
+        startHandoff.mockImplementationOnce(async (params) => {
           const started = await start(params);
           current = false;
           return started;
@@ -57,17 +290,14 @@ describe("update.run handoff refusal diagnostics", () => {
           }
         },
       } as never);
-      const started = expectDefined(
-        startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0],
-        "started handoff",
-      );
-      expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-      expect(cancelManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
+      const started = expectDefined(startHandoff.mock.calls[0]?.[0], "started handoff");
+      expect(transferHandoff).not.toHaveBeenCalled();
+      expect(cancelHandoff).toHaveBeenCalledExactlyOnceWith({
         kind: "managed-update-handoff",
         handoffId: started.handoffId,
         installRoot: "/tmp/openclaw-global",
       });
-      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+      expect(scheduleRestart).not.toHaveBeenCalled();
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -82,17 +312,15 @@ describe("update.run handoff refusal diagnostics", () => {
   it.each(["sentinel-write", "transfer-rejected", "transfer-error"])(
     "cancels managed admission and keeps serving after %s failure",
     async (failure) => {
-      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-      mockGlobalInstallSurface();
       if (failure === "sentinel-write") {
         sentinelState.restartSentinelWriteError = new Error("state database unavailable");
       } else if (failure === "transfer-rejected") {
-        transferManagedServiceUpdateHandoffMock.mockResolvedValueOnce(false);
+        transferHandoff.mockResolvedValueOnce(false);
       } else {
-        transferManagedServiceUpdateHandoffMock.mockRejectedValueOnce(new Error("EPIPE"));
+        transferHandoff.mockRejectedValueOnce(new Error("EPIPE"));
       }
-      cancelManagedServiceUpdateHandoffMock.mockImplementationOnce(async () => {
-        const started = startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0];
+      cancelHandoff.mockImplementationOnce(async () => {
+        const started = startHandoff.mock.calls[0]?.[0];
         const runId = expectDefined(started?.runId, "started update run");
         expect(getUpdateRun(runId)).toMatchObject({
           status: "running",
@@ -112,16 +340,14 @@ describe("update.run handoff refusal diagnostics", () => {
         sessionKey: "agent:main:slack:dm:C0123ABC:thread:1234567890.123456",
       });
 
-      const started = startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0];
-      expect(cancelManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
+      const started = startHandoff.mock.calls[0]?.[0];
+      expect(cancelHandoff).toHaveBeenCalledExactlyOnceWith({
         kind: "managed-update-handoff",
         handoffId: started?.handoffId,
         installRoot: "/tmp/openclaw-global",
       });
-      expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(
-        failure === "sentinel-write" ? 0 : 1,
-      );
-      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+      expect(transferHandoff).toHaveBeenCalledTimes(failure === "sentinel-write" ? 0 : 1);
+      expect(scheduleRestart).not.toHaveBeenCalled();
       expect(payload).toMatchObject({
         ok: false,
         restart: null,
@@ -134,46 +360,29 @@ describe("update.run handoff refusal diagnostics", () => {
           : failure === "transfer-error"
             ? "EPIPE"
             : "managed update ownership transfer failed";
-      const run = expectDefined(
-        getUpdateRun(expectDefined(payload, "update response").runId),
-        "update run",
-      );
-      const failureFacts = [
-        expect.objectContaining({
-          check: "managed-service",
-          code: "Error",
-          errorName: "Error",
-          message,
-        }),
-      ];
-      const report = await prepareUpdateFailureReport({
-        attemptId: run.runId,
-        recordedRun: run,
-        result: {
-          status: "error",
-          mode: "npm",
-          reason: run.reason ?? undefined,
-          steps: [],
-          durationMs: 0,
-        },
-      });
+      const run = readRun(payload);
+      const failureFacts = [errorFact(message)];
+      const report = await failureReport(run, run.reason ?? undefined);
       if (failure === "sentinel-write") {
+        expect(report.body).toContain("Recovery outcome: Gateway kept serving");
+        expect(report.body).toContain("handoff-payload-failed");
         expect.soft(report.body).toContain("Failing check managed-service (Error)");
-        expect.soft(report.body).toContain(message);
+        expect.soft(report.body).not.toContain(message);
+        expect.soft(report.body).toContain("[redacted-diagnostic]");
       } else {
+        expect(report.body).not.toContain("Recovery outcome: Gateway kept serving");
         expect.soft(report.body).toContain(`Failed phase requested: ${message}`);
       }
+      const failedStep = { failureFacts: expect.arrayContaining(failureFacts) };
       expect(run.steps).toContainEqual(
-        expect.objectContaining({ step: "requested", status: "failed", failureFacts }),
+        expect.objectContaining({ step: "requested", status: "failed", ...failedStep }),
       );
       expect(payload?.result).toMatchObject({
-        steps: expect.arrayContaining([expect.objectContaining({ failureFacts })]),
+        steps: expect.arrayContaining([expect.objectContaining(failedStep)]),
       });
-      expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
+      expect(sendNotice).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining(
-            "OpenClaw update failed: managed-service-handoff-failed",
-          ),
+          message: `⚠️ OpenClaw couldn't finish updating.\nThe current version (${run.before.version}) is still running.\nUpdate failed before the update started (managed-service-handoff-failed).\nFor details, open Settings → Updates in the Control UI or run \`openclaw update status\` in your terminal.`,
         }),
         expect.any(Object),
       );
@@ -187,12 +396,16 @@ describe("update.run handoff refusal diagnostics", () => {
       message: "ENOENT",
     },
     {
-      error: new Error(
-        "Managed update handoff requires a user-scope systemd unit; perform a manual system-service update.",
+      error: new UpdatePreMutationError(
+        "managed-service-handoff-failed",
+        "System-scope Gateway package update cannot write its install root /opt/openclaw. As the installation's owning account (UID 0), run: openclaw update --yes --no-restart. Then run: sudo systemctl restart openclaw-gateway.service",
       ),
       reason: "managed-service-handoff-failed",
       message:
-        "Managed update handoff requires a user-scope systemd unit; perform a manual system-service update.",
+        "System-scope Gateway package update cannot write its install root /opt/openclaw. As the installation's owning account (UID 0), run: openclaw update --yes --no-restart. Then run: sudo systemctl restart openclaw-gateway.service",
+      publicMessage: "System-scope Gateway package update cannot write its install root.",
+      statusMessage:
+        "System-scope Gateway package update cannot write its install root [redacted-path]",
     },
     {
       error: new UpdatePreMutationError("requester-revoked", "requester-revoked", {
@@ -203,74 +416,44 @@ describe("update.run handoff refusal diagnostics", () => {
       reason: "requester-revoked",
       message: "requester-revoked",
     },
-    {
-      error: new Error(
-        "managed update handoff exited before signaling readiness (code=1, signal=null)",
-      ),
-      reason: "managed-service-handoff-failed",
-      message: "managed update handoff exited before signaling readiness (code=1, signal=null)",
-      publicMessage: "managed update handoff exited before signaling readiness",
-    },
-    {
-      error: new Error("managed update handoff did not signal readiness within 1800 seconds"),
-      reason: "managed-service-handoff-failed",
-      message: "managed update handoff did not signal readiness within 1800 seconds",
-      publicMessage: "managed update handoff did not signal readiness",
-    },
   ])(
     "records a handoff refusal: $message",
-    async ({ error, reason, message, publicMessage = message }) => {
-      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-      mockGlobalInstallSurface();
-      startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(error);
+    async ({ error, reason, message, publicMessage = message, statusMessage = message }) => {
+      startHandoff.mockRejectedValueOnce(error);
 
       const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
         captureUpdateRunPayload(),
       );
 
-      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+      expect(scheduleRestart).not.toHaveBeenCalled();
       expect(payload?.ok).toBe(false);
       expect(payload?.result).toMatchObject({
         status: "error",
         reason,
       });
       expect(payload?.handoff).toBeUndefined();
-      const run = expectDefined(
-        getUpdateRun(expectDefined(payload, "update response").runId),
-        "update run",
-      );
-      const report = await prepareUpdateFailureReport({
-        attemptId: run.runId,
-        recordedRun: run,
-        result: { status: "error", mode: "npm", reason, steps: [], durationMs: 0 },
-      });
+      const run = readRun(payload);
+      const report = await failureReport(run, reason);
+      if (error instanceof UpdatePreMutationError) {
+        expect(run.origin.nextAction).toBe(message);
+        expect(renderUpdateRunReport(run).markdown).toContain(message);
+        expect(report.body).not.toContain("sudo systemctl restart");
+      }
       expect.soft(report.body).toContain(`Failed phase requested: ${publicMessage}`);
       expect.soft(report.body).not.toContain("exit unknown");
       const failureFacts =
-        error instanceof UpdatePreMutationError
-          ? error.failureFacts
-          : [
-              expect.objectContaining({
-                check: "managed-service",
-                code: "Error",
-                errorName: "Error",
-                message,
-              }),
-            ];
+        error instanceof UpdatePreMutationError ? error.failureFacts : [errorFact(message)];
+      const failedStep = { failureFacts: expect.arrayContaining(failureFacts) };
       expect(run.steps).toContainEqual(
-        expect.objectContaining({
-          step: "requested",
-          status: "failed",
-          failureFacts,
-        }),
+        expect.objectContaining({ step: "requested", status: "failed", ...failedStep }),
       );
-      expect(payload?.result).toMatchObject({ steps: [expect.objectContaining({ failureFacts })] });
+      expect(payload?.result).toMatchObject({ steps: [expect.objectContaining(failedStep)] });
       const sentinel = expectDefined(sentinelState.capturedPayload, "restart sentinel");
-      expect(sentinel.stats?.steps).toContainEqual(expect.objectContaining({ failureFacts }));
-      expect(formatUpdateRestartStatusValue(sentinel)).toContain(message);
-      expect(buildStatusUpdateRows(sentinel)).toContainEqual({
+      expect(sentinel.stats?.steps).toContainEqual(expect.objectContaining(failedStep));
+      expect(formatUpdateRestartStatusValue(sentinel)).toContain(statusMessage);
+      expect(await buildStatusUpdateRows(sentinel)).toContainEqual({
         Item: "Update run",
-        Value: expect.stringContaining(message),
+        Value: expect.stringContaining(statusMessage),
       });
     },
   );
@@ -279,73 +462,54 @@ describe("update.run handoff refusal diagnostics", () => {
 describe("update.run foreground respawn admission", () => {
   const sessionKey = "agent:main:slack:dm:C0123ABC:thread:1234567890.123456";
 
-  it.each(["git", "global"] as const)(
-    "refuses a foreground %s update before acknowledgement when process respawn is disabled",
-    async (kind) => {
-      if (kind === "global") {
-        mockGlobalInstallSurface();
-      }
-      const response = await withEnvAsync({ OPENCLAW_NO_RESPAWN: "1" }, () =>
-        captureUpdateRunPayload({ sessionKey }),
-      );
-
-      expect(response).toMatchObject({
-        ok: false,
-        ackDelivered: false,
-        result: { reason: "restart-unavailable" },
-        message: expect.stringContaining("OPENCLAW_NO_RESPAWN"),
+  it.each(["before", "after"] as const)(
+    "refuses foreground respawn disabled %s acknowledgement",
+    async (timing) => {
+      const acknowledged = timing === "after";
+      await withEnvAsync({ OPENCLAW_NO_RESPAWN: acknowledged ? undefined : "1" }, async () => {
+        if (acknowledged) {
+          sendNotice.mockImplementationOnce(async () => {
+            process.env.OPENCLAW_NO_RESPAWN = "1";
+            return true;
+          });
+        }
+        const response = await captureUpdateRunPayload({ sessionKey });
+        expect(response).toMatchObject({
+          ok: false,
+          ackDelivered: acknowledged,
+          result: { reason: "restart-unavailable" },
+          message: expect.stringContaining("OPENCLAW_NO_RESPAWN"),
+        });
+        if (!acknowledged) {
+          const run = getUpdateRun(expectDefined(response, "update response").runId);
+          expect(run).toMatchObject({
+            phase: "finished",
+            reason: "restart-unavailable",
+            origin: { nextAction: expect.stringContaining("openclaw update") },
+          });
+          expect(run?.steps.map(({ step, status }) => ({ step, status }))).toEqual([
+            { step: "requested", status: "failed" },
+            { step: "installation-inspection", status: "completed" },
+          ]);
+          expect(sendNotice).not.toHaveBeenCalled();
+        }
+        expect(startHandoff).not.toHaveBeenCalled();
+        expect(transferHandoff).not.toHaveBeenCalled();
+        expect(scheduleRestart).not.toHaveBeenCalled();
       });
-      const run = getUpdateRun(expectDefined(response, "update response").runId);
-      expect(run).toMatchObject({
-        phase: "finished",
-        reason: "restart-unavailable",
-        origin: { nextAction: expect.stringContaining("openclaw update") },
-      });
-      expect(run?.steps.map(({ step, status }) => ({ step, status }))).toEqual([
-        { step: "requested", status: "failed" },
-        { step: "installation-inspection", status: "completed" },
-      ]);
-      expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
-      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-      expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
     },
   );
-
-  it("rechecks foreground respawn after awaiting acknowledgement", async () => {
-    await withEnvAsync({ OPENCLAW_NO_RESPAWN: undefined }, async () => {
-      sendGatewayLifecycleNoticeMock.mockImplementationOnce(async () => {
-        process.env.OPENCLAW_NO_RESPAWN = "1";
-        return true;
-      });
-
-      const response = await captureUpdateRunPayload({ sessionKey });
-
-      expect(response).toMatchObject({
-        ok: false,
-        ackDelivered: true,
-        result: { reason: "restart-unavailable" },
-        message: expect.stringContaining("OPENCLAW_NO_RESPAWN"),
-      });
-      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-      expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
-    });
-  });
 
   it.each(["before", "during"] as const)(
     "keeps serving when respawn is disabled %s the parking notification",
     async (timing) => {
       await withEnvAsync({ OPENCLAW_NO_RESPAWN: undefined }, async () => {
         expect(await captureUpdateRunPayload({ sessionKey })).toMatchObject({ ok: true });
-        const handoff = expectDefined(
-          startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0],
-          "prepared handoff",
-        );
+        const handoff = expectDefined(startHandoff.mock.calls[0]?.[0], "prepared handoff");
         if (timing === "before") {
           process.env.OPENCLAW_NO_RESPAWN = "1";
         } else {
-          sendGatewayLifecycleNoticeMock.mockImplementationOnce(async () => {
+          sendNotice.mockImplementationOnce(async () => {
             process.env.OPENCLAW_NO_RESPAWN = "1";
             return true;
           });
@@ -354,32 +518,21 @@ describe("update.run foreground respawn admission", () => {
         await expect(expectDefined(handoff.beforePark, "parking callback")()).rejects.toThrow(
           "OPENCLAW_NO_RESPAWN",
         );
-        expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+        expect(scheduleRestart).not.toHaveBeenCalled();
       });
     },
   );
 
-  it.each(["launchd", "systemd"] as const)(
-    "retains %s-managed updates when foreground respawn is disabled",
+  it.each(["launchd", "systemd", null] as const)(
+    "admits updates when supervisor=%s permits respawn",
     async (supervisor) => {
-      detectRespawnSupervisorMock.mockReturnValue(supervisor);
-      const response = await withEnvAsync({ OPENCLAW_NO_RESPAWN: "1" }, () =>
+      detectSupervisor.mockReturnValue(supervisor);
+      const response = await withEnvAsync({ OPENCLAW_NO_RESPAWN: supervisor ? "1" : "0" }, () =>
         captureUpdateRunPayload(),
       );
-
       expect(response).toMatchObject({ ok: true, handoff: { status: "started" } });
-      expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-        expect.objectContaining({ supervisor }),
-      );
-      expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
+      expect(startHandoff).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ supervisor }));
+      expect(transferHandoff).toHaveBeenCalledOnce();
     },
   );
-
-  it("admits foreground updates when the respawn policy is explicitly false", async () => {
-    const response = await withEnvAsync({ OPENCLAW_NO_RESPAWN: "0" }, () =>
-      captureUpdateRunPayload(),
-    );
-    expect(response).toMatchObject({ ok: true, handoff: { status: "started" } });
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
-  });
 });

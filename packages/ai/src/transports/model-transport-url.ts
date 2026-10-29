@@ -4,16 +4,15 @@
  */
 /** Return a sanitized URL suitable for logs and diagnostics. */
 export function formatModelTransportDebugUrl(rawUrl: string): string {
-  try {
-    const parsed = new URL(rawUrl);
-    parsed.username = "";
-    parsed.password = "";
-    parsed.search = "";
-    parsed.hash = "";
-    return parsed.toString();
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     return "<invalid-url>";
   }
+  parsed.username = "";
+  parsed.password = "";
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
 }
 
 /** Format a configured base URL for debug output, or the implicit default. */

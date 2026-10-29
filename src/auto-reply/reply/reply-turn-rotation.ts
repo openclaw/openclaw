@@ -1,29 +1,37 @@
-import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import {
+  getSessionControllerEntry,
+  getSessionControllerEntryForOperation,
+  type SessionControllerEntry,
   isReplyOperationAbortedForRestart,
   lifecycleAdmissionByOperation,
   mergeReplyRunAdmissionSource,
+  observeReplyRunCompletions,
   type ReplyRunAdmissionSource,
-} from "./reply-run-registry.state.js";
+} from "../../sessions/session-controller.state.js";
+import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 
 type ReplyRotationSource = ReplyRunAdmissionSource & { fromBarrier: boolean };
 
 /** Retains invocation-local lineage evidence; the admission owner decides whether work may start. */
 export function createReplyTurnRotationEvidence(params: {
   sessionKey: string;
+  controller?: SessionControllerEntry;
   /** Observed predecessors, from oldest to newest. */
   expectedActiveOperations?: readonly ReplyOperation[];
   activeAtAdmission?: ReplyOperation;
 }) {
+  const controller = params.controller ?? getSessionControllerEntry(params.sessionKey);
   const waitedRotations = new Map<ReplyRotationSource["databaseIdentity"], ReplyRotationSource>();
   // Barrier snapshots retain their source lane after rekeying; active owners do not.
   const isCurrent = (source: ReplyRotationSource) =>
     !isReplyOperationAbortedForRestart(source.operation) &&
     (source.fromBarrier ||
-      (source.operation.key === params.sessionKey &&
-        (source.operation === replyRunRegistry.get(params.sessionKey) ||
-          source.operation.result !== null)));
+      (getSessionControllerEntryForOperation(source.operation) === controller &&
+        lifecycleAdmissionByOperation.get(source.operation)?.databaseIdentity ===
+          source.databaseIdentity &&
+        source.operation.key === params.sessionKey &&
+        (source.operation === controller.active || source.operation.result !== null)));
   const mergeWaitedRotation = (source: ReplyRotationSource) => {
     const previous = waitedRotations.get(source.databaseIdentity);
     // Candidate joins must not mutate history or acquire IDs from later rekeys.
@@ -35,23 +43,39 @@ export function createReplyTurnRotationEvidence(params: {
     );
   };
 
+  const recordSources = (sources: readonly ReplyRunAdmissionSource[], fromBarrier: boolean) => {
+    for (const source of sources) {
+      waitedRotations.set(
+        source.databaseIdentity,
+        mergeWaitedRotation({ ...source, sessionIds: new Set(source.sessionIds), fromBarrier }),
+      );
+    }
+  };
+
   return {
     recordBarrierSources(sources: ReplyRunAdmissionSource[] = []) {
-      for (const source of sources) {
-        waitedRotations.set(
-          source.databaseIdentity,
-          mergeWaitedRotation({
-            ...source,
-            sessionIds: new Set(source.sessionIds),
-            fromBarrier: true,
-          }),
-        );
-      }
+      recordSources(sources, true);
+    },
+    observeAdmission() {
+      const completions = observeReplyRunCompletions(controller.id);
+      const initialOperation = controller.active;
+      return {
+        recordCompletions: () => recordSources(completions.read() ?? [], false),
+        changed: () => completions.read() !== undefined || initialOperation !== controller.active,
+        dispose: () => {
+          const sources = completions.read();
+          completions.dispose();
+          recordSources(sources ?? [], false);
+        },
+      };
     },
     recordCompletedOperation(
       operation: ReplyOperation,
       databaseIdentity: OpenClawAgentDatabaseIdentity | undefined,
     ) {
+      if (lifecycleAdmissionByOperation.get(operation)?.databaseIdentity !== databaseIdentity) {
+        return;
+      }
       waitedRotations.set(
         databaseIdentity,
         mergeWaitedRotation({
@@ -63,6 +87,9 @@ export function createReplyTurnRotationEvidence(params: {
         }),
       );
     },
+    hasCurrentRotationEvidence(): boolean {
+      return [...waitedRotations.values()].some(isCurrent);
+    },
     takeStorelessRotation(): { sessionId: string; sessionIds: ReadonlySet<string> } | undefined {
       const source = waitedRotations.get(undefined);
       waitedRotations.delete(undefined);
@@ -73,7 +100,7 @@ export function createReplyTurnRotationEvidence(params: {
       sessionId: string | undefined;
       databaseIdentity: OpenClawAgentDatabaseIdentity | undefined;
     }): boolean {
-      const registeredOperation = replyRunRegistry.get(params.sessionKey);
+      const registeredOperation = controller.active;
       const rotationSources = [...waitedRotations.values()];
       for (const candidate of new Set([
         ...(params.expectedActiveOperations ?? []),

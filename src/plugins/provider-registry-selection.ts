@@ -37,7 +37,8 @@ export function findProviderRuntimeRegistrationInRegistry(params: {
                 (ref) => index.refs.get(normalizeLowercaseStringOrEmpty(ref)) ?? [],
               ),
             ]),
-          ].toSorted((left, right) => left - right);
+            // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a private array.
+          ].sort((left, right) => left - right);
     position = candidates?.find(eligible);
   }
   return position === undefined ? undefined : providers[position];

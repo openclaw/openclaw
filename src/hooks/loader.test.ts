@@ -1,17 +1,22 @@
-// Hook loader tests cover loading bundled, workspace, and plugin hooks.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import { buildPluginCapabilitySummary } from "../plugins/capability-summary.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { projectInstalledPluginComponents } from "../plugins/installed-plugin-components.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
-import { captureEnv } from "../test-utils/env.js";
+import { pinConfigDir } from "../utils.js";
+import { writeHookFixture } from "./hook-fixture.test-support.js";
 import {
   clearInternalHooks,
-  getRegisteredEventKeys,
+  hasInternalHookListeners,
   triggerInternalHook,
   createInternalHookEvent,
   registerInternalHook,
@@ -19,85 +24,79 @@ import {
 } from "./internal-hooks.js";
 import { prepareInternalHooks } from "./loader.js";
 import type { OpenClawHookMetadata } from "./types.js";
+import { loadWorkspaceHookEntries } from "./workspace.js";
 
-async function commitPreparedHooks(...args: Parameters<typeof prepareInternalHooks>) {
-  const prepared = await prepareInternalHooks(...args);
-  prepared.commit();
-  return prepared.loadedCount;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("loader", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
   let tmpDir: string;
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let managedHooksDir: string;
 
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-loader-"));
-  });
+  function prepare(cfg: OpenClawConfig, opts?: Parameters<typeof prepareInternalHooks>[2]) {
+    return prepareInternalHooks(cfg, tmpDir, opts);
+  }
 
-  beforeEach(async () => {
+  async function load(cfg: OpenClawConfig, opts?: Parameters<typeof prepareInternalHooks>[2]) {
+    const prepared = await prepare(cfg, opts);
+    prepared.commit();
+    return prepared.loadedCount;
+  }
+
+  async function expectMessages(messages: string[]) {
+    const event = createInternalHookEvent("command", "new", "test-session");
+    await triggerInternalHook(event);
+    expect(event.messages).toEqual(messages);
+  }
+
+  beforeEach(() => {
     clearInternalHooks();
     setInternalHooksEnabled(true);
-    // Create a temp directory for test modules
-    tmpDir = path.join(fixtureRoot, `case-${caseId++}`);
-    await fs.mkdir(tmpDir, { recursive: true });
-
-    // Disable bundled hooks during tests by setting env var to non-existent directory
-    envSnapshot = captureEnv(["OPENCLAW_BUNDLED_HOOKS_DIR"]);
-    process.env.OPENCLAW_BUNDLED_HOOKS_DIR = "/nonexistent/bundled/hooks";
+    tmpDir = tempDirs.make("openclaw-hooks-loader-");
+    managedHooksDir = path.join(tmpDir, "managed", "hooks");
+    pinConfigDir({ OPENCLAW_STATE_DIR: path.dirname(managedHooksDir) });
+    vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", "/nonexistent/bundled/hooks");
     setLoggerOverride({ level: "silent", consoleLevel: "error" });
-    loggingState.rawConsole = {
-      log: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   });
 
-  async function writeDiscoveredHook(params: {
-    sourceDir?: string;
-    hookName: string;
-    handlerCode?: string;
-    events?: string[];
-    exportName?: string;
-    hookKey?: string;
-    requires?: OpenClawHookMetadata["requires"];
-  }): Promise<string> {
-    const sourceDir = params.sourceDir ?? path.join(tmpDir, "hooks");
-    const hookDir = path.join(sourceDir, params.hookName);
-    await fs.mkdir(hookDir, { recursive: true });
-    const events = params.events ?? ["command:new"];
-    const metadata = {
-      events,
-      ...(params.exportName ? { export: params.exportName } : {}),
-      ...(params.hookKey ? { hookKey: params.hookKey } : {}),
-      ...(params.requires ? { requires: params.requires } : {}),
-    };
-    await fs.writeFile(
-      path.join(hookDir, "HOOK.md"),
-      [
-        "---",
-        `name: ${params.hookName}`,
-        `description: ${params.hookName} test hook`,
-        `metadata: ${JSON.stringify({ openclaw: metadata })}`,
-        "---",
-        "",
-        `# ${params.hookName}`,
-      ].join("\n"),
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(hookDir, "handler.js"),
-      params.handlerCode ??
-        `export default async function(event) { event.messages.push("${params.hookName}"); }\n`,
-      "utf-8",
+  function writeHook(
+    name: string,
+    {
+      sourceDir = managedHooksDir,
+      handlerCode,
+      message = name,
+      ...metadata
+    }: Partial<OpenClawHookMetadata> & {
+      sourceDir?: string;
+      handlerCode?: string;
+      message?: string;
+    } = {},
+  ) {
+    const hookDir = path.join(sourceDir, name);
+    writeHookFixture(
+      hookDir,
+      `---\nname: ${name}\nmetadata: ${JSON.stringify({ openclaw: { events: ["command:new"], ...metadata } })}\n---\n`,
+      handlerCode ??
+        `export default async function(event) { event.messages.push(${JSON.stringify(message)}); }\n`,
+      "handler.js",
     );
     return hookDir;
   }
 
-  function createEnabledHooksConfig(): OpenClawConfig {
-    return { hooks: { internal: { enabled: true } } };
+  function hookConfig(
+    names: string[] = [],
+    enabled?: boolean,
+    extraDirs?: string[],
+  ): OpenClawConfig {
+    return {
+      hooks: {
+        internal: {
+          enabled,
+          entries: Object.fromEntries(names.map((name) => [name, { enabled: true }])),
+          ...(extraDirs ? { load: { extraDirs } } : {}),
+        },
+      },
+    };
   }
 
   afterEach(async () => {
@@ -105,859 +104,428 @@ describe("loader", () => {
     setInternalHooksEnabled(true);
     loggingState.rawConsole = null;
     setLoggerOverride(null);
-    envSnapshot.restore();
+    setCurrentPluginMetadataSnapshot(undefined);
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    pinConfigDir();
     vi.unstubAllGlobals();
   });
 
-  afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
+  it("skips hook discovery until internal hooks are configured", async () => {
+    for (const cfg of [
+      {} satisfies OpenClawConfig,
+      { hooks: {} } satisfies OpenClawConfig,
+      { hooks: { internal: {} } } satisfies OpenClawConfig,
+    ]) {
+      const count = await load(cfg);
+      expect(count).toBe(0);
     }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  describe("prepareInternalHooks", () => {
-    const expectNoCommandHookRegistration = async (cfg: OpenClawConfig) => {
-      const count = await commitPreparedHooks(cfg, tmpDir);
-      expect(count).toBe(0);
-      expect(getRegisteredEventKeys()).not.toContain("command:new");
-    };
-
-    it("should return 0 when hooks are explicitly disabled", async () => {
-      const count = await commitPreparedHooks(
-        { hooks: { internal: { enabled: false } } } satisfies OpenClawConfig,
-        tmpDir,
-      );
-      expect(count).toBe(0);
+  it("registers unknown event keys anyway (advisory warning, not a load failure)", async () => {
+    writeHook("typo-hook", {
+      events: ["command:nwe", "command:new"],
     });
 
-    it("skips hook discovery until internal hooks are configured", async () => {
-      for (const cfg of [
-        {} satisfies OpenClawConfig,
-        { hooks: {} } satisfies OpenClawConfig,
-        { hooks: { internal: {} } } satisfies OpenClawConfig,
-      ]) {
-        const count = await commitPreparedHooks(cfg, tmpDir);
-        expect(count).toBe(0);
-      }
+    const count = await load(hookConfig(["typo-hook"]));
+
+    expect(count).toBe(1);
+    expect(hasInternalHookListeners("command", "nwe")).toBe(true);
+    expect(hasInternalHookListeners("command", "new")).toBe(true);
+    await expectMessages(["typo-hook"]);
+  });
+
+  it("keeps committed hooks serving while replacement imports are pending", async () => {
+    writeHook("original");
+    await load(hookConfig([], true));
+    const importStarted = createDeferredCore();
+    const releaseImport = createDeferredCore();
+    vi.stubGlobal("openclawHookImportGate", {
+      started: importStarted.resolve,
+      wait: releaseImport.promise,
     });
-
-    it("loads only explicitly configured discovered hooks", async () => {
-      const hooksDir = path.join(tmpDir, "managed-hooks");
-      await writeDiscoveredHook({ sourceDir: hooksDir, hookName: "keep-hook" });
-      await writeDiscoveredHook({ sourceDir: hooksDir, hookName: "skip-hook" });
-
-      const count = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              enabled: true,
-              entries: {
-                "keep-hook": { enabled: true },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        tmpDir,
-        { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" },
-      );
-
-      expect(count).toBe(1);
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-      expect(event.messages).toEqual(["keep-hook"]);
+    writeHook("replacement", {
+      handlerCode:
+        'globalThis.openclawHookImportGate.started(); await globalThis.openclawHookImportGate.wait; export default async function(event) { event.messages.push("replacement"); }',
     });
+    const loading = prepare(hookConfig(["replacement"]));
+    try {
+      await importStarted.promise;
+      await expectMessages(["original"]);
+    } finally {
+      releaseImport.resolve();
+      await loading;
+    }
+    const prepared = await loading;
+    await expectMessages(["original"]);
+    prepared.commit();
+    await expectMessages(["replacement"]);
+  });
 
-    it("matches configured names against metadata hook keys", async () => {
-      const hooksDir = path.join(tmpDir, "managed-hooks");
-      await writeDiscoveredHook({
-        sourceDir: hooksDir,
-        hookName: "display-name",
-        hookKey: "metadata-key",
+  it.each(["import", "missing handler", "escaped handler", "descriptor", "oversized", "invalid"])(
+    "retains active handlers after %s failure during sibling reload",
+    async (failure) => {
+      const extraDir = path.join(tmpDir, "extra-hooks");
+      const original = writeHook("original", {
+        sourceDir: extraDir,
+        hookKey: "selected-name",
       });
-      await writeDiscoveredHook({ sourceDir: hooksDir, hookName: "skip-hook" });
-
-      const count = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              enabled: true,
-              entries: { "metadata-key": { enabled: true } },
-            },
-          },
-        },
-        tmpDir,
-        { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" },
-      );
-
-      expect(count).toBe(1);
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-      expect(event.messages).toEqual(["display-name"]);
-    });
-
-    it("registers unknown event keys anyway (advisory warning, not a load failure)", async () => {
-      const hooksDir = path.join(tmpDir, "managed-hooks");
-      await writeDiscoveredHook({
-        sourceDir: hooksDir,
-        hookName: "typo-hook",
-        events: ["command:nwe", "command:new"],
-      });
-
-      const count = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              entries: {
-                "typo-hook": { enabled: true },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        tmpDir,
-        { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" },
-      );
-
-      // The typo'd key never fires, but validation is advisory: the hook still
-      // loads and its valid subscriptions keep working.
-      expect(count).toBe(1);
-      const keys = getRegisteredEventKeys();
-      expect(keys).toContain("command:nwe");
-      expect(keys).toContain("command:new");
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-      expect(event.messages).toEqual(["typo-hook"]);
-    });
-
-    it("preserves plugin-registered hooks when workspace hooks reload", async () => {
-      const pluginHandler = vi.fn();
-      registerInternalHook("gateway:startup", pluginHandler);
-
-      const count = await commitPreparedHooks(createEnabledHooksConfig(), tmpDir);
-
-      expect(count).toBe(0);
-      expect(getRegisteredEventKeys()).toContain("gateway:startup");
-
-      await triggerInternalHook(createInternalHookEvent("gateway", "startup", "gateway:startup"));
-      expect(pluginHandler).toHaveBeenCalledTimes(1);
-    });
-
-    it("replaces prior workspace hook registrations instead of duplicating them", async () => {
-      const hooksDir = path.join(tmpDir, "managed-hooks");
-      await writeDiscoveredHook({
-        sourceDir: hooksDir,
-        hookName: "reloadable-hook",
-      });
-      const cfg = {
-        hooks: {
-          internal: {
-            enabled: true,
-            entries: { "reloadable-hook": { enabled: true } },
-          },
-        },
-      } satisfies OpenClawConfig;
-      const options = { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" };
-
-      expect(await commitPreparedHooks(cfg, tmpDir, options)).toBe(1);
-      expect(await commitPreparedHooks(cfg, tmpDir, options)).toBe(1);
-
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-      expect(
-        event.messages.reduce(
-          (count, message) => count + (message === "reloadable-hook" ? 1 : 0),
-          0,
-        ),
-      ).toBe(1);
-    });
-
-    it.each([
-      ["invalid export", 'export default "not a function";'],
-      ["failed import", 'throw new Error("candidate import failed");'],
-    ])("retains the committed hook generation after %s", async (_name, handlerCode) => {
-      const managedHooksDir = path.join(tmpDir, "managed-hooks");
-      await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "original" });
-      const options = { managedHooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" };
-      const config = (names: string[]): OpenClawConfig => ({
-        hooks: {
-          internal: { entries: Object.fromEntries(names.map((name) => [name, { enabled: true }])) },
-        },
-      });
-      await commitPreparedHooks(config(["original"]), tmpDir, options);
-      await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "replacement" });
-      await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "broken", handlerCode });
-
-      await expect(
-        commitPreparedHooks(config(["replacement", "broken"]), tmpDir, options),
-      ).rejects.toThrow();
-
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-      expect(event.messages).toEqual(["original"]);
-    });
-
-    it("keeps committed hooks serving while replacement imports are pending", async () => {
-      const managedHooksDir = path.join(tmpDir, "managed-hooks");
-      const options = { managedHooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" };
-      await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "original" });
-      await commitPreparedHooks(createEnabledHooksConfig(), tmpDir, options);
-      const importStarted = createDeferredCore();
-      const releaseImport = createDeferredCore();
-      vi.stubGlobal("openclawHookImportGate", {
-        started: importStarted.resolve,
-        wait: releaseImport.promise,
-      });
-      await writeDiscoveredHook({
-        sourceDir: managedHooksDir,
-        hookName: "replacement",
-        handlerCode:
-          'globalThis.openclawHookImportGate.started(); await globalThis.openclawHookImportGate.wait; export default async function(event) { event.messages.push("replacement"); }',
-      });
-      const loading = prepareInternalHooks(
-        {
-          hooks: { internal: { entries: { replacement: { enabled: true } } } },
-        },
-        tmpDir,
-        options,
-      );
-      try {
-        await importStarted.promise;
-        const event = createInternalHookEvent("command", "new", "test-session");
-        await triggerInternalHook(event);
-        expect(event.messages).toEqual(["original"]);
-      } finally {
-        releaseImport.resolve();
-        await loading;
-      }
-      const prepared = await loading;
-      const beforeCommit = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(beforeCommit);
-      expect(beforeCommit.messages).toEqual(["original"]);
-      prepared.commit();
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-      expect(event.messages).toEqual(["replacement"]);
-    });
-
-    it.each(["missing", "outside hook directory"])(
-      "retains active handlers when a selected handler becomes %s before sibling reload",
-      async (failure) => {
-        const managedHooksDir = path.join(tmpDir, "managed-hooks");
-        const options = { managedHooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" };
-        const hookDir = await writeDiscoveredHook({
-          sourceDir: managedHooksDir,
-          hookName: "original",
-        });
-        const config: OpenClawConfig = {
-          hooks: { internal: { entries: { original: { enabled: true } } } },
-        };
-        await commitPreparedHooks(config, tmpDir, options);
-        const initial = createInternalHookEvent("command", "new", "test-session");
-        await triggerInternalHook(initial);
-        expect(initial.messages).toEqual(["original"]);
-
-        const handlerPath = path.join(hookDir, "handler.js");
-        await fs.unlink(handlerPath);
-        if (failure === "outside hook directory") {
+      const config = hookConfig(["selected-name", "sibling"], undefined, [extraDir]);
+      await load(config);
+      await expectMessages(["original"]);
+      const handler = path.join(original, "handler.js");
+      const descriptor = path.join(original, "HOOK.md");
+      if (failure === "import") {
+        await fs.writeFile(handler, 'throw new Error("candidate import failed");');
+      } else if (failure === "missing handler" || failure === "escaped handler") {
+        await fs.unlink(handler);
+        if (failure === "escaped handler") {
           const outside = path.join(tmpDir, "outside.js");
-          await fs.writeFile(outside, "export default async function() {}\n");
-          await fs.symlink(outside, handlerPath);
+          await fs.writeFile(outside, "export default async function() {}");
+          await fs.symlink(outside, handler);
         }
-        await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "sibling" });
-        await expect(
-          commitPreparedHooks(
-            {
-              hooks: {
-                internal: {
-                  entries: { original: { enabled: true }, sibling: { enabled: true } },
-                },
-              },
-            },
-            tmpDir,
-            options,
-          ),
-        ).rejects.toThrow();
-        const after = createInternalHookEvent("command", "new", "test-session");
-        await triggerInternalHook(after);
-        expect(after.messages).toEqual(["original"]);
-      },
-    );
-
-    it.each([
-      "directory",
-      "descriptor",
-      "oversized metadata",
-      "invalid metadata",
-      "invalid keyed metadata",
-    ])(
-      "retains active handlers when its configured source loses %s before sibling reload",
-      async (failure) => {
-        const extraDir = path.join(tmpDir, "extra-hooks");
-        const original = await writeDiscoveredHook({
-          sourceDir: extraDir,
-          hookName: "original",
-          hookKey: "selected-name",
-        });
-        const options = {
-          managedHooksDir:
-            failure === "invalid keyed metadata" ? extraDir : path.join(tmpDir, "managed-none"),
-        };
-        const config: OpenClawConfig = {
-          hooks: {
-            internal: {
-              load: { extraDirs: failure === "invalid keyed metadata" ? [] : [extraDir] },
-              entries: { "selected-name": { enabled: true } },
-            },
-          },
-        };
-        await commitPreparedHooks(config, tmpDir, options);
-        const initial = createInternalHookEvent("command", "new", "test-session");
-        await triggerInternalHook(initial);
-        expect(initial.messages).toEqual(["original"]);
-
-        if (failure === "directory") {
-          await fs.rm(original, { recursive: true });
-        } else if (failure === "descriptor") {
-          await fs.unlink(path.join(original, "HOOK.md"));
-        } else {
-          await fs.writeFile(
-            path.join(original, "HOOK.md"),
-            failure === "oversized metadata"
-              ? "x".repeat(1024 * 1024 + 1)
-              : "---\nname: original\nmetadata: {invalid\n---\n",
-          );
-        }
-        await writeDiscoveredHook({ sourceDir: extraDir, hookName: "sibling" });
-        await expect(commitPreparedHooks(config, tmpDir, options)).rejects.toThrow();
-        const after = createInternalHookEvent("command", "new", "test-session");
-        await triggerInternalHook(after);
-        expect(after.messages).toEqual(["original"]);
-      },
-    );
-
-    it.each(["disabled", "ineligible", "unselected", "collision loser"])(
-      "ignores a missing handler for a %s during atomic reload",
-      async (selection) => {
-        const managedHooksDir = path.join(tmpDir, "managed-hooks");
-        const options = { managedHooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" };
-        await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "valid" });
-        const broken = await writeDiscoveredHook({
-          sourceDir: selection === "collision loser" ? undefined : managedHooksDir,
-          hookName: selection === "collision loser" ? "valid" : "broken",
-          requires: selection === "ineligible" ? { config: ["browser.enabled"] } : undefined,
-        });
-        await fs.unlink(path.join(broken, "handler.js"));
-
-        await expect(
-          commitPreparedHooks(
-            {
-              browser: { enabled: false },
-              hooks: {
-                internal: {
-                  entries: {
-                    valid: { enabled: true },
-                    ...(selection === "disabled" ? { broken: { enabled: false } } : {}),
-                    ...(selection === "ineligible" ? { broken: { enabled: true } } : {}),
-                  },
-                },
-              },
-            },
-            tmpDir,
-            options,
-          ),
-        ).resolves.toBe(1);
-        const event = createInternalHookEvent("command", "new", "test-session");
-        await triggerInternalHook(event);
-        expect(event.messages).toEqual(["valid"]);
-      },
-    );
-
-    it.each(
-      ["ineligible", "disabled", "unselected"].flatMap((selection) =>
-        ["handler", "directory"].map((failure) => ({ selection, failure })),
-      ),
-    )(
-      "does not activate a shadowed hook when its $selection override loses its $failure",
-      async ({ selection, failure }) => {
-        const bundledHooksDir = path.join(tmpDir, "bundled-hooks");
-        const managedHooksDir = path.join(tmpDir, "managed-hooks");
-        const options = { bundledHooksDir, managedHooksDir };
-        await writeDiscoveredHook({
-          sourceDir: bundledHooksDir,
-          hookName: "overridden",
-          hookKey: "bundled-selection",
-          handlerCode: 'export default async function(event) { event.messages.push("bundled"); }',
-        });
-        const overriding = await writeDiscoveredHook({
-          sourceDir: managedHooksDir,
-          hookName: "overridden",
-          hookKey: "managed-selection",
-          requires: selection === "ineligible" ? { config: ["browser.enabled"] } : undefined,
-        });
-        const entries = {
-          "bundled-selection": { enabled: true },
-          ...(selection !== "unselected"
-            ? { "managed-selection": { enabled: selection !== "disabled" } }
-            : {}),
-        };
-        const config: OpenClawConfig = {
-          browser: { enabled: false },
-          hooks: { internal: { entries } },
-        };
-        await expect(commitPreparedHooks(config, tmpDir, options)).resolves.toBe(0);
-        const initial = createInternalHookEvent("command", "new", "test-session");
-        await triggerInternalHook(initial);
-        expect(initial.messages).toEqual([]);
-
-        if (failure === "directory") {
-          await fs.rm(overriding, { recursive: true });
-        } else {
-          await fs.unlink(path.join(overriding, "handler.js"));
-        }
-        await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "sibling" });
-        await commitPreparedHooks(
-          {
-            ...config,
-            hooks: { internal: { entries: { ...entries, sibling: { enabled: true } } } },
-          },
-          tmpDir,
-          options,
+      } else if (failure === "descriptor") {
+        await fs.unlink(descriptor);
+      } else {
+        await fs.writeFile(
+          descriptor,
+          failure === "oversized"
+            ? "x".repeat(1024 * 1024 + 1)
+            : "---\nname: original\nmetadata: {invalid\n---\n",
         );
-        const after = createInternalHookEvent("command", "new", "test-session");
-        await triggerInternalHook(after);
-        expect(after.messages).toEqual(["sibling"]);
-      },
-    );
+      }
+      writeHook("sibling", { sourceDir: extraDir });
+      await expect(load(config)).rejects.toThrow();
+      await expectMessages(["original"]);
+    },
+  );
 
-    it("allows a valid higher-precedence source to replace a lost selected source", async () => {
-      const bundledHooksDir = path.join(tmpDir, "bundled-hooks");
-      const managedHooksDir = path.join(tmpDir, "managed-hooks");
-      const original = await writeDiscoveredHook({
-        sourceDir: bundledHooksDir,
-        hookName: "original",
-      });
-      const options = { bundledHooksDir, managedHooksDir };
-      const config = createEnabledHooksConfig();
-      await commitPreparedHooks(config, tmpDir, options);
-      await fs.rm(original, { recursive: true });
-      await writeDiscoveredHook({
-        sourceDir: managedHooksDir,
-        hookName: "original",
-        handlerCode: 'export default async function(event) { event.messages.push("replacement"); }',
-      });
-      await commitPreparedHooks(config, tmpDir, options);
-      const after = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(after);
-      expect(after.messages).toEqual(["replacement"]);
+  it("keeps managed code over a workspace collision, even after the losing handler disappears", async () => {
+    writeHook("valid");
+    const losing = writeHook("valid", {
+      sourceDir: path.join(tmpDir, "hooks"),
+      message: "workspace-override",
     });
+    const config = { browser: { enabled: false }, ...hookConfig(["valid"]) };
+    await expect(load(config)).resolves.toBe(1);
+    await expectMessages(["valid"]);
+    await fs.unlink(path.join(losing, "handler.js"));
+    await expect(load(config)).resolves.toBe(1);
+    await expectMessages(["valid"]);
+  });
 
-    it.each(["disable", "ineligible", "name removal", "root removal", "install removal"])(
-      "accepts intentional %s after a winning source disappears",
-      async (removal) => {
-        const bundledHooksDir = path.join(tmpDir, "bundled-hooks");
-        const managedHooksDir = path.join(tmpDir, "managed-hooks");
-        const extraDir = path.join(tmpDir, "extra-hooks");
-        const options = { bundledHooksDir, managedHooksDir };
-        await writeDiscoveredHook({
-          sourceDir: bundledHooksDir,
-          hookName: "original",
-          hookKey: "lower-name",
-          handlerCode: 'export default async function(event) { event.messages.push("lower"); }',
-        });
-        const original = await writeDiscoveredHook({
-          sourceDir: extraDir,
-          hookName: "original",
-          hookKey: "selected-name",
-          requires: { config: ["browser.enabled"] },
-        });
-        const config: OpenClawConfig = {
-          browser: { enabled: true },
-          hooks: {
-            internal: {
-              load: { extraDirs: [extraDir] },
-              entries: {
-                "lower-name": { enabled: true },
-                ...(removal === "install removal" ? {} : { "selected-name": { enabled: true } }),
-              },
-            },
-          },
-        };
-        const state = await import("../state/config-machine-state.js");
-        const installed = vi.spyOn(state, "readConfigMachineState");
-        installed.mockReturnValue(
-          removal === "install removal"
-            ? { pack: { source: "path", hooks: ["selected-name"] } }
-            : undefined,
-        );
-        try {
-          await commitPreparedHooks(config, tmpDir, options);
-          await fs.rm(original, { recursive: true });
-          await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "sibling" });
-          const entries: Record<string, { enabled?: boolean }> = {
-            ...config.hooks?.internal?.entries,
-            sibling: { enabled: true },
-          };
-          if (removal === "disable") {
-            entries["selected-name"] = { enabled: false };
-          }
-          if (removal === "name removal") {
-            delete entries["selected-name"];
-          }
-          if (removal === "install removal") {
-            installed.mockReturnValue(undefined);
-          }
-          const next: OpenClawConfig = {
-            ...config,
-            browser: { enabled: removal !== "ineligible" },
-            hooks: {
-              internal: {
-                entries,
-                load: { extraDirs: removal === "root removal" ? [] : [extraDir] },
-              },
-            },
-          };
-          await commitPreparedHooks(next, tmpDir, options);
-          const after = createInternalHookEvent("command", "new", "test-session");
-          await triggerInternalHook(after);
-          expect(after.messages).toEqual(
-            removal === "disable" || removal === "ineligible" ? ["sibling"] : ["lower", "sibling"],
-          );
-        } finally {
-          installed.mockRestore();
-        }
-      },
-    );
-
-    it("drops a lost workspace source when the selected workspace changes", async () => {
-      const original = await writeDiscoveredHook({ hookName: "original" });
+  it.each(["ineligible", "disable", "install removal"])(
+    "preserves source precedence through %s of a missing winning hook",
+    async (removal) => {
+      const bundled = path.join(tmpDir, "bundled");
+      const extraDir = path.join(tmpDir, "extra");
+      vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", bundled);
+      writeHook("original", { sourceDir: bundled, hookKey: "lower-name", message: "lower" });
+      const original = writeHook("original", {
+        sourceDir: extraDir,
+        hookKey: "selected-name",
+        requires: { config: ["browser.enabled"] },
+      });
       const config: OpenClawConfig = {
-        hooks: { internal: { entries: { original: { enabled: true } } } },
+        browser: { enabled: removal !== "ineligible" },
+        ...hookConfig(
+          removal === "install removal" ? ["lower-name"] : ["lower-name", "selected-name"],
+          undefined,
+          [extraDir],
+        ),
       };
-      await commitPreparedHooks(config, tmpDir);
-      await fs.rm(original, { recursive: true });
-      const nextWorkspace = path.join(tmpDir, "new-workspace");
-      await writeDiscoveredHook({
-        sourceDir: path.join(nextWorkspace, "hooks"),
-        hookName: "original",
-        handlerCode:
-          'export default async function(event) { event.messages.push("new-workspace"); }',
-      });
-      await commitPreparedHooks(config, nextWorkspace);
-      const after = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(after);
-      expect(after.messages).toEqual(["new-workspace"]);
-    });
+      const state = await import("./installs.js");
+      const installed =
+        removal === "install removal"
+          ? vi.spyOn(state, "readHookInstallsAsync").mockResolvedValue({
+              pack: { source: "path", hooks: ["selected-name"] },
+            })
+          : undefined;
+      await expect(load(config)).resolves.toBe(removal === "ineligible" ? 0 : 1);
+      await expectMessages(removal === "ineligible" ? [] : ["original"]);
+      if (removal === "ineligible") {
+        await fs.unlink(path.join(original, "handler.js"));
+      } else {
+        await fs.rm(original, { recursive: true });
+      }
+      writeHook("sibling");
+      installed?.mockResolvedValue({});
+      const entries = {
+        ...config.hooks?.internal?.entries,
+        ...(removal === "disable" ? { "selected-name": { enabled: false } } : {}),
+        sibling: { enabled: true },
+      };
+      await load({ ...config, hooks: { internal: { ...config.hooks?.internal, entries } } });
+      await expectMessages(removal === "install removal" ? ["lower", "sibling"] : ["sibling"]);
+    },
+  );
 
-    it("keeps best-effort startup's intact lower-priority hook after discovery rejection", async () => {
-      const bundledHooksDir = path.join(tmpDir, "bundled-hooks");
-      const managedHooksDir = path.join(tmpDir, "managed-hooks");
-      await writeDiscoveredHook({ sourceDir: bundledHooksDir, hookName: "original" });
-      const broken = await writeDiscoveredHook({
-        sourceDir: managedHooksDir,
-        hookName: "original",
-      });
-      await fs.unlink(path.join(broken, "handler.js"));
+  it("commits disable and re-enable for registered internal hook listeners", async () => {
+    const handler = vi.fn();
+    registerInternalHook("command:new", handler);
+    for (const enabled of [false, true]) {
+      const prepared = await prepare(hookConfig([], enabled));
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
+      expect(handler).toHaveBeenCalledTimes(1);
+      prepared.commit();
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
+      expect(handler).toHaveBeenCalledTimes(enabled ? 2 : 1);
+    }
+  });
 
-      await expect(
-        commitPreparedHooks(createEnabledHooksConfig(), tmpDir, {
-          managedHooksDir,
-          bundledHooksDir,
-          failureMode: "best-effort",
-        }),
-      ).resolves.toBe(1);
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-      expect(event.messages).toEqual(["original"]);
-    });
-
-    it("commits disable and re-enable for registered internal hook listeners", async () => {
+  it.each(["before preparation", "after preparation", "after shutdown"])(
+    "keeps deferred startup from overwriting ownership transferred %s",
+    async (transfer) => {
+      await drainGlobalSingletonLifecycleState("restart");
       const handler = vi.fn();
       registerInternalHook("command:new", handler);
-      const disabled = await prepareInternalHooks(
-        { hooks: { internal: { enabled: false } } },
-        tmpDir,
-      );
-      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
-      expect(handler).toHaveBeenCalledTimes(1);
-      disabled.commit();
-      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
-      expect(handler).toHaveBeenCalledTimes(1);
-
-      const enabled = await prepareInternalHooks(createEnabledHooksConfig(), tmpDir);
-      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
-      expect(handler).toHaveBeenCalledTimes(1);
-      enabled.commit();
-      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
-      expect(handler).toHaveBeenCalledTimes(2);
-    });
-
-    it.each(["before preparation", "after preparation", "after shutdown"])(
-      "keeps deferred startup from overwriting ownership transferred %s",
-      async (transfer) => {
+      const disable = () => load({ hooks: { internal: { enabled: false } } });
+      if (transfer === "before preparation") {
+        await disable();
+      }
+      const startup = await prepare(hookConfig([], true));
+      if (transfer === "after preparation") {
+        await disable();
+      } else if (transfer === "after shutdown") {
         await drainGlobalSingletonLifecycleState("restart");
-        const handler = vi.fn();
-        registerInternalHook("command:new", handler);
-        const disable = () =>
-          commitPreparedHooks({ hooks: { internal: { enabled: false } } }, tmpDir);
-        if (transfer === "before preparation") {
-          await disable();
-        }
-        const startup = await prepareInternalHooks(createEnabledHooksConfig(), tmpDir);
-        if (transfer === "after preparation") {
-          await disable();
-        } else if (transfer === "after shutdown") {
-          await drainGlobalSingletonLifecycleState("restart");
-          await disable();
+        await disable();
+      }
+
+      expect(startup.commit({ initial: true })).toBe(false);
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["replacement", "disable"])(
+    "finishes an admitted event's original handlers across %s",
+    async (change) => {
+      const started = createDeferredCore();
+      const release = createDeferredCore();
+      registerInternalHook("command", async () => {
+        started.resolve();
+        await release.promise;
+      });
+      writeHook("original");
+      await load(hookConfig([], true));
+      const originalEvent = createInternalHookEvent("command", "new", "test-session");
+      const dispatch = triggerInternalHook(originalEvent);
+      try {
+        await started.promise;
+        writeHook("replacement");
+        await load(hookConfig(["replacement"], change !== "disable"));
+      } finally {
+        release.resolve();
+        await dispatch;
+      }
+      expect(originalEvent.messages).toEqual(["original"]);
+      await expectMessages(change === "disable" ? [] : ["replacement"]);
+    },
+  );
+
+  it("keeps configured hooks across plugin cleanup and retires them on Gateway restart", async () => {
+    writeHook("managed");
+    await load(hookConfig([], true));
+    const unrelated = vi.fn();
+    registerInternalHook("command:new", unrelated);
+
+    await drainGlobalSingletonLifecycleState("plugin-registry");
+    await expectMessages(["managed"]);
+    expect(unrelated).toHaveBeenCalledTimes(1);
+
+    await drainGlobalSingletonLifecycleState("restart");
+    await expectMessages([]);
+    expect(unrelated).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips invalid handlers while preserving a named-export sibling during best-effort startup", async () => {
+    writeHook("bad-export", {
+      handlerCode: 'export default "not a function";\n',
+    });
+
+    writeHook("valid", {
+      export: "myHandler",
+      handlerCode: 'export const myHandler = async (event) => { event.messages.push("valid"); };\n',
+    });
+    const count = await load(hookConfig(["bad-export", "valid"], true), {
+      failureMode: "best-effort",
+    });
+    expect(count).toBe(1);
+    await expectMessages(["valid"]);
+  });
+
+  it("keeps workspace hooks disabled by default until explicitly enabled", async () => {
+    writeHook("workspace-hook", { sourceDir: path.join(tmpDir, "hooks") });
+
+    const disabledCount = await load(hookConfig([], true));
+    expect(disabledCount).toBe(0);
+    expect(hasInternalHookListeners("command", "new")).toBe(false);
+
+    const enabledCount = await load(hookConfig(["workspace-hook"], true));
+    expect(enabledCount).toBe(1);
+
+    await expectMessages(["workspace-hook"]);
+  });
+
+  describe("bundle plugin hooks", () => {
+    async function writeBundleFiles(root: string, files: Record<string, string>) {
+      for (const [relative, content] of Object.entries(files)) {
+        const file = path.join(root, relative);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, content, "utf-8");
+      }
+    }
+
+    async function writeBundleHookFixture(
+      format = "codex",
+      withJsonHooks = false,
+      declaredRoot = "hooks",
+    ): Promise<string> {
+      const bundleRoot = path.join(tmpDir, ".openclaw", "extensions", "sample-bundle");
+      await writeBundleFiles(bundleRoot, {
+        [`.${format}-plugin/plugin.json`]: JSON.stringify({
+          name: "Sample Bundle",
+          hooks: declaredRoot,
+        }),
+      });
+      writeHook("bundle-hook", {
+        sourceDir: path.join(bundleRoot, "hooks"),
+        message: "bundle-hook-ok",
+      });
+      if (withJsonHooks) {
+        await writeBundleFiles(bundleRoot, { "hooks/hooks.json": '{"hooks":[]}' });
+      }
+      return bundleRoot;
+    }
+
+    function createConfig(enabled: boolean, pluginId = "sample-bundle"): OpenClawConfig {
+      return {
+        hooks: { internal: { enabled: true } },
+        plugins: { entries: { [pluginId]: { enabled } } },
+      };
+    }
+
+    function publishSnapshot(config: OpenClawConfig, gateway = true) {
+      const snapshot = loadPluginMetadataSnapshot({
+        config,
+        workspaceDir: tmpDir,
+        env: process.env,
+      });
+      const publish = gateway ? setGatewayPluginMetadataSnapshot : setCurrentPluginMetadataSnapshot;
+      publish(snapshot, { config, workspaceDir: tmpDir });
+    }
+
+    function expectBundleEntry(config: OpenClawConfig) {
+      expect(
+        loadWorkspaceHookEntries(tmpDir, { config }).map(({ hook }) => [
+          hook.name,
+          hook.source,
+          hook.pluginId,
+        ]),
+      ).toEqual([["bundle-hook", "openclaw-plugin", "sample-bundle"]]);
+    }
+
+    function projectBundleComponents(pluginId: string, config: OpenClawConfig) {
+      const metadata = loadPluginMetadataSnapshot({
+        config,
+        workspaceDir: tmpDir,
+        env: process.env,
+      });
+      const manifest = metadata.manifestRegistry.plugins.find(({ id }) => id === pluginId);
+      if (!manifest) {
+        throw new Error(`Expected bundle manifest for ${pluginId}`);
+      }
+      const { declared } = buildPluginCapabilitySummary({ manifest, origin: manifest.origin });
+      return projectInstalledPluginComponents({ manifest, declared });
+    }
+
+    it.each([
+      { format: "codex", withJsonHooks: false, root: "hooks", supported: ["hooks"] },
+      { format: "claude", withJsonHooks: false, root: "hooks", supported: ["hooks"] },
+      { format: "claude", withJsonHooks: true, root: "hooks", supported: ["hooks"] },
+      { format: "claude", withJsonHooks: false, root: "hooks/bundle-hook", supported: [] },
+    ])(
+      "matches $format hook components to discovery for $root with JSON hooks $withJsonHooks",
+      async ({ format, withJsonHooks, root, supported }) => {
+        await writeBundleHookFixture(format, withJsonHooks, root);
+        const config = createConfig(true);
+        if (supported.length > 0) {
+          expectBundleEntry(config);
+        } else {
+          expect(loadWorkspaceHookEntries(tmpDir, { config })).toHaveLength(0);
         }
 
-        expect(startup.commit({ initial: true })).toBe(false);
-        await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
-        expect(handler).not.toHaveBeenCalled();
-      },
-    );
-
-    it.each(["replacement", "disable"])(
-      "finishes an admitted event's original handlers across %s",
-      async (change) => {
-        const managedHooksDir = path.join(tmpDir, "managed-hooks");
-        const options = { managedHooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" };
-        const started = createDeferredCore();
-        const release = createDeferredCore();
-        registerInternalHook("command", async () => {
-          started.resolve();
-          await release.promise;
+        expect(projectBundleComponents("sample-bundle", config)).toMatchObject({
+          mapped: supported.length > 0 ? ["hooks"] : [],
+          hooks: supported,
+          unavailable: { capabilities: supported.length > 0 ? [] : ["hooks"] },
         });
-        await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "original" });
-        await commitPreparedHooks(createEnabledHooksConfig(), tmpDir, options);
-        const originalEvent = createInternalHookEvent("command", "new", "test-session");
-        const dispatch = triggerInternalHook(originalEvent);
-        try {
-          await started.promise;
-          await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "replacement" });
-          await commitPreparedHooks(
-            {
-              hooks: {
-                internal: {
-                  enabled: change !== "disable",
-                  entries: { replacement: { enabled: true } },
-                },
-              },
-            },
-            tmpDir,
-            options,
-          );
-        } finally {
-          release.resolve();
-          await dispatch;
-        }
-        expect(originalEvent.messages).toEqual(["original"]);
-        const nextEvent = createInternalHookEvent("command", "new", "test-session");
-        await triggerInternalHook(nextEvent);
-        expect(nextEvent.messages).toEqual(change === "disable" ? [] : ["replacement"]);
       },
     );
 
-    it("keeps configured hooks across plugin cleanup and retires them on Gateway restart", async () => {
-      const managedHooksDir = path.join(tmpDir, "managed-hooks");
-      await writeDiscoveredHook({ sourceDir: managedHooksDir, hookName: "managed" });
-      await commitPreparedHooks(createEnabledHooksConfig(), tmpDir, { managedHooksDir });
-      const unrelated = vi.fn();
-      registerInternalHook("command:new", unrelated);
-
-      await drainGlobalSingletonLifecycleState("plugin-registry");
-      const afterPluginCleanup = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(afterPluginCleanup);
-      expect(afterPluginCleanup.messages).toEqual(["managed"]);
-      expect(unrelated).toHaveBeenCalledTimes(1);
-
-      await drainGlobalSingletonLifecycleState("restart");
-      const afterRestart = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(afterRestart);
-      expect(afterRestart.messages).toEqual([]);
-      expect(unrelated).toHaveBeenCalledTimes(2);
-    });
-
-    it("should support named exports", async () => {
-      const hooksDir = path.join(tmpDir, "managed-hooks");
-      await writeDiscoveredHook({
-        sourceDir: hooksDir,
-        hookName: "named-export",
-        exportName: "myHandler",
-        handlerCode: "export const myHandler = async function() {};\n",
-      });
-      const cfg = {
-        hooks: {
-          internal: {
-            enabled: true,
-            entries: { "named-export": { enabled: true } },
-          },
-        },
-      } satisfies OpenClawConfig;
-
-      const count = await commitPreparedHooks(cfg, tmpDir, {
-        managedHooksDir: hooksDir,
-        bundledHooksDir: "/nonexistent/bundled/hooks",
-      });
-      expect(count).toBe(1);
-    });
-
-    it("skips invalid handlers while preserving valid siblings during best-effort startup", async () => {
-      const hooksDir = path.join(tmpDir, "managed-hooks");
-      await writeDiscoveredHook({
-        sourceDir: hooksDir,
-        hookName: "bad-export",
-        handlerCode: 'export default "not a function";\n',
-      });
-
-      await writeDiscoveredHook({ sourceDir: hooksDir, hookName: "valid" });
-      const count = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              enabled: true,
-              entries: { "bad-export": { enabled: true }, valid: { enabled: true } },
-            },
-          },
-        },
-        tmpDir,
-        {
-          managedHooksDir: hooksDir,
-          bundledHooksDir: "/nonexistent/bundled/hooks",
-          failureMode: "best-effort",
-        },
-      );
-      expect(count).toBe(1);
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-      expect(event.messages).toEqual(["valid"]);
-    });
-
-    it("keeps workspace hooks disabled by default until explicitly enabled", async () => {
-      await writeDiscoveredHook({ hookName: "workspace-hook" });
-
-      const disabledCount = await commitPreparedHooks(createEnabledHooksConfig(), tmpDir);
-      expect(disabledCount).toBe(0);
-      expect(getRegisteredEventKeys()).not.toContain("command:new");
-
-      const enabledCount = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              enabled: true,
-              entries: {
-                "workspace-hook": {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-        tmpDir,
-      );
-      expect(enabledCount).toBe(1);
-
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-      expect(event.messages).toContain("workspace-hook");
-    });
-
-    it("rejects directory hook handlers that escape hook dir via symlink", async () => {
-      const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-${caseId}.js`);
-      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
-
-      const hookDir = path.join(tmpDir, "hooks", "symlink-hook");
-      await fs.mkdir(hookDir, { recursive: true });
-      await fs.writeFile(
-        path.join(hookDir, "HOOK.md"),
-        [
-          "---",
-          "name: symlink-hook",
-          "description: symlink test",
-          'metadata: {"openclaw":{"events":["command:new"]}}',
-          "---",
-          "",
-          "# Symlink Hook",
-        ].join("\n"),
-        "utf-8",
-      );
-      try {
-        await fs.symlink(outsideHandlerPath, path.join(hookDir, "handler.js"));
-      } catch {
-        return;
-      }
-
-      await expectNoCommandHookRegistration(createEnabledHooksConfig());
-    });
-
-    it("rejects directory hook handlers that escape hook dir via hardlink", async () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-hardlink-${caseId}.js`);
-      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
-
-      const hookDir = path.join(tmpDir, "hooks", "hardlink-hook");
-      await fs.mkdir(hookDir, { recursive: true });
-      await fs.writeFile(
-        path.join(hookDir, "HOOK.md"),
-        [
-          "---",
-          "name: hardlink-hook",
-          "description: hardlink test",
-          'metadata: {"openclaw":{"events":["command:new"]}}',
-          "---",
-          "",
-          "# Hardlink Hook",
-        ].join("\n"),
-        "utf-8",
-      );
-      try {
-        await fs.link(outsideHandlerPath, path.join(hookDir, "handler.js"));
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-          return;
+    it.each([false, true])(
+      "reuses published inventory through policy commits (gateway=%s)",
+      async (gateway) => {
+        await writeBundleHookFixture();
+        const config = createConfig(true);
+        publishSnapshot(config, gateway);
+        const registry = await import("../plugins/manifest-registry-installed.js");
+        const scan = vi.spyOn(registry, "loadPluginManifestRegistryForInstalledIndex");
+        expectBundleEntry(config);
+        expectBundleEntry(config);
+        if (gateway) {
+          const initial = await prepare(config);
+          expect(initial.loadedCount).toBe(1);
+          initial.commit();
+          for (const enabled of [false, true]) {
+            const candidate = await prepare(createConfig(enabled));
+            expect(candidate.loadedCount).toBe(enabled ? 1 : 0);
+            await expectMessages(enabled ? [] : ["bundle-hook-ok"]);
+            candidate.commit();
+            await expectMessages(enabled ? ["bundle-hook-ok"] : []);
+          }
         }
-        throw err;
-      }
+        expect(scan).not.toHaveBeenCalled();
+      },
+    );
 
-      await expectNoCommandHookRegistration(createEnabledHooksConfig());
-    });
+    it.each(["root", "descriptor"])(
+      "retains a selected plugin hook after losing its %s until the plugin is disabled",
+      async (failure) => {
+        const bundleRoot = await writeBundleHookFixture();
+        const config = createConfig(true);
+        publishSnapshot(config);
+        (await prepare(config)).commit();
+        const hookRoot = path.join(bundleRoot, "hooks");
+        await fs.rm(failure === "root" ? hookRoot : path.join(hookRoot, "bundle-hook", "HOOK.md"), {
+          recursive: true,
+        });
 
-    it("keeps managed hooks active when a workspace hook reuses the same name", async () => {
-      const managedHooksDir = path.join(tmpDir, "managed-hooks");
-      await writeDiscoveredHook({
-        sourceDir: managedHooksDir,
-        hookName: "session-memory",
-        handlerCode: 'export default async function(event) { event.messages.push("managed"); }\n',
+        await expect(prepare(config)).rejects.toThrow();
+        await expectMessages(["bundle-hook-ok"]);
+        (await prepare(createConfig(false))).commit();
+        await expectMessages([]);
+      },
+    );
+
+    it("does not treat Claude hooks.json bundles as OpenClaw hook packs", async () => {
+      const bundleRoot = path.join(tmpDir, ".openclaw", "extensions", "claude-bundle");
+      await writeBundleFiles(bundleRoot, {
+        ".claude-plugin/plugin.json": JSON.stringify({
+          name: "Claude Bundle",
+          hooks: [{ type: "command" }],
+        }),
+        "hooks/hooks.json": '{"hooks":[]}',
       });
-      await writeDiscoveredHook({
-        hookName: "session-memory",
-        handlerCode:
-          'export default async function(event) { event.messages.push("workspace-override"); }\n',
+      const config = createConfig(true, "claude-bundle");
+      const entries = loadWorkspaceHookEntries(tmpDir, { config });
+      expect(entries).toHaveLength(0);
+
+      expect(projectBundleComponents("claude-bundle", config)).toMatchObject({
+        mapped: [],
+        hooks: [],
+        unavailable: { capabilities: ["hooks"] },
       });
-
-      const count = await commitPreparedHooks(
-        {
-          hooks: {
-            internal: {
-              enabled: true,
-              entries: {
-                "session-memory": {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-        tmpDir,
-        { managedHooksDir },
-      );
-      expect(count).toBe(1);
-
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-      expect(event.messages).toContain("managed");
-      expect(event.messages).not.toContain("workspace-override");
     });
   });
 });

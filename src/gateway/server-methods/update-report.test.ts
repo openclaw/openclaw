@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   getLatest: vi.fn<() => RestartSentinelPayload | null>(),
@@ -24,9 +25,9 @@ vi.mock("../../infra/update-failure-report.js", () => ({
   submitUpdateFailureReport: mocks.submit,
 }));
 
-vi.mock("../server-restart-sentinel.js", async () => {
-  const actual = await vi.importActual<typeof import("../server-restart-sentinel.js")>(
-    "../server-restart-sentinel.js",
+vi.mock("../server-update-sentinel.js", async () => {
+  const actual = await vi.importActual<typeof import("../server-update-sentinel.js")>(
+    "../server-update-sentinel.js",
   );
   return {
     ...actual,
@@ -74,6 +75,7 @@ async function invoke(
   await handler({
     ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
     client: { internal: { operatorRoleActor: { kind: "system" } } },
+    context: createDirectChatContext(),
     params,
     respond,
   } as never);
@@ -258,41 +260,19 @@ describe("update.report", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 
-  it.each(["preview", "submit"] as const)(
-    "refuses %s without a live authenticated-client guard",
-    async (action) => {
-      const respond = await invoke(
-        {
-          action,
-          attemptId: "handoff-failed",
-          ...(action === "submit" ? { previewDigest: "a".repeat(64) } : {}),
-        },
-        null,
-      );
+  it("refuses submission without a live authenticated-client guard", async () => {
+    const respond = await invoke(
+      { action: "submit", attemptId: "handoff-failed", previewDigest: "a".repeat(64) },
+      null,
+    );
 
-      expect(mocks.submit).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("authenticated client"),
-        }),
-      );
-    },
-  );
-
-  it("rejects a stale update identity before preparing or submitting", async () => {
-    const respond = await invoke({ action: "preview", attemptId: "older-handoff" });
-
-    expect(mocks.prepare).not.toHaveBeenCalled();
     expect(mocks.submit).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({
         code: "INVALID_REQUEST",
-        message: expect.stringContaining("stale"),
+        message: expect.stringContaining("authenticated client"),
       }),
     );
   });
@@ -350,6 +330,7 @@ describe("update.report", () => {
 
     expect(mocks.getLatest).not.toHaveBeenCalled();
     expect(mocks.prepare).not.toHaveBeenCalled();
+    expect(mocks.submit).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,

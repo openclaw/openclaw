@@ -1,4 +1,3 @@
-// Shared resolver for channel live-preview draft chunk thresholds.
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";

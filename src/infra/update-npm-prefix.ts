@@ -1,9 +1,11 @@
 // npm owns effective prefix resolution; callers consume its layout and launcher facts.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveExecutablePath } from "./executable-path.js";
 import { pathExists } from "./fs-safe.js";
 import { applyPathPrepend } from "./path-prepend.js";
+import { resolveRuntimeDependencyEntrypointUrlFromDirectory } from "./runtime-process-dependency-url.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 
 /** npm prefix layout paths needed to install, stage, and expose global bins. */
@@ -15,14 +17,8 @@ export type NpmGlobalPrefixLayout = {
 
 /** Reads the command value after package-manager warnings printed on stdout. */
 export function readPackageManagerProbeValue(stdout: string): string {
-  const lines = stdout.split(/\r?\n/u);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const value = lines[index]?.trim();
-    if (value) {
-      return value;
-    }
-  }
-  return "";
+  const value = stdout.split(/\r?\n/u).findLast((line) => line.trim());
+  return value?.trim() ?? "";
 }
 
 /**
@@ -42,29 +38,21 @@ export function resolveNpmGlobalPrefixLayoutFromGlobalRoot(
     return null;
   }
   const parentDir = path.dirname(normalized);
-  if (path.basename(parentDir) === "lib") {
-    const prefix = path.dirname(parentDir);
-    return {
-      prefix,
-      globalRoot: normalized,
-      binDir: path.join(prefix, "bin"),
-    };
+  const hasLibParent = path.basename(parentDir) === "lib";
+  const windows = process.platform === "win32";
+  if (!hasLibParent && !windows && !options.allowDirectNodeModulesRoot) {
+    return null;
   }
-  if (process.platform === "win32") {
-    return {
-      prefix: parentDir,
-      globalRoot: normalized,
-      binDir: parentDir,
-    };
-  }
-  if (options.allowDirectNodeModulesRoot) {
-    return {
-      prefix: parentDir,
-      globalRoot: normalized,
-      binDir: path.join(normalized, ".bin"),
-    };
-  }
-  return null;
+  const prefix = hasLibParent ? path.dirname(parentDir) : parentDir;
+  return {
+    prefix,
+    globalRoot: normalized,
+    binDir: hasLibParent
+      ? path.join(prefix, "bin")
+      : windows
+        ? prefix
+        : path.join(normalized, ".bin"),
+  };
 }
 
 /**
@@ -73,17 +61,11 @@ export function resolveNpmGlobalPrefixLayoutFromGlobalRoot(
  */
 export function resolveNpmGlobalPrefixLayoutFromPrefix(prefix: string): NpmGlobalPrefixLayout {
   const resolvedPrefix = path.resolve(prefix);
-  if (process.platform === "win32") {
-    return {
-      prefix: resolvedPrefix,
-      globalRoot: path.join(resolvedPrefix, "node_modules"),
-      binDir: resolvedPrefix,
-    };
-  }
+  const windows = process.platform === "win32";
   return {
     prefix: resolvedPrefix,
-    globalRoot: path.join(resolvedPrefix, "lib", "node_modules"),
-    binDir: path.join(resolvedPrefix, "bin"),
+    globalRoot: path.join(resolvedPrefix, windows ? "" : "lib", "node_modules"),
+    binDir: windows ? resolvedPrefix : path.join(resolvedPrefix, "bin"),
   };
 }
 
@@ -101,10 +83,13 @@ export async function probeNpmGlobalPrefix(
     : null;
   // npm owns npmrc precedence and expansion. Use the Node running this launcher,
   // even when PATH's npm belongs to a different Node installation.
-  const argv =
+  const cliUrl =
     cli && path.basename(cli) === "npm-cli.js" && (await pathExists(cli))
-      ? [process.execPath, cli, "prefix", "-g"]
-      : [command, "prefix", "-g"];
+      ? resolveRuntimeDependencyEntrypointUrlFromDirectory("npm", path.dirname(cli))
+      : undefined;
+  const argv = cliUrl
+    ? [process.execPath, fileURLToPath(cliUrl), "prefix", "-g"]
+    : [command, "prefix", "-g"];
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) {

@@ -23,7 +23,7 @@ scenario:
     - docs/automation/cron-jobs.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - src/cron/service/task-runs.ts
+    - src/cron/service/run-history-recovery.ts
     - src/cron/store.ts
     - src/gateway/server-runtime-services.ts
     - test/e2e/qa-lab/runtime/gateway-cron-startup-recovery.e2e.test.ts
@@ -31,5 +31,5 @@ scenario:
     kind: vitest
     path: test/e2e/qa-lab/runtime/gateway-cron-startup-recovery.e2e.test.ts
     summary: >-
-      Seed persisted cron jobs and task-run history, start a real Gateway, wait
+      Seed persisted cron jobs and Cron run history, start a real Gateway, wait
       for post-ready recovery, and inspect the authoritative cron.list result.

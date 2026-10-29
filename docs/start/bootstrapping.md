@@ -21,8 +21,7 @@ OpenClaw:
 - Has the agent follow a short birth sequence: it asks what you want
   to call it, shares one short soul/vibe line, generates four avatar options
   when `image_generate` is available, asks whether you want the
-  minimal recommended plugin set or maximum convenience, and closes with one
-  short safety note about the access it runs with.
+  minimal recommended plugin set or maximum convenience.
 - Persists the agreed identity twice: into `IDENTITY.md` and `SOUL.md` (what the
   agent reads about itself) and via `openclaw agents set-identity` (what channels
   and the UI display).
@@ -41,6 +40,8 @@ OpenClaw:
 
 A workspace counts as configured once `SOUL.md`, `IDENTITY.md`, or `USER.md` has
 diverged from its starter template, or a `memory/` folder exists.
+When OpenClaw has recorded a file as generated, an unchanged copy of that starter
+file keeps onboarding pending even if an update changes the bundled template.
 
 <Note>
 `BOOTSTRAP.md` covers the full identity conversation. See its contents at

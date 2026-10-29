@@ -61,7 +61,7 @@ Once you have SSH access to a macOS VM, continue at [Install OpenClaw](#6-instal
 If `~/.local/bin` is not in your PATH:
 
 ```bash
-echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.zshrc && source ~/.zshrc
+echo 'export PATH="$PATH:$HOME/.local/bin"' >> "${ZDOTDIR:-$HOME}/.zshrc" && source "${ZDOTDIR:-$HOME}/.zshrc"
 ```
 
 Verify:
@@ -116,15 +116,34 @@ Replace `youruser` with the account you created, and the IP with your VM's IP.
 
 ## 6) Install OpenClaw
 
-Inside the VM, use the following command on npm 12 or npm 11.16+. On npm 11.15
-and earlier, omit `--allow-scripts=openclaw`.
+A fresh macOS VM has no Node.js or npm. Inside the VM, run the
+[installer script](/install/installer). It installs a supported Node runtime
+when needed, installs OpenClaw, and starts onboarding:
+
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash
+```
+
+Follow the onboarding prompts to set up your model provider (Anthropic, OpenAI, etc.).
+
+Quick start keeps the Gateway in the foreground of this terminal, but the VM
+will later run headless, so the Gateway needs to run as a background service.
+Press **Ctrl+C** to stop the foreground Gateway, then install the service and
+verify that it is running:
+
+```bash
+openclaw gateway install
+openclaw gateway status
+```
+
+If the VM already has [Node 24.22.1+ or 26.12.1+](/install/node), you can install the
+package directly instead. Use the following command on npm 12 or npm 11.16+. On
+npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 
 ```bash
 npm install -g openclaw@latest --allow-scripts=openclaw
 openclaw onboard --install-daemon
 ```
-
-Follow the onboarding prompts to set up your model provider (Anthropic, OpenAI, etc.).
 
 ## 7) Configure channels
 
@@ -213,16 +232,20 @@ Keep the VM running by:
 - Disabling sleep in System Settings -> Energy Saver
 - Using `caffeinate` if needed
 
+Those controls are on the host Mac, and they limit idle sleep. Closing a Mac laptop lid forces the host to sleep, so the VM and the Gateway inside it stop until the host wakes. Sleep settings inside the VM affect the guest.
+
+The host can keep running with the lid closed in Apple's closed-display setup: a connected external display, power, an external keyboard, and a mouse ([If your external display is dark or low resolution](https://support.apple.com/en-us/102501)). On a Mac laptop with Apple silicon, allow that display, keyboard, and mouse to connect before closing the lid ([Allow USB and other accessories to connect to your Mac](https://support.apple.com/en-us/102282)). [QA1340](https://developer.apple.com/library/archive/qa/qa1340/_index.html) describes closing the lid as forced sleep, separate from the idle sleep these settings can prevent.
+
 For true always-on, consider a dedicated Mac mini or a small VPS. See [VPS hosting](/vps).
 
 ## Troubleshooting
 
-| Problem                  | Solution                                                                            |
-| ------------------------ | ----------------------------------------------------------------------------------- |
-| Cannot SSH into VM       | Check "Remote Login" is enabled in the VM's System Settings                         |
-| VM IP not showing        | Wait for VM to fully boot, run `lume get openclaw` again                            |
-| Lume command not found   | Add `~/.local/bin` to your PATH                                                     |
-| WhatsApp QR not scanning | Ensure you are logged into the VM (not host) when running `openclaw channels login` |
+| Problem                  | Solution                                                                                |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| Cannot SSH into VM       | Check "Remote Login" is enabled in the VM's System Settings                             |
+| VM IP not showing        | Wait for VM to fully boot, run `lume get openclaw` again                                |
+| Lume command not found   | Add `~/.local/bin` to your PATH                                                         |
+| WhatsApp QR not scanning | Check that you are logged into the VM (not host) when running `openclaw channels login` |
 
 ## Related docs
 

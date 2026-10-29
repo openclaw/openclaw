@@ -21,10 +21,6 @@ const sharedSourceRoots = [
   path.join("..", "swabble", "Sources", "SwabbleKit"),
 ];
 
-const excludedSwiftFiles = new Set([
-  "../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-]);
-
 function normalizeFileListPath(filePath: string): string {
   return filePath.split(path.sep).join("/");
 }
@@ -60,9 +56,9 @@ function writeGeneratedFile(filePath: string, contents: string): void {
 
 const iosFiles = iosSourceRoots.flatMap(collectSwiftFiles);
 const sharedFiles = sharedSourceRoots.flatMap(collectSwiftFiles);
-const fileList = [...new Set([...iosFiles, ...sharedFiles])]
-  .filter((filePath) => !excludedSwiftFiles.has(filePath))
-  .toSorted((left, right) => left.localeCompare(right));
+const fileList = [...new Set([...iosFiles, ...sharedFiles])].toSorted((left, right) =>
+  left.localeCompare(right),
+);
 
 writeGeneratedFile(outputPath, `${fileList.join("\n")}\n`);
 process.stdout.write(`Prepared iOS Swift file list: ${path.relative(repoRoot, outputPath)}\n`);

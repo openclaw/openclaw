@@ -5,7 +5,7 @@ summary: "Full reference for the skills.* config schema, agent allowlists, works
 read_when:
   - Configuring skill loading, install, or gating behavior
   - Setting per-agent skill visibility
-  - Adjusting Skill Workshop limits or approval policy
+  - Adjusting Skill Workshop learning mode or size limits
 ---
 
 Most skills configuration lives under `skills` in
@@ -28,8 +28,6 @@ Most skills configuration lives under `skills` in
     },
     workshop: {
       autonomous: { mode: "auto" },
-      approvalPolicy: "auto",
-      maxPending: 50,
       maxSkillBytes: 40000,
     },
     entries: {
@@ -67,8 +65,11 @@ Most skills configuration lives under `skills` in
 </ParamField>
 
 <ParamField path="skills.load.watch" type="boolean" default="true">
-  Watch skill folders and refresh the skills snapshot when `SKILL.md` files
-  change. Covers nested files under grouped skill roots.
+  Enable automatic skill discovery from filesystem events, including nested files
+  under grouped roots. A safety rescan every 30 minutes catches missed events.
+  Set to `false` to disable automatic observation. Explicit OpenClaw skill changes,
+  relevant configuration changes, and Gateway startup still request an immediate
+  rescan. Existing sessions use changed snapshots on their next agent turn.
 </ParamField>
 
 ## Install (`skills.install`)
@@ -79,7 +80,7 @@ Most skills configuration lives under `skills` in
 
 <ParamField path="skills.install.nodeManager" type='"npm" | "pnpm" | "yarn" | "bun"' default='"npm"'>
   Node package manager preference for skill installs. This only affects skill
-  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4+
+  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4.4+
   with WAL-reset-safe `node:sqlite` is supported as an explicit runtime opt-in.
   `openclaw setup --node-manager` and `openclaw onboard --node-manager` accept
   `npm`, `pnpm`, or `bun`; set `"yarn"` directly in config for Yarn-backed skill
@@ -126,7 +127,7 @@ skills, skill dependency installers, and plugin install/update sources.
 
 <ParamField path="security.installPolicy.enabled" type="boolean" default="false">
   Enables operator-owned install policy. When enabled without a valid `exec`
-  command, installs fail closed.
+  command, installs are blocked.
 </ParamField>
 
 <ParamField path="security.installPolicy.targets" type='("skill" | "plugin")[]'>
@@ -148,8 +149,7 @@ skills, skill dependency installers, and plugin install/update sources.
 </ParamField>
 
 <ParamField path="security.installPolicy.exec.noOutputTimeoutMs" type="number" default="timeoutMs">
-  Maximum time without stdout or stderr output before the policy fails
-  closed.
+  Maximum time without stdout or stderr output before the policy blocks the install.
 </ParamField>
 
 <ParamField path="security.installPolicy.exec.maxOutputBytes" type="number" default="1048576">
@@ -186,11 +186,11 @@ Malformed finding entries are ignored, and
 invalid optional fields are omitted. A non-array `findings` value is treated as
 absent. Operator-facing reason and finding text are limited to 1,000 characters.
 OpenClaw retains at most 100 normalized findings for display. Only a `warn`
-response with more than 100 valid findings fails closed and cannot be
+response with more than 100 valid findings blocks installation and cannot be
 acknowledged; `allow` and `block` retain the first 100. A warning stops the
 install before commit. A `warn` review whose fully rendered notice, including
 its title, target, sanitized reason and findings, and recovery guidance, exceeds
-the 4,000-character aggregate display limit fails closed without presenting a
+the 4,000-character aggregate display limit blocks installation without presenting a
 partial review. An over-budget `block` remains terminal with a
 bounded denial, while over-budget findings on `allow` are summarized in bounded
 diagnostic output. Interactive CLI
@@ -209,12 +209,12 @@ change `security.installPolicy` to return `allow` for the reviewed request,
 then retry the managed flow. `--force` does not approve policy warnings. A `block`,
 non-zero exit, timeout, invalid JSON, non-object response, missing or invalid
 protocol version or decision, or missing or empty `warn`/`block` reason always
-fails closed.
+blocks installation.
 
 OpenClaw does not execute install policy during normal Gateway startup.
-Installs and updates fail closed when policy is enabled but unavailable.
+Installs and updates are blocked when policy is enabled but unavailable.
 `openclaw doctor` performs static validation; `openclaw doctor --deep`
-executes a synthetic install probe against the configured command.
+executes a synthetic install check against the configured command.
 
 Bulk updates apply policy per target: a blocked skill or plugin update fails
 that target without disabling the policy or skipping later targets in the
@@ -283,8 +283,8 @@ process.stdin.on("end", () => {
 
 <ParamField path="skills.allowBundled" type="string[]">
   Optional allowlist for **bundled** skills only. When set, only bundled
-  skills in the list are eligible. Managed, agent-level, and workspace
-  skills are unaffected.
+  skills in the list are eligible; an empty list disables all bundled skills.
+  Managed, agent-level, and workspace skills are unaffected.
 </ParamField>
 
 ## Per-skill entries (`skills.entries`)
@@ -295,7 +295,7 @@ Keys under `entries` match the skill `name` by default. If a skill defines
 
 <ParamField path="skills.entries.<key>.enabled" type="boolean">
   `false` disables the skill even when bundled or installed. The
-  `coding-agent` bundled skill is opt-in — set it to `true` and ensure one of
+  `coding-agent` bundled skill is opt-in — set it to `true` and check that one of
   `claude`, `codex`, `opencode`, or another supported CLI is installed and
   authenticated.
 </ParamField>
@@ -322,15 +322,19 @@ different visible skill set per agent.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
+      systemAgent: { agentId: "writer" },
+      authInheritance: { agentId: "writer" },
     },
     entries: {
-      writer: { default: true }, // inherits github, weather
+      writer: { workspace: "~/.openclaw/workspace" }, // inherits github, weather
       docs: { skills: ["docs-search"] }, // replaces defaults entirely
       "locked-down": { skills: [] }, // no skills
     },
   },
+  talk: { agentId: "writer" },
 }
 ```
 
@@ -361,35 +365,39 @@ different visible skill set per agent.
 ## Workshop (`skills.workshop`)
 
 <ParamField path="skills.workshop.autonomous.mode" type='"off" | "propose" | "auto"' default='"auto"'>
-  `off` disables autonomous capture while keeping the durable-instruction
-  suggestion nudge. `propose` creates pending proposals from corrections and
-  substantial completed work. `auto` uses normal agent tools for direct per-turn
-  and weekly Workshop maintenance, without proposal scanning or automatic rollback
-  snapshots. Immediate foreground repairs still use scanner-gated proposal apply.
-  User-prompted skill creation,
-  `/learn`, and manual learning sessions continue to work in every mode.
+  `auto` lets agents save and update Workshop skills: a background review runs
+  after substantial work, and learned skills unused for 30 days are archived.
+  Review changes appear as a **Learned** row in the Control UI chat, separately
+  from the assistant’s answer and collapsed **Worked** activity. Older plain-text
+  review notices also stay separate. Every change can be undone. `propose` runs
+  the background review but saves its changes as
+  [drafts](/tools/skill-workshop#drafts) to review with `/learn drafts`; it does
+  not archive unused skills. `off` disables the background review and
+  unused-skill cleanup. User-prompted skill creation, `/learn`, and manual
+  learning sessions work in every mode.
+</ParamField>
+
+<ParamField path="skills.workshop.autonomous.channelNotices" type="boolean" default="false">
+  When `true`, background review notices are posted to channel conversations
+  (except Slack) with an **Undo** button; the Control UI shows that message as
+  plain text. When `false`, they appear only as the **Learned** row in the
+  Control UI chat. Saying "undo" works either way.
 </ParamField>
 
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,
-proposal-only permissions, and troubleshooting.
-
-<ParamField path="skills.workshop.approvalPolicy" type='"pending" | "auto"' default='"auto"'>
-  `auto` allows agent-initiated apply, reject, or quarantine without an
-  additional approval prompt. `pending` requires operator approval.
-</ParamField>
-
-<ParamField path="skills.workshop.maxPending" type="number" default="50">
-  Maximum pending and quarantined proposals retained per agent (allowed
-  range: 1-200).
-</ParamField>
+and troubleshooting.
 
 <ParamField path="skills.workshop.maxSkillBytes" type="number" default="40000">
-  Maximum proposal body size in bytes (allowed range: 1024-200000). Proposal
-  descriptions are hard-capped at 160 bytes separately, because they appear
-  in discovery and listing output.
+  Maximum `SKILL.md` size in bytes for Workshop skills (allowed range:
+  1024-200000). Skill descriptions are capped at 1024 bytes separately; keep
+  them near 160 bytes because they appear in discovery and listing output.
 </ParamField>
 
-See [Skill Workshop](/tools/skill-workshop) for the proposal lifecycle, CLI
+`openclaw doctor --fix` migrates configs from the removed proposal queue: it
+maps `autonomous.enabled: true` to `mode: "propose"` (`false` to `"off"`) and
+deletes `skills.workshop.approvalPolicy` and `skills.workshop.maxPending`.
+
+See [Skill Workshop](/tools/skill-workshop) for the skill lifecycle, CLI
 commands, agent tool parameters, and Gateway methods this config controls.
 
 ## Symlinked skill roots
@@ -473,10 +481,10 @@ for when changes become visible.
     Authoring custom workspace skills.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
-    Proposal queue for agent-drafted skills.
+    Agent-learned skills, change history, and undo.
   </Card>
   <Card title="Self-learning" href="/tools/self-learning" icon="brain">
-    Conservative, opt-in proposals from completed work.
+    Automatic, undoable skill learning from completed work.
   </Card>
   <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
     Native slash-command catalog and chat directives.

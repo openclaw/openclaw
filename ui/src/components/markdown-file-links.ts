@@ -89,9 +89,15 @@ const BARE_FILE_EXTENSIONS = new Set([
   "zsh",
 ]);
 
-export function markdownFileLinkFromEvent(
-  event: Event,
-): { path: string; line: number | null } | null {
+export type MarkdownFileLinkTarget = {
+  path: string;
+  line?: number | null;
+  sessionKey?: string;
+  messageEntryId?: string;
+  documentRelative?: boolean;
+};
+
+export function markdownFileLinkFromEvent(event: Event): MarkdownFileLinkTarget | null {
   const target = event.target;
   if (!(target instanceof Element)) {
     return null;
@@ -102,12 +108,22 @@ export function markdownFileLinkFromEvent(
     return null;
   }
   const line = link.dataset.fileLine;
-  return { path, line: line ? Number.parseInt(line, 10) : null };
+  const sessionKey = link.closest<HTMLElement>("[data-file-session-key]")?.dataset.fileSessionKey;
+  const messageEntryId =
+    link.closest<HTMLElement>("[data-file-entry-id]")?.dataset.fileEntryId ??
+    (!sessionKey ? link.closest<HTMLElement>("[data-entry-id]")?.dataset.entryId : undefined);
+  return {
+    path,
+    line: line ? Number.parseInt(line, 10) : null,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(messageEntryId ? { messageEntryId } : {}),
+    ...(link.dataset.fileDocumentRelative === "true" ? { documentRelative: true } : {}),
+  };
 }
 
 export function markdownFileLinkFromKeyboardEvent(
   event: KeyboardEvent,
-): { path: string; line: number | null } | null {
+): MarkdownFileLinkTarget | null {
   if (event.key !== "Enter" && event.key !== " ") {
     return null;
   }
@@ -148,4 +164,29 @@ export function parseMarkdownFileLinkTarget(
 
 export function isHostLocalMarkdownFileHref(href: string): boolean {
   return HOST_LOCAL_FILE_HREF_RE.test(href.trim());
+}
+
+/** Only a file reader supplies the document context needed to consume a relative href. */
+export function parseMarkdownDocumentFileLinkTarget(href: string) {
+  // Split URL delimiters before decoding: an encoded # belongs to the filename.
+  const path = href.split("#", 1)[0] ?? "";
+  if (!path || path.includes("?")) {
+    return null;
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    return null;
+  }
+  const target = splitMarkdownFileLineSuffix(decoded);
+  if (
+    !target.path ||
+    /^(?:[/\\]|~[/\\]|[a-z][a-z0-9+.-]*:)/i.test(target.path) ||
+    /\p{Cc}/u.test(decoded)
+  ) {
+    return null;
+  }
+  // Authored document hrefs already delimit their paths, including extensionless files.
+  return target;
 }

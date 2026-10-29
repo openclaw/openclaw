@@ -46,13 +46,14 @@ export function buildDiscordConversationRouteContext(params: {
 
 export function resolveDiscordConversationRoute(params: {
   cfg: OpenClawConfig;
+  defaultAgentId?: string;
   accountId?: string | null;
   guildId?: string | null;
   memberRoleIds?: string[];
   peer: RoutePeer;
   parentConversationId?: string | null;
 }): ResolvedAgentRoute {
-  return resolveAgentRoute({
+  const input = {
     cfg: params.cfg,
     channel: "discord",
     accountId: params.accountId,
@@ -60,44 +61,23 @@ export function resolveDiscordConversationRoute(params: {
     memberRoleIds: params.memberRoleIds,
     peer: params.peer,
     parentPeer: params.parentConversationId
-      ? { kind: "channel", id: params.parentConversationId }
+      ? { kind: "channel" as const, id: params.parentConversationId }
       : undefined,
-  });
-}
-
-export function resolveDiscordBoundConversationRoute(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  guildId?: string | null;
-  memberRoleIds?: string[];
-  isDirectMessage: boolean;
-  isGroupDm: boolean;
-  directUserId?: string | null;
-  conversationId: string;
-  parentConversationId?: string | null;
-  boundSessionKey?: string | null;
-  configuredRoute?: { route: ResolvedAgentRoute } | null;
-  matchedBy?: ResolvedAgentRoute["matchedBy"];
-}): ResolvedAgentRoute {
-  const route = resolveDiscordConversationRoute({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    guildId: params.guildId,
-    memberRoleIds: params.memberRoleIds,
-    peer: buildDiscordRoutePeer({
-      isDirectMessage: params.isDirectMessage,
-      isGroupDm: params.isGroupDm,
-      directUserId: params.directUserId,
-      conversationId: params.conversationId,
-    }),
-    parentConversationId: params.parentConversationId,
-  });
-  return resolveDiscordEffectiveRoute({
-    route,
-    boundSessionKey: params.boundSessionKey,
-    configuredRoute: params.configuredRoute,
-    matchedBy: params.matchedBy,
-  });
+  };
+  try {
+    return resolveAgentRoute(input);
+  } catch (error) {
+    if (
+      !params.defaultAgentId ||
+      !(error instanceof Error) ||
+      !("code" in error) ||
+      error.code !== "AGENT_SELECTION_REQUIRED"
+    ) {
+      throw error;
+    }
+    // Preserve ordinary routes for stale-binding comparison when selection succeeds.
+    return resolveAgentRoute({ ...input, defaultAgentId: params.defaultAgentId });
+  }
 }
 
 export function resolveDiscordEffectiveRoute(params: {

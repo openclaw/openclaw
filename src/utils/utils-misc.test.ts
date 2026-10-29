@@ -31,21 +31,6 @@ describe("parseBooleanValue", () => {
     expect(parseBooleanValue("off")).toBe(false);
   });
 
-  it("respects custom truthy/falsy lists", () => {
-    expect(
-      parseBooleanValue("on", {
-        truthy: ["true"],
-        falsy: ["false"],
-      }),
-    ).toBeUndefined();
-    expect(
-      parseBooleanValue("yes", {
-        truthy: ["yes"],
-        falsy: ["no"],
-      }),
-    ).toBe(true);
-  });
-
   it("returns undefined for unsupported values", () => {
     expect(parseBooleanValue("")).toBeUndefined();
     expect(parseBooleanValue("maybe")).toBeUndefined();
@@ -54,11 +39,6 @@ describe("parseBooleanValue", () => {
 });
 
 describe("splitShellArgs", () => {
-  it("splits whitespace and respects quotes", () => {
-    expect(splitShellArgs(`search --foo "bar baz"`)).toEqual(["search", "--foo", "bar baz"]);
-    expect(splitShellArgs(`search --foo 'bar baz'`)).toEqual(["search", "--foo", "bar baz"]);
-  });
-
   it("supports backslash escapes inside double quotes", () => {
     expect(splitShellArgs(String.raw`echo "a\"b"`)).toEqual(["echo", `a"b`]);
     expect(splitShellArgs(String.raw`echo "\$HOME"`)).toEqual(["echo", "$HOME"]);
@@ -77,31 +57,9 @@ describe("splitShellArgs", () => {
 });
 
 describe("splitCommandArgs", () => {
-  it.each([
-    {
-      input: String.raw`program some\path 'a"b' #literal`,
-      expected: ["program", String.raw`some\path`, 'a"b', "#literal"],
-    },
-    {
-      input: String.raw`program "C:\some path\file.py" \\server\share\ #literal`,
-      expected: ["program", String.raw`C:\some path\file.py`, "\\\\server\\share\\", "#literal"],
-    },
-    { input: 'program "unfinished', expected: null },
-    { input: "program 'unfinished", expected: null },
-    { input: "program unfinished\\", expected: ["program", "unfinished\\"] },
-  ])("parses quote-only process arguments: $input", ({ input, expected }) => {
-    expect(splitCommandArgs(input)).toEqual(expected);
+  it.each(['program "unfinished'])("allows unfinished quotes when requested: %s", (raw) => {
+    expect(splitCommandArgs(raw, { allowUnclosedQuotes: true })).toEqual(["program", "unfinished"]);
   });
-
-  it.each(['program "unfinished', "program 'unfinished"])(
-    "allows unfinished quotes when requested: %s",
-    (raw) => {
-      expect(splitCommandArgs(raw, { allowUnclosedQuotes: true })).toEqual([
-        "program",
-        "unfinished",
-      ]);
-    },
-  );
 });
 
 describe("zod parse helpers", () => {

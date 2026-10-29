@@ -1,6 +1,18 @@
 import path from "node:path";
 import type { Page } from "playwright";
 
+export const TALK_READY_HISTORY_MESSAGE = {
+  role: "assistant",
+  content: "Talk history is ready.",
+  __openclaw: { id: "talk-ready" },
+};
+
+export async function waitForTalkReady(page: Page): Promise<void> {
+  // Dictation keeps the microphone enabled before Talk's history/catalog admission.
+  await page.getByText(TALK_READY_HISTORY_MESSAGE.content, { exact: true }).waitFor();
+  await page.locator('[data-chat-talk-capability="realtime"]').waitFor({ state: "detached" });
+}
+
 export async function dispatchOpenAiTalkEvent(page: Page, event: unknown) {
   await page.evaluate((payload) => {
     const channel = (
@@ -129,6 +141,10 @@ function installTalkMediaBrowserFixture(profile: TalkMediaFixtureProfile) {
     async close() {
       state.audioContextsClosed += 1;
     }
+
+    async suspend() {}
+
+    async resume() {}
   }
 
   Object.defineProperty(window, "AudioContext", {

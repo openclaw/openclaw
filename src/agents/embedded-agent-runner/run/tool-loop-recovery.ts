@@ -1,38 +1,77 @@
+import {
+  attachInternalToolBatchLifecycle,
+  InternalToolLoopBlocked,
+  type InternalBeforeToolBatchHook,
+} from "../../../../packages/agent-core/src/internal-hooks.js";
 import { clearBatchAdmittedToolCallsForRun } from "../../agent-tools.before-tool-call.state.js";
 import type { HookContext } from "../../agent-tools.before-tool-call.types.js";
 import { normalizeCodeModeExecBeforeHookParams } from "../../code-mode-control-tools.js";
 import type { Agent } from "../../runtime/index.js";
-import {
-  attachInternalToolBatchLifecycle,
-  type InternalBeforeToolBatchHook,
-} from "../../runtime/internal-hooks.js";
 import { admitToolCallBatch } from "../../tool-loop-admission.js";
-import { hashToolCall } from "../../tool-loop-detection.js";
+import { hashToolCall, observeRepeatedToolError } from "../../tool-loop-detection.js";
 import { log } from "../logger.js";
 
 /** Build the embedded-runner's private bridge into agent-core loop recovery. */
-export function createToolLoopBatchAdmission(
-  ctx: HookContext,
-): InternalBeforeToolBatchHook | undefined {
-  if (ctx.loopDetection?.enabled !== true) {
-    return undefined;
-  }
-  return async ({ calls }) => {
+export function createToolLoopBatchAdmission(ctx: HookContext): InternalBeforeToolBatchHook {
+  return async ({ calls, toolLoopRecoveryState }) => {
     const canonicalCalls = calls.map((call) => ({
       ...call,
       args: call.tool
         ? normalizeCodeModeExecBeforeHookParams({ tool: call.tool, params: call.args })
         : call.args,
     }));
+    const blockedCall = (call: (typeof canonicalCalls)[number], args = call.args) => {
+      const blocked = toolLoopRecoveryState.blockedToolActions;
+      if (!blocked?.size) {
+        return undefined;
+      }
+      const canonicalArgs = call.tool
+        ? normalizeCodeModeExecBeforeHookParams({ tool: call.tool, params: args })
+        : args;
+      const intervention = blocked.get(hashToolCall(call.toolCall.name, canonicalArgs));
+      return intervention ? { ...intervention, toolCallId: call.toolCall.id } : undefined;
+    };
+    // Only rejected arguments are final here; executable calls can change in hooks.
+    for (const call of canonicalCalls) {
+      const intervention = call.validationFailure ? blockedCall(call) : undefined;
+      if (intervention) {
+        return { intervention };
+      }
+    }
     try {
       const admission = await admitToolCallBatch(canonicalCalls, ctx);
       const { commitReadyCalls, releaseSkippedCalls, ...result } = admission;
-      return commitReadyCalls && releaseSkippedCalls
-        ? attachInternalToolBatchLifecycle(result, {
-            commitReadyCalls,
-            releaseSkippedCalls,
-          })
-        : result;
+      return attachInternalToolBatchLifecycle(result, {
+        commitReadyCalls(readyCalls) {
+          for (const ready of readyCalls) {
+            const call = canonicalCalls.find((entry) => entry.toolCall.id === ready.toolCallId);
+            // Final post-hook arguments decide whether this source may start.
+            // Validation commits record evidence, not an implementation start.
+            if (call && !call.validationFailure) {
+              const intervention = blockedCall(call, ready.args);
+              if (intervention) {
+                throw new InternalToolLoopBlocked(intervention);
+              }
+            }
+          }
+          commitReadyCalls?.(readyCalls);
+        },
+        releaseSkippedCalls,
+        observeOutcome(outcome, state) {
+          const tool = canonicalCalls.find(
+            (call) => call.toolCall.id === outcome.toolCall.id,
+          )?.tool;
+          return observeRepeatedToolError(
+            {
+              ...outcome,
+              args: tool
+                ? normalizeCodeModeExecBeforeHookParams({ tool, params: outcome.args })
+                : outcome.args,
+            },
+            state,
+          );
+        },
+      });
     } catch (error) {
       const first = canonicalCalls[0];
       log.error(`tool-loop batch admission failed: ${String(error)}`);

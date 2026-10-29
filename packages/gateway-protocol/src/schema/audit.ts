@@ -1,38 +1,39 @@
-// Gateway Protocol schema module defines metadata-only audit query payloads.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+// Gateway Protocol schema module defines metadata-only audit query payloads.
+import { stringLiteralUnion } from "./string-literal-union.js";
 
-const AuditEventKindSchema = Type.Union([Type.Literal("agent_run"), Type.Literal("tool_action")]);
+const AuditEventKindSchema = stringLiteralUnion(["agent_run", "tool_action"]);
 
-const AuditEventActionSchema = Type.Union([
-  Type.Literal("agent.run.started"),
-  Type.Literal("agent.run.finished"),
-  Type.Literal("tool.action.started"),
-  Type.Literal("tool.action.finished"),
+const AuditEventActionSchema = stringLiteralUnion([
+  "agent.run.started",
+  "agent.run.finished",
+  "tool.action.started",
+  "tool.action.finished",
 ]);
 
-const AuditEventStatusSchema = Type.Union([
-  Type.Literal("started"),
-  Type.Literal("succeeded"),
-  Type.Literal("failed"),
-  Type.Literal("cancelled"),
-  Type.Literal("timed_out"),
-  Type.Literal("blocked"),
-  Type.Literal("unknown"),
+const AuditEventStatusSchema = stringLiteralUnion([
+  "started",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+  "blocked",
+  "unknown",
 ]);
 
-const AuditEventErrorCodeSchema = Type.Union([
-  Type.Literal("run_failed"),
-  Type.Literal("run_cancelled"),
-  Type.Literal("run_timed_out"),
-  Type.Literal("run_blocked"),
-  Type.Literal("tool_failed"),
-  Type.Literal("tool_cancelled"),
-  Type.Literal("tool_timed_out"),
-  Type.Literal("tool_blocked"),
-  Type.Literal("tool_outcome_unknown"),
+const AuditEventErrorCodeSchema = stringLiteralUnion([
+  "run_failed",
+  "run_cancelled",
+  "run_timed_out",
+  "run_blocked",
+  "tool_failed",
+  "tool_cancelled",
+  "tool_timed_out",
+  "tool_blocked",
+  "tool_outcome_unknown",
 ]);
 
 /** One content-free run/tool audit record. */
@@ -46,7 +47,7 @@ export const AuditEventSchema = closedObject({
   status: AuditEventStatusSchema,
   errorCode: Type.Optional(AuditEventErrorCodeSchema),
   actor: closedObject({
-    type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
+    type: stringLiteralUnion(["agent", "system"]),
     id: NonEmptyString,
   }),
   agentId: NonEmptyString,

@@ -1,51 +1,43 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
-import { renderConfiguredModel } from "./configured-model.ts";
 import type { ModelSetupVerifyState } from "./state.ts";
+import {
+  disposeViews,
+  mount as mountView,
+  props,
+  renderSetup,
+} from "./test-helpers/view.test-support.tsx";
 
 function mount(
   result: SystemAgentSetupDetectResult,
-  onContinue?: () => void,
   verify: ModelSetupVerifyState = {
     phase: "failed",
     status: "unavailable",
     error: "connect ECONNREFUSED",
   },
 ) {
-  const container = document.createElement("div");
-  document.body.append(container);
   const onVerify = vi.fn();
-  render(
-    renderConfiguredModel({
-      result,
-      verify,
-      canVerify: true,
-      actionsDisabled: false,
-      onVerify,
-      onContinue,
-    }),
-    container,
-  );
-  return { container, onVerify };
+  const view = props({ page: { phase: "ready", result }, verify, onVerify });
+  const root = mountView(view);
+  const container = root.querySelector<HTMLElement>(".model-setup__current")!;
+  const setVerify = (next: ModelSetupVerifyState) => renderSetup({ ...view, verify: next }, root);
+  return { container, onVerify, setVerify };
 }
 
 function text(container: Element): string {
   return container.textContent?.replace(/\s+/gu, " ").trim() ?? "";
 }
 
-describe("renderConfiguredModel", () => {
+describe("ConfiguredModel", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
   });
 
   afterEach(() => {
-    for (const container of document.body.querySelectorAll("div")) {
-      render(nothing, container);
-    }
+    disposeViews();
     document.body.replaceChildren();
   });
 
@@ -63,13 +55,6 @@ describe("renderConfiguredModel", () => {
       kind: "provider-auto:llama-cpp",
       label: "llama.cpp",
       modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
-    },
-    {
-      brandId: "lmstudio",
-      detail: "qwen3-8b-instruct at http://localhost:1234/v1",
-      kind: "provider-auto:lmstudio",
-      label: "LM Studio",
-      modelRef: "lmstudio/qwen3-8b-instruct",
     },
   ] as const)("shows a quiet recovery state for $brandId", (fixture) => {
     const result: SystemAgentSetupDetectResult = {
@@ -92,7 +77,12 @@ describe("renderConfiguredModel", () => {
     };
     const { container, onVerify } = mount(result);
 
-    expect(text(container)).toContain(`Selected model ${fixture.label}`);
+    expect(container.querySelector(".settings-section__header h2")?.textContent).toBe(
+      "Selected model",
+    );
+    expect(container.querySelector(".model-setup__current-copy strong")?.textContent).toBe(
+      fixture.label,
+    );
     expect(text(container)).toContain(fixture.detail);
     expect(text(container)).toContain("connect ECONNREFUSED");
     expect(text(container)).not.toContain("isn’t responding");
@@ -104,26 +94,6 @@ describe("renderConfiguredModel", () => {
     expect(onVerify).toHaveBeenCalledOnce();
   });
 
-  it("renders the optional continuation action in the configured card", () => {
-    const onContinue = vi.fn();
-    const { container } = mount(
-      {
-        candidates: [],
-        manualProviders: [],
-        prepareOptions: [],
-        workspace: "/tmp/workspace",
-        configuredModel: "openai/gpt-5",
-        setupComplete: true,
-      },
-      onContinue,
-    );
-    const button = [...container.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent?.trim() === "Continue setup",
-    );
-    button?.click();
-    expect(onContinue).toHaveBeenCalledOnce();
-  });
-
   it("explains a setup timeout without claiming the provider is unreachable", () => {
     const result: SystemAgentSetupDetectResult = {
       candidates: [],
@@ -133,7 +103,7 @@ describe("renderConfiguredModel", () => {
       configuredModel: "ollama/gemma4:latest",
       setupComplete: true,
     };
-    const { container } = mount(result, undefined, {
+    const { container } = mount(result, {
       phase: "failed",
       status: "timeout",
       error: "LLM request timed out.",
@@ -145,5 +115,30 @@ describe("renderConfiguredModel", () => {
     );
     expect(text(container)).not.toContain("isn’t responding");
     expect(text(container)).not.toContain("service is running and reachable");
+  });
+
+  it("updates the provider and model to the successful verification result", () => {
+    const { container, setVerify } = mount(
+      {
+        candidates: [],
+        manualProviders: [],
+        prepareOptions: [],
+        workspace: "/tmp/workspace",
+        configuredModel: "ollama/initial-model",
+        setupComplete: true,
+      },
+      { phase: "checking" },
+    );
+    expect(text(container)).toContain("ollama/initial-model");
+    expect(container.querySelector('[data-provider-icon="ollama"]')).not.toBeNull();
+
+    setVerify({ phase: "ok", modelRef: "openai/verified-model", latencyMs: 12 });
+
+    expect(container.getAttribute("data-verify-phase")).toBe("ok");
+    expect(text(container)).toContain("OpenAI");
+    expect(text(container)).toContain("verified-model");
+    expect(text(container)).not.toContain("initial-model");
+    expect(container.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
+    expect(container.querySelector("button")?.textContent?.trim()).toBe("Check again");
   });
 });

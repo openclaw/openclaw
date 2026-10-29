@@ -32,7 +32,7 @@ Explicitly empty and whitespace-only values are rejected.
 
 Default output renders IDs and names in a table. Empty list results name the channel and account
 that were queried. JSON list output uses an empty array (`[]`). Failures exit nonzero and use the
-canonical `{ "ok": false, "error": { "type": "cli_error", "message": "..." } }` envelope in
+standard `{ "ok": false, "error": { "type": "cli_error", "message": "..." } }` envelope in
 JSON mode.
 
 ## Notes

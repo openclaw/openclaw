@@ -1,6 +1,6 @@
 ---
 name: proof-video
-description: Add subtitles, captions, narration cues, or zoom to a proof video or PR recording using repo-local capture helpers and a system ffmpeg renderer.
+description: Capture and annotate PR screenshots and videos with measured arrows, outlines, alignment guides, spacing brackets, captions, zoom, and speed cues.
 ---
 
 # Proof video
@@ -10,6 +10,21 @@ Captions are burned into an MP4; they are visual narration, not synthesized audi
 Keep the raw video as evidence, attach the polished MP4, and never commit media or
 `.artifacts/` output. Inspect the entire capture for unrelated or private content
 before publishing under the PR's existing authorization.
+
+## Point out the claim
+
+Choose marks that demonstrate the change. Use arrows to locate a control, outlines
+to identify a region, alignment guides to compare edges or centers, and spacing
+brackets to measure gaps. Measurements come from `locator.boundingBox()` after the
+asserted layout settles; the renderer calculates the labels. Keep the reference
+element first and use the same viewport, crop, scale, and edge before and after.
+Keep marks sparse and labels in empty space. Preserve the raw capture.
+
+For screenshot markup or timed video marks, read [annotations](references/annotations.md).
+Both paths use the same SVG geometry renderer. Annotations are composited before
+zoom, while narration stays fixed in the viewport. Re-measure and replace marks
+after scrolling or layout changes; a cue describes a stationary capture, not a
+live element tracker. Clear marks during movement when they would become stale.
 
 ## Standalone recording
 
@@ -187,10 +202,11 @@ cannot overlap other speed cues. Adjacent cues are allowed.
 node --import tsx scripts/render-proof-video.mts --cues <dir>/cues.json --rasterize
 ```
 
-`--rasterize` creates missing caption PNGs with fresh Playwright Chromium pages.
-The exported `rasterizeCaptions(browser, cues, dir)` also supports programmatic
+`--rasterize` creates missing caption and annotation PNGs with fresh Playwright Chromium pages.
+The exported `rasterizeProofOverlays(browser, cues, dir)` also supports programmatic
 native-capture workflows. Neither path needs libass or drawtext: Chromium
-rasterizes text and ffmpeg overlays PNGs after the zoom.
+rasterizes text and geometry. ffmpeg overlays annotations before zoom and captions
+after zoom.
 
 ## Verified capture mode and limitations
 

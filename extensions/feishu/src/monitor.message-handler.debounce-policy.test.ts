@@ -13,6 +13,7 @@ import * as dedup from "./dedup.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 
 it("changes Feishu batching timing on the running receive handler", async () => {
+  vi.useFakeTimers();
   const cfg: OpenClawConfig = { messages: { inbound: { debounceMs: 0 } } };
   setRuntimeConfigSnapshot(cfg, cfg);
   const claim = vi
@@ -64,31 +65,19 @@ it("changes Feishu batching timing on the running receive handler", async () => 
     await enqueue("immediate");
     expect(dispatched).toEqual(["immediate"]);
     publish(250);
-    const started = performance.now();
     await enqueue("first");
     await enqueue("second");
     expect(dispatched).toEqual(["immediate"]);
-    await vi.waitFor(() => expect(dispatched).toEqual(["immediate", "first\nsecond"]));
-    const delayedElapsedMs = performance.now() - started;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(dispatched).toEqual(["immediate", "first\nsecond"]);
     publish(0);
     await enqueue("after disable");
     expect(dispatched.at(-1)).toBe("after disable");
     expect(dispatched).toHaveLength(3);
-    console.log(
-      "MONITOR_DEBOUNCE_PROOF " +
-        JSON.stringify({
-          channel: "feishu",
-          pid: process.pid,
-          clock: "real",
-          delaysMs: [0, 250, 0],
-          delayedElapsedMs,
-          bodies: dispatched,
-          debouncersCreated: debouncers.length,
-        }),
-    );
   } finally {
     await Promise.all(debouncers.map((debouncer) => debouncer.drain()));
     clearRuntimeConfigSnapshot();
     claim.mockRestore();
+    vi.useRealTimers();
   }
 });

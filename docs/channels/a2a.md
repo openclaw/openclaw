@@ -90,9 +90,15 @@ By default, the request waits for the agent response. A completed response conta
 }
 ```
 
-Include `message.contextId` on subsequent requests to continue the same conversation. Context IDs can contain letters, numbers, periods, underscores, colons, and hyphens, and must not exceed 128 characters.
+Include `message.contextId` on subsequent requests to continue the same conversation with a new task. Omit `message.taskId`: continuing an existing task is not supported, including while that task is working. Context IDs can contain letters, numbers, periods, underscores, colons, and hyphens, and must not exceed 128 characters.
+
+If `message.taskId` is supplied, unknown, expired, or other peers' task IDs return JSON-RPC error `-32001`. An owned task with a conflicting `message.contextId` returns `-32602`; otherwise, the request returns `-32004` for unsupported task continuation. None of these requests starts new work or changes the referenced task.
 
 To return immediately while the agent continues working, add `"configuration": { "returnImmediately": true }` alongside `"message"` in `params`. The task initially reports `TASK_STATE_WORKING`. Requests that exceed `replyTimeoutMs` also return the current working task instead of canceling it.
+
+When another turn is active in the same context, the new task queues behind it. Its reply
+and terminal state remain attached to the original task ID, so the peer can keep polling
+`GetTask`. Queued replies do not require an outbound peer URL or start a reverse-direction message.
 
 Older clients can use `message/send` as an alias for `SendMessage`.
 
@@ -114,7 +120,7 @@ curl http://127.0.0.1:18789/a2a/v1 \
 
 The task transitions from `TASK_STATE_WORKING` to `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, or `TASK_STATE_REJECTED`. Older clients can use `tasks/get` as a compatibility alias.
 
-`CancelTask` is refused with JSON-RPC error `-32004` rather than acknowledged. A dispatched agent run has no plugin-facing abort seam, so reporting `TASK_STATE_CANCELED` would tell the peer the work stopped while the run kept using tools. Refusing keeps the reported state honest.
+`CancelTask` is refused with JSON-RPC error `-32004` rather than acknowledged. A dispatched agent run has no plugin API for stopping it, so reporting `TASK_STATE_CANCELED` would tell the peer the work stopped while the run kept using tools. Refusing keeps the reported state honest.
 
 ## Configure outbound peers
 
@@ -139,6 +145,13 @@ Add a peer URL when OpenClaw should send messages to another A2A agent. Set `out
 
 Address outbound messages to `a2a:hermes`. The plugin sends `SendMessage` directly to the configured URL without performing Agent Card discovery. Outbound messages reuse a stable conversation context per peer. A peer without a configured `url` cannot receive outbound messages.
 
+Agent replies, including queued followups, deliver only terminal reply content to A2A peers.
+Host status notices, including metadata-only diagnostics, and run-failure messages are not
+forwarded as new peer messages or task artifacts. A failed agent run instead marks its
+originating task `TASK_STATE_FAILED` with the reason `Agent run failed`, including when the
+run was queued. If collect mode combines requests, a failed run marks every originating
+task failed. This does not change error reporting on human-facing channels.
+
 ## Configuration reference
 
 | Key                          | Type     | Default  | Description                                                                    |
@@ -161,7 +174,7 @@ Each authenticated peer and A2A `contextId` pair gets its own agent session. A2A
 isolated direct-message scope rather than inheriting `session.dmScope`, so remote peer content never
 joins the operator's main session and one peer cannot read another peer's conversation history.
 
-For agent bindings, use the configured peer name as the canonical direct-peer ID, such as
+For agent bindings, use the configured peer name as the direct-peer ID, such as
 `hermes`. A context-specific `hermes:<contextId>` binding takes precedence over that stable peer
 binding, and the stable peer binding takes precedence over broader A2A account or channel routes.
 
@@ -185,7 +198,17 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 
 The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
 
-Tasks remain in memory only. Completed and other terminal tasks are retained for up to 24 hours, with a maximum of 500 retained entries. Restarting the gateway discards all tasks and task history.
+The Agent Card advertises `pushNotifications: false`. Push notification configuration methods return JSON-RPC error `-32003` (`PushNotificationNotSupportedError`), as required by the [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/#334-capability-validation). Other recognized unsupported methods return `-32004`; unknown method names return `-32601`.
+
+A repeated `messageId` from the same authenticated peer returns the existing task and its current
+state while that task is retained. It does not start another agent turn, even if the retry omits
+`contextId`. Use a new `messageId` for new work. Replies are associated with the task that started
+the turn, including when messages in one context finish out of order. A finished turn with no
+reply text completes without an artifact; stopping the channel fails unfinished tasks.
+
+Completed and other terminal tasks are persisted per account before they are returned to peers. They survive Gateway restarts for up to 24 hours from their original completion time, with a maximum of 500 retained entries in finish order. Peer ownership and message deduplication survive with each retained task. Active inference is not resumed after a restart; stopping the channel records unfinished tasks as failed.
+
+A definite storage validation refusal (for example, a result exceeding the plugin-state size limit) becomes a visible failed task whose status explains that it will not survive a restart; any completed artifact remains available until the process stops or retention expires. An uncertain write acknowledgement is not replaced with a synthetic failure, because the original result may already have committed.
 
 ## Related
 

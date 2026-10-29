@@ -1,86 +1,141 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { startLazyPluginServiceModule } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { registerBrowserPlugin } from "./plugin-registration.js";
 
-const runtimeMocks = vi.hoisted(() => ({
-  hasBrowserNodeHostWork: vi.fn(() => false),
-  handleGatewayExtensionUpgrade: vi.fn(async () => true),
-  handleBrowserScreencastUpgrade: vi.fn(async () => true),
-  stopBrowserControlService: vi.fn(async () => undefined),
+const runtime = vi.hoisted(() => ({
+  upgradeExtension: vi.fn(async () => true),
+  upgradeScreencast: vi.fn(async () => true),
+  stopControl: vi.fn(async () => undefined),
+  startEager: vi.fn<typeof startLazyPluginServiceModule>().mockResolvedValue(null),
+  startCleanup: vi.fn(() => async () => {}),
 }));
+const upgradeArgs = [{} as IncomingMessage, {} as Duplex, Buffer.alloc(0)] as const;
 
-vi.mock("./register.runtime.js", () => ({
-  hasBrowserNodeHostWork: runtimeMocks.hasBrowserNodeHostWork,
-  stopBrowserControlService: runtimeMocks.stopBrowserControlService,
+vi.mock("./register.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./register.runtime.js")>()),
+  stopBrowserControlService: runtime.stopControl,
 }));
-
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
+  startLazyPluginServiceModule: runtime.startEager,
+}));
+// mock-isolation: Lifecycle assertions must not schedule real tab sweeps.
+vi.mock("./src/browser/session-tab-cleanup.js", () => ({
+  startTrackedBrowserTabCleanupTimer: runtime.startCleanup,
+}));
+// mock-isolation: Exercise registration activity without starting real relay sockets.
 vi.mock("./src/browser/extension-relay/gateway-relay-route.js", () => ({
-  handleGatewayExtensionUpgrade: runtimeMocks.handleGatewayExtensionUpgrade,
+  handleGatewayExtensionUpgrade: runtime.upgradeExtension,
 }));
-
+// mock-isolation: Exercise registration activity without creating a WebSocket server.
 vi.mock("./src/browser/screencast/upgrade.js", () => ({
-  handleBrowserScreencastUpgrade: runtimeMocks.handleBrowserScreencastUpgrade,
+  handleBrowserScreencastUpgrade: runtime.upgradeScreencast,
 }));
-
 vi.mock("./src/browser/session-tab-store.js", () => ({
   initializeBrowserSessionTabStore: vi.fn(),
+  drainBrowserSessionTabStore: vi.fn(async () => undefined),
 }));
-
 vi.mock("./src/browser/system-profile-import-state.js", () => ({
   configureSystemProfileImportStateStore: vi.fn(),
 }));
 
-function registerLifecycleCallbacks(path: string) {
-  let route: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0] | undefined;
-  let service: OpenClawPluginService | undefined;
-  registerBrowserPlugin(
-    createTestPluginApi({
-      runtime: {
-        state: { openKeyedStore: vi.fn() },
-      } as never,
-      registerHttpRoute(value) {
-        if (value.path === path) {
-          route = value;
-        }
-      },
-      registerService(value) {
-        service = value;
-      },
-    }),
-  );
+function registerLifecycle(eager = false, path = "/browser/screencast") {
+  if (eager) {
+    vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
+  }
+  const api = createTestPluginApi({
+    runtime: { state: { openKeyedStore: vi.fn() } } as never,
+    registerHttpRoute: vi.fn(),
+    registerService: vi.fn(),
+  });
+  registerBrowserPlugin(api);
+  const route = vi.mocked(api.registerHttpRoute).mock.calls.findLast(([r]) => r.path === path)?.[0];
+  const service = vi.mocked(api.registerService).mock.calls.at(-1)?.[0];
   if (!route?.handleUpgrade || !service?.stop) {
     throw new Error("expected browser relay route and service lifecycle");
   }
-  return { handleUpgrade: route.handleUpgrade, stop: service.stop };
+  const scheduler = createTestPluginServiceScheduler();
+  const context = { config: {}, stateDir: "/tmp/browser-startup", logger: console, scheduler };
+  const stop = () => service.stop?.(context);
+  onTestFinished(async () => {
+    try {
+      await stop();
+    } finally {
+      await scheduler.stop();
+    }
+  });
+  return { handleUpgrade: route.handleUpgrade, start: () => service.start(context), stop };
 }
 
-describe("browser websocket shutdown registration", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.unstubAllEnvs());
+
+it("keeps shutdown lazy until direct websocket activity prepares teardown", async () => {
+  await registerLifecycle().stop();
+  expect(runtime.stopControl).not.toHaveBeenCalled();
+  for (const path of ["/browser/screencast", "/browser/extension"]) {
+    const { handleUpgrade, stop } = registerLifecycle(false, path);
+    await expect(handleUpgrade(...upgradeArgs)).resolves.toBe(true);
+    await stop();
+  }
+  expect(runtime.upgradeScreencast).toHaveBeenCalledWith(...upgradeArgs);
+  expect(runtime.upgradeExtension).toHaveBeenCalledWith(...upgradeArgs);
+  expect(runtime.stopControl).toHaveBeenCalledTimes(2);
+});
+
+it.each([true, false])("gates cleanup on eager success=%s", async (success) => {
+  const entered = createDeferred<void>();
+  const ready = createDeferred<void>();
+  runtime.startEager.mockImplementationOnce(async () => {
+    entered.resolve();
+    await ready.promise;
+    return null;
   });
+  const lifecycle = registerLifecycle(true);
+  const settled = Promise.resolve(lifecycle.start()).catch((error: unknown) => error);
+  const failure = new Error("eager startup failed");
+  await entered.promise;
+  const cleanupBeforeReady = runtime.startCleanup.mock.calls.length;
+  if (success) {
+    ready.resolve();
+  } else {
+    ready.reject(failure);
+  }
+  expect(await settled).toBe(success ? undefined : failure);
+  expect(cleanupBeforeReady).toBe(0);
+  expect(runtime.startCleanup).toHaveBeenCalledTimes(success ? 1 : 0);
+});
 
-  it("keeps shutdown lazy until direct websocket activity prepares teardown", async () => {
-    const coldLifecycle = registerLifecycleCallbacks("/browser/screencast");
+it("validates eager browser override specifiers", async () => {
+  await registerLifecycle(true).start();
+  const validate = runtime.startEager.mock.lastCall?.[0].validateOverrideSpecifier;
+  expect(validate?.(" ./server.js ")).toBe("./server.js");
+  const unsafe = ["data:text/javascript,boom", "HTTPS://example.invalid/mod.mjs", "node:fs"];
+  for (const specifier of unsafe) {
+    expect(() => validate?.(specifier)).toThrow();
+  }
+});
 
-    await coldLifecycle.stop({} as never);
-
-    expect(runtimeMocks.stopBrowserControlService).not.toHaveBeenCalled();
-
-    const req = {} as IncomingMessage;
-    const socket = {} as Duplex;
-    const head = Buffer.alloc(0);
-
-    for (const path of ["/browser/screencast", "/browser/extension"]) {
-      const { handleUpgrade, stop } = registerLifecycleCallbacks(path);
-      await expect(handleUpgrade(req, socket, head)).resolves.toBe(true);
-      await stop({} as never);
-    }
-
-    expect(runtimeMocks.handleBrowserScreencastUpgrade).toHaveBeenCalledWith(req, socket, head);
-    expect(runtimeMocks.handleGatewayExtensionUpgrade).toHaveBeenCalledWith(req, socket, head);
-    expect(runtimeMocks.stopBrowserControlService).toHaveBeenCalledTimes(2);
-  });
+it.each([true, false])("retries failed cleanup (eager=%s)", async (eager) => {
+  const stop = eager ? vi.fn(async () => undefined) : runtime.stopControl;
+  stop.mockRejectedValueOnce(new Error("cleanup failed"));
+  const lifecycle = registerLifecycle(eager);
+  if (eager) {
+    runtime.startEager.mockResolvedValueOnce({ stop });
+    await lifecycle.start();
+  } else {
+    await lifecycle.handleUpgrade(...upgradeArgs);
+  }
+  await expect(lifecycle.stop()).rejects.toThrow("cleanup failed");
+  await expect(lifecycle.stop()).resolves.toBeUndefined();
+  if (eager) {
+    expect(runtime.stopControl).not.toHaveBeenCalled();
+  }
 });

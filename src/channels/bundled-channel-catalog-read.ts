@@ -1,8 +1,3 @@
-/**
- * Bundled channel catalog reader.
- *
- * Loads channel metadata from generated package catalogs and bundled plugin package manifests.
- */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -76,18 +71,8 @@ function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
   return bundledExternalEntries;
 }
 
-function isChannelCatalogEntryLike(
-  entry: ChannelCatalogEntryLike | PluginPackageChannel,
-): entry is ChannelCatalogEntryLike {
-  return "openclaw" in entry;
-}
-
-function toBundledChannelEntry(
-  entry: ChannelCatalogEntryLike | PluginPackageChannel,
-): BundledChannelCatalogEntry | null {
-  const channel: PluginPackageChannel | undefined = isChannelCatalogEntryLike(entry)
-    ? entry.openclaw?.channel
-    : entry;
+function toBundledChannelEntry(entry: ChannelCatalogEntryLike): BundledChannelCatalogEntry | null {
+  const channel = entry.openclaw?.channel;
   const id = normalizeOptionalLowercaseString(channel?.id);
   if (!id || !channel) {
     return null;
@@ -109,9 +94,6 @@ function toBundledChannelEntry(
   };
 }
 
-/**
- * Lists bundled channel catalog entries from package manifests and generated catalog files.
- */
 export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[] {
   const pluginsDir = resolveBundledPluginsDir();
   const catalogs = getPluginCache().metadata.bundledChannelCatalogs;

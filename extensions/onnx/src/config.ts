@@ -11,11 +11,7 @@ export const ConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type WorkerConfig = {
-  modelDir: string;
-  threads: number;
-  maxLoadedModels: number;
-};
+export type WorkerConfig = { modelDir: string; threads: number; maxLoadedModels: number };
 
 export function resolveOnnxConfig(
   config: Record<string, unknown> | undefined,

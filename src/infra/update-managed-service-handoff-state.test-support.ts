@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import { DatabaseSync } from "node:sqlite";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
 
 const storeModulePath = createRequire(import.meta.url).resolve("@openclaw/fs-safe/store");
@@ -14,11 +15,20 @@ export function managedServiceStateUpdateScript(statePath: string, update: strin
 
 // The JSON shadow can retain fields that the Gateway's typed reader cannot see.
 export function readRestartSentinelPayload(env: NodeJS.ProcessEnv): unknown {
-  const current = readRestartSentinelRowSync(openOpenClawStateDatabase({ env }).db);
-  if (current.kind === "invalid") {
-    throw new Error("Expected a valid typed restart sentinel fixture");
+  const pathname = resolveOpenClawStateSqlitePath(env);
+  if (!fs.existsSync(pathname)) {
+    return null;
   }
-  return current.kind === "valid" ? current.sentinel : null;
+  const database = new DatabaseSync(pathname, { readOnly: true });
+  try {
+    const current = readRestartSentinelRowSync(database);
+    if (current.kind === "invalid") {
+      throw new Error("Expected a valid typed restart sentinel fixture");
+    }
+    return current.kind === "valid" ? current.sentinel : null;
+  } finally {
+    database.close();
+  }
 }
 
 export function readManagedServiceHandoffLease(

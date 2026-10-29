@@ -1,16 +1,19 @@
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
+import * as gateway from "./gateway.js";
 import { createTaskSuggestionTools } from "./task-suggestion-tools.js";
 
+afterEach(() => vi.restoreAllMocks());
+
 function createTools(gatewayCall = vi.fn()) {
+  vi.spyOn(gateway, "callGatewayTool").mockImplementation(gatewayCall);
   return {
     gatewayCall,
     tools: createTaskSuggestionTools({
       sessionKey: "agent:main:main",
       agentId: "main",
       cwd: "/repo",
-      callGateway: gatewayCall as never,
     }),
   };
 }

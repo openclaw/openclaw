@@ -148,14 +148,13 @@ openclaw_prepublish_plugin_registry_run_mounted() (
   local registry_root registry_pid="" command_pid=""
   registry_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-prepublish-registry.XXXXXX")"
   cleanup_registry_command() {
-    if [ -n "$command_pid" ]; then
-      kill "$command_pid" >/dev/null 2>&1 || true
-      wait "$command_pid" >/dev/null 2>&1 || true
-    fi
-    if [ -n "$registry_pid" ]; then
-      kill "$registry_pid" >/dev/null 2>&1 || true
-      wait "$registry_pid" >/dev/null 2>&1 || true
-    fi
+    local pid
+    for pid in "$command_pid" "$registry_pid"; do
+      if [ -n "$pid" ]; then
+        kill "$pid" >/dev/null 2>&1 || true
+        wait "$pid" >/dev/null 2>&1 || true
+      fi
+    done
     rm -rf "$registry_root"
   }
   trap cleanup_registry_command EXIT

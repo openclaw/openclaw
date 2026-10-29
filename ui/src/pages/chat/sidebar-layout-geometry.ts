@@ -5,10 +5,6 @@ import type {
   SidebarSlotId,
 } from "./sidebar-layout-types.ts";
 
-export function cloneLayout(layout: SidebarLayout): SidebarLayout {
-  return structuredClone(layout);
-}
-
 export const SIDEBAR_MIN_WIDTH_PX = 260;
 export const SIDEBAR_MIN_HEIGHT_PX = 220;
 const SIDEBAR_MAX_WIDTH_PX = 1_200;
@@ -55,18 +51,18 @@ export function fitSidebarLayout(
   layout: SidebarLayout,
   availableWidth: number,
 ): SidebarLayout | null {
-  const next = cloneLayout(layout);
   if (!Number.isFinite(availableWidth) || availableWidth <= 0) {
-    return next;
+    return layout;
   }
-  const column = next.columns[0];
+  const column = layout.columns[0];
   if (!column) {
-    return next;
+    return layout;
   }
-  next.columns = [column];
-  if (sidebarDock(next) === "bottom") {
-    column.height = clampHeight(column.height);
-    return next;
+  if (sidebarDock(layout) === "bottom") {
+    const height = clampHeight(column.height);
+    return layout.columns.length === 1 && height === column.height
+      ? layout
+      : { ...layout, columns: [{ ...column, height }] };
   }
   const maxColumnWidth = Math.max(
     SIDEBAR_MIN_WIDTH_PX,
@@ -76,12 +72,10 @@ export function fitSidebarLayout(
   if (SIDEBAR_MIN_WIDTH_PX > budget) {
     return null;
   }
-  column.width = Math.min(maxColumnWidth, budget, clampWidth(column.width));
-  return next;
-}
-
-export function isSidebarRegionCollapsed(_layout: SidebarLayout, availableWidth: number): boolean {
-  return availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX;
+  const width = Math.min(maxColumnWidth, budget, clampWidth(column.width));
+  return layout.columns.length === 1 && width === column.width
+    ? layout
+    : { ...layout, columns: [{ ...column, width }] };
 }
 
 export function initializeBrowserSidebarWidth(
@@ -104,13 +98,12 @@ export function initializeBrowserSidebarWidth(
   ) {
     return layout;
   }
-  const next = cloneLayout(layout);
-  const nextColumn = next.columns[0]!;
+  const nextColumn = { ...column };
   // Reclaim the centered chat's spare margins; share tighter panes evenly.
   nextColumn.width = Math.max(
     column.width,
     availableWidth - Math.min(chatWidth, availableWidth / 2) - SIDEBAR_DIVIDER_WIDTH_PX,
   );
   delete nextColumn.browserWidthPending;
-  return fitSidebarLayout(next, availableWidth) ?? layout;
+  return fitSidebarLayout({ ...layout, columns: [nextColumn] }, availableWidth) ?? layout;
 }

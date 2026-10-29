@@ -9,10 +9,8 @@ export function normalizeBrowserUrlDraft(raw: string): string | null {
     return null;
   }
   const candidate = hasExplicitScheme ? trimmed : `https://${trimmed}`;
-  try {
-    const parsed = new URL(candidate);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : null;
-  } catch {
-    return null;
-  }
+  const parsed = URL.parse(candidate);
+  return parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")
+    ? parsed.toString()
+    : null;
 }

@@ -100,7 +100,6 @@ read_when:
       agents: {
         entries: {
           main: {
-            default: true,
             groupChat: {
               mentionPatterns: ["@openclaw", "openclaw"],
             },
@@ -129,15 +128,19 @@ read_when:
     ```json5
     {
       agents: {
+        ownership: "explicit",
         defaults: {
           skills: ["github", "weather"],
+          systemAgent: { agentId: "writer" },
+          authInheritance: { agentId: "writer" },
         },
         entries: {
-          writer: { default: true }, // inherits github, weather
+          writer: { workspace: "~/.openclaw/workspace" }, // inherits github, weather
           docs: { skills: ["docs-search"] }, // replaces defaults
           "locked-down": { skills: [] }, // no skills
         },
       },
+      talk: { agentId: "writer" },
     }
     ```
 
@@ -280,24 +283,26 @@ read_when:
 
   </Accordion>
 
-  <Accordion title="Set up heartbeat (periodic check-ins)">
-    ```json5
-    {
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "30m",
-            target: "owner",
-          },
-        },
-      },
-    }
+  <a id="set-up-heartbeat-periodic-check-ins" />
+  <Accordion title="Set up periodic check-ins">
+    Periodic check-ins are ordinary jobs in **Automations**. Select the job to
+    edit its schedule, scratch checklist, session, active hours, and delivery.
+    You can also adjust an existing job from the CLI:
+
+    ```bash
+    openclaw cron list --all
+    openclaw cron edit <job-id> --every 30m
+    openclaw cron disable <job-id>
     ```
 
-    - `every`: duration string (`30m`, `2h`). Set `0m` to disable recurring cadence; targeted event-driven wakes can still run one agent turn. Default: `30m`.
-    - `target`: `owner` (default operator DM) | `last` (latest conversation, including groups) | `none` (internal only) | `<channel-id>`
-    - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
-    - See [Heartbeat](/gateway/heartbeat) for the full guide.
+    For an existing July 2026 or newer heartbeat config, run
+    `openclaw doctor --fix` first. Doctor transfers the settings into ordinary
+    jobs and removes the retired heartbeat blocks. Edit the jobs after that;
+    deleting a job does not cause it to reappear on restart or config reload.
+    Disabling a periodic job leaves event-driven follow-ups available.
+
+    See [Cron jobs](/automation/cron-jobs) to create a job and
+    [Heartbeat migration](/gateway/heartbeat) for the migration details.
 
   </Accordion>
 
@@ -363,15 +368,22 @@ read_when:
     ```json5
     {
       agents: {
+        ownership: "explicit",
+        defaults: {
+          systemAgent: { agentId: "home" },
+          authInheritance: { agentId: "home" },
+        },
         entries: {
-          home: { default: true, workspace: "~/.openclaw/workspace-home" },
+          home: { workspace: "~/.openclaw/workspace-home" },
           work: { workspace: "~/.openclaw/workspace-work" },
         },
       },
       bindings: [
         { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
         { agentId: "work", match: { channel: "whatsapp", accountId: "biz" } },
+        { agentId: "home", match: { channel: "whatsapp", accountId: "*" } },
       ],
+      talk: { agentId: "home" },
     }
     ```
 
@@ -414,7 +426,7 @@ read_when:
       include arrays, sibling overrides, files shared by multiple logical paths,
       changes spanning ownership boundaries,
       any nested include beneath a merged owner, and any include whose own file
-      still authors a nested `$include` directive fail closed instead of
+      still authors a nested `$include` directive reject writes instead of
       flattening the config. Numeric object keys are treated as map keys, not
       array positions.
       Include targets and contents are rechecked around persistence; a concurrent

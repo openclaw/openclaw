@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   runReleaseValidationCampaignPublish,
   validateReleaseValidationCampaignArtifact,
@@ -9,53 +9,22 @@ const TAG = "v2026.8.1-beta.3";
 const TRAIN = "v2026.8.1";
 const RELEASE_COMMIT = "a".repeat(40);
 const GUIDANCE_SHA = "b".repeat(40);
+const TITLE = "OpenClaw 2026.8.1 beta feedback";
 
-function surface(name: string) {
-  return [
-    `### [${name}](https://docs.openclaw.ai/maturity/taxonomy#${name.toLowerCase()})`,
-    "",
-    "| **Maturity score** | M4 Stable |",
-    "| --- | --- |",
-    "| **What changed** | Runtime behavior changed. |",
-    "| **Recommended testing** | Run `{{OPENCLAW}} status`; it exits successfully. |",
-    "| **Testing notes** | |",
-  ].join("\n");
-}
+const surface = "Runtime behavior changed. Run `{{OPENCLAW}} status`.\n| **Testing notes** | |\n";
 
 function campaignBody(tag = TAG) {
   return [
-    `<!-- openclaw-release-validation:${TRAIN} -->`,
-    "",
+    `<!-- openclaw-release-validation:${TRAIN} -->\n`,
     `- Current beta: [${tag}](https://github.com/openclaw/openclaw/releases/tag/${tag})`,
     `- Beta commit: \`${RELEASE_COMMIT}\``,
     `- Guidance main commit: \`${GUIDANCE_SHA}\``,
-    "- Test target: latest immutable `origin/main`",
-    "",
-    "> [!NOTE]",
-    "> Priorities use the live maturity scorecard.",
-    "",
-    "<!-- validation-guidance:start -->",
-    "",
-    "## Priority surfaces for this release",
-    "",
-    surface("Gateway"),
-    "",
-    surface("Channels"),
-    "",
-    surface("Models"),
-    "",
-    `## Priority surfaces since ${tag}`,
-    "",
-    surface("Agents"),
-    "",
-    surface("Sessions"),
-    "",
-    surface("Approvals"),
-    "<!-- validation-guidance:end -->",
-    "",
-    "## Participate",
-    "",
-    "Run the release-validation skill.",
+    "- Test target: latest immutable `origin/main`\n",
+    "<!-- validation-guidance:start -->\n\n## Priority surfaces for this release\n",
+    surface.repeat(3),
+    `\n## Priority surfaces since ${tag}\n`,
+    surface.repeat(3),
+    "<!-- validation-guidance:end -->\n\n## Participate",
   ].join("\n");
 }
 
@@ -68,7 +37,7 @@ function betaArtifact(tag = TAG) {
     releaseUrl: `https://github.com/openclaw/openclaw/releases/tag/${tag}`,
     releaseCommit: RELEASE_COMMIT,
     guidanceMainSha: GUIDANCE_SHA,
-    title: "OpenClaw 2026.8.1 beta feedback",
+    title: TITLE,
     body: campaignBody(tag),
   };
 }
@@ -86,10 +55,16 @@ function issue(number: number, body: string, labels = ["release-validation"]) {
 
 function harness(initialIssues: ReturnType<typeof issue>[]) {
   const issues = new Map(initialIssues.map((candidate) => [candidate.number, candidate]));
+  const getIssue = (number: number) => {
+    const current = issues.get(number);
+    if (!current) {
+      throw new Error("missing issue");
+    }
+    return current;
+  };
   const calls = {
     comments: [] as Array<Record<string, unknown>>,
     creates: [] as Array<Record<string, unknown>>,
-    labels: [] as Array<Record<string, unknown>>,
     updates: [] as Array<Record<string, unknown>>,
   };
   let nextNumber = 100;
@@ -99,10 +74,7 @@ function harness(initialIssues: ReturnType<typeof issue>[]) {
       issues: {
         listForRepo: async () => ({ data: [] }),
         getLabel: async () => ({ data: {} }),
-        createLabel: async (args: Record<string, unknown>) => {
-          calls.labels.push(args);
-          return { data: {} };
-        },
+        createLabel: async () => ({ data: {} }),
         createComment: async (args: Record<string, unknown>) => {
           calls.comments.push(args);
           return { data: {} };
@@ -116,184 +88,130 @@ function harness(initialIssues: ReturnType<typeof issue>[]) {
         },
         update: async (args: Record<string, unknown>) => {
           calls.updates.push(args);
-          const current = issues.get(Number(args.issue_number));
-          if (!current) {
-            throw new Error("missing issue");
-          }
+          const current = getIssue(Number(args.issue_number));
           Object.assign(current, args);
           if (Array.isArray(args.labels)) {
             current.labels = args.labels.map((name) => ({ name: String(name) }));
           }
           return { data: current };
         },
-        get: async ({ issue_number }: { issue_number: number }) => {
-          const current = issues.get(issue_number);
-          if (!current) {
-            throw new Error("missing issue");
-          }
-          return { data: current };
-        },
+        get: async ({ issue_number }: { issue_number: number }) => ({
+          data: getIssue(issue_number),
+        }),
       },
     },
   };
-  const core = { info: () => {}, setOutput: () => {} };
-  return { calls, core, github };
+  const publish = (
+    options: Partial<Parameters<typeof runReleaseValidationCampaignPublish>[0]> = {},
+  ) =>
+    runReleaseValidationCampaignPublish({
+      github,
+      core: { info: () => {}, setOutput: () => {} },
+      context: { repo: { owner: "openclaw", repo: "openclaw" } },
+      artifact: betaArtifact(),
+      ...options,
+    });
+  return { calls, publish };
 }
 
-describe("release-validation campaign artifact", () => {
-  it("accepts the exact beta campaign contract", () => {
-    expect(() =>
-      validateReleaseValidationCampaignArtifact(betaArtifact(), {
-        expectedTag: TAG,
-        expectedReleaseCommit: RELEASE_COMMIT,
-        expectedGuidanceMainSha: GUIDANCE_SHA,
-      }),
-    ).not.toThrow();
-  });
+function expectCall(calls: unknown[], fields: Record<string, unknown>) {
+  expect(calls).toContainEqual(expect.objectContaining(fields));
+}
 
-  it("rejects non-empty testing notes and local paths", () => {
-    const notes = betaArtifact();
-    notes.body = notes.body.replace("| **Testing notes** | |", "| **Testing notes** | failed |");
-    expect(() => validateReleaseValidationCampaignArtifact(notes)).toThrow("testing-notes row");
+function expectSingleCall(calls: unknown[], fields: Record<string, unknown>) {
+  expect(calls).toEqual([expect.objectContaining(fields)]);
+}
 
-    const path = betaArtifact();
-    path.body = path.body.replace("Runtime behavior changed.", "/Users/test/private.log");
-    expect(() => validateReleaseValidationCampaignArtifact(path)).toThrow("local filesystem path");
-  });
+it.each([
+  ["| **Testing notes** | |", "| **Testing notes** | failed |", "testing-notes row"],
+  ["Runtime behavior changed.", "/Users/test/private.log", "local filesystem path"],
+])("rejects campaign body %s -> %s", (before, after, message) => {
+  const artifact = betaArtifact();
+  artifact.body = artifact.body.replace(before, after);
+  expect(() => validateReleaseValidationCampaignArtifact(artifact)).toThrow(message);
 });
 
-describe("release-validation campaign publisher", () => {
-  it("creates the canonical campaign when none exists", async () => {
-    const { calls, core, github } = harness([]);
-
-    const result = await runReleaseValidationCampaignPublish({
-      github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core,
-      artifact: betaArtifact(),
-    });
-
-    expect(result.action).toBe("create");
-    expect(calls.creates).toEqual([
-      expect.objectContaining({
-        title: "OpenClaw 2026.8.1 beta feedback",
-        labels: ["release-validation"],
-      }),
-    ]);
-  });
-
-  it("updates the matching train and closes an older campaign", async () => {
-    const matching = issue(10, campaignBody());
-    const older = issue(
-      9,
-      campaignBody().replaceAll(TRAIN, "v2026.7.1").replaceAll("2026.8.1", "2026.7.1"),
-    );
-    const { calls, core, github } = harness([matching, older]);
-
-    const result = await runReleaseValidationCampaignPublish({
-      github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core,
-      artifact: betaArtifact(),
-      expectedTag: TAG,
-      expectedReleaseCommit: RELEASE_COMMIT,
-      expectedGuidanceMainSha: GUIDANCE_SHA,
-    });
-
-    expect(result).toEqual({
-      action: "update",
-      issueNumber: 10,
-      issueUrl: "https://github.com/openclaw/openclaw/issues/10",
-    });
-    expect(calls.updates).toContainEqual(
-      expect.objectContaining({ issue_number: 10, labels: ["release-validation"] }),
-    );
-    expect(calls.comments).toContainEqual(
-      expect.objectContaining({ issue_number: 9, body: expect.stringContaining("issues/10") }),
-    );
-    expect(calls.updates).toContainEqual(
-      expect.objectContaining({ issue_number: 9, state: "closed", state_reason: "completed" }),
-    );
-  });
-
-  it("migrates one explicitly selected legacy campaign", async () => {
-    const legacy = issue(
-      10,
-      campaignBody().replace(
-        `<!-- openclaw-release-validation:${TRAIN} -->`,
-        `<!-- openclaw-release-validation:${TAG} -->`,
-      ),
-      ["maintainer"],
-    );
-    const { calls, core, github } = harness([legacy]);
-
-    const result = await runReleaseValidationCampaignPublish({
-      github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core,
-      artifact: betaArtifact(),
-      campaignIssueNumber: 10,
-    });
-
-    expect(result.action).toBe("update");
-    expect(calls.creates).toHaveLength(0);
-    expect(calls.updates).toContainEqual(
-      expect.objectContaining({ issue_number: 10, labels: ["release-validation"] }),
-    );
-  });
-
-  it("refuses to replace newer guidance with an older beta", async () => {
-    const newerTag = "v2026.8.1-beta.4";
-    const { core, github } = harness([issue(10, campaignBody(newerTag))]);
-
-    await expect(
-      runReleaseValidationCampaignPublish({
-        github,
-        context: { repo: { owner: "openclaw", repo: "openclaw" } },
-        core,
-        artifact: betaArtifact(),
-      }),
-    ).rejects.toThrow("older v2026.8.1-beta.3");
-  });
-
-  it("closes the matching train after a stable release", async () => {
-    const { calls, core, github } = harness([
-      issue(10, campaignBody(), ["release-validation", "keep"]),
-    ]);
-
-    const result = await runReleaseValidationCampaignPublish({
-      github,
-      context: { repo: { owner: "openclaw", repo: "openclaw" } },
-      core,
-      artifact: {
-        schema: "openclaw.release-validation-campaign/v1",
-        operation: "close",
-        tag: TRAIN,
-        stableTrain: TRAIN,
-        releaseUrl: `https://github.com/openclaw/openclaw/releases/tag/${TRAIN}`,
-      },
-    });
-
-    expect(result.action).toBe("close");
-    expect(calls.comments).toEqual([
-      expect.objectContaining({ issue_number: 10, body: expect.stringContaining(`/tag/${TRAIN}`) }),
-    ]);
-    expect(calls.updates).toEqual([
-      expect.objectContaining({ issue_number: 10, state: "closed", labels: ["keep"] }),
-    ]);
-  });
+it("creates the canonical campaign when none exists", async () => {
+  const { calls, publish } = harness([]);
+  expect(await publish()).toMatchObject({ action: "create" });
+  expectSingleCall(calls.creates, { title: TITLE, labels: ["release-validation"] });
 });
 
-describe("release-validation skill runner workflow", () => {
-  it("keeps Codex read-only and publishes only through the validated artifact", () => {
-    const workflow = readFileSync(".github/workflows/release-validation-skill-runner.yml", "utf8");
+it("updates the matching train and closes an older campaign", async () => {
+  const older = issue(
+    9,
+    campaignBody().replaceAll(TRAIN, "v2026.7.1").replaceAll("2026.8.1", "2026.7.1"),
+  );
+  const { calls, publish } = harness([issue(10, campaignBody()), older]);
 
-    expect(workflow).toContain("permissions:\n  contents: read");
-    expect(workflow).not.toContain("issues: write");
-    expect(workflow).toContain("RELEASE_VALIDATION_ARTIFACT_PATH");
-    expect(workflow).toContain("validateReleaseValidationCampaignArtifact");
-    expect(workflow.indexOf("openai/codex-action@")).toBeLessThan(
-      workflow.indexOf("actions/create-github-app-token@"),
-    );
+  const result = await publish({
+    expectedTag: TAG,
+    expectedReleaseCommit: RELEASE_COMMIT,
+    expectedGuidanceMainSha: GUIDANCE_SHA,
   });
+
+  expect(result).toEqual({
+    action: "update",
+    issueNumber: 10,
+    issueUrl: "https://github.com/openclaw/openclaw/issues/10",
+  });
+  expectCall(calls.updates, { issue_number: 10, labels: ["release-validation"] });
+  expectCall(calls.comments, { issue_number: 9, body: expect.stringContaining("issues/10") });
+  expectCall(calls.updates, { issue_number: 9, state: "closed", state_reason: "completed" });
+});
+
+it("migrates one explicitly selected legacy campaign", async () => {
+  const legacy = issue(
+    10,
+    campaignBody().replace(
+      `<!-- openclaw-release-validation:${TRAIN} -->`,
+      `<!-- openclaw-release-validation:${TAG} -->`,
+    ),
+    ["maintainer"],
+  );
+  const { calls, publish } = harness([legacy]);
+
+  expect(await publish({ campaignIssueNumber: 10 })).toMatchObject({ action: "update" });
+  expect(calls.creates).toHaveLength(0);
+  expectCall(calls.updates, { issue_number: 10, labels: ["release-validation"] });
+});
+
+it("refuses to replace newer guidance with an older beta", async () => {
+  const newerTag = "v2026.8.1-beta.4";
+  const { publish } = harness([issue(10, campaignBody(newerTag))]);
+
+  await expect(publish()).rejects.toThrow("older v2026.8.1-beta.3");
+});
+
+it("closes the matching train after a stable release", async () => {
+  const { calls, publish } = harness([issue(10, campaignBody(), ["release-validation", "keep"])]);
+
+  const closing = publish({
+    artifact: {
+      schema: "openclaw.release-validation-campaign/v1",
+      operation: "close",
+      tag: TRAIN,
+      stableTrain: TRAIN,
+      releaseUrl: `https://github.com/openclaw/openclaw/releases/tag/${TRAIN}`,
+    },
+  });
+
+  expect(await closing).toMatchObject({ action: "close" });
+  expectSingleCall(calls.comments, {
+    issue_number: 10,
+    body: expect.stringContaining(`/tag/${TRAIN}`),
+  });
+  expectSingleCall(calls.updates, { issue_number: 10, state: "closed", labels: ["keep"] });
+});
+
+it("keeps Codex read-only and publishes only through the validated artifact", () => {
+  const workflow = readFileSync(".github/workflows/release-validation-skill-runner.yml", "utf8");
+
+  expect(workflow).toContain("permissions:\n  contents: read");
+  expect(workflow).not.toContain("issues: write");
+  expect(workflow).toContain("RELEASE_VALIDATION_ARTIFACT_PATH");
+  expect(workflow).toContain("validateReleaseValidationCampaignArtifact");
+  expect(workflow.indexOf("openai/codex-action@")).toBeLessThan(
+    workflow.indexOf("actions/create-github-app-token@"),
+  );
 });

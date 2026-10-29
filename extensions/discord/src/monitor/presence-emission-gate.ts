@@ -1,4 +1,3 @@
-// Discord plugin module gates presence-event emission after reconnects and during bursts.
 const DISCORD_PRESENCE_RECONNECT_SUPPRESS_MS = 5 * 60 * 1000;
 const DISCORD_PRESENCE_BURST_LIMIT = 8;
 const DISCORD_PRESENCE_BURST_WINDOW_MS = 60 * 1000;
@@ -36,7 +35,6 @@ type DiscordPresenceReconnectDecision =
   | { allowed: false; reason: "reconnect-window"; shouldLog: boolean };
 
 type DiscordPresenceBurstEntry = {
-  id: number;
   atMs: number;
   committed: boolean;
 };
@@ -46,10 +44,8 @@ type DiscordPresenceBurstState = {
   logged: boolean;
 };
 
-type DiscordPresenceBurstReservation = number;
-
 type DiscordPresenceBurstDecision =
-  | { allowed: true; reservation: DiscordPresenceBurstReservation }
+  | { allowed: true; reservation: DiscordPresenceBurstEntry }
   | { allowed: false; reason: "burst" | "burst-pending"; shouldLog: boolean };
 
 /**
@@ -62,7 +58,6 @@ export class DiscordPresenceEmissionGate {
   // Sharing this history across guilds lets one guild's settings prune or consume another's
   // window. Keep each configured guild's rate-limit state and logging episode independent.
   private readonly burstByGuild = new Map<string, DiscordPresenceBurstState>();
-  private nextReservationId = 0;
 
   noteGatewaySessionReset(nowMs: number): void {
     this.lastSessionResetAtMs = nowMs;
@@ -104,30 +99,24 @@ export class DiscordPresenceEmissionGate {
       return { allowed: false, reason, shouldLog };
     }
     state.logged = false;
-    const reservation = { id: this.nextReservationId++, atMs: nowMs, committed: false };
+    const reservation = { atMs: nowMs, committed: false };
     state.reservations.push(reservation);
-    return { allowed: true, reservation: reservation.id };
+    return { allowed: true, reservation };
   }
 
-  commitBurst(guildId: string, reservation: DiscordPresenceBurstReservation, nowMs: number): void {
-    const entry = this.burstByGuild
-      .get(guildId)
-      ?.reservations.find((candidate) => candidate.id === reservation);
-    if (!entry) {
-      return;
-    }
+  commitBurst(entry: DiscordPresenceBurstEntry, nowMs: number): void {
     // Admission reservations cap concurrent Discord lookups. Start the sliding window only when
     // an event is actually queued so slow lookups do not shorten the configured emission window.
     entry.atMs = nowMs;
     entry.committed = true;
   }
 
-  releaseBurst(guildId: string, reservation: DiscordPresenceBurstReservation): void {
+  releaseBurst(guildId: string, reservation: DiscordPresenceBurstEntry): void {
     const state = this.burstByGuild.get(guildId);
     if (!state) {
       return;
     }
-    state.reservations = state.reservations.filter((candidate) => candidate.id !== reservation);
+    state.reservations = state.reservations.filter((candidate) => candidate !== reservation);
     if (state.reservations.length === 0 && !state.logged) {
       this.burstByGuild.delete(guildId);
     }

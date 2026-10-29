@@ -1,61 +1,23 @@
-// Tlon helper module supports settings helpers behavior.
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { PendingApproval, TlonSettingsStore } from "../settings.js";
+import type { TlonSettingsStore } from "../settings.js";
 import { normalizeShip } from "../targets.js";
 import type { TlonResolvedAccount } from "../types.js";
-
-type TlonMonitorSettingsState = {
-  effectiveDmAllowlist: string[];
-  effectiveShowModelSig: boolean;
-  effectiveAutoAcceptDmInvites: boolean;
-  effectiveAutoAcceptGroupInvites: boolean;
-  effectiveGroupInviteAllowlist: string[];
-  effectiveAutoDiscoverChannels: boolean;
-  effectiveOwnerShip: string | null;
-  pendingApprovals: PendingApproval[];
-  currentSettings: TlonSettingsStore;
-};
 
 export function buildTlonSettingsMigrations(
   account: TlonResolvedAccount,
   currentSettings: TlonSettingsStore,
-): Array<{ key: string; fileValue: unknown; settingsValue: unknown }> {
+): Array<{ key: keyof TlonSettingsStore; fileValue: unknown; settingsValue: unknown }> {
+  const keys = [
+    "dmAllowlist",
+    "groupInviteAllowlist",
+    "groupChannels",
+    "defaultAuthorizedShips",
+    "autoDiscoverChannels",
+    "autoAcceptDmInvites",
+    "autoAcceptGroupInvites",
+  ] as const;
   return [
-    {
-      key: "dmAllowlist",
-      fileValue: account.dmAllowlist,
-      settingsValue: currentSettings.dmAllowlist,
-    },
-    {
-      key: "groupInviteAllowlist",
-      fileValue: account.groupInviteAllowlist,
-      settingsValue: currentSettings.groupInviteAllowlist,
-    },
-    {
-      key: "groupChannels",
-      fileValue: account.groupChannels,
-      settingsValue: currentSettings.groupChannels,
-    },
-    {
-      key: "defaultAuthorizedShips",
-      fileValue: account.defaultAuthorizedShips,
-      settingsValue: currentSettings.defaultAuthorizedShips,
-    },
-    {
-      key: "autoDiscoverChannels",
-      fileValue: account.autoDiscoverChannels,
-      settingsValue: currentSettings.autoDiscoverChannels,
-    },
-    {
-      key: "autoAcceptDmInvites",
-      fileValue: account.autoAcceptDmInvites,
-      settingsValue: currentSettings.autoAcceptDmInvites,
-    },
-    {
-      key: "autoAcceptGroupInvites",
-      fileValue: account.autoAcceptGroupInvites,
-      settingsValue: currentSettings.autoAcceptGroupInvites,
-    },
+    ...keys.map((key) => ({ key, fileValue: account[key], settingsValue: currentSettings[key] })),
     {
       key: "showModelSig",
       fileValue: account.showModelSignature,
@@ -74,75 +36,51 @@ export function applyTlonSettingsOverrides(params: {
   account: TlonResolvedAccount;
   currentSettings: TlonSettingsStore;
   log?: (message: string) => void;
-}): TlonMonitorSettingsState {
-  let effectiveDmAllowlist = params.account.dmAllowlist;
-  let effectiveShowModelSig = params.account.showModelSignature ?? false;
-  let effectiveAutoAcceptDmInvites = params.account.autoAcceptDmInvites ?? false;
-  let effectiveAutoAcceptGroupInvites = params.account.autoAcceptGroupInvites ?? false;
-  let effectiveGroupInviteAllowlist = params.account.groupInviteAllowlist;
-  let effectiveAutoDiscoverChannels = params.account.autoDiscoverChannels ?? false;
-  let effectiveOwnerShip = params.account.ownerShip
-    ? normalizeShip(params.account.ownerShip)
-    : null;
-  let pendingApprovals: PendingApproval[] = [];
-
-  if (params.currentSettings.defaultAuthorizedShips?.length) {
-    params.log?.(
-      `[tlon] Using defaultAuthorizedShips from settings store: ${params.currentSettings.defaultAuthorizedShips.join(", ")}`,
+}) {
+  const { account, currentSettings: settings, log } = params;
+  if (settings.defaultAuthorizedShips?.length) {
+    log?.(
+      `[tlon] Using defaultAuthorizedShips from settings store: ${settings.defaultAuthorizedShips.join(", ")}`,
     );
   }
-  if (params.currentSettings.autoDiscoverChannels !== undefined) {
-    effectiveAutoDiscoverChannels = params.currentSettings.autoDiscoverChannels;
-    params.log?.(
-      `[tlon] Using autoDiscoverChannels from settings store: ${effectiveAutoDiscoverChannels}`,
-    );
+  for (const key of [
+    "autoDiscoverChannels",
+    "dmAllowlist",
+    "autoAcceptDmInvites",
+    "autoAcceptGroupInvites",
+    "groupInviteAllowlist",
+  ] as const) {
+    const value = settings[key];
+    if (value !== undefined) {
+      log?.(
+        `[tlon] Using ${key} from settings store: ${Array.isArray(value) ? value.join(", ") : value}`,
+      );
+    }
   }
-  if (params.currentSettings.dmAllowlist !== undefined) {
-    effectiveDmAllowlist = params.currentSettings.dmAllowlist;
-    params.log?.(
-      `[tlon] Using dmAllowlist from settings store: ${effectiveDmAllowlist.join(", ")}`,
-    );
+  const effectiveOwnerShip = settings.ownerShip
+    ? normalizeShip(settings.ownerShip)
+    : account.ownerShip
+      ? normalizeShip(account.ownerShip)
+      : null;
+  if (settings.ownerShip) {
+    log?.(`[tlon] Using ownerShip from settings store: ${effectiveOwnerShip}`);
   }
-  if (params.currentSettings.showModelSig !== undefined) {
-    effectiveShowModelSig = params.currentSettings.showModelSig;
+  if (settings.pendingApprovals?.length) {
+    log?.(`[tlon] Loaded ${settings.pendingApprovals.length} pending approval(s) from settings`);
   }
-  if (params.currentSettings.autoAcceptDmInvites !== undefined) {
-    effectiveAutoAcceptDmInvites = params.currentSettings.autoAcceptDmInvites;
-    params.log?.(
-      `[tlon] Using autoAcceptDmInvites from settings store: ${effectiveAutoAcceptDmInvites}`,
-    );
-  }
-  if (params.currentSettings.autoAcceptGroupInvites !== undefined) {
-    effectiveAutoAcceptGroupInvites = params.currentSettings.autoAcceptGroupInvites;
-    params.log?.(
-      `[tlon] Using autoAcceptGroupInvites from settings store: ${effectiveAutoAcceptGroupInvites}`,
-    );
-  }
-  if (params.currentSettings.groupInviteAllowlist !== undefined) {
-    effectiveGroupInviteAllowlist = params.currentSettings.groupInviteAllowlist;
-    params.log?.(
-      `[tlon] Using groupInviteAllowlist from settings store: ${effectiveGroupInviteAllowlist.join(", ")}`,
-    );
-  }
-  if (params.currentSettings.ownerShip) {
-    effectiveOwnerShip = normalizeShip(params.currentSettings.ownerShip);
-    params.log?.(`[tlon] Using ownerShip from settings store: ${effectiveOwnerShip}`);
-  }
-  if (params.currentSettings.pendingApprovals?.length) {
-    pendingApprovals = params.currentSettings.pendingApprovals;
-    params.log?.(`[tlon] Loaded ${pendingApprovals.length} pending approval(s) from settings`);
-  }
-
   return {
-    effectiveDmAllowlist,
-    effectiveShowModelSig,
-    effectiveAutoAcceptDmInvites,
-    effectiveAutoAcceptGroupInvites,
-    effectiveGroupInviteAllowlist,
-    effectiveAutoDiscoverChannels,
+    effectiveDmAllowlist: settings.dmAllowlist ?? account.dmAllowlist,
+    effectiveShowModelSig: settings.showModelSig ?? account.showModelSignature ?? false,
+    effectiveAutoAcceptDmInvites:
+      settings.autoAcceptDmInvites ?? account.autoAcceptDmInvites ?? false,
+    effectiveAutoAcceptGroupInvites:
+      settings.autoAcceptGroupInvites ?? account.autoAcceptGroupInvites ?? false,
+    effectiveGroupInviteAllowlist: settings.groupInviteAllowlist ?? account.groupInviteAllowlist,
+    effectiveAutoDiscoverChannels:
+      settings.autoDiscoverChannels ?? account.autoDiscoverChannels ?? false,
     effectiveOwnerShip,
-    pendingApprovals,
-    currentSettings: params.currentSettings,
+    pendingApprovals: settings.pendingApprovals?.length ? settings.pendingApprovals : [],
+    currentSettings: settings,
   };
 }
 

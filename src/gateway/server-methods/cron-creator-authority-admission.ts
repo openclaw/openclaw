@@ -1,10 +1,14 @@
-import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
+import {
+  createCronCreatorAuthorityCapability,
+  type CronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import {
   consumeRequesterCronAuthorityAdmission,
   revokeRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
+import { revokeCronCreatorAuthorityRunScope } from "../cron-creator-authority-grant.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";
 
@@ -17,6 +21,10 @@ export type GatewayCronCreatorAuthorityAdmission = Readonly<{
   callerScopedCreation?: true;
   isCurrent?: () => boolean;
   bindRunScope?: (scope: CronCreatorAuthorityCapability) => void;
+  /** Exact requester scope already bound before Gateway acceptance. */
+  boundRunScope?: CronCreatorAuthorityCapability;
+  /** Retires accepted continuation custody even when dispatch never starts. */
+  release?: () => void;
 }>;
 
 type DirectOperatorAuthorityParams = {
@@ -29,15 +37,11 @@ type DirectOperatorAuthorityParams = {
   disallowed: boolean;
 };
 
-function isDirectGatewayUserTurn(params: DirectOperatorAuthorityParams): boolean {
-  const internal = params.client?.internal;
+/** Classifies a direct operator connection without granting any capability. */
+export function isDirectGatewayUserClient(client: GatewayClient | null | undefined): boolean {
+  const internal = client?.internal;
   return (
-    params.runId.trim().length > 0 &&
-    params.client != null &&
-    Boolean(params.resolvedSessionKey?.trim()) &&
-    !params.spawnedBy?.trim() &&
-    params.inputProvenance === undefined &&
-    !params.disallowed &&
+    client != null &&
     internal?.syntheticClient !== true &&
     internal?.senderAttribution === undefined &&
     internal?.approvalRuntime !== true &&
@@ -48,6 +52,17 @@ function isDirectGatewayUserTurn(params: DirectOperatorAuthorityParams): boolean
     internal?.pluginSubagentRequester === undefined &&
     internal?.runtimePluginToolGrant === undefined &&
     internal?.delegatedToolPolicyHandoffId === undefined
+  );
+}
+
+function isDirectGatewayUserTurn(params: DirectOperatorAuthorityParams): boolean {
+  return (
+    params.runId.trim().length > 0 &&
+    isDirectGatewayUserClient(params.client) &&
+    Boolean(params.resolvedSessionKey?.trim()) &&
+    !params.spawnedBy?.trim() &&
+    params.inputProvenance === undefined &&
+    !params.disallowed
   );
 }
 
@@ -63,7 +78,7 @@ function resolveDirectOperatorAuthority(
   }
   const isDirectOperator =
     isDirectTurn &&
-    clientHasAdminScope(params.client ?? null) &&
+    hasGatewayAdminScope(params.client) &&
     (internal?.isLocalClient === true || internal?.controlUiAdmin === true);
   return isDirectOperator
     ? Object.freeze({
@@ -94,14 +109,12 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   inputProvenance?: InputProvenance;
   hasRestoredCronContinuation: boolean;
   isOneShotModelRun: boolean;
-  isRestartRecoveryResumeRun: boolean;
 }): GatewayCronCreatorAuthorityAdmission | undefined {
   const request = params.request;
   if (
     params.client?.internal?.syntheticClient === true &&
     !params.hasRestoredCronContinuation &&
-    !params.isOneShotModelRun &&
-    !params.isRestartRecoveryResumeRun
+    !params.isOneShotModelRun
   ) {
     const continuation = consumeRequesterCronAuthorityAdmission({
       runId: params.runId,
@@ -114,21 +127,13 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
     }
   }
   return resolveDirectOperatorAuthority({
-    runId: params.runId,
-    resolvedSessionKey: params.resolvedSessionKey,
-    spawnedBy: params.spawnedBy,
-    client: params.client,
-    isCurrent: params.isCurrent,
-    inputProvenance: params.inputProvenance,
+    ...params,
     disallowed:
       params.hasRestoredCronContinuation ||
       params.isOneShotModelRun ||
-      params.isRestartRecoveryResumeRun ||
       request.modelRun === true ||
       request.acpTurnSource !== undefined ||
       request.internalRuntimeHandoffId !== undefined ||
-      request.internalExecutionIdentityRetry === true ||
-      request.internalExecutionIdentityRecoveryAttempt !== undefined ||
       request.execApprovalFollowupExpectedSessionId !== undefined ||
       request.internalEvents !== undefined ||
       request.sessionEffects === "internal" ||
@@ -136,6 +141,58 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
       request.swarmCollector === true ||
       request.lane === "subagent",
   });
+}
+
+/** Owns requester run-scope transfer before acceptance and through undispatched cleanup. */
+export function prepareGatewayCronCreatorAuthorityAdmission(
+  params: Parameters<typeof resolveGatewayCronCreatorAuthorityAdmission>[0],
+  signal: AbortSignal,
+): GatewayCronCreatorAuthorityAdmission | undefined {
+  const authority = resolveGatewayCronCreatorAuthorityAdmission(params);
+  if (!authority?.bindRunScope) {
+    // Direct human/operator admissions retain dispatch-time scope issuance.
+    return authority;
+  }
+  let boundRunScope: CronCreatorAuthorityCapability | undefined;
+  let released = false;
+  const revokeBoundRunScope = () => {
+    if (boundRunScope) {
+      revokeCronCreatorAuthorityRunScope(boundRunScope);
+    }
+  };
+  const release = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    signal.removeEventListener("abort", revokeBoundRunScope);
+    try {
+      revokeBoundRunScope();
+    } finally {
+      authority.release?.();
+    }
+  };
+  try {
+    boundRunScope = createCronCreatorAuthorityCapability(
+      authority.runId,
+      authority.callerOrigin,
+      authority.managementEntitlement,
+      authority.isCurrent,
+      undefined,
+      authority.requesterOwner,
+      authority.callerScopedCreation,
+    );
+    if (!boundRunScope) {
+      throw new Error("Requester continuation run scope could not be created");
+    }
+    signal.addEventListener("abort", revokeBoundRunScope, { once: true });
+    signal.throwIfAborted();
+    authority.bindRunScope(boundRunScope);
+    return { ...authority, boundRunScope, release };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 type GatewayChatUserTurn = {
@@ -157,11 +214,7 @@ type GatewayChatUserTurn = {
 /** Current external user input, independently of the permission being admitted. */
 export function isDirectGatewayChatUserTurn(params: GatewayChatUserTurn): boolean {
   return isDirectGatewayUserTurn({
-    runId: params.runId,
-    resolvedSessionKey: params.resolvedSessionKey,
-    spawnedBy: params.spawnedBy,
-    client: params.client,
-    inputProvenance: params.inputProvenance,
+    ...params,
     disallowed:
       !params.isDirectExternalUser ||
       params.hasExplicitOrigin ||

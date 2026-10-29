@@ -35,7 +35,7 @@ scenario:
       requiredProviderMode: mock-openai
       channelId: qa-failed-cron
       promptSnippet: Failed tool terminal recovery QA check
-      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      retryNeedle: "Do not repeat completed tool calls or restart from scratch. Do not call tools in this step."
       expectedMarker: CRON-FAILED-TOOL-FINALIZED-OK
       expectedReply: "The requested file could not be read: ENOENT. CRON-FAILED-TOOL-FINALIZED-OK"
 
@@ -159,6 +159,7 @@ flow:
           args:
             - ref: env
             - expr: "`agent:qa:cron:${jobId}`"
+            - includeCodeModeControl: true
         - assert:
             expr: "transcript.assistantToolCallCounts.exec === 1 && transcript.completedToolCallCounts.exec === 1 && !transcript.successfulToolCallCounts.exec"
             message:

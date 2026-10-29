@@ -1,39 +1,29 @@
-export type QaThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max";
+import type { CliBackendThinkingLevel } from "openclaw/plugin-sdk/cli-backend";
+
+export type QaThinkingLevel = CliBackendThinkingLevel;
 
 export function normalizeQaThinkingLevel(input: unknown): QaThinkingLevel | undefined {
   const value = typeof input === "string" ? input.trim().toLowerCase() : "";
   const collapsed = value.replace(/[\s_-]+/g, "");
-  if (collapsed === "off") {
-    return "off";
+  switch (collapsed) {
+    case "off":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "adaptive":
+    case "max":
+      return collapsed;
+    case "min":
+      return "minimal";
+    case "med":
+      return "medium";
+    case "extrahigh":
+      return "xhigh";
+    case "auto":
+      return "adaptive";
+    default:
+      return undefined;
   }
-  if (collapsed === "minimal" || collapsed === "min") {
-    return "minimal";
-  }
-  if (collapsed === "low") {
-    return "low";
-  }
-  if (collapsed === "medium" || collapsed === "med") {
-    return "medium";
-  }
-  if (collapsed === "high") {
-    return "high";
-  }
-  if (collapsed === "xhigh" || collapsed === "extrahigh") {
-    return "xhigh";
-  }
-  if (collapsed === "adaptive" || collapsed === "auto") {
-    return "adaptive";
-  }
-  if (collapsed === "max") {
-    return "max";
-  }
-  return undefined;
 }

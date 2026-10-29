@@ -5,8 +5,8 @@
  *
  * The snapshot module registers its reader here at eval time, so any process
  * that published or scoped a snapshot serves reads through the registered
- * instance. The require fallback only covers cold processes that never loaded
- * the metadata system (built code loads .js; source/jiti paths resolve .ts).
+ * instance. Only snapshot resolution cold-loads the metadata system (built code
+ * loads .js; source/jiti paths resolve .ts); current reads never start discovery.
  */
 import { createRequire } from "node:module";
 import {
@@ -40,23 +40,16 @@ function createModuleLoader(candidates: readonly string[]): () => unknown {
   };
 }
 
-const loadCurrentSnapshotModule = createModuleLoader([
-  "./current-plugin-metadata-snapshot.js",
-  "./current-plugin-metadata-snapshot.ts",
-]) as () => CurrentSnapshotModule | null;
 const loadSnapshotLoaderModule = createModuleLoader([
   "./plugin-metadata-snapshot.js",
   "./plugin-metadata-snapshot.ts",
 ]) as () => SnapshotLoaderModule | null;
 
-/** Reads the current plugin metadata snapshot, loading the snapshot graph lazily. */
+/** Reads the already-published snapshot without waking a cold metadata graph. */
 export function getCurrentPluginMetadataSnapshotRuntime(
   params: Parameters<CurrentSnapshotModule["getCurrentPluginMetadataSnapshot"]>[0],
 ): ReturnType<CurrentSnapshotModule["getCurrentPluginMetadataSnapshot"]> {
-  const reader =
-    snapshotReaderSlot.getCurrentPluginMetadataSnapshot ??
-    loadCurrentSnapshotModule()?.getCurrentPluginMetadataSnapshot;
-  return reader?.(params) ?? undefined;
+  return snapshotReaderSlot.getCurrentPluginMetadataSnapshot?.(params);
 }
 
 /** Publishes through the loaded lifecycle owner without waking a cold metadata system. */

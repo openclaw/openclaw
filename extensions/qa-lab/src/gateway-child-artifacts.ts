@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns sanitized gateway debug artifacts and temp cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";

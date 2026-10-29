@@ -22,7 +22,14 @@ type CodeModeErrorCode =
 
 `invalid_input` covers bad `exec`/`wait` arguments, including retired `language`
 and `typecheck` fields, rejected module access, JavaScript syntax errors, unknown/expired/
-wrong-scope `runId` values, and too many suspended runs. `runtime_unavailable`
+wrong-scope `runId` values, and too many suspended runs. It also covers an
+uncaught nested tool call that the host rejected as invalid input (an
+`input_contract` schema mismatch or a tool's own input error); the error names
+the missing or unexpected arguments. Host-rejected session-store keys and capacity rejections
+also report `invalid_input`, with `TypeError` or `RangeError` and recovery guidance.
+Other uncaught tool failures report
+`internal_error`. Codes the guest assigns to `error.code` never change the
+terminal code. `runtime_unavailable`
 covers an unavailable executor or a worker that fails to start or exits
 unexpectedly. Check the selected `tools.codeMode.executor` and its plugin
 availability; the `quickjs` executor requires the bundled `code-mode-quickjs`
@@ -41,9 +48,8 @@ JavaScript syntax errors are rejected during source preparation, before any
 nested tool dispatch. The bounded diagnostic includes a one-based source line
 and column. Malformed JavaScript reports its syntax error before module-access
 checks. Correct the source and submit a new `exec`; OpenClaw does not repair
-or replay it automatically. This no-dispatch outcome does not enable
-`restartSafe` or change the result's `replaySafe` flag. Exceptions thrown by valid
-guest code, including `SyntaxError`, remain runtime failures.
+or replay it automatically. Exceptions thrown by valid guest code, including
+`SyntaxError`, remain runtime failures.
 
 The current parser has a known limitation with division immediately after an
 optional keyword-named property, such as `value?.return / 2 / 3`. This is valid
@@ -55,9 +61,15 @@ objects and prototypes are not passed through the JSON result bridge. This
 bridge contract does not make the Node executor a security boundary; see
 [Code Mode executors](/tools/code-mode/executors).
 
-A bridge failure can occur after a tool has performed its action. When a result
-reports `failurePhase: "bridge"` and `replaySafe: false`, check the destination
-before repeating a send or another action that changes state. A failed `exec`
+`failurePhase` identifies where the terminal error originated. An uncaught
+rejected tool call reports `"bridge"`; a new JavaScript error after a successful
+call or a caught tool rejection reports `"guest"`. Rethrowing the original tool
+error keeps `"bridge"`, including after `wait`. Bridge failure origin and code
+come only from host replies. Guest code cannot settle its own pending tool calls
+or forge bridge provenance.
+
+When `bridgeDispatchStarted` is `true`, check the destination before repeating a
+send or another action that changes state, even for a guest error. A failed `exec`
 does not by itself prove that a message was not delivered.
 
 ## Telemetry
@@ -91,8 +103,9 @@ The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
   `codeModeOnly` is a separate native feature that this field does not track.
 - `assistantTurns`: completed assistant/provider round trips across the run.
 - `bridgeCalls`: the run's cumulative inner bridge counts
-  (`{ search, describe, call }`). These calls never reach the provider;
-  provider-visible outer tool calls remain in `meta.toolSummary.calls`.
+  (`{ search, describe, call }`). These are not provider requests. The embedded
+  runtime's `meta.toolSummary.calls` includes outer and nested tool terminals,
+  so bridge counts can overlap it and must not be added to it.
 - `costUsd`: estimated USD cost from the run's accumulated usage and the
   model's cost config (cache read/write tiers included); omitted when the
   model has no cost data.
@@ -101,6 +114,31 @@ Telemetry must not include secrets, raw environment values, or unredacted
 tool inputs beyond existing OpenClaw trajectory policy.
 
 ## Debugging
+
+Guest exceptions, rejected input, and admitted guest deadlines are logged at
+warning level under `agents/code-mode`. Worker startup/crash failures, bridge
+infrastructure failures, and output-contract violations remain errors. A bridge
+rejection is logged once at its host boundary, including when the guest catches
+it; an uncaught rejection does not add a second projected error record.
+The server record includes a bounded error category and failure kind, without
+message or tool content. Serialized worker errors are restored before
+classification; `errorCategory: "object"` in older builds can represent an
+ordinary input or guest Error serialized across the worker boundary.
+It includes session, agent-run, Code Mode run, outer tool-call, bridge-request,
+and executor worker identifiers when available. No debug flag is required. File
+logs retain the raw diagnostic; log exports apply their normal redaction.
+
+Missing or ambiguous edit anchors are input errors. Correct the patch or edit
+after inspecting the current file. Code Mode never automatically retries failed
+guest code or nested tool calls; earlier actions in the cell may have completed.
+
+Node worker heap exhaustion reports `runtime_unavailable` with the configured
+heap allowance and guidance to paginate results or retain less guest data.
+Check completed actions before retrying: worker termination does not undo
+dispatched tools. Worker lifecycle retirement reason `crash` records native
+worker errors, including heap exhaustion; `gc-thrash` identifies retirement by
+the near-limit GC watchdog. Both are separate from an ordinary tool rejection
+reported with `failurePhase: "bridge"`.
 
 JavaScript failure frames labeled `openclaw-code-mode:user.js` use line numbers
 from the submitted JavaScript, excluding internal wrappers and headless setup,
@@ -120,10 +158,10 @@ openclaw gateway
 ```
 
 For payload-shape debugging, use `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted`.
-This logs a capped, redacted JSON snapshot of the model request; use it only
-while debugging, since prompts and message text can still appear.
+This logs request shape and the complete tool-name list, without prompt,
+message, or tool content.
 
-For stream debugging, use `OPENCLAW_DEBUG_SSE=peek` to log the first five
-redacted SSE events. Code mode also fails closed if the final provider
-payload does not contain exactly one `exec`, one `wait`, and only approved
+For stream debugging, use `OPENCLAW_DEBUG_SSE=events` or `peek` for timing
+diagnostics without SSE event bodies. Code mode also rejects the final provider
+payload if it does not contain exactly one `exec`, one `wait`, and only approved
 direct-only tools after the code-mode surface has activated.

@@ -32,36 +32,7 @@ type CliOptions = {
   help: boolean;
 };
 
-type CompatDebtRecord = {
-  code: string;
-  owner: string;
-  status: PluginCompatRecord["status"];
-  removeAfter?: string;
-  removalGate?: PluginCompatRecord["removalGate"];
-  replacement: string;
-  docsPath: string;
-  surfaces: readonly string[];
-  tokens: string[];
-  codeReferenceFiles: string[];
-  docReferenceFiles: string[];
-  eligibleForRemoval: boolean;
-};
-
-type RemovalPendingDebtRecord = {
-  code: string;
-  owner: string;
-  status: "removal-pending";
-  removeAfter?: string;
-  removalGate?: PluginCompatRecord["removalGate"];
-  blocker: string;
-  readerFiles: string[];
-  dueForReview: boolean;
-};
-
-type RemovalPendingDebtSummary = Omit<RemovalPendingDebtRecord, "readerFiles"> & {
-  readerCount: number;
-  readerSample: string[];
-};
+type CompatDebtRecord = ReturnType<typeof collectCompatDebt>[number];
 
 type WorkspaceTextFile = {
   file: string;
@@ -69,64 +40,9 @@ type WorkspaceTextFile = {
   source: string;
 };
 
-type BoundaryReport = {
-  generatedAt: string;
-  compat: {
-    deprecatedCount: number;
-    eligibleForRemovalCount: number;
-    records: CompatDebtRecord[];
-    removalPendingCount: number;
-    removalPendingDueCount: number;
-    removalPending: RemovalPendingDebtRecord[];
-  };
-  pluginSdk: {
-    entrypointCount: number;
-    supportedBundledFacadeCount: number;
-    publicPluginOwnedCount: number;
-  };
-  memoryHostSdk: {
-    privatePackage: boolean;
-    exportedSubpaths: string[];
-    sourceBridgeFiles: string[];
-    packageCoreReferenceFiles: string[];
-  };
-};
-
-type BoundaryReportSummary = {
-  generatedAt: string;
-  owner?: string;
-  compat: {
-    deprecatedCount: number;
-    eligibleForRemovalCount: number;
-    deprecatedByOwner: Record<string, number>;
-    eligibleForRemoval: Array<Pick<CompatDebtRecord, "code" | "owner" | "removeAfter">>;
-    removalPendingCount: number;
-    removalPendingDueCount: number;
-    removalPending: RemovalPendingDebtSummary[];
-  };
-  pluginSdk: {
-    entrypointCount: number;
-    supportedBundledFacadeCount: number;
-    publicPluginOwnedCount: number;
-  };
-  memoryHostSdk: {
-    privatePackage: boolean;
-    exportedSubpathCount: number;
-    sourceBridgeFileCount: number;
-    packageCoreReferenceFileCount: number;
-    implementation:
-      | "private-core-bridge"
-      | "private-package-core-integrated"
-      | "package-owned"
-      | "mixed";
-  };
-};
-
-export type PluginBoundaryReportResult = {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-};
+type BoundaryReport = ReturnType<typeof buildReport>;
+type BoundaryReportSummary = ReturnType<typeof buildSummary>;
+export type PluginBoundaryReportResult = ReturnType<typeof createPluginBoundaryReport>;
 
 function collectTextFiles(dir: string): string[] {
   const files: string[] = [];
@@ -158,47 +74,25 @@ function isExistingTextFile(file: string): boolean {
 }
 
 function collectWorkspaceTextFiles(): string[] {
-  const gitFiles = collectWorkspaceTextFilesFromGit();
+  const gitFiles = collectWorkspaceTextFilesFromGit([
+    "ls-files",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+  ]);
   return (
     gitFiles ?? SOURCE_ROOTS.flatMap((root) => collectTextFiles(resolve(REPO_ROOT, root)))
   ).toSorted((left, right) => relative(REPO_ROOT, left).localeCompare(relative(REPO_ROOT, right)));
 }
 
-function collectWorkspaceTextFilesFromGit(): string[] | null {
-  const result = spawnSync(
-    "git",
-    ["ls-files", "--cached", "--others", "--exclude-standard", "--", ...SOURCE_ROOTS],
-    {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      maxBuffer: 32 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && TEXT_FILE_PATTERN.test(line))
-    .filter((line) => !line.split("/").some((part) => SKIPPED_DIRS.has(part)))
-    .map((line) => resolve(REPO_ROOT, line))
-    .filter(isExistingTextFile);
-}
-
-function collectWorkspaceTextFilesMatchingGit(patternArgs: readonly string[]): string[] | null {
-  const result = spawnSync(
-    "git",
-    ["grep", "--untracked", "-l", ...patternArgs, "--", ...SOURCE_ROOTS],
-    {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      maxBuffer: 32 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status === 1) {
+function collectWorkspaceTextFilesFromGit(args: readonly string[]): string[] | null {
+  const result = spawnSync("git", [...args, "--", ...SOURCE_ROOTS], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    maxBuffer: 32 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (args[0] === "grep" && result.status === 1) {
     return [];
   }
   if (result.status !== 0) {
@@ -237,7 +131,10 @@ function collectWorkspaceTextFileSources(
   );
   // Keep every file either collector can use; Git failure retains the exhaustive scan.
   const matches = tokens
-    ? collectWorkspaceTextFilesMatchingGit([
+    ? collectWorkspaceTextFilesFromGit([
+        "grep",
+        "--untracked",
+        "-l",
         "-F",
         ...[...tokens, MEMORY_HOST_SOURCE_BRIDGE_TOKEN, MEMORY_HOST_CORE_REFERENCE_TOKEN].flatMap(
           (token) => ["-e", token],
@@ -259,7 +156,10 @@ function collectSummaryWorkspaceTextFileSources(): WorkspaceTextFile[] {
   if (summaryWorkspaceTextFileSources) {
     return summaryWorkspaceTextFileSources;
   }
-  const pluginSdkFiles = collectWorkspaceTextFilesMatchingGit([
+  const pluginSdkFiles = collectWorkspaceTextFilesFromGit([
+    "grep",
+    "--untracked",
+    "-l",
     "-E",
     String.raw`openclaw/plugin-sdk/[a-z0-9][a-z0-9-]*`,
   ]);
@@ -407,7 +307,7 @@ function collectCompatDebt(
   files: readonly WorkspaceTextFile[],
   today = new Date(),
   options: { includeReferenceFiles?: boolean } = {},
-): CompatDebtRecord[] {
+) {
   return records
     .filter((record) => record.status === "deprecated")
     .map((record) => {
@@ -444,7 +344,7 @@ function collectRemovalPendingDebt(
   records: readonly PluginCompatRecord[],
   files: readonly WorkspaceTextFile[],
   today = new Date(),
-): RemovalPendingDebtRecord[] {
+) {
   return records
     .filter((record) => record.status === "removal-pending")
     .map((record) => {
@@ -470,9 +370,7 @@ function collectRemovalPendingDebt(
     );
 }
 
-function collectMemoryHostBoundary(
-  files: readonly WorkspaceTextFile[],
-): BoundaryReport["memoryHostSdk"] {
+function collectMemoryHostBoundary(files: readonly WorkspaceTextFile[]) {
   const packageJson = JSON.parse(
     readFileSync(resolve(REPO_ROOT, "packages/memory-host-sdk/package.json"), "utf8"),
   ) as { private?: boolean; exports?: Record<string, string> };
@@ -514,8 +412,8 @@ function formatRemovalGate(
 }
 
 function resolveMemoryHostImplementation(
-  memoryHostSdk: BoundaryReport["memoryHostSdk"],
-): BoundaryReportSummary["memoryHostSdk"]["implementation"] {
+  memoryHostSdk: ReturnType<typeof collectMemoryHostBoundary>,
+) {
   if (memoryHostSdk.privatePackage && memoryHostSdk.sourceBridgeFiles.length > 0) {
     return "private-core-bridge";
   }
@@ -528,7 +426,7 @@ function resolveMemoryHostImplementation(
   return "mixed";
 }
 
-function buildSummary(report: BoundaryReport, owner?: string): BoundaryReportSummary {
+function buildSummary(report: BoundaryReport, owner?: string) {
   const eligibleForRemoval = report.compat.records
     .filter((record) => record.eligibleForRemoval)
     .map((record) => ({
@@ -552,11 +450,7 @@ function buildSummary(report: BoundaryReport, owner?: string): BoundaryReportSum
         readerSample: readerFiles.slice(0, 5),
       })),
     },
-    pluginSdk: {
-      entrypointCount: report.pluginSdk.entrypointCount,
-      supportedBundledFacadeCount: report.pluginSdk.supportedBundledFacadeCount,
-      publicPluginOwnedCount: report.pluginSdk.publicPluginOwnedCount,
-    },
+    pluginSdk: report.pluginSdk,
     memoryHostSdk: {
       privatePackage: report.memoryHostSdk.privatePackage,
       exportedSubpathCount: report.memoryHostSdk.exportedSubpaths.length,
@@ -567,7 +461,7 @@ function buildSummary(report: BoundaryReport, owner?: string): BoundaryReportSum
   };
 }
 
-function buildReport(options: Partial<Pick<CliOptions, "owner" | "summary">> = {}): BoundaryReport {
+function buildReport(options: Partial<Pick<CliOptions, "owner" | "summary">> = {}) {
   const records = listPluginCompatRecords().filter(
     (record) => options.owner === undefined || record.owner === options.owner,
   );
@@ -649,17 +543,7 @@ function renderText(report: BoundaryReport, owner?: string): string {
   return lines.join("\n");
 }
 
-function collectFailures(report: BoundaryReport, options: CliOptions): string[] {
-  const failures: string[] = [];
-  if (options.failOnEligibleCompat && report.compat.eligibleForRemovalCount > 0) {
-    failures.push(
-      `${report.compat.eligibleForRemovalCount} compatibility record(s) are due for removal`,
-    );
-  }
-  return failures;
-}
-
-export function createPluginBoundaryReport(args: readonly string[]): PluginBoundaryReportResult {
+export function createPluginBoundaryReport(args: readonly string[]) {
   const options = parseArgs(args);
   if (options.help) {
     return {
@@ -676,14 +560,13 @@ export function createPluginBoundaryReport(args: readonly string[]): PluginBound
     : options.summary
       ? renderSummaryText(summary)
       : renderText(report, options.owner);
-  const failures = collectFailures(report, options);
+  const failed = options.failOnEligibleCompat && report.compat.eligibleForRemovalCount > 0;
   return {
     stdout: `${body}\n`,
-    stderr:
-      failures.length > 0
-        ? `${failures.map((failure) => `plugin-boundary-report: ${failure}`).join("\n")}\n`
-        : "",
-    exitCode: failures.length > 0 ? 1 : 0,
+    stderr: failed
+      ? `plugin-boundary-report: ${report.compat.eligibleForRemovalCount} compatibility record(s) are due for removal\n`
+      : "",
+    exitCode: failed ? 1 : 0,
   };
 }
 

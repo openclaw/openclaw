@@ -1,11 +1,9 @@
-import path from "node:path";
-import type { BrowserContext, Page } from "playwright-core";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test-support.js";
+import { describe, expect, it } from "vitest";
+import { callTargetTool, resolveChromeMcpSnapshotRef } from "./chrome-mcp-routing.js";
+import * as fixture from "./chrome-mcp.chromium.test-support.js";
 import {
   clickChromeMcpCoords,
   clickChromeMcpElement,
-  closeChromeMcpSession,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
   navigateChromeMcpPage,
@@ -13,68 +11,32 @@ import {
   selectChromeMcpOption,
   takeChromeMcpSnapshot,
 } from "./chrome-mcp.js";
-import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
-import { resolveBrowserConfig } from "./config.js";
-import { getPlaywrightCore } from "./playwright-core.runtime.js";
-import { registerBrowserAgentActRoutes } from "./routes/agent.act.js";
-import { registerBrowserAgentSnapshotRoutes } from "./routes/agent.snapshot.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./routes/test-helpers.js";
-import { createBrowserRouteContext, type BrowserServerState } from "./server-context.js";
+import {
+  flattenChromeMcpSnapshotToAriaResult,
+  type ChromeMcpSnapshotNode,
+} from "./chrome-mcp.snapshot.js";
 import { getFreePort } from "./test-port.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function snapshotRef(root: ChromeMcpSnapshotNode, role: string, name: string): string {
-  const nodes = [root];
-  while (nodes.length) {
-    const node = nodes.pop()!;
-    if (node.role?.toLowerCase() === role && node.name === name && node.id) {
-      return node.id;
-    }
-    nodes.push(...(node.children ?? []));
-  }
-  throw new Error(`Snapshot has no ${role} named "${name}"`);
+async function act(routes: ReturnType<typeof fixture.mcpRoutes>, body: Record<string, unknown>) {
+  const response = await fixture.routePost(routes, "/act", body);
+  expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
 }
 
-async function withMcpBrowser(
-  run: (fixture: {
-    profile: { cdpUrl: string; mcpCommand?: string };
-    profileName: string;
-    context: BrowserContext;
-    page: Page;
-  }) => Promise<void>,
-) {
-  const port = await getFreePort();
-  const profile = {
-    cdpUrl: `http://127.0.0.1:${port}`,
-    mcpCommand: process.env.OPENCLAW_BROWSER_MCP_TEST_COMMAND,
-  };
-  const profileName = "mcp-contract-proof";
-  const context = await getPlaywrightCore().chromium.launchPersistentContext(
-    path.join(tempDirs.make("openclaw-mcp-contract-"), "profile"),
-    {
-      headless: true,
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-      args: [`--remote-debugging-port=${port}`, "--site-per-process"],
-    },
+function snapshotRef(root: ChromeMcpSnapshotNode, role: string, name: string): string {
+  const node = flattenChromeMcpSnapshotToAriaResult(root).nodes.find(
+    (candidate) => candidate.role === role && candidate.name === name,
   );
-  try {
-    const page = context.pages()[0] ?? (await context.newPage());
-    await run({ profile, profileName, context, page });
-  } finally {
-    try {
-      await closeChromeMcpSession(profileName);
-    } finally {
-      await context.close();
-    }
+  if (!node?.ref) {
+    throw new Error(`Snapshot has no ${role} named "${name}"`);
   }
+  return node.ref;
 }
 
 describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
   "pinned Chrome MCP in Chromium",
   () => {
     it("preserves native input, option values, and operation outcomes", async () => {
-      await withMcpBrowser(async ({ page, profile, profileName }) => {
+      await fixture.withMcpBrowser(async ({ page, profile, profileName }) => {
         await page.setContent(`<!doctype html>
         <input id="focus" style="position:absolute;left:10px;top:10px;width:100px;height:30px">
         <iframe style="position:absolute;left:200px;top:10px;width:100px;height:80px;border:0"
@@ -138,161 +100,144 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
     }, 120_000);
 
     it("preserves controls through polling and recaptures after cross-origin navigation", async () => {
-      await withMcpBrowser(async ({ page, context: browserContext, profile, profileName }) => {
-        const fixturePort = await getFreePort();
-        const originalUrl = `http://127.0.0.1:${fixturePort}/original`;
-        const replacementUrl = `http://localhost:${fixturePort}/replacement`;
-        for (const { url, phase } of [
-          { url: originalUrl, phase: "original" },
-          { url: replacementUrl, phase: "replacement" },
-        ]) {
-          await browserContext.route(url, (route) =>
-            route.fulfill({
-              contentType: "text/html",
-              body: `<!doctype html><body data-phase="${phase}">${Array.from(
-                { length: 32 },
-                (_, index) =>
+      await fixture.withMcpBrowser(
+        async ({ page, context: browserContext, profile, profileName }) => {
+          const fixturePort = await getFreePort();
+          const originalUrl = `http://127.0.0.1:${fixturePort}/original`;
+          const replacementUrl = `http://localhost:${fixturePort}/replacement`;
+          for (const { url, phase } of [
+            { url: originalUrl, phase: "original" },
+            { url: replacementUrl, phase: "replacement" },
+          ]) {
+            await fixture.serveHtml(
+              browserContext,
+              url,
+              `<!doctype html><body data-phase="${phase}">${fixture.controls(
+                32,
+                (index) =>
                   `<button onclick="document.body.dataset.clicked = '${phase}'">${index === 0 ? "Run" : `${phase} ${index}`}</button>`,
-              ).join("")}</body>`,
-            }),
-          );
-        }
-        await page.goto(originalUrl);
-        const state: BrowserServerState = {
-          port: 0,
-          resolved: resolveBrowserConfig({
-            defaultProfile: profileName,
-            ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-            profiles: {
-              [profileName]: { ...profile, driver: "existing-session", color: "#123456" },
-            },
-          }),
-          profiles: new Map(),
-        };
-        const routes = createBrowserRouteApp();
-        const context = createBrowserRouteContext({ getState: () => state });
-        registerBrowserAgentSnapshotRoutes(routes.app, context);
-        registerBrowserAgentActRoutes(routes.app, context);
-        const snapshotResponse = createBrowserRouteResponse();
-        await routes.getHandlers.get("/snapshot")!(
-          { params: {}, query: { format: "ai" } },
-          snapshotResponse.res,
-        );
-        expect(snapshotResponse.statusCode, JSON.stringify(snapshotResponse.body)).toBe(200);
-        const snapshot = snapshotResponse.body as {
-          targetId: string;
-          refs: Record<string, { name?: string }>;
-        };
-        const ref = Object.entries(snapshot.refs).find(([, value]) => value.name === "Run")?.[0];
-        expect(ref).toBeTypeOf("string");
-        const waitResponse = createBrowserRouteResponse();
-        await routes.postHandlers.get("/act")!(
-          {
-            params: {},
-            query: {},
-            body: {
-              kind: "wait",
-              targetId: snapshot.targetId,
-              timeoutMs: 10_000,
-              fn: `() => {
+              )}</body>`,
+            );
+          }
+          await page.goto(originalUrl);
+          const routes = fixture.mcpRoutes(profileName, profile, true);
+          const snapshot = await fixture.routeSnapshot(routes);
+          const target = { profileName, profile, targetId: snapshot.targetId };
+          const ref = Object.entries(snapshot.refs).find(([, value]) => value.name === "Run")?.[0];
+          expect(ref).toBeTypeOf("string");
+          await act(routes, {
+            kind: "wait",
+            targetId: snapshot.targetId,
+            timeoutMs: 10_000,
+            fn: `() => {
             const polls = Number(document.body.dataset.polls ?? 0) + 1;
             document.body.dataset.polls = String(polls);
             return polls >= 2;
           }`,
-            },
-          },
-          waitResponse.res,
-        );
-        expect(waitResponse.statusCode, JSON.stringify(waitResponse.body)).toBe(200);
-        const clickResponse = createBrowserRouteResponse();
-        await routes.postHandlers.get("/act")!(
-          {
-            params: {},
-            query: {},
-            body: {
-              kind: "click",
-              targetId: snapshot.targetId,
-              ref,
-            },
-          },
-          clickResponse.res,
-        );
-        expect(clickResponse.statusCode, JSON.stringify(clickResponse.body)).toBe(200);
-        expect(await page.evaluate(() => document.body.dataset.clicked)).toBe("original");
-        expect(
-          Number(await page.evaluate(() => document.body.dataset.polls)),
-        ).toBeGreaterThanOrEqual(2);
+          });
+          await act(routes, { kind: "click", targetId: snapshot.targetId, ref });
+          expect(await page.evaluate(() => document.body.dataset.clicked)).toBe("original");
+          expect(
+            Number(await page.evaluate(() => document.body.dataset.polls)),
+          ).toBeGreaterThanOrEqual(2);
 
-        await page.goto(replacementUrl);
-        await expect(
-          evaluateChromeMcpScript({
-            profileName,
-            profile,
-            targetId: snapshot.targetId,
-            timeoutMs: 10_000,
-            args: [ref!],
-            fn: `(element) => {
+          await page.goto(replacementUrl);
+          await expect(
+            evaluateChromeMcpScript({
+              ...target,
+              timeoutMs: 10_000,
+              args: [ref!],
+              fn: `(element) => {
               element.ownerDocument.body.dataset.staleRefExecuted = "true";
               return element.textContent;
             }`,
-          }),
-        ).rejects.toThrow(/Element (?:with )?uid .* (?:not found|no longer exists)/);
-        expect(await page.evaluate(() => document.body.dataset.staleRefExecuted)).toBeUndefined();
+            }),
+          ).rejects.toThrow(/Element (?:with )?uid .* (?:not found|no longer exists)/);
+          expect(await page.evaluate(() => document.body.dataset.staleRefExecuted)).toBeUndefined();
 
-        const replacementWait = createBrowserRouteResponse();
-        await routes.postHandlers.get("/act")!(
-          {
-            params: {},
-            query: {},
-            body: {
-              kind: "wait",
-              targetId: snapshot.targetId,
-              timeoutMs: 10_000,
-              fn: '() => document.body.dataset.phase === "replacement"',
-            },
-          },
-          replacementWait.res,
-        );
-        expect(replacementWait.statusCode, JSON.stringify(replacementWait.body)).toBe(200);
-        await expect(
-          evaluateChromeMcpScript({
-            profileName,
-            profile,
+          await act(routes, {
+            kind: "wait",
             targetId: snapshot.targetId,
-            args: [ref!],
-            fn: "(element) => element.textContent",
-          }),
-        ).rejects.toThrow(/Unknown ref/);
+            timeoutMs: 10_000,
+            fn: '() => document.body.dataset.phase === "replacement"',
+          });
+          await expect(
+            evaluateChromeMcpScript({
+              ...target,
+              args: [ref!],
+              fn: "(element) => element.textContent",
+            }),
+          ).rejects.toThrow(/Unknown ref/);
 
-        const replacementResponse = createBrowserRouteResponse();
-        await routes.getHandlers.get("/snapshot")!(
-          { params: {}, query: { format: "ai", targetId: snapshot.targetId } },
-          replacementResponse.res,
+          const replacementSnapshot = await fixture.routeSnapshot(routes, snapshot.targetId);
+          expect(replacementSnapshot.targetId).toBe(snapshot.targetId);
+          const replacementRef = Object.entries(replacementSnapshot.refs).find(
+            ([, value]) => value.name === "Run",
+          )?.[0];
+          expect(replacementRef).toBeTypeOf("string");
+          expect(replacementRef).not.toBe(ref);
+          await act(routes, { kind: "click", targetId: snapshot.targetId, ref: replacementRef });
+          expect(await page.evaluate(() => document.body.dataset.clicked)).toBe("replacement");
+        },
+      );
+    }, 120_000);
+
+    it("keeps CSS lookup bound to the captured renderer and document", async () => {
+      await fixture.withMcpBrowser(async ({ page, context, profile, profileName }) => {
+        const fixturePort = await getFreePort();
+        const mainUrl = `http://127.0.0.1:${fixturePort}/styles`;
+        const frameUrl = `http://localhost:${fixturePort}/frame`;
+        const replacementUrl = `http://localhost:${fixturePort}/replacement`;
+        await fixture.serveHtml(
+          context,
+          mainUrl,
+          `<!doctype html><style>.top { color: red; }</style>${fixture.controls(
+            64,
+            (index) => `<button class="top">Top ${index}</button>`,
+          )}<iframe src="${frameUrl}"></iframe>`,
         );
-        expect(replacementResponse.statusCode, JSON.stringify(replacementResponse.body)).toBe(200);
-        const replacementSnapshot = replacementResponse.body as typeof snapshot;
-        expect(replacementSnapshot.targetId).toBe(snapshot.targetId);
-        const replacementRef = Object.entries(replacementSnapshot.refs).find(
-          ([, value]) => value.name === "Run",
-        )?.[0];
-        expect(replacementRef).toBeTypeOf("string");
-        expect(replacementRef).not.toBe(ref);
-        const replacementClick = createBrowserRouteResponse();
-        await routes.postHandlers.get("/act")!(
-          {
-            params: {},
-            query: {},
-            body: { kind: "click", targetId: snapshot.targetId, ref: replacementRef },
-          },
-          replacementClick.res,
+        await fixture.serveHtml(
+          context,
+          frameUrl,
+          `<!doctype html><style>.frame { color: blue; }</style>${fixture.controls(
+            32,
+            (index) => `<button class="frame">Frame ${index}</button>`,
+          )}`,
         );
-        expect(replacementClick.statusCode, JSON.stringify(replacementClick.body)).toBe(200);
-        expect(await page.evaluate(() => document.body.dataset.clicked)).toBe("replacement");
+        await fixture.serveHtml(
+          context,
+          replacementUrl,
+          '<!doctype html><button class="replacement">Replacement</button>',
+        );
+        await page.goto(mainUrl);
+
+        const [tab] = await listChromeMcpTabs(profileName, profile, { timeoutMs: 30_000 });
+        const target = {
+          profileName,
+          profile,
+          targetId: tab!.targetId,
+          timeoutMs: 10_000,
+        };
+        const snapshot = await takeChromeMcpSnapshot(target);
+        const topRef = snapshotRef(snapshot, "button", "Top 0");
+        const frameRef = snapshotRef(snapshot, "button", "Frame 0");
+        const styles = (ref: string) =>
+          callTargetTool(target, "get_css_styles", (session) => ({
+            uid: resolveChromeMcpSnapshotRef(session, target.targetId, ref).uid,
+            pageSize: 10,
+            pageIdx: 0,
+          }));
+
+        await expect(styles(topRef)).resolves.toBeDefined();
+        await expect(styles(frameRef)).rejects.toThrow(/detached or no longer exists/);
+
+        await page.goto(replacementUrl);
+        await expect(styles(topRef)).rejects.toThrow(/no longer exists/);
       });
     }, 120_000);
 
     it("retires canceled session handles and reconnects to the same browser", async () => {
-      await withMcpBrowser(async ({ page, profile, profileName }) => {
+      await fixture.withMcpBrowser(async ({ page, profile, profileName }) => {
         await page.setContent(
           "<button onclick=\"document.body.dataset.clicked = 'true'\">Run</button>",
         );

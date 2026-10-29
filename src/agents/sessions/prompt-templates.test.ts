@@ -18,12 +18,12 @@ describe("loadPromptTemplates", () => {
     const templates = loadPromptTemplates({
       cwd: root,
       agentDir: join(root, "agent"),
-      promptPaths: [promptsDir],
-      includeDefaults: false,
+      promptPaths: [join(root, "missing"), join(promptsDir, "emoji.md", "child"), promptsDir],
     });
 
     expect(templates).toHaveLength(1);
     expect(templates[0]?.description).toBe(`${"a".repeat(59)}...`);
+    expect(templates[0]?.sourceInfo.baseDir).toBe(promptsDir);
   });
 
   it("preserves dash-prefixed Markdown as prompt content", async () => {
@@ -37,7 +37,6 @@ describe("loadPromptTemplates", () => {
       cwd: root,
       agentDir: join(root, "agent"),
       promptPaths: [promptsDir],
-      includeDefaults: false,
     });
 
     expect(templates).toHaveLength(1);
@@ -61,7 +60,6 @@ describe("loadPromptTemplates", () => {
             cwd: root,
             agentDir: join(root, "AGENT"),
             promptPaths: [promptDir],
-            includeDefaults: false,
           })[0]?.sourceInfo.scope,
       ),
     ).toBe("user");

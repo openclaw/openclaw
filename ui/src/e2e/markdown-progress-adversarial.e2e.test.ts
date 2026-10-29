@@ -1,4 +1,3 @@
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   captureUiProof,
@@ -7,18 +6,21 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-
-async function captureProof(page: Page, fileName: string): Promise<void> {
-  await captureUiProof(suite, page, "markdown-progress-adversarial", fileName);
-}
 
 suite.define(() => {
   it("keeps an adversarial progress payload responsive through a Gateway refresh", async () => {
     const now = Date.now();
     const selectedSessionKey = "agent:main:adversarial-selected";
     const sessionKey = "agent:main:adversarial-progress";
+    const session = (key: string, label: string, updatedAt: number) => ({
+      key,
+      label,
+      updatedAt,
+      kind: "direct",
+    });
     const cardResponse = (markdown: string, revision: number) => ({
       card: {
         markdown,
@@ -34,14 +36,10 @@ suite.define(() => {
     });
 
     await suite.withPage(
-      {
-        colorScheme: "dark",
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { ...createControlUiE2eContextOptions(), colorScheme: "dark", hasTouch: false },
       async ({ page }) => {
+        const captureProof = (fileName: string) =>
+          captureUiProof(suite, page, "markdown-progress-adversarial", fileName);
         const gateway = await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           methodResponses: {
@@ -58,18 +56,8 @@ suite.define(() => {
               ],
             },
             "sessions.list": chatSessionListResponse([
-              {
-                key: selectedSessionKey,
-                kind: "direct",
-                label: "Selected session",
-                updatedAt: now,
-              },
-              {
-                key: sessionKey,
-                kind: "direct",
-                label: "Adversarial progress",
-                updatedAt: now - 1,
-              },
+              session(selectedSessionKey, "Selected session", now),
+              session(sessionKey, "Adversarial progress", now - 1),
             ]),
           },
           sessionKey: selectedSessionKey,
@@ -84,7 +72,7 @@ suite.define(() => {
         await card.waitFor({ state: "visible" });
         await expect.poll(() => card.textContent()).toContain("Adversarial payload rendered");
         expect(performance.now() - renderStartedAt).toBeLessThan(2_000);
-        await captureProof(page, "adversarial-payload-rendered.png");
+        await captureProof("adversarial-payload-rendered.png");
 
         await gateway.setMethodResponse(
           "progressCard.get",
@@ -97,7 +85,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("progressCard.changed", { revision: 2, sessionKey });
         await expect.poll(() => card.textContent()).toContain("Responsive after refresh");
         expect(performance.now() - refreshStartedAt).toBeLessThan(1_000);
-        await captureProof(page, "adversarial-payload-refreshed.png");
+        await captureProof("adversarial-payload-refreshed.png");
       },
     );
   });

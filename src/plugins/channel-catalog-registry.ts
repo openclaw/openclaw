@@ -1,6 +1,6 @@
-// Maintains channel catalog entries advertised by plugins.
 import { normalizeOptionalString as resolveOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getCurrentPluginMetadataSnapshotState,
   getGatewayPluginMetadataSnapshot,
@@ -12,6 +12,8 @@ import { resolvePluginTrust } from "./installed-plugin-record-match.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+
+const log = createSubsystemLogger("plugins/channel-catalog");
 
 export type PluginChannelCatalogEntry = {
   pluginId: string;
@@ -76,7 +78,6 @@ export function listChannelCatalogEntries(
     const trusted =
       installRecords &&
       resolvePluginTrust({
-        pluginId,
         candidate,
         installRecords,
         env: params.env ?? process.env,
@@ -116,8 +117,12 @@ function resolveInstallRecords(
   }
   try {
     return loadInstalledPluginIndexInstallRecordsSync(params.env ? { env: params.env } : {});
-  } catch {
+  } catch (error) {
     // Failed ledger reads remain retryable within the operation owner.
+    log.warn(
+      "Channel catalog could not load plugin installation records; installed channels may be missing. Run openclaw doctor to inspect plugin state.",
+      { error },
+    );
     return undefined;
   }
 }

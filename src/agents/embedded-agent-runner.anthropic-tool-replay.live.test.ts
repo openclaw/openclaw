@@ -63,93 +63,67 @@ function buildLiveAnthropicModel(): {
 }
 
 describeLive("embedded agent anthropic replay sanitization (live)", () => {
-  it(
-    "accepts regular text-only assistant replay history",
-    async () => {
-      const { apiKey, model } = buildLiveAnthropicModel();
-      const messages: Message[] = [
-        {
-          role: "user",
-          content: "Remember the marker REGULAR_ANTHROPIC_REPLAY_OK.",
-          timestamp: Date.now(),
-        },
-        buildTestAssistantMessage({
-          model: { api: model.api, provider: model.provider, id: model.id },
-          content: [{ type: "text", text: "I remember REGULAR_ANTHROPIC_REPLAY_OK." }],
-          stopReason: "stop",
-        }),
-        {
-          role: "user",
-          content: "Reply with a short confirmation if this replay history is valid.",
-          timestamp: Date.now(),
-        },
-      ];
-
-      logLiveCache(`anthropic regular replay live model=${model.provider}/${model.id}`);
-      const response = await completeSimpleWithLiveTimeout(
-        model,
-        { messages },
-        {
-          apiKey,
-          cacheRetention: "none",
-          sessionId: "anthropic-regular-replay-live",
-          maxTokens: 64,
-          temperature: 0,
-        },
-        "anthropic regular text replay live synthetic transcript",
-        ANTHROPIC_TIMEOUT_MS,
-      );
-
-      const text = extractEmbeddedAssistantText(response);
-      logLiveCache(`anthropic regular replay live result=${JSON.stringify(text)}`);
-      if (shouldSkipEmptyAnthropicReplayResult("regular replay", text)) {
-        return;
-      }
-      expect(text.trim().length).toBeGreaterThan(0);
+  it.each([
+    {
+      name: "accepts regular text-only assistant replay history",
+      user: "Remember the marker REGULAR_ANTHROPIC_REPLAY_OK.",
+      assistant: "I remember REGULAR_ANTHROPIC_REPLAY_OK.",
+      followup: "Reply with a short confirmation if this replay history is valid.",
+      label: "regular",
+      sessionId: "anthropic-regular-replay-live",
+      completionLabel: "anthropic regular text replay live synthetic transcript",
+      skipLabel: "regular replay",
     },
-    6 * 60_000,
-  );
-
-  it(
-    "accepts omitted-reasoning placeholder assistant replay history",
-    async () => {
+    {
+      name: "accepts omitted-reasoning placeholder assistant replay history",
+      user: "Remember that the previous assistant reasoning was omitted.",
+      assistant: OMITTED_ASSISTANT_REASONING_TEXT,
+      followup: "Reply with exactly OK if this placeholder replay history is valid.",
+      label: "omitted-reasoning",
+      sessionId: "anthropic-omitted-reasoning-replay-live",
+      completionLabel: "anthropic omitted reasoning replay live synthetic transcript",
+      skipLabel: "omitted reasoning replay",
+    },
+  ])(
+    "$name",
+    async ({ user, assistant, followup, label, sessionId, completionLabel, skipLabel }) => {
       const { apiKey, model } = buildLiveAnthropicModel();
       const messages: Message[] = [
         {
           role: "user",
-          content: "Remember that the previous assistant reasoning was omitted.",
+          content: user,
           timestamp: Date.now(),
         },
         buildTestAssistantMessage({
           model: { api: model.api, provider: model.provider, id: model.id },
-          content: [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
+          content: [{ type: "text", text: assistant }],
           stopReason: "stop",
         }),
         {
           role: "user",
-          content: "Reply with exactly OK if this placeholder replay history is valid.",
+          content: followup,
           timestamp: Date.now(),
         },
       ];
 
-      logLiveCache(`anthropic omitted-reasoning replay live model=${model.provider}/${model.id}`);
+      logLiveCache(`anthropic ${label} replay live model=${model.provider}/${model.id}`);
       const response = await completeSimpleWithLiveTimeout(
         model,
         { messages },
         {
           apiKey,
           cacheRetention: "none",
-          sessionId: "anthropic-omitted-reasoning-replay-live",
+          sessionId,
           maxTokens: 64,
           temperature: 0,
         },
-        "anthropic omitted reasoning replay live synthetic transcript",
+        completionLabel,
         ANTHROPIC_TIMEOUT_MS,
       );
 
       const text = extractEmbeddedAssistantText(response);
-      logLiveCache(`anthropic omitted-reasoning replay live result=${JSON.stringify(text)}`);
-      if (shouldSkipEmptyAnthropicReplayResult("omitted reasoning replay", text)) {
+      logLiveCache(`anthropic ${label} replay live result=${JSON.stringify(text)}`);
+      if (shouldSkipEmptyAnthropicReplayResult(skipLabel, text)) {
         return;
       }
       expect(text.trim().length).toBeGreaterThan(0);

@@ -20,7 +20,7 @@ export async function createAccountOwnedScheduledJob(params: {
     { createTestAdmittedRunContext },
     { withGatewayToolCallerIdentity },
     { McpLoopbackToolCache },
-    { getGatewayRecoveryRuntime },
+    { getGatewayLifecycleRuntime },
     { getGatewayContextResolver },
     {
       claimAgentRunDelegatedAuthority,
@@ -33,13 +33,13 @@ export async function createAccountOwnedScheduledJob(params: {
     import("../../../src/agents/admitted-run-context.test-support.js"),
     import("../../../src/agents/tools/gateway-caller-context.js"),
     import("../../../src/gateway/mcp-http.runtime.js"),
-    import("../../../src/gateway/server-recovery-runtime-context.js"),
+    import("../../../src/gateway/server-lifecycle-runtime-context.js"),
     import("../../../src/plugins/runtime/gateway-request-scope.js"),
     import("../../../src/infra/agent-run-registry.js"),
   ]);
-  const recovery = expectDefined(getGatewayRecoveryRuntime(), "outer Gateway recovery owner");
+  const lifecycle = expectDefined(getGatewayLifecycleRuntime(), "outer Gateway lifecycle owner");
   const resolveGatewayContext = expectDefined(
-    getGatewayContextResolver(recovery),
+    getGatewayContextResolver(lifecycle),
     "outer Gateway context binding",
   );
   const context = expectDefined(resolveGatewayContext(), "live outer Gateway context");
@@ -47,7 +47,7 @@ export async function createAccountOwnedScheduledJob(params: {
   const assertContextCurrent = () => {
     expect(resolveGatewayContext()).toBe(context);
     expect(context.resolveGatewayContext?.()).toBe(context);
-    expect(context.recoveryRuntime).toBe(recovery);
+    expect(context.lifecycleRuntime).toBe(lifecycle);
     expect(context.getRuntimeConfig()).toBe(params.cfg);
     expect(params.cfg.gateway?.port).toBe(params.gatewayPort);
     expect(context.cron).toBe(cron);

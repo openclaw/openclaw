@@ -1,129 +1,331 @@
-import type { CopilotClient } from "@github/copilot-sdk";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { Tool as SdkTool } from "@github/copilot-sdk";
+import { expectDefined } from "@openclaw/normalization-core";
+import type {
+  AgentHarnessAttemptParamsV2,
+  AnyAgentTool,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import * as runtimeConfig from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  cleanupAttemptTranscriptJournalFixtures,
-  createFakeSession,
-  createFixture,
-  event,
-  transcriptMessages,
-} from "./attempt-transcript-journal.test-helpers.js";
-import type { AttemptResultWithSdkSessionId } from "./attempt-types.js";
-import { runCopilotAttempt } from "./attempt.js";
+import { useSqliteWorkerFault } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { Type } from "typebox";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as selectors from "./attempt-selectors.test-support.js";
+import * as journal from "./attempt-transcript-journal.test-helpers.js";
+import type { AttemptParamsLike, AttemptResultWithSdkSessionId } from "./attempt-types.js";
+import * as copilot from "./attempt.test-support.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
-import type { CopilotClientPool } from "./runtime.js";
 
-afterEach(cleanupAttemptTranscriptJournalFixtures);
+const transcriptAppendControl = vi.hoisted(() => ({
+  beforeAppend: undefined as (() => Promise<void>) | undefined,
+}));
 
-describe("Copilot canonical session identity", () => {
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
+  return {
+    ...actual,
+    appendSessionTranscriptMessagesByIdentity: async (
+      ...args: Parameters<typeof actual.appendSessionTranscriptMessagesByIdentity>
+    ) => {
+      await transcriptAppendControl.beforeAppend?.();
+      return await actual.appendSessionTranscriptMessagesByIdentity(...args);
+    },
+  };
+});
+
+const toolResultFault = useSqliteWorkerFault([
+  {
+    name: "fail_copilot_attempt_tool_result",
+    match: /^insert into transcript_events\b/u,
+    sql: `CREATE TEMP TRIGGER fail_copilot_attempt_tool_result
+      BEFORE INSERT ON main.transcript_events
+      WHEN NEW.event_json LIKE '%result-boundary%'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected attempt group failure');
+      END;`,
+  },
+]);
+
+function makeParams(attempt: AttemptParamsLike, tempDir: string) {
+  return {
+    ...attempt,
+    agentDir: tempDir,
+    auth: { useLoggedInUser: true },
+    provider: "github-copilot",
+    modelId: "gpt-5",
+    model: copilot.makeCopilotModel(),
+    hostCapabilities: createCopilotTestHostCapabilities(),
+    promptMode: "none",
+    disableTools: true,
+  } satisfies AgentHarnessAttemptParamsV2 & Pick<AttemptParamsLike, "auth">;
+}
+
+function finish(session: copilot.FakeSession, text: string, id: string) {
+  const message = copilot.makeAssistantMessageEvent(text, { messageId: id });
+  session.emit(message.type, { ...message.data, __eventId: id });
+  session.emit("session.idle", {});
+  return { ...message, id };
+}
+
+async function fixture() {
+  const context = await journal.createFixture();
+  context.bridge.detach();
+  return { ...context, params: makeParams(context.attempt, context.tempDir) };
+}
+
+function emptyTools() {
+  selectors.copilotAttemptOverrides.createToolBridge = async () => ({
+    sourceTools: [],
+    promptToolPolicy: { apply: () => ({ tools: [], callableToolNames: [] }) },
+  });
+}
+
+describe("Copilot canonical session persistence", () => {
+  beforeEach(() => runtimeConfig.setRuntimeConfigSnapshot({}));
+  afterEach(() => {
+    transcriptAppendControl.beforeAppend = undefined;
+    runtimeConfig.clearRuntimeConfigSnapshot();
+    selectors.resetCopilotAttemptOverrides();
+  });
+
+  it("answers a detached setup probe through its caller-owned in-memory transcript", async () => {
+    const { attempt, tempDir, params } = await fixture();
+    const manager = SessionManager.inMemory(tempDir);
+    const sdk = copilot.makeFakeSdk((session) => {
+      session.sendAndWait = vi.fn(async () => {
+        session.emit("user.message", { content: attempt.prompt });
+        return finish(session, "OK", "probe-answer");
+      });
+    });
+    const input = {
+      ...params,
+      sessionTarget: undefined,
+      sessionManager: manager,
+      sessionPersistence: "detached" as const,
+    };
+    emptyTools();
+    const result = await copilot.runCopilotAttempt(input, { pool: copilot.makeFakePool(sdk) });
+
+    expect(result.terminal).toEqual({ kind: "ok" });
+    expect(result.lastAssistant).toMatchObject({ content: [{ type: "text", text: "OK" }] });
+    expect(journal.transcriptMessages(manager.getEntries()).map((row) => row.message.role)).toEqual(
+      ["user", "assistant"],
+    );
+    expect(manager.getSessionTarget()).toBeUndefined();
+  });
+
+  it("requires an exact durable target even when a persistent manager is supplied", async () => {
+    const { target, tempDir, params } = await fixture();
+    const manager = await SessionManager.openAsync(target, tempDir);
+    const sdk = copilot.makeFakeSdk();
+    const result = await copilot.runCopilotAttempt(
+      {
+        ...params,
+        sessionTarget: undefined,
+        sessionManager: manager,
+      },
+      { pool: copilot.makeFakePool(sdk) },
+    );
+
+    expect(result.terminal).toMatchObject({
+      kind: "failed",
+      source: "prompt",
+      error: {
+        code: "transcript_persistence_failed",
+        message:
+          "[copilot-attempt] saved transcript persistence requires an exact runtime session target",
+      },
+    });
+    expect(sdk.sessions[0]?.sendAndWait).not.toHaveBeenCalled();
+    expect(journal.transcriptMessages(await readSessionTranscriptEvents(target))).toEqual([]);
+  });
+
+  it.each(["commit", "rollback"] as const)(
+    "joins the tool transcript transaction before finalizing: %s",
+    async (outcome) => {
+      const { attempt, target, params: baseParams } = await fixture();
+      const append = copilot.createAttemptGate();
+      const controller = new AbortController();
+      const signal = controller.signal;
+      const execution = { toolName: "read", toolCallId: "call-boundary" };
+      const execute = vi.fn<AnyAgentTool["execute"]>(async () => ({
+        content: [{ type: "text", text: "result" }],
+        details: {},
+      }));
+      const sourceTool: AnyAgentTool = {
+        name: "read",
+        label: "Read",
+        description: "Read the fixture",
+        parameters: Type.Object({}),
+        execute,
+      };
+      let sdkReply: unknown;
+      let attemptSettled = false;
+      transcriptAppendControl.beforeAppend = append.wait;
+      if (outcome === "rollback") {
+        toolResultFault.enable();
+      }
+
+      const sdk = copilot.makeFakeSdk((session, config) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { __eventId: "initial-user", content: attempt.prompt });
+          session.emit("assistant.message", {
+            __eventId: "assistant-boundary",
+            messageId: "assistant-boundary",
+            content: "checking",
+            toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-boundary" }],
+          });
+          session.emit("tool.execution_start", execution);
+          const read = (config.tools as SdkTool[]).find((tool) => tool.name === "read");
+          const handler = expectDefined(read?.handler, "registered read handler");
+          sdkReply = await handler(
+            {},
+            { ...execution, arguments: {}, sessionId: session.sessionId },
+          );
+          const reply = expectDefined(asOptionalRecord(sdkReply), "SDK tool reply");
+          session.emit("tool.execution_complete", {
+            __eventId: "result-boundary",
+            result: { content: reply.textResultForLlm },
+            success: reply.resultType === "success",
+            toolCallId: "call-boundary",
+          });
+          return finish(session, "finished", "assistant-final");
+        });
+      });
+      const pool = copilot.makeFakePool(sdk);
+      const params = {
+        ...baseParams,
+        abortSignal: signal,
+        config: { tools: { toolSearch: false } },
+        disableTools: false,
+        hostCapabilities: createCopilotTestHostCapabilities(() => [sourceTool]),
+        // Raw prompts omit SDK tools; this fixture exercises the ordinary tool bridge.
+        promptMode: "minimal",
+      } satisfies AgentHarnessAttemptParamsV2 & Pick<AttemptParamsLike, "auth">;
+      const pending = copilot.runCopilotAttempt(params, { pool }).finally(() => {
+        attemptSettled = true;
+      });
+      const joined = pending.catch(() => undefined);
+
+      try {
+        await copilot.awaitAttemptStage(append.entered, pending);
+        expect(sdkReply).toMatchObject({ resultType: "success", textResultForLlm: "result" });
+        const prefix = journal.transcriptMessages(await readSessionTranscriptEvents(target));
+        expect(prefix.map((row) => row.message.role)).toEqual(["user"]);
+        expect(prefix[0]?.message.idempotencyKey).toBe("run-1:user");
+        expect(attemptSettled).toBe(false);
+
+        append.release();
+        const result = await pending;
+        const rows = journal.transcriptMessages(await readSessionTranscriptEvents(target));
+        expect(rows.slice(0, prefix.length)).toEqual(prefix);
+        if (outcome === "commit") {
+          expect(result).toMatchObject({
+            terminal: { kind: "ok" },
+            replayMetadata: { replaySafe: true },
+          });
+          expect(rows.map((row) => [row.message.role, row.message.idempotencyKey])).toEqual([
+            ["user", "run-1:user"],
+            ["assistant", "copilot-sdk:sess-1:assistant-boundary"],
+            ["toolResult", "copilot-sdk:sess-1:result-boundary"],
+            ["assistant", "copilot-sdk:sess-1:assistant-final"],
+          ]);
+          expect(result.messagesSnapshot).toEqual(rows.map((row) => row.message));
+        } else {
+          expect(rows).toEqual(prefix);
+          expect(copilot.projectAgentRunAttemptTerminal(result.terminal).promptError).toMatchObject(
+            {
+              code: "transcript_persistence_failed",
+              cause: expect.objectContaining({
+                message: expect.stringContaining("injected attempt group failure"),
+              }),
+            },
+          );
+          expect(result.replayMetadata.replaySafe).toBe(false);
+        }
+        const toolSignal = expectDefined(execute.mock.calls[0]?.[2], "tool execution signal");
+        const session = expectDefined(sdk.sessions[0], "SDK session");
+        expect(session.abort).toHaveBeenCalledTimes(outcome === "rollback" ? 1 : 0);
+        expect(session.disconnect).toHaveBeenCalledOnce();
+        expect(pool.release).toHaveBeenCalledOnce();
+        // Host admission composes cancellation; the caller signal need not retain identity.
+        expect(toolSignal.aborted).toBe(false);
+        const cancellation = new Error("caller cancelled the fixture");
+        controller.abort(cancellation);
+        expect(toolSignal.aborted).toBe(true);
+        expect(toolSignal.reason).toBe(cancellation);
+      } finally {
+        append.release();
+        if (!attemptSettled) {
+          controller.abort();
+        }
+        await joined;
+      }
+    },
+  );
+
   it("keeps the host session through provider failure, retry, resume, and finalization", async () => {
-    const { attempt, target, tempDir, bridge } = await createFixture();
-    bridge.detach();
+    const { attempt, target, params: baseParams } = await fixture();
     const failure = new Error("Authentication failed with provider (HTTP 401)");
     let turns = 0;
-    let sessions = 0;
-    const newSession = (sessionId: string) => {
-      const session = { ...createFakeSession(), sessionId };
-      session.sendAndWait = vi.fn(async () => {
+    const configureSession = (session: copilot.FakeSession) => {
+      session.sendAndWait.mockImplementation(async () => {
         turns += 1;
-        session.emit(event("user.message", `user-${turns}`, { content: attempt.prompt }));
+        session.emit("user.message", { __eventId: `user-${turns}`, content: attempt.prompt });
         if (turns === 1) {
           throw failure;
         }
-        const assistant = event("assistant.message", `assistant-${turns}`, {
-          content: `answer-${turns}`,
-          messageId: `assistant-${turns}`,
-        });
-        session.emit(assistant);
-        session.emit(event("session.idle", `idle-${turns}`, {}));
-        return assistant as Awaited<ReturnType<typeof session.sendAndWait>>;
+        const id = `assistant-${turns}`;
+        return finish(session, `answer-${turns}`, id);
       });
-      return session;
     };
-    const client = {
-      createSession: vi.fn(async () => newSession(`sdk-session-${++sessions}`)),
-      resumeSession: vi.fn(async (id: string) => newSession(id)),
-      deleteSession: vi.fn(async () => undefined),
-    };
-    const pool = {
-      acquire: vi.fn(async (key) => ({ client: client as unknown as CopilotClient, key })),
-      release: vi.fn(async () => undefined),
-      dispose: vi.fn(async () => []),
-      size: () => 0,
-    } satisfies CopilotClientPool;
-    const params = {
-      ...attempt,
-      agentDir: tempDir,
-      model: {
-        api: "openai-responses",
-        id: "gpt-5.6-luna",
-        name: "Luna",
-        provider: "github-copilot",
-        baseUrl: "https://api.githubcopilot.com",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      } satisfies AgentHarnessAttemptParamsV2["model"],
-      auth: { useLoggedInUser: true },
-      hostCapabilities: createCopilotTestHostCapabilities(),
-      promptMode: "none" as const,
-      disableTools: true,
-    };
-    const deps = {
-      pool,
-      createToolBridge: async () => ({
-        sourceTools: [],
-        promptToolPolicy: { apply: () => ({ tools: [], callableToolNames: [] }) },
-      }),
-    };
-    const failed = (await runCopilotAttempt(params, deps)) as AttemptResultWithSdkSessionId;
-    expect(failed.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
-    expect(failed.sdkSessionId).toBe("sdk-session-1");
-
-    // The host adopts sessionIdUsed before retrying; storage must still accept
-    // that exact identity, while the SDK independently resumes its native id.
-    const retryParams = {
-      ...params,
-      sessionId: failed.sessionIdUsed,
-      sessionTarget: { ...target, sessionId: failed.sessionIdUsed },
-    };
-    const retried = (await runCopilotAttempt(retryParams, deps)) as AttemptResultWithSdkSessionId;
-    expect(retried.terminal).toEqual({ kind: "ok" });
-    expect(retried.sessionIdUsed).toBe(target.sessionId);
-    expect(retried.replayMetadata.replaySafe).toBe(true);
-
-    const resumeParams = {
-      ...retryParams,
-      sessionId: retried.sessionIdUsed,
-      initialReplayState: {
-        replayInvalid: !retried.replayMetadata.replaySafe,
-        hadPotentialSideEffects: retried.replayMetadata.hadPotentialSideEffects,
-        journalValidated: retried.journalValidated,
-        sdkSessionId: retried.sdkSessionId,
-      },
-    };
-    const resumed = (await runCopilotAttempt(resumeParams, deps)) as AttemptResultWithSdkSessionId;
-    expect(resumed.terminal).toEqual({ kind: "ok" });
-    expect(resumed.sessionIdUsed).toBe(target.sessionId);
-    expect(resumed.replayMetadata.replaySafe).toBe(true);
-
-    const final = (await runCopilotAttempt(
-      { ...resumeParams, sessionId: resumed.sessionIdUsed },
-      { ...deps, operation: "settled-tool-finalization" },
-    )) as AttemptResultWithSdkSessionId;
-    expect(final.terminal).toEqual({ kind: "ok" });
-    expect(final.sessionIdUsed).toBe(target.sessionId);
-    expect(final.sdkSessionId).toBe("sdk-session-2");
-    expect(client.createSession).toHaveBeenCalledTimes(2);
-    expect(client.resumeSession.mock.calls.map(([id]) => id)).toEqual([
-      "sdk-session-2",
-      "sdk-session-2",
-    ]);
+    const sdk = copilot.makeFakeSdk({
+      onCreateSession: configureSession,
+      onResumeSession: configureSession,
+    });
+    const pool = copilot.makeFakePool(sdk);
+    let sessionId = baseParams.sessionId;
+    let initialReplayState = baseParams.initialReplayState;
+    emptyTools();
+    for (const phase of ["failure", "retry", "resume", "finalize"] as const) {
+      const params = {
+        ...baseParams,
+        sessionId,
+        initialReplayState,
+        sessionTarget: { ...target, sessionId },
+      };
+      const result = (await copilot.runCopilotAttempt(params, {
+        pool,
+        ...(phase === "finalize" ? { operation: "settled-tool-finalization" as const } : {}),
+      })) as AttemptResultWithSdkSessionId;
+      if (phase === "failure") {
+        expect(result.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
+      } else {
+        expect(result).toMatchObject({ terminal: { kind: "ok" }, sessionIdUsed: target.sessionId });
+      }
+      expect(result.sdkSessionId).toBe(phase === "failure" ? "sess-1" : "sess-2");
+      if (phase === "retry" || phase === "resume") {
+        expect(result.replayMetadata.replaySafe).toBe(true);
+      }
+      // Adopt the host identity on every continuation, but resume the SDK checkpoint from retry.
+      sessionId = result.sessionIdUsed;
+      if (phase === "retry") {
+        initialReplayState = {
+          replayInvalid: !result.replayMetadata.replaySafe,
+          hadPotentialSideEffects: result.replayMetadata.hadPotentialSideEffects,
+          journalValidated: result.journalValidated,
+          sdkSessionId: result.sdkSessionId,
+        };
+      }
+    }
+    expect(sdk.createSession).toHaveBeenCalledTimes(2);
+    expect(sdk.resumeSession.mock.calls.map(([id]) => id)).toEqual(["sess-2", "sess-2"]);
     expect(
-      transcriptMessages(await readSessionTranscriptEvents(target)).map((row) => row.message.role),
+      journal
+        .transcriptMessages(await readSessionTranscriptEvents(target))
+        .map((row) => row.message.role),
     ).toEqual(["user", "assistant", "assistant", "assistant"]);
   });
 });

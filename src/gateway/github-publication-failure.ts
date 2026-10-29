@@ -61,13 +61,35 @@ export class GitHubPublicationWorkspaceChangedError extends GitHubPublicationKno
 }
 
 export class GitHubPublicationBranchChangedError extends GitHubPublicationKnownFailure {
-  constructor() {
+  constructor(options: { originalPullRequest?: boolean } = {}) {
     super("GitHub publication cannot safely extend the published branch.", {
       code: "push_rejected",
-      nextAction:
-        "Preserve your local work and inspect the published head. To refresh the existing PR, apply the intended changes on top of that head without rewriting its history; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never rewrites published history.",
+      nextAction: options.originalPullRequest
+        ? "Preserve your local work and inspect the original PR's current head. Continue only after its updated source has been explicitly accepted and your intended edits reapplied without rewriting published history. Do not create a replacement PR or redirect publication to another branch."
+        : "Preserve your local work and inspect the published head. To refresh the existing PR, apply the intended changes on top of that head without rewriting its history; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never rewrites published history.",
     });
   }
+}
+
+/**
+ * Classify a push whose head did not land. Git exiting on its own with a failure while the
+ * remote still holds its pre-push head is a definitive rejection. Anything else (exit 0, a
+ * killed or signalled push, or a moved remote) stays unconfirmed for recovery to settle.
+ */
+export function gitHubPublicationPushFailure(
+  pushed: { code: number | null; signal: unknown; killed: boolean },
+  remoteUnchanged: boolean,
+  { login, pushRepository }: { login: string; pushRepository: string },
+): Error {
+  if (!remoteUnchanged || pushed.code === 0 || pushed.signal !== null || pushed.killed) {
+    return new Error(
+      pushed.code === 0 ? "GitHub push verification failed." : "GitHub push was rejected.",
+    );
+  }
+  return new GitHubPublicationKnownFailure(`GitHub rejected the push to ${pushRepository}.`, {
+    code: "push_rejected",
+    nextAction: `GitHub rejected @${login}'s push to ${pushRepository}; nothing was pushed. Give @${login} write access (or point the worktree's origin at a fork it owns) and check the repository's branch rules, then request publication again.`,
+  });
 }
 
 export class GitHubPublicationSessionChangedError extends GitHubPublicationKnownFailure {
@@ -90,12 +112,22 @@ export class GitHubPublicationRequesterUnavailableError extends GitHubPublicatio
   }
 }
 
+export class GitHubPublicationCreditChangedError extends GitHubPublicationKnownFailure {
+  constructor() {
+    super("GitHub publication contributor credit changed.", {
+      code: "identity_changed",
+      nextAction:
+        "Review contributor credit and any recorded GitHub effects, reconcile unpushed prepared commits, then request a new publication. Already published commits and pull requests are retained.",
+    });
+  }
+}
+
 export class GitHubPublicationWorkflowChangesError extends GitHubPublicationKnownFailure {
   constructor() {
     super("Publishing GitHub workflow changes requires full operator write permission.", {
       code: "github_rejected",
       nextAction:
-        "Your saved changes are intact. Ask a maintainer with full write access to publish the GitHub workflow changes, or restore the workflow definitions and request publication again.",
+        "OpenClaw requires the requester's full operator write authority for these workflow changes; this is not a GitHub token scope failure. Your saved changes are intact. Ask a maintainer with full write access to publish, or remove only unintended workflow edits after reviewing the accepted diff.",
     });
   }
 }

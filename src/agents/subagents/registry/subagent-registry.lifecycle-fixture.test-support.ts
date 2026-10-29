@@ -21,6 +21,19 @@ export type SessionStoreEntry = {
   delivery?: SessionDeliveryState;
 };
 
+export function createExternalRequesterSessionEntry(): SessionStoreEntry {
+  return {
+    sessionId: "sess-main",
+    updatedAt: 1,
+    delivery: {
+      kind: "external",
+      route: { channel: "discord", accountId: "default", target: { to: "user-1" } },
+      context: { channel: "discord", to: "user-1", accountId: "default" },
+      origin: { provider: "discord", to: "user-1", accountId: "default" },
+    },
+  };
+}
+
 type GatewayAgentRequestParams = {
   sessionKey?: string;
   idempotencyKey?: string;
@@ -40,21 +53,39 @@ export function getAgentResultsForChildSession(
   childSessionKey: string,
 ): string[] {
   return requests
-    .filter((request) => {
-      const inputProvenance = request.params?.inputProvenance;
-      if (!inputProvenance || typeof inputProvenance !== "object") {
-        return false;
-      }
-      return (
-        (inputProvenance as { sourceSessionKey?: unknown }).sourceSessionKey === childSessionKey
-      );
-    })
+    .filter((request) => request.params?.inputProvenance?.sourceSessionKey === childSessionKey)
     .flatMap((request) => {
-      const internalEvents = request.params?.internalEvents;
-      const event =
-        Array.isArray(internalEvents) && internalEvents[0] && typeof internalEvents[0] === "object"
-          ? (internalEvents[0] as { result?: string })
-          : undefined;
-      return typeof event?.result === "string" ? [event.result] : [];
+      const result = request.params?.internalEvents?.[0]?.result;
+      return result === undefined ? [] : [result];
     });
+}
+
+export async function settleYieldedCliTurn(params: {
+  requesterSessionKey: string;
+  requesterSessionId: string;
+  requesterTurnRunId: string;
+  acceptedSessionSpawns: Array<{
+    runId: string;
+    childSessionKey: string;
+    expectsCompletionMessage?: boolean;
+  }>;
+}) {
+  const { withLocalSessionPlacementTurnSettlement } =
+    await import("../../session-placement-admission.js");
+  return await withLocalSessionPlacementTurnSettlement(
+    {
+      sessionId: params.requesterSessionId,
+      sessionKey: params.requesterSessionKey,
+      agentId: "main",
+      runId: params.requesterTurnRunId,
+    },
+    async () => ({
+      acceptedSessionSpawns: params.acceptedSessionSpawns,
+      meta: {
+        durationMs: 1,
+        yielded: true,
+        executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
+      },
+    }),
+  );
 }

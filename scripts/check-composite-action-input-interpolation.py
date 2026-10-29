@@ -7,8 +7,11 @@ import sys
 
 
 INPUT_INTERPOLATION_RE = re.compile(r"\$\{\{\s*inputs\.")
-RUN_LINE_RE = re.compile(r"^(\s*)run:\s*(.*)$")
-USING_COMPOSITE_RE = re.compile(r"^\s*using:\s*composite\s*$", re.MULTILINE)
+RUN_LINE_RE = re.compile(r"^(\s*(?:-\s+)?)run:\s*(.*)$")
+USING_COMPOSITE_RE = re.compile(
+    r"""^\s*using:\s*(?:composite|'composite'|"composite")\s*(?:#.*)?$""",
+    re.MULTILINE,
+)
 
 
 def indentation(line: str) -> int:

@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { VERSION } from "../version.js";
+import { publishAgentSchemaMetadata } from "./openclaw-agent-db-metadata.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 
 type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
@@ -39,4 +40,5 @@ export function persistAgentSchemaMetadata(
           ),
       ),
   );
+  publishAgentSchemaMetadata(db, { role: "agent", schemaVersion: targetVersion, agentId });
 }

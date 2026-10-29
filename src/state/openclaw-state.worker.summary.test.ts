@@ -1,5 +1,11 @@
-import { existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { readConfigHealthStateInDatabase } from "../config/io.health-state.kernel.js";
+import {
+  acquireStateDatabaseSchemaLease,
+  assertStateDatabaseAccessAllowed,
+} from "../infra/gateway-state-owner.js";
 import {
   createSqliteAuditRecordKernel,
   prepareSqliteAuditRecord,
@@ -10,27 +16,23 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
-import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
-import { readTaskRegistrySnapshot } from "../tasks/task-registry.store.kernel.js";
-import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
-import { TASK_RUNTIMES, type TaskStatus } from "../tasks/task-registry.types.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
+import { pluginStateLookup } from "../plugin-state/plugin-state-store.sqlite.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
   createSqliteWorkerBackend,
   openExistingSqliteWorkerBackend,
 } from "./openclaw-state.worker.js";
 
-let state: OpenClawTestState;
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 const backends = new Set<ReturnType<typeof createSqliteWorkerBackend>>();
+const pluginKey = { pluginId: "native-borrow-fixture", namespace: "shared", key: "answer" };
 beforeEach(async () => {
-  state = await createOpenClawTestState({ prefix: "openclaw-flow-summary-", applyEnv: true });
+  state = await createOpenClawTestState({ prefix: "openclaw-native-handles-", applyEnv: true });
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -42,326 +44,169 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-async function fixture(statuses: readonly TaskStatus[] = ["running"]) {
-  const ownerKey = "agent:main:summary";
-  const flow = buildFlowRecord({
-    controllerId: "tests/summary",
-    ownerKey,
-    goal: "Synthetic flow",
-    createdAt: 100,
-  });
-  upsertTaskFlowRegistryRecordToSqlite(flow);
-  let index = 0;
-  for (const runtime of TASK_RUNTIMES) {
-    for (const status of statuses) {
-      const count =
-        runtime === "subagent" && status === "queued"
-          ? 3
-          : runtime === "cli" && status === "failed"
-            ? 2
-            : 1;
-      for (let copy = 0; copy < count; copy++) {
-        upsertTaskWithDeliveryStateToSqlite({
-          task: {
-            taskId: `task-${index++}`,
-            runtime,
-            status,
-            parentFlowId: flow.flowId,
-            ownerKey,
-            requesterSessionKey: ownerKey,
-            scopeKind: "session",
-            task: "Large task ".repeat(1024),
-            progressSummary: "Progress ".repeat(1024),
-            deliveryStatus: "not_applicable",
-            notifyPolicy: "silent",
-            createdAt: 100,
-          },
-        });
-      }
-    }
-  }
-  const context = captureOpenClawStateWorkerContext();
-  const backend = runWithSqliteWorkerStateContext(context, () =>
-    createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
-  );
-  backends.add(backend);
-  await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("flows.summary");
-  const summary = (requestedOwner = ownerKey, flowId = flow.flowId) =>
-    runWithSqliteWorkerStateContext(context, () =>
-      backend.execute({ type: "flows.summary", input: { ownerKey: requestedOwner, flowId } }),
-    );
-  const detail = () =>
-    runWithSqliteWorkerStateContext(context, () =>
-      backend.execute({
-        type: "flows.detail",
-        input: { ownerKey, lookup: "id", token: flow.flowId },
-      }),
-    );
-  return { summary, detail, database: openOpenClawStateDatabase() };
+function createExistingStateContext() {
+  const databasePath = resolveOpenClawStateSqlitePath(state.env);
+  mkdirSync(path.dirname(databasePath), { recursive: true });
+  writeFileSync(databasePath, "");
+  return captureOpenClawStateWorkerContext({ path: databasePath, env: state.env });
 }
 
-it("counts every status and runtime without mixing another flow, including empty and missing flows", async () => {
-  const { summary, database } = await fixture([
-    "queued",
-    "running",
-    "succeeded",
-    "failed",
-    "timed_out",
-    "cancelled",
-    "lost",
-  ]);
-  const expected = {
-    total: 31,
-    active: 10,
-    terminal: 21,
-    failures: 13,
-    byStatus: {
-      queued: 6,
-      running: 4,
-      succeeded: 4,
-      failed: 5,
-      timed_out: 4,
-      cancelled: 4,
-      lost: 4,
-    },
-    byRuntime: { subagent: 9, acp: 7, cron: 7, cli: 8 },
-  };
-  expect(summary()).toEqual(expected);
-  expect(summary("agent:other:summary")).toBeUndefined();
-  expect(summary(undefined, "missing")).toBeUndefined();
-  const unrelated = buildFlowRecord({
-    controllerId: "tests/summary",
-    ownerKey: "agent:main:summary",
-    goal: "Empty flow",
-    createdAt: 100,
-  });
-  upsertTaskFlowRegistryRecordToSqlite(unrelated);
-  expect(summary(undefined, unrelated.flowId)).toEqual({
-    total: 0,
-    active: 0,
-    terminal: 0,
-    failures: 0,
-    byStatus: {
-      queued: 0,
-      running: 0,
-      succeeded: 0,
-      failed: 0,
-      timed_out: 0,
-      cancelled: 0,
-      lost: 0,
-    },
-    byRuntime: { subagent: 0, acp: 0, cron: 0, cli: 0 },
-  });
-  database.db
-    .prepare("UPDATE task_runs SET parent_flow_id = ? WHERE task_id = 'task-0'")
-    .run(unrelated.flowId);
-  expect(summary()).toMatchObject({
-    total: 30,
-    active: 9,
-    byStatus: { queued: 5 },
-    byRuntime: { subagent: 8 },
-  });
-});
-
-it("retains the shared native handle until its last actor closes and preserves rows on reopen", async () => {
-  const context = captureOpenClawStateWorkerContext();
-  const first = runWithSqliteWorkerStateContext(context, () =>
-    createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+type Context = ReturnType<typeof captureOpenClawStateWorkerContext>;
+function createBackend(context: Context, existing = false) {
+  const databasePath = context.admission.databasePath;
+  const backend = runWithSqliteWorkerStateContext(context, () =>
+    existing
+      ? openExistingSqliteWorkerBackend(undefined, {
+          databasePath,
+          existingIdentity: context.admission.identity.key,
+        })
+      : createSqliteWorkerBackend(undefined, { databasePath }),
   );
-  const second = runWithSqliteWorkerStateContext(context, () =>
-    openExistingSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
-  );
-  backends.add(first).add(second);
-  await first[SQLITE_WORKER_PREPARE_COMMAND]?.("flows.createManaged");
-  await second[SQLITE_WORKER_PREPARE_COMMAND]?.("flows.current");
-  const database = openOpenClawStateDatabase();
-  const flow = buildFlowRecord({
-    controllerId: "tests/native-borrow",
-    ownerKey: "agent:main:borrow",
-    goal: "Keep the surviving actor usable",
-    createdAt: 100,
-  });
-  runWithSqliteWorkerStateContext(context, () =>
-    first.execute({ type: "flows.createManaged", input: { flow } }),
-  );
-  expect(
-    runWithSqliteWorkerStateContext(context, () =>
-      second.execute({ type: "flows.current", input: { flowId: flow.flowId } }),
-    ),
-  ).toMatchObject({ flowId: flow.flowId, revision: 0 });
-
-  await first.close();
-  expect(database.db.isOpen).toBe(true);
-  expect(
-    runWithSqliteWorkerStateContext(context, () =>
-      second.execute({
-        type: "flows.updateManaged",
+  backends.add(backend);
+  const execute = (command: Parameters<typeof backend.execute>[0]) =>
+    runWithSqliteWorkerStateContext(context, () => backend.execute(command));
+  return {
+    ...backend,
+    execute,
+    patch(configPath: string, signature: string, previous?: string) {
+      const expected =
+        previous === undefined
+          ? null
+          : {
+              lastKnownGoodJson: null,
+              lastPromotedGoodJson: null,
+              suspiciousSignature: previous,
+              updatedAtMs: 100,
+            };
+      return execute({
+        type: "config.health.patch",
         input: {
-          flowId: flow.flowId,
-          ownerKey: flow.ownerKey,
-          expectedRevision: 0,
-          patch: { status: "succeeded", updatedAt: 200, endedAt: 200 },
+          configPath,
+          patch: { last_observed_suspicious_signature: signature },
+          expected,
+          updatedAtMs: expected ? 200 : 100,
         },
-      }),
-    ),
-  ).toMatchObject({ applied: true, flow: { status: "succeeded", revision: 1 } });
-  await second.close();
-  expect(database.db.isOpen).toBe(false);
+      });
+    },
+    register(value: number | { value: number }, bindAuthority = false) {
+      return admitted(
+        context,
+        () =>
+          execute({
+            type: "pluginState.register",
+            input: {
+              ...pluginKey,
+              valueJson: JSON.stringify(value),
+              maxEntries: 4,
+              overflowPolicy: "reject-new",
+            },
+          }),
+        bindAuthority,
+      );
+    },
+  };
+}
 
-  const reopenedContext = captureOpenClawStateWorkerContext();
-  const reopened = runWithSqliteWorkerStateContext(reopenedContext, () =>
-    createSqliteWorkerBackend(undefined, { databasePath: reopenedContext.admission.databasePath }),
-  );
-  backends.add(reopened);
-  await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("flows.current");
-  expect(
-    runWithSqliteWorkerStateContext(reopenedContext, () =>
-      reopened.execute({ type: "flows.current", input: { flowId: flow.flowId } }),
-    ),
-  ).toMatchObject({ flowId: flow.flowId, status: "succeeded", revision: 1 });
-});
+function admitted<T>(context: Context, run: () => T, bindAuthority = false): T {
+  const databasePath = context.admission.databasePath;
+  const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
+    context.admission.assertCurrent();
+    grant();
+  });
+  if (bindAuthority) {
+    admission.bindDatabaseAuthority({
+      databasePath: context.admission.identity.canonicalPath,
+      assertRequest: context.admission.assertCurrent,
+      assertAccess: () => assertStateDatabaseAccessAllowed(databasePath),
+      acquireSchema: () => acquireStateDatabaseSchemaLease(databasePath),
+    });
+  }
+  const nativePost = admission.port.postMessage.bind(admission.port);
+  // Service the real grant before this same-thread backend waits synchronously.
+  const dispatch = vi
+    .spyOn(admission.port, "postMessage")
+    .mockImplementation((message, transfer) => {
+      nativePost(message, transfer);
+      admission.service();
+    });
+  try {
+    return runWithSqliteWorkerStateContext(context, () =>
+      withSqliteWorkerOperationAdmission({ port: admission.port }, run),
+    );
+  } finally {
+    dispatch.mockRestore();
+    admission.finish();
+  }
+}
 
-it.each(["kv", "task"] as const)(
+it.each(["kv", "health"] as const)(
   "retains a promoted KV actor's native handle when %s closes first",
   async (firstToClose) => {
-    const context = captureOpenClawStateWorkerContext();
+    const context = createExistingStateContext();
     const databasePath = context.admission.databasePath;
-    const key = { pluginId: "borrow-fixture", namespace: "shared", key: "answer" };
-    const kv = runWithSqliteWorkerStateContext(context, () =>
-      openExistingSqliteWorkerBackend(undefined, { databasePath }),
-    );
-    backends.add(kv);
-    await kv[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.lookup");
-    expect(
-      runWithSqliteWorkerStateContext(context, () =>
-        kv.execute({ type: "pluginState.lookup", input: key }),
-      ),
-    ).toEqual({ ok: true, value: undefined });
-    expect(existsSync(databasePath)).toBe(false);
-    const stages: string[] = [];
-    const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-      stages.push(request.stage);
-      context.admission.assertCurrent();
-      grant();
-    });
-    const nativePost = admission.port.postMessage.bind(admission.port);
-    // Both native backends share this thread; service the real grant before its synchronous wait.
-    const dispatch = vi
-      .spyOn(admission.port, "postMessage")
-      .mockImplementation((message, transferList) => {
-        nativePost(message, transferList);
-        admission.service();
+    const kv = createBackend(context, true);
+    await kv[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.register");
+    expect(pluginStateLookup(pluginKey)).toBeUndefined();
+    expect(readFileSync(databasePath)).toEqual(Buffer.alloc(0));
+    withStateDatabaseSchemaMaintenance({ databasePath }, () => {
+      expect(kv.register({ value: 42 }, true)).toEqual({
+        ok: true,
+        value: undefined,
       });
-    try {
-      expect(
-        runWithSqliteWorkerStateContext(context, () =>
-          withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-            kv.execute({
-              type: "pluginState.register",
-              input: {
-                ...key,
-                valueJson: JSON.stringify({ value: 42 }),
-                maxEntries: 4,
-                overflowPolicy: "reject-new",
-              },
-            }),
-          ),
-        ),
-      ).toEqual({ ok: true, value: undefined });
-      expect(stages).toEqual(["transaction", "commit"]);
-    } finally {
-      dispatch.mockRestore();
-      admission.finish();
-    }
-    const task = runWithSqliteWorkerStateContext(context, () =>
-      createSqliteWorkerBackend(undefined, { databasePath }),
-    );
-    backends.add(task);
-    await task[SQLITE_WORKER_PREPARE_COMMAND]?.("flows.createManaged");
-    const database = openOpenClawStateDatabase();
-    const flow = buildFlowRecord({
-      controllerId: "tests/kv-native-borrow",
-      ownerKey: "agent:main:kv-borrow",
-      goal: "Keep both state readers available",
-      createdAt: 100,
     });
-    expect(
-      runWithSqliteWorkerStateContext(context, () =>
-        task.execute({ type: "flows.createManaged", input: { flow } }),
-      ),
-    ).toMatchObject({ flowId: flow.flowId, revision: 0 });
+    const health = createBackend(context);
+    await health[SQLITE_WORKER_PREPARE_COMMAND]?.("config.health.patch");
+    const database = openOpenClawStateDatabase();
+    const configPath = "/synthetic-native-borrow.json";
+    expect(health.patch(configPath, "first")).toBe(true);
 
-    await (firstToClose === "kv" ? kv : task).close();
+    await (firstToClose === "kv" ? kv : health).close();
     expect(database.db.isOpen).toBe(true);
     if (firstToClose === "kv") {
-      expect(
-        runWithSqliteWorkerStateContext(context, () =>
-          task.execute({ type: "flows.current", input: { flowId: flow.flowId } }),
-        ),
-      ).toMatchObject({ flowId: flow.flowId, revision: 0 });
+      expect(health.patch(configPath, "second", "first")).toBe(true);
     } else {
-      expect(
-        runWithSqliteWorkerStateContext(context, () =>
-          kv.execute({ type: "pluginState.lookup", input: key }),
-        ),
-      ).toEqual({ ok: true, value: { value: 42 } });
+      expect(pluginStateLookup(pluginKey)).toEqual({ value: 42 });
     }
-    await (firstToClose === "kv" ? task : kv).close();
+    await (firstToClose === "kv" ? health : kv).close();
     expect(database.db.isOpen).toBe(false);
 
-    const reopenedContext = captureOpenClawStateWorkerContext();
-    const reopened = runWithSqliteWorkerStateContext(reopenedContext, () =>
-      createSqliteWorkerBackend(undefined, { databasePath }),
-    );
-    backends.add(reopened);
-    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.lookup");
-    expect(
-      runWithSqliteWorkerStateContext(reopenedContext, () =>
-        reopened.execute({ type: "pluginState.lookup", input: key }),
-      ),
-    ).toEqual({ ok: true, value: { value: 42 } });
-    expect(
-      runWithSqliteWorkerStateContext(reopenedContext, () =>
-        reopened.execute({ type: "flows.current", input: { flowId: flow.flowId } }),
-      ),
-    ).toMatchObject({ flowId: flow.flowId, revision: 0 });
+    createBackend(captureOpenClawStateWorkerContext());
+    expect(pluginStateLookup(pluginKey)).toEqual({ value: 42 });
+    expect(readConfigHealthStateInDatabase(openOpenClawStateDatabase().db)).toMatchObject({
+      entries: {
+        [configPath]: {
+          lastObservedSuspiciousSignature: firstToClose === "kv" ? "second" : "first",
+        },
+      },
+    });
   },
 );
 
 it.each(["config.health.patch", "diagnostic.register"] as const)(
   "retains %s writes from existing-only actors until last close and durably reopens",
   async (operation) => {
-    const context = captureOpenClawStateWorkerContext();
-    const first = runWithSqliteWorkerStateContext(context, () =>
-      openExistingSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
-    );
-    const second = runWithSqliteWorkerStateContext(context, () =>
-      openExistingSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
-    );
-    backends.add(first).add(second);
-    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("config.health.read");
+    const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+    await closeOpenClawStateDatabaseAsync();
+    const initialBytes = readFileSync(databasePath);
+    const context = captureOpenClawStateWorkerContext({ path: databasePath, env: state.env });
+    const first = createBackend(context, true);
+    const second = createBackend(context, true);
+    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("templates.install-schema-versions");
     await second[SQLITE_WORKER_PREPARE_COMMAND]?.(operation);
     expect(
-      runWithSqliteWorkerStateContext(context, () =>
-        first.execute({ type: "config.health.read", input: { artifactPreserving: false } }),
-      ),
-    ).toEqual({ state: {}, basis: {} });
-    expect(existsSync(context.admission.databasePath)).toBe(false);
+      first.execute({
+        type: "templates.install-schema-versions",
+        input: { artifactPreservingReadOnly: false },
+      }),
+    ).toEqual([]);
+    expect(readFileSync(databasePath)).toEqual(initialBytes);
 
     const scope = "tests/health-native-borrow";
     const write = (backend: typeof first, key: string) =>
-      runWithSqliteWorkerStateContext(context, () =>
-        operation === "config.health.patch"
-          ? backend.execute({
-              type: operation,
-              input: {
-                configPath: `/${key}.json`,
-                patch: { last_observed_suspicious_signature: key },
-                expected: null,
-                updatedAtMs: 100,
-              },
-            })
-          : backend.execute({
+      operation === "config.health.patch"
+        ? backend.patch(`/${key}.json`, key)
+        : admitted(context, () =>
+            backend.execute({
               type: operation,
               input: {
                 scope,
@@ -373,7 +218,7 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
                 }),
               },
             }),
-      );
+          );
     const expectedResult = operation === "config.health.patch" ? true : undefined;
     expect(write(first, "first")).toBe(expectedResult);
     expect(write(second, "second")).toBe(expectedResult);
@@ -384,27 +229,15 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
     await second.close();
     expect(database.db.isOpen).toBe(false);
 
-    const reopenedContext = captureOpenClawStateWorkerContext();
-    const reopened = runWithSqliteWorkerStateContext(reopenedContext, () =>
-      createSqliteWorkerBackend(undefined, {
-        databasePath: reopenedContext.admission.databasePath,
-      }),
-    );
-    backends.add(reopened);
-    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("config.health.read");
+    const reopened = createBackend(captureOpenClawStateWorkerContext());
+    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("templates.install-schema-versions");
     const reopenedDatabase = openOpenClawStateDatabase();
     if (operation === "config.health.patch") {
-      expect(
-        runWithSqliteWorkerStateContext(reopenedContext, () =>
-          reopened.execute({ type: "config.health.read", input: { artifactPreserving: false } }),
-        ),
-      ).toMatchObject({
-        state: {
-          entries: {
-            "/first.json": { lastObservedSuspiciousSignature: "first" },
-            "/second.json": { lastObservedSuspiciousSignature: "second" },
-            "/third.json": { lastObservedSuspiciousSignature: "third" },
-          },
+      expect(readConfigHealthStateInDatabase(reopenedDatabase.db)).toMatchObject({
+        entries: {
+          "/first.json": { lastObservedSuspiciousSignature: "first" },
+          "/second.json": { lastObservedSuspiciousSignature: "second" },
+          "/third.json": { lastObservedSuspiciousSignature: "third" },
         },
       });
     } else {
@@ -420,29 +253,3 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
     expect(reopenedDatabase.db.isOpen).toBe(false);
   },
 );
-
-it.each(["runtime", "status"] as const)(
-  "rejects invalid count input %s only after checking flow ownership",
-  async (field) => {
-    const { summary, database } = await fixture();
-    database.db.exec(`UPDATE task_runs SET ${field} = 'invalid' WHERE task_id = 'task-0'`);
-    expect(summary("agent:other:summary")).toBeUndefined();
-    expect(summary(undefined, "missing")).toBeUndefined();
-    expect(() => summary()).toThrow(`Invalid persisted task ${field}: "invalid"`);
-  },
-);
-
-it.each([
-  ["scope_kind", "scope kind"],
-  ["delivery_status", "delivery status"],
-  ["notify_policy", "notify policy"],
-  ["terminal_outcome", "terminal outcome"],
-] as const)("leaves unused %s validation with full record readers", async (field, label) => {
-  const { summary, detail, database } = await fixture();
-  database.db.exec(`UPDATE task_runs SET ${field} = 'invalid' WHERE task_id = 'task-0'`);
-  expect(summary()).toMatchObject({ total: 4, active: 4, terminal: 0, failures: 0 });
-  expect(() => detail()).toThrow(`Invalid persisted task ${label}: "invalid"`);
-  expect(() => readTaskRegistrySnapshot(database)).toThrow(
-    `Invalid persisted task ${label}: "invalid"`,
-  );
-});

@@ -8,9 +8,7 @@ import {
   type BatchCompletionResult,
 } from "./batch-status.js";
 import { splitBatchRequestsByLimits } from "./batch-utils.js";
-import { runMemoryHostTasksWithConcurrency } from "./internal.js";
-
-// Shared runner for splitting and executing remote embedding batch groups.
+import { runWithConcurrency } from "./concurrency.js";
 
 /** Execution controls for provider embedding batch submissions and polling. */
 export type EmbeddingBatchExecutionParams = {
@@ -93,9 +91,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
         throw error;
       }
       const splitAt = Math.ceil(group.length / 2);
-      const parts = [group.slice(0, splitAt), group.slice(splitAt)].filter(
-        (part) => part.length > 0,
-      );
+      const parts = [group.slice(0, splitAt), group.slice(splitAt)];
       params.onSplitGroup?.({
         error,
         group,
@@ -109,9 +105,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
       }
     }
   };
-  const tasks = groups.map((group, groupIndex) => async () => {
-    await runGroup(group, groupIndex);
-  });
+  const tasks = groups.map((group, groupIndex) => () => runGroup(group, groupIndex));
 
   params.debug?.(params.debugLabel, {
     requests: params.requests.length,
@@ -124,7 +118,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
     timeoutMs: params.timeoutMs,
   });
 
-  await runMemoryHostTasksWithConcurrency(tasks, params.concurrency);
+  await runWithConcurrency(tasks, params.concurrency);
   return byCustomId;
 }
 

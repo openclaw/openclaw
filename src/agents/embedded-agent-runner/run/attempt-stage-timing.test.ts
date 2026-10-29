@@ -1,113 +1,73 @@
-// Coverage for embedded attempt startup stage timing diagnostics.
 import { isMainThread, threadId } from "node:worker_threads";
-import { describe, expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import {
-  createEmbeddedRunStageTracker,
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
-  formatEmbeddedRunStageSummary,
-  shouldWarnEmbeddedRunStageSummary,
+  logEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 
-describe("embedded run stage timing", () => {
-  it("captures stage duration and elapsed time", () => {
-    // Stage snapshots carry both local duration and total elapsed time so slow
-    // startup logs can identify where time accumulated.
-    let clock = 10;
-    const tracker = createEmbeddedRunStageTracker({ now: () => clock });
+function timedStages(stages: readonly (readonly [string, number])[], start: number, end: number) {
+  let clock = start;
+  const tracker = createStageTimingTracker(() => clock);
+  for (const [name, time] of stages) {
+    clock = time;
+    tracker.mark(name);
+  }
+  clock = end;
+  return tracker.snapshot();
+}
+const createLog = (trace = false) => ({ isEnabled: () => trace, warn: vi.fn(), trace: vi.fn() });
 
-    clock = 25;
-    tracker.mark("workspace");
-    clock = 40;
-    tracker.mark("tools");
-    clock = 45;
-
-    expect(tracker.snapshot()).toEqual({
-      totalMs: 35,
-      stages: [
-        { name: "workspace", durationMs: 15, elapsedMs: 15 },
-        { name: "tools", durationMs: 15, elapsedMs: 30 },
-      ],
-    });
-  });
-
-  it("warns only for very slow stage summaries by default", () => {
-    expect(
-      shouldWarnEmbeddedRunStageSummary({
-        totalMs: 9_999,
-        stages: [{ name: "auth", durationMs: 4_999, elapsedMs: 4_999 }],
-      }),
-    ).toBe(false);
-    expect(shouldWarnEmbeddedRunStageSummary({ totalMs: 10_000, stages: [] })).toBe(true);
-    expect(
-      shouldWarnEmbeddedRunStageSummary({
-        totalMs: 10,
-        stages: [{ name: "auth", durationMs: 5_000, elapsedMs: 5_000 }],
-      }),
-    ).toBe(true);
-  });
-
-  it("supports custom warning thresholds", () => {
-    expect(
-      shouldWarnEmbeddedRunStageSummary(
-        {
-          totalMs: 2_000,
-          stages: [{ name: "auth", durationMs: 10, elapsedMs: 10 }],
-        },
-        { totalThresholdMs: 2_000, stageThresholdMs: 1_000 },
-      ),
-    ).toBe(true);
-  });
-
-  it("formats summaries compactly for logs", () => {
-    expect(
-      formatEmbeddedRunStageSummary("embedded run startup stages: runId=r1", {
-        totalMs: 80,
-        stages: [
-          { name: "workspace", durationMs: 25, elapsedMs: 25 },
-          { name: "tools", durationMs: 55, elapsedMs: 80 },
-        ],
-      }),
-    ).toBe(
-      `embedded run startup stages: runId=r1 pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=80 stages=workspace:25ms@25ms,tools:55ms@80ms`,
+it.each([
+  [9_999, 4_999, false, undefined],
+  [10_000, 0, true, undefined],
+  [10, 5_000, true, undefined],
+  [2_000, 10, true, { totalThresholdMs: 2_000, stageThresholdMs: 1_000 }],
+] as const)(
+  "warns for slow summaries (total=%s, stage=%s)",
+  (totalMs, durationMs, warn, thresholds) => {
+    const log = createLog();
+    logEmbeddedRunStageSummary(
+      { totalMs, stages: [{ name: "auth", durationMs, elapsedMs: durationMs }] },
+      log,
+      () => "startup",
+      thresholds,
     );
-  });
+    expect(log.warn).toHaveBeenCalledTimes(warn ? 1 : 0);
+    expect(log.trace).not.toHaveBeenCalled();
+  },
+);
 
-  it("keeps orchestration startup stages ordered and cumulative", () => {
-    let clock = 0;
-    const tracker = createEmbeddedRunStageTracker({ now: () => clock });
-
-    clock = 2;
-    tracker.mark("workspace");
-    clock = 7;
-    tracker.mark("harness-selection");
-    clock = 18;
-    tracker.mark("prepared-runtime");
-    clock = 21;
-    tracker.mark("runtime-context");
-    tracker.mark("runtime-plugins");
-
-    expect(formatEmbeddedRunStageSummary("startup", tracker.snapshot())).toBe(
-      `startup pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=21 stages=workspace:2ms@2ms,harness-selection:5ms@7ms,prepared-runtime:11ms@18ms,runtime-context:3ms@21ms,runtime-plugins:0ms@21ms`,
-    );
-  });
-
-  it("names first-attempt dispatch subspans for slow startup summaries", () => {
-    // First-attempt dispatch stages use stable names because logs are compared
-    // across provider/runtime startup regressions.
-    let clock = 0;
-    const tracker = createEmbeddedRunStageTracker({ now: () => clock });
-
-    clock = 10;
-    tracker.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);
-    clock = 40;
-    tracker.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
-    clock = 90;
-    tracker.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
-    clock = 91;
-    tracker.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
-
-    expect(formatEmbeddedRunStageSummary("startup", tracker.snapshot())).toBe(
-      `startup pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=91 stages=attempt-workspace:10ms@10ms,attempt-prompt:30ms@40ms,attempt-runtime-plan:50ms@90ms,attempt-dispatch:1ms@91ms`,
-    );
-  });
+it.each([
+  [
+    "orchestration",
+    10,
+    36,
+    [
+      ["workspace", 12],
+      ["harness-selection", 17],
+      ["prepared-runtime", 28],
+      ["runtime-context", 31],
+      ["runtime-plugins", 31],
+    ],
+    "totalMs=26 stages=workspace:2ms@2ms,harness-selection:5ms@7ms,prepared-runtime:11ms@18ms,runtime-context:3ms@21ms,runtime-plugins:0ms@21ms",
+  ],
+  [
+    "first-attempt dispatch",
+    0,
+    91,
+    [
+      [EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace, 10],
+      [EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt, 40],
+      [EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan, 90],
+      [EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch, 91],
+    ],
+    "totalMs=91 stages=attempt-workspace:10ms@10ms,attempt-prompt:30ms@40ms,attempt-runtime-plan:50ms@90ms,attempt-dispatch:1ms@91ms",
+  ],
+] as const)("keeps %s stages ordered and cumulative", (_name, start, end, stages, expected) => {
+  const log = createLog(true);
+  logEmbeddedRunStageSummary(timedStages(stages, start, end), log, () => "startup");
+  expect(log.trace).toHaveBeenCalledExactlyOnceWith(
+    `startup pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} ${expected}`,
+  );
 });

@@ -14,7 +14,6 @@ import {
 } from "./package-local-overrides-preflight.js";
 import {
   assertLocalOverrideMutationTopology,
-  buildLocalOverrideInventoryEntry,
   emptyResult,
   fileModesHaveSameExecutableSemantics,
   mergeLocalOverrideFileMode,
@@ -29,6 +28,8 @@ import {
   type LocalPackageOverridesPlan,
   type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export { captureLocalPackageOverrides } from "./package-local-overrides-capture.js";
@@ -37,106 +38,60 @@ export type {
   LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
 
-function resolveLocalOverrideRuntimeUrls(): string[] {
-  return [
-    import.meta.resolve("@openclaw/fs-safe/config"),
-    import.meta.resolve("@openclaw/fs-safe/root"),
-    import.meta.resolve("@openclaw/fs-safe/durability"),
-    import.meta.resolve("@openclaw/fs-safe/errors"),
-  ];
+type LocalOverrideRuntime = {
+  entryUrl: string;
+  configUrl: string;
+  rootUrl: string;
+  durabilityUrl: string;
+  errorsUrl: string;
+};
+
+function resolveLocalOverrideRuntime(): LocalOverrideRuntime {
+  return {
+    entryUrl: resolveRuntimeProcessEntrypointUrl("packageLocalOverrides").href,
+    configUrl: import.meta.resolve("@openclaw/fs-safe/config"),
+    rootUrl: import.meta.resolve("@openclaw/fs-safe/root"),
+    durabilityUrl: import.meta.resolve("@openclaw/fs-safe/durability"),
+    errorsUrl: import.meta.resolve("@openclaw/fs-safe/errors"),
+  };
 }
 
 /** Resolve while the installed updater still exists; keep its complete dependency scope. */
 export async function prepareLocalOverrideRuntime(params: {
   sourceRoot: string;
   destinationRoot: string;
-}): Promise<string[]> {
+}): Promise<LocalOverrideRuntime> {
   const sourceRoot = await fs.realpath(params.sourceRoot);
   const destinationRoot = path.join(
     await fs.realpath(path.dirname(params.destinationRoot)),
     path.basename(params.destinationRoot),
   );
-  return await Promise.all(
-    resolveLocalOverrideRuntimeUrls().map(async (url) => {
-      // Real paths preserve external stores, and rebase in-project dependencies with
-      // the entire retained npm package or native package-manager project.
-      const modulePath = await fs.realpath(fileURLToPath(url));
-      return pathToFileURL(relocateRuntimePath(modulePath, [{ sourceRoot, destinationRoot }])).href;
-    }),
-  );
-}
-
-// Keep required native policy isolated from the operator's process-global defaults.
-// Root.move in fs-safe 0.8.5 is a check+rename fallback, even in required mode.
-const REQUIRED_FS_SAFE_OPERATION_SCRIPT = `
-const [configUrl, rootUrl, durabilityUrl, errorsUrl, rootDir, sourcePath, relativePath] = process.argv.slice(1);
-const { configureFsSafeNative } = await import(configUrl);
-configureFsSafeNative({ mode: "require" });
-const { root } = await import(rootUrl);
-const { publishFileExclusive } = await import(durabilityUrl);
-const { FsSafeError } = await import(errorsUrl);
-const packageFs = await root(rootDir, { hardlinks: "reject", symlinks: "reject" });
-const source = await packageFs.open(sourcePath);
-try {
-  await publishFileExclusive({
-    sourcePath: source.realPath,
-    targetPath: await packageFs.resolve(relativePath),
-    expectedSourceIdentity: source.stat,
-    strategy: "rename-noreplace",
-  });
-  process.stdout.write("moved");
-} catch (error) {
-  // A post-rename verification/sync failure must still enter caller rollback.
-  if (error instanceof FsSafeError && error.details?.targetCreated === true) {
-    process.stdout.write("moved");
-  }
-  throw error;
-} finally {
-  await source.handle.close();
-}
-`;
-
-async function runRequiredFsSafeMove(params: {
-  packageFs: LocalOverridePackageRoot;
-  runtimeUrls: readonly string[];
-  sourcePath: string;
-  relativePath: string;
-  onMoved?: () => void;
-}): Promise<void> {
-  const { error, stdout } = await new Promise<{
-    error: ExecFileException | null;
-    stdout: string;
-  }>((resolve) => {
-    execFile(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        REQUIRED_FS_SAFE_OPERATION_SCRIPT,
-        ...params.runtimeUrls,
-        params.packageFs.rootReal,
-        params.sourcePath,
-        params.relativePath,
-      ],
-      { timeout: 30_000, windowsHide: true },
-      (failure, output) => resolve({ error: failure, stdout: output }),
-    );
-  });
-  if (stdout === "moved") {
-    params.onMoved?.();
-  }
-  if (error) {
-    throw new Error("Native local override publication failed", { cause: error });
-  }
-  if (stdout !== "moved") {
-    throw new Error("Local override move completed without a publication receipt");
-  }
+  const runtime = resolveLocalOverrideRuntime();
+  const relocate = (modulePath: string) =>
+    pathToFileURL(relocateRuntimePath(modulePath, [{ sourceRoot, destinationRoot }])).href;
+  const dependency = async (url: string) => {
+    // Keep external stores intact and move project dependencies with the retained tree.
+    return relocate(await fs.realpath(fileURLToPath(url)));
+  };
+  const [configUrl, rootUrl, durabilityUrl, errorsUrl] = await Promise.all([
+    dependency(runtime.configUrl),
+    dependency(runtime.rootUrl),
+    dependency(runtime.durabilityUrl),
+    dependency(runtime.errorsUrl),
+  ]);
+  return {
+    // A standalone entry is an addressable image alias, without a physical JS file.
+    entryUrl: relocate(fileURLToPath(runtime.entryUrl)),
+    configUrl,
+    rootUrl,
+    durabilityUrl,
+    errorsUrl,
+  };
 }
 
 class LocalOverrideRollbackError extends Error {
   constructor(
     readonly relativePath: string,
-    readonly action: string,
     readonly rollbackError: unknown,
   ) {
     super(
@@ -154,263 +109,272 @@ function createLocalOverrideMutationPath(relativePath: string, label: string): s
   );
 }
 
-async function publishLocalOverrideTarget(params: {
-  packageFs: LocalOverridePackageRoot;
-  runtimeUrls: readonly string[];
-  sourcePath: string;
-  relativePath: string;
-  onPublished?: () => void;
-}): Promise<void> {
-  await assertLocalOverrideMutationTopology({
-    packageRoot: params.packageFs.rootDir,
-    realPackageRoot: params.packageFs.rootReal,
-    relativePath: params.sourcePath,
-  });
-  await assertLocalOverrideMutationTopology({
-    packageRoot: params.packageFs.rootDir,
-    realPackageRoot: params.packageFs.rootReal,
-    relativePath: params.relativePath,
-  });
-  await runRequiredFsSafeMove({ ...params, onMoved: params.onPublished });
-  await assertLocalOverrideMutationTopology({
-    packageRoot: params.packageFs.rootDir,
-    realPackageRoot: params.packageFs.rootReal,
-    relativePath: params.relativePath,
-  });
-}
-
-async function restoreMovedLocalOverrideTarget(params: {
-  packageFs: LocalOverridePackageRoot;
-  runtimeUrls: readonly string[];
-  movedPath: string;
-  relativePath: string;
-}): Promise<void> {
-  await publishLocalOverrideTarget({
-    packageFs: params.packageFs,
-    runtimeUrls: params.runtimeUrls,
-    sourcePath: params.movedPath,
-    relativePath: params.relativePath,
-  });
-}
-
-async function throwAfterRestoringMovedLocalOverrideTarget(params: {
-  packageFs: LocalOverridePackageRoot;
-  runtimeUrls: readonly string[];
-  movedPath: string;
-  relativePath: string;
-  originalError: unknown;
-  removeMovedAfterFailedRestore: boolean;
-}): Promise<never> {
-  try {
-    await restoreMovedLocalOverrideTarget({
-      packageFs: params.packageFs,
-      runtimeUrls: params.runtimeUrls,
-      movedPath: params.movedPath,
-      relativePath: params.relativePath,
-    });
-  } catch (rollbackError) {
-    if (params.removeMovedAfterFailedRestore) {
-      await params.packageFs.remove(params.movedPath).catch(() => undefined);
-    }
-    throw new LocalOverrideRollbackError(
-      params.relativePath,
-      "restore current target",
-      rollbackError,
-    );
-  }
-  throw params.originalError;
-}
-
-async function removeLocalOverrideCleanupPath(
+function createLocalOverrideMutations(
   packageFs: LocalOverridePackageRoot,
-  relativePath: string,
-): Promise<void> {
-  try {
-    await packageFs.remove(relativePath);
-  } catch (error) {
-    if (!isMissingPathError(error)) {
+  runtime: LocalOverrideRuntime,
+) {
+  const assertTopology = (relativePath: string) =>
+    assertLocalOverrideMutationTopology({
+      packageRoot: packageFs.rootDir,
+      realPackageRoot: packageFs.rootReal,
+      relativePath,
+    });
+  async function runRequiredFsSafeMove(params: {
+    sourcePath: string;
+    relativePath: string;
+    onMoved?: () => void;
+  }): Promise<void> {
+    const { error, stdout } = await new Promise<{
+      error: ExecFileException | null;
+      stdout: string;
+    }>((resolve) => {
+      execFile(
+        process.execPath,
+        [
+          ...resolveRuntimeWorkerArgv(new URL(runtime.entryUrl)),
+          runtime.configUrl,
+          runtime.rootUrl,
+          runtime.durabilityUrl,
+          runtime.errorsUrl,
+          packageFs.rootReal,
+          params.sourcePath,
+          params.relativePath,
+        ],
+        { timeout: 30_000, windowsHide: true },
+        (failure, output) => resolve({ error: failure, stdout: output }),
+      );
+    });
+    if (stdout === "moved") {
+      params.onMoved?.();
+    }
+    if (error) {
+      throw new Error("Native local override publication failed", { cause: error });
+    }
+    if (stdout !== "moved") {
+      throw new Error("Local override move completed without a publication receipt");
+    }
+  }
+
+  async function publishLocalOverrideTarget(params: {
+    sourcePath: string;
+    relativePath: string;
+    onPublished?: () => void;
+  }): Promise<void> {
+    await assertTopology(params.sourcePath);
+    await assertTopology(params.relativePath);
+    await runRequiredFsSafeMove({ ...params, onMoved: params.onPublished });
+    await assertTopology(params.relativePath);
+  }
+
+  async function throwAfterRestoringMovedLocalOverrideTarget(params: {
+    movedPath: string;
+    relativePath: string;
+    originalError: unknown;
+    removeMovedAfterFailedRestore: boolean;
+  }): Promise<never> {
+    try {
+      await publishLocalOverrideTarget({
+        sourcePath: params.movedPath,
+        relativePath: params.relativePath,
+      });
+    } catch (rollbackError) {
+      if (params.removeMovedAfterFailedRestore) {
+        await packageFs.remove(params.movedPath).catch(() => undefined);
+      }
+      throw new LocalOverrideRollbackError(params.relativePath, rollbackError);
+    }
+    throw params.originalError;
+  }
+
+  async function removeLocalOverrideCleanupPath(relativePath: string): Promise<void> {
+    try {
+      await packageFs.remove(relativePath);
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  async function moveExpectedLocalOverrideTarget(params: {
+    relativePath: string;
+    expected: PackageDistContentInventoryEntry;
+  }): Promise<{ movedPath: string; content: Buffer; mode: number }> {
+    const movedPath = createLocalOverrideMutationPath(params.relativePath, "previous");
+    let targetMoved = false;
+    try {
+      await runRequiredFsSafeMove({
+        sourcePath: params.relativePath,
+        relativePath: movedPath,
+        onMoved: () => {
+          targetMoved = true;
+        },
+      });
+      const moved = await packageFs.read(movedPath, {
+        hardlinks: "reject",
+        maxBytes: Number.POSITIVE_INFINITY,
+        symlinks: "reject",
+      });
+      const mode = normalizeFileMode(moved.stat.mode);
+      const sha256 = createHash("sha256").update(moved.buffer).digest("hex");
+      if (
+        sha256 !== params.expected.sha256 ||
+        !fileModesHaveSameExecutableSemantics(mode, params.expected.mode)
+      ) {
+        throw new Error(`local override target changed during mutation: ${params.relativePath}`);
+      }
+      return { movedPath, content: moved.buffer, mode };
+    } catch (error) {
+      if (targetMoved) {
+        await throwAfterRestoringMovedLocalOverrideTarget({
+          movedPath,
+          relativePath: params.relativePath,
+          originalError: error,
+          removeMovedAfterFailedRestore: false,
+        });
+      }
       throw error;
     }
   }
-}
 
-async function moveExpectedLocalOverrideTarget(params: {
-  packageFs: LocalOverridePackageRoot;
-  runtimeUrls: readonly string[];
-  relativePath: string;
-  expected: PackageDistContentInventoryEntry;
-}): Promise<{ movedPath: string; content: Buffer; mode: number }> {
-  const movedPath = createLocalOverrideMutationPath(params.relativePath, "previous");
-  let targetMoved = false;
-  try {
-    await runRequiredFsSafeMove({
-      packageFs: params.packageFs,
-      runtimeUrls: params.runtimeUrls,
-      sourcePath: params.relativePath,
-      relativePath: movedPath,
-      onMoved: () => {
-        targetMoved = true;
-      },
-    });
-    const moved = await params.packageFs.read(movedPath, {
-      hardlinks: "reject",
-      maxBytes: Number.POSITIVE_INFINITY,
-      symlinks: "reject",
-    });
-    const mode = normalizeFileMode(moved.stat.mode);
-    const sha256 = createHash("sha256").update(moved.buffer).digest("hex");
-    if (
-      sha256 !== params.expected.sha256 ||
-      !fileModesHaveSameExecutableSemantics(mode, params.expected.mode)
-    ) {
-      throw new Error(`local override target changed during mutation: ${params.relativePath}`);
-    }
-    return { movedPath, content: moved.buffer, mode };
-  } catch (error) {
-    if (targetMoved) {
-      await throwAfterRestoringMovedLocalOverrideTarget({
-        packageFs: params.packageFs,
-        runtimeUrls: params.runtimeUrls,
-        movedPath,
-        relativePath: params.relativePath,
-        originalError: error,
-        removeMovedAfterFailedRestore: false,
+  async function replaceLocalOverrideTarget(params: {
+    relativePath: string;
+    sourcePath: string;
+    mode?: number;
+    expected?: PackageDistContentInventoryEntry;
+    backupPath?: string;
+    onCommitted?: (cleanupPaths: string[], backupMode?: number) => void;
+  }): Promise<string[]> {
+    const temporaryPath = createLocalOverrideMutationPath(params.relativePath, "next");
+    let backupMode: number | undefined;
+    let backupWritten = false;
+    let committed = false;
+    let movedPath: string | undefined;
+    let replacementMode = params.mode;
+    try {
+      await packageFs.copyIn(temporaryPath, params.sourcePath, {
+        maxBytes: Number.POSITIVE_INFINITY,
+        mkdir: true,
+        mode: params.mode,
+        sourceHardlinks: "reject",
       });
+      if (params.expected) {
+        if (!params.backupPath) {
+          throw new Error(`missing local override rollback path: ${params.relativePath}`);
+        }
+        const moved = await moveExpectedLocalOverrideTarget({
+          relativePath: params.relativePath,
+          expected: params.expected,
+        });
+        movedPath = moved.movedPath;
+        backupMode = moved.mode;
+        if (replacementMode !== undefined) {
+          replacementMode = mergeLocalOverrideFileMode(moved.mode, replacementMode);
+        }
+        await writeFileWithMode(moved.content, params.backupPath, moved.mode);
+        backupWritten = true;
+      }
+      if (replacementMode !== undefined && process.platform !== "win32") {
+        const temporary = await packageFs.open(temporaryPath, {
+          hardlinks: "reject",
+          symlinks: "reject",
+        });
+        try {
+          await temporary.handle.chmod(replacementMode);
+        } finally {
+          await temporary.handle.close();
+        }
+      }
+      const cleanupPaths = [temporaryPath, ...(movedPath ? [movedPath] : [])];
+      await publishLocalOverrideTarget({
+        sourcePath: temporaryPath,
+        relativePath: params.relativePath,
+        onPublished: () => {
+          committed = true;
+          params.onCommitted?.(cleanupPaths, backupMode);
+        },
+      });
+      return cleanupPaths;
+    } catch (error) {
+      if (movedPath && !committed) {
+        await throwAfterRestoringMovedLocalOverrideTarget({
+          movedPath,
+          relativePath: params.relativePath,
+          originalError: error,
+          removeMovedAfterFailedRestore: backupWritten,
+        });
+      }
+      throw error;
+    } finally {
+      if (!committed) {
+        await removeLocalOverrideCleanupPath(temporaryPath).catch(() => undefined);
+      }
     }
-    throw error;
   }
-}
 
-async function replaceLocalOverrideTarget(params: {
-  packageFs: LocalOverridePackageRoot;
-  runtimeUrls: readonly string[];
-  relativePath: string;
-  sourcePath: string;
-  mode?: number;
-  expected?: PackageDistContentInventoryEntry;
-  backupPath?: string;
-  onCommitted?: (cleanupPaths: string[], backupMode?: number) => void;
-}): Promise<string[]> {
-  const temporaryPath = createLocalOverrideMutationPath(params.relativePath, "next");
-  let backupMode: number | undefined;
-  let backupWritten = false;
-  let committed = false;
-  let movedPath: string | undefined;
-  let replacementMode = params.mode;
-  try {
-    await params.packageFs.copyIn(temporaryPath, params.sourcePath, {
-      maxBytes: Number.POSITIVE_INFINITY,
-      mkdir: true,
-      mode: params.mode,
-      sourceHardlinks: "reject",
+  async function deleteLocalOverrideTarget(params: {
+    relativePath: string;
+    expected: PackageDistContentInventoryEntry;
+    backupPath: string;
+  }): Promise<number> {
+    const moved = await moveExpectedLocalOverrideTarget({
+      relativePath: params.relativePath,
+      expected: params.expected,
     });
-    if (params.expected) {
-      if (!params.backupPath) {
-        throw new Error(`missing local override rollback path: ${params.relativePath}`);
-      }
-      const moved = await moveExpectedLocalOverrideTarget({
-        packageFs: params.packageFs,
-        runtimeUrls: params.runtimeUrls,
-        relativePath: params.relativePath,
-        expected: params.expected,
-      });
-      movedPath = moved.movedPath;
-      backupMode = moved.mode;
-      if (replacementMode !== undefined) {
-        replacementMode = mergeLocalOverrideFileMode(moved.mode, replacementMode);
-      }
+    let backupWritten = false;
+    try {
       await writeFileWithMode(moved.content, params.backupPath, moved.mode);
       backupWritten = true;
-    }
-    if (replacementMode !== undefined && process.platform !== "win32") {
-      const temporary = await params.packageFs.open(temporaryPath, {
-        hardlinks: "reject",
-        symlinks: "reject",
-      });
-      try {
-        await temporary.handle.chmod(replacementMode);
-      } finally {
-        await temporary.handle.close();
+      await packageFs.remove(moved.movedPath);
+      await assertTopology(params.relativePath);
+      const targetProbe = await probeLocalOverrideTarget(
+        resolveSafePackagePath(packageFs.rootReal, params.relativePath),
+      );
+      if (targetProbe.status !== "missing") {
+        throw new Error(`local override deletion target recreated: ${params.relativePath}`);
       }
-    }
-    const cleanupPaths = [temporaryPath, ...(movedPath ? [movedPath] : [])];
-    await publishLocalOverrideTarget({
-      packageFs: params.packageFs,
-      runtimeUrls: params.runtimeUrls,
-      sourcePath: temporaryPath,
-      relativePath: params.relativePath,
-      onPublished: () => {
-        committed = true;
-        params.onCommitted?.(cleanupPaths, backupMode);
-      },
-    });
-    return cleanupPaths;
-  } catch (error) {
-    if (movedPath && !committed) {
-      await throwAfterRestoringMovedLocalOverrideTarget({
-        packageFs: params.packageFs,
-        runtimeUrls: params.runtimeUrls,
-        movedPath,
+      return moved.mode;
+    } catch (error) {
+      return await throwAfterRestoringMovedLocalOverrideTarget({
+        movedPath: moved.movedPath,
         relativePath: params.relativePath,
         originalError: error,
         removeMovedAfterFailedRestore: backupWritten,
       });
     }
-    throw error;
-  } finally {
-    if (!committed) {
-      await removeLocalOverrideCleanupPath(params.packageFs, temporaryPath).catch(() => undefined);
-    }
   }
+
+  return {
+    replace: replaceLocalOverrideTarget,
+    remove: deleteLocalOverrideTarget,
+    cleanup: removeLocalOverrideCleanupPath,
+  };
 }
 
-async function deleteLocalOverrideTarget(params: {
-  packageFs: LocalOverridePackageRoot;
-  runtimeUrls: readonly string[];
-  relativePath: string;
-  expected: PackageDistContentInventoryEntry;
-  backupPath: string;
-}): Promise<number> {
-  const moved = await moveExpectedLocalOverrideTarget({
-    packageFs: params.packageFs,
-    runtimeUrls: params.runtimeUrls,
-    relativePath: params.relativePath,
-    expected: params.expected,
-  });
-  let backupWritten = false;
-  try {
-    await writeFileWithMode(moved.content, params.backupPath, moved.mode);
-    backupWritten = true;
-    await params.packageFs.remove(moved.movedPath);
-    await assertLocalOverrideMutationTopology({
-      packageRoot: params.packageFs.rootDir,
-      realPackageRoot: params.packageFs.rootReal,
-      relativePath: params.relativePath,
-    });
-    const targetProbe = await probeLocalOverrideTarget(
-      resolveSafePackagePath(params.packageFs.rootReal, params.relativePath),
-    );
-    if (targetProbe.status !== "missing") {
-      throw new Error(`local override deletion target recreated: ${params.relativePath}`);
-    }
-    return moved.mode;
-  } catch (error) {
-    return await throwAfterRestoringMovedLocalOverrideTarget({
-      packageFs: params.packageFs,
-      runtimeUrls: params.runtimeUrls,
-      movedPath: moved.movedPath,
-      relativePath: params.relativePath,
-      originalError: error,
-      removeMovedAfterFailedRestore: backupWritten,
-    });
-  }
+function appliedLocalOverridesResult(
+  plan: LocalPackageOverridesPlan,
+  conflicts: LocalPackageOverridesResult["conflicts"],
+  applied: number,
+): LocalPackageOverridesResult {
+  return {
+    ...plan.result,
+    status: conflicts.length > 0 ? "conflict" : "applied",
+    applied,
+    conflicts,
+    warnings:
+      conflicts.length > 0
+        ? [
+            "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
+          ]
+        : [],
+  };
 }
 
 export async function applyLocalPackageOverrides(params: {
   packageRoot: string;
   plan: LocalPackageOverridesPlan | null;
   reapply: boolean;
-  runtimeUrls?: readonly string[];
+  runtime?: LocalOverrideRuntime;
 }): Promise<LocalPackageOverridesResult> {
   if (!params.plan) {
     return emptyResult("none");
@@ -473,18 +437,7 @@ export async function applyLocalPackageOverrides(params: {
     changesToApply.push(change);
   }
   if (changesToApply.length === 0) {
-    return {
-      ...params.plan.result,
-      status: conflicts.length > 0 ? "conflict" : "applied",
-      applied: 0,
-      conflicts,
-      warnings:
-        conflicts.length > 0
-          ? [
-              "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
-            ]
-          : [],
-    };
+    return appliedLocalOverridesResult(params.plan, conflicts, 0);
   }
 
   let rollbackDir: string | null = null;
@@ -497,15 +450,15 @@ export async function applyLocalPackageOverrides(params: {
   }> = [];
   let applied = 0;
   let preserveRollbackDir = false;
-  let packageFs: LocalOverridePackageRoot | undefined;
-  let runtimeUrls: readonly string[] = [];
+  let mutations: ReturnType<typeof createLocalOverrideMutations> | undefined;
   try {
-    runtimeUrls = params.runtimeUrls ?? resolveLocalOverrideRuntimeUrls();
-    packageFs = await openFsRoot(params.packageRoot, {
+    const runtime = params.runtime ?? resolveLocalOverrideRuntime();
+    const packageFs = await openFsRoot(params.packageRoot, {
       hardlinks: "reject",
       mkdir: true,
       symlinks: "reject",
     });
+    mutations = createLocalOverrideMutations(packageFs, runtime);
     try {
       assertDirectoryIdentitySync(packageFs.rootReal, packageRootIdentity);
     } catch {
@@ -516,29 +469,21 @@ export async function applyLocalPackageOverrides(params: {
       const backupPath = path.join(rollbackDir, change.path);
 
       if (change.kind === "deleted") {
-        if (!change.baseline) {
-          throw new Error(`missing local override baseline for ${change.path}`);
-        }
-        const backupMode = await deleteLocalOverrideTarget({
-          packageFs,
-          runtimeUrls,
+        const backupMode = await mutations.remove({
           relativePath: change.path,
           expected: change.baseline,
           backupPath,
         });
         rollbackEntries.push({ path: change.path, backupPath, backupMode });
       } else {
-        if (!change.savedPath) {
-          throw new Error(`missing saved override payload for ${change.path}`);
-        }
-        const appliedEntry = await buildLocalOverrideInventoryEntry({
-          relativePath: change.path,
-          sourcePath: change.savedPath,
+        const content = await fs.readFile(change.savedPath);
+        const appliedEntry: PackageDistContentInventoryEntry = {
+          path: change.path,
+          sha256: createHash("sha256").update(content).digest("hex"),
           mode: change.mode,
-        });
-        const cleanupPaths = await replaceLocalOverrideTarget({
-          packageFs,
-          runtimeUrls,
+          size: content.length,
+        };
+        const cleanupPaths = await mutations.replace({
           relativePath: change.path,
           sourcePath: change.savedPath,
           mode: change.mode,
@@ -558,7 +503,7 @@ export async function applyLocalPackageOverrides(params: {
           if (cleanupPath === undefined) {
             break;
           }
-          await removeLocalOverrideCleanupPath(packageFs, cleanupPath);
+          await mutations.cleanup(cleanupPath);
           cleanupPaths.shift();
         }
       }
@@ -572,24 +517,26 @@ export async function applyLocalPackageOverrides(params: {
       rollbackFailures.set(relativePath, messages);
     };
     if (applyError instanceof LocalOverrideRollbackError) {
-      recordRollbackFailure(applyError.relativePath, applyError.action, applyError.rollbackError);
+      recordRollbackFailure(
+        applyError.relativePath,
+        "restore current target",
+        applyError.rollbackError,
+      );
     }
     for (const entry of rollbackEntries.toReversed()) {
-      if (entry.cleanupPaths && packageFs) {
+      if (entry.cleanupPaths && mutations) {
         for (const cleanupPath of entry.cleanupPaths) {
           try {
-            await removeLocalOverrideCleanupPath(packageFs, cleanupPath);
+            await mutations.cleanup(cleanupPath);
           } catch (error) {
             recordRollbackFailure(entry.path, "remove mutation backup", error);
           }
         }
       }
       let removeError: unknown;
-      if (entry.applied && packageFs && rollbackDir) {
+      if (entry.applied && mutations && rollbackDir) {
         try {
-          await deleteLocalOverrideTarget({
-            packageFs,
-            runtimeUrls,
+          await mutations.remove({
             relativePath: entry.path,
             expected: entry.applied,
             backupPath: path.join(rollbackDir, "applied", entry.path),
@@ -601,17 +548,15 @@ export async function applyLocalPackageOverrides(params: {
       if (removeError) {
         recordRollbackFailure(entry.path, "remove partial target", removeError);
       }
-      if (entry.backupPath && packageFs) {
+      if (entry.backupPath && mutations) {
         try {
-          const cleanupPaths = await replaceLocalOverrideTarget({
-            packageFs,
-            runtimeUrls,
+          const cleanupPaths = await mutations.replace({
             relativePath: entry.path,
             sourcePath: entry.backupPath,
             mode: entry.backupMode,
           });
           for (const cleanupPath of cleanupPaths) {
-            await removeLocalOverrideCleanupPath(packageFs, cleanupPath);
+            await mutations.cleanup(cleanupPath);
           }
         } catch (error) {
           recordRollbackFailure(entry.path, "restore original target", error);
@@ -652,16 +597,5 @@ export async function applyLocalPackageOverrides(params: {
     }
   }
 
-  return {
-    ...params.plan.result,
-    status: conflicts.length > 0 ? "conflict" : "applied",
-    applied,
-    conflicts,
-    warnings:
-      conflicts.length > 0
-        ? [
-            "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
-          ]
-        : [],
-  };
+  return appliedLocalOverridesResult(params.plan, conflicts, applied);
 }

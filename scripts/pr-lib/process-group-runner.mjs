@@ -1,15 +1,29 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { constants, tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectManagedProcessGroup } from "../lib/managed-child-process.mts";
+import { bindGitInvocation } from "./git-invocation.mjs";
+import { claimMaterializedAnchor, retireMaterializedAnchor } from "./materialized-anchor.mjs";
 
 const SIGNAL_GRACE_MS = 5000;
 const KILL_DRAIN_MS = 5000;
 const POLL_MS = 25;
 const MAX_NOTIFICATION_LINE_BYTES = 4096;
 const FORWARDED_SIGNALS = ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
+// Sourced helpers bypass scripts/pr's re-exec guard. Use system Bash on macOS
+// so PATH cannot reintroduce Bash 5.3's heredoc/here-string deadlock.
+const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
 
 const [repoRootArg, script, ...args] = process.argv.slice(2);
 if (!repoRootArg || !script) {
@@ -22,6 +36,46 @@ if (process.platform === "win32") {
 }
 
 const repoRoot = resolve(repoRootArg);
+const ownedAnchor = claimMaterializedAnchor(script);
+delete process.env.OPENCLAW_PR_ANCHOR_CREATOR_PID;
+delete process.env.OPENCLAW_PR_ANCHOR_FD;
+// Startup failures have no operation child whose code could still be in use.
+let operationStarted = false;
+let operationFullyDrained = false;
+process.once("exit", () => {
+  if (!operationStarted) {
+    retireMaterializedAnchor(ownedAnchor);
+  }
+});
+const workflowContext = process.env.OPENCLAW_PR_WORKFLOW_CONTEXT;
+if (workflowContext) {
+  // Exec preserves the verified producer PID; only its child receives this FD.
+  // The child validates the repository/PR/source again before loading helpers.
+  try {
+    const held = fstatSync(8);
+    if (
+      !held.isFile() ||
+      held.uid !== process.getuid() ||
+      (held.mode & 0o777) !== 0o400 ||
+      held.nlink !== 0 ||
+      held.size < 1 ||
+      held.size > 4096 ||
+      `${held.dev}:${held.ino}` !== workflowContext
+    ) {
+      throw new Error("Invalid workflow selection descriptor");
+    }
+    const bytes = Buffer.alloc(held.size);
+    if (
+      readSync(8, bytes, 0, bytes.length, 0) !== bytes.length ||
+      JSON.parse(bytes.toString("utf8")).creator !== String(process.pid)
+    ) {
+      throw new Error("Workflow selection does not belong to this supervisor");
+    }
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
+}
 // The supervisor must not retain a cwd inside a worktree the operation may
 // delete. Start the child in this same owner so early Git/gh reads use the
 // repository selected by the wrapper, before any PR worktree is entered.
@@ -35,7 +89,7 @@ const darwinIdentityScript = fileURLToPath(
 );
 if (process.platform === "darwin") {
   const identity = spawnSync(
-    "bash",
+    bash,
     [
       "-c",
       'source "$1"; pr_operation_lock_process_birth "$2"',
@@ -61,6 +115,11 @@ if (process.platform === "darwin") {
 const lockSnapshotDir = mkdtempSync(join(tmpdir(), "openclaw-pr-lock-release-"));
 const lockScriptSnapshot = join(lockSnapshotDir, "operation-lock.sh");
 process.once("exit", () => {
+  // Descendants inherit this Git/GH context even when their operation lock can
+  // be released. Only startup without a child or a full drain ends its use.
+  if (operationStarted && !operationFullyDrained) {
+    return;
+  }
   try {
     rmSync(lockSnapshotDir, { force: true, recursive: true });
   } catch {
@@ -78,9 +137,11 @@ writeFileSync(
 for (const relative of [
   "pr-lib/github.sh",
   "pr-lib/github.mjs",
+  "pr-lib/git-invocation.mjs",
   "pr-lib/gh-api-preflight.mjs",
   "lib/plain-gh.mjs",
   "lib/direct-run.mjs",
+  "windows-cmd-helpers.mjs",
 ]) {
   const target = join(lockSnapshotDir, "scripts", relative);
   mkdirSync(dirname(target), { recursive: true });
@@ -89,12 +150,9 @@ for (const relative of [
 // Imported Git owners and package-manager children use PATH. Keep the selected
 // binary available even after merge cleanup removes the wrapper's worktree.
 const selectedGit = process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC;
-const childPath = selectedGit
-  ? `${lockSnapshotDir}${delimiter}${process.env.PATH ?? ""}`
-  : process.env.PATH;
-if (selectedGit) {
-  symlinkSync(selectedGit, join(lockSnapshotDir, "git"));
-}
+const gitInvocation = selectedGit
+  ? bindGitInvocation(lockSnapshotDir, selectedGit)
+  : { executable: "git", env: process.env };
 if (process.platform === "darwin") {
   // Keep the complete stdlib-only provider beside the release shell. No app
   // node_modules, dynamic package loader or deleted source path is retained.
@@ -279,16 +337,21 @@ const child = spawn(script, args, {
   cwd: repoRoot,
   detached: true,
   env: {
-    ...process.env,
-    PATH: childPath,
+    ...gitInvocation.env,
     GIT_CONFIG_PARAMETERS: gitConfigParameters,
     OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
     OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
     OPENCLAW_PR_LOCK_SUPERVISOR_PID: String(process.pid),
     OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: lockSnapshotDir,
   },
-  stdio: ["inherit", "inherit", "inherit", "pipe"],
+  stdio: workflowContext
+    ? ["inherit", "inherit", "inherit", "pipe", "ignore", "ignore", "ignore", "ignore", 8]
+    : ["inherit", "inherit", "inherit", "pipe"],
 });
+operationStarted = true;
+if (workflowContext) {
+  closeSync(8);
+}
 operationGroup.pid = child.pid;
 if (killDeadline) {
   signalProcessGroup("SIGKILL");
@@ -350,10 +413,11 @@ function consumeNotificationLine(line) {
   }
 
   const owner = spawnSync(
-    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
+    gitInvocation.executable,
     ["-C", repoRoot, "cat-file", "blob", ownerOid],
     {
       encoding: "utf8",
+      env: gitInvocation.env,
       stdio: ["ignore", "pipe", "ignore"],
     },
   );
@@ -477,6 +541,25 @@ function childResultAllowsLockRelease() {
   return completedCleanly || failedDuringValidation;
 }
 
+// A side-effecting failure that ended on its own leaves the same evidence as a
+// clean exit once the full drain observes the group dead and every inherited
+// notification-pipe holder gone: only an escaped, fd-closing daemonizer stays
+// invisible, the residual a clean exit already accepts (#124583). Signals,
+// lingering group work, open pipes, and controller loss keep the lock sticky.
+function failedOperationDrainAllowsLockRelease() {
+  return (
+    drainResult === "drained" &&
+    operationCompleteReceived &&
+    childResult.code !== null &&
+    childResult.code > 0 &&
+    childResult.code < 128 &&
+    !receivedSignal &&
+    !childResult.signal &&
+    !notificationFailure &&
+    !hadLingeringGroup
+  );
+}
+
 const postExitGroupStatus = child.pid ? processGroupStatus() : "dead";
 if (postExitGroupStatus === "indeterminate") {
   notificationFailure ??= new Error("scripts/pr process-group state became indeterminate");
@@ -527,10 +610,10 @@ async function waitForOperationDrain() {
 }
 
 function releaseLock({ lockRef, ownerOid }) {
-  const env = { ...process.env };
+  const env = { ...gitInvocation.env };
   delete env.OPENCLAW_PR_LOCK_NOTIFY_FD;
   const result = spawnSync(
-    "bash",
+    bash,
     [
       "-c",
       [
@@ -679,7 +762,9 @@ for (const [signal, handler] of signalHandlers) {
 
 const retainedLocks = [];
 const releaseFailures = new Set();
-if (drained && childResultAllowsLockRelease()) {
+const releaseAfterDrainedFailure =
+  drained && !childResultAllowsLockRelease() && failedOperationDrainAllowsLockRelease();
+if (drained && (childResultAllowsLockRelease() || releaseAfterDrainedFailure)) {
   for (const lock of locks.values()) {
     try {
       releaseLock(lock);
@@ -695,6 +780,23 @@ if (drained && childResultAllowsLockRelease()) {
 }
 for (const { lock, releaseError } of retainedLocks) {
   reportRetainedLock(lock, releaseError, releaseFailures);
+}
+if (releaseAfterDrainedFailure) {
+  for (const { lockRef } of locks.values()) {
+    if (!retainedLocks.some(({ lock }) => lock.lockRef === lockRef)) {
+      console.error(
+        `Released the operation lock for PR #${lockRef.split("/").at(-1)} after exit code ${childResult.code}; its process group and every notification-pipe holder exited.`,
+      );
+    }
+  }
+}
+
+if (drainResult === "drained") {
+  operationFullyDrained = true;
+  // Anchors hold code bytes, not PR state. A dead group and closed pipe leave
+  // only the fd-closing escapee residual already accepted on clean exits.
+  // Lock/merge recovery runs from trusted checkouts, never these anchor paths.
+  retireMaterializedAnchor(ownedAnchor);
 }
 
 if (notificationFailure) {

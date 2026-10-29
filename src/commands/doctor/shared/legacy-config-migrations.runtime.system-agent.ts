@@ -1,11 +1,9 @@
 // Restores legacy ambient ownership and removes the retired system-agent alias.
 import { parseLegacyAgentRoster } from "../../../config/legacy.roster.js";
 import {
-  defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
   type LegacyConfigMigrationSpec,
-  type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 
@@ -47,10 +45,7 @@ function resolveMissingLegacySystemAgent(raw: Record<string, unknown>) {
   if (!selected) {
     return undefined;
   }
-  // Shared defaults and per-agent heartbeat blocks already enroll agents explicitly.
-  const heartbeatUnresolved =
-    defaults?.heartbeat === undefined && !entries.some((entry) => entry.config.heartbeat);
-  return { agentId: selected.id, heartbeatUnresolved };
+  return { agentId: selected.id };
 }
 
 // Missing optional ownership is Doctor advice, not a runtime validation issue.
@@ -65,17 +60,16 @@ export function findLegacySystemAgentOwnerIssue(raw: unknown) {
     : undefined;
 }
 
-const LEGACY_SYSTEM_AGENT_CONFIG_RULE: LegacyConfigRule = {
-  path: ["crestodian"],
-  message:
-    'crestodian config was retired; system-agent rescue now uses built-in policy. Run "openclaw doctor --fix" to remove it.',
-};
-
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "crestodian-retired",
-    describe: "Remove retired system-agent config",
-    legacyRules: [LEGACY_SYSTEM_AGENT_CONFIG_RULE],
+    legacyRules: [
+      {
+        path: ["crestodian"],
+        message:
+          'crestodian config was retired; system-agent rescue now uses built-in policy. Run "openclaw doctor --fix" to remove it.',
+      },
+    ],
     apply: (raw, changes) => {
       if (!Object.hasOwn(raw, "crestodian")) {
         return;
@@ -83,25 +77,20 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT: LegacyConfigMigratio
       delete raw.crestodian;
       changes.push("Removed retired crestodian config; system-agent rescue uses built-in policy.");
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "runtime.legacy-system-agent-owner",
-    describe: "Restore the legacy default agent for ambient operations",
     apply: (raw, changes) => {
       const owner = resolveMissingLegacySystemAgent(raw);
       if (!owner) {
         return;
       }
-      const { agentId, heartbeatUnresolved } = owner;
+      const { agentId } = owner;
       const defaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
       ensureRecord(defaults, "systemAgent").agentId = agentId;
       changes.push(
         `Set agents.defaults.systemAgent.agentId to ${agentId} for legacy ambient operations.`,
       );
-      if (heartbeatUnresolved) {
-        ensureRecord(defaults, "heartbeat").agentId = agentId;
-        changes.push(`Set agents.defaults.heartbeat.agentId to ${agentId} for legacy heartbeats.`);
-      }
     },
-  }),
+  },
 ];

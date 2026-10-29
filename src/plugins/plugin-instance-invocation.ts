@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   PluginExecutionFrame,
@@ -7,14 +8,22 @@ import type {
 } from "./plugin-instance-invocation.types.js";
 
 export class InvocationFrame implements PluginExecutionFrame {
+  readonly retentionOwner: PluginExecutionScopes["retentionOwner"];
   readonly invocation: PluginExecutionScopes["invocation"];
   readonly metadataScope: PluginExecutionScopes["metadataScope"];
   readonly cacheScope: PluginExecutionScopes["cacheScope"];
+  readonly sourceCaptureStorage: PluginExecutionScopes["sourceCaptureStorage"];
 
-  constructor(scopes: PluginExecutionScopes) {
-    this.invocation = scopes.invocation;
+  constructor(scopes: PluginExecutionScopes, invocation = scopes.invocation) {
+    this.retentionOwner = scopes.retentionOwner;
+    this.invocation = invocation;
     this.metadataScope = scopes.metadataScope;
     this.cacheScope = scopes.cacheScope;
+    this.sourceCaptureStorage = scopes.sourceCaptureStorage;
+  }
+
+  get runtimePluginId(): string | undefined {
+    return undefined;
   }
 
   withScopes(scopes: PluginExecutionScopes): InvocationFrame {
@@ -43,18 +52,23 @@ const pluginExecutionContext = resolveGlobalSingleton(
         },
         run<T>(invocation: PluginInstanceInvocation, run: () => T): T {
           const current = frames.getStore();
-          return frames.run(
-            current?.invocation === invocation
-              ? current
-              : createPluginExecutionFrame({ ...current, invocation }, current),
-            run,
-          );
+          return current?.invocation === invocation
+            ? run()
+            : runWithAsyncStore(
+                frames,
+                createPluginExecutionFrame({ ...current, invocation }, current),
+                run,
+              );
         },
         // Cache-owned retirement drops self-call admission, never the Gateway caller.
         exit<T>(run: () => T): T {
           const current = frames.getStore();
           return current?.invocation
-            ? frames.run(current.withScopes({ ...current, invocation: undefined }), run)
+            ? runWithAsyncStore(
+                frames,
+                current.withScopes({ ...current, invocation: undefined }),
+                run,
+              )
             : run();
         },
       },
@@ -62,7 +76,7 @@ const pluginExecutionContext = resolveGlobalSingleton(
         return frames.getStore();
       },
       runFrame<T>(this: void, frame: PluginExecutionFrame, run: () => T): T {
-        return frames.run(frame, run);
+        return runWithAsyncStore(frames, frame, run);
       },
     };
   },

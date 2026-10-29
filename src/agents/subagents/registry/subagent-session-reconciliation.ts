@@ -1,53 +1,135 @@
-/**
- * Subagent session-store reconciliation.
- *
- * Infers child completion from persisted session entries when registry updates arrive late.
- */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../../../config/config.js";
+import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-  type InternalSessionEntry as SessionEntry,
-} from "../../../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+  readSessionEntryReadOnlyInWorker,
+  withSessionEntryReadOnlyInWorker,
+} from "../../../config/sessions/session-entry-read-runtime.js";
+import { findTranscriptEvent } from "../../../config/sessions/session-transcript-match.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { getAgentRunContext, listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
-import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../../state/openclaw-state-db-readonly.js";
-import { getTaskRegistryProcessState } from "../../../tasks/task-registry.process-state.js";
-import { hasTaskSessionOwnerInDatabase } from "../../../tasks/task-registry.store.kernel.js";
+import { waitForAgentJob } from "../../../gateway/agent-turn/agent-job.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
+import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
+import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
+import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
-import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
+import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { hasSubagentSessionOwnerInDatabase } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
-export type SubagentRunOrphanReason =
-  | "missing-session-entry"
-  | "missing-session-id"
-  | "stale-unended-run";
-
-/** Completion inferred from the child session store. */
 export type SubagentSessionCompletion = {
   startedAt?: number;
   endedAt: number;
   outcome: SubagentRunOutcome;
   reason: SubagentLifecycleEndedReason;
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
-function finiteTimestamp(value: number | undefined): number | undefined {
-  return asFiniteNumber(value);
+export async function resolveCompletionForSubagentRun(
+  entry: SubagentRunRecord,
+  session: SessionEntry | undefined,
+  assertCurrent: () => void,
+): Promise<SubagentSessionCompletion | null> {
+  const authority = resolveSubagentChildAuthority(entry, session);
+  if (!session || authority.status !== "verified") {
+    return null;
+  }
+  const executionRunId = entry.runId;
+  const snapshot = await waitForAgentJob({ runId: executionRunId, timeoutMs: 0 });
+  assertCurrent();
+  if (!snapshot) {
+    // A previous boot has no job snapshot; persisted timing must name this execution.
+    if (session.lastRunId !== executionRunId) {
+      return null;
+    }
+    const completion = resolveCompletionFromSessionEntry(session, entry.createdAt, {
+      notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
+    });
+    if (!completion) {
+      return null;
+    }
+    const { agentId, storePath } = resolveSubagentChildSessionOwner(entry, getRuntimeConfig());
+    const final = await withSubagentSessionSource(
+      { agentId, storePath, sessionKey: entry.childSessionKey, assertCurrent },
+      async (source) => {
+        if (!source && isIncognitoSessionKey(entry.childSessionKey)) {
+          return undefined;
+        }
+        return findTranscriptEvent(
+          {
+            agentId,
+            storePath: source?.path ?? storePath,
+            sessionKey: entry.childSessionKey,
+            sessionId: session.sessionId,
+          },
+          { kind: "visible-final", runId: executionRunId },
+        );
+      },
+    );
+    assertCurrent();
+    const text = extractStoredAssistantText(
+      isRecord(final?.event) ? final.event.message : undefined,
+    );
+    return {
+      ...completion,
+      terminalReply: text ? sanitizeAgentRunTerminalReply(text) : undefined,
+    };
+  }
+  if (
+    !snapshot.session ||
+    snapshot.session.sessionId !== session.sessionId ||
+    snapshot.session.sessionKey !== entry.childSessionKey ||
+    (snapshot.session.agentId !== undefined &&
+      snapshot.session.agentId !== authority.childAgentId) ||
+    !isAgentEventLifecycleGenerationCurrent(snapshot.session.lifecycleGeneration) ||
+    (snapshot.yielded && !entry.collect) ||
+    typeof snapshot.endedAt !== "number"
+  ) {
+    return null;
+  }
+  const terminal = buildAgentRunTerminalOutcomeFromWaitResult(snapshot);
+  if (!terminal) {
+    return null;
+  }
+  const classification =
+    snapshot.yielded && terminal.status !== "timeout" && terminal.reason !== "blocked"
+      ? "success"
+      : classifySubagentTerminalOutcome(terminal);
+  return {
+    startedAt: snapshot.startedAt,
+    endedAt: snapshot.endedAt,
+    terminalReply: snapshot.terminalReply,
+    outcome:
+      classification === "success"
+        ? { status: "ok" }
+        : classification === "timeout"
+          ? { status: "timeout" }
+          : {
+              status: "error",
+              error: classification === "cancellation" ? "subagent run terminated" : terminal.error,
+            },
+    reason:
+      classification === "cancellation"
+        ? SUBAGENT_ENDED_REASON_KILLED
+        : classification === "success" || classification === "timeout"
+          ? SUBAGENT_ENDED_REASON_COMPLETE
+          : SUBAGENT_ENDED_REASON_ERROR,
+  };
 }
 
 function terminalSessionTimestamp(sessionEntry: SessionEntry | undefined): number | undefined {
-  return finiteTimestamp(sessionEntry?.endedAt) ?? finiteTimestamp(sessionEntry?.updatedAt);
+  return asFiniteNumber(sessionEntry?.endedAt) ?? asFiniteNumber(sessionEntry?.updatedAt);
 }
 
 function isFreshForRun(
@@ -65,7 +147,7 @@ function freshSessionStartedAt(
   sessionEntry: SessionEntry | undefined,
   notBeforeMs: number | undefined,
 ): number | undefined {
-  const startedAt = finiteTimestamp(sessionEntry?.startedAt);
+  const startedAt = asFiniteNumber(sessionEntry?.startedAt);
   if (startedAt === undefined) {
     return undefined;
   }
@@ -73,228 +155,127 @@ function freshSessionStartedAt(
 }
 
 /** Read the current child entry; session-key scope also selects incognito storage. */
-export function loadSubagentSessionEntry(params: {
+export async function loadSubagentSessionEntry(params: {
   childSessionKey: string;
+  childAgentId?: string;
   cfg?: OpenClawConfig;
-}): SessionEntry | undefined {
+  assertCurrent?: () => void;
+}): Promise<SessionEntry | undefined> {
   const key = params.childSessionKey.trim();
   if (!key) {
     return undefined;
   }
-  const agentId = resolveAgentIdFromSessionKey(key);
   const cfg = params.cfg ?? getRuntimeConfig();
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  return loadSessionEntryReadOnly({
-    agentId,
-    storePath,
-    sessionKey: key,
-    clone: false,
-  });
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params, cfg);
+  if (isIncognitoSessionKey(key)) {
+    return withSubagentSessionEntry({ ...params, cfg }, (entry) => entry);
+  }
+  return readSessionEntryReadOnlyInWorker(
+    { agentId, storePath, sessionKey: key, projection: "list" },
+    params.assertCurrent,
+  );
 }
 
-/** Resolves whether a registry row is orphaned from its child session entry. */
-export function resolveSubagentRunOrphanReason(params: {
-  entry: SubagentRunRecord;
-  includeStaleUnended?: boolean;
-  now?: number;
-  cfg?: OpenClawConfig;
-}): SubagentRunOrphanReason | null {
-  const { entry } = params;
-  // Execution, recovery, and completion obligations outlive individual turns.
-  // Missing session metadata must not steal those owners or manufacture success.
-  if (
-    entry.execution.outcome ||
-    entry.collectorCompletion ||
-    entry.requesterSettleWake ||
-    hasRetainedRequiredCompletionDelivery(entry) ||
-    entry.pauseReason ||
-    entry.killIntent ||
-    entry.killReconciliation ||
-    entry.execution.restartRecovery ||
-    entry.terminalOwner === "interrupted-recovery" ||
-    entry.suppressAnnounceReason === "steer-restart" ||
-    entry.execution.status === "queued" ||
-    getAgentRunContext(entry.runId)
-  ) {
-    return null;
-  }
-  const childSessionKey = params.entry.childSessionKey?.trim();
-  if (!childSessionKey) {
-    return "missing-session-entry";
-  }
-  try {
-    const sessionEntry = loadSubagentSessionEntry({
-      childSessionKey,
-      cfg: params.cfg,
-    });
-    if (!sessionEntry) {
-      return "missing-session-entry";
-    }
-    if (typeof sessionEntry.sessionId !== "string" || !sessionEntry.sessionId.trim()) {
-      return "missing-session-id";
-    }
-    if (
-      params.includeStaleUnended === true &&
-      sessionEntry.abortedLastRun !== true &&
-      params.entry.execution.status !== "interrupted" &&
-      isStaleUnendedSubagentRun(params.entry, params.now)
-    ) {
-      return "stale-unended-run";
-    }
-    return null;
-  } catch {
-    // A failed read cannot establish orphanhood or authorize terminal settlement.
-    return null;
-  }
-}
-
-/** Convert persisted session status into a subagent completion outcome. */
 export function resolveCompletionFromSessionEntry(
   sessionEntry: SessionEntry | undefined,
   fallbackEndedAt: number,
   opts?: { notBeforeMs?: number },
 ): SubagentSessionCompletion | null {
   const status = sessionEntry?.status;
-  const startedAt = freshSessionStartedAt(sessionEntry, opts?.notBeforeMs);
-  const endedAt =
-    finiteTimestamp(sessionEntry?.endedAt) ??
-    finiteTimestamp(sessionEntry?.updatedAt) ??
-    fallbackEndedAt;
-
-  if (status === "done") {
-    if (!isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
-      return null;
-    }
-    return {
-      startedAt,
-      endedAt,
-      outcome: { status: "ok" },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    };
-  }
-  if (status === "timeout") {
-    if (!isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
-      return null;
-    }
-    return {
-      startedAt,
-      endedAt,
-      outcome: { status: "timeout" },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    };
-  }
-  if (status === "failed") {
-    if (!isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
-      return null;
-    }
-    return {
-      startedAt,
-      endedAt,
-      outcome: { status: "error", error: "session completed before registry settled" },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
-    };
-  }
-  if (status === "interrupted") {
-    // Startup has no terminal event timestamp and does not own registry completion or delivery.
+  // An interrupted history row is not evidence of a completed live child.
+  if (status === "interrupted" || !isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
     return null;
   }
-  if (status === "killed") {
-    if (!isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
-      return null;
-    }
-    return {
-      startedAt,
-      endedAt,
-      outcome: { status: "error", error: "subagent run terminated" },
-      reason: SUBAGENT_ENDED_REASON_KILLED,
-    };
+  let outcome: SubagentRunOutcome;
+  let reason: SubagentLifecycleEndedReason = SUBAGENT_ENDED_REASON_COMPLETE;
+  switch (status) {
+    case "failed":
+      outcome = {
+        status: "error",
+        error: sessionEntry?.lastRunError || "session completed before registry settled",
+      };
+      reason = SUBAGENT_ENDED_REASON_ERROR;
+      break;
+    case "killed":
+      outcome = { status: "error", error: "subagent run terminated" };
+      reason = SUBAGENT_ENDED_REASON_KILLED;
+      break;
+    case "timeout":
+      outcome = { status: "timeout", error: sessionEntry?.lastRunError };
+      break;
+    default:
+      if (status !== "done" && typeof sessionEntry?.endedAt !== "number") {
+        return null;
+      }
+      outcome = { status: "ok" };
   }
-  if (status !== "running" && typeof sessionEntry?.endedAt === "number") {
-    if (!isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
-      return null;
-    }
-    return {
-      startedAt,
-      endedAt,
-      outcome: { status: "ok" },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    };
-  }
-  return null;
+  return {
+    startedAt: freshSessionStartedAt(sessionEntry, opts?.notBeforeMs),
+    endedAt: terminalSessionTimestamp(sessionEntry) ?? fallbackEndedAt,
+    outcome,
+    reason,
+  };
 }
 
-/** Resolve child completion by reading its persisted session entry. */
-export function resolveSubagentSessionCompletion(params: {
+export async function resolveSubagentSessionCompletion(params: {
   childSessionKey: string;
+  childAgentId?: string;
   fallbackEndedAt: number;
   notBeforeMs?: number;
   cfg?: OpenClawConfig;
-}): SubagentSessionCompletion | null {
-  return resolveCompletionFromSessionEntry(
-    loadSubagentSessionEntry({
-      childSessionKey: params.childSessionKey,
-      cfg: params.cfg,
+  assertCurrent?: () => void;
+}): Promise<SubagentSessionCompletion | null> {
+  return withSubagentSessionEntry(params, (entry) =>
+    resolveCompletionFromSessionEntry(entry, params.fallbackEndedAt, {
+      notBeforeMs: params.notBeforeMs,
     }),
-    params.fallbackEndedAt,
-    { notBeforeMs: params.notBeforeMs },
   );
 }
 
-/** Resolve a fresh child session start time for lifecycle reconciliation. */
-export function resolveSubagentSessionStartedAt(params: {
-  childSessionKey: string;
-  notBeforeMs?: number;
-  cfg?: OpenClawConfig;
-}): number | undefined {
-  const sessionEntry = loadSubagentSessionEntry({
-    childSessionKey: params.childSessionKey,
-    cfg: params.cfg,
-  });
-  return isFreshForRun(sessionEntry, params.notBeforeMs)
-    ? freshSessionStartedAt(sessionEntry, params.notBeforeMs)
-    : undefined;
+export async function withSubagentSessionEntry<T>(
+  params: {
+    childSessionKey: string;
+    childAgentId?: string;
+    cfg?: OpenClawConfig;
+    assertCurrent?: () => void;
+  },
+  consume: (entry: SessionEntry | undefined) => T | Promise<T>,
+): Promise<T> {
+  const cfg = params.cfg ?? getRuntimeConfig();
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params, cfg);
+  return withSubagentSessionSource(
+    { agentId, storePath, sessionKey: params.childSessionKey, assertCurrent: params.assertCurrent },
+    async (source) => {
+      if (source) {
+        return consume(source.actor.snapshot(source.authority)?.entry);
+      }
+      if (isIncognitoSessionKey(params.childSessionKey)) {
+        return consume(undefined);
+      }
+      return withSessionEntryReadOnlyInWorker(
+        { agentId, storePath, sessionKey: params.childSessionKey, projection: "list" },
+        () => params.assertCurrent?.(),
+        async (result) => {
+          if (!result.ok) {
+            throw result.error;
+          }
+          return consume(result.value);
+        },
+      );
+    },
+  );
 }
 
-/** Startup may only settle session-only rows; any run/task generation retains ownership. */
-export function hasSubagentSessionRecoveryOwner(params: {
-  sessionKey: string;
-  sessionId: string;
-  env: NodeJS.ProcessEnv;
-}): boolean {
-  const key = params.sessionKey;
-  if (listAgentRunsForSession(params).length > 0) {
-    return true;
-  }
-  for (const run of subagentRuns.values()) {
-    if (
-      run.childSessionKey === key ||
-      run.requesterSessionKey === key ||
-      run.controllerSessionKey === key
-    ) {
-      return true;
-    }
-  }
-  const tasks = getTaskRegistryProcessState();
-  if (tasks.projection.pending.size > 0) {
-    return true;
-  }
-  for (const owner of tasks.runOwners.values()) {
-    if (owner.task.childSessionKey === key || owner.task.ownerKey === key) {
-      return true;
-    }
-  }
-  for (const task of tasks.tasks.values()) {
-    if (task.childSessionKey === key || task.requesterSessionKey === key || task.ownerKey === key) {
-      return true;
-    }
-  }
-  // Failed or incompatible reads propagate: unknown ownership never authorizes mutation.
-  return (
-    withExistingOpenClawStateDatabaseCurrentReadOnly(
-      (database) =>
-        hasSubagentSessionOwnerInDatabase(database, key) ||
-        hasTaskSessionOwnerInDatabase(database.db, key),
-      { env: params.env },
-    ) ?? false
+export async function resolveSubagentSessionStartedAt(params: {
+  childSessionKey: string;
+  childAgentId?: string;
+  notBeforeMs?: number;
+  cfg?: OpenClawConfig;
+  assertCurrent?: () => void;
+}): Promise<number | undefined> {
+  return withSubagentSessionEntry(params, (entry) =>
+    isFreshForRun(entry, params.notBeforeMs)
+      ? freshSessionStartedAt(entry, params.notBeforeMs)
+      : undefined,
   );
 }

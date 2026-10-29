@@ -8,18 +8,13 @@ const nativeThreadOwners = resolveGlobalSingleton(
   () => new KeyedAsyncQueue(),
 );
 
-/** Serialize OpenClaw-owned lifecycle changes, not native-internal thread controllers. */
-export async function withCodexAppServerThreadMutation<T>(
-  threadId: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  return await nativeThreadOwners.enqueue(`thread:${threadId}`, run);
+function mutationQueue(namespace: "thread" | "conversation") {
+  return async <T>(id: string, run: () => Promise<T>): Promise<T> =>
+    await nativeThreadOwners.enqueue(`${namespace}:${id}`, run);
 }
 
+/** Serialize OpenClaw-owned lifecycle changes, not native-internal thread controllers. */
+export const withCodexAppServerThreadMutation = mutationQueue("thread");
+
 /** Serializes bound turns and retirement so detach cannot unsubscribe an active turn. */
-export async function withCodexConversationThreadActivity<T>(
-  bindingId: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  return await nativeThreadOwners.enqueue(`conversation:${bindingId}`, run);
-}
+export const withCodexConversationThreadActivity = mutationQueue("conversation");

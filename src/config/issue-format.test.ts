@@ -66,15 +66,17 @@ describe("config issue format", () => {
   it("formats concise issue summaries", () => {
     expect(formatConfigIssueSummary([])).toBeNull();
     expect(
-      formatConfigIssueSummary(
-        [
-          { path: "", message: "root broken" },
-          { path: "gateway.auth.password.source", message: "Required" },
-          { path: "agents.defaults.execution", message: "Unrecognized key" },
-        ],
-        { maxIssues: 2 },
-      ),
-    ).toBe("<root>: root broken; gateway.auth.password.source: Required; and 1 more");
+      formatConfigIssueSummary([
+        { path: "", message: "root broken" },
+        { path: "gateway.auth.password.source", message: "Required" },
+        { path: "agents.defaults.execution", message: "Unrecognized key" },
+        { path: "channels.slack.enabled", message: "Expected boolean" },
+        { path: "gateway.port", message: "Expected number" },
+        { path: "plugins", message: "Expected object" },
+      ]),
+    ).toBe(
+      "<root>: root broken; gateway.auth.password.source: Required; agents.defaults.execution: Unrecognized key; channels.slack.enabled: Expected boolean; gateway.port: Expected number; and 1 more",
+    );
   });
 
   it("normalizes issue collections for machine output", () => {

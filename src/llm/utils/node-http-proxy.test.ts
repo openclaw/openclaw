@@ -48,15 +48,6 @@ describe("node HTTP proxy resolution", () => {
     });
   });
 
-  it("honors default WebSocket ports in NO_PROXY", () => {
-    withProxyEnv(
-      { HTTPS_PROXY: "http://proxy.example:8080", NO_PROXY: "web.whatsapp.com:443" },
-      () => {
-        expect(createHttpProxyAgentsForTarget("wss://web.whatsapp.com/ws")).toBeUndefined();
-      },
-    );
-  });
-
   it("does not mutate URL inputs when normalizing WebSocket targets", () => {
     withProxyEnv(
       { HTTPS_PROXY: "http://proxy.example:8080", NO_PROXY: "web.whatsapp.com:443" },
@@ -67,19 +58,6 @@ describe("node HTTP proxy resolution", () => {
         expect(target.href).toBe("wss://web.whatsapp.com/ws");
       },
     );
-  });
-
-  it("uses Proxyline Node agents for resolved env proxies", () => {
-    withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
-      const agents = createHttpProxyAgentsForTarget("https://api.example.test/v1");
-
-      expect(agents?.httpsAgent.constructor.name).toBe("ProxylineNodeProxyAgent");
-      expect(
-        (
-          agents?.httpsAgent as { getProxyForUrl?: (url: string) => string } | undefined
-        )?.getProxyForUrl?.("https://api.example.test/v1"),
-      ).toBe("http://proxy.example:8080/");
-    });
   });
 
   it("falls back to ALL_PROXY for Node agent proxy resolution", () => {

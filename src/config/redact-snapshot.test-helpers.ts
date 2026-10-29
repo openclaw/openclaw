@@ -1,5 +1,6 @@
 // Provides assertions for redacted snapshot tests.
 import { expect } from "vitest";
+import { createSnapshot } from "./mutate.test-support.js";
 import { restoreRedactedValues as restoreRedactedValues_orig } from "./redact-snapshot.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
@@ -18,21 +19,12 @@ export function makeSnapshot<TConfig extends Record<string, unknown>>(
   config: TConfig,
   raw?: string,
 ): TestSnapshot<TConfig> {
-  return {
+  return createSnapshot({
     path: "/home/user/.openclaw/config.json5",
-    exists: true,
     raw: raw ?? JSON.stringify(config),
-    parsed: config,
-    sourceConfig: config as ConfigFileSnapshot["sourceConfig"],
-    resolved: config as ConfigFileSnapshot["resolved"],
-    valid: true,
-    runtimeConfig: config as ConfigFileSnapshot["runtimeConfig"],
-    config: config as ConfigFileSnapshot["config"],
+    sourceConfig: config,
     hash: "abc123",
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  } as unknown as TestSnapshot<TConfig>;
+  }) as unknown as TestSnapshot<TConfig>;
 }
 
 export function restoreRedactedValues<TOriginal>(

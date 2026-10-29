@@ -15,7 +15,7 @@ OpenClaw Featherless AI provider plugin.
 ## Distribution
 
 - Package: `@openclaw/featherless-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/featherless-provider`
+- Install route: npm or ClawHub: `@openclaw/featherless-provider`
 
 ## Surface
 

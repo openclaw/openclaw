@@ -1,265 +1,205 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
-import type { RecordInboundSession } from "../session.types.js";
+import { withPluginServiceScheduler } from "../../plugins/service-scheduler-binding.js";
+import { createPluginServiceScheduler } from "../../plugins/service-scheduler.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  assertAgentDatabaseAdmitted as assertAdmitted,
+  readAgentDatabaseAdmissionRefusal as readRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { OpenClawDatabaseSchemaPreflight as Preflight } from "../../state/openclaw-database-preflight.types.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { hasFinalChannelTurnDispatch } from "./dispatch-result.js";
+import { runPreparedChannelTurn } from "./execution.js";
+import {
+  createCtx,
+  createRecordInboundSession,
+  expectDispatched,
+} from "./run-channel-turn.delivery.test-helpers.js";
 import { runChannelTurn } from "./run-channel-turn.js";
+import type { PreparedChannelTurn, RunChannelTurnParams } from "./types.js";
 
-function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
-  return {
-    Body: "hello",
-    RawBody: "hello",
-    CommandBody: "hello",
-    From: "sender",
-    To: "target",
-    SessionKey: "agent:main:test:peer",
-    Provider: "test",
-    Surface: "test",
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function createTurn(overrides: Partial<PreparedChannelTurn> = {}, observeOnly = false) {
+  const onFinalize = vi.fn();
+  const turn = {
+    channel: "test",
+    routeSessionKey: "agent:main:test:peer",
+    storePath: overrides.storePath ?? path.join(tempDirs.make("channel-turn-"), "sessions.json"),
+    ctxPayload: createCtx(),
+    recordInboundSession: createRecordInboundSession(),
+    runDispatch: vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    })),
+    runDispatchLifecycle: { turnAdoptionLifecycle: undefined, onDispatchSkipped: vi.fn() },
     ...overrides,
-  } as FinalizedMsgContext;
-}
-
-function createRecordInboundSession(events: string[] = []): RecordInboundSession {
-  return vi.fn(async () => {
-    events.push("record");
-  }) as unknown as RecordInboundSession;
-}
-
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
-type FinalizeResult = {
-  admission?: unknown;
-  dispatched?: boolean;
-};
-
-function finalizeResult(value: unknown): FinalizeResult {
-  return value as FinalizeResult;
-}
-
-describe("prepared channel turn lifecycle", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  let storePath: string;
-
-  beforeEach(() => {
-    storePath = path.join(
-      tempDirs.make("openclaw-channel-turn-prepared-lifecycle-"),
-      "sessions.json",
-    );
-  });
-
-  it("runs custom prepared dispatch from a full turn adapter", async () => {
-    const events: string[] = [];
-    const result = await runChannelTurn({
+  } satisfies PreparedChannelTurn;
+  const run = (turnAdoptionLifecycle?: RunChannelTurnParams<unknown>["turnAdoptionLifecycle"]) =>
+    runChannelTurn({
       channel: "test",
-      raw: { id: "msg-1", text: "hello" },
-      adapter: {
-        ingest: () => ({ id: "msg-1", rawText: "hello" }),
-        resolveTurn: () => ({
-          channel: "test",
-          routeSessionKey: "agent:main:test:peer",
-          storePath,
-          ctxPayload: createCtx(),
-          recordInboundSession: createRecordInboundSession(events),
-          runDispatch: async () => {
-            events.push("custom-dispatch");
-            return {
-              queuedFinal: true,
-              counts: { tool: 0, block: 0, final: 1 },
-            };
-          },
-          runDispatchLifecycle: {
-            turnAdoptionLifecycle: undefined,
-            onDispatchSkipped: vi.fn(),
-          },
-        }),
-      },
-    });
-
-    expect(events).toEqual(["record", "custom-dispatch"]);
-    expect(result.dispatched).toBe(true);
-    if (!result.dispatched) {
-      throw new Error("expected dispatch");
-    }
-    expect(result.dispatchResult.queuedFinal).toBe(true);
-  });
-
-  it("rejects prepared turns that omit dispatch lifecycle ownership when the caller adopts a durable ingress claim", async () => {
-    const recordInboundSession = createRecordInboundSession();
-    const runDispatch = vi.fn(async () => ({ visibleReplySent: true }));
-    const onFinalize = vi.fn();
-    const turnAdoptionLifecycle = { onAdopted: vi.fn(async () => undefined) };
-
-    await expect(
-      runChannelTurn({
-        channel: "test",
-        raw: { id: "msg-1", text: "hello" },
-        turnAdoptionLifecycle,
-        adapter: {
-          ingest: () => ({ id: "msg-1", rawText: "hello" }),
-          resolveTurn: () => {
-            const turn = {
-              channel: "test",
-              routeSessionKey: "agent:main:test:peer",
-              storePath,
-              ctxPayload: createCtx(),
-              recordInboundSession,
-              runDispatch,
-              runDispatchLifecycle: {
-                turnAdoptionLifecycle,
-                onDispatchSkipped: vi.fn(),
-              },
-            };
-            Object.defineProperty(turn, "runDispatchLifecycle", { value: undefined });
-            return turn;
-          },
-          onFinalize,
-        },
-      }),
-    ).rejects.toThrow("runChannelInboundEvent prepared turns must declare runDispatchLifecycle");
-
-    expect(recordInboundSession).not.toHaveBeenCalled();
-    expect(runDispatch).not.toHaveBeenCalled();
-    expect(onFinalize).toHaveBeenCalledWith(
-      expect.objectContaining({ admission: { kind: "dispatch" }, dispatched: false }),
-    );
-  });
-
-  it("rejects a prepared dispatch lifecycle that does not own the top-level adoption", async () => {
-    const recordInboundSession = createRecordInboundSession();
-    const runDispatch = vi.fn(async () => ({ visibleReplySent: true }));
-    const onFinalize = vi.fn();
-
-    await expect(
-      runChannelTurn({
-        channel: "test",
-        raw: { id: "msg-1", text: "hello" },
-        turnAdoptionLifecycle: { onAdopted: vi.fn(async () => undefined) },
-        adapter: {
-          ingest: () => ({ id: "msg-1", rawText: "hello" }),
-          resolveTurn: () => ({
-            channel: "test",
-            routeSessionKey: "agent:main:test:peer",
-            storePath,
-            ctxPayload: createCtx(),
-            recordInboundSession,
-            runDispatch,
-            runDispatchLifecycle: {
-              turnAdoptionLifecycle: undefined,
-              onDispatchSkipped: vi.fn(),
-            },
-          }),
-          onFinalize,
-        },
-      }),
-    ).rejects.toThrow(
-      "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
-    );
-
-    expect(recordInboundSession).not.toHaveBeenCalled();
-    expect(runDispatch).not.toHaveBeenCalled();
-    expect(onFinalize).toHaveBeenCalledWith(
-      expect.objectContaining({ admission: { kind: "dispatch" }, dispatched: false }),
-    );
-  });
-
-  it("runs a prepared turn whose dispatch lifecycle owns the top-level adoption", async () => {
-    const onAdopted = vi.fn(async () => undefined);
-    const turnAdoptionLifecycle = { onAdopted };
-    const runDispatch = vi.fn(async () => {
-      await turnAdoptionLifecycle.onAdopted();
-      return { visibleReplySent: true };
-    });
-
-    const result = await runChannelTurn({
-      channel: "test",
-      raw: { id: "msg-1", text: "hello" },
+      raw: {},
       turnAdoptionLifecycle,
       adapter: {
         ingest: () => ({ id: "msg-1", rawText: "hello" }),
-        resolveTurn: () => ({
-          channel: "test",
-          routeSessionKey: "agent:main:test:peer",
-          storePath,
-          ctxPayload: createCtx(),
-          recordInboundSession: createRecordInboundSession(),
-          runDispatch,
-          runDispatchLifecycle: {
-            turnAdoptionLifecycle,
-            onDispatchSkipped: vi.fn(),
-          },
-        }),
+        preflight: () =>
+          observeOnly ? { kind: "observeOnly", reason: "broadcast-observer" } : undefined,
+        resolveTurn: () => turn,
+        onFinalize,
       },
     });
+  const expectIdle = () => {
+    expect(turn.recordInboundSession).not.toHaveBeenCalled();
+    expect(turn.runDispatch).not.toHaveBeenCalled();
+  };
+  return { turn, run, onFinalize, expectIdle };
+}
 
-    expect(result.dispatched).toBe(true);
-    expect(runDispatch).toHaveBeenCalledOnce();
-    expect(onAdopted).toHaveBeenCalledOnce();
+it.each([true, false])("rejects unowned adoption (missing: %s)", async (missing) => {
+  const { turn, run, onFinalize, expectIdle } = createTurn();
+  if (missing) {
+    Object.defineProperty(turn, "runDispatchLifecycle", { value: undefined });
+  }
+  await expect(run({ onAdopted: vi.fn(async () => undefined) })).rejects.toThrow(
+    missing
+      ? "prepared turns must declare runDispatchLifecycle"
+      : "runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
+  );
+  expectIdle();
+  expect(onFinalize.mock.calls[0]?.[0]).toMatchObject({
+    admission: { kind: "dispatch" },
+    dispatched: false,
+  });
+});
+
+it.each(["record", "dispatch"])("checks authority before %s", async (boundary) => {
+  const { turn, run } = createTurn();
+  let current = boundary === "dispatch";
+  const refusal = new Error("channel authority revoked");
+  turn.assertAuthority = () => {
+    if (!current) {
+      throw refusal;
+    }
+  };
+  turn.recordInboundSession = vi.fn(async () => {
+    current = false;
   });
 
-  it.each(["draft lane", "typing indicator", "delivery correlation"])(
-    "settles a prepared %s when observe-only suppresses dispatch",
-    async () => {
-      const events: string[] = [];
-      const onFinalize = vi.fn();
-      let resourceOpen = true;
-      const onDispatchSkipped = vi.fn(async () => {
-        resourceOpen = false;
-        events.push("cleanup");
-      });
-      const runDispatch = vi.fn(async () => {
-        events.push("custom-dispatch");
-        return {
-          queuedFinal: true,
-          counts: { tool: 0, block: 0, final: 1 },
-        };
-      });
-      const result = await runChannelTurn({
-        channel: "test",
-        raw: { id: "msg-1", text: "hello" },
-        adapter: {
-          ingest: () => ({ id: "msg-1", rawText: "hello" }),
-          preflight: () => ({ kind: "observeOnly", reason: "broadcast-observer" }),
-          resolveTurn: () => ({
-            channel: "test",
-            routeSessionKey: "agent:observer:test:peer",
-            storePath,
-            ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
-            recordInboundSession: createRecordInboundSession(events),
-            runDispatch,
-            runDispatchLifecycle: {
-              turnAdoptionLifecycle: undefined,
-              onDispatchSkipped,
-            },
-          }),
-          onFinalize,
-        },
-      });
+  await expect(run()).rejects.toBe(refusal);
 
-      expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
-      expect(result.dispatched).toBe(true);
-      expect(events).toEqual(["record", "cleanup"]);
-      expect(runDispatch).not.toHaveBeenCalled();
-      expect(onDispatchSkipped).toHaveBeenCalledWith("observeOnly");
-      expect(resourceOpen).toBe(false);
-      if (!result.dispatched) {
-        throw new Error("expected dispatch");
-      }
-      expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
-      expect(onFinalize).toHaveBeenCalledTimes(1);
-      const [finalized] = requireFirstMockCall(onFinalize, "finalize");
-      const finalizedResult = finalizeResult(finalized);
-      expect(finalizedResult.admission).toEqual({
-        kind: "observeOnly",
-        reason: "broadcast-observer",
-      });
-      expect(finalizedResult.dispatched).toBe(true);
-    },
-  );
+  expect(turn.recordInboundSession).toHaveBeenCalledTimes(boundary === "record" ? 0 : 1);
+  expect(turn.runDispatch).not.toHaveBeenCalled();
 });
+
+it("settles prepared resources when observe-only suppresses dispatch", async () => {
+  const events: string[] = [];
+  const onDispatchSkipped = vi.fn(async () => {
+    events.push("cleanup");
+  });
+  const observed = { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+  const { turn, run, onFinalize } = createTurn(
+    {
+      recordInboundSession: createRecordInboundSession(events),
+      runDispatchLifecycle: { turnAdoptionLifecycle: undefined, onDispatchSkipped },
+      observeOnlyDispatchResult: observed,
+    },
+    true,
+  );
+  const result = await run();
+  expectDispatched(result);
+  expect(result.dispatchResult).toBe(observed);
+  expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
+  expect(events).toEqual(["record", "cleanup"]);
+  expect(turn.runDispatch).not.toHaveBeenCalled();
+  expect(onDispatchSkipped).toHaveBeenCalledWith("observeOnly");
+  expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
+  expect(onFinalize).toHaveBeenCalledExactlyOnceWith(result);
+});
+
+it.for(["admitted", "failed", "account-stopped", "gateway-stopped"] as const)(
+  "keeps replay behind its agent startup admission: %s",
+  async (outcome, { signal }) => {
+    await withOpenClawTestState({ label: "channel-turn-startup-admission" }, async (state) => {
+      await withAgentDatabaseStartupAdmission(async (admission) => {
+        const { env } = state;
+        const inspections = {
+          qa: createDeferredCore<Preflight>(),
+          other: createDeferredCore<Preflight>(),
+        };
+        const ready = { incompatible: [], indeterminate: [] };
+        const finishInspections = () =>
+          Object.values(inspections).forEach((item) => item.resolve(ready));
+        const refusals = admission.defer({
+          env,
+          inspections: Object.entries(inspections).map(([agentId, inspection]) => ({
+            target: { agentId, path: openOpenClawAgentDatabase({ agentId, env }).path },
+            result: inspection.promise,
+          })),
+          reason: "Gateway startup is preparing the agent",
+        });
+        recordAgentDatabaseAdmissions(refusals, { env, source: "startup" });
+        const lifetime = admission.adopt();
+        admission.activate({
+          isCurrent: () => true,
+          preparationReady: Promise.resolve(),
+          openAgent: async () => {},
+          migrateAgent: async () => {},
+          publishAgent: async () => {},
+        });
+        const gateway = createTestGatewayScheduler(createGatewaySchedulerClock(0).clock);
+        const { scheduler } = createPluginServiceScheduler(gateway);
+        const preDispatchFailure = vi.fn();
+        const log = vi.fn();
+        const sessionKey = "agent:qa:qa-channel:direct:peer";
+        const { turn: prepared, expectIdle } = createTurn({
+          routeSessionKey: sessionKey,
+          storePath: state.statePath("agents", "qa", "sessions", "sessions.json"),
+          ctxPayload: createCtx({ AgentId: "qa", SessionKey: sessionKey }),
+          recordInboundSession: vi.fn(async () => assertAdmitted("qa", { env })),
+          onPreDispatchFailure: preDispatchFailure,
+          log,
+        });
+        const { recordInboundSession: record, runDispatch: dispatch } = prepared;
+        const turn = withPluginServiceScheduler(scheduler, () => runPreparedChannelTurn(prepared));
+        void turn.catch(() => {});
+        try {
+          expectIdle();
+          expect(log).toHaveBeenCalledWith(
+            expect.objectContaining({ reason: "agent-database-preparation-pending" }),
+          );
+          if (outcome === "admitted") {
+            inspections.qa.resolve(ready);
+            expect((await withinTest(turn, signal)).dispatched).toBe(true);
+            expect(record).toHaveBeenCalledOnce();
+            expect(dispatch).toHaveBeenCalledOnce();
+            expect(readRefusal("other", { env })?.code).toBe("agent-database-inspection-pending");
+          } else if (outcome === "failed") {
+            inspections.qa.reject(new Error("inspection failed"));
+            await expect(withinTest(turn, signal)).rejects.toThrow("inspection failed");
+            expect(dispatch).not.toHaveBeenCalled();
+            expect(preDispatchFailure).toHaveBeenCalledOnce();
+          } else {
+            const stopping = outcome === "account-stopped" ? scheduler.stop() : lifetime.stop();
+            await expect(withinTest(turn, signal)).rejects.toBeInstanceOf(Error);
+            expectIdle();
+            expect(preDispatchFailure).toHaveBeenCalledOnce();
+            finishInspections();
+            await stopping;
+          }
+        } finally {
+          finishInspections();
+          await Promise.allSettled([turn, lifetime.stop(), scheduler.stop(), gateway.stop()]);
+        }
+      });
+    });
+  },
+);
