@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { withClientCredentialStore } from "./client-credential-store.test-support.js";
 import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
 import {
@@ -17,6 +18,8 @@ import {
   signDevicePayload,
   verifyDeviceSignature,
 } from "./device-identity.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { preparePrivateStoreFileSync } from "./private-store-file.js";
 
 const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
 const SWIFT_RAW_PUBLIC_KEY = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
@@ -44,6 +47,26 @@ describe("local device identity owner", () => {
     await withIdentityStore((env, stateDir) => {
       expect(loadDeviceIdentityIfPresent({ env })).toBeNull();
       expect(fs.readdirSync(stateDir)).toEqual([]);
+    });
+  });
+
+  it("treats a store file left before its schema committed as absent", async () => {
+    await withIdentityStore((env) => {
+      // A creator that stops after creating the private file never commits the schema.
+      preparePrivateStoreFileSync(resolveClientCredentialStorePath(env), false);
+      expect(loadDeviceIdentityIfPresent({ env })).toBeNull();
+      const created = loadOrCreateDeviceIdentity({ env });
+      expect(loadDeviceIdentityIfPresent({ env })).toEqual(created);
+    });
+    await withIdentityStore((env) => {
+      const storePath = resolveClientCredentialStorePath(env);
+      preparePrivateStoreFileSync(storePath, false);
+      {
+        using db = openNodeSqliteDatabase(storePath);
+        db.exec("CREATE TABLE partial (id INTEGER)");
+      }
+      // A partial schema is not an uncommitted bootstrap and still fails closed.
+      expect(() => loadDeviceIdentityIfPresent({ env })).toThrow("unsupported schema version 0");
     });
   });
 
