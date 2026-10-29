@@ -56,6 +56,7 @@ import {
   selectDeferredRunCandidates,
   selectLatestRunsPerLane,
 } from "./lib/release-priority.mjs";
+import { evaluateReleaseChildPolicy } from "./lib/release-validation-waivers.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import {
   createReleaseEvidenceClient,
@@ -1038,6 +1039,7 @@ async function inspectQualificationStatus(plan, runId, client) {
   } catch (error) {
     return {
       ...(status ?? continuationStatus([])),
+      blockers: [],
       collectionComplete: false,
       qualification: { state: "observation-unavailable", evidence: "unavailable" },
       drain: {
@@ -1057,6 +1059,10 @@ async function inspectQualificationStatus(plan, runId, client) {
     throw new Error("status parent identity differs from the immutable execution plan");
   }
   const currentJobs = jobs.filter((job) => Number(job.run_attempt) === Number(parent.run_attempt));
+  const blockers = [
+    ...parentJobBlockers(currentJobs, parent.run_attempt),
+    ...childJobBlockers(status.children, plan.targetVersion),
+  ];
   const drainJobs = currentJobs.filter((job) => job.name === "Diagnostic Drain");
   const drainJob = drainJobs.length === 1 ? drainJobs[0] : undefined;
   const drain = {
@@ -1115,7 +1121,10 @@ async function inspectQualificationStatus(plan, runId, client) {
           ? "observation-unavailable"
           : decision && !["qualifying", "passed"].includes(decision.state)
             ? "blocked"
-            : parent.status === "completed" || status.failed.length || status.missing.length
+            : parent.status === "completed" ||
+                status.failed.length ||
+                status.missing.length ||
+                blockers.length
               ? "blocked"
               : "running",
     evidence,
@@ -1135,6 +1144,7 @@ async function inspectQualificationStatus(plan, runId, client) {
   } --run ${runId}`;
   return {
     ...status,
+    blockers,
     collectionComplete: observationErrors.length === 0,
     qualification,
     drain,
@@ -2327,6 +2337,8 @@ export async function inspectUnsealedPlan(options, client) {
   if (JSON.stringify(current) !== JSON.stringify(before)) {
     throw new Error(`run ${options.runId} changed while inspecting plan availability`);
   }
+  // Dispatch and artifact producer failures land before the seal; surface them now.
+  const blockers = parentJobBlockers(jobs, before.runAttempt);
   const uploadSucceeded = upload?.status === "completed" && upload.conclusion === "success";
   const uploadCompletedAt = uploadSucceeded ? Date.parse(upload.completed_at) : Number.NaN;
   if (
@@ -2338,6 +2350,7 @@ export async function inspectUnsealedPlan(options, client) {
   ) {
     return {
       action: "waiting-for-plan",
+      blockers,
       planAvailability: {
         state: "artifact-propagating",
         runAttempt: before.runAttempt,
@@ -2352,12 +2365,15 @@ export async function inspectUnsealedPlan(options, client) {
   }
   if (seal?.status === "completed" || before.status === "completed") {
     throw new Error(
-      `run ${options.runId} attempt ${before.runAttempt} completed without an authenticated immutable FRV plan`,
+      `run ${options.runId} attempt ${before.runAttempt} completed without an authenticated immutable FRV plan${
+        blockers.length > 0 ? `; blockers: ${blockers.map(formatBlocker).join("; ")}` : ""
+      }`,
     );
   }
   const state = before.runAttempt > 1 ? "reseal-in-progress" : "not-yet-sealed";
   return {
     action: "waiting-for-plan",
+    blockers,
     planAvailability: {
       state,
       runAttempt: before.runAttempt,
@@ -3173,24 +3189,68 @@ function formatProgressEvent(command, event) {
   return `[frv ${command}] ${formatFrvTimestamp()} ${event.message}${event.url ? ` ${event.url}` : ""}`;
 }
 
-function failedJobEvent(owner, job, attempt, runId) {
-  if (job.status !== "completed" || !FAILED_JOB_CONCLUSIONS.has(String(job.conclusion))) {
+function isFailedActionsJob(job) {
+  return job.status === "completed" && FAILED_JOB_CONCLUSIONS.has(String(job.conclusion));
+}
+
+/** Failed parent jobs of one attempt: dispatchers, artifact producers, and gates. */
+function parentJobBlockers(attemptJobs, attempt) {
+  return attemptJobs.filter(isFailedActionsJob).map((job) => ({
+    owner: "parent",
+    job: String(job.name),
+    conclusion: String(job.conclusion),
+    runAttempt: Number(attempt),
+    url: String(job.html_url ?? ""),
+  }));
+}
+
+/** Policy-blocking child jobs, including failures a later attempt carried forward. */
+function childJobBlockers(children, targetVersion) {
+  return children.flatMap((child) =>
+    child.jobs
+      ? evaluateReleaseChildPolicy({ child, targetVersion }).blockingJobs.map((job) => ({
+          owner: child.key,
+          job: job.name,
+          conclusion: job.conclusion,
+          runAttempt: job.acceptedRunAttempt,
+          url: job.url,
+        }))
+      : [],
+  );
+}
+
+function formatBlocker(blocker) {
+  return `${blocker.owner} job "${blocker.job}" ${blocker.conclusion} (attempt ${blocker.runAttempt})${blocker.url ? ` ${blocker.url}` : ""}`;
+}
+
+// `attempt` is the attempt whose job listing holds `job`. GitHub copies jobs that a
+// partial rerun does not select into the new attempt with a new id and that attempt
+// number, but keeps their original timestamps; a job that completed before its
+// listing attempt started was carried forward, not rerun.
+function failedJobEvent(owner, job, attempt, runId, attemptStartedAt) {
+  if (!isFailedActionsJob(job)) {
     return undefined;
   }
   const reportedAttempt = Number(job.run_attempt ?? attempt);
-  const jobAttempt =
-    Number.isSafeInteger(reportedAttempt) && reportedAttempt > 0 ? reportedAttempt : attempt;
-  const attemptLabel =
-    jobAttempt < attempt
-      ? `effective attempt ${attempt}; carried forward from attempt ${jobAttempt}`
-      : `attempt ${jobAttempt}`;
+  const sourceAttempt =
+    Number.isSafeInteger(reportedAttempt) && reportedAttempt > 0 && reportedAttempt < attempt
+      ? reportedAttempt
+      : undefined;
+  const carried =
+    attempt > 1 &&
+    (sourceAttempt !== undefined ||
+      Date.parse(job.completed_at) < Date.parse(attemptStartedAt ?? ""));
+  const attemptLabel = carried
+    ? `effective attempt ${attempt}; carried forward from ${sourceAttempt ? `attempt ${sourceAttempt}` : "an earlier attempt"}`
+    : `attempt ${attempt}`;
   const labels = Array.isArray(job.labels) && job.labels.length > 0 ? job.labels.join(",") : "none";
   const runner = job.runner_name ? ` / ${job.runner_name}` : "";
-  return [
-    `job:${runId ?? job.run_id ?? owner}:${jobAttempt}:${job.name}`,
-    `${owner} job "${job.name}" ${job.conclusion} (${attemptLabel}; runner ${labels}${runner})`,
-    job.html_url,
-  ];
+  return {
+    carried,
+    id: `job:${runId ?? job.run_id ?? owner}:${attempt}:${job.name}`,
+    message: `${owner} job "${job.name}" ${job.conclusion} (${attemptLabel}; runner ${labels}${runner})`,
+    url: job.html_url,
+  };
 }
 
 async function mapBounded(values, limit, operation) {
@@ -3204,14 +3264,16 @@ async function mapBounded(values, limit, operation) {
 async function pollRelease(state, client, pending, observation, readOptions) {
   const events = [];
   const failedReads = [];
-  const report = (id, message, url, candidate) => {
+  const report = (id, message, url, extra = {}) => {
     if (!state.reported.has(id)) {
       state.reported.add(id);
-      events.push({
-        message,
-        ...(url ? { url: String(url) } : {}),
-        ...(candidate ? { candidate } : {}),
-      });
+      events.push({ message, ...(url ? { url: String(url) } : {}), ...extra });
+    }
+  };
+  // Blockers stop the watcher once; a resumed watcher keeps following the tree.
+  const reportFailure = (failure, blocker) => {
+    if (failure) {
+      report(failure.id, failure.message, failure.url, blocker ? { blocker: true } : {});
     }
   };
   // Transient GitHub failures, including HTML 5xx bodies, never become job results.
@@ -3264,10 +3326,20 @@ async function pollRelease(state, client, pending, observation, readOptions) {
     !parentJobs?.some((job) => Number(job.run_attempt) === Number(parent.run_attempt)) ||
     parentJobs.some((job) => job.status !== "completed");
   for (const job of parentJobs ?? []) {
-    const failure = failedJobEvent("parent", job, parent.run_attempt, parentRunId);
-    if (failure) {
-      report(...failure);
-    }
+    const jobAttempt = Number(job.run_attempt ?? parent.run_attempt);
+    const currentAttempt = jobAttempt === Number(parent.run_attempt);
+    // Every failed current-attempt parent job blocks: a failed dispatcher leaves its
+    // child undispatched, and a failed artifact producer gates the whole candidate.
+    reportFailure(
+      failedJobEvent(
+        "parent",
+        job,
+        jobAttempt,
+        parentRunId,
+        currentAttempt ? parent.run_started_at : undefined,
+      ),
+      currentAttempt,
+    );
     const key = dispatchKeys.get(job.name);
     if (!key || job.conclusion === "skipped" || state.reported.has(`log:${job.id}`)) {
       continue;
@@ -3284,7 +3356,7 @@ async function pollRelease(state, client, pending, observation, readOptions) {
       String(log),
     ).matchAll(DISPATCHED_CHILD_PATTERN)) {
       if (repository === state.repository && !state.children[runId]) {
-        state.children[runId] = { key, workflow };
+        state.children[runId] = { key, parentAttempt: jobAttempt, workflow };
         report(
           `dispatched:${runId}`,
           `${key} dispatched ${workflow} run ${runId} (attempt ${attempt})`,
@@ -3329,11 +3401,39 @@ async function pollRelease(state, client, pending, observation, readOptions) {
           jobs.length > 0 &&
           jobs.every((job) => job.status === "completed");
         scansComplete &&= final;
+        // Artifact producers gate every candidate consumer, and a failure carried into the
+        // current attempt survives that rerun; both block before the child completes.
+        // A producer dispatched by a superseded parent attempt no longer gates the
+        // release. Jobs still materializing (duplicate or unfinished rows of one name)
+        // may be a rerun in flight, so they wait for a settled listing.
+        const unsettled = new Set([
+          ...duplicateJobNames(jobs),
+          ...jobs.filter((job) => job.status !== "completed").map((job) => job.name),
+        ]);
+        const blocking =
+          attempt === current
+            ? new Set(
+                evaluateReleaseChildPolicy({
+                  child: { key: child.key, jobs },
+                  targetVersion: observation.plan?.targetVersion,
+                })
+                  .blockingJobs.map((job) => job.name)
+                  .filter((name) => !unsettled.has(name)),
+              )
+            : new Set();
+        const currentProducer =
+          child.key.startsWith("artifact:") &&
+          (child.parentAttempt === undefined ||
+            Number(child.parentAttempt) === Number(parent.run_attempt));
         for (const job of jobs) {
-          const failure = failedJobEvent(child.key, job, current, runId);
-          if (failure) {
-            report(...failure);
-          }
+          const failure = failedJobEvent(
+            child.key,
+            job,
+            attempt,
+            runId,
+            attempt === current ? run.run_started_at : undefined,
+          );
+          reportFailure(failure, blocking.has(job.name) && (currentProducer || failure?.carried));
         }
         const duplicates = duplicateJobNames(jobs);
         // Attempts briefly list overlapping jobs while GitHub materializes them.
@@ -3406,7 +3506,7 @@ async function pollRelease(state, client, pending, observation, readOptions) {
         ? `candidate ${candidate.sha} is the current ${candidate.ref} tip; qualification remains separate`
         : `candidate ${candidate.sha ?? "identity"}: tip observation unknown; no current-tip qualification claim`,
     undefined,
-    candidate,
+    { candidate },
   );
   const complete =
     parentDone && !dispatchPending && childStates.every(Boolean) && failedReads.length === 0;
@@ -3454,6 +3554,10 @@ export async function watchRelease(parentRunId, client, options = {}) {
     writeWatchState(statePath, state);
     for (const event of events) {
       emit(event);
+    }
+    const blockers = events.filter((event) => event.blocker);
+    if (blockers.length > 0) {
+      return { complete, blockers, statePath };
     }
     if (complete) {
       return { complete, statePath };
@@ -3531,6 +3635,9 @@ function print(value, json) {
       "Inspect the skipped runs and their latest PR checks, then preview with pnpm frv prioritize --restore <record> --dry-run using the same record and same --repo. Restore without --dry-run only if those checks still need recovery.",
     );
   }
+  for (const blocker of value.blockers ?? []) {
+    console.log(`blocker: ${formatBlocker(blocker)}`);
+  }
   for (const failure of value.failures ?? []) {
     console.log(`failure: ${failure}`);
   }
@@ -3571,17 +3678,30 @@ async function main() {
     return;
   }
   if (options.command === "watch") {
-    await watchRelease(options.runId, createClient(options.repository, { cachedReads: true }), {
-      emit: (event) =>
-        console.log(
-          options.json
-            ? JSON.stringify({ at: new Date().toISOString(), ...event })
-            : formatProgressEvent("watch", event),
-        ),
-      intervalMs: options.intervalMs,
-      once: options.once,
-      statePath: options.statePath,
-    });
+    const { blockers } = await watchRelease(
+      options.runId,
+      createClient(options.repository, { cachedReads: true }),
+      {
+        emit: (event) =>
+          console.log(
+            options.json
+              ? JSON.stringify({ at: new Date().toISOString(), ...event })
+              : formatProgressEvent("watch", event),
+          ),
+        intervalMs: options.intervalMs,
+        once: options.once,
+        statePath: options.statePath,
+      },
+    );
+    if (blockers) {
+      console.error(
+        `[frv watch] stopped on blocker: ${blockers.map((event) => event.message).join("; ")}`,
+      );
+      console.error(
+        `[frv watch] next: inspect with pnpm frv status --run ${options.runId}, then plan recovery with pnpm frv continue --failed --dry-run --run ${options.runId} (an undispatched child needs a fresh all-group FRV); rerun watch to keep following the tree`,
+      );
+      process.exitCode = 1;
+    }
     return;
   }
   const client = createClient(options.repository);

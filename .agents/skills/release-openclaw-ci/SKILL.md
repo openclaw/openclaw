@@ -796,7 +796,10 @@ State lives in `$TMPDIR/openclaw-frv/<repo>-<parent>-watch.json` (`--state`
 overrides), so a restart after a harness or Monitor timeout does not re-report.
 `--once` takes one snapshot, `--interval <seconds>` sets polling (default 60),
 and `--json` prints NDJSON. It exits once the parent and every dispatched child
-are terminal; restart it after a later rerun. Do not hand-roll bash or `gh`
+are terminal; restart it after a later rerun. It exits 1 earlier on the first
+blocker: a failed current-attempt parent job (child dispatch, artifact gate), an
+`artifact:*` producer job failure, or a failure carried into a child's rerun
+attempt. Act on the named next step, then restart it to keep following. Do not hand-roll bash or `gh`
 watchers.
 
 Watch candidate events derive the frozen SHA and context ref from the sealed

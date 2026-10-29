@@ -55,6 +55,23 @@ prints the next eligible check and resumes automatically. Permission-denied
 403 responses remain terminal. A local state file under `$TMPDIR/openclaw-frv/`
 retains the retry boundary and reported events across watcher restarts.
 
+`watch` exits 1 on the first newly reported blocker instead of waiting for the
+tree to finish: a failed current-attempt parent job (including a child dispatch
+that never created its run, or an artifact producer gate), a failed job in an
+`artifact:*` producer's current attempt, or a failure that a partial rerun carried
+into the child's current attempt. GitHub copies jobs a partial rerun did not
+select into the new attempt with that attempt number but their original
+timestamps, so a failed job that completed before its attempt started is labeled
+carried forward. Producers dispatched by a superseded parent attempt and job rows
+still materializing for a rerun do not stop it. A failing `Release Decision` or
+`Verify full validation` job is also a current-attempt parent failure, so a
+failing tree ends with exit 1. First-attempt child job failures are reported
+without stopping, because `continue --failed` recovers them once the child
+settles; `status` still lists them as blockers. The exit message names the
+blocker and the next step. Rerun the
+same `watch --run` command to keep following the tree; already reported blockers
+do not stop it again.
+
 Once the immutable execution plan is available, `watch` reports its frozen
 candidate SHA and observes the admitted context ref's current tip freshly. If
 that tip advances, the watcher keeps observing the original run and labels the
@@ -130,7 +147,11 @@ ambiguous transient error, the controller performs read-only reconciliation
 until the newer attempt becomes visible or the bounded reconciliation deadline
 expires. It never repeats the mutation, and provenance drift stops the operation.
 `frv status` leads with qualification, evidence acceptance, diagnostic drain,
-workload failures, and the next supported command. A passing GitHub badge or green
+workload failures, and the next supported command. It lists `blocker:` lines
+(`blockers` in JSON) as soon as they exist, even while children are active and
+before the plan seals: failed current-attempt parent jobs such as child
+dispatchers and artifact producer gates, and policy-blocking child jobs,
+including failures carried into a later attempt. A passing GitHub badge or green
 child list is not an accepted seal: terminal successful parents are checked by the
 same strict verifier used by recovery. Missing or unreadable evidence stays
 explicitly unavailable. JSON preserves child facts and marks incomplete collection.

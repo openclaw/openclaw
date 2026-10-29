@@ -1788,6 +1788,112 @@ describe("publication status real CLI", () => {
     expect(result.stdout).toContain("next: pnpm frv watch --run 77");
   });
 
+  // Shapes from FRV 40394524874: the npm producer failed while every child was active,
+  // and releaseChecks run 40395616917 attempt 2 reran one job and carried another
+  // failure forward with a restamped attempt and id but its original timestamps.
+  it.each([true, false])(
+    "lists producer and carried-forward failures as blockers while the tree is active (json=%s)",
+    async (json) => {
+      const fixture = publicationFixture();
+      fixture.root.status = "in_progress";
+      fixture.root.conclusion = null;
+      const gateway = "Run repo/live E2E validation / Gateway E2E / Repo E2E (Gateway 3/4)";
+      const native = "Run repo/live E2E validation / Native live suites (Native live agents)";
+      const failedAt = { started_at: "2026-10-26T20:36:34Z", completed_at: "2026-10-26T20:56:45Z" };
+      const result = await runPublicationCli(
+        fixture,
+        ["status", "--run", "77", ...(json ? ["--json"] : [])],
+        (responses) => {
+          responses[`repos/${REPOSITORY}/actions/runs/77/jobs?filter=all&per_page=100`] = {
+            jobs: [
+              // A superseded parent attempt is history, not a current blocker.
+              { ...job("Run normal full CI", "failure"), id: 11, run_attempt: 1 },
+              { ...job("Prepare release npm artifacts"), id: 21, run_attempt: 2 },
+              {
+                ...job("Qualify release npm artifacts", "failure"),
+                id: 22,
+                run_attempt: 2,
+                html_url: `https://github.com/${REPOSITORY}/actions/runs/77/job/22`,
+              },
+              {
+                ...job("Diagnostic Drain"),
+                status: "in_progress",
+                conclusion: null,
+                run_attempt: 2,
+              },
+            ],
+          };
+          const releaseChecks = requiredChildren().find((entry) => entry.key === "releaseChecks")!;
+          const runPath = `repos/${REPOSITORY}/actions/runs/${releaseChecks.runId}`;
+          responses[runPath] = {
+            ...runFor(releaseChecks, 2, null),
+            run_started_at: "2026-10-26T22:01:42Z",
+            workflow_id: Number(releaseChecks.runId) + 1000,
+          };
+          const attemptJobs = (attempt: number, jobs: Record<string, unknown>[]) => {
+            responses[`${runPath}/attempts/${attempt}/jobs?per_page=100&page=1`] = {
+              total_count: jobs.length,
+              jobs: jobs.map((entry, index) => ({
+                ...entry,
+                id: attempt * 100 + index,
+                run_id: Number(releaseChecks.runId),
+                run_attempt: attempt,
+              })),
+            };
+          };
+          attemptJobs(1, [
+            { ...job(gateway, "failure"), ...failedAt },
+            { ...job(native, "failure"), ...failedAt },
+          ]);
+          attemptJobs(2, [
+            {
+              ...job(gateway, "failure"),
+              ...failedAt,
+              html_url: `https://github.com/${REPOSITORY}/actions/runs/303/job/200`,
+            },
+            {
+              ...job(native),
+              conclusion: null,
+              status: "in_progress",
+              runner_name: "blacksmith-1",
+            },
+          ]);
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const producer = `parent job "Qualify release npm artifacts" failure (attempt 2) https://github.com/${REPOSITORY}/actions/runs/77/job/22`;
+      const carried = `releaseChecks job "${gateway}" failure (attempt 2) https://github.com/${REPOSITORY}/actions/runs/303/job/200`;
+      if (!json) {
+        expect(result.stdout).toContain("qualification: blocked; evidence: pending");
+        expect(result.stdout).toContain(`blocker: ${producer}`);
+        expect(result.stdout).toContain(`blocker: ${carried}`);
+        expect(result.stdout).not.toContain(`blocker: releaseChecks job "${native}"`);
+        expect(result.stdout).not.toContain('blocker: parent job "Run normal full CI"');
+        return;
+      }
+      const value = JSON.parse(result.stdout);
+      expect(value.qualification.state).toBe("blocked");
+      expect(value.active.map((entry: { key: string }) => entry.key)).toEqual(["releaseChecks"]);
+      expect(value.blockers).toEqual([
+        {
+          owner: "parent",
+          job: "Qualify release npm artifacts",
+          conclusion: "failure",
+          runAttempt: 2,
+          url: `https://github.com/${REPOSITORY}/actions/runs/77/job/22`,
+        },
+        {
+          owner: "releaseChecks",
+          job: gateway,
+          conclusion: "failure",
+          runAttempt: 2,
+          url: `https://github.com/${REPOSITORY}/actions/runs/303/job/200`,
+        },
+      ]);
+      expect(value.nextCommand).toBe("pnpm frv watch --run 77");
+    },
+  );
+
   it("labels canceled children and never suggests retry while descendants remain active", async () => {
     const fixture = publicationFixture();
     fixture.root.conclusion = "failure";
