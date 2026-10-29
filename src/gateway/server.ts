@@ -32,24 +32,25 @@ async function loadServerStart() {
 
 async function closeWithRuntimeCleanup(
   name: string,
-  close: () => Promise<void>,
+  close: (() => Promise<void>) | undefined,
   run: () => Promise<void>,
   options: Parameters<GatewayServer["close"]>[0],
 ): Promise<void> {
   let failure: { error: unknown } | undefined;
   try {
-    await close();
+    await close?.();
   } catch (error) {
     failure = { error };
   }
   try {
     const pending = measureGatewayCloseStep(`shutdown.${name}`, run);
-    const budget = options?.exitAfterClose ? getProcessCleanupBudget() : undefined;
-    if (!budget) {
+    const budget = getProcessCleanupBudget();
+    const graceMs = budget ? Math.max(0, budget.deadline - performance.now()) : 5_000;
+    if (!options?.exitAfterClose) {
       await pending;
-    } else if (!(await settlesWithin(pending, Math.max(0, budget.deadline - performance.now())))) {
+    } else if (!(await settlesWithin(pending, graceMs))) {
       const message = `${name} cleanup exceeded process shutdown deadline; resources remain; pending: ${formatGatewayPendingCloseSteps()}`;
-      budget.warn(message);
+      budget?.warn(message);
       throw new GatewayShutdownCleanupRetainedError([new Error(message)], message);
     }
   } catch (error) {
@@ -120,7 +121,10 @@ export async function startGatewayServer(
     if (signal?.aborted) {
       const reason = signal.reason;
       return await rethrowGatewayStartupError(reason, () =>
-        closeServer({ reason: String(reason) }),
+        closeServer({
+          reason: String(reason),
+          exitAfterClose: opts.exitAfterStartupFailure?.(reason),
+        }),
       );
     }
     return {
@@ -175,7 +179,11 @@ async function startGatewayServerWithRuntime(
           ),
       };
     } catch (error) {
-      return await rethrowGatewayStartupError(error, () => readOnlyWorkers.close());
+      return await rethrowGatewayStartupError(error, () =>
+        closeWithRuntimeCleanup("read-only-workers", undefined, () => readOnlyWorkers.close(), {
+          exitAfterClose: opts.exitAfterStartupFailure?.(error),
+        }),
+      );
     }
   };
   // Gateway brokerage targets Linux's page-table copy cost.
@@ -232,6 +240,10 @@ async function startGatewayServerWithRuntime(
         ),
     };
   } catch (error) {
-    return await rethrowGatewayStartupError(error, closeBroker);
+    return await rethrowGatewayStartupError(error, () =>
+      closeWithRuntimeCleanup("spawn-broker-runtime", undefined, closeBroker, {
+        exitAfterClose: opts.exitAfterStartupFailure?.(error),
+      }),
+    );
   }
 }

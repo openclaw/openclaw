@@ -1,6 +1,7 @@
 // Publishes a Doctor pass's outcome to the updater that launched it.
 import type { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
-import { retainCurrentDeferredPluginMigrationWarnings } from "../infra/deferred-plugin-migration-warnings.js";
+import { retainCurrentDeferredUpdateWarnings } from "../infra/deferred-update-warnings.js";
+import { resolveDoctorUpdateRun } from "../infra/update-deferred-model-retirement.js";
 import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
   writeUpdatePostInstallDoctorResult,
@@ -22,13 +23,14 @@ export async function publishDoctorUpdateResult(params: {
   for (const change of updateResult.capture.configChanges) {
     createSubsystemLogger("update").warn(formatUpdateDoctorConfigChange(change));
   }
-  const warnings = await retainCurrentDeferredPluginMigrationWarnings(
+  const warnings = await retainCurrentDeferredUpdateWarnings(
     collectDoctorHealthResultWarnings({
       healthContext,
       startupWarnings: params.startupWarnings,
       resultWarnings: doctorResult.warnings,
       maintenanceWarnings: maintenance?.warnings,
     }),
+    { readUpdateRun: () => resolveDoctorUpdateRun(healthContext?.env ?? process.env) },
   );
   const outcome = { ...doctorResult };
   delete outcome.warnings;

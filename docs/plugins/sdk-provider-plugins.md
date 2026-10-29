@@ -39,6 +39,28 @@ with the accepted harness IDs. Model Setup stages those permissions on that
 agent in the same verified config commit as the runtime routing and plugin enable.
 Do not write a separate permission store or infer consent from successful login.
 
+## Checklist before you open a provider PR
+
+- **Live listing.** If the vendor has a model-list API, the provider lists the
+  account's models live, so new vendor models need no OpenClaw release. See
+  [live model discovery](/plugins/sdk-provider-plugins/model-catalogs#live-model-discovery).
+  `src/plugins/contracts/provider-live-listing.contract.test.ts` enforces this
+  for bundled hosted providers.
+- **Thinking from catalog data.** Declare efforts in manifest `compat`. Add
+  `resolveThinkingProfile` only to restrict or relabel the ladder, and derive it
+  with `resolveEffortThinkingProfile` instead of a hard-coded level list. See
+  [runtime hooks](/plugins/sdk-provider-plugins/runtime-hooks).
+- **Connection-only setup.** Onboarding saves the endpoint and credential through
+  `createProviderConnectionPresetAppliers`. Outside `models.mode: "replace"`, which
+  keeps its documented exception, it never copies catalog rows into config. See
+  [model catalogs](/plugins/sdk-provider-plugins/model-catalogs).
+- **Docs.** Add `docs/providers/<id>.md` and list the provider in alphabetical
+  order on the provider index.
+- **Proof.** Run a real agent turn on an isolated Gateway with a real key before
+  the PR opens. API calls and mocked transports do not replace it.
+- **New model for an existing provider.** Add catalog data, not code. Search
+  every provider for the predecessor model ID before adding an exact-ID rule.
+
 ## Import an existing credential during sign-in
 
 An auth method can declare `credentialImport` with a `migrationProviderId`,

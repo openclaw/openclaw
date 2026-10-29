@@ -401,6 +401,18 @@ may request browser profile access. See [browser setup](/tools/browser/setup) an
 
 ### Auth migration recovery
 
+Doctor leaves a `models.json` key untouched instead of importing it when the
+shared auth store already provides an effective profile for that provider. The
+warning names the provider and shared profile. This preserves read-through auth
+without creating an agent-local credential that takes precedence over it.
+
+If an existing agent-local `<provider>:models-json` profile takes precedence over
+shared auth, Doctor preserves both credentials and reports the exact
+`openclaw models auth logout <profile-id> --agent <agent-id> --yes` command. Confirm
+the shared account is the one you want before running it. A profile name alone
+does not prove Doctor created the credential, so Doctor does not remove it
+automatically.
+
 Auth imports retain their original warning receipts and recovery copies. The
 final summary distinguishes the remaining work:
 

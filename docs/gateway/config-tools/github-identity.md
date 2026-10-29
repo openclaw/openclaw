@@ -137,6 +137,15 @@ publication receipt does not grant permission to import another person's PR.
 Prior receipts retain the destination recorded for their own publication, and
 recovery verifies accepted effects against the original PR before another write.
 
+If someone else pushes to that PR's head branch, publication refuses to overwrite
+their commits. Call `prepare_pr` with the PR URL in the same conversation. It
+starts from the head this conversation last published, merges the newer head into
+the saved work, and returns any conflicts. The next publication appends to the
+same PR. This also works when the managed publisher authored the PR, as long as
+the PR author is the publisher account recorded for this conversation's
+publication. Assigning a new session owner does not change who can prepare it:
+only the person who started the conversation can.
+
 To import your own existing PR into a local conversation, use `github_publish` with
 `action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
 sessions with a writable managed sandbox or an ordinary local Docker or Podman
@@ -164,7 +173,7 @@ Input already being prepared retains its original source. New input after
 adoption uses the PR workspace.
 
 Initial preparation of an already managed workspace requires a clean workspace without dirty, untracked, or
-unpublished work. Otherwise it preserves that work and asks you to keep or finish
+unpublished work, except for a PR this conversation published, described above. Otherwise it preserves that work and asks you to keep or finish
 it separately before continuing. A clean workspace receives exactly the verified
 PR head's files, even when the selected project's base is newer. Preparation
 keeps an already managed directory and sandbox scope, and records the original PR
@@ -244,9 +253,13 @@ Keep the updated Gateway when continuing an imported workspace; older versions
 do not understand this association.
 
 Use `github_publish` with `action: "edit"` to change the current session's shared
-PR title or description without publishing source. Call it without `title`/`body`
-to read the current metadata, then send `requestId`, `expectedHeadCommit`, and only
-the fields to change, each paired with its observed `expectedTitle`/`expectedBody`.
+PR title or description without publishing source. Read the current metadata with
+`{ "action": "edit" }`, omitting `expectedHeadCommit`, `title`/`body` and
+`expectedTitle`/`expectedBody`. Then send its top-level `headCommit` as
+`expectedHeadCommit`, its publication `requestId`, and only the fields to change,
+each paired with its observed `expectedTitle`/`expectedBody`. The observed head can
+be newer than `publication.headCommit`; editing metadata does not rewrite that
+historical receipt. Other receipt-backed actions still require the receipt head.
 Keep the attribution, publication marker and footer unchanged in the full body.
 Omitted fields stay unchanged. Guests can edit their own session's PR; no child or
 arbitrary PR selector is accepted. Edit never synchronizes, stages, commits or
@@ -254,10 +267,13 @@ pushes workspace files, and never changes PR lifecycle state. Closed PRs are rea
 An unsuccessful later source publication does not hide the existing PR from edit.
 
 Stale observed values are rejected. This is not atomic GitHub compare-and-swap:
-external edits can race the PATCH. After a lost response, the Gateway rereads the
-same PR; already-applied values need no second write. Read with `edit` before
-retrying uncertainty. Omitted action or `publish` still publishes workspace source;
-its title/body are creation-only and do not edit an existing PR.
+external edits or pushes can race the PATCH. A head change detected after dispatch
+can mean the metadata was applied but confirmation failed. After a lost response,
+the Gateway rereads the same PR; already-applied values need no second write.
+Before retrying uncertainty, read again with only `{ "action": "edit" }`, without
+reusing the previous write preconditions. Omitted action or `publish` still
+publishes workspace source; its title/body are creation-only and do not edit an
+existing PR.
 
 Guests can mark their own current session's shared draft ready for review with
 `github_publish` and `action: "ready"`. First read its state with `action: "edit"`,

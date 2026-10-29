@@ -1415,7 +1415,6 @@ const startupEnglish = {
     common: {
       emptyValue: "—",
       unknown: "unknown",
-      atLeast: "≥ {value}",
       approx: "≈ {value}",
     },
     loading: {
@@ -1685,6 +1684,7 @@ const startupEnglish = {
       dismissError: "Dismiss error",
       exitFocusMode: "Exit focus mode",
       scrollToLatest: "Scroll to latest",
+      skipToComposer: "Skip to message composer",
     },
     markdown: {
       truncated: "… truncated ({total} chars, showing first {shown}).",

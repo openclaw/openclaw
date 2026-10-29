@@ -13,7 +13,7 @@ import {
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
-import { listNodeTestConfigFiles } from "./ci-node-test-inventory.mts";
+import { listNodeTestConfigFiles, listWholeConfigFiles } from "./ci-node-test-inventory.mts";
 import nativeBunQualification from "./ci-test-native-bun-qualification.json" with { type: "json" };
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
@@ -104,6 +104,7 @@ const nodeRequiredFiles = new Set([
   // Consumed async-loader retention is specific to V8's suspended frames.
   "src/agents/harness/lifecycle-hook-helpers.test.ts",
   // JavaScriptCore's conservative stack scanning cannot prove forced WeakRef collection.
+  "packages/ai/src/transports/openai-responses-websocket.test.ts",
   "src/agents/agent-tools.execution-validation.test.ts",
   "src/config/sessions/session-accessor.pending-input-retention.test.ts",
   "src/gateway/session-list-history-retention.test.ts",
@@ -320,7 +321,18 @@ function resolveAllRuntimeSelections(
             fullSuiteVitestShards.find((shard) => shard.config === config)?.projects ?? [config],
         )
       : [];
-  const inventories = ownerConfigs.map((config) => listNodeTestConfigFiles(config));
+  const inventories = ownerConfigs.map((config) => {
+    const inventory = listNodeTestConfigFiles(config);
+    if (inventory) {
+      return inventory;
+    }
+    // Focused targets can use an aggregate config while their single-project CI
+    // owner already supplies the complete file inventory.
+    const owner = fullSuiteVitestShards.find(
+      ({ projects }) => projects?.length === 1 && projects[0] === config,
+    );
+    return owner ? listWholeConfigFiles(owner.name) : undefined;
+  });
   const unresolvedConfigs = ownerConfigs.filter((_, index) => !inventories[index]);
   const matches = (file: string, include: readonly string[]) =>
     include.some((pattern) => {

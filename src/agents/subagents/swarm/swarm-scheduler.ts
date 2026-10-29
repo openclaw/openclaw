@@ -345,20 +345,6 @@ export function activateSwarmRun(
   pumpLane(lane);
 }
 
-export function enqueueSwarmRun(
-  params: SwarmLaunch & {
-    groupId: string;
-    runId: string;
-    maxConcurrent: number;
-    activeRunIds: readonly string[];
-  },
-): void {
-  if (!reserveSwarmRun(params)) {
-    throw new Error(`swarm scheduler run already exists: ${params.runId}`);
-  }
-  activateSwarmRun(params);
-}
-
 export function releaseSwarmRun(runId: string): boolean {
   const location = runLocations.get(runId);
   if (!location || location.state !== "active") {

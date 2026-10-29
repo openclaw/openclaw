@@ -258,6 +258,8 @@ export type ReplyPayloadMetadata = {
   blockSourceText?: string;
   /** UTF-16 source range represented by this block within one assistant message. */
   blockSourceRange?: readonly [start: number, end: number];
+  /** An authored line break continues an already accepted source text block. */
+  streamedSourceBoundary?: true;
   /** Live source receipts retained until final text recovery settles. */
   blockReplySources?: readonly BlockReplySource[];
   /** Persisted assistant speech facts; never serialized into channel payloads. */

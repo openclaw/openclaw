@@ -450,6 +450,8 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   ...getRpcSourceIdentity(admission.sourceRef),
                   ownerConnId: admission.sourceRef.adapter.requester?.connectionId,
                   ownerDeviceId: admission.sourceRef.adapter.requester?.deviceId,
+                  initiatingPersonalOperator:
+                    admission.sourceRef.adapter.initiatingPersonalOperator,
                   controlUiVisible: admission.sourceRef.adapter.controlUiVisible,
                   turnKind: admission.sourceRef.adapter.turnKind,
                 },

@@ -24,6 +24,7 @@ import type {
   ChatHeaderViewersSnapshot,
 } from "./chat-header-viewers-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import { trimmedChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
@@ -590,13 +591,11 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
   let retainedMessageWeight = messageWeights.reduce((sum, weight) => sum + weight, 0);
   let start = 0;
   while (true) {
-    const pagination =
-      start === 0
-        ? snapshot.pagination
-        : capSnapshotPagination(snapshot.pagination, snapshot.messages, start);
-    if (!pagination) {
+    if (start > 0 && start === snapshot.messages.length) {
       return null;
     }
+    const pagination =
+      start === 0 ? snapshot.pagination : trimmedChatHistoryPagination(snapshot.pagination);
     const rowDisplay = projectChatRowDisplay(snapshot, start);
     const envelope = { ...snapshot, messages: [], rowDisplay, pagination };
     let weight: number | null;
@@ -659,37 +658,16 @@ function serializedArrayItemWeight(value: unknown): number | null {
   }
 }
 
-function capSnapshotPagination(
-  pagination: ChatHistoryPagination,
-  messages: unknown[],
-  start = 0,
-): ChatHistoryPagination | null {
-  const totalMessages = pagination.totalMessages;
-  let oldestSeq: number | null = null;
-  for (let index = start; index < messages.length; index += 1) {
-    oldestSeq = readSessionMessageSequence(messages[index]);
-    if (oldestSeq !== null) {
-      break;
-    }
-  }
-  if (typeof totalMessages !== "number" || oldestSeq === null) {
-    return null;
-  }
-  const retainedDepth = totalMessages - oldestSeq + 1;
-  if (retainedDepth <= 0) {
-    return null;
-  }
-  return oldestSeq > 1
-    ? { hasMore: true, nextOffset: retainedDepth, totalMessages }
-    : { hasMore: false, totalMessages };
-}
-
 function samePagination(left: ChatHistoryPagination, right: ChatHistoryPagination): boolean {
   if (left.hasMore !== right.hasMore || left.totalMessages !== right.totalMessages) {
     return false;
   }
   if (left.hasMore && right.hasMore) {
-    return left.nextOffset === right.nextOffset;
+    return (
+      left.nextOffset === right.nextOffset &&
+      left.olderCursor === right.olderCursor &&
+      left.needsBoundary === right.needsBoundary
+    );
   }
   return !left.hasMore && !right.hasMore && left.completeSnapshot === right.completeSnapshot;
 }

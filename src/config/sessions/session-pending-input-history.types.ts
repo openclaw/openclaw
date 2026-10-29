@@ -17,10 +17,6 @@ export type PendingInputHistorySnapshot = {
   nextBefore?: number;
   currentSessionId?: string;
 };
-export type PendingInputCustodyCandidate = Pick<
-  SessionPendingInputRow,
-  "input_id" | "session_key" | "session_id" | "lifecycle_generation"
->;
 export type PendingInputHistoryWorkerInput = {
   kind: "session-pending-input-history";
   database: { agentId: string; path: string };

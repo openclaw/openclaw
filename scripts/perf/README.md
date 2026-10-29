@@ -1,5 +1,26 @@
 # Team-shaped synthetic state
 
+## Update state I/O
+
+`update-state-io-measure.ts` measures candidate inventory and snapshot creation,
+runtime retention, and the complete candidate Doctor command against synthetic
+shared and agent databases (about 2 GiB) and a 256 MiB runtime tree. It freezes
+the baseline snapshot owner while using unchanged dependencies from the current
+checkout, then interleaves baseline and candidate samples. Retention and Doctor
+are unchanged controls. Full output integrity and payload checks run outside
+the timed snapshot phase.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/update-state-io-measure.ts \
+  --baseline <base-commit> --samples 5
+```
+
+The script creates a realpath-resolved temporary root, isolates HOME and state,
+selects a free Gateway port, and removes its synthetic files afterward. Set
+`TMPDIR` to a trusted per-user temporary directory if the host's default has
+unsafe ancestors. Results include operation counts, medians, p95, spread, source
+identity, and host load. These phase timings do not measure total update downtime.
+
 ## Plugin policy reads
 
 `plugin-policy-read-measure.mjs` measures warm Codex config resolution and registered

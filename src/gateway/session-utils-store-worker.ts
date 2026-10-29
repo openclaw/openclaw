@@ -22,10 +22,11 @@ import {
 } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
+import { prepareSessionStoreCandidatesInWorker } from "../config/sessions/session-transcript-worker-resources.js";
 import { isConfiguredSessionStoreAgentId } from "../config/sessions/targets-configured-agents.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
@@ -183,15 +184,20 @@ async function prepareGatewaySessionStoreReadInWorker(
     onSelected?.(target);
     return { target };
   }
-  const { candidates, ...inventory } = prepareSessionStoreTargetInventory(
-    params.cfg,
-    [
-      agentId,
-      ...(retiredOwner ? listAgentIds(params.cfg) : []),
-      ...(parsedAgent && parsedAgent !== agentId ? [parsedAgent] : []),
-    ],
-    params.env,
-  );
+  const agentIds = [
+    agentId,
+    ...(retiredOwner ? listAgentIds(params.cfg) : []),
+    ...(parsedAgent && parsedAgent !== agentId ? [parsedAgent] : []),
+  ];
+  const { candidates, ...inventory } = isArtifactPreservingStateRead("agent")
+    ? (
+        await prepareSessionStoreCandidatesInWorker({
+          config: params.cfg,
+          agentIds,
+          env: { ...(params.env ?? process.env) },
+        })
+      ).inventory!
+    : prepareSessionStoreTargetInventory(params.cfg, agentIds, params.env);
   const identities = retainPlan ? captureSessionStoreCandidateIdentities(candidates) : undefined;
   const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...inventory, candidates });
   const captured = new Map<
@@ -223,7 +229,7 @@ async function prepareGatewaySessionStoreReadInWorker(
       }
       const lookup = {
         ...params,
-        cfg: inventory.config,
+        cfg: params.cfg,
         key: params.key,
         env: inventory.env,
         targetDiscoveryCache,
@@ -288,15 +294,10 @@ async function prepareGatewaySessionStoreReadInWorker(
                 agentId: preparedRead.database.agentId,
                 path: preparedRead.database.path,
               };
-              const identity = readDatabasePathIdentitySync(preparedRead.database.path);
               preparedRead.assertCurrent();
-              if (identity.key.startsWith("file:")) {
-                read.capturedReadSource = {
-                  ...read.readSource,
-                  databaseIdentity: identity.key.slice("file:".length),
-                  databaseBirthtime: identity.birthtime,
-                };
-              }
+              // Inspections retain original provenance, not the private image used for SQL.
+              read.capturedReadSource =
+                preparedRead.result.snapshotSource ?? preparedRead.result.source;
               if (retainPlan) {
                 captured.set(read, {
                   input: {

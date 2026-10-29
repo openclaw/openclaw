@@ -63,6 +63,22 @@ const widgetSnapshot = (
 ): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
+  it("publishes changed older edges without inventing numeric coverage", () => {
+    const { cache, write, read } = createCacheContext();
+    const persisted = vi.fn();
+    observeChatCache(cache, { write: persisted, delete: vi.fn() });
+    const messages = ["held source group"];
+    const snapshot = widgetSnapshot(messages);
+    write({ ...snapshot, pagination: { hasMore: true, olderCursor: "older-A" } });
+    write({ ...snapshot, pagination: { hasMore: true, olderCursor: "older-B" } });
+    expect(read()?.pagination).toEqual({ hasMore: true, olderCursor: "older-B" });
+    write({ ...snapshot, pagination: { hasMore: true, needsBoundary: true } });
+    write({ ...snapshot, pagination: { hasMore: true, needsBoundary: true } });
+    expect(persisted).toHaveBeenCalledTimes(3);
+    expect(read()?.pagination).toEqual({ hasMore: true, needsBoundary: true });
+    expect(read()?.messages).toBe(messages);
+  });
+
   it("persists changed session display facts once without repeating unchanged writes", () => {
     const { cache, write, read } = createCacheContext();
     const persisted = vi.fn();
@@ -554,7 +570,7 @@ describe("session message cache", () => {
     });
     const snapshot = read();
     expect(snapshot?.messages).toHaveLength(1);
-    expect(snapshot?.pagination).toEqual({ hasMore: true, nextOffset: 1, totalMessages: 2 });
+    expect(snapshot?.pagination).toEqual({ hasMore: true, needsBoundary: true, totalMessages: 2 });
     expect(snapshot?.rowDisplay).toEqual({
       last: { links: { source: { title: "Last linked task" } } },
     });

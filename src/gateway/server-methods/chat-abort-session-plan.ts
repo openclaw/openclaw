@@ -297,7 +297,11 @@ export function prepareChatSessionAbort(
             (adapter?.controlUiVisible === false ||
               (params.preserveSideRuns && adapter?.turnKind === "btw"))) ||
           !canRequesterAbortChatRun(
-            { ...getSessionControllerSourceIdentity(input), requester: adapter?.requester },
+            {
+              ...getSessionControllerSourceIdentity(input),
+              requester: adapter?.requester,
+              initiatingPersonalOperator: source?.adapter.initiatingPersonalOperator,
+            },
             params.requester,
           )
         ) {

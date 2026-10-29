@@ -44,6 +44,7 @@ export type PluginMigrationInspection = {
   runtimePluginAliases: readonly string[];
   unavailablePluginIds?: readonly string[];
   discoveryBlockedPluginIds?: readonly string[];
+  inactivePluginIds?: readonly string[];
   replacementPluginIds?: Readonly<Record<string, string>>;
 };
 
@@ -256,6 +257,11 @@ export async function inspectPluginMigrationAvailability(params: {
             statelessPlugins,
             runtimePluginAliases,
             discoveryBlockedPluginIds,
+            inactivePluginIds: [...inspectedIds].filter(
+              (id) =>
+                !selected.has(id) ||
+                !passesManifestOwnerBasePolicy({ plugin: { id }, normalizedConfig }),
+            ),
             // The updating parent still owns package availability until convergence resumes.
             ...(!params.deferInstallation ? { unavailablePluginIds, replacementPluginIds } : {}),
           };
