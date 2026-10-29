@@ -1,2 +1,2 @@
 # Covers bot-identity fixtures and consolidated agent-input assertions.
-21
+20
