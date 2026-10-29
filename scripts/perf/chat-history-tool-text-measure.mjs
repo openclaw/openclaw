@@ -7,9 +7,6 @@
  * results, each below the native producer's 32 KiB bound. Timing is untraced; allocation
  * is a separate pass including collected objects. Both sanitizer passes used by history
  * are measured; read/admission, worker transfer and final JSON encoding are excluded.
- * --candidate-source selects a separately compiled owner, matching --base-source.
- * Each owner must resolve its own changed dependencies. --reply-chars sets visible
- * reply length for text-allocation comparisons; omitted preserves the tool fixture.
  * Acceptance: identical output/input bytes and lower CPU or allocation per page.
  */
 import assert from "node:assert/strict";
@@ -19,12 +16,11 @@ import { resolve } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { sanitizeChatHistoryMessages } from "../../src/gateway/chat-display-projection.sanitize.ts";
 
 const { values } = parseArgs({
   options: {
     "base-source": { type: "string" },
-    "candidate-source": { type: "string" },
-    "reply-chars": { type: "string" },
     iterations: { type: "string", default: "1000" },
     pairs: { type: "string", default: "5" },
     allocation: { type: "boolean", default: false },
@@ -35,16 +31,10 @@ const iterations = Number(values.iterations);
 const pairs = Number(values.pairs);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(Number.isSafeInteger(pairs) && pairs > 0);
-const replyChars = values["reply-chars"] === undefined ? undefined : Number(values["reply-chars"]);
-assert(replyChars === undefined || (Number.isSafeInteger(replyChars) && replyChars > 0));
 const arms = {
   base: (await import(pathToFileURL(resolve(values["base-source"])).href))
     .sanitizeChatHistoryMessages,
-  candidate: values["candidate-source"]
-    ? (await import(pathToFileURL(resolve(values["candidate-source"])).href))
-        .sanitizeChatHistoryMessages
-    : (await import("../../src/gateway/chat-display-projection.sanitize.ts"))
-        .sanitizeChatHistoryMessages,
+  candidate: sanitizeChatHistoryMessages,
 };
 const messages = Array.from({ length: 200 }, (_, index) =>
   index < 65
@@ -65,15 +55,7 @@ const messages = Array.from({ length: 200 }, (_, index) =>
       }
     : {
         role: index % 2 ? "assistant" : "user",
-        content: [
-          {
-            type: "text",
-            text:
-              replyChars === undefined
-                ? "Synthetic reply"
-                : "Synthetic reply ".repeat(Math.ceil(replyChars / 16)).slice(0, replyChars),
-          },
-        ],
+        content: [{ type: "text", text: "Synthetic reply" }],
       },
 );
 const input = JSON.stringify(messages);
@@ -140,7 +122,6 @@ console.log(
       mode: values.allocation ? "allocation" : "timing",
       messages: messages.length,
       nestedResults: 65,
-      replyChars,
       inputBytes: Buffer.byteLength(input),
       outputBytes: Buffer.byteLength(expected),
       rows,

@@ -234,7 +234,7 @@ serveOwnedWorkerTasks(
       }
       if (request.kind === "transcript-stats-batch") {
         const { readTranscriptStatsBatchReadOnlySync } =
-          await import("./session-accessor.sqlite-read.js");
+          await import("./session-accessor.sqlite-transcript-stats-read.js");
         return {
           kind: request.kind,
           stats: readTranscriptStatsBatchReadOnlySync(
