@@ -2,14 +2,8 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-} from "../../agents/admitted-run-context.js";
-import {
-  prepareCommandSessionRecoveryEntry,
-  prepareEmbeddedSessionState,
-} from "../../agents/command/session-preparation.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { prepareEmbeddedSessionState } from "../../agents/command/session-preparation.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -397,12 +391,9 @@ describe("startAgentRunExecution Gateway ownership", () => {
     sourceChannel?: string;
     replyChannel?: string;
     sessionDelivery?: SessionEntry["delivery"];
-    recoveryIngress?: "internal" | "control-ui";
     expectedChannel?: string;
   }>([
     { name: "unbound CLI" },
-    { name: "channel-less operator recovery", recoveryIngress: "internal" },
-    { name: "Control UI recovery", recoveryIngress: "control-ui", expectedChannel: "webchat" },
     { name: "CLI with internal delivery history", sessionDelivery: { kind: "internal" } },
     { name: "WebChat client", webchat: true, expectedChannel: "webchat" },
     { name: "WebChat continuation", sourceChannel: "webchat", expectedChannel: "webchat" },
@@ -425,55 +416,11 @@ describe("startAgentRunExecution Gateway ownership", () => {
     { name: "explicit internal channel", replyChannel: "webchat", expectedChannel: "webchat" },
   ])("preserves $name provider context through command resolution", async (testCase) => {
     const execution = createExecution();
-    let sessionEntry: SessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "source-session",
       updatedAt: 1,
       delivery: testCase.sessionDelivery,
     };
-    if (testCase.recoveryIngress) {
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
-        profileId: "operator",
-        scopes: ["operator.read"],
-        assertCurrent() {},
-        recoverySnapshot: {
-          profileId: "operator",
-          scopes: ["operator.read"],
-          assignedRole: null,
-          githubLogin: null,
-          grant: null,
-          aliasBindingIds: [],
-          authPolicy: {
-            generation: "",
-            grantGeneration: "grant",
-            role: "operator",
-            authMethod: "token",
-          },
-          controlUiAdmin: false,
-          localOperator: false,
-          sourceIngress: testCase.recoveryIngress,
-        },
-      });
-      sessionEntry = prepareCommandSessionRecoveryEntry({
-        entry: sessionEntry,
-        sessionId: sessionEntry.sessionId,
-        sessionKey: "agent:main:lab-recovery",
-        agentId: "main",
-        runId: "interrupted-run",
-        now: 1,
-        lifecycleGeneration: getAgentRunLifecycleGeneration(),
-        isSessionRollover: false,
-        opts: { message: "continue", operatorAuthority, messageChannel: testCase.expectedChannel },
-      }).nextEntry;
-      sessionEntry.restartRecoveryDeliveryRunId = execution.params.runId;
-      Object.assign(execution.params, {
-        canUseInternalRuntimeHandoff: true,
-        isRestartRecoveryResumeRun: true,
-        resolvedSessionId: sessionEntry.sessionId,
-        resolvedSessionKey: "agent:main:lab-recovery",
-        sessionEntry,
-      });
-      execution.params.request.expectedExistingSessionId = sessionEntry.sessionId;
-    }
     const client: AgentTurnPrincipal = {
       connect: {
         minProtocol: 1,
@@ -541,43 +488,6 @@ describe("startAgentRunExecution Gateway ownership", () => {
       clearAgentRunContext(runId);
     }
   });
-
-  it.each([
-    { sourceIngress: "control-ui" as const, sourceChannel: "webchat", deliveryContext: undefined },
-    {
-      sourceIngress: "channel" as const,
-      sourceChannel: "discord",
-      deliveryContext: { channel: "discord" },
-    },
-  ])(
-    "preserves targetless $sourceChannel policy context at recovery dispatch",
-    async ({ sourceIngress, sourceChannel, deliveryContext }) => {
-      const execution = createExecution();
-      Object.assign(execution.params, {
-        canUseInternalRuntimeHandoff: true,
-        isRestartRecoveryResumeRun: true,
-        resolvedSessionId: "recovery-session",
-        sessionEntry: {
-          sessionId: "recovery-session",
-          updatedAt: 1,
-          restartRecoveryDeliveryRunId: execution.params.runId,
-          restartRecoveryDeliverySourceRunId: "source-run",
-          restartRecoveryDeliveryContext: deliveryContext,
-          restartRecoverySourceIngress: sourceIngress,
-        },
-      });
-      execution.params.request.expectedExistingSessionId = "recovery-session";
-      execution.params.delivery.originMessageChannel = "slack";
-      dispatchAgentRunFromGateway.mockResolvedValueOnce(undefined);
-
-      await startAgentRunExecution(execution.params);
-
-      expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
-      const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
-      expect(dispatch?.ingressOpts.runContext.messageChannel).toBe(sourceChannel);
-      expect(dispatch?.ingressOpts.runContext.currentChannelId).toBeUndefined();
-    },
-  );
 
   it("dispatches with the runtime generation frozen at admission", async () => {
     const execution = createExecution();

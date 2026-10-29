@@ -37,13 +37,10 @@ export function createSubagentManagerTestOptions(
 }
 
 export function createRegistrationFixture() {
-  const refusal = { descriptor: true, terminal: false };
+  const refusal = { terminal: false };
   probe.command(stateWorker, async (command, executeOptions, scope) => {
     if (isSubagentRegistryWriteCommand(command)) {
       const rows = command.input.values.map(rowToSubagentRunRecord);
-      if (refusal.descriptor && rows.some((row) => row?.queuedLaunch)) {
-        throw new Error("descriptor refused");
-      }
       if (refusal.terminal && rows.some((row) => row?.execution.status === "terminal")) {
         throw new Error("terminal settlement refused");
       }

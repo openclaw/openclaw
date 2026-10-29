@@ -50,7 +50,6 @@ describe("delivery queue entry state", () => {
   const queueId = "synthetic-entry";
   function expectPublicInput(input: object) {
     expect(input).not.toHaveProperty("deliveryQueueStateContext");
-    expect(input).not.toHaveProperty("transcriptGeneration");
   }
 
   function root(name: string) {
@@ -158,13 +157,6 @@ describe("delivery queue entry state", () => {
         },
         deliveryQueueStateContext: { stateDir: injectedRoot },
         deliveryQueueStateDir: injectedRoot,
-        transcriptGeneration: {
-          agentId: "unrelated",
-          storePath: path.join(injectedRoot, "agent.sqlite"),
-          sessionKey: "agent:unrelated:main",
-          sessionId: "unrelated-session",
-          lifecycleRevision: null,
-        },
       };
       if (entrypoint === "sdk") {
         await expect(sendDurableMessageBatch(injected)).resolves.toMatchObject({ status: "sent" });

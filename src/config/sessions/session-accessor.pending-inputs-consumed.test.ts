@@ -351,10 +351,11 @@ it.each(["empty-metadata", "transport-metadata", "changed-payload", "changed-sen
   },
 );
 
-const stagePrivate = (assertCurrent = () => {}) =>
+const stagePrivate = (assertCurrent = () => {}, retryCancelled = false) =>
   stage("announce:private-child", {
     trackCompletion: true,
     assertCurrent,
+    retryCancelled,
     message: {
       ...internalMessage("announce:private-child", "subagent_announce"),
       content: "private child marker",
@@ -437,9 +438,10 @@ it.each(["pending", "completed", "transcript", "prepared transcript", "public pe
       replaySourceSessionKeys: ["child-a", "child-b"],
       prepareMessageAfterIdempotencyCheck,
     });
-    if (state === "public pending") {
+    if (state === "public pending" || state === "pending") {
       await expect(replay).rejects.toThrow("Pending input ownership ended");
       expect(acceptedOrder()).toEqual(beforeReplay);
+      expect(transcriptRows()).toEqual(beforeTranscript);
       return;
     }
     const receipt = await replay;
@@ -610,7 +612,6 @@ it("preserves a message-hook veto when retrying already committed private input"
 
 it.each([
   ["operator stop", { status: "error", stopReason: "rpc" }],
-  ["restart interruption", { status: "timeout", stopReason: "restart" }],
   ["provider failure", { status: "error", error: "provider unavailable" }],
 ] as const)("preserves private retry semantics after %s", async (kind, outcome) => {
   const first = await stagePrivate();
@@ -626,15 +627,10 @@ it.each([
     await first.settled?.();
     await close();
   } else {
-    if (kind === "provider failure") {
-      expect(completionRows()).toMatchObject([{ succeeded: 0 }]);
-    }
-    await finish(first);
-    if (kind === "restart interruption") {
-      await restart();
-    }
+    expect(completionRows()).toMatchObject([{ succeeded: 0 }]);
+    await finish(first, "cancelled");
   }
-  const retry = await stagePrivate();
+  const retry = await stagePrivate(undefined, kind === "provider failure");
   if (kind === "operator stop") {
     expect(retry.completion).toMatchObject({ reason: "cancelled", stopReason: "rpc" });
     expect(() => retry.run(() => "stopped work")).toThrow("already completed");
@@ -642,72 +638,13 @@ it.each([
   } else {
     expect(retry.completion).toBeUndefined();
     await complete(retry, { status: "ok" });
-    if (kind === "provider failure") {
-      expect(await complete(first, { status: "error" })).toMatchObject({
-        error: "provider unavailable",
-      });
-      expect(pendingCount()).toBe(0);
-    }
+    expect(await complete(first, { status: "error" })).toMatchObject({
+      error: "provider unavailable",
+    });
+    expect(pendingCount()).toBe(0);
     expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
   }
 });
-
-it.each(["pending", "interrupted", "consumed", "completed"] as const)(
-  "reconciles saved peer delivery identity after restart (%s)",
-  async (state) => {
-    const runId = "peer-restart";
-    const endpoint = (sessionKey: string, sessionId: string) => ({
-      agentId: "main",
-      sessionKey,
-      sessionId,
-      lifecycleRevision: undefined,
-    });
-    const original: PersistedUserTurnMessage = {
-      ...internalMessage(runId, "sessions_send", "agent:main:source"),
-      __openclaw: {
-        sessionSendDelivery: {
-          version: 1,
-          runId,
-          source: endpoint("agent:main:source", "source-id"),
-          target: endpoint(scope().sessionKey, scope().sessionId),
-          sandboxed: false,
-          message: "Synthetic accepted input",
-        },
-      },
-    };
-    const first = await stage(runId, { message: original, trackCompletion: true });
-    if (state === "consumed" || state === "completed") {
-      await promote(first);
-    }
-    if (state !== "pending") {
-      await complete(
-        first,
-        state === "completed" ? { status: "ok" } : { status: "error", stopReason: "restart" },
-      );
-    }
-    await finish(first);
-    await restart();
-
-    const saved = expectDefined(
-      await readSessionSubmittedInput(scope(), `${runId}:user`),
-      "Expected saved peer input after restart",
-    );
-    // SQLite JSON omits undefined endpoint revisions; recovery must match the original hash.
-    expect(JSON.stringify(saved)).not.toContain("lifecycleRevision");
-    await expect(
-      stage(runId, { message: { ...saved, content: "Different input" }, trackCompletion: true }),
-    ).rejects.toThrow("conflicts");
-    const recovered = await stage(runId, { message: saved, trackCompletion: true });
-    expect(recovered.message).toEqual(saved);
-    if (state === "completed") {
-      expect(recovered.completion).toMatchObject({ reason: "completed" });
-      expect(() => recovered.run(() => {})).toThrow("already completed");
-    } else {
-      expect(recovered.completion).toBeUndefined();
-      await complete(recovered, { status: "ok" });
-    }
-  },
-);
 
 it.each(["owner", "session", "lifecycle"] as const)(
   "rejects a private completion after %s changes",

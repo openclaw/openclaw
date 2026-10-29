@@ -6,8 +6,6 @@ export type ReplyToolAuthorityInput = {
   originatingChannel?: FollowupRun["originatingChannel"];
   toolsAllow?: string[];
   disableTools?: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   run: Partial<
     Pick<
       FollowupRun["run"],

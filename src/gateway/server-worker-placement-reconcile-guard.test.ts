@@ -55,7 +55,6 @@ function createFailedPlacementGuard(params: {
   activeOwnerEpoch: number | null;
   destroyRequestedAtMs: number | null;
 }) {
-  const resumeProvisioning = vi.fn();
   const guard = createPlacementGuard({
     placement: {
       ...ACTIVE_PLACEMENT,
@@ -67,9 +66,9 @@ function createFailedPlacementGuard(params: {
       activeOwnerEpoch: params.activeOwnerEpoch,
     },
     destroyRequestedAtMs: params.destroyRequestedAtMs,
-    dispatch: { resumeProvisioning, hasPendingPlacementLifecycleOperation: () => false },
+    dispatch: { isPlacementOperationInFlight: () => false },
   });
-  return { guard, resumeProvisioning };
+  return { guard };
 }
 
 describe("worker placement reconciliation teardown authority", () => {
@@ -78,7 +77,6 @@ describe("worker placement reconciliation teardown authority", () => {
     const release = createDeferredCore();
     const provisioning = { ...PROVISIONING_PLACEMENT, sessionId: REQUEST.sessionId };
     const active = { ...ACTIVE_PLACEMENT, environmentId: provisioning.environmentId };
-    const resumeProvisioning = vi.fn(async () => undefined);
     const dispatch = coordinateWorkerPlacementDispatch(
       createCoordinatorTestService({
         dispatch: async (_request, onTransition) => {
@@ -87,7 +85,6 @@ describe("worker placement reconciliation teardown authority", () => {
           await release.promise;
           return active;
         },
-        resumeProvisioning,
       }),
       (_request, run) => run(),
     );
@@ -107,7 +104,6 @@ describe("worker placement reconciliation teardown authority", () => {
           initialPlacement.then(() => "initial placement settled"),
         ]),
       ).resolves.toBe("reconciled");
-      expect(resumeProvisioning).not.toHaveBeenCalled();
       expect(reconcileCore).not.toHaveBeenCalled();
     } finally {
       release.resolve();
@@ -117,7 +113,7 @@ describe("worker placement reconciliation teardown authority", () => {
   });
 
   it("allows destruction only after its exact failed owner has released all authority", async () => {
-    const { guard, resumeProvisioning } = createFailedPlacementGuard({
+    const { guard } = createFailedPlacementGuard({
       turnClaim: null,
       activeOwnerEpoch: null,
       destroyRequestedAtMs: 1,
@@ -127,7 +123,6 @@ describe("worker placement reconciliation teardown authority", () => {
     await guard("worker-cleanup", reconcileCore);
 
     expect(reconcileCore).toHaveBeenCalledOnce();
-    expect(resumeProvisioning).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -152,7 +147,7 @@ describe("worker placement reconciliation teardown authority", () => {
   ])(
     "keeps failed-placement cleanup fenced with $reason",
     async ({ reason: _reason, ...params }) => {
-      const { guard, resumeProvisioning } = createFailedPlacementGuard(params);
+      const { guard } = createFailedPlacementGuard(params);
       const reconcileCore = vi.fn(async () => {});
 
       await expect(guard("worker-cleanup", reconcileCore)).rejects.toThrow(
@@ -160,7 +155,6 @@ describe("worker placement reconciliation teardown authority", () => {
       );
 
       expect(reconcileCore).not.toHaveBeenCalled();
-      expect(resumeProvisioning).not.toHaveBeenCalled();
     },
   );
 });

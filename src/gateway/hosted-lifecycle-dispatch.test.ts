@@ -21,12 +21,12 @@ import * as gatewayCall from "./call.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
+import { bindGatewayLifecycleRequest } from "./server-lifecycle-runtime-context.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
 import {
   getInProcessGatewayRequestContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
-import { bindGatewayLifecycleRequest } from "./server-recovery-runtime-context.js";
 import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const deleteGatewaySession = vi.hoisted(() =>
@@ -77,7 +77,7 @@ function createGateway(handlers: GatewayRequestHandlers) {
     getMethodRegistry: () => registry,
     isDispatchAvailable: () => true,
   });
-  context.recoveryRuntime = runtime.recovery;
+  context.lifecycleRuntime = runtime.lifecycle;
   runtimes.push(runtime);
   return () => context;
 }

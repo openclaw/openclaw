@@ -234,6 +234,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
         }
       });
       publishSidecars({
+        name: "chat-metadata",
         stop: async () => {
           sessionCostUsageNotifications.onUpdated = () => {};
           clearTimeout(usageTimer);

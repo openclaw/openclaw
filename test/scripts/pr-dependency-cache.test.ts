@@ -688,7 +688,9 @@ retireAnchorDependencies(anchor, () => {
       );
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("metadata is busy");
-      expect(performance.now() - started).toBeLessThan(3_000);
+      const elapsed = performance.now() - started;
+      expect(elapsed).toBeGreaterThanOrEqual(1_000);
+      expect(elapsed).toBeLessThan(3_000);
       expect(readdirSync(join(f.cache, ".metadata-lock"))).toHaveLength(1);
     });
     expect(existsSync(join(f.cache, ".metadata-lock"))).toBe(false);

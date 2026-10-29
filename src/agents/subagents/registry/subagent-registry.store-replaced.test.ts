@@ -1,15 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { createGatewayRequestContext } from "../../../gateway/server-request-context.js";
-import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
-import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { resetHeartbeatEventsForTest } from "../../../infra/heartbeat-events.js";
-import { loadPendingSessionDeliveries } from "../../../infra/session-delivery-queue-storage.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
@@ -24,9 +19,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import {
   blockSubagentCompletionDelivery,
@@ -34,7 +27,6 @@ import {
   mutateRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
 import {
-  admitCompletionFixtureDatabase,
   failedRecords,
   records,
   requesterWakeDriver,
@@ -46,22 +38,16 @@ import {
 } from "./subagent-controller-inputs.js";
 import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
-import {
-  bindSubagentRunGatewayOwners,
-  retryDeferredSubagentCompletionSource,
-} from "./subagent-registry-gateway-owner.js";
 import { suspendReplacedStoreNotifications } from "./subagent-registry-lifecycle-cleanup.js";
-import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import {
   createSubagentStoreRunFixture,
   loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
-  activateSubagentRegistry,
   initSubagentRegistry,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
@@ -345,14 +331,13 @@ it("keeps an observed late-result store retirement after the original selector r
   expectNoSystemEvents(database);
 });
 
-it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"] as const)(
+it.each(["same", "failed", "pending acknowledgment"] as const)(
   "keeps automatic child notification disposition through store publication: %s",
   async (change) => {
     const { subagent } =
       change === "failed" ? failedRecords("failed", { status: "error" }) : records();
-    const unknownStore = change === "unknown retry";
-    subagent.requesterStorePath = unknownStore ? undefined : "original-store";
-    subagent.controllerStorePath = unknownStore ? undefined : "original-store";
+    subagent.requesterStorePath = "original-store";
+    subagent.controllerStorePath = "original-store";
     subagent.cleanupCompletedAt = undefined;
     subagent.delivery = {
       status: "pending",
@@ -379,12 +364,6 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
     );
     subagentRuns.set(subagent.runId, subagent);
     await initSubagentRegistry();
-    if (change === "unknown retry") {
-      await admitCompletionFixtureDatabase();
-      database.db.exec(
-        "CREATE TRIGGER reject_store_retirement BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'retirement write rejected'); END",
-      );
-    }
     if (change === "pending acknowledgment") {
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -430,54 +409,14 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
         disposition: "intentional_non_delivery",
       });
       expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(true);
-    } else if (change === "restore") {
-      for (let boot = 0; boot < 2; boot++) {
-        await resetSubagentRegistryForTests({ persist: false });
-        publishSystemEventStoreResolver(() => "replacement-store");
-        await initSubagentRegistry();
-        const context = createGatewayRequestContext(makeContextParams());
-        context.resolveGatewayContext = () => context;
-        await activateSubagentRegistry(() => context).settled;
-        await settleRootWork(true);
-      }
     } else {
       publishSystemEventStoreResolver(() =>
-        change === "same" || unknownStore ? "original-store" : "replacement-store",
+        change === "same" ? "original-store" : "replacement-store",
       );
     }
     publishSystemEventStoreResolver(() => "original-store");
-    if (change === "unknown retry") {
-      const context = createGatewayRequestContext(makeContextParams());
-      context.resolveGatewayContext = () => context;
-      await activateSubagentRegistry(() => context).settled;
-      try {
-        await expect(settleRootWork(true)).rejects.toMatchObject({
-          name: "AggregateError",
-          message: "Failed to settle subagent cleanup roots",
-          errors: [
-            {
-              name: "SubagentRegistryWriteError",
-              outcome: "not-committed",
-              cause: { message: "retirement write rejected" },
-            },
-          ],
-        });
-        expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.delivery).toEqual(receipt);
-        expect(() => subagentRuns.runWithCompletionAuthority(subagent, () => "send")).toThrow(
-          /store was retired/,
-        );
-      } finally {
-        database.db.exec("DROP TRIGGER reject_store_retirement");
-      }
-      // The active registry owns retry even when the selector never publishes again.
-      await vi.advanceTimersByTimeAsync(60_000);
-    }
     await settleRootWork(true);
     const persisted = loadSubagentRegistryFromSqlite().get(subagent.runId);
-    if (unknownStore) {
-      expect(persisted?.requesterStorePath).toBeUndefined();
-      expect(persisted?.controllerStorePath).toBeUndefined();
-    }
     expect(persisted?.completion?.resultText).toBe(subagent.completion?.resultText);
     expect(persisted?.execution).toEqual(executionBefore);
     expectNoSystemEvents(database);
@@ -489,140 +428,5 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
       expect(persisted?.requesterSettleWake).toBeUndefined();
     }
     expect(hasSubagentControllerInput(subagent)).toBe(change === "same");
-  },
-);
-
-it.each([false, true])(
-  "durably settles missing completion sources across two restarts (failed write: %s)",
-  async (failWrite) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = { session: { store: state.path("sessions.json") } };
-      setRuntimeConfigSnapshot(cfg);
-      vi.mocked(getRuntimeConfig).mockReturnValue(cfg);
-      const wake = { status: "pending", attemptCount: 0 } as const;
-      const delivered = { status: "delivered", deliveredAt: 260, announcedAt: 260 } as const;
-      const terminal = { status: "terminal", endedAt: 250 } as const;
-      const paused = { pauseReason: "sessions_yield", execution: terminal } as const;
-      const legacy = (kind: string, overrides: Partial<SubagentRunRecord> = {}) =>
-        createSubagentStoreRunFixture({
-          runId: `legacy-${kind}`,
-          childSessionKey: `agent:main:subagent:legacy-${kind}`,
-          requesterStorePath: "current",
-          ...overrides,
-        });
-      const entries = [
-        legacy("successful"),
-        legacy("interrupted", {
-          execution: { ...terminal, outcome: { status: "error", error: "Gateway restarted" } },
-        }),
-        legacy("quiet", { expectsCompletionMessage: false, requesterStorePath: "old" }),
-        legacy("delivered", {
-          requesterStorePath: "old",
-          delivery: { ...delivered, disposition: "delivered" },
-        }),
-      ];
-      const legacyStates: Partial<SubagentRunRecord>[] = [
-        { requesterSettleWake: wake, cleanupCompletedAt: 300, delivery: delivered },
-        { requesterSettleWake: wake, cleanupCompletedAt: 300 },
-        {
-          requesterSettleWake: wake,
-          delivery: { status: "suspended", disposition: "permanent_failure" },
-        },
-        { execution: terminal },
-        { ...paused, requesterStorePath: "old" },
-        { ...paused, requesterStorePath: undefined, delivery: delivered },
-        {
-          ...paused,
-          requesterSettleWake: { ...wake, pauseNotice: { acknowledgment: "Paused" } },
-        },
-        {
-          ...paused,
-          requesterSettleWake: { ...wake, requesterYieldBatch: true, rearmGeneration: 1 },
-        },
-        {
-          runId: "announce:requester-settle:main:legacy:yield-1",
-          requesterSettleWake: {
-            status: "dispatching",
-            attemptCount: 1,
-            requesterYieldBatch: true,
-            rearmGeneration: 1,
-          },
-        },
-        {
-          runId: "announce:requester-settle:main:legacy:yield-2",
-          execution: { status: "running", endedAt: 250, outcome: { status: "ok" } },
-          cleanupCompletedAt: 300,
-          delivery: delivered,
-        },
-      ];
-      for (const [index, overrides] of legacyStates.entries()) {
-        const runId = overrides.runId ?? `legacy-state-${index}`;
-        const entry = legacy(`state-${index}`, {
-          runId,
-          completionTarget: "parent",
-          ...overrides,
-        });
-        if (entry.requesterSettleWake?.requesterYieldBatch) {
-          entry.requesterSettleWake.batchRunIds = [runId];
-        }
-        entries.push(entry);
-      }
-      saveSubagentRegistryChangesToSqlite(
-        new Map(entries.map((entry) => [entry.runId, entry])),
-        entries.map((entry) => entry.runId),
-      );
-      const restart = async () => {
-        await resetSubagentRegistryForTests({ persist: false });
-        rotateAgentEventLifecycleGeneration();
-        await initSubagentRegistry();
-        publishSystemEventStoreResolver(() => "current");
-        const context = createContext();
-        context.resolveGatewayContext = () => context;
-        await bindSubagentRunGatewayOwners({
-          runs: subagentRuns,
-          entries: [...getSubagentActivationRuns(subagentRuns)],
-          resumedRuns: new Set(),
-          getGatewayContextResolver: () => context.resolveGatewayContext,
-          onRecovered: () => {},
-        });
-      };
-      onTestFinished(() => publishSystemEventStoreResolver(undefined));
-      if (failWrite) {
-        await admitCompletionFixtureDatabase();
-        openOpenClawStateDatabase().db.exec(`CREATE TRIGGER reject_missing_source_settlement
-          BEFORE UPDATE ON subagent_runs WHEN NEW.run_id = 'legacy-state-0'
-          BEGIN SELECT RAISE(ABORT, 'temporary completion settlement failure'); END`);
-      }
-      await restart();
-      if (failWrite) {
-        const unsettled = [...loadSubagentRegistryFromSqlite().values()].filter(
-          (entry) => !entry.suppressCompletionDelivery,
-        );
-        expect(unsettled.map((entry) => entry.runId)).toEqual(["legacy-state-0"]);
-        openOpenClawStateDatabase().db.exec("DROP TRIGGER reject_missing_source_settlement");
-        await retryDeferredSubagentCompletionSource(
-          expectDefined(subagentRuns.get(unsettled[0]!.runId), "retryable completion"),
-        );
-      }
-      expect(await loadPendingSessionDeliveries(captureOpenClawStateWorkerContext())).toEqual([]);
-      await restart();
-      const settled = loadSubagentRegistryFromSqlite();
-      for (const entry of entries) {
-        expect(settled.get(entry.runId)?.requesterSettleWake).toBeUndefined();
-        expect(settled.get(entry.runId)).toMatchObject({
-          execution: entry.execution,
-          completion: entry.completion,
-          suppressCompletionDelivery: true,
-          delivery:
-            entry.delivery?.status === "delivered"
-              ? entry.delivery
-              : {
-                  status: entry.expectsCompletionMessage ? "failed" : "not_required",
-                  disposition: "permanent_failure",
-                  lastError: expect.stringContaining("original operator source"),
-                },
-        });
-      }
-    });
   },
 );

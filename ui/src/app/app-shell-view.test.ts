@@ -151,6 +151,47 @@ it("publishes readiness when the retained sidebar's delayed module commits", asy
   }
 });
 
+it("shows the read-only banner only for the serving Gateway while its configuration is read-only", async () => {
+  const { runtime, query, refresh, route } = await mountShell();
+  const { config, gateway } = runtime.context;
+  const fetch = vi.spyOn(globalThis, "fetch");
+  const loadConfig = async (configReadOnly: boolean, configReadOnlyNotice?: string) => {
+    fetch.mockResolvedValueOnce(Response.json({ configReadOnly, configReadOnlyNotice }));
+    await config.refresh();
+    refresh();
+  };
+  const getBanner = () => query(".shell-config-read-only");
+  await loadConfig(true);
+  const banner = getBanner();
+  expect(banner?.textContent?.trim()).toBe(
+    "Gateway configuration is read-only. To make changes, update the configuration file or deployment settings for this Gateway.",
+  );
+  expect(banner?.querySelector("a")).toBeNull();
+  route("settings");
+  expect(getBanner()).toBe(banner);
+
+  const docsUrl = "https://docs.example.org/gateway";
+  const notice = `Use the <admin> console. ${docsUrl}`;
+  await loadConfig(true, notice);
+  const custom = getBanner();
+  expect(custom?.textContent?.trim()).toBe(
+    "Gateway configuration is read-only. Use the <admin> console. Learn more",
+  );
+  expect(custom?.querySelector("a")?.href).toBe(docsUrl);
+
+  const serving = gateway.connection;
+  const connection = vi.spyOn(gateway, "connection", "get");
+  connection.mockReturnValue({ ...serving, gatewayUrl: serving.gatewayUrl + "/another-gateway" });
+  refresh();
+  expect(getBanner()).toBeNull();
+  connection.mockRestore();
+  refresh();
+  expect(getBanner()).not.toBeNull();
+
+  await loadConfig(false, notice);
+  expect(getBanner()).toBeNull();
+});
+
 it("exposes the Templates navigation entry only while its Labs toggle is enabled", async () => {
   const { owner, runtime } = await mountShell();
   const initial = runtime.context.runtimeConfig.state;

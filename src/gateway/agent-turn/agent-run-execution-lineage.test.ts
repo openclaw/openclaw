@@ -47,7 +47,6 @@ function childFacts(runtime: "acp" | "subagent", withToken: boolean, depth = 1) 
       context: {
         validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
       },
-      isRestartRecoveryResumeRun: false,
     },
     {},
   );

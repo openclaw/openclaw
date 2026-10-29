@@ -7,7 +7,6 @@ import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget
 import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
 import { expectCallCount, withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
 import {
-  createActiveWorkSnapshot,
   createLifecycleGate,
   createUpdateRespawnChild,
   advanceWithoutCalls,
@@ -85,7 +84,6 @@ export function registerHostedUpdateStopTests(f: UpdateRespawnFixtures) {
 }
 
 export function registerForegroundUpdateStopTests({
-  waitForGatewayActiveWork: waitForWork,
   requestManagedServiceUpdateHandoffPark: parkUpdate,
   consumeGatewayRestartIntent: consumeRestart,
   managedUpdateSuccessorOwner: updateOwner,
@@ -398,25 +396,15 @@ export function registerForegroundUpdateStopTests({
   );
 
   it.each([
-    { phase: "drain", signal: "SIGINT", restartIntent: false },
-    { phase: "server-close", signal: "SIGTERM", restartIntent: false },
-    { phase: "drain", signal: "SIGTERM", restartIntent: true },
+    { signal: "SIGINT", restartIntent: false },
+    { signal: "SIGTERM", restartIntent: false },
+    { signal: "SIGTERM", restartIntent: true },
   ] as const)(
-    "retains pre-close foreground $signal during $phase (restart intent: $restartIntent)",
-    async ({ phase, signal, restartIntent }) => {
+    "retains foreground $signal during close (restart intent: $restartIntent)",
+    async ({ signal, restartIntent }) => {
       const preClose = createLifecycleGate();
       const { updater } = prepareRespawn();
-      waitForWork.mockImplementationOnce(async () => {
-        if (phase === "drain") {
-          await preClose.wait();
-        }
-        return { drained: true, snapshot: createActiveWorkSnapshot() };
-      });
-      const close = vi.fn(async () => {
-        if (phase === "server-close") {
-          await preClose.wait();
-        }
-      });
+      const close = vi.fn(preClose.wait);
       await withIsolatedSignals(async ({ captureSignal }) => {
         const { start, runtime, exited } = await startStopLoop(close, 18789);
         try {

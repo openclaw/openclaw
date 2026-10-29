@@ -1816,6 +1816,7 @@ src/sessions/model-selection-error.ts
 src/sessions/session-chat-type-shared.ts
 src/sessions/session-controller.cleanup-context.ts
 src/sessions/session-controller.owner-context.ts
+src/sessions/session-controller.target.ts
 src/sessions/session-diff-parser.ts
 src/sessions/session-diff-revisions.ts
 src/sessions/session-diff.runtime.ts
@@ -1896,7 +1897,6 @@ src/state/agent-deletion-journal-recovery.ts
 src/state/agent-deletion-journal-status.ts
 src/state/agent-deletion-journal.read.ts
 src/state/agent-deletion-journal.ts
-src/state/agent-input-recovery-context.ts
 src/state/agent-provenance.kernel.ts
 src/state/agent-provenance-publication.ts
 src/state/agent-provenance.schema.ts
@@ -2279,8 +2279,6 @@ src/config/sessions/session-participant-identity.ts
 src/config/sessions/session-participant-prepared-read.ts
 packages/agent-core/src/harness/session/session.ts
 packages/ai/src/transports/provider-compaction-checkpoint.ts
-src/config/sessions/recovery-notice.ts
-src/config/sessions/restart-recovery-state.ts
 src/config/sessions/session-accessor.sqlite-delete-snapshot.ts
 src/config/sessions/session-accessor.sqlite-export-slices.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-projection.ts
@@ -2480,7 +2478,6 @@ src/agents/failover/signal-details.ts
 src/agents/failover/user-copy.ts
 src/agents/harness/errors.ts
 src/agents/live-model-errors.ts
-src/agents/main-session-recovery/main-session-recovery-clear.ts
 src/agents/sandbox-host.ts
 src/agents/sandbox-widget-scroll-bridge.ts
 src/agents/sessions/session-manager-append-codec.ts
@@ -2508,7 +2505,6 @@ src/config/sessions/conversation-route-fingerprint.ts
 src/config/sessions/goals-operation-policy.ts
 src/config/sessions/goals-transitions.ts
 src/config/sessions/provider-review-store.ts
-src/config/sessions/restart-recovery-receipt-state.ts
 src/config/sessions/session-accessor.sqlite-normalize.ts
 src/config/sessions/session-accessor.sqlite-parent-fork.ts
 src/config/sessions/session-accessor.sqlite-replacement-worker.ts
@@ -2516,7 +2512,6 @@ src/config/sessions/session-accessor.sqlite-visible-cursor.ts
 src/config/sessions/session-actor-memory-closed-turn.ts
 src/config/sessions/session-actor-memory-collaboration-state.ts
 src/config/sessions/session-actor-memory-collaboration.ts
-src/config/sessions/session-actor-memory-completion.ts
 src/config/sessions/session-actor-memory-conversation-contract.ts
 src/config/sessions/session-actor-memory-conversation-delivery.ts
 src/config/sessions/session-actor-memory-conversation.ts
@@ -2543,7 +2538,6 @@ src/config/sessions/session-actor-memory-owner.ts
 src/config/sessions/session-actor-memory-pending.ts
 src/config/sessions/session-actor-memory-publication.ts
 src/config/sessions/session-actor-memory-reactions.ts
-src/config/sessions/session-actor-memory-recovery.ts
 src/config/sessions/session-actor-memory-registry.ts
 src/config/sessions/session-actor-memory-reports.ts
 src/config/sessions/session-actor-memory-search.ts
@@ -2578,7 +2572,6 @@ src/config/sessions/session-entry-public-patch.ts
 src/config/sessions/session-entry-read-facts.ts
 src/config/sessions/session-entry-selection.ts
 src/config/sessions/session-entry-usage.ts
-src/config/sessions/session-harness-completion-input.ts
 src/config/sessions/session-history-visibility.ts
 src/config/sessions/session-memory-targets-policy.ts
 src/config/sessions/session-message-cut-content.ts
@@ -2719,7 +2712,6 @@ src/shared/tool-approval-reviews.ts
 src/agents/agent-lifecycle-parent-state.ts
 src/agents/agent-run-terminal-error.ts
 src/agents/agent-run-terminal-outcome.ts
-src/agents/main-session-recovery/main-session-recovery-lifecycle.ts
 src/agents/run-termination.ts
 src/config/sessions/session-run-lifecycle-projection.ts
 src/shared/agent-liveness.ts

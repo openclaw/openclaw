@@ -88,7 +88,7 @@ export function createDeferredGatewayUpdateCheck(params: {
     },
   });
 
-  const stop = () => {
+  const stopGatewayUpdateCheck = () => {
     stopped = true;
     return (stopPromise ??= (async () => {
       // Fence immediately; a lazy factory that finishes later stops its own
@@ -165,5 +165,5 @@ export function createDeferredGatewayUpdateCheck(params: {
     });
   };
 
-  return { start, stop };
+  return { start, stop: stopGatewayUpdateCheck };
 }

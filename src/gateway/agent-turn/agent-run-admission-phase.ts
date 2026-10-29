@@ -1,6 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -54,7 +53,6 @@ import type {
   PreparedAgentRunDispatch,
 } from "./agent-run-admission-types.js";
 import { isGatewayAgentAbortRejection } from "./agent-run-dispatch-outcome.js";
-import { admitAgentRestartRecovery } from "./agent-run-recovery-admission.js";
 import {
   consumeGatewaySubagentCompletionToolHandoff,
   prepareGatewaySubagentRun,
@@ -273,7 +271,6 @@ export async function prepareAgentRunDispatch(
           ? { projectSessionMessages: false, projectSessionActive: false }
           : {}),
         lifecycleGeneration: params.lifecycleGeneration,
-        mainSessionRestartRecovery: params.isRestartRecoveryResumeRun ? true : undefined,
       });
       admittedRunContext = getAgentRunContext(params.runId);
     }
@@ -304,9 +301,6 @@ export async function prepareAgentRunDispatch(
   let followupCompletion: FollowupCompletionOwner | undefined;
   let adoptedParentResume: SubagentRunRecord | undefined;
   let rejectPluginSubagentAdmission: SubagentAdmissionRejection | undefined;
-  let restoreAdmittedRestartRecoveryInterrupted:
-    | (() => Promise<MainSessionRecoveryPendingTarget | undefined>)
-    | undefined;
   const cleanupPreaccept = async (admissionReleased = false, failure?: string) => {
     const lease = preparedModelRuntimeLease;
     const completion = followupCompletion;
@@ -328,7 +322,6 @@ export async function prepareAgentRunDispatch(
         admittedRunIdentity,
         admittedRunContext,
         releaseCallerAuthority,
-        restoreAdmittedRestartRecoveryInterrupted,
         lease,
         completion,
         adopted,
@@ -453,30 +446,6 @@ export async function prepareAgentRunDispatch(
   }
   const { pluginSubagent, reactivateSubagent, adoptParentResume, followupSuccessor } =
     subagentAdmission;
-  if (params.isRestartRecoveryResumeRun) {
-    const recoverySessionKey = params.resolvedSessionKey;
-    if (!recoverySessionKey || !lifecycleStorePath) {
-      return rejectPreaccept(
-        errorShape(ErrorCodes.UNAVAILABLE, "restart recovery session target is unavailable"),
-      );
-    }
-    try {
-      restoreAdmittedRestartRecoveryInterrupted = await admitAgentRestartRecovery({
-        lifecycleGeneration: params.lifecycleGeneration,
-        runId: params.runId,
-        sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
-        sessionKey: recoverySessionKey,
-        storePath: lifecycleStorePath,
-        activeRunAbort,
-      });
-      const recoveryRevalidation = revalidateAdmission();
-      if (recoveryRevalidation !== true) {
-        return recoveryRevalidation;
-      }
-    } catch (err) {
-      return rejectPreaccept(errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
-  }
   let assertInputAdmissionCurrent = params.assertAdmissionCurrent;
   let resumedTaskAdopted = false;
   let userTurn: PreparedAgentRunUserTurn | undefined;
@@ -531,11 +500,7 @@ export async function prepareAgentRunDispatch(
     }
   } catch (err) {
     const failure = userTurn
-      ? await releasePreparedAgentRunUserTurnAfterFailure(
-          userTurn,
-          err,
-          parentResume ? "cancelled" : "interrupted",
-        )
+      ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err)
       : err;
     if (
       !(failure instanceof AgentRunUserTurnCleanupError) &&
@@ -705,7 +670,6 @@ export async function prepareAgentRunDispatch(
       unpersistedOffloadedRefs: userTurn.recorder ? [] : params.offloadedRefs,
       userTurn,
       workspaceOverride,
-      restoreAdmittedRestartRecoveryInterrupted,
     };
   } catch (error) {
     return releaseFailedAgentRunAdmission(userTurn, error, cleanupPreaccept);

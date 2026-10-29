@@ -229,8 +229,6 @@ function resolveFollowupRunToolAuthorityFingerprint(
         ? readToolAllowlistIntersection(snapshot.toolsAllow)
         : undefined,
       disableTools: snapshot.disableTools === true,
-      forceRestartSafeTools: snapshot.forceRestartSafeTools === true,
-      forceCodeModeTools: snapshot.forceCodeModeTools === true,
       sessionFile: execution.sessionFile,
       agentDir: execution.agentDir,
       workspaceDir: execution.workspaceDir,
