@@ -261,14 +261,14 @@ export function resolveModelDirectiveSelection(params: {
   if (selection) {
     return { selection };
   }
-  if (
-    params.requireKnownModel &&
-    !isExactSelection &&
-    ![...policy.catalog, ...policy.configuredCatalog].some(
-      (entry) => entry.id.toLowerCase() === rawTrimmed.toLowerCase(),
-    )
-  ) {
-    return {};
+  if (params.requireKnownModel && !isExactSelection) {
+    const rawId = rawTrimmed.toLowerCase();
+    if (
+      !policy.catalog.some((entry) => entry.id.toLowerCase() === rawId) &&
+      !policy.configuredCatalog.some((entry) => entry.id.toLowerCase() === rawId)
+    ) {
+      return {};
+    }
   }
   if (permitted) {
     return { selection: explicitSelection };

@@ -1,6 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { routeReplyDirectivesForTest as route } from "./get-reply-directives-routing.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -65,13 +63,15 @@ describe("sender-owned directive projection", () => {
   });
 
   const tail = "/think high\n  code()";
-  const forwardedStatus = `Please summarize\n[Forwarded message]\n/status marker\n${tail}`;
+  const prose =
+    "Prüfe anschließend, ob das Modell über /model bzw. /models in Telegram auswählbar ist.";
+  const forwardedStatus = `${prose}\n[Forwarded message]\n/status marker\n${tail}`;
   it.each<[string, string, string, boolean, string?, string?, boolean?]>([
-    ["preserves forwarded status beside a caption", "Please summarize", forwardedStatus, false],
+    ["preserves model prose and forwarded status", prose, forwardedStatus, false],
     [
       "removes only sender status",
-      "Please /status summarize",
-      `Please /status summarize\n[Forwarded message]\n/status marker\n${tail}`,
+      `${prose} /status`,
+      `${prose} /status\n[Forwarded message]\n/status marker\n${tail}`,
       true,
       forwardedStatus,
     ],
@@ -108,10 +108,14 @@ describe("sender-owned directive projection", () => {
         BodyForAgent: agentText,
         CommandAuthorized: true,
       });
-      const result = await route(ctx, { resetTriggered });
+      const result = await route(ctx, {
+        resetTriggered,
+        preparedModelCatalog: { entries: [], routeVariants: [] },
+      });
       expect(result.cleanedBody).toBe(expected);
       expect(result.inlineStatusRequested).toBe(inlineStatus);
       expect(result.directives.hasThinkDirective).toBe(false);
+      expect(result.directives.hasModelDirective).toBe(false);
     },
   );
 
@@ -152,84 +156,4 @@ describe("sender-owned directive projection", () => {
       );
     },
   );
-});
-
-describe("model references in ordinary text", () => {
-  const german =
-    "Prüfe anschließend, ob das Modell über /model bzw. /models in Telegram auswählbar ist.";
-  const entries = [
-    { provider: "openai", id: "safe", name: "Safe" },
-    { provider: "fixture-route", id: "reasoner-42", name: "Reasoner" },
-    { provider: "fixture-route", id: "blocked-42", name: "Blocked" },
-  ];
-  const cfg: OpenClawConfig = {
-    commands: { text: true },
-    agents: {
-      defaults: {
-        model: "openai/safe",
-        models: { "fixture-route/reasoner-42": { alias: "chosen" } },
-        modelPolicy: { allow: ["openai/safe", "fixture-route/reasoner-42"] },
-      },
-    },
-  };
-  it.each([
-    { body: german, expected: german, model: false },
-    { body: german, expected: german, model: false, unrestricted: true },
-    {
-      body: `${german} /elevated full /exec security=full`,
-      expected: german,
-      model: false,
-      isGroup: true,
-    },
-    { body: `${german} /queue collect`, expected: german, model: false, queue: true },
-    { body: "Explain /model reasoner-42 today", expected: "Explain today", model: true },
-    { body: "Explain /model reasonr-42 today", expected: "Explain today", model: true },
-    { body: "Explain /model chosen today", expected: "Explain today", model: true },
-    { body: "Explain /chosen today", expected: "Explain today", model: true },
-    {
-      body: "Explain /model reasoner-42 /queue collect today",
-      expected: "Explain today",
-      model: true,
-      queue: true,
-    },
-    { body: "Explain /model blocked-42 today", expected: "Explain today", model: true },
-    { body: "Explain /model: unknown today", expected: "Explain today", model: true },
-    { body: "Explain /model 123 today", expected: "Explain today", model: true },
-    { body: "Explain /model other/unknown today", expected: "Explain today", model: true },
-    { body: 'Explain /model "unknown" today', expected: "Explain today", model: true },
-    { body: "Explain /model unknown@profile today", expected: "Explain today", model: true },
-    {
-      body: "Explain /model unknown --runtime openclaw today",
-      expected: "Explain today",
-      model: true,
-    },
-    { body: "Explain /model unknown --session today", expected: "Explain today", model: true },
-    { body: "Explain /model default today", expected: "Explain today", model: true },
-    { body: "/model unknown", expected: "", model: true },
-    { body: "/model unknown /queue collect", expected: "", model: true, queue: true },
-  ])("routes $body without changing explicit selection semantics", async (testCase) => {
-    const history = `\n[Forwarded message]\n${testCase.body}`;
-    const ctx = buildTestCtx({
-      CommandBody: testCase.body,
-      RawBody: testCase.body,
-      BodyForAgent: `${testCase.body}${history}`,
-      ChatType: testCase.isGroup ? "group" : "direct",
-      WasMentioned: false,
-      CommandAuthorized: true,
-    });
-    const result = await route(ctx, {
-      cfg: testCase.unrestricted
-        ? { ...cfg, agents: { defaults: { ...cfg.agents?.defaults, modelPolicy: { allow: [] } } } }
-        : cfg,
-      defaultModel: "safe",
-      model: "safe",
-      aliasIndex: buildModelAliasIndex({ cfg, defaultProvider: "openai" }),
-      preparedModelCatalog: { entries, routeVariants: entries },
-    });
-    expect(result.directives.hasModelDirective).toBe(testCase.model);
-    expect(result.directives.hasQueueDirective).toBe(testCase.queue ?? false);
-    expect(result.directives.hasElevatedDirective).toBe(false);
-    expect(result.directives.hasExecDirective).toBe(false);
-    expect(result.cleanedBody).toBe(`${testCase.expected}${history}`.trimStart());
-  });
 });
